@@ -1,4 +1,4 @@
-# tinycmdr changelog (newest first, through 1.0.0, tinycmdr-cli 1.0.15)
+# tinycmdr changelog (newest first, through 1.0.0)
 
 > **Renamed 2026-09-20: tinycmdr became tinycmdr.** Entries below were written while the project
 > carried the old name, and they keep the name they were written with: a path, task name or

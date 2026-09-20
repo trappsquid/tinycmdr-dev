@@ -149,11 +149,11 @@ sub('    """The two verbs this file uses, plus the exception type it catches."""
     '    """The two verbs this file uses, plus the exception types it catches."""',
     "shim docstring plural")
 
-# The enterprise build carries its OWN version, and it moves when its bytes move: 1.0.0 was
-# published before the config-drift fix, and re-cutting different bytes under a published
-# name would make the site's version-anchored claims untrue.
-sub_re(r'VERSION = "[0-9]+\.[0-9]+\.[0-9]+"', 'VERSION = "1.0.15"',
-       "enterprise version number")
+# NO version override: this build carries the project's version, inherited from the file it
+# was generated from. It had its own number (1.0.14, then 1.0.15) on the premise that 1.0.0
+# had already been published and its bytes could not move - but nothing has ever been
+# published, so that premise bought nothing and cost a second numbering line to keep in step.
+# What distinguishes the shapes in --version is the "cli build" tag, not a number.
 
 # The visible-core list names the web tools, which this build cuts. core_tool_names()
 # filters by what exists, so behaviour is already right; this keeps the generated file
