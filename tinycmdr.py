@@ -7763,6 +7763,29 @@ class _CatchUpMessage:
         self.create_at = post.get("create_at") or 0
 
 
+def checkin_line(session_key, steps, elapsed, name=None, args=None):
+    """The ⏳ line: how long this has been going, which step, what it is doing
+    now, what it has spent, and what memory it is holding.
+
+    Module level and single-copy on purpose. Mattermost grew this text first; the
+    web lane had none of it, and two implementations of the same line is how the
+    two lanes drifted apart in the first place."""
+    bits = [f"⏳ {int(elapsed // 60)}m{int(elapsed % 60):02d}s in",
+            f"step {steps}"]
+    if name:
+        snippet = " ".join(str(args).split())[:70]
+        bits.append(f"doing `{name}` {snippet}".strip())
+    # live first: last_usage still holds the PREVIOUS run until this one ends
+    u = (fmt_usage(AGENT.live_usage.get(session_key))
+         or fmt_usage(AGENT.last_usage.get(session_key)))
+    if u:
+        bits.append(u)
+    m = mem_line()
+    if m:
+        bits.append(m)
+    return " · ".join(bits)
+
+
 class ProgressReporter:
     """The live '🔧 Working…' line (edited in place) PLUS periodic check-in
     messages.
@@ -7812,18 +7835,7 @@ class ProgressReporter:
                 or fmt_usage(AGENT.last_usage.get(self.session_key)))
 
     def checkin_text(self, steps, elapsed, name, args):
-        bits = [f"⏳ {int(elapsed // 60)}m{int(elapsed % 60):02d}s in",
-                f"step {steps}"]
-        if name:
-            snippet = " ".join(str(args).split())[:70]
-            bits.append(f"doing `{name}` {snippet}".strip())
-        u = self._usage()
-        if u:
-            bits.append(u)
-        m = mem_line()
-        if m:
-            bits.append(m)
-        return " · ".join(bits)
+        return checkin_line(self.session_key, steps, elapsed, name, args)
 
     def note(self, text):
         """The model's own check-in line ("Checking what holds the lock:").
@@ -9038,6 +9050,8 @@ background:transparent;padding:0 13px}
 .tool_fail{align-self:flex-start;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--bad);
 background:transparent;padding:0 13px}
 .system{align-self:center;color:var(--dim);font-size:12.5px}
+.checkin{align-self:flex-start;color:var(--dim);background:transparent;padding:0 13px;
+font-size:12.5px;font-family:ui-monospace,Consolas,monospace}
 .error{align-self:flex-start;color:var(--bad)}
 .stamp{color:#5c636d;font-size:11px;margin-right:7px}
 #drawer{position:absolute;top:0;right:0;bottom:0;width:370px;max-width:92vw;background:var(--panel);
@@ -10082,6 +10096,8 @@ class WebRun:
         self.turn_start = self.started
         self.status = "starting"
         self.steps = 0
+        self.last_checkin = self.started     # the ⏳ cadence, as in Mattermost
+        self.last_checkin_step = 0
         self.rev = 0            # bumps on every add AND on every in-place grow
         self.stream_i = None    # the line the model's text is currently growing
         self.answer_i = None    # the line the run's answer is (decided at the end)
@@ -10199,12 +10215,52 @@ class WebRun:
         # a tool call ends this turn's thinking: the next fragment starts a new
         # turn, and gets its own line instead of growing this one
         self.turn_start = time.time()
-        self.add("tool", f"{name}({_web_short_args(raw_args)})")
+        # The same one-line preview Mattermost shows: the raw JSON of a shell call
+        # is a wall of escaped text, and the command is the part being watched.
+        self.add("tool", f"{name}({_tool_preview(name, raw_args, limit=200)})")
+        self.maybe_checkin(name, raw_args)
+
+    def maybe_checkin(self, name, raw_args):
+        """The ⏳ line every checkin_minutes / checkin_steps, on the same cadence
+        and with the same words as the Mattermost lane.
+
+        A browser always has the header (elapsed, steps), but the header is not the
+        record and it does not survive a reload: a run whose transcript holds only
+        tool lines reads as a spinner with no clock."""
+        if not CONFIG["agent"].get("progress_updates", True):
+            return
+        every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
+        every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
+        now = time.time()
+        with self.lock:
+            due = bool((every_s and now - self.last_checkin >= every_s)
+                       or (every_n and self.steps - self.last_checkin_step >= every_n))
+            if due:
+                self.last_checkin = now
+                self.last_checkin_step = self.steps
+                steps = self.steps
+        if due:
+            self.add("checkin", checkin_line(self.session_key, steps,
+                                             now - self.started, name, raw_args))
 
     def on_tool_done(self, name, args, output, elapsed):
-        bad = failed_output(output or "")
-        self.add("tool_fail" if bad else "tool_done",
-                 f"{'✗ failed' if bad else '✓'} {name} · {elapsed:.1f}s")
+        """What Mattermost shows for a finished call: the preview, the duration,
+        the exit code, and the REASON it failed.
+
+        '✗ failed read_file · 0.4s' is what the browser used to get, and it sends
+        the operator to the host log to find out what actually happened. The
+        reason line is the whole point of the report."""
+        rc, why = _failed_call(output)
+        line = f"{'✗' if (rc or why) else '✓'} {name}"
+        preview = _tool_preview(name, args)
+        if preview:
+            line += f" {preview}"
+        line += f" · {elapsed:.1f}s"
+        if rc:
+            line += f" [exit {rc}]"
+        if why:
+            line += f" — {why}"
+        self.add("tool_fail" if (rc or why) else "tool_done", line)
 
     def on_narration(self, text, final, first):
         """Model text, streaming, and never the answer until the run ends.
@@ -10263,6 +10319,30 @@ class WebRun:
             self.asked = row
         return row
 
+    def confirm(self, command, wait=300.0):
+        """Ask the browser to approve a command that matched a confirm pattern.
+
+        Not a nicety: without a confirm_cb the shell tool returns
+        "DECLINED: command needs operator confirmation ... and none was given", so
+        on the web lane a dangerous-but-intended command silently never ran while
+        the same command in Mattermost was asked about and then ran. Same 300s
+        wait as that door."""
+        row = self.opener(f"⚠️ This command matches a confirm-pattern. Allow it?",
+                          ["yes, run it", "no, skip it"], wait, "the web page")
+        self.add("ask", "⚠️ Confirmation needed before this runs:\n"
+                 + str(command)[:800])
+        answered = row["ev"].wait(wait)
+        answer = str(row.get("answer") or "").strip().lower() if answered else ""
+        self.close_question(answered=bool(answer))
+        ok = answer.startswith(("y", "1", "ok", "approve", "run", "yes"))
+        if not answered:
+            self.add("system", f"⏱ no answer within {int(wait)}s - that command "
+                               f"was skipped")
+        else:
+            self.add("system", "✅ confirmed, running" if ok
+                     else "🚫 not confirmed - that command was skipped")
+        return ok
+
     def close_question(self, answered=False):
         with self.lock:
             self.asked = None
@@ -10314,6 +10394,11 @@ def _web_drive(run, text):
                            progress_done_cb=run.on_tool_done,
                            narration_cb=run.on_narration,
                            interim_cb=run.on_interim,
+                           # Without this door the shell tool DECLINES any command
+                           # matching agent.confirm_patterns instead of asking: the
+                           # browser was quieter than Mattermost AND could not run
+                           # the work Mattermost would have asked about.
+                           confirm_cb=run.confirm,
                            cancel_event=run.cancel,
                            steer_cb=run.take_steer)
     except Exception as e:

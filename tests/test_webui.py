@@ -583,6 +583,129 @@ def main():
         check(after == before,
               "reading a page or an unknown conversation does not grow the registry")
 
+        # -- the lanes must report the same run the same way -------------------
+        # The operator's report: "the streaming that I am familiar with in
+        # Mattermost is not reflected in the web UI". Mattermost goes through
+        # ProgressReporter; the web run subscribes to the callbacks directly, and
+        # the whole reporting layer - the command preview, the exit code, the
+        # FAILURE REASON, the periodic ⏳ line - simply was not there. These
+        # checks pin the two together, so the next divergence fails a suite
+        # instead of being noticed on a phone.
+        class FakeChannel:
+            """What ProgressReporter needs from a dispatcher: post, edit, delete."""
+            def __init__(self):
+                self.timeline = []
+
+            def _post(self, channel_id, root_id, text, color=None):
+                self.timeline.append(text)
+                return f"post{len(self.timeline)}"
+
+            def _edit(self, msg_id, channel_id, text, color=None):
+                self.timeline.append(text)
+
+            def _delete(self, msg_id, channel_id):
+                pass
+
+        agent_cfg = fb.CONFIG["agent"]
+        saved = {k: agent_cfg.get(k) for k in
+                 ("checkin_steps", "checkin_minutes", "progress_updates",
+                  "checkin_per_tool", "checkin_tool_preview_chars")}
+        try:
+            agent_cfg["progress_updates"] = True
+            agent_cfg["checkin_steps"] = 1          # fire the ⏳ line on the first step
+            agent_cfg["checkin_minutes"] = 0
+            agent_cfg["checkin_per_tool"] = True
+            channel = FakeChannel()
+            rep = fb.ProgressReporter(channel, "chan-1", None, "web")
+            mm_run = fb.WebRun("parity", "web")
+
+            call = '{"command": "Get-ChildItem C:/temp -Recurse"}'
+            failed = "exit_code=1\npermission denied while opening C:\\temp\\locked"
+            rep.progress("shell", call)
+            mm_run.on_progress("shell", call)
+            rep.tool_done("shell", call, failed, 2.4)
+            mm_run.on_tool_done("shell", call, failed, 2.4)
+            mm_text = "\n".join(channel.timeline)
+            web_text = "\n".join(l["text"] for l in mm_run.lines)
+
+            check("Get-ChildItem C:" in mm_text and "Get-ChildItem C:" in web_text,
+                  "parity: the command preview reaches the browser, as it does chat")
+            tool_line = next((l["text"] for l in mm_run.lines
+                              if l["kind"] == "tool"), "")
+            check("Get-ChildItem C:/temp -Recurse" in tool_line,
+                  f"parity: the call line is the command it is running "
+                  f"({tool_line!r})")
+            check('{"command"' not in tool_line,
+                  "parity: not the escaped JSON argument as it arrived")
+            for fact in ("2.4s", "exit 1", "permission denied"):
+                check(fact in mm_text and fact in web_text,
+                      f"parity: the finished call reports '{fact}' in both lanes")
+            check(web_text.count("✗") == 1 and "✓" not in web_text,
+                  f"parity: a failed call is marked failed on the page "
+                  f"({web_text.splitlines()[-1][:70]!r})")
+            check(any(l["kind"] == "tool_fail" for l in mm_run.lines),
+                  "...and it is a tool_fail line, so the page can color it")
+
+            # the ⏳ check-in: same cadence, same WORDS, one implementation
+            check("⏳" in mm_text, f"the chat lane posts its check-in ({mm_text[-90:]})")
+            check("⏳" in web_text,
+                  f"the web lane posts the same check-in ({web_text[-90:]})")
+            same = fb.checkin_line("web", 7, 305, "shell", call)
+            check(rep.checkin_text(7, 305, "shell", call) == same,
+                  "parity: both lanes draw the check-in from one function")
+            check("step 7" in same and "5m05s in" in same,
+                  f"...and it says how long and which step ({same})")
+
+            # a command matching a confirm pattern must be ASKED about, not
+            # silently declined - that was the web lane's behaviour, and it made
+            # the browser unable to run work the chat lane would have run
+            agent_cfg["confirm_patterns"] = ["echo CONFIRM-ME"]
+            asked = fb.WebRun("confirm", "web")
+
+            def say_yes():
+                for _ in range(50):
+                    time.sleep(0.1)
+                    with asked.lock:
+                        row = got[0]
+                    if row is not None:
+                        row["answer"] = "yes"
+                        row["ev"].set()
+                        return
+
+            got = [None]
+            real_opener = asked.opener
+
+            def opener(question, options, wait, label=None):
+                row = real_opener(question, options, wait, label)
+                got[0] = row
+                return row
+
+            asked.opener = opener
+            threading.Thread(target=say_yes, daemon=True).start()
+            out = fb.tool_shell({"command": "echo CONFIRM-ME"},
+                                {"confirm_cb": asked.confirm})
+            check("DECLINED" not in out,
+                  f"confirm: an approved command runs ({str(out)[:60]!r})")
+            check(any(l["kind"] == "ask" for l in asked.lines),
+                  "confirm: the browser is shown the command and asked")
+            check(any("CONFIRM-ME" in l["text"] for l in asked.lines),
+                  "confirm: ...with the command itself in the question")
+            check(any("confirmed" in l["text"] for l in asked.lines),
+                  "confirm: and the verdict lands in the transcript")
+
+            # no answer: the command is skipped, and the page says why
+            quiet = fb.WebRun("confirm-timeout", "web")
+            verdict = quiet.confirm("echo CONFIRM-ME", wait=0.4)
+            check(verdict is False, "confirm: silence is not consent")
+            check(any("no answer" in l["text"] for l in quiet.lines),
+                  "confirm: and the transcript shows the timeout, not a shrug")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    agent_cfg.pop(k, None)
+                else:
+                    agent_cfg[k] = v
+
         srv.shutdown()
         srv.server_close()
 
