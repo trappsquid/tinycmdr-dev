@@ -404,3 +404,39 @@ Ranked, cheapest and safest first:
 
 What to measure before/after any of these: the static overhead line at startup, the
 per-tool median/p95 result size, and the rework proxies from fleet-metrics.py.
+
+## MiniDSH hardening, stages 1-2 (2026-09-19)
+
+Git exists here now, so "is this a real fix or a band-aid" is answerable with a diff instead of a
+story. The repo root is the install itself (`C:/Users/<user>\tinycmdr`), branch `main`,
+repo-local identity `David Trapp <david@the manager box.local>`, and `core.autocrlf false` on purpose: the
+working files are mixed (tinycmdr.py is pure CRLF, several suites are LF) and fleet "in sync" is
+a sha256 comparison, so git must never normalise a line ending on checkout.
+
+```
+848aad3  2.5.19: initial import of the source tree (96 files)
+4e04b31  2.5.19: gate the always-on tool-schema block
+```
+
+The import is byte-for-byte (index blob hash == working bytes for every staged file) and was
+leak-scanned before committing: no value from this host's `.env` or `web-token.txt` appears in any
+staged file, and every token-shaped string is a placeholder or the operator's Mattermost user id.
+Ignored so a later `git add -A` cannot commit per-host state: logs, sessions, spill, `*.bak*`,
+`*.pre-*`, config.json, jobs.json, inbox/, state.json, web-token.txt, .env, notes.md,
+field-notes.md, tasks.json, atlas.md, knowledge/, skills/, tools/, dist/, `__pycache__/`, and
+tests/eval-runs/ (run_eval writes there and the packager already excludes it, so it is output,
+not source).
+
+Stage 2 gated the number instead of trusting it. Always-on payload, measured 2026-09-19:
+tinycmdr.py 13 tools / 7,133 chars / 1,783 est_tokens (fattest single schema ask_user 1,078);
+tinycmdr-cli.py 10 tools / 5,408 chars / 1,352 est_tokens (fattest skill 838). The budget (7,600
+chars) and the per-tool cap (1,200) live in `tests/test_disclosure.py` with the date beside them.
+The same suite run in a temp tree with the constants tightened to 7,000/1,000 fails both checks
+and exits 1, so the gate is live arithmetic rather than a comment. Suites after the change:
+test_disclosure on both builds ok, test_cli 149/0, test_stall 232/0.
+
+Scope kept honest: the static block sits in the cached prefix, so this is a per-run prefill saving,
+not a per-call cost. The win is that the number cannot grow back unnoticed.
+
+Compare like with like: the 13,898-char figure is the WHOLE registry; the 7,133 is the 13 tools
+that are always visible (the always-on payload, which is what a run pays for before its first call).
