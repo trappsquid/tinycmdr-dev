@@ -197,23 +197,23 @@ def test_an_answer_releases_the_run():
     try:
         door = d.ask_door_factory("chan-a", "sess-a")
         join, box = in_thread(fb.tool_ask_user,
-                              {"question": "Restart the manager box or the other Windows box first?",
-                               "options": ["the manager box", "the other Windows box"]},
+                              {"question": "Restart host-a or host-b first?",
+                               "options": ["host-a", "host-b"]},
                               {"session_key": "sess-a", "ask_door": door})
         check("the question is posted", wait_for(lambda: any(
-            "Restart the manager box or the other Windows box first?" in t for _, t in d.posted), 3.0),
+            "Restart host-a or host-b first?" in t for _, t in d.posted), 3.0),
             d.posted)
         check("the options are offered", any(
-            "the other Windows box" in t for _, t in d.posted), d.posted)
+            "host-b" in t for _, t in d.posted), d.posted)
         check("a row is open for the session",
               wait_for(lambda: d.pending_asks.get("chan-a") is not None, 3.0),
               list(d.pending_asks))
-        claimed = d.reply_ask("sess-a", "the other Windows box first")
+        claimed = d.reply_ask("sess-a", "host-b first")
         check("the answer is claimed (not queued as steering)", claimed is True)
         join(5)
         out = box.get("out", box.get("err", ""))
         check("the run resumes with the operator's answer",
-              "OPERATOR ANSWER: the other Windows box first" in out, out[:200])
+              "OPERATOR ANSWER: host-b first" in out, out[:200])
         check("and the answer is marked as an instruction",
               "direct instruction" in out, out[:220])
         check("the pending row is cleared after the answer",
@@ -239,11 +239,11 @@ def test_a_message_in_the_channel_is_claimed_by_enqueue():
         join, box = in_thread(fb.tool_ask_user, {"question": "Which host first?"},
                               {"session_key": "sess-e", "ask_door": door})
         check("waiting", wait_for(lambda: d.pending_asks.get("chan-e") is not None, 3.0))
-        d.enqueue(_FakeMsg("chan-e", "the the other Windows box one"), "the the other Windows box one")
+        d.enqueue(_FakeMsg("chan-e", "the host-b one"), "the host-b one")
         join(5)
         out = box.get("out", box.get("err", ""))
         check("enqueue delivered it as the ANSWER, not to the queue",
-              "OPERATOR ANSWER: the the other Windows box one" in out, out[:200])
+              "OPERATOR ANSWER: the host-b one" in out, out[:200])
         q = d.queues.get("chan-e")
         check("nothing was queued behind the parked run",
               q is None or q.empty(), "queue size %s" % (q.qsize() if q else 0))
@@ -492,9 +492,9 @@ def test_duration_parsing():
 def test_options_are_numbered_for_the_operator():
     """Reported live after the first real question: the options were inline code, so
     answering meant retyping one verbatim. A number has to be a valid answer."""
-    text = fb._ask_format("Patch which host first?", ["the other Windows box", "the LAN model box", "the manager box"])
+    text = fb._ask_format("Patch which host first?", ["host-b", "host-c", "host-a"])
     check("the question is in the post", "Patch which host first?" in text, text)
-    check("options are numbered", "**1.** the other Windows box" in text and "**3.** the manager box" in text, text)
+    check("options are numbered", "**1.** host-b" in text and "**3.** host-a" in text, text)
     check("the numbering is explained", "number" in text.lower(), text)
 
 
@@ -505,11 +505,11 @@ def test_a_question_with_no_options_still_renders():
 
 
 def test_a_number_is_the_selector():
-    row = {"options": ["the other Windows box", "the LAN model box", "the manager box"]}
-    cases = {"1": "the other Windows box", "2": "the LAN model box", "3.": "the manager box", "3)": "the manager box",
-             "option 2": "the LAN model box",
-             "1 - do it now": "the other Windows box - with this too: do it now",
-             "2 but not the MacBook": "the LAN model box - with this too: but not the MacBook"}
+    row = {"options": ["host-b", "host-c", "host-a"]}
+    cases = {"1": "host-b", "2": "host-c", "3.": "host-a", "3)": "host-a",
+             "option 2": "host-c",
+             "1 - do it now": "host-b - with this too: do it now",
+             "2 but not the third host": "host-c - with this too: but not the third host"}
     bad = []
     for said, want in cases.items():
         got = fb._ask_record_choice(row, said)
@@ -519,7 +519,7 @@ def test_a_number_is_the_selector():
 
 
 def test_non_selectors_are_left_as_prose():
-    row = {"options": ["the other Windows box", "the LAN model box"]}
+    row = {"options": ["host-b", "host-c"]}
     cases = ["9", "skytch first", "the second one", ""]
     bad = [(c, fb._ask_record_choice(row, c)) for c in cases
            if fb._ask_record_choice(row, c) is not None]
@@ -540,19 +540,19 @@ def test_a_numbered_answer_reaches_the_model_resolved():
         door = d.ask_door_factory("chan-n", "sess-n")
         join, box = in_thread(fb.tool_ask_user,
                               {"question": "Which host first?",
-                               "options": ["the other Windows box", "the LAN model box"]},
+                               "options": ["host-b", "host-c"]},
                               {"session_key": "sess-n", "ask_door": door})
         check("the numbered list is posted",
-              wait_for(lambda: any("**1.** the other Windows box" in t for _, t in d.posted), 3.0),
+              wait_for(lambda: any("**1.** host-b" in t for _, t in d.posted), 3.0),
               [t for _, t in d.posted][:2])
         d.enqueue(_FakeMsg("chan-n", "2"), "2")
         join(5)
         out = box.get("out", box.get("err", ""))
         check("the model is told the option, not just the digit",
-              "OPERATOR ANSWER: the LAN model box" in out, out[:220])
+              "OPERATOR ANSWER: host-c" in out, out[:220])
         check("and which one it read", "reads as" in out, out[:280])
         check("the operator gets the echo, so a misfire is visible",
-              any("Got it: the LAN model box" in t for _, t in d.posted),
+              any("Got it: host-c" in t for _, t in d.posted),
               [t for _, t in d.posted][-2:])
     finally:
         fb.CONFIG["agent"]["ask_user"] = saved

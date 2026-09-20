@@ -2043,7 +2043,7 @@ def _read_capped(path, limit=None, from_end=False):
 
     Unbounded read_text() here broke run_capture's own promise that a command cannot
     hurt this process: a grep across big log dirs became tens of GiB of Python strings
-    and the kernel OOM-killed a bot account four times on 2026-09-19 (up to 194 GB resident
+    and the kernel OOM-killed one deployed agent four times on 2026-09-19 (up to 194 GB resident
     against a 188 GiB box, then against the unit's own 32 GiB MemoryMax). The command
     is still allowed to be greedy; what it emits is now bounded, and the file is kept
     so the rest can be read deliberately.
@@ -2075,7 +2075,7 @@ def _read_capped(path, limit=None, from_end=False):
 def _self_rss_mb():
     """Resident memory of THIS process in MiB, or None when it cannot be read.
 
-    Written because a bot account was OOM-killed four times on 2026-09-19 and nothing in the
+    Written because an agent was OOM-killed four times on 2026-09-19 and nothing in the
     chat showed the climb — the number that mattered was only visible in journalctl
     afterwards. Cheap enough to call on every check-in.
     """
@@ -2131,7 +2131,7 @@ def _own_cgroup_dir():
     """This process's own cgroup directory, or None.
 
     Reading /sys/fs/cgroup/memory.max reads the ROOT cgroup, and on a systemd host the root
-    files do not exist at all: measured on the LAN model box and the Linux test box 2026-09-19, both memory
+    files do not exist at all: measured on two deployed Linux hosts 2026-09-19, both memory
     readers returned None there, so the check-in's "children" figure and the launch warning
     were dead on the two hosts where the OOM kills happened. A process's own path is in
     /proc/self/cgroup on v2 and v1 alike.
@@ -2178,7 +2178,7 @@ def _cgroup_mem_mb():
 
     The distinction is the whole point. A model server started as a child of this
     process does not show up in _self_rss_mb() but does count against MemoryMax, and
-    that is how a bot account died at 17:09 on 2026-09-19: 33.4 GiB charged to
+    that is how one agent died at 17:09 on 2026-09-19: 33.4 GiB charged to
     tinycmdr.service 108s after a shell batch that launched the ik server CPU-only,
     with no tool result bigger than 7.5 KB in the window.
     """
@@ -2688,7 +2688,7 @@ def _edit_diff(old_text, new_text, path, limit=60):
 
     Without this the only feedback was "replaced 1 occurrence(s)": a subtly wrong edit
     landed silently and the first signal was a failing suite much later (measured on
-    the manager box, 2026-09-19, where the model could not tell an applied-but-wrong edit from a
+    the development host, 2026-09-19, where the model could not tell an applied-but-wrong edit from a
     correct one).
     """
     import difflib
@@ -2954,7 +2954,7 @@ def tool_fetch_url(args, ctx):
     except (TypeError, ValueError):
         ceil = 12000
     # The model may ask for more than the 8k default, but not for 30 KB: the largest page
-    # in the Windows test box's ten-day log was 30,048 chars, 17.6% of that host's result chars.
+    # in one host's ten-day log was 30,048 chars, 17.6% of that host's result chars.
     max_chars = max(1000, min(int(args.get("max_chars") or 8000), ceil))
     try:
         resp = requests.get(url, timeout=30, headers={
@@ -3686,7 +3686,7 @@ def _read_text_any(path, max_bytes=None):
     max_bytes is a hard ceiling on the read itself, not a filter after it: the
     2026-09-19 OOM was this function slurping a 47 GB GGUF because a tool call
     named the model path twice and read_bytes() has no upper bound. (Found by
-    a bot account, which measured the 44,901 MiB mapping against the 47,039,860,096 B
+    the model host, which measured the 44,901 MiB mapping against the 47,039,860,096 B
     fnx IQ3_XXS shard.)
     """
     try:
