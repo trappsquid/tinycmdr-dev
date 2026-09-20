@@ -1,0 +1,119 @@
+captured at: 2026-09-19 07:33:49
+user: the manager box\David Trapp
+elevated: True
+
+=== SCHEDULED TASKS (shell/exec actions) ===
+Task: \Adobe-Genuine-Software-Integrity-Scheduler-1.0
+   exec: C:\Program Files (x86)\Common Files\Adobe\AdobeGCClient\AGSService.exe  args: 
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \AdobeGCInvoker-1.0
+   exec: C:\Program Files (x86)\Common Files\Adobe\AdobeGCClient\agcinvokerutility.exe  args: -mode=scheduled
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \AdobeGCInvokerLogon
+   exec: C:\Program Files (x86)\Common Files\Adobe\AdobeGCClient\agcinvokerutility.exe  args: --logon
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \CreateExplorerShellUnelevatedTask
+   exec: C:\WINDOWS\explorer.exe  args: /NoUACCheck
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \cua-driver-serve
+   exec: powershell.exe  args: -NoProfile -WindowStyle Hidden -NonInteractive -Command "Start-Process -FilePath 'C:/Users/<user>\AppData\Local\Programs\Cua\cua-driver\bin\cua-driver.exe' -ArgumentList 'serve' -WindowStyle Hidden -WorkingDirectory 'C:/Users/<user>'"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \FileBrowserStart
+   exec: F:\Docker\filebrowser\filebrowser.exe  args: -d F:\Docker\filebrowser\filebrowser.db
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \tinycmdr
+   exec: wscript.exe  args: //B //Nologo "C:/Users/<user>\tinycmdr\tinycmdr-service.vbs"
+   trigger: CimInstance
+   trigger: CimInstance
+   states: started=Running hidden=False restartOnNet=
+
+Task: \Hermes_Gateway_Watchdog
+   exec: powershell.exe  args: -NoProfile -ExecutionPolicy Bypass -File "C:/Users/<user>\AppData\Local\hermes\scripts\hermes_gateway_watchdog.ps1"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \Hermes_MMRelay
+   exec: C:/Users/<user>\AppData\Local\Programs\Python\Python314\pythonw.exe  args: F:\Docker\mattermost\mm-slash-relay\relay.py
+   trigger: CimInstance
+   states: started=Running hidden=False restartOnNet=
+
+Task: \the manager box-BIOS-Firmware
+   exec: powershell.exe  args: -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:/Users/<user>\tinycmdr\maintenance\bios-firmware-update.ps1"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \the manager box-CompactDockerVhd
+   exec: powershell.exe  args: -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:/Users/<user>\tinycmdr\maintenance\compact-docker-vhd.ps1"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \the manager box-PostFlash-Log
+   exec: powershell.exe  args: -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:/Users/<user>\tinycmdr\maintenance\postflash-check.ps1"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \the manager box-StartContainers
+   exec: powershell.exe  args: -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "C:/Users/<user>\tinycmdr\maintenance\start-containers.ps1"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \MicrosoftEdgeUpdateTaskMachineCore{E2326954-0F70-4017-8BE9-E561F2AA96EB}
+   exec: C:\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe  args: /c
+   trigger: CimInstance
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \MicrosoftEdgeUpdateTaskMachineUA{3262716A-C128-443E-A8DA-A8EAD5D90AC7}
+   exec: C:\Program Files (x86)\Microsoft\EdgeUpdate\MicrosoftEdgeUpdate.exe  args: /ua /installsource scheduler
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \BrowserWorks\Waterfox Default Browser Agent 6F940AC27A98DD61
+   exec: C:\Program Files\Waterfox\default-browser-agent.exe  args: do-task "6F940AC27A98DD61"
+   trigger: CimInstance
+   states: started=Ready hidden=False restartOnNet=
+
+Task: \Microsoft\Windows\AppID\PolicyConverter
+   exec: %windir%\system32\appidpolicyconverter.exe  args: 
+tasks err: You cannot call a method on a null-valued expression.
+
+=== TASK SCHEDULER EVENTS (last 40) ===
+tssched err: No events were found that match the specified selection criteria.
+
+=== 4688 PROCESS CREATION (shells, last 60) ===
+(no 4688 entries matched -- process creation may not be audited)
+
+=== CURRENT SHELL PROCESSES ===
+id=10788 conhost start=12:49:08 dur=758682s  path=C:\WINDOWS\system32\conhost.exe
+id=11292 conhost start=12:49:09 dur=758681s  path=C:\WINDOWS\system32\conhost.exe
+id=12244 conhost start=12:49:11 dur=758679s  path=C:\WINDOWS\system32\conhost.exe
+id=14052 conhost start=12:49:16 dur=758675s  path=C:\WINDOWS\system32\conhost.exe
+id=14140 conhost start=12:49:16 dur=758674s  path=C:\WINDOWS\system32\conhost.exe
+id=12696 conhost start=12:49:16 dur=758674s  path=C:\WINDOWS\system32\conhost.exe
+id=12672 conhost start=12:49:16 dur=758674s  path=C:\WINDOWS\system32\conhost.exe
+id=12308 conhost start=12:50:30 dur=758600s  path=C:\WINDOWS\system32\conhost.exe
+id=11400 conhost start=13:28:21 dur=756329s  path=C:\WINDOWS\system32\conhost.exe
+id=5496 conhost start=18:35:48 dur=392282s  path=C:\WINDOWS\system32\conhost.exe
+id=14860 wscript start=20:37:42 dur=298568s  path=C:\WINDOWS\system32\wscript.exe
+id=2860 conhost start=16:51:32 dur=52938s  path=C:\WINDOWS\system32\conhost.exe
+id=18384 conhost start=22:50:54 dur=31376s  path=C:\WINDOWS\system32\conhost.exe
+id=3524 conhost start=07:33:21 dur=29s  path=C:\WINDOWS\system32\conhost.exe
+id=7292 conhost start=07:33:49 dur=2s  path=C:\WINDOWS\system32\conhost.exe
+id=10116 powershell start=07:33:49 dur=1s  path=C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+id=16668 conhost start=07:33:49 dur=1s  path=C:\WINDOWS\system32\conhost.exe
+id=15864 powershell start=07:33:49 dur=1s  path=C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe
+
+=== VISIBLE TOP-LEVEL WINDOWS ===
+(none / COM unavailable)

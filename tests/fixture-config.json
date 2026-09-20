@@ -1,0 +1,56 @@
+{
+  "_readme": [
+    "Sanitized config used by the test suites. The suites copy this into a temp",
+    "dir next to a byte-copy of tinycmdr.py and import that, so they can run",
+    "against a fresh unpack where no config.json exists yet (CI, a new host, a",
+    "download). Every value here is fake on purpose: do not point it at a real",
+    "server, and never put a real token in it.",
+    "It is not the example to hand to a person: config.example.json is that, and it",
+    "spells out every key with fake values. This one exists so the suites have a",
+    "config that can never be mistaken for a real host's.",
+    "base_url is 127.0.0.1:1 (a port nothing listens on) and not a plausible port",
+    "like 8081: a fixture pointing at a live local service makes endpoint tests",
+    "reach something real and fail for the wrong reason."
+  ],
+  "llm": {
+    "base_url": "http://127.0.0.1:1/v1",
+    "api_key": "none",
+    "model": "main",
+    "max_turns": 600,
+    "max_context_tokens": 110000,
+    "max_tokens": 16384,
+    "final_max_tokens": 8192,
+    "request_timeout": 1200,
+    "max_tokens_ceiling": 65536,
+    "fallbacks": [],
+    "allow_cloud_fallback": false,
+    "stream": false
+  },
+  "mattermost": {
+    "url": "chat.example.com",
+    "scheme": "https",
+    "port": 443,
+    "token": "fixture-token-not-a-secret",
+    "allowed_users": [
+      "fixture-user"
+    ],
+    "ssl_verify": true
+  },
+  "web": {
+    "enabled": true,
+    "port": 8788,
+    "token": "fixture-web-token-not-a-secret",
+    "host": "127.0.0.1"
+  },
+  "search": {
+    "anysearch_api_key": "",
+    "tavily_api_key": "",
+    "max_results": 5
+  },
+  "agent": {
+    "bot_name": "fixture",
+    "max_steps": 100,
+    "max_minutes": 35,
+    "shell_timeout": 380
+  }
+}

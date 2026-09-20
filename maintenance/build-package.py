@@ -1,0 +1,851 @@
+"""Build the shippable tinycmdr package for a new host (Windows or Linux).
+
+    python maintenance/build-package.py            # -> dist/tinycmdr-<v>-win.zip
+                                                  #    dist/tinycmdr-<v>-linux.tar.gz
+    python maintenance/build-package.py --list     # just show what would ship
+
+Design rules, in order of importance:
+
+1. NOTHING host-specific ships. No .env, no config.json, no logs, no session
+   history, no notes/ledger, no web token, no Mattermost ids. The build FAILS if
+   it finds any of them — a leak here is a leak onto every host you install on.
+2. Everything needed to reach a working install ships: the app, the config and
+   env templates, the skills, the tests, and the installer.
+3. The manifest records what shipped, so an installed host can be compared
+   against the package it came from.
+"""
+import argparse
+import ast
+import hashlib
+import json
+import pathlib
+import plistlib
+import re
+import shutil
+import sys
+import tarfile
+import tempfile
+import time
+import zipfile
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+DIST = ROOT / "dist"
+
+# files/dirs that ship, in package-relative form
+SHIP = [
+    "tinycmdr.py",
+    "field-notes.md",
+    "requirements.txt",
+    "config.example.json",
+    ".env.example",
+    "README.md",
+    "CHANGELOG.md",
+    "install/install-tinycmdr.ps1",
+    "install/install-tinycmdr.cmd",
+    "install/install-tinycmdr.sh",
+    "install/install-tinycmdr-macos.sh",
+    "install/com.trapp.tinycmdr.plist",
+    "install/README-macos.md",
+    "maintenance/restart-tinycmdr.ps1",
+    "maintenance/restart-tinycmdr.sh",
+    "launch-tinycmdr.sh",
+    "skills",
+    "tests",
+]
+
+# The console-only build of the same agent travels inside this package, so one
+# download covers both ways of using it. It is generated from tinycmdr.py by
+# maintenance/build-cli-source.py, and it is the file with no chat layer at all.
+CLI_FOLDER_README = """tinycmdr console build
+======================
+
+This is the same agent as the tinycmdr.py one folder up, built for a terminal
+only: no Mattermost, no bot account, no web page, and no dependencies beyond
+Python itself (3.10+). It talks to the model over the standard library.
+
+    python tinycmdr-cli.py                   start a console session
+    python tinycmdr-cli.py --once "task"     run one task and exit
+    python tinycmdr-cli.py --help            the rest
+
+It reads config.json from THIS folder, and it never writes one: copy the example
+from one level up and fill in the fields, then start it again.
+
+    cp ../config.example.json config.json
+    {"llm": {"base_url": "http://your-model-host:8081/v1",
+             "model": "your-model", "api_key": "optional"}}
+
+Opening it creates nothing: no log file, no sessions/, no tools/, no config.json.
+Those appear only once it has something to keep.
+
+Give it a folder of its own: sessions, notes and tasks are written next to the
+file, so two copies in one folder share a single history.
+
+Which build do I want?
+  cli/tinycmdr-cli.py    I want to talk to it from a terminal
+  tinycmdr.py            I want it in Mattermost, or the local web page
+                         (python tinycmdr.py --web)
+"""
+
+# A backup/file that must never be staged, whatever it is called: ".bak" anywhere
+# (x.py.bak, x.py.bak-pre256-20260914), "pre" immediately followed by a version
+# digit (x.pre-1.9.30, x.bak-pre256-...), and the usual editor leftovers.
+BACKUP_RE = re.compile(r"\.bak|\.pre-|(?<![a-z])pre[-_]?\d|\.orig$|\.rej$|~$", re.I)
+
+# things that must never be inside the zip, even by accident
+FORBIDDEN_NAMES = {
+    ".env", "config.json", "state.json", "jobs.json", "tasks.json", "tasks.md",
+    "notes.md", "notes-archive.md", "tinycmdr.log", "tinycmdr.lock",
+    "web-token.txt",
+    # The machine atlas is generated ON the host it describes (atlas.md: os, paths, ports,
+    # and where things live). Shipping this box's map to another box is worse than shipping
+    # none: it is wrong in a way that reads as authoritative.
+    "atlas.md",
+}
+FORBIDDEN_DIRS = {"sessions", "snapshots", "tools", "tmp", "__pycache__",
+                  # Run output, not source: the graded-eval runner writes a jsonl per run
+                  # plus a per-task artifact folder, and shipping those put ~400 KB of this
+                  # box's own scoring runs inside the public archive (173 of its 191 entries
+                  # were test output). The leak gate passed them; a stranger-facing package
+                  # still has no business carrying them.
+                  "eval-runs",
+                  "dist", ".archive"}
+# Makes a host install zero-argument: this fleet's Mattermost host, model
+# endpoint and allowed user. Deliberately fleet-specific (that is its point) and
+# carries no secrets - the bot token is written to .env at install time.
+FLEET_FILE = "install/fleet-defaults.json"
+# Fleet-wide keys (search): the same on every host, so they ship in the package and
+# the installer writes them into .env. Per-bot keys (Mattermost token, DeepSeek) are
+# NOT here - those come from -MattermostToken/-SecretsFile/an existing .env/prompt.
+SECRETS_FILE = "install/fleet-secrets.env"
+FLEET_WIDE_KEYS = ("TAVILY_API_KEY", "ANYSEARCH_API_KEY")
+FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
+
+# only the restart helpers are generic; the rest of maintenance/ is the manager box-specific
+ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
+                       "restart-tinycmdr-macos.sh"}
+
+# Values that must not appear ANYWHERE (they are secrets, or this box's identity)
+SECRET_LABELS = ("web ui token", "mattermost token", "allowed user id")
+ENV_PREFIX = "env "
+# Ships-as-code files must be neutral too: a host value here would be baked into
+# every install, which is exactly how this box's endpoint ended up in the code.
+APP_FILES = ("tinycmdr.py", "config.example.json", ".env.example", "README.md",
+             "CHANGELOG.md", "install/install-tinycmdr.ps1",
+             "install/install-tinycmdr.sh", "maintenance/restart-tinycmdr.ps1",
+             "maintenance/restart-tinycmdr.sh", "launch-tinycmdr.sh",
+             "install/install-tinycmdr-macos.sh", "install/com.trapp.tinycmdr.plist",
+             "maintenance/restart-tinycmdr-macos.sh")
+
+# --------------------------------------------------------------- public build ---
+# Skills that belong to ONE box and must not ride along in a fleet build. They document a
+# specific host's key path and a public server address, so installing them on other hosts would
+# hand those hosts instructions that cannot work there (and leak that address into every copy).
+# Host-local by design, added 2026-09-11.
+HOST_SKILLS_SKIP = ("devops/mail-vps-admin", "web/example-blog", "devops/the file share",
+                    "web/post-humanizer")
+
+# `--public` produces the package that can be handed to strangers (a blog
+# download): no fleet defaults, no keys, no private runbooks, and a scan that
+# FAILS if a single personal string survives.
+
+# The public package ships NO skills. The bot is the product; the skills are
+# whatever the operator brings. The format is documented for drag-and-drop, and
+# a reader has no use for this fleet's runbooks. Shipping a library would also
+# mean shipping other people's copyrights (some bundled skills are MIT by other
+# authors), which a standalone download has no reason to do.
+PUBLIC_PRUNE = ("skills",)
+
+# Written to skills/README.md in a public build, so whoever opens that folder
+# knows the contract without reading the whole README.
+PUBLIC_SKILLS_README = """# Skills go here
+
+tinycmdr ships no skills of its own, and it does not need any. Anything you put
+in this folder that follows the SKILL.md skill convention is picked up
+automatically:
+
+    skills/<category>/<name>/SKILL.md      or just   skills/<name>/SKILL.md
+
+SKILL.md must begin with YAML frontmatter carrying a name and a description:
+
+    ---
+    name: mail-server-admin
+    description: "Use when administering a self-hosted mail server."
+    ---
+
+    # Mail server admin
+
+    The runbook: commands, paths, gotchas, in the order you would do them.
+
+How tinycmdr uses it:
+
+  - the model sees one line per skill ("name: description") in its prompt;
+  - it reads a skill in full only when the task looks relevant (first 4000
+    characters), or searches one for a topic;
+  - every other .md in the skill folder is searchable too;
+  - a new folder is live on the NEXT message. No restart, no config, no index.
+
+Two things worth knowing:
+
+  - COPY the folder in. A symlinked skill folder is invisible to the scanner
+    (pathlib does not descend into symlinked directories).
+  - The format is the one agent skill libraries use, so folders from those load
+    as they are. What does not come with them is their tools: a runbook whose
+    steps call a tool this build does not have (a desktop, browser or subagent
+    tool, say) is an instruction for a program that is not here. Every skill read
+    ends with the list of tools this install does have, and a capability you need
+    is a file in tools/ - or one the agent writes with create_tool.
+
+This file is documentation, not a skill. Delete it whenever you like.
+"""
+
+# Prose that a public build MAY rewrite (the rest of APP_FILES is code: a hit
+# there is a bug to fix by hand, not something to silently rewrite).
+PUBLIC_REDACT_DOCS = ("README.md", "CHANGELOG.md")
+
+# Redaction for everything else. ORDER MATTERS: the specific phrases first, then
+# the generic shapes, or a broad rule eats the context a narrow one needed.
+PUBLIC_RULES = (
+    (r"\bthe manager box-style\b", "host-style"),
+    (r"\bchat\.example\.com\b", "chat.example.com"),
+    (r"[\w.-]*example\.com", "example.com"),
+    (r"(?i:\bthe manager box\b|\bbot-aTOWER\b|\bthe Windows test box\b)", "a Windows host"),
+    (r"(?i:\bthe LAN model box\b|\bthe Linux test box\b)", "a Linux host"),
+    # the box's ROLE, not its name: "the security onion bot" names a host that the
+    # site's content policy does not mention, and the name alone leaked into shipped
+    # docs (found 2026-09-12 by grepping the built package, not by the build failing)
+    (r"(?i:\bsecurity onion\b|\bthe Linux box\b)", "a Linux host"),
+    (r"(?i:\bthe manager boxbot\b|\bthe macOS boxbot\b|\bthe other Windows boxbot\b|\bthe LAN model boxbot\b|\ba bot account\b"
+     r"|\bthe Linux box\b|\ba bot account\b|\bsystem-bot\b)", "a bot account"),
+    (r"\bDavid Trapp\b|\bDavid\b|\b<user>\b", "the operator"),
+    (r"C:\\Users\\<user>", r"C:\\tinycmdr"),
+    (r"/home/<user>", "/home/<user>"),
+    (r"\b<id>gp8g3k6qod9t5nwyro\b", "<mattermost-user-id>"),
+    (r"\b10\.10\.\d+\.\d+(?::\d+)?\b", "a LAN address"),
+    (r"\bthe file share\b", "the file share"),
+    (r"\bMattermost-(?:BOT-TOKENS|ACCOUNTS|AGENT-TOKENS)\.txt\b", "the credentials file"),
+    (r"\b[a-z0-9]{26}\b", "<id>"),
+)
+
+# Anything matching one of these in a --public package is a build failure, not a
+# warning. The 26-char rule catches Mattermost ids; the key shapes catch leaked
+# credentials in any doc that quotes one.
+PUBLIC_FORBIDDEN = (
+    r"example", r"10\.10\.0\.", r"(?i:\bthe manager box\b)", r"the LAN model box", r"the Linux test box",
+    r"the other Windows box", r"the macOS box", r"bot-aTOWER|the Windows test box", r"a bot account",
+    r"the Linux box", r"(?i)security onion", r"\ba bot account\b", r"\bDavid\b",
+    r"<user>",
+    r"<id>", r"\b[a-z0-9]{26}\b", r"the file share",
+    r"tvly-[A-Za-z0-9]{8,}", r"sk-[A-Za-z0-9]{20,}",
+    r"C:\\Users\\David", r"/home/<user>",
+)
+
+
+def version():
+    m = re.search(r'^VERSION\s*=\s*"([^"]+)"', (ROOT / "tinycmdr.py").read_text(
+        encoding="utf-8", errors="replace"), re.M)
+    return m.group(1) if m else "unknown"
+
+
+def host_values():
+    """Values that exist only on THIS host. A package containing any of them is
+    leaking this machine's identity, channels or secrets — refuse to build."""
+    vals = {}
+    cfg_path = ROOT / "config.json"
+    if cfg_path.exists():
+        try:
+            cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+        except Exception:
+            cfg = {}
+        for section, key, label in (
+                ("mattermost", "url", "mattermost url"),
+                ("mattermost", "token", "mattermost token"),
+                ("web", "token", "web ui token"),
+                ("llm", "base_url", "llm base url")):
+            v = ((cfg.get(section) or {}).get(key) or "")
+            if isinstance(v, str) and len(v) >= 6:
+                vals[label] = v
+        for u in ((cfg.get("mattermost") or {}).get("allowed_users") or []):
+            if isinstance(u, str) and len(u) >= 6:
+                vals["allowed user id"] = u
+    env_path = ROOT / ".env"
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, v = line.split("=", 1)
+                if v.strip() and len(v.strip()) >= 8:
+                    vals[f"env {k.strip()}"] = v.strip()
+    return vals
+
+
+def write_fleet_secrets(target):
+    """install/fleet-secrets.env with the fleet-wide keys, taken from this box's .env
+    so they are never typed again. Read by install-tinycmdr.ps1 automatically."""
+    env_path = ROOT / ".env"
+    vals = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+            s = line.strip()
+            if s.startswith("#") or "=" not in s:
+                continue
+            k, v = s.split("=", 1)
+            if k.strip() in FLEET_WIDE_KEYS and v.strip():
+                vals[k.strip()] = v.strip()
+    if not vals:
+        return {}
+    lines = ["# fleet-wide keys (same on every host). install-tinycmdr.ps1 reads this",
+             "# file automatically and writes these into the install's .env.",
+             "# Per-bot keys are NOT here: Mattermost token and DeepSeek key are per host."]
+    lines += [f"{k}={vals[k]}" for k in FLEET_WIDE_KEYS if k in vals]
+    p = target / SECRETS_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return vals
+
+
+def write_fleet_defaults(target):
+    cfg_path = ROOT / "config.json"
+    cfg = {}
+    if cfg_path.exists():
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+    mm, llm = cfg.get("mattermost") or {}, cfg.get("llm") or {}
+    users = [u for u in (mm.get("allowed_users") or []) if isinstance(u, str) and u]
+    out = {
+        "_readme": [
+            "Fleet defaults for install-tinycmdr.ps1: with this file present a host",
+            "installs with no arguments and nothing hand-edited. It carries no",
+            "secrets - the Mattermost bot token is written to .env at install time.",
+            "Command-line switches always win over these values.",
+        ],
+        "mattermost_url": mm.get("url") or "",
+        "mattermost_port": mm.get("port") or 443,
+        "allowed_user": users[0] if users else "",
+        "model_base_url": llm.get("base_url") or "",
+        "model": llm.get("model") or "main",
+    }
+    p = target / FLEET_FILE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(out, indent=2), encoding="utf-8")
+    return out
+
+
+def lf_only(path):
+    """A .sh with CRLF endings is not runnable: bash reads the shebang as
+    "#!/usr/bin/env bash\r" and dies with "syntax error near '$\'in\r\''".
+    The Windows working tree can carry CRLF even though the shipped kit must be
+    LF, so normalise here instead of trusting the checkout."""
+    if path.suffix != ".sh":
+        return False
+    raw = path.read_bytes()
+    if b"\r\n" not in raw:
+        return False
+    path.write_bytes(raw.replace(b"\r\n", b"\n"))
+    return True
+
+
+def stage(target):
+    """Copy the shipping set into target/, applying the exclusion rules."""
+    target.mkdir(parents=True, exist_ok=True)
+    for rel in SHIP:
+        src = ROOT / rel
+        if not src.exists():
+            print(f"  ! missing {rel} — skipped")
+            continue
+        dst = target / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_dir():
+            for item in src.rglob("*"):
+                if item.is_dir():
+                    continue
+                if any(part in FORBIDDEN_DIRS or part in FORBIDDEN_NAMES
+                       for part in item.relative_to(src).parts):
+                    continue
+                if item.suffix in (".pyc", ".log", ".bak"):
+                    continue
+                # Rollback copies live beside the file they replace until a version is
+                # proven; they must never ship (a stale test copy in the package is worse
+                # than no test at all, because it passes). The suffix rules above missed
+                # a backup named "x.py.bak-pre256-20260914-234923": its suffix is
+                # ".bak-pre256-..." and the old name test looked for ".pre-" while the
+                # real name had "-pre256-". One release shipped that file. So: match the
+                # shape, not one spelling of it - ".bak" anywhere, "pre" followed by a
+                # version digit, and the usual editor leftovers.
+                if BACKUP_RE.search(item.name):
+                    continue
+                # Same rule for run output that is not a .log: jsonl run records and the
+                # per-task artifact folders the eval runner leaves behind.
+                if item.suffix == ".jsonl" or ".jsonl" in item.name:
+                    continue
+                if any(part.endswith("-artifacts") for part in item.relative_to(src).parts):
+                    continue
+                rel_from_src = item.relative_to(src).as_posix()
+                if any(rel_from_src.startswith(host + "/") for host in HOST_SKILLS_SKIP):
+                    continue
+                out = dst / item.relative_to(src)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, out)
+                lf_only(out)
+        else:
+            shutil.copy2(src, dst)
+            lf_only(dst)
+
+    # the console build, bundled whole so nobody has to hunt for a second download
+    cli = ROOT / "tinycmdr-cli.py"
+    if cli.exists():
+        out = target / "cli" / "tinycmdr-cli.py"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(cli, out)
+        lf_only(out)
+        (target / "cli" / "README.txt").write_text(CLI_FOLDER_README,
+                                                   encoding="utf-8")
+    else:
+        print("  ! missing tinycmdr-cli.py — the console build is NOT bundled")
+    return target
+
+
+# Secrets and personal ids get replaced rather than dropped: the docs stay
+# useful on the new host, without carrying this box's credentials or ids.
+PLACEHOLDER = {
+    "web ui token": "<web-ui-token>",
+    "mattermost token": "<mattermost-bot-token>",
+    "allowed user id": "<your-mattermost-user-id>",
+}
+
+
+def sanitize(target, host_vals):
+    """Replace secret values in the shipped files (never in APP_FILES, which must
+    be clean by construction). Returns the list of redacted files."""
+    changed = []
+    for f in target.rglob("*"):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(target).as_posix()
+        if rel in APP_FILES:
+            continue
+        if rel == SECRETS_FILE:
+            # This file exists to carry the fleet-wide keys, so it must not go
+            # through env-value redaction: doing so replaced every key with the
+            # literal "<redacted: TAVILY_API_KEY>" and both installers wrote that
+            # into the new host's .env as if it were a key (seen 2026-09-11 on
+            # the LAN model box and the Linux test box: search dead, HTTP 401 from the provider).
+            # audit() and the zip verifier already exempt it the same way.
+            continue
+        text = f.read_text(encoding="utf-8", errors="replace")
+        new = text
+        for label, val in host_vals.items():
+            if not val or val not in new:
+                continue
+            if rel == FLEET_FILE and label in FLEET_MAY_CARRY:
+                # fleet-defaults.json exists to carry the fleet's own values; a
+                # redacted allowed_user would leave the bot ignoring every DM
+                continue
+            if label in SECRET_LABELS:
+                new = new.replace(val, PLACEHOLDER[label])
+            elif label.startswith(ENV_PREFIX):
+                new = new.replace(val, f"<redacted: {label[4:]}>")
+        if new != text:
+            f.write_text(new, encoding="utf-8")
+            changed.append(rel)
+    return changed
+
+
+def audit(target, host_vals, allow_secrets=False):
+    """Fail on secrets and on any host value inside shippable code; merely warn
+    about this fleet's hostnames appearing in skills, which are documentation
+    about the fleet and are meant to be useful as-is."""
+    problems, warnings, scanned = [], [], 0
+    for f in target.rglob("*"):
+        if not f.is_file():
+            continue
+        scanned += 1
+        rel = f.relative_to(target).as_posix()
+        parts = f.relative_to(target).parts
+        if f.name in FORBIDDEN_NAMES or any(p in FORBIDDEN_DIRS for p in parts):
+            problems.append(f"forbidden file: {rel}")
+        if parts[0] == "maintenance" and f.name not in ALLOWED_MAINTENANCE:
+            problems.append(f"host-specific maintenance script: {rel}")
+        # Windows PowerShell 5.1 decodes a BOM-less file as ANSI, so a UTF-8 em
+        # dash inside a string turns into a smart quote and breaks the parse.
+        # Shipped scripts must be pure ASCII.
+        # A BOM breaks JSON parsing and HTTP headers (an installer-written
+        # web token with a BOM is a 401 with no visible cause). Notepad and
+        # PowerShell 5.1 both add one, so gate it.
+        if f.suffix.lower() in (".json", ".example") or f.name == ".env.example":
+            if f.read_bytes()[:3] == b"\xef\xbb\xbf":
+                problems.append(f"UTF-8 BOM in a shipped data file: {rel}")
+        # The .sh half of this gate covers the scripts THIS package runs on a new
+        # host (installer, launcher, restart helper) - the ones that must parse in
+        # any locale. Skill scripts are the agent's own toolkit and ship as-is,
+        # like the .py and .md beside them.
+        runs_here = (rel.startswith("install/") or rel.startswith("maintenance/")
+                     or rel == "launch-tinycmdr.sh")
+        if f.suffix.lower() in (".ps1", ".bat", ".vbs", ".cmd") or (
+                f.suffix.lower() == ".sh" and runs_here):
+            raw = f.read_bytes()
+            nonascii = [b for b_ in [raw] for b in b_ if b > 127]
+            if nonascii:
+                problems.append(
+                    f"non-ASCII bytes in a script (PS 5.1 will misparse it): {rel}")
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for label, val in host_vals.items():
+            if not val or val not in text:
+                continue
+            if label.startswith(ENV_PREFIX):
+                if rel == SECRETS_FILE and allow_secrets:
+                    continue          # this file exists to carry the fleet keys
+                problems.append(f"secret {label} in {rel}")
+                continue
+            if rel == FLEET_FILE and label in FLEET_MAY_CARRY:
+                continue          # fleet-defaults.json exists to carry these
+            hard = (label in SECRET_LABELS or rel in APP_FILES)
+            (problems if hard else warnings).append(f"{label} in {rel}")
+    return problems, warnings, scanned
+
+
+def prune(stage_dir, prefixes):
+    """Drop whole subtrees (skills this fleet's docs live in). Returns the count."""
+    dropped = 0
+    for pre in prefixes:
+        target = stage_dir / pre
+        if target.is_dir():
+            dropped += len([f for f in target.rglob("*") if f.is_file()])
+            shutil.rmtree(target)
+    return dropped
+
+
+def redact_public(stage_dir):
+    """Scrub personal strings out of every non-code file. Returns {file: n_hits}."""
+    changed = {}
+    for f in sorted(stage_dir.rglob("*")):
+        if not f.is_file() or f.suffix.lower() in (".png", ".gz", ".zip"):
+            continue
+        rel = f.relative_to(stage_dir).as_posix()
+        if rel in APP_FILES and rel not in PUBLIC_REDACT_DOCS:
+            # the app itself must be byte-identical to the live file, so a hit
+            # here is a bug in tinycmdr.py, not something to silently rewrite
+            continue
+        text = f.read_text(encoding="utf-8", errors="replace")
+        new, n = text, 0
+        for pat, repl in PUBLIC_RULES:
+            new, k = re.subn(pat, repl, new)
+            n += k
+        if n:
+            f.write_text(new, encoding="utf-8", newline="")
+            changed[rel] = n
+    return changed
+
+
+def audit_public(stage_dir):
+    """Any personal string left anywhere (code included) fails the build."""
+    problems = []
+    for f in sorted(stage_dir.rglob("*")):
+        if not f.is_file() or f.suffix.lower() in (".png", ".gz", ".zip"):
+            continue
+        rel = f.relative_to(stage_dir).as_posix()
+        text = f.read_text(encoding="utf-8", errors="replace")
+        for pat in PUBLIC_FORBIDDEN:
+            for m in set(re.findall(pat, text)):
+                problems.append(f"private string {m!r} ({pat}) in {rel}")
+    return problems
+
+
+# The package states Python 3.10 as its floor in the README and requirements, so a shipped
+# .py that only PARSES on a newer interpreter is a broken promise: 2.3.0 went out with two
+# suites using a nested same-quote f-string (3.12-only, PEP 701), found by unpacking the
+# published archive on a 3.10 host. Parse every shipped .py against the floor, not the
+# interpreter this build happens to run on.
+PY_FLOOR = (3, 10)
+
+
+def syntax_floor(folder):
+    """Problems for any shipped .py that does not parse on the stated minimum."""
+    problems, checked = [], 0
+    for f in sorted(folder.rglob("*.py")):
+        rel = f.relative_to(folder).as_posix()
+        try:
+            ast.parse(f.read_text(encoding="utf-8", errors="replace"),
+                      filename=rel, feature_version=PY_FLOOR)
+            checked += 1
+        except SyntaxError as e:
+            problems.append(f"{rel}:{e.lineno} does not parse on Python "
+                            f"{PY_FLOOR[0]}.{PY_FLOOR[1]} ({e.msg})")
+    print(f"syntax floor: {checked} .py file(s) parse on Python "
+          f"{PY_FLOOR[0]}.{PY_FLOOR[1]}")
+    return problems
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--list", action="store_true", help="show what would ship")
+    ap.add_argument("--public", action="store_true",
+                    help="blog/release build: no fleet defaults, no keys, private "
+                         "runbooks dropped, everything else redacted, and a scan that "
+                         "REFUSES the build on any surviving personal string")
+    ap.add_argument("--no-fleet", action="store_true",
+                    help="omit fleet-defaults.json (a generic, argument-driven package)")
+    ap.add_argument("--macos", action="store_true",
+                    help="also build dist/tinycmdr-<v>-macos.zip (macOS kit: the same\n                         staged tree plus the launchd installer)")
+    ap.add_argument("--no-secrets", action="store_true",
+                    help="omit install/fleet-secrets.env (no keys in the package; hosts "
+                         "then need -SecretsFile)")
+    args = ap.parse_args()
+
+    public = args.public
+    if public:
+        args.no_fleet = True
+        args.no_secrets = True
+
+    ver = version()
+    host_vals = host_values()
+    print(f"tinycmdr package builder — version {ver}"
+          + ("  [PUBLIC RELEASE]" if public else ""))
+    print(f"host-specific values that must NOT appear: {len(host_vals)}")
+    for label in host_vals:
+        print(f"  will check: {label}")
+
+    with tempfile.TemporaryDirectory(prefix="tinycmdr-pkg-") as tmp:
+        stage_dir = pathlib.Path(tmp) / f"tinycmdr-{ver}"
+        stage(stage_dir)
+        if public:
+            n = prune(stage_dir, PUBLIC_PRUNE)
+            print(f"\npublic: dropped {n} file(s) under "
+                  f"{', '.join(PUBLIC_PRUNE)} (skills are the operator's to bring)")
+            sk = stage_dir / "skills"
+            sk.mkdir(parents=True, exist_ok=True)
+            (sk / "README.md").write_text(PUBLIC_SKILLS_README, encoding="utf-8",
+                                          newline="\n")
+            print("public: wrote skills/README.md (the drag-and-drop contract)")
+        if not args.no_fleet:
+            fleet = write_fleet_defaults(stage_dir)
+            print(f"fleet defaults: {fleet['mattermost_url']} | {fleet['model_base_url']} "
+                  f"| allowed_user={'set' if fleet['allowed_user'] else 'unset'}")
+        secrets_written = {}
+        if not args.no_secrets:
+            secrets_written = write_fleet_secrets(stage_dir)
+            if secrets_written:
+                print("fleet secrets : " + ", ".join(sorted(secrets_written))
+                      + "  <-- the package now carries these keys; keep the zip to "
+                        "your own hosts")
+
+        if args.list:
+            print("\nwould ship:")
+            for f in sorted(stage_dir.rglob("*")):
+                if f.is_file():
+                    print(f"  {f.relative_to(stage_dir)}  ({f.stat().st_size} B)")
+            return 0
+
+        redacted = sanitize(stage_dir, host_vals)
+        if redacted:
+            print(f"\nredacted {len(redacted)} file(s) that carried secrets/ids:")
+            for r_ in redacted:
+                print(f"  ~ {r_}")
+        if public:
+            scrubbed = redact_public(stage_dir)
+            if scrubbed:
+                print(f"\npublic: scrubbed personal strings out of {len(scrubbed)} "
+                      f"file(s) ({sum(scrubbed.values())} replacements):")
+                for r_ in sorted(scrubbed):
+                    print(f"  ~ {r_}  ({scrubbed[r_]})")
+        problems, warnings, scanned = audit(stage_dir, host_vals,
+                                            allow_secrets=not args.no_secrets)
+        if public:
+            problems += audit_public(stage_dir)
+        problems += syntax_floor(stage_dir)
+        if problems:
+            print("\nBUILD REFUSED — the package would carry secrets or host data:")
+            for p in problems:
+                print(f"  ! {p}")
+            return 2
+        print(f"\naudit: {scanned} files, no forbidden names, no secrets, "
+              f"no host values in shipped code")
+        if public:
+            print("public scan: no personal strings anywhere (domains, hosts, "
+                  "ids, names, paths, keys)")
+        if warnings and not public:
+            files = sorted({w.split(" in ", 1)[1] for w in warnings})
+            print(f"note: {len(files)} skill file(s) mention this fleet's "
+                  f"hostnames (documentation, shipped as-is):")
+            for f in files[:8]:
+                print(f"  - {f}")
+            if len(files) > 8:
+                print(f"  ... and {len(files) - 8} more")
+
+        # manifest. MANIFEST.txt counts itself: listing the files before writing
+        # it made the tally one short, and a reader can see that.
+        files = sorted([f for f in stage_dir.rglob("*") if f.is_file()]
+                       + [stage_dir / "MANIFEST.txt"])
+        lines = [
+            f"tinycmdr {ver} — "
+            + ("community release (Windows, Linux and macOS installers)" if public
+               else "fleet package (Windows, Linux and macOS installers)"),
+            "" if public else f"built from {ROOT}",
+            "",
+            "sha256 of the files that matter:",
+        ]
+        for rel in ("tinycmdr.py", "config.example.json", ".env.example",
+                    "install/install-tinycmdr.ps1", "install/install-tinycmdr.cmd",
+                    "install/install-tinycmdr.sh",
+                    "install/install-tinycmdr-macos.sh",
+                    "install/com.trapp.tinycmdr.plist",
+                    "cli/tinycmdr-cli.py"):
+            p = stage_dir / rel
+            if p.exists():
+                h = hashlib.sha256(p.read_bytes()).hexdigest()
+                lines.append(f"  {h}  {rel}")
+        lines += ["", f"{len(files)} files:", ""]
+        lines += [f"  {f.relative_to(stage_dir)}" for f in files]
+        (stage_dir / "MANIFEST.txt").write_text("\n".join(lines) + "\n",
+                                                encoding="utf-8")
+
+        DIST.mkdir(exist_ok=True)
+        suffix = "-public" if public else ""
+        zip_path = DIST / f"tinycmdr-{ver}-win{suffix}.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in sorted(stage_dir.rglob("*")):
+                if f.is_file():
+                    z.write(f, f.relative_to(stage_dir.parent))
+
+        # verify the zip itself, not just the staging dir
+        with zipfile.ZipFile(zip_path) as z:
+            names = z.namelist()
+            bad = [n for n in names
+                   if pathlib.PurePosixPath(n).name in FORBIDDEN_NAMES]
+            leak, soft = [], []
+            for n in names:
+                if n.endswith("/"):
+                    continue
+                rel = n.split("/", 1)[1] if "/" in n else n
+                blob = z.read(n).decode("utf-8", errors="replace")
+                for label, val in host_vals.items():
+                    if not val or val not in blob:
+                        continue
+                    if label.startswith(ENV_PREFIX):
+                        if rel == SECRETS_FILE and not args.no_secrets:
+                            continue
+                        leak.append(f"secret {label} in {rel}")
+                        continue
+                    if rel == FLEET_FILE and label in FLEET_MAY_CARRY:
+                        continue
+                    hard = (label in SECRET_LABELS or rel in APP_FILES)
+                    (leak if hard else soft).append(f"{label} in {rel}")
+            inner = hashlib.sha256(z.read(f"tinycmdr-{ver}/tinycmdr.py")).hexdigest()
+
+        live_inner = hashlib.sha256((ROOT / "tinycmdr.py").read_bytes()).hexdigest()
+        ok = (not bad and not leak and inner == live_inner)
+        print(f"\nzip: {zip_path}")
+        print(f"  {len(names)} entries, {zip_path.stat().st_size / 1024:.0f} KB")
+        print(f"  tinycmdr.py in zip matches the live file: {inner == live_inner}")
+        print(f"  no forbidden filenames: {not bad}")
+        print(f"  no secrets/ids anywhere: {not leak}")
+        print(f"  fleet hostnames in skills (informational): {len(soft)}")
+        if leak:
+            for l in leak:
+                print(f"    ! {l}")
+
+        # The same staged tree as a tarball: the .sh half of the kit needs its
+        # exec bits, which a zip does not carry dependably - and on Windows the
+        # filesystem has no exec bit at all, so set the modes explicitly rather
+        # than trusting st_mode.
+        tar_path = DIST / f"tinycmdr-{ver}-linux{suffix}.tar.gz"
+
+        def _modes(ti):
+            if ti.isdir():
+                ti.mode = 0o755
+            elif ti.name.endswith(".sh") or ti.name == "tinycmdr.py":
+                ti.mode = 0o755
+            else:
+                ti.mode = 0o644
+            return ti
+
+        with tarfile.open(tar_path, "w:gz") as t:
+            t.add(stage_dir, arcname=stage_dir.name, filter=_modes)
+        with tarfile.open(tar_path) as t:
+            tfiles = [m for m in t.getmembers() if m.isfile()]
+            tbad = [m.name for m in tfiles
+                    if pathlib.PurePosixPath(m.name).name in FORBIDDEN_NAMES
+                    or BACKUP_RE.search(pathlib.PurePosixPath(m.name).name)]
+            tinner = hashlib.sha256(
+                t.extractfile(f"{stage_dir.name}/tinycmdr.py").read()).hexdigest()
+            tmode = next((m.mode for m in tfiles
+                          if m.name.endswith("install/install-tinycmdr.sh")), 0)
+        tar_ok = (not tbad and tinner == live_inner and tmode & 0o111)
+        print(f"\ntarball: {tar_path}")
+        print(f"  {len(tfiles)} files, {tar_path.stat().st_size / 1024:.0f} KB")
+        print(f"  tinycmdr.py matches the live file: {tinner == live_inner}")
+        print(f"  install-tinycmdr.sh mode: {oct(tmode)} (executable: {bool(tmode & 0o111)})")
+        print(f"  no forbidden filenames: {not tbad}")
+        # macOS: the same staged tree as a zip (Finder extracts it), with the exec bits
+        # written explicitly because the build host has no exec bit to copy. The launchd
+        # plist is parsed here rather than trusted: launchd refusing a plist is the kind of
+        # failure nobody sees until the install is already "done".
+        mac_ok = True
+        if args.macos:
+            mac_path = DIST / f"tinycmdr-{ver}-macos{suffix}.zip"
+            with zipfile.ZipFile(mac_path, "w", zipfile.ZIP_DEFLATED) as z:
+                for f in sorted(stage_dir.rglob("*")):
+                    if not f.is_file():
+                        continue
+                    arc = f.relative_to(stage_dir.parent).as_posix()
+                    mode = 0o755 if (f.suffix == ".sh" or f.name == "tinycmdr.py") else 0o644
+                    zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
+                    zi.external_attr = mode << 16
+                    zi.compress_type = zipfile.ZIP_DEFLATED
+                    z.writestr(zi, f.read_bytes())
+            with zipfile.ZipFile(mac_path) as z:
+                mac_names = z.namelist()
+                macbad = [n for n in mac_names
+                          if pathlib.PurePosixPath(n).name in FORBIDDEN_NAMES]
+                macinner = hashlib.sha256(z.read(f"tinycmdr-{ver}/tinycmdr.py")).hexdigest()
+                rendered = (z.read(f"tinycmdr-{ver}/install/com.trapp.tinycmdr.plist")
+                            .decode("utf-8")
+                            .replace("__LABEL__", "com.example.test")
+                            .replace("__PYTHON__", "/tmp/venv/bin/python")
+                            .replace("__APP__", "/tmp/tinycmdr"))
+                try:
+                    pl = plistlib.loads(rendered.encode("utf-8"))
+                    plist_ok = (pl.get("Label") == "com.example.test"
+                                and pl.get("RunAtLoad") is True
+                                and isinstance(pl.get("KeepAlive"), dict)
+                                and pl["KeepAlive"].get("SuccessfulExit") is False
+                                and len(pl.get("ProgramArguments", [])) == 2)
+                except Exception as e:                      # noqa: BLE001
+                    plist_ok = False
+                    print(f"    ! plist did not parse: {e}")
+                inst = f"tinycmdr-{ver}/install/install-tinycmdr-macos.sh"
+                macmode = (z.getinfo(inst).external_attr >> 16) & 0o777
+                mleak, msoft = [], []
+                for n in mac_names:
+                    if n.endswith("/"):
+                        continue
+                    rel = n.split("/", 1)[1] if "/" in n else n
+                    blob = z.read(n).decode("utf-8", errors="replace")
+                    for label, val in host_vals.items():
+                        if not val or val not in blob:
+                            continue
+                        if label.startswith(ENV_PREFIX) and rel == SECRETS_FILE:
+                            continue
+                        if rel == FLEET_FILE and label in FLEET_MAY_CARRY:
+                            continue
+                        # Same rule as the Windows zip: a host value in shipped CODE (or
+                        # a secret anywhere) fails the build; a host value in skills is
+                        # documentation about this fleet and ships as-is.
+                        hard = (label in SECRET_LABELS or rel in APP_FILES)
+                        (mleak if hard else msoft).append(f"{label} in {rel}")
+            mac_ok = (not macbad and not mleak and macinner == live_inner
+                      and plist_ok and bool(macmode & 0o111))
+            print(f"\nmacos zip: {mac_path}")
+            print(f"  {len(mac_names)} entries, {mac_path.stat().st_size / 1024:.0f} KB")
+            print(f"  tinycmdr.py matches the live file: {macinner == live_inner}")
+            print(f"  install-tinycmdr-macos.sh mode: {oct(macmode)} "
+                  f"(executable: {bool(macmode & 0o111)})")
+            print(f"  launchd plist parses and is complete: {plist_ok}")
+            print(f"  no forbidden filenames: {not macbad}")
+            print(f"  no secrets/ids anywhere: {not mleak}")
+            print(f"  fleet hostnames in skills (informational): {len(msoft)}")
+            for l in mleak:
+                print(f"    ! {l}")
+
+        return 0 if (ok and tar_ok and mac_ok) else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

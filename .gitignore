@@ -1,0 +1,50 @@
+# tinycmdr repo — what is source and what is per-host state.
+#
+# Rule: anything a host writes for itself (logs, sessions, memory files, secrets,
+# backups) never enters git. One folder goes to six boxes, so a committed per-host
+# file would read as canonical and be wrong.
+
+# --- the plan's list (docs/minidsh-hardening-plan.md, stage 1) ---
+logs/
+sessions/
+spill/
+state.json
+*.bak*
+web-token.txt
+.env
+__pycache__/
+dist/
+tools/
+notes.md
+tasks.json
+atlas.md
+knowledge/
+skills/.imported-unused/
+
+# --- per-host state and junk the first staging pass found (2026-09-19) ---
+# Every name here is a file a host writes for itself, or a scratch artifact.
+# Deviations from the plan's list are listed in the stage-1 report.
+field-notes.md
+notes-archive.md
+notes-authored.json
+tasks.md
+tests/eval-runs/
+snapshots/
+tmp/
+uploads/
+hermes-tmp/
+.archive/
+.pre-*
+*.pre-*
+config.json
+jobs.json
+inbox/
+*.log
+*.lock
+*.tmp
+skills/
+.env.*
+!.env.example
+web-token.txt.*
+a.txt
+lines.txt*

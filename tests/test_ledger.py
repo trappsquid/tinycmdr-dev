@@ -1,0 +1,1840 @@
+"""Tests for the v1.9.0 ledger + transport work.
+
+Run:  python -m pytest -q tests/test_ledger.py       (or plain python, see main)
+They import the live tinycmdr.py as a module (no Mattermost connection, no
+scheduled jobs, no lock) and redirect every file it writes at a temp dir.
+"""
+import copy
+import importlib.util
+import json
+import os
+import re
+import socket
+import sys
+import tempfile
+import threading
+import atexit
+import shutil
+import time
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+
+# Which build to import: the Mattermost bot by default, the chatless CLI build
+# with tinycmdr_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
+SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+
+# --- hermetic staging -------------------------------------------------------
+# config.json is written by the installer, so it is NOT in the shipped package,
+# and the module refuses to start without one. These suites must run against a
+# fresh unpack (CI, a friend's box, a stranger's download), so import a
+# byte-identical copy from a temp dir that HAS a config.json beside it.
+STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage"
+STAGE.mkdir(parents=True, exist_ok=True)
+shutil.copy2(SRC, STAGE / "tinycmdr.py")
+FIXTURE_CFG = STAGE / "config.json"
+# The fixture is a shipped file, not a dict buried in this suite: it is the
+# sanitized worked example of a complete config.json, it is what the suites
+# actually run against, and having one copy of it stops the two suites drifting.
+FIXTURE_SRC = Path(__file__).resolve().parent / "fixture-config.json"
+if not FIXTURE_SRC.exists():
+    sys.exit(f"missing test fixture: {FIXTURE_SRC} (it ships in tests/)")
+shutil.copy2(FIXTURE_SRC, FIXTURE_CFG)
+
+spec = importlib.util.spec_from_file_location("tinycmdr_under_test",
+                                              STAGE / "tinycmdr.py")
+fb = importlib.util.module_from_spec(spec)
+sys.modules["tinycmdr_under_test"] = fb
+spec.loader.exec_module(fb)
+
+TMP = Path(tempfile.mkdtemp(prefix="fbtest-"))
+# Clean the scratch dir on exit: running the suites on a fresh host
+# should not leave a directory behind for every run.
+atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
+PRISTINE = copy.deepcopy(fb.CONFIG)
+FAILURES = []
+PASSES = []
+
+
+def check(name, cond, detail=""):
+    if cond:
+        PASSES.append(name)
+    else:
+        FAILURES.append(f"{name}: {detail}")
+        print(f"FAIL {name}: {detail}")
+
+
+def reset_config():
+    fb.CONFIG.clear()
+    fb.CONFIG.update(copy.deepcopy(PRISTINE))
+
+
+def redirect_files():
+    reset_config()
+    fb.NOTES_FILE = TMP / "notes.md"
+    fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
+    fb.TASKS_FILE = TMP / "tasks.json"
+    fb.TASKS_DOC = TMP / "tasks.md"
+    fb.SESSIONS_DIR = TMP / "sessions"
+    fb.SESSIONS_DIR.mkdir(exist_ok=True)
+    fb.NOTES_FILE.write_text("", encoding="utf-8")
+    for f in (fb.NOTES_ARCHIVE_FILE, fb.TASKS_FILE, fb.TASKS_DOC):
+        if f.exists():
+            f.unlink()
+    # A damaged-ledger test archives the file it salvaged; TMP is shared across
+    # this whole suite, so a leftover would make the next test's "nothing was
+    # kept" assertion read as a failure.
+    for f in TMP.glob("tasks.json.damaged-*"):
+        f.unlink()
+    for f in TMP.glob("*.tmp-*"):
+        f.unlink()
+
+
+def fresh_notes(text=""):
+    fb.NOTES_FILE.write_text(text, encoding="utf-8")
+    if fb.NOTES_ARCHIVE_FILE.exists():
+        fb.NOTES_ARCHIVE_FILE.unlink()
+
+
+# --------------------------------------------------------------------------
+# notes: bounded at write time, evict to archive, mark every elision
+# --------------------------------------------------------------------------
+
+def test_remember_caps_at_write_time():
+    redirect_files()
+    fb.CONFIG["agent"]["notes_max_note_chars"] = 200
+    fb.CONFIG["agent"]["notes_max_chars"] = 100000   # isolate this test
+    out = fb.tool_remember({"note": "x" * 5000}, {})
+    body = fb.NOTES_FILE.read_text(encoding="utf-8")
+    check("remember reports the clip", "clipped" in out, out[:120])
+    check("remember caps the note", len(body) < 600, f"{len(body)} chars")
+    check("remember says where long content belongs", "file" in body, body[:200])
+
+
+def test_remember_rejects_empty():
+    redirect_files()
+    out = fb.tool_remember({"note": "   "}, {})
+    check("empty note rejected", out.startswith("ERROR"), out)
+
+
+def test_preamble_is_preserved():
+    redirect_files()
+    fb.NOTES_FILE.write_text(
+        "# my hand-written header\nsome operator prose\n"
+        "- [2026-09-01 10:00] first fact\n", encoding="utf-8")
+    fb.CONFIG["agent"]["notes_keep_entries"] = 1
+    fb.CONFIG["agent"]["notes_archive_days"] = 1
+    fb.CONFIG["agent"]["notes_max_chars"] = 4000
+    fb.curate_notes("test")
+    body = fb.NOTES_FILE.read_text(encoding="utf-8")
+    check("preamble survives curation", "# my hand-written header" in body
+          and "some operator prose" in body, body)
+    check("aged entry archived", "first fact" in
+          fb.NOTES_ARCHIVE_FILE.read_text(encoding="utf-8"))
+
+
+def test_curate_dedupes_and_marks():
+    redirect_files()
+    fb.CONFIG["agent"]["notes_keep_entries"] = 100
+    fb.CONFIG["agent"]["notes_archive_days"] = 9999
+    for _ in range(6):
+        fb.NOTES_FILE.write_text(
+            fb.NOTES_FILE.read_text(encoding="utf-8")
+            + "- [2026-09-10 10:00] identical fact\n", encoding="utf-8")
+    out = fb.curate_notes("test")
+    body = fb.NOTES_FILE.read_text(encoding="utf-8")
+    check("duplicates collapsed to one", body.count("identical fact") == 1, body)
+    check("curation reports the merge", "duplicate" in out, out)
+
+
+def test_curate_respects_char_cap_and_archives():
+    redirect_files()
+    cfg = fb.CONFIG["agent"]
+    cfg["notes_max_chars"] = 600
+    cfg["notes_keep_entries"] = 500
+    cfg["notes_archive_days"] = 9999
+    lines = [f"- [2026-09-10 10:{i:02d}] fact number {i} " + "y" * 80
+             for i in range(20)]
+    fb.NOTES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    before = [l for l in lines]
+    fb.curate_notes("test")
+    body = fb.NOTES_FILE.read_text(encoding="utf-8")
+    archived = fb.NOTES_ARCHIVE_FILE.read_text(encoding="utf-8")
+    check("notes under cap after curation", len(body) <= 600, f"{len(body)}")
+    check("elision is explicit", "notes elided" in body, body[:200])
+    check("archived, not lost", "fact number 0" in archived, archived[:200])
+    check("newest entries kept", "fact number 19" in body, body[-300:])
+    check("oldest entry left the prompt", "fact number 0" not in body, body)
+
+
+def test_remember_auto_curates():
+    redirect_files()
+    fb.CONFIG["agent"]["notes_max_note_chars"] = 100000
+    fb.CONFIG["agent"]["notes_max_chars"] = 400
+    fb.CONFIG["agent"]["notes_keep_entries"] = 500
+    fb.CONFIG["agent"]["notes_archive_days"] = 9999
+    out = ""
+    for i in range(12):
+        out = fb.tool_remember({"note": f"fact {i} " + "z" * 60}, {})
+    check("curation triggered by remember", "curated" in out, out[-200:])
+    check("notes bounded at write time",
+          len(fb.NOTES_FILE.read_text(encoding="utf-8")) <= 400,
+          str(len(fb.NOTES_FILE.read_text(encoding="utf-8"))))
+
+
+def test_notes_tool_actions():
+    redirect_files()
+    fb.CONFIG["agent"]["notes_max_chars"] = 4000
+    fb.tool_remember({"note": "a durable fact"}, {})
+    view = fb.tool_notes({"action": "view"}, {})
+    check("notes view shows the budget", "prompt cap" in view, view[:120])
+    check("notes view shows content", "a durable fact" in view, view[:200])
+    check("notes curate is a no-op when fine",
+          "inside budget" in fb.tool_notes({"action": "curate"}, {}), "")
+
+
+def test_prompt_carries_elision_pointer():
+    redirect_files()
+    fb.NOTES_FILE.write_text("- [2026-09-10 10:00] hi\n", encoding="utf-8")
+    prompt = fb.build_system_prompt()
+    # v1.9.1: the notes block (and with it the archive pointer) moved out of the
+    # static system prompt into the trailing state block, so a `remember` write
+    # can't invalidate the server's prefix cache. The pointer must still reach
+    # the model: in the trailing block, and in the remember tool description.
+    check("the archive is named where the notes actually are",
+          "notes-archive.md" in fb.volatile_context())
+    check("the remember tool schema still names the archive",
+          "notes-archive.md" in json.dumps(fb.REGISTRY.openai_schemas()))
+    check("the static prompt carries no archive pointer (cache-stable)",
+          "notes-archive.md" not in prompt)
+    check("prompt lists the task tool", "task ledger" in prompt.lower(), "")
+
+
+# --------------------------------------------------------------------------
+# task ledger
+# --------------------------------------------------------------------------
+
+def test_task_ledger_lifecycle():
+    redirect_files()
+    fb.CONFIG["agent"]["tasks_max_open"] = 3
+    fb.CONFIG["agent"]["tasks_done_keep"] = 2
+    out = fb.tool_task({"action": "add", "task": "roll tinycmdr 1.9.0 out"},
+                       {})
+    check("task add", "task #1 added" in out, out)
+    tid = json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))["items"][0]["id"]
+    check("tasks.json is the source of truth",
+          (TMP / "tasks.md").exists() and "#1" in
+          (TMP / "tasks.md").read_text(encoding="utf-8"), "")
+    out = fb.tool_task({"action": "doing", "id": tid}, {})
+    check("task doing", "-> doing" in out, out)
+    out = fb.tool_task({"action": "done", "id": tid}, {})
+    check("done without evidence refused", out.startswith("ERROR"), out)
+    out = fb.tool_task({"action": "done", "id": tid,
+                        "note": "unit tests green, service restarted"}, {})
+    check("done with evidence", "-> done" in out, out)
+    for n in range(2, 5):
+        fb.tool_task({"action": "add", "task": f"job {n}"}, {})
+    out = fb.tool_task({"action": "add", "task": "one too many"}, {})
+    check("open-task cap enforced", out.startswith("ERROR") and "cap" in out,
+          out)
+    out = fb.tool_task({"action": "clear"}, {})
+    check("clear prunes finished", "cleared 1" in out, out)
+    out = fb.tool_task({"action": "status", "id": 999, "status": "done"}, {})
+    check("unknown id refused", out.startswith("ERROR"), out)
+    out = fb.tool_task({"action": "status", "id": 2, "status": "nonsense"}, {})
+    check("bad status refused", out.startswith("ERROR"), out)
+
+
+def test_task_prompt_render():
+    redirect_files()
+    fb.tool_task({"action": "add", "task": "fix the poster pipeline"}, {})
+    rendered = fb.render_task_prompt()
+    check("render shows the open task", "fix the poster pipeline" in rendered,
+          rendered)
+    check("render is a plan not a log",
+          "mark, don't append" in rendered and "to-do list" in rendered,
+          rendered)
+    check("a done row is marked as history, not an order",
+          "[done, no action]" in rendered or "0 done" in rendered, rendered)
+    # v1.9.1: the ledger is injected as a trailing block, not into the static
+    # system prompt — see test_system_prompt_is_static_state_is_trailing.
+    check("the ledger reaches the model (trailing block)",
+          "fix the poster pipeline" in fb.volatile_context())
+    check("the static prompt does not carry the ledger",
+          "fix the poster pipeline" not in fb.build_system_prompt())
+
+
+def test_skill_read_names_the_tool_surface():
+    """A dropped-in runbook has to arrive beside the list of tools that exist here.
+
+    A prose runbook transfers as text; the tools it names do not. An install whose tools/
+    folder is empty otherwise gets instructions for a program it does not have, and the
+    mismatch only surfaces several steps later as an unknown-tool error. Measured on a
+    real install: a desktop-automation runbook dropped in, tools/ empty, the agent
+    looking for a tool that no build of it has.
+    """
+    reset_config()
+    sdir = Path(fb.SKILLS_DIR) / "hermes-runbook"
+    sdir.mkdir(parents=True, exist_ok=True)
+    (sdir / "SKILL.md").write_text(
+        "---\nname: hermes-runbook\ndescription: written for another harness\n---\n\n"
+        "## Steps\n\nCall `computer_use` to look at the desktop.\n", encoding="utf-8")
+    try:
+        body = fb.tool_skill({"action": "read", "name": "hermes-runbook"}, {})
+        check("the runbook body comes back", "Call `computer_use`" in body, body[:120])
+        check("the tool surface rides with it",
+              "[HARNESS: tools this box has:" in body, body[-300:])
+        surface = body.split("[HARNESS:", 1)[-1]
+        check("the surface lists the tools this build does have",
+              "list_tools" in surface and "shell" in surface, surface[:160])
+        check("a step's missing tool is named as such, not left to be discovered",
+              "written for another build" in surface, surface[:200])
+        cont = fb.tool_skill({"action": "read", "name": "hermes-runbook", "offset": 10}, {})
+        check("a continuation page does not repeat it", "[HARNESS:" not in cont, cont[-160:])
+    finally:
+        shutil.rmtree(sdir, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# evidence check
+# --------------------------------------------------------------------------
+
+def test_force_shrink_terminates_under_a_tight_budget():
+    """Regression: _force_shrink cut at messages[1:first_user_message], which
+    pointed at its OWN elision marker once one was in place — it deleted the
+    marker, re-inserted it, and looped for ever, so recovering from a
+    server-side context overflow hung the run instead of recovering.
+    test_force_shrink above did not catch it: its budget was loose enough that
+    the loop never iterated (the tool-output clipping did all the shrinking)."""
+    redirect_files()
+    try:
+        fb.CONFIG["llm"]["max_context_tokens"] = 4000        # target = 2000
+        _budget_clear()
+        msgs = [{"role": "system", "content": "sys"}]
+        for i in range(30):
+            msgs.append({"role": "user", "content": f"u{i} " + "x" * 2000})
+            msgs.append({"role": "assistant", "content": ""})
+            msgs.append({"role": "tool", "tool_call_id": str(i),
+                         "content": "y" * 3000})
+        before = fb.AGENT._messages_token_est(msgs)
+        fb.AGENT._force_shrink(msgs)                        # used to hang here
+        after = fb.AGENT._messages_token_est(msgs)
+        check("terminates", True)
+        check("keeps the system prompt", msgs[0]["content"] == "sys")
+        check("leaves no orphan tool message",
+              all(msgs[i].get("role") != "tool" or
+                  msgs[i - 1].get("role") in ("tool", "assistant")
+                  for i in range(1, len(msgs))))
+        check("shrinks hard", after < before / 2, f"{before} -> {after}")
+        marks = [m["content"] for m in msgs
+                 if m.get("content") in fb.ELISION_MARKERS]
+        check("reuses one elision marker instead of stacking them",
+              len(marks) == 1, marks)
+    finally:
+        redirect_files()
+        _budget_clear()
+
+
+def test_evidence_rules():
+    a = fb._annotate_evidence("I fixed the widget.", [], 0)
+    check("claim with no tool call is flagged", "evidence check" in a, a)
+    b = fb._annotate_evidence("Nothing to do here.", [], 0)
+    check("silent when nothing is claimed", "evidence check" not in b, b)
+    c = fb._annotate_evidence("Fixed it.", [("write_file", "x.py", 3)], 3)
+    check("last write with no read-back flagged", "no read-back" in c, c)
+    d = fb._annotate_evidence("Fixed it.", [("write_file", "x.py", 3)], 4)
+    check("silent once something follows the write",
+          "evidence check" not in d, d)
+    check("mutation detection: file writers",
+          fb._is_mutation("write_file", {}, "OK") and
+          fb._is_mutation("edit_file", {}, "OK") and
+          fb._is_mutation("create_tool", {}, "OK"))
+    check("mutation detection: shell is not guessed at",
+          not fb._is_mutation("shell", {"command": "rm x"}, "OK"))
+    check("mutation detection: failed writes do not count",
+          not fb._is_mutation("write_file", {}, "ERROR: nope"))
+    fb.REGISTRY.custom["faux"] = {"mutates": True}
+    check("mutation detection: MUTATES honoured",
+          fb._is_mutation("faux", {}, "OK"))
+    fb.REGISTRY.custom.pop("faux", None)
+
+
+def scripted_run(seq, **cfg):
+    """Run Agent.run against a scripted _chat, with files redirected."""
+    redirect_files()
+    fb.AGENT.histories.clear()
+    fb.AGENT.model_overrides.clear()
+    fb.AGENT.last_usage.clear()
+    saved_chat = fb.AGENT._chat
+    saved_cfg = copy.deepcopy(fb.CONFIG["agent"]) if cfg else None
+    fb.CONFIG["agent"].update(cfg)
+    seq = list(seq)
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None,
+                  max_tokens=None, cancel_event=None,
+                  on_delta=None, session_key=None):
+        reply = seq.pop(0)
+        if usage is not None:
+            usage["calls"] += 1
+            usage["llm_secs"] += 0.01
+            usage.setdefault("finish_reason", "stop")
+        return reply
+
+    fb.AGENT._chat = fake_chat
+    try:
+        out = fb.AGENT.run("test-session", "do the thing")
+    finally:
+        fb.AGENT._chat = saved_chat
+        if saved_cfg is not None:
+            fb.CONFIG["agent"].clear()
+            fb.CONFIG["agent"].update(saved_cfg)
+    return out, fb.AGENT.last_usage.get("test-session") or {}
+
+
+def test_run_flags_unverified_write():
+    target = TMP / "written.txt"
+    out, usage = scripted_run([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "function": {
+             "name": "write_file",
+             "arguments": json.dumps({"path": str(target),
+                                      "content": "hello"})}}]},
+        {"role": "assistant", "content": "Wrote the config file."},
+    ])
+    check("unverified write flagged in the answer", "evidence check" in out, out)
+    check("run counted the mutation", usage.get("mutations") == 1, usage)
+    check("run classified ok", usage.get("status") == "ok", usage)
+
+
+def test_run_silent_when_verified():
+    target = TMP / "written2.txt"
+    out, usage = scripted_run([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "function": {
+             "name": "write_file",
+             "arguments": json.dumps({"path": str(target),
+                                      "content": "hello"})}}]},
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "2", "function": {
+             "name": "read_file",
+             "arguments": json.dumps({"path": str(target)})}}]},
+        {"role": "assistant", "content": "Wrote and read back the config file."},
+    ])
+    check("verified write is not flagged", "evidence check" not in out, out)
+    check("read-back recognised", usage.get("mutations") == 1, usage)
+
+
+def test_run_flags_hallucinated_change():
+    out, usage = scripted_run([
+        {"role": "assistant", "content": "I updated the service and restarted "
+                                        "it, all good."},
+    ])
+    check("change claimed with no tool call flagged",
+          "evidence check" in out, out)
+    check("no mutations recorded", usage.get("mutations") == 0, usage)
+
+
+def test_run_budget_wrapup_asks_for_verification():
+    target = TMP / "written3.txt"
+    out, usage = scripted_run([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "function": {
+             "name": "write_file",
+             "arguments": json.dumps({"path": str(target),
+                                      "content": "hello"})}}]},
+        {"role": "assistant", "content": "Report body."},
+        # auto_continue_max=0 on purpose: a run that still has continuation budget left
+        # opens another segment instead of wrapping up (tests/test_stall.py pins that
+        # behaviour). This test is about the wrap-up itself, so it takes the one setting
+        # that reaches it.
+    ], max_steps=1, auto_continue_max=0)
+    check("budget wrap-up reported", "Budget reached" in out, out[:200])
+    check("budget status recorded", usage.get("status") == "budget", usage)
+
+
+def test_run_infra_failure_is_not_a_wrong_answer():
+    redirect_files()
+    fb.AGENT.histories.clear()
+    saved_chat = fb.AGENT._chat
+
+    def boom(*a, **kw):
+        raise fb.InfraError("connection refused by all endpoints")
+
+    fb.AGENT._chat = boom
+    try:
+        out = fb.AGENT.run("test-infra", "do the thing")
+    finally:
+        fb.AGENT._chat = saved_chat
+    check("infra failure named as infra", "infrastructure failure" in out, out)
+    check("infra status recorded",
+          fb.AGENT.last_usage["test-infra"].get("status") == "infra",
+          fb.AGENT.last_usage["test-infra"])
+
+
+# --------------------------------------------------------------------------
+# transport hardening
+# --------------------------------------------------------------------------
+
+class FakeResp:
+    def __init__(self, status=200, body=None, text="", headers=None):
+        self.status_code = status
+        self._body = body
+        self.text = text
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            err = fb.requests.HTTPError(f"HTTP {self.status_code}")
+            err.response = self
+            raise err
+
+    def json(self):
+        if self._body is None:
+            raise ValueError("not json")
+        return self._body
+
+
+def _sse(*objs, done=True):
+    """Build an SSE body: dicts become data: lines, bytes are appended verbatim."""
+    body = b""
+    for o in objs:
+        body += o if isinstance(o, bytes) else b"data: " + json.dumps(o).encode() + b"\n\n"
+    return body + (b"data: [DONE]\n\n" if done else b"")
+
+
+def _chunk(delta, finish=None, **extra):
+    c = {"choices": [{"index": 0, "delta": delta}], "object": "chat.completion.chunk"}
+    if finish:
+        c["choices"][0]["finish_reason"] = finish
+    c.update(extra)
+    return c
+
+
+class _RawStub:
+    """Stands in for urllib3's HTTPResponse: _stream_chat's hang-up path reaches for
+    raw._connection.sock (absent here, which is fine) and then raw.close()."""
+
+    def __init__(self, outer):
+        self.outer = outer
+
+    def close(self):
+        self.outer.closed = True
+
+
+class StreamResp:
+    """A streamed response. `stall=True` keeps the connection open and sends nothing,
+    which is the wedged-stream shape the idle gap exists for."""
+
+    def __init__(self, body=b"", status=200, stall=False):
+        self.status_code = status
+        self._body = body
+        self._stall = stall
+        self.closed = False
+        self.headers = {}
+        self.raw = _RawStub(self)
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            err = fb.requests.HTTPError(f"HTTP {self.status_code}")
+            err.response = self
+            raise err
+
+    def iter_lines(self, decode_unicode=False):
+        for line in self._body.splitlines():
+            yield line.decode("utf-8", "replace") if decode_unicode else line
+        if self._stall:
+            time.sleep(600)
+
+    def close(self):
+        self.closed = True
+
+
+class DribbleServer(threading.Thread):
+    """Accepts the POST, sends headers, then dribbles a byte every `interval`
+    seconds for `duration`. Every individual read succeeds inside the requests
+    timeout, so nothing but a wall-clock bound can end this call — which is
+    exactly the endpoint behaviour the watchdog exists for."""
+
+    saw_close = False
+
+    def __init__(self, interval=0.15, duration=6.0):
+        super().__init__(daemon=True)
+        self.interval, self.duration = interval, duration
+        self.sock = socket.socket()
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+
+    def run(self):
+        try:
+            conn, _ = self.sock.accept()
+        except OSError:
+            return
+        with conn:
+            try:
+                conn.recv(65536)
+                conn.sendall(b"HTTP/1.1 200 OK\r\n"
+                             b"Content-Type: application/json\r\n\r\n")
+                deadline = time.time() + self.duration
+                while time.time() < deadline:
+                    try:
+                        conn.sendall(b" ")
+                    except OSError:
+                        # a write into a closed peer IS the hang-up: this
+                        # is how the test proves the client cancelled the
+                        # call instead of walking away from a live thread
+                        self.saw_close = True
+                        return
+                    time.sleep(self.interval)
+            except Exception:
+                pass
+
+    def stop(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+class SilentServer(threading.Thread):
+    """Accepts and never sends anything — the plain hang that the ordinary
+    read timeout is supposed to bound."""
+
+    def __init__(self):
+        super().__init__(daemon=True)
+        self.sock = socket.socket()
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(4)
+        self.port = self.sock.getsockname()[1]
+
+    def run(self):
+        try:
+            conn, _ = self.sock.accept()
+        except OSError:
+            return
+        with conn:
+            try:
+                conn.recv(65536)
+                time.sleep(8)
+            except Exception:
+                pass
+
+    def stop(self):
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+def test_watchdog_abandons_a_trickling_endpoint():
+    srv = DribbleServer()
+    srv.start()
+    url = f"http://127.0.0.1:{srv.port}/v1/chat/completions"
+    t0 = time.time()
+    try:
+        fb._post_watchdog(url, {}, {}, timeout=0.4, grace=0.2)
+        check("trickling endpoint abandoned", False, "no exception raised")
+    except fb.InfraError as e:
+        elapsed = time.time() - t0
+        check("trickling endpoint abandoned", True)
+        check("abandoned at the hard bound, not a read timeout",
+              elapsed < 2.5, f"{elapsed:.1f}s")
+        check("abandon message explains itself", "abandoned" in str(e), str(e))
+        # KNOWN GAP, pinned so it is not mistaken for handled: the caller walks
+        # away, the socket stays open, and the server below keeps working (for a
+        # real trickling llama.cpp that means the GPU keeps generating for an
+        # answer nobody will collect). Closing the requests.Session does NOT fix
+        # it: urllib3 closes only IDLE pooled connections, and this one is checked
+        # out. A real cancel means owning the socket (http.client), which the
+        # operator has explicitly parked as not worth the restructuring.
+        # For STREAMING calls that gap is now closed (v1.9.28 closes the response,
+        # which drops the connection, and the local box stops generating). A
+        # non-streaming call still walks away from a live socket: that half is
+        # unchanged, and test_a_streaming_cancel_hangs_up_on_the_server proves the
+        # half that changed.
+        if srv.saw_close:
+            # Fails only if the non-streaming path started closing the socket too,
+            # which would mean the two paths no longer differ.
+            check("non-streaming abandonment still does not close the socket",
+                  False, "saw_close became True on the non-streaming path")
+    except Exception as e:
+        check("trickling endpoint abandoned", False, repr(e))
+    finally:
+        srv.stop()
+
+
+def test_read_timeout_still_bounds_a_silent_endpoint():
+    srv = SilentServer()
+    srv.start()
+    url = f"http://127.0.0.1:{srv.port}/v1/chat/completions"
+    t0 = time.time()
+    try:
+        fb._post_watchdog(url, {}, {}, timeout=0.4, grace=2.0)
+        check("silent endpoint raises", False, "no exception raised")
+    except fb.InfraError as e:
+        check("silent endpoint bounded", False, f"InfraError: {e}")
+    except Exception as e:
+        check("silent endpoint bounded by the read timeout", True)
+        check("bounded quickly", time.time() - t0 < 2.0,
+              f"{time.time() - t0:.1f}s")
+    finally:
+        srv.stop()
+
+
+def with_fake_post(responses, fn, catalog=None):
+    """Run fn with requests.post scripted. Returns (result, call list)."""
+    calls = []
+    saved = fb.requests.post
+
+    def fake_post(url, headers=None, json=None, timeout=None, stream=False):
+        # headers are recorded too: which key an endpoint is called with is the
+        # difference between the local box ("none") and a cloud provider
+        calls.append({"url": url, "payload": json, "stream": stream, "headers": headers})
+        item = responses[min(len(calls) - 1, len(responses) - 1)]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    fb.requests.post = fake_post
+    fb._MODEL_CACHE.update(at=time.time(), entries=catalog if catalog is not None else [
+        {"name": "main", "url": fb.CONFIG["llm"]["base_url"], "local": True,
+         "alias": False, "send_as": "main", "key": "none"}])
+    try:
+        return fn(), calls
+    finally:
+        fb.requests.post = saved
+
+
+def ok_resp(text="answer"):
+    return FakeResp(200, body={
+        "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 20, "completion_tokens": 3}})
+
+
+def isolated_config():
+    """Single-endpoint config, so failover cannot muddy a transport test."""
+    cfg = copy.deepcopy(fb.CONFIG)
+    cfg["llm"]["fallbacks"] = []
+    cfg["llm"]["allow_cloud_fallback"] = False
+    fb.CONFIG = cfg
+    return cfg
+
+
+def test_429_is_waited_out_on_the_same_endpoint():
+    saved_cfg = fb.CONFIG
+    try:
+        cfg = isolated_config()
+        cfg["llm"]["retry_after_max"] = 0
+        usage = {}
+        resp, calls = with_fake_post(
+            [FakeResp(429, text="slow down", headers={"Retry-After": "0"}),
+             ok_resp("recovered")],
+            lambda: fb.AGENT._chat([{"role": "user", "content": "hi"}],
+                                   usage=usage))
+        check("429 retried, not failed over",
+              len(calls) == 2 and len({c["url"] for c in calls}) == 1, calls)
+        check("429 recovered on retry", resp["content"] == "recovered", resp)
+        check("429 recorded as a retry", usage.get("retries") == 1, usage)
+        check("attempt log notes the wait",
+              usage["attempts"][0]["outcome"] == "retry", usage)
+        check("usage line admits the retry",
+              "retried/abandoned" in fb.fmt_usage(usage), fb.fmt_usage(usage))
+    finally:
+        fb.CONFIG = saved_cfg
+
+
+def test_context_overflow_is_recoverable():
+    saved_cfg = fb.CONFIG
+    try:
+        isolated_config()
+        usage = {}
+        err = None
+        def go():
+            fb.AGENT._chat([{"role": "user", "content": "hi"}], usage=usage)
+        _r, calls = with_fake_post(
+            [FakeResp(400, text="This model's maximum context length is 4096 "
+                                "tokens, however you requested 8000 tokens")],
+            go)
+        check("context overflow did not fail over", len(calls) == 1, calls)
+        check("overflow recorded", usage.get("retries") == 1, usage)
+    except fb.ContextOverflow as e:
+        check("context overflow raised for the agent loop",
+              "context window" in str(e), str(e))
+    except Exception as e:
+        check("context overflow raised for the agent loop", False, repr(e))
+    finally:
+        fb.CONFIG = saved_cfg
+
+
+def test_fatal_status_is_not_reported_as_model_failure():
+    saved_cfg = fb.CONFIG
+    try:
+        isolated_config()
+        try:
+            with_fake_post([FakeResp(401, text="invalid api key")],
+                           lambda: fb.AGENT._chat(
+                               [{"role": "user", "content": "hi"}], usage={}))
+            check("401 raises InfraError", False, "no exception")
+        except fb.InfraError as e:
+            check("401 raises InfraError", "rejected the request" in str(e),
+                  str(e))
+            check("401 names the cause", "401" in str(e), str(e))
+    finally:
+        fb.CONFIG = saved_cfg
+
+
+def test_dead_endpoint_reports_infra_not_answer():
+    saved_cfg = fb.CONFIG
+    try:
+        isolated_config()
+        try:
+            with_fake_post([fb.requests.ConnectionError("refused")],
+                           lambda: fb.AGENT._chat(
+                               [{"role": "user", "content": "hi"}], usage={}))
+            check("dead endpoint raises InfraError", False, "no exception")
+        except fb.InfraError as e:
+            check("dead endpoint raises InfraError", "no LLM endpoint" in str(e),
+                  str(e))
+    finally:
+        fb.CONFIG = saved_cfg
+
+
+def test_clamp_is_detected_against_the_sent_cap():
+    saved_cfg = fb.CONFIG
+    try:
+        cfg = isolated_config()
+        cfg["llm"]["max_tokens"] = 8000
+        usage = {}
+        clamped = FakeResp(200, body={
+            "choices": [{"message": {"content": "partial..."},
+                         "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 20, "completion_tokens": 512}})
+        with_fake_post([clamped], lambda: fb.AGENT._chat(
+            [{"role": "user", "content": "hi"}], usage=usage))
+        outcomes = [a["outcome"] for a in usage.get("attempts", [])]
+        check("server clamp detected", "clamped" in outcomes, usage)
+    finally:
+        fb.CONFIG = saved_cfg
+
+
+def test_force_shrink():
+    msgs = [{"role": "system", "content": "sys"}]
+    for i in range(30):
+        msgs.append({"role": "user", "content": f"u{i} " + "x" * 2000})
+        msgs.append({"role": "assistant", "content": "",
+                     "tool_calls": [{"id": str(i), "function": {
+                         "name": "shell", "arguments": "{}"}}]})
+        msgs.append({"role": "tool", "tool_call_id": str(i),
+                     "content": "y" * 3000})
+    before = fb.AGENT._messages_token_est(msgs)
+    fb.AGENT._force_shrink(msgs)
+    after = fb.AGENT._messages_token_est(msgs)
+    check("force_shrink shrinks hard", after < before / 2, f"{before} -> {after}")
+    check("force_shrink keeps the system prompt", msgs[0]["content"] == "sys")
+    check("force_shrink leaves no orphan tool message",
+          all(msgs[i].get("role") != "tool" or
+              msgs[i - 1].get("role") in ("tool", "assistant")
+              for i in range(1, len(msgs))))
+
+
+# --------------------------------------------------------------------------
+# v1.9.1: cache-stable prompt (trailing state block), deep compaction,
+# block-trimmed history. The point of all three is the same: never rewrite
+# tokens early in the payload, because that invalidates the server's prefix
+# cache and re-prefills the WHOLE conversation (measured 24.5 s at 7.7k
+# tokens, ~93 s for a notes write at 6.3k, ~400 s at 120k).
+# --------------------------------------------------------------------------
+
+def _budget_clear():
+    """_context_budget() memoises on the instance — drop it when a test
+    changes llm.max_context_tokens, or the previous test's value sticks."""
+    fb.AGENT.__dict__.pop("_budget_cache", None)
+
+
+def test_system_prompt_is_static_state_is_trailing():
+    redirect_files()
+    fb.NOTES_FILE.write_text("- [10:00] a durable fact\n", encoding="utf-8")
+    sp = fb.build_system_prompt()
+    vc = fb.volatile_context()
+    check("system prompt carries no notes", "a durable fact" not in sp,
+          sp[-200:])
+    check("system prompt carries no task ledger", "Task ledger" not in sp)
+    check("system prompt still carries the instructions",
+          "How you work:" in sp)
+    check("volatile block carries the notes", "a durable fact" in vc)
+    check("volatile block is marked as state, not a request",
+          vc.startswith("[context only") and "NOT a new request" in vc,
+          vc[:80])
+
+
+def test_notes_write_does_not_move_the_cached_prefix():
+    redirect_files()
+    fb.NOTES_FILE.write_text("- [10:00] one\n", encoding="utf-8")
+    before = fb.build_system_prompt()
+    fb.tool_remember({"note": "two"}, {})
+    after = fb.build_system_prompt()
+    check("system prompt is byte-identical after a remember", before == after)
+    check("the volatile block did change", "two" in fb.volatile_context())
+
+
+def test_volatile_block_always_carries_the_clock():
+    """Nothing to say is now "the clock and nothing else". v2.0.0 put a timestamp in
+    the trailing block, never in the system prompt (which must stay byte-identical for
+    prefix caching). Live 2026-09-13 on a Windows host: asked for the date, time, zone,
+    weekday and yesterday with tools forbidden, the bot answered all five from this line
+    and made no tool call, where it previously had to shell out to `date` first."""
+    redirect_files()
+    vc = fb.volatile_context()
+    check("with no notes and no ledger the block still exists", vc != "")
+    check("it is still marked as state, not a request",
+          vc.startswith("[context only") and "NOT a new request" in vc, vc[:80])
+    check("its first line is the machine clock with the offset and the zone",
+          re.search(r"Current date and time on this machine: \d{4}-\d{2}-\d{2} "
+                    r"\d{2}:\d{2}:\d{2} [+-]\d{4} \(\w+", vc) is not None, vc[:160])
+    check("and it carries nothing else",
+          "Notes from previous sessions" not in vc and "Task ledger" not in vc)
+
+
+def test_payload_inserts_state_without_accumulating():
+    """The block goes BEFORE the operator's request, not after it. Appended last
+    it became the thing the model answered (live 2026-09-10: asked to list
+    containers, it replied "Nothing new to chase — the refreshed state just
+    confirms everything I've reported still holds")."""
+    redirect_files()
+    fb.NOTES_FILE.write_text("- [10:00] a fact\n", encoding="utf-8")
+    base = [{"role": "system", "content": "s"},
+            {"role": "user", "content": "u"}]
+    p1 = fb.AGENT._payload(base)
+    p2 = fb.AGENT._payload(base)
+    check("state block is inserted", len(p1) == 3 and
+          "a fact" in p1[1]["content"], len(p1))
+    check("the operator's message stays last",
+          p1[-1]["content"] == "u" and len(p1[-1]) == 2, p1[-1])
+    check("payload is a copy, not the caller's list",
+          len(base) == 2 and p1 is not base and p2 is not base, len(base))
+    check("state does not accumulate over calls",
+          len(p2) == 3, len(p2))
+    check("wrap-up call can omit the state block",
+          fb.AGENT._payload(base, state=False) is base)
+
+
+def test_run_injects_state_at_every_tool_call_but_not_the_wrapup():
+    """Structural: this is the fix, and losing it is invisible at runtime.
+
+    Parsed with ast rather than matched as text: an earlier version counted a literal
+    string, so any reformatting of the call (necessary when a new keyword arrived) failed
+    a check whose invariant was still intact. The invariant is the shape of the call, not
+    the spelling of the line.
+    """
+    import ast
+    src = (SRC).read_text(encoding="utf-8", errors="replace")
+    tree = ast.parse(src)
+    calls = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "_chat"):
+            continue
+        arg0 = node.args[0] if node.args else None
+        via_payload = (isinstance(arg0, ast.Call)
+                       and isinstance(arg0.func, ast.Attribute)
+                       and arg0.func.attr == "_payload")
+        payload_session = False
+        if via_payload:
+            payload_session = any(kw.arg == "session_key" for kw in arg0.keywords)
+        state_false = False
+        if via_payload:
+            # state=False is a keyword of the INNER _payload call, not of _chat.
+            state_false = any(kw.arg == "state" and isinstance(kw.value, ast.Constant)
+                              and kw.value.value is False for kw in arg0.keywords)
+        raw_list = isinstance(arg0, ast.Name) and arg0.id == "messages"
+        calls.append({"via_payload": via_payload, "state_false": state_false,
+                      "raw_list": raw_list, "session": payload_session})
+
+    check("there is more than one _chat call site to check", len(calls) >= 3, len(calls))
+    check("every _chat call goes through _payload",
+          all(c["via_payload"] for c in calls),
+          [c for c in calls if not c["via_payload"]])
+    check("no _chat call receives the raw list",
+          not any(c["raw_list"] for c in calls), calls)
+    check("the forced wrap-up is the only caller that omits the state block",
+          sum(1 for c in calls if c["state_false"]) == 1,
+          sum(1 for c in calls if c["state_false"]))
+    check("the tool-calling calls pass the session through, so the plan and runway "
+          "reach the payload",
+          sum(1 for c in calls if c["session"] and not c["state_false"]) >= 2,
+          sum(1 for c in calls if c["session"]))
+
+
+def test_history_trims_in_blocks_not_every_turn():
+    redirect_files()
+    fb.CONFIG["agent"]["history_exchanges"] = 10          # keep = 20 messages
+    hist = fb.AGENT._history("trim-test")
+    hist.clear()
+    for i in range(20):
+        hist.append({"role": "user" if i % 2 == 0 else "assistant",
+                     "content": f"m{i}"})
+    fb.AGENT._trim_history("trim-test")
+    check("at the limit nothing is dropped (no cache churn)", len(hist) == 20,
+          len(hist))
+    hist.append({"role": "user", "content": "one more"})
+    fb.AGENT._trim_history("trim-test")
+    check("over the limit it cuts deep, not by one exchange",
+          len(hist) == 10, len(hist))
+    check("the newest message survives", hist[-1]["content"] == "one more")
+    for i in range(5):
+        hist.append({"role": "assistant", "content": f"a{i}"})
+    fb.AGENT._trim_history("trim-test")
+    check("hysteresis: no second trim for several more turns",
+          len(hist) == 15, len(hist))
+
+
+def test_compact_goes_deep_then_stays_put():
+    redirect_files()
+    try:
+        fb.CONFIG["llm"]["max_context_tokens"] = 4000
+        _budget_clear()
+        msgs = [{"role": "system", "content": "sys"}]
+        for i in range(12):
+            msgs.append({"role": "user", "content": f"u{i} " + "x" * 3000})
+            msgs.append({"role": "assistant", "content": ""})
+            msgs.append({"role": "tool", "tool_call_id": str(i),
+                         "content": "y" * 3000})
+        fb.AGENT._compact(msgs)
+        est = fb.AGENT._messages_token_est(msgs)
+        check("lands under the low-water mark, not merely the budget",
+              est < 4000 * 0.6 + 400, est)
+        check("system prompt survives compaction", msgs[0]["content"] == "sys")
+        check("no orphan tool message",
+              all(msgs[i].get("role") != "tool" or
+                  msgs[i - 1].get("role") in ("tool", "assistant")
+                  for i in range(1, len(msgs))))
+        again = copy.deepcopy(msgs)
+        fb.AGENT._compact(again)
+        check("a second compaction is a no-op (no per-turn cache churn)",
+              [m["content"] for m in again] == [m["content"] for m in msgs])
+    finally:
+        redirect_files()
+        _budget_clear()
+
+
+def test_compaction_budget_counts_the_trailing_state_block():
+    """A fat notes file must make compaction cut DEEPER, because the trailing
+    block is part of the payload even though it is not in the message list."""
+    def run(note_chars):
+        redirect_files()
+        fb.CONFIG["agent"]["notes_max_chars"] = 9000
+        fb.CONFIG["llm"]["max_context_tokens"] = 6000
+        _budget_clear()
+        if note_chars:
+            fb.NOTES_FILE.write_text("- [10:00] " + "n" * note_chars,
+                                     encoding="utf-8")
+        msgs = [{"role": "system", "content": "sys"}]
+        for i in range(12):
+            msgs.append({"role": "user", "content": f"u{i} " + "x" * 3000})
+            msgs.append({"role": "assistant", "content": ""})
+            msgs.append({"role": "tool", "tool_call_id": str(i),
+                         "content": "y" * 3000})
+        fb.AGENT._compact(msgs)
+        raw = fb.volatile_context()
+        return (fb.AGENT._messages_token_est(msgs), fb.est_tokens(raw), raw)
+
+    est_small, vol_small, raw_small = run(0)
+    est_big, vol_big, raw_big = run(7000)
+    # v2.0.0: the block is never empty, it is the clock and nothing else, so the
+    # baseline is small rather than absent (~25 tokens)
+    check("no notes and no ledger -> the trailing block is only the clock",
+          raw_small.startswith(fb._STATE_MARKER) and "Current date and time" in raw_small
+          and "Notes from previous sessions" not in raw_small and vol_small < 60,
+          (vol_small, raw_small[:90]))
+    check("the state block is genuinely large", vol_big > 1500, vol_big)
+    check("a large state block makes compaction cut deeper",
+          est_big < est_small, f"{est_small} vs {est_big}")
+    check("payload + state block fits the budget",
+          est_big + vol_big <= 6000, f"{est_big} + {vol_big}")
+    redirect_files()
+    _budget_clear()
+
+
+# What the model box accepts in ONE request. Re-measured 2026-09-16 from the
+# server itself (`GET http://a LAN address:8081/props`): total_slots 3,
+# default_generation_settings.n_ctx 262144, i.e. -c 786432 split three ways.
+# It was 131072 when the box ran two slots, and this constant was left at the
+# old number, so the check failed on a config that in fact fits — a stale
+# constant just makes a suite red and hides the failures that matter.
+SERVER_WINDOW = 262144
+
+
+def test_tuning_defaults_are_the_agreed_ones():
+    reset_config()
+    # The old assertion here pinned ">= 150000" — which is how the budget ended
+    # up 65k over what the server can accept (n_ctx 262144 / total_slots 2 =
+    # 131072 per request). A budget that does not fit makes the server reject the
+    # payload, which triggers _force_shrink and leaves "[earlier context
+    # dropped...]" in the transcript — so assert the INVARIANT, not a number.
+    llm = fb.CONFIG["llm"]
+    worst_case = (llm["max_context_tokens"] + llm["max_tokens"]
+                  + 4000)          # ~3.3k of tool schemas + slack
+    check("budget + generation + schemas fits the server window",
+          worst_case <= SERVER_WINDOW, f"{worst_case} > {SERVER_WINDOW}")
+    check("budget is not shrunk to nothing", llm["max_context_tokens"] >= 60000,
+          llm["max_context_tokens"])
+    check("tool output cap trimmed from 16k",
+          fb.CONFIG["agent"]["tool_output_max_chars"] <= 12000,
+          fb.CONFIG["agent"]["tool_output_max_chars"])
+    check("sampling is pinned explicitly, not half-inherited",
+          isinstance(llm.get("sampling"), dict) or llm.get("temperature") is None,
+          llm.get("sampling"))
+    # When this suite runs beside a real install, assert THAT config too: the
+    # staged fixture proves the invariant holds for a sane config, the host file
+    # proves the fleet's own numbers still fit the server it talks to.
+    host_cfg = BASE / "config.json"
+    if host_cfg.exists():
+        h = json.loads(host_cfg.read_text(encoding="utf-8-sig"))["llm"]
+        hworst = h["max_context_tokens"] + h["max_tokens"] + 4000
+        check("host config: budget + generation + schemas fits the window",
+              hworst <= SERVER_WINDOW, f"{hworst} > {SERVER_WINDOW}")
+        check("host config: budget is not shrunk to nothing",
+              h["max_context_tokens"] >= 60000, h["max_context_tokens"])
+
+# --- tool pairing -----------------------------------------------------------
+# Live failure 2026-09-11 on api.deepseek.com: the loop guard nudged the model
+# after the FIRST of two batched tool calls, so a user message landed between
+# the two tool results. DeepSeek rejected the entire request (400 "an assistant
+# message with 'tool_calls' must be followed by tool messages responding to each
+# 'tool_call_id'") and the task never ran. The local llama.cpp server had
+# accepted that shape for weeks, because it does not validate. Three guards now:
+# the nudge is queued, an unanswered call gets an explicit result, and the one
+# choke point every payload passes repairs and logs.
+
+def _batched_turn(nudge_inside=True, both_results=True,
+                  nudge="SYSTEM: stop repeating yourself"):
+    c1 = {"id": "call_a", "type": "function",
+          "function": {"name": "shell", "arguments": "{\"command\": \"ls\"}"}}
+    c2 = {"id": "call_b", "type": "function",
+          "function": {"name": "read_file",
+                       "arguments": "{\"path\": \"/etc/hosts\"}"}}
+    msgs = [{"role": "system", "content": "sys"},
+            {"role": "user", "content": "do the thing"},
+            {"role": "assistant", "content": "", "tool_calls": [c1, c2]},
+            {"role": "tool", "tool_call_id": "call_a", "content": "a"},
+            {"role": "tool", "tool_call_id": "call_b", "content": "b"}]
+    if not both_results:
+        msgs = msgs[:4]
+    if nudge_inside:
+        msgs.insert(4, {"role": "user", "content": nudge})
+    return msgs
+
+
+def test_a_batched_tool_turn_with_adjacent_results_is_valid():
+    msgs = _batched_turn(nudge_inside=False)
+    probs = fb._tool_pairing_problems(msgs)
+    check("a batched turn with contiguous tool results has no pairing problem",
+          probs == [], probs)
+
+
+def test_a_user_message_between_batched_tool_results_is_flagged():
+    probs = fb._tool_pairing_problems(_batched_turn(nudge_inside=True))
+    check("a nudge inside a tool batch is reported as a violation",
+          bool(probs), probs)
+    check("and the report names the unanswered tool_call_id",
+          any("call_b" in p for p in probs), probs)
+
+
+def test_payload_repairs_a_nudge_that_landed_inside_a_batch():
+    msgs = _batched_turn(nudge_inside=True)
+    out = fb.AGENT._payload([dict(m) for m in msgs], state=False)
+    probs = fb._tool_pairing_problems(out)
+    check("the repaired payload is valid for a strict provider",
+          probs == [], probs)
+    ids = [m.get("tool_call_id") for m in out if m.get("role") == "tool"]
+    check("both tool results survive, in call order",
+          ids == ["call_a", "call_b"], ids)
+    users = [m.get("content") for m in out if m.get("role") == "user"]
+    check("the nudge is kept, just moved after the block",
+          users == ["do the thing", "SYSTEM: stop repeating yourself"], users)
+    check("nothing was dropped by the repair",
+          len(out) == len(msgs), f"{len(out)} vs {len(msgs)}")
+
+
+def test_payload_answers_a_tool_call_that_produced_no_result():
+    msgs = _batched_turn(nudge_inside=False, both_results=False)
+    check("a missing tool result is flagged as a violation",
+          bool(fb._tool_pairing_problems(msgs)))
+    out = fb.AGENT._payload([dict(m) for m in msgs], state=False)
+    check("the repaired payload is valid",
+          fb._tool_pairing_problems(out) == [],
+          fb._tool_pairing_problems(out))
+    filler = [m for m in out if m.get("role") == "tool"
+              and m.get("tool_call_id") == "call_b"]
+    check("the unanswered call gets an explicit tool result",
+          len(filler) == 1, len(filler))
+    check("and that result says the call did not complete",
+          "did not complete" in (filler[0]["content"] if filler else ""),
+          filler[0]["content"] if filler else None)
+
+
+def test_the_loop_guard_nudge_waits_for_the_whole_tool_batch():
+    src = (SRC).read_text(encoding="utf-8")
+    i, j = src.find("nudges.append("), src.find("you have now made this exact")
+    check("the loop-guard nudge is queued, not appended mid-batch",
+          0 <= i < j and (j - i) < 120, f"{i} {j}")
+    check("and it is flushed after the per-call loop",
+          "for _nudge in nudges:" in src)
+    check("_payload repairs pairing at the one choke point",
+          "messages = _repair_tool_pairing(messages)" in src)
+    check("a tool call that produced no result is answered, never skipped",
+          "this call did not\n" in src or "this call did not " in src)
+
+# --- restart ownership ------------------------------------------------------
+# /restart used to always spawn a detached copy of itself: a second process on
+# disk while the first is still alive, with the instance lock deciding which
+# survives. On a supervised Windows host the supervisor's child lost that race
+# ("bot exited 3 (lock held elsewhere)") and the supervisor backed off 300 s;
+# under systemd it produced two instances fighting over the web port. The owner
+# now decides.
+
+def _with_restart_env(env, fn):
+    saved = {k: os.environ.get(k) for k in env}
+    for k, v in env.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    try:
+        return fn()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def test_restart_owner_reads_the_environment():
+    def run():
+        out = []
+        os.environ.pop("INVOCATION_ID", None)
+        os.environ.pop("tinycmdr_SUPERVISED", None)
+        out.append(("self", fb.restart_owner()))
+        os.environ["tinycmdr_SUPERVISED"] = "1"
+        out.append(("supervisor", fb.restart_owner()))
+        os.environ["INVOCATION_ID"] = "test-unit-start"
+        out.append(("systemd", fb.restart_owner()))
+        return out
+    got = _with_restart_env({"INVOCATION_ID": None, "tinycmdr_SUPERVISED": None}, run)
+    for want, actual in got:
+        check(f"restart owner with that environment is '{want}'",
+              actual == want, actual)
+
+
+def _restart_with(env):
+    """Call perform_restart without touching the real process, report what it did."""
+    calls = {"spawn": 0, "code": None}
+    real_exit, real_sleep, real_spawn = os._exit, time.sleep, fb._spawn_replacement
+
+    class _Exited(Exception):
+        pass
+
+    def fake_exit(code):
+        raise _Exited(code)
+
+    def fake_spawn():
+        calls["spawn"] += 1
+
+    os._exit = fake_exit
+    time.sleep = lambda _s: None
+    fb._spawn_replacement = fake_spawn
+
+    def run():
+        try:
+            fb.perform_restart(by="test")
+        except _Exited as e:
+            calls["code"] = e.args[0]
+        except Exception as e:            # noqa: BLE001 - report, do not mask
+            calls["error"] = repr(e)
+        return calls
+
+    try:
+        return _with_restart_env(env, run)
+    finally:
+        os._exit = real_exit
+        time.sleep = real_sleep
+        fb._spawn_replacement = real_spawn
+
+
+def test_restart_hands_over_instead_of_spawning_when_supervised():
+    c = _restart_with({"tinycmdr_SUPERVISED": "1", "INVOCATION_ID": None})
+    check("a supervised restart does not spawn a second process",
+          c["spawn"] == 0, c)
+    check("it exits with the hand-over code", c["code"] == fb.RESTART_EXIT_CODE, c)
+    check("which is not 0, so a supervisor can tell it from a clean stop",
+          c["code"] != 0, c)
+
+
+def test_restart_hands_over_under_systemd():
+    c = _restart_with({"INVOCATION_ID": "test-unit-start", "tinycmdr_SUPERVISED": None})
+    check("under systemd it does not spawn either", c["spawn"] == 0, c)
+    check("and it exits with the hand-over code", c["code"] == fb.RESTART_EXIT_CODE, c)
+
+
+def test_restart_spawns_a_replacement_when_nobody_owns_it():
+    c = _restart_with({"tinycmdr_SUPERVISED": None, "INVOCATION_ID": None})
+    check("with no owner it spawns exactly one replacement", c["spawn"] == 1, c)
+    check("and exits 0, because the replacement is already up", c["code"] == 0, c)
+
+def test_a_spawned_replacement_re_reads_dot_env():
+    """A changed .env must take effect on /restart.
+
+    The child inherits our environment and _load_env_file never overwrites an
+    inherited key, so without stripping them an edited token would be masked by
+    the stale copy (live: skyteck kept running as the old bot account after its
+    token was replaced, and /restart looked like it had ignored the edit).
+    """
+    envf = fb.ENV_FILE
+    saved = envf.read_text(encoding="utf-8") if envf.exists() else None
+    stale = os.environ.get("tinycmdr_MM_TOKEN")
+    captured = {}
+    real_popen = fb.subprocess.Popen
+
+    class _Fake:
+        def __init__(self, *a, **kw):
+            captured.update(kw)
+
+    fb.subprocess.Popen = _Fake
+    try:
+        envf.write_text("tinycmdr_MM_TOKEN=file-value\nOTHER=kept\n", encoding="utf-8")
+        os.environ["tinycmdr_MM_TOKEN"] = "stale-inherited-value"
+        check("the file's keys are found", "tinycmdr_MM_TOKEN" in fb._env_file_keys(),
+              fb._env_file_keys())
+        fb._spawn_replacement()
+    finally:
+        fb.subprocess.Popen = real_popen
+        if saved is None:
+            envf.unlink(missing_ok=True)
+        else:
+            envf.write_text(saved, encoding="utf-8")
+        if stale is None:
+            os.environ.pop("tinycmdr_MM_TOKEN", None)
+        else:
+            os.environ["tinycmdr_MM_TOKEN"] = stale
+    env = captured.get("env") or {}
+    check("the child does not inherit the stale .env value",
+          "tinycmdr_MM_TOKEN" not in env, env.get("tinycmdr_MM_TOKEN"))
+    check("keys that .env does not own are still inherited",
+          "PATH" in env or "PYTHONPATH" in env, list(env)[:4])
+
+
+
+# --------------------------------------------------- stage 3: SSE streaming
+
+def test_stream_chat_assembles_content_reasoning_and_usage():
+    body = _sse(
+        _chunk({"reasoning_content": "let me think"}),
+        _chunk({"content": "Hel"}),
+        _chunk({"content": "lo"}),
+        _chunk({}, finish="stop"),
+        {"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 2},
+         "timings": {"predicted_per_second": 24.5}})
+    data, stats = fb._stream_chat(StreamResp(body))
+    msg = data["choices"][0]["message"]
+    check("stream: content assembled", msg["content"] == "Hello", msg)
+    check("stream: reasoning assembled", msg["reasoning_content"] == "let me think", msg)
+    check("stream: finish reason kept", data["choices"][0]["finish_reason"] == "stop", data)
+    check("stream: usage taken from the final chunk",
+          data["usage"]["completion_tokens"] == 2, data)
+    check("stream: server-reported decode rate recorded",
+          abs(stats.get("server_tps", 0) - 24.5) < 0.01, stats)
+    check("stream: first-delta latency measured", stats.get("ttft") is not None, stats)
+    check("stream: chunks counted", stats.get("deltas") == 4, stats)
+
+
+def test_stream_chat_merges_fragmented_tool_calls():
+    body = _sse(
+        _chunk({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                                "function": {"name": "shell", "arguments": ""}}]}),
+        _chunk({"tool_calls": [{"index": 0, "function": {"arguments": '{"comm'}}]}),
+        _chunk({"tool_calls": [{"index": 0, "function": {"arguments": 'and": "hostname"}'}}]}),
+        _chunk({"tool_calls": [{"index": 1, "id": "call_2", "type": "function",
+                                "function": {"name": "list_tools", "arguments": "{}"}}]}),
+        _chunk({}, finish="tool_calls"))
+    data, _ = fb._stream_chat(StreamResp(body))
+    tcs = data["choices"][0]["message"].get("tool_calls") or []
+    check("stream: both tool calls reassembled", len(tcs) == 2, tcs)
+    check("stream: argument fragments merged across chunks",
+          tcs and tcs[0]["function"]["arguments"] == '{"command": "hostname"}', tcs)
+    check("stream: ids and names survive the split",
+          tcs and tcs[0]["id"] == "call_1" and tcs[0]["function"]["name"] == "shell"
+          and tcs[1]["id"] == "call_2", tcs)
+    check("stream: finish=tool_calls preserved",
+          data["choices"][0]["finish_reason"] == "tool_calls", data)
+
+
+def test_stream_chat_tolerates_comments_keepalives_and_torn_lines():
+    body = (b": keep-alive\n\n" + b"\n" + b"data: {not json}\n\n"
+            + b"data: " + json.dumps(_chunk({"content": "ok"})).encode() + b"\n\n"
+            + b"data: [DONE]\n\n")
+    data, _ = fb._stream_chat(StreamResp(body))
+    check("stream: SSE noise and a torn line do not break the call",
+          data["choices"][0]["message"]["content"] == "ok", data)
+
+
+def test_stream_idle_gap_ends_the_call_and_closes_it():
+    resp = StreamResp(_sse(_chunk({"content": "partial"}), done=False), stall=True)
+    t0 = time.time()
+    try:
+        fb._stream_chat(resp, idle_seconds=1)
+        check("stream: an idle stream is ended", False, "no exception raised")
+    except fb.StreamFailed as e:
+        elapsed = time.time() - t0
+        check("stream: an idle stream is ended", True)
+        check("stream: it ends on the idle gap, not the request timeout",
+              elapsed < 5, f"{elapsed:.1f}s")
+        check("stream: the wedged stream is closed", resp.closed, "close() not called")
+        check("stream: the reason names the quiet gap", "quiet" in str(e), str(e))
+    except Exception as e:
+        check("stream: an idle stream is ended", False, repr(e))
+
+
+def test_a_streaming_cancel_hangs_up_on_the_server():
+    """The acceptance test for stage 3, and the other half of /stop: a cancel while
+    streaming must CLOSE the socket, because that is what makes a local llama.cpp stop
+    generating. Proven against a socket that reports the peer hang-up (the
+    non-streaming path used to pin saw_close False here)."""
+    srv = DribbleServer(interval=0.05, duration=10.0)
+    srv.start()
+    url = f"http://127.0.0.1:{srv.port}/v1/chat/completions"
+    ev = threading.Event()
+    box = {}
+
+    def call():
+        try:
+            resp = fb._post_watchdog(url, {}, {}, timeout=5, grace=1,
+                                     cancel_event=ev, stream=True)
+            fb._stream_chat(resp, cancel_event=ev, idle_seconds=60)
+            box["r"] = "returned"
+        except fb.OperatorStop:
+            box["r"] = "stopped"
+        except BaseException as e:            # noqa: BLE001 - reported below
+            box["r"] = f"{type(e).__name__}: {e}"
+
+    th = threading.Thread(target=call, daemon=True)
+    th.start()
+    time.sleep(0.8)
+    ev.set()
+    th.join(8)
+    check("stream cancel: the call stops with OperatorStop",
+          box.get("r") == "stopped", box)
+    deadline = time.time() + 5
+    while time.time() < deadline and not srv.saw_close:
+        time.sleep(0.1)
+    check("stream cancel: the SERVER sees the hang-up (this is what ends the GPU work)",
+          srv.saw_close, "the socket stayed open")
+    srv.stop()
+
+
+def test_chat_retries_the_same_endpoint_without_streaming_when_the_stream_fails():
+    """A server that ignores "stream": true answers with plain JSON. Reporting that as
+    an empty answer would be a silent wrong answer, so the call is retried on the SAME
+    endpoint without streaming - not demoted to another provider."""
+    saved_cfg = copy.deepcopy(fb.CONFIG)
+    fb.CONFIG["llm"]["stream"] = True
+    fb._STREAM_UNSUPPORTED.clear()
+    try:
+        usage = {}
+        not_sse = StreamResp(b'{"choices":[{"message":{"content":"ignored"}}]}')
+        good = ok_resp("recovered without streaming")
+        resp, calls = with_fake_post(
+            [not_sse, good],
+            lambda: fb.AGENT._chat([{"role": "user", "content": "hi"}], usage=usage))
+        check("stream fallback: the same endpoint is retried",
+              len(calls) == 2 and calls[0]["url"] == calls[1]["url"], calls)
+        check("stream fallback: the first attempt asked for a stream",
+              calls[0].get("stream") is True, calls[0].get("stream"))
+        check("stream fallback: the retry does not",
+              calls[1].get("stream") is not True, calls[1].get("stream"))
+        check("stream fallback: no key named stream is left in the payload",
+              "stream" not in (calls[1]["payload"] or {}), calls[1]["payload"])
+        check("stream fallback: the answer arrives",
+              resp.get("content") == "recovered without streaming", resp)
+        check("stream fallback: the endpoint is remembered as stream-less",
+              any(u.endswith("/chat/completions") for u in fb._STREAM_UNSUPPORTED),
+              fb._STREAM_UNSUPPORTED)
+        check("stream fallback: it is recorded as a failed attempt",
+              any(a["outcome"] == "error" and "stream" in a["detail"]
+                  for a in usage.get("attempts", [])), usage.get("attempts"))
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved_cfg)
+
+
+
+def test_a_cancel_is_noticed_while_chunks_are_still_flowing():
+    """Caught LIVE on the manager box 2026-09-12: /stop arrived mid-generation and the run kept
+    going, because the cancel was only checked when the queue went EMPTY - and a busy
+    stream never goes empty. The check now runs on every iteration."""
+
+    class BusyStream(StreamResp):
+        def iter_lines(self, decode_unicode=False):
+            for _ in range(400):
+                yield b"data: " + json.dumps(_chunk({"content": "x"})).encode()
+                time.sleep(0.02)
+
+    resp = BusyStream()
+    ev = threading.Event()
+    box = {}
+
+    def run():
+        try:
+            fb._stream_chat(resp, cancel_event=ev, idle_seconds=30)
+            box["r"] = "returned"
+        except fb.OperatorStop:
+            box["r"] = "stopped"
+        except BaseException as e:            # noqa: BLE001 - reported below
+            box["r"] = f"{type(e).__name__}: {e}"
+
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    time.sleep(0.4)
+    ev.set()
+    th.join(6)
+    check("busy stream: a cancel while chunks flow still stops the call",
+          box.get("r") == "stopped", box)
+    check("busy stream: the connection is dropped, not left running",
+          resp.closed, "not closed")
+
+
+
+# --------------------------------------------- both sides: LAN endpoint vs cloud
+
+CLOUD_URL = "https://api.deepseek.com/v1"
+CLOUD_MODEL = "deepseek-v4-flash"
+
+
+def _both_sides(allow_cloud):
+    """A config with a LAN primary AND a cloud fallback, as every fleet host has."""
+    fb.CONFIG["llm"]["fallbacks"] = [{"base_url": CLOUD_URL, "model": CLOUD_MODEL,
+                                      "alias": "cloud", "api_key": "k-cloud"}]
+    fb.CONFIG["llm"]["allow_cloud_fallback"] = allow_cloud
+
+
+def _catalog_both_sides():
+    return [{"name": "main", "url": fb.CONFIG["llm"]["base_url"], "local": True,
+             "alias": False, "send_as": "main", "key": "none"},
+            {"name": CLOUD_MODEL, "url": CLOUD_URL, "local": False, "alias": False,
+             "send_as": CLOUD_MODEL, "key": "k-cloud"},
+            {"name": "cloud", "url": CLOUD_URL, "local": False, "alias": True,
+             "send_as": CLOUD_MODEL, "key": "k-cloud"}]
+
+
+def test_local_and_cloud_are_classified_correctly():
+    """Everything else rests on this split: the failover gate, the streaming option set,
+    and the privacy promise that a local failure does not reach the internet."""
+    for url in ("http://10.20.30.40:8081/v1", "http://127.0.0.1:8081/v1",
+                "http://[redacted]:8080/v1", "http://172.16.5.4:8081/v1",
+                "http://172.31.255.1/v1", "http://nas-bot.local:8081/v1"):
+        check(f"local: {url}", fb._is_local_url(url) is True, url)
+    for url in ("https://api.deepseek.com/v1", "https://api.moonshot.ai/v1",
+                "https://example.com/api", "http://8.8.8.8:8081/v1",
+                "http://172.32.0.1/v1", "http://192.169.0.1/v1"):
+        check(f"cloud: {url}", fb._is_local_url(url) is False, url)
+
+
+def test_an_explicit_cloud_model_reaches_the_cloud_endpoint_first():
+    """The live lesson from a bot account: a name that matches a fallback routes THERE, even when
+    the primary is a LAN box that would happily accept the request and ignore the model
+    field. Getting this wrong is silent - the answer looks fine and comes from the wrong
+    place - so it is pinned for both the model id and the alias."""
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=True)
+        for want in (CLOUD_MODEL, "cloud"):
+            resp, calls = with_fake_post([ok_resp("from the cloud")],
+                                         lambda: fb.AGENT._chat(
+                                             [{"role": "user", "content": "hi"}],
+                                             model=want),
+                                         catalog=_catalog_both_sides())
+            check(f"cloud {want}: the first call goes to the cloud endpoint",
+                  calls and calls[0]["url"].startswith(CLOUD_URL), [c["url"] for c in calls])
+            check(f"cloud {want}: with the cloud endpoint's own key",
+                  calls and calls[0]["headers"].get("Authorization") == "Bearer k-cloud",
+                  calls[0].get("headers"))
+            check(f"cloud {want}: sent as the model that endpoint serves",
+                  calls and calls[0]["payload"]["model"] == CLOUD_MODEL, calls[0]["payload"].get("model"))
+            check(f"cloud {want}: the answer comes back",
+                  resp.get("content") == "from the cloud", resp)
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+def test_a_local_model_stays_local_and_is_not_given_a_cloud_key():
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=True)
+        resp, calls = with_fake_post([ok_resp("from the box")],
+                                     lambda: fb.AGENT._chat(
+                                         [{"role": "user", "content": "hi"}], model="main"),
+                                     catalog=_catalog_both_sides())
+        lan_chat = fb.CONFIG["llm"]["base_url"].rstrip("/") + "/chat/completions"
+        check("local model: the call stays on the LAN endpoint",
+              calls and calls[0]["url"] == lan_chat, [c["url"] for c in calls])
+        check("local model: no cloud key is attached",
+              calls and calls[0]["headers"].get("Authorization") == "Bearer none",
+              calls[0].get("headers"))
+        check("local model: the answer comes back",
+              resp.get("content") == "from the box", resp)
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+def test_cloud_failover_is_off_by_default_and_that_is_the_privacy_guarantee():
+    """allow_cloud_fallback=false: a LAN failure must FAIL, not quietly ship the
+    conversation to a provider. Verified by proving the cloud endpoint is never called."""
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=False)
+        resp, calls = with_fake_post(
+            [FakeResp(500, text="box is unhappy"), ok_resp("cloud would have answered")],
+            lambda: _try_chat(),
+            catalog=_catalog_both_sides())
+        check("privacy: the cloud endpoint was never called",
+              all(not c["url"].startswith(CLOUD_URL) for c in calls), [c["url"] for c in calls])
+        check("privacy: the run reports infrastructure failure, not an answer",
+              isinstance(resp, fb.InfraError), resp)
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+def test_cloud_failover_works_when_the_operator_allows_it():
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=True)
+        usage = {}
+        resp, calls = with_fake_post(
+            [FakeResp(500, text="box is unhappy"), ok_resp("from the cloud")],
+            lambda: _try_chat(usage=usage),
+            catalog=_catalog_both_sides())
+        check("failover: the cloud endpoint took over",
+              any(c["url"].startswith(CLOUD_URL) for c in calls), [c["url"] for c in calls])
+        check("failover: the answer came from the cloud",
+              resp == "from the cloud", resp)
+        # usage['failovers'] lists the endpoints that FAILED (the local box here), not
+        # where the call ended up - the answer above already proves the cloud took it
+        check("failover: the local failure is on the record",
+              any(u.startswith("http://127.0.0.1") for u in usage.get("failovers", [])),
+              usage.get("failovers"))
+        check("failover: the local attempt is on the record",
+              any(a["outcome"] in ("error", "fatal") for a in usage.get("attempts", [])),
+              usage.get("attempts"))
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+def _try_chat(usage=None):
+    """Run one chat call and return either the content or the InfraError raised."""
+    try:
+        r = fb.AGENT._chat([{"role": "user", "content": "hi"}], usage=usage)
+        return (r.get("content") or "")
+    except fb.InfraError as e:
+        return e
+
+
+def test_streaming_asks_for_usage_on_the_lan_but_not_from_a_provider():
+    """stream_options is a llama.cpp nicety: a provider that does not know it can answer
+    400, so it goes only to a LAN endpoint. Both directions are pinned - the option's
+    presence is what makes tok/s exact locally, its absence is what keeps cloud calls
+    working at all."""
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=True)
+        fb.CONFIG["llm"]["stream"] = True
+        fb._STREAM_UNSUPPORTED.clear()
+        body = _sse(_chunk({"content": "local"}), _chunk({}, finish="stop"))
+        _, calls = with_fake_post([StreamResp(body)],
+                                  lambda: fb.AGENT._chat(
+                                      [{"role": "user", "content": "hi"}], model="main"),
+                                  catalog=_catalog_both_sides())
+        check("streaming/local: the request asks to stream", calls[0].get("stream") is True,
+              calls[0].get("stream"))
+        check("streaming/local: usage is requested (llama.cpp answers with it)",
+              calls[0]["payload"].get("stream_options") == {"include_usage": True},
+              calls[0]["payload"].get("stream_options"))
+
+        fb._STREAM_UNSUPPORTED.clear()
+        body2 = _sse(_chunk({"content": "cloud"}), _chunk({}, finish="stop"))
+        _, calls2 = with_fake_post([StreamResp(body2)],
+                                   lambda: fb.AGENT._chat(
+                                       [{"role": "user", "content": "hi"}], model=CLOUD_MODEL),
+                                   catalog=_catalog_both_sides())
+        check("streaming/cloud: the provider is asked to stream",
+              calls2[0].get("stream") is True, calls2[0].get("stream"))
+        check("streaming/cloud: NO stream_options (a provider may reject it)",
+              "stream_options" not in (calls2[0]["payload"] or {}),
+              sorted((calls2[0]["payload"] or {}).keys()))
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+def test_a_cloud_stream_without_usage_still_answers_and_marks_the_estimate():
+    """Cloud reality: usage may never arrive. The call must still produce the answer, and
+    the token figures must be marked as estimates rather than silently invented."""
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=True)
+        fb.CONFIG["llm"]["stream"] = True
+        fb._STREAM_UNSUPPORTED.clear()
+        usage = {}
+        body = _sse(_chunk({"content": "no usage here"}), _chunk({}, finish="stop"))
+        resp, _ = with_fake_post([StreamResp(body)],
+                                 lambda: fb.AGENT._chat(
+                                     [{"role": "user", "content": "hi"}], model=CLOUD_MODEL,
+                                     usage=usage),
+                                 catalog=_catalog_both_sides())
+        check("cloud stream: the answer arrives without a usage chunk",
+              resp.get("content") == "no usage here", resp)
+        check("cloud stream: the figures are flagged as estimates",
+              usage.get("estimated") is True, usage)
+        check("cloud stream: the call still counts",
+              usage.get("calls") == 1 and usage.get("streamed") == 1, usage)
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+def test_a_rejected_cloud_request_names_the_config_not_the_model():
+    """A 401/403/404 from a provider is a key/model/base_url problem. The bot must say so
+    instead of reporting a model failure - that message is what sent the operator looking
+    in the wrong place the first time a cloud key went stale."""
+    saved = copy.deepcopy(fb.CONFIG)
+    try:
+        _both_sides(allow_cloud=True)
+        resp, calls = with_fake_post(
+            [FakeResp(401, text="invalid api key")],
+            lambda: _try_chat(),
+            catalog=[{"name": CLOUD_MODEL, "url": CLOUD_URL, "local": False,
+                      "alias": False, "send_as": CLOUD_MODEL, "key": "stale"},
+                     {"name": "cloud", "url": CLOUD_URL, "local": False, "alias": True,
+                      "send_as": CLOUD_MODEL, "key": "stale"}])
+        check("rejected cloud call: reported as infrastructure, not an answer",
+              isinstance(resp, fb.InfraError), resp)
+        check("rejected cloud call: the message points at the config",
+              "key" in str(resp) and "base_url" in str(resp), str(resp))
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved)
+
+
+# --------------------------------------------------------------------------
+# ledger integrity: survive a damaged file, and never splice a write
+# --------------------------------------------------------------------------
+# Found on the fleet manager 2026-09-16: tasks.json held a complete JSON document
+# followed by a duplicated fragment ("Extra data: line 165 column 2"), the loader
+# read that as "unreadable", and 20 items disappeared into a fresh ledger. Two
+# fixes are pinned here: the file is replaced in one step, and items are only
+# dropped when there is nothing parseable at all.
+
+def test_a_damaged_ledger_is_salvaged_not_dropped():
+    redirect_files()
+    good = json.dumps({"items": [{"id": 1, "desc": "keep me", "status": "open",
+                                  "note": ""}], "next_id": 2}, indent=2)
+    fb.TASKS_FILE.write_text(good + '\n"desc": "a duplicated tail',
+                             encoding="utf-8")
+    t = fb.load_tasks()
+    check("a tail-damaged ledger keeps its items",
+          [i["desc"] for i in t["items"]] == ["keep me"], t)
+    check("the damaged file is kept for inspection",
+          sorted(p.name for p in TMP.glob("tasks.json.damaged-*")),
+          sorted(p.name for p in TMP.iterdir()))
+    check("the salvaged ledger needs no repair to render",
+          "keep me" in fb.render_task_prompt())
+
+
+def test_a_ledger_with_nothing_parseable_starts_fresh():
+    redirect_files()
+    fb.TASKS_FILE.write_text("not json at all", encoding="utf-8")
+    t = fb.load_tasks()
+    check("nothing salvageable -> an empty ledger, not an exception",
+          t["items"] == [] and t["next_id"] == 1, t)
+    check("no damaged copy is kept when there was nothing to keep",
+          not list(TMP.glob("tasks.json.damaged-*")),
+          sorted(p.name for p in TMP.iterdir()))
+
+
+def test_state_files_are_replaced_atomically():
+    redirect_files()
+    calls = []
+    real_replace = fb.os.replace
+    try:
+        fb.os.replace = lambda a, b: (calls.append((str(a), str(b))),
+                                      real_replace(a, b))[1]
+        fb.save_tasks({"items": [], "next_id": 1})
+    finally:
+        fb.os.replace = real_replace
+    check("the ledger and its mirror are renamed into place",
+          sorted(os.path.basename(c[1]) for c in calls) ==
+          ["tasks.json", "tasks.md"], calls)
+    check("each temp file is a sibling of its target (same filesystem)",
+          all(os.path.dirname(c[0]) == os.path.dirname(c[1]) for c in calls),
+          calls)
+    check("no temp file is left behind",
+          not list(TMP.glob("*.tmp-*")), sorted(p.name for p in TMP.iterdir()))
+
+
+def test_a_failed_atomic_write_still_leaves_a_parseable_ledger():
+    redirect_files()
+    fb.save_tasks({"items": [{"id": 1, "desc": "first", "status": "open",
+                              "note": ""}], "next_id": 2})
+    real_fsync = fb.os.fsync
+    try:
+        fb.os.fsync = lambda _fd: (_ for _ in ()).throw(OSError("disk gone"))
+        fb.save_tasks({"items": [{"id": 2, "desc": "second", "status": "open",
+                                  "note": ""}], "next_id": 3})
+    finally:
+        fb.os.fsync = real_fsync
+    loaded = json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))
+    check("a write that fails mid-flight never leaves a spliced file",
+          len(loaded["items"]) == 1
+          and loaded["items"][0]["desc"] in ("first", "second"), loaded)
+    check("the fallback path cleans up after itself",
+          not list(TMP.glob("*.tmp-*")), sorted(p.name for p in TMP.iterdir()))
+
+
+def main():
+    # One suite serves both builds. The chatless CLI build (tinycmdr_SRC=tinycmdr-cli.py)
+    # carries no failover list and no restart handover, so the tests that describe those
+    # features are skipped there rather than deleted: they still guard the Mattermost build.
+    CHATLESS = not hasattr(fb, "MattermostDispatcher")
+    CHAT_ONLY = ("test_restart_", "test_an_explicit_cloud_model", "test_cloud_failover",
+                 "test_a_cloud_stream_without_usage", "test_a_local_model_stays_local", "test_a_spawned_replacement", "test_streaming_asks_for_usage")
+    chatless_skips = []
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and callable(v)]
+    only = sys.argv[1] if len(sys.argv) > 1 else ""
+    for t in tests:
+        if only and only not in t.__name__:
+            continue
+        if CHATLESS and t.__name__.startswith(CHAT_ONLY):
+            chatless_skips.append(t.__name__)
+            continue
+        try:
+            t()
+        except Exception as e:
+            import traceback
+            FAILURES.append(f"{t.__name__} raised: {e}")
+            traceback.print_exc()
+    _tail = ("" if not chatless_skips
+             else f", {len(chatless_skips)} skipped (chat build only)")
+    print(f"\n{len(PASSES)} passed, {len(FAILURES)} failed{_tail}")
+    for f in FAILURES:
+        print("  FAIL:", f)
+    return 1 if FAILURES else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
