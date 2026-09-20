@@ -292,10 +292,22 @@ DEFAULT_CONFIG = {
         "search_timeout": 60,
         "command_cost_guard": True,
         "scan_budget_seconds": 120,
+        "checkin_minutes": 5,
+        "checkin_steps": 30,
         "auto_continue": True,
         "auto_continue_max": 2,
         "deliver_after_announcements": 3,
         "session_transcript": True,
+        "checkin_per_tool": True,
+        "checkin_notes": True,
+        "checkin_note_chars": 400,
+        "checkin_note_min_seconds": 1.0,
+        "checkin_stream_notes": True,
+        "checkin_stream_seconds": 2.0,
+        "checkin_tool_merge_seconds": 2.0,
+        "checkin_tool_max_lines": 4,
+        "checkin_tool_preview_chars": 90,
+        "checkin_tool_min_seconds": 0.0,
     },
 }
 
@@ -7305,6 +7317,551 @@ def _save_overrides():
         log.warning("could not persist model overrides: %s", e)
 
 
+# --------------------------------------------------------------- reporting ---
+# ONE vocabulary, N destinations.
+#
+# Every interface shows the same run: the status line while it works, a line per
+# tool call with what it ran and what came back, the model's own narration as it
+# streams, a check-in every so often, the questions, and the answer. That used to
+# be written three times - ProgressReporter for Mattermost, WebRun's callbacks for
+# the browser, and a pile of print() closures inside the console build - so the
+# three drifted: the browser lost exit codes, failure reasons and check-ins
+# entirely, and the console could not even import the wording (the generator cuts
+# this file between model_command and run_cli, so anything the console needs has
+# to live ABOVE that cut, which is why the helpers below sit here).
+#
+# The split:
+#
+#   RunReporter      what is SAID, once: wording, cadence, caps, scrubbing,
+#                    tool-line merging, the source tag, the done line.
+#   Destination      how a lane LOOKS: four verbs and a cost model. A browser
+#                    line is free, a Mattermost post notifies a phone, a terminal
+#                    line is scrolled away - those are the only real differences.
+#   drive_run()      the one place AGENT.run's callbacks are wired.
+#
+# A lane that implements the four verbs gets the whole vocabulary and can never
+# fall behind the others again. tests/test_lane_parity.py drives one scripted run
+# through every destination and asserts the three event streams are identical,
+# text for text; a lane that quietly drops a fact fails a suite.
+
+class Destination:
+    """A place a run can report into.
+
+    line() draws something and returns an opaque ref; update() redraws it because
+    it grew; drop() takes it back (the streamed narration that turned out to be
+    the answer); ask() is a question with an optional wait, and a destination
+    without a human behind it returns None instead of pretending.
+
+    `kind` is a semantic tone - note, tool, tool_done, tool_fail, checkin, say,
+    ask, final, system - and each destination maps it to its own styling. That is
+    the whole contract: the reporter never learns what a post id, a uid or an
+    ANSI colour is.
+    """
+
+    name = "?"
+    has_human = False      # can ask() reach somebody?
+    merge_tools = False    # is a line expensive (a notification) or free?
+    max_lines = 0          # 0 = no limit; else roll the batch line at this many
+
+    def line(self, kind, text, src="main"):
+        raise NotImplementedError
+
+    def update(self, ref, kind, text, src="main"):
+        raise NotImplementedError
+
+    def drop(self, ref):
+        pass
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+        """Return the operator's answer, or None when nobody can be asked."""
+        return None
+
+
+# --- the failure verdict, shared by every tool line ---------------------------
+_FAILURE_MARKERS = ("ERROR", "BLOCKED", "DECLINED", "TIMEOUT", "STOPPED")
+
+
+def _exit_code(output):
+    """Exit code carried by a tool result ('exit_code=1'), else None."""
+    m = re.search(r"(?:^|\n)\s*exit_code=(-?\d+)", str(output or ""))
+    return int(m.group(1)) if m else None
+
+
+def _failure_snippet(text, limit=160):
+    """The first meaningful line of a failed result, for the progress line.
+
+    Bounded on purpose: one line, scrubbed, no newlines and no backticks - the
+    batch text is not a code fence, so a stray backtick mangles the whole post.
+    """
+    for raw in str(text or "").splitlines():
+        line = " ".join(raw.split())
+        if not line or line.startswith("exit_code=") or line.startswith("--- "):
+            continue
+        line = scrub(line).replace("`", "'")
+        return line[:limit] + ("…" if len(line) > limit else "")
+    return ""
+
+
+def _failed_call(output):
+    """(rc, reason_line) for a tool result that failed, else (rc, '')."""
+    rc = _exit_code(output)
+    text = str(output or "")
+    head = text.lstrip()[:10].upper()
+    marker = any(head.startswith(m) for m in _FAILURE_MARKERS)
+    if not rc and not marker:          # rc 0, rc absent, and no verdict word = success
+        return rc, ""
+    return rc, _failure_snippet(text)
+
+
+def _tool_preview(name, args, limit=None):
+    """One-line, secret-scrubbed preview of what a tool call is doing."""
+    if isinstance(args, str):
+        try:
+            args = json.loads(args) if args.strip() else {}
+        except Exception:
+            args = {"_raw": args}
+    if not isinstance(args, dict):
+        args = {"_raw": args}
+    if "command" in args:
+        first = str(args.get("command") or "").splitlines()
+        text = first[0] if first else ""
+    elif args.get("path") or args.get("pattern"):
+        text = str(args.get("path") or args.get("pattern"))
+    else:
+        text = ", ".join(f"{k}={v}" for k, v in list(args.items())[:2])
+    limit = limit or int(CONFIG["agent"].get("checkin_tool_preview_chars", 90) or 90)
+    text = scrub(" ".join(str(text).split()))
+    return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def checkin_line(session_key, steps, elapsed, name=None, args=None):
+    """The ⏳ line: how long this has been going, which step, what it is doing
+    now, what it has spent, and what memory it is holding.
+
+    Module level and single-copy on purpose: three lanes draw this line, and
+    three implementations of one line is how they drifted apart in the first place.
+    """
+    bits = [f"⏳ {int(elapsed // 60)}m{int(elapsed % 60):02d}s in",
+            f"step {steps}"]
+    if name:
+        snippet = " ".join(str(args).split())[:70]
+        bits.append(f"doing `{name}` {snippet}".strip())
+    # live first: last_usage still holds the PREVIOUS run until this one ends
+    u = (fmt_usage(AGENT.live_usage.get(session_key))
+         or fmt_usage(AGENT.last_usage.get(session_key)))
+    if u:
+        bits.append(u)
+    m = mem_line()
+    if m:
+        bits.append(m)
+    return " · ".join(bits)
+
+
+# --- the tones, as Mattermost attachment colours ------------------------------
+# Kept here with the reporter because they are the reporting palette, not a
+# Mattermost detail: the browser maps the same tones to CSS, the terminal to ANSI.
+COLOR_NARRATION = "#2ecc71"
+COLOR_TOOL = "#f1c40f"   # amber: a tool call that ran
+COLOR_STATUS = "#ffffff"
+COLOR_FAIL = "#e74c3c"     # red: reserved for failures
+
+
+def want_color(color):
+    """None when the operator turned colours off in config.json."""
+    return color if CONFIG["agent"].get("color_coded", True) else None
+
+
+class RunReporter:
+    """What a run says about itself, written once for every interface.
+
+    The reporter owns wording, cadence and caps; a Destination owns looks. Feed
+    it to drive_run() and every lane shows the same run, because there is only
+    one copy of it to change.
+
+    Sources: a delegated subtask reports through the same reporter with its own
+    src (`sub:<name>`), so two sub-agents streaming at once cannot grow each
+    other's line - and could not, before, because one slot was shared between
+    them. The run's own answer is always a main-source line.
+    """
+
+    def __init__(self, dest, session_key, source="main", label="🔧 Working…"):
+        self.dest = dest
+        self.session_key = session_key
+        self.src = source
+        self.label = label
+        self.steps = 0
+        self.t0 = time.time()
+        self.status_ref = None
+        self.last_edit = 0.0
+        self.last_checkin = time.time()
+        self.last_checkin_step = 0
+        self.last_note = {}
+        self.last_tool = {}
+        self.tool_ref = {}
+        self.tool_lines = {}
+        self.tool_failed = {}
+        self.stream_ref = {}
+        self.stream_text = {}      # what the line says now
+        self.stream_open = {}      # what the line was OPENED with
+        self.last_stream = {}
+        self.lock = threading.Lock()
+        if CONFIG["agent"].get("progress_updates", True):
+            self.status_ref = self.dest.line("status", label)
+
+    # -- what the operator reads ------------------------------------------
+    def checkin_text(self, steps, elapsed, name=None, args=None):
+        return checkin_line(self.session_key, steps, elapsed, name, args)
+
+    def note(self, text, src=None):
+        """The model's own interstitial line ("Checking what holds the lock:").
+
+        Posted before the tools it announces run: a line that only lands in the
+        final answer is the difference between watching the work and waiting for it.
+        """
+        if not CONFIG["agent"].get("progress_updates", True):
+            return
+        if not CONFIG["agent"].get("checkin_notes", True):
+            return
+        src = src or self.src
+        text = scrub(" ".join(str(text).split()))
+        if not text:
+            return
+        cap = int(CONFIG["agent"].get("checkin_note_chars", 400) or 400)
+        if len(text) > cap:
+            text = text[:cap].rstrip() + "…"
+        gap = float(CONFIG["agent"].get("checkin_note_min_seconds", 1.0) or 0)
+        with self.lock:
+            now = time.time()
+            if now - self.last_note.get(src, 0.0) < gap:
+                return
+            self.last_note[src] = now
+        self.dest.line("note", f"💬 {text}", src)
+
+    def say(self, text, src=None):
+        """A line from the HARNESS, not the model: the notice that a run
+        continued past its budget belongs here."""
+        try:
+            self.dest.line("say", str(text), src or self.src)
+        except Exception:
+            log.debug("say() failed", exc_info=True)
+
+    def narration(self, text, final=False, new_turn=False, src=None):
+        """The model's own text, STREAMED into one line that grows.
+
+        `new_turn` closes the previous line and opens a new one, so a multi-step
+        run reads as a sequence of steps rather than one line whose text keeps
+        being replaced; an IDENTICAL line keeps the existing one, so a looping
+        run cannot spam the surface with the same sentence.
+        """
+        if not CONFIG["agent"].get("progress_updates", True):
+            return
+        if not CONFIG["agent"].get("checkin_notes", True):
+            return
+        if not CONFIG["agent"].get("checkin_stream_notes", True):
+            return
+        src = src or self.src
+        text = scrub(" ".join(str(text).split()))
+        if not text:
+            return
+        cap = int(CONFIG["agent"].get("checkin_note_chars", 400) or 400)
+        body = f"💬 {text[:cap].rstrip()}" + ("…" if len(text) > cap else "")
+        gap = float(CONFIG["agent"].get("checkin_stream_seconds", 2.0) or 0)
+        with self.lock:
+            # A new turn opens a NEW line only when it does not start with the
+            # same sentence the current line was opened with. Comparing against
+            # the line's CURRENT text instead - which is what it grew into - put
+            # a fresh post on the surface for every turn of a looping run: nine
+            # identical "💬 I will list the tools first:" posts, one per turn.
+            ref = self.stream_ref.get(src)
+            if new_turn and body != (self.stream_open.get(src) or ""):
+                ref = None
+                self.stream_text[src] = ""
+                self.stream_open[src] = ""
+            now = time.time()
+            if ref is None:
+                fresh = True
+            else:
+                fresh = False
+                if not final and (now - self.last_stream.get(src, 0.0)) < gap:
+                    return
+                if body == self.stream_text.get(src):
+                    return
+            self.stream_text[src] = body
+            self.last_stream[src] = now
+        if fresh:
+            new_ref = self.dest.line("note", body, src)
+            with self.lock:
+                self.stream_ref[src] = new_ref
+                self.stream_open[src] = body
+        else:
+            self.dest.update(ref, "note", body, src)
+
+    def narration_live(self, src=None):
+        with self.lock:
+            return self.stream_ref.get(src or self.src) is not None
+
+    def narration_drop(self, src=None):
+        """The streamed text WAS the final answer: the answer is posted as its
+        own line, so the draft goes rather than showing the same words twice."""
+        src = src or self.src
+        with self.lock:
+            ref = self.stream_ref.pop(src, None)
+            self.stream_text[src] = ""
+            self.stream_open[src] = ""
+            self.last_stream[src] = 0.0
+        if ref is not None:
+            self.dest.drop(ref)
+
+    def tool_done(self, name, args, output, elapsed, src=None):
+        """The line for one finished call: the preview, the duration, the exit
+        code and the REASON it failed. "failed read_file" with no reason sends
+        the operator to the host log to find out what happened."""
+        if not CONFIG["agent"].get("progress_updates", True):
+            return
+        if not CONFIG["agent"].get("checkin_per_tool", True):
+            return
+        floor = float(CONFIG["agent"].get("checkin_tool_min_seconds", 0.0) or 0)
+        if floor and elapsed < floor:
+            return
+        src = src or self.src
+        line = f"`{name}`"
+        preview = _tool_preview(name, args)
+        if preview:
+            line += f" {preview}"
+        line += f" · {elapsed:.1f}s"
+        rc, why = _failed_call(output)
+        if rc:                      # 0 and "no exit code" stay quiet
+            line += f" [exit {rc}]"
+        if why:
+            line += f" — {why}"
+        merge = float(CONFIG["agent"].get("checkin_tool_merge_seconds", 2.0) or 0)
+        cap = int(CONFIG["agent"].get("checkin_tool_max_lines", 4) or 4)
+        with self.lock:
+            now = time.time()
+            ref = self.tool_ref.get(src)
+            lines = self.tool_lines.get(src) or []
+            # Merging a burst of calls into one message is a NOTIFICATION
+            # decision, not a reporting one: on a phone five posts in two seconds
+            # is noise, and in a browser five lines is just the transcript. The
+            # thresholds themselves are the operator's, from config.
+            if not self.dest.merge_tools:
+                fresh = True
+            else:
+                fresh = (not ref or not lines
+                         or (cap and len(lines) >= cap)
+                         or now - self.last_tool.get(src, 0.0) > merge)
+            if fresh:
+                lines = [line]
+                self.tool_failed[src] = bool(rc)
+                ref = None
+            else:
+                lines = lines + [line]
+                self.tool_failed[src] = self.tool_failed.get(src, False) or bool(rc)
+            self.tool_lines[src] = lines
+            self.last_tool[src] = now
+            failed = self.tool_failed[src]
+        body = self._batch_text(lines)
+        # a batch containing a failed call is a failure even if it also contains
+        # good ones: the line has to read as "something in here broke"
+        kind = "tool_fail" if failed else "tool_done"
+        if ref is None:
+            new_ref = self.dest.line(kind, body, src)
+            with self.lock:
+                self.tool_ref[src] = new_ref
+        else:
+            self.dest.update(ref, kind, body, src)
+
+    @staticmethod
+    def _batch_text(lines):
+        if len(lines) == 1:
+            return f"🔧 {lines[0]}"
+        return (f"🔧 {len(lines)} tool calls\n"
+                + "\n".join(f"   {l}" for l in lines))
+
+    def progress(self, name, args, src=None):
+        """One tool call started: the live status line, plus the periodic check-in."""
+        if not CONFIG["agent"].get("progress_updates", True):
+            return
+        src = src or self.src
+        now = time.time()
+        every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
+        every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
+        with self.lock:
+            self.steps += 1
+            steps = self.steps
+            checkin = bool(
+                (every_s and now - self.last_checkin >= every_s)
+                or (every_n and steps - self.last_checkin_step >= every_n))
+            edit = None
+            if checkin:
+                self.last_checkin = now
+                self.last_checkin_step = steps
+            elif self.status_ref and now - self.last_edit >= 2:
+                self.last_edit = now
+                edit = self.status_ref
+        if checkin:
+            self.dest.line("checkin", self.checkin_text(steps, now - self.t0,
+                                                        name, args), src)
+        elif edit is not None:
+            # Live visibility for the anti-loop machinery: if the model has tried
+            # to repeat a call, the operator sees it happening rather than only
+            # reading the count in the final Done line.
+            dup = (AGENT.live_usage.get(self.session_key) or {}
+                   ).get("duplicates_blocked", 0)
+            suffix = f" · {dup} duplicate blocked" if dup else ""
+            self.dest.update(edit, "status",
+                             f"{self.label} {steps} step(s), last: `{name}`{suffix}",
+                             src)
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+        """Ask the operator, wherever this run's destination can reach one."""
+        if not self.dest.has_human:
+            return None
+        return self.dest.ask(question, options, wait, label or "this conversation")
+
+    def confirm(self, command, wait=300.0):
+        """A command matched agent.confirm_patterns, so ASK before running it.
+
+        The shell tool treats "no confirm_cb" as no consent and returns DECLINED,
+        so a lane that cannot ask cannot run that command at all - which is how
+        the browser went quiet on work the chat lane would have run.
+        """
+        answer = self.ask(
+            "⚠️ This command matches a confirm-pattern. Allow it?\n"
+            f"```\n{str(command)[:800]}\n```",
+            ["yes", "no"], wait, "this conversation")
+        if answer is None:
+            if CONFIG["agent"].get("confirm_without_door", "decline") == "allow":
+                return True
+            return False
+        # The operator's first word decides, in every lane: a button that says
+        # "yes, run it" and a terminal that says "go" both mean yes, and one
+        # parser means one place to change what yes is.
+        first = re.sub(r"[^a-z0-9]", "", str(answer).strip().lower().split()[0]) \
+            if str(answer).strip() else ""
+        ok = first in ("y", "yes", "yeah", "ok", "okay", "approve", "approved",
+                       "run", "go", "confirm", "confirmed", "1", "true")
+        self.dest.line("system", "✅ confirmed, running" if ok
+                       else "🚫 not confirmed - that command was skipped")
+        return ok
+
+    def finish(self, ok=True):
+        """The Done line, in place of the status line this run opened with."""
+        ref = self.status_ref
+        if not ref:
+            return
+        if (AGENT.last_usage.get(self.session_key) or {}).get("infra_failed"):
+            # An endpoint that could not be reached is a failure however cleanly
+            # it was reported, so the Done line goes red (the operator asked for
+            # red to mean "something is actually wrong").
+            ok = False
+        elapsed = int(time.time() - self.t0)
+        extra = ""
+        if CONFIG["agent"].get("show_usage", True):
+            u = fmt_usage(AGENT.last_usage.get(self.session_key))
+            if u:
+                extra = f" · {u}"
+        model = (AGENT.model_overrides.get(self.session_key)
+                 or CONFIG["llm"]["model"])
+        fell = set((AGENT.last_usage.get(self.session_key) or {})
+                   .get("failovers") or [])
+        if fell:
+            # never let a silent fallback look like the chosen model ran
+            extra += f" · ⚠️ fell back from {len(fell)} endpoint(s)"
+        self.dest.update(ref, "final" if ok else "error",
+                         f"{'✅' if ok else '⚠️'} Done — {self.steps} step(s) in "
+                         f"{elapsed}s · model `{model}`{extra}")
+
+
+class NowhereDestination(Destination):
+    """A run with nowhere to report: the events land in the log and nowhere else.
+
+    A scheduled job fired with no destination still runs, and still gets a
+    reporter, so the wiring has ONE shape and no call site has to juggle a None
+    reporter. What it would have said is in tinycmdr.log if the run is ever in
+    question.
+    """
+
+    name = "nowhere"
+
+    def line(self, kind, text, src="main"):
+        log.debug("run report (nowhere) [%s]: %s", kind, text)
+        return None
+
+    def update(self, ref, kind, text, src="main"):
+        log.debug("run report (nowhere) [%s]: %s", kind, text)
+        return ref
+
+
+def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
+              channel_id=None, cancel_event=None, steer_cb=None, ask_door=None):
+    """Run the agent, wired to ONE reporter. The only place these callbacks live.
+
+    Three lanes used to build this keyword list three times with three different
+    subsets, which is exactly how the browser ended up without the exit codes,
+    the failure reasons, the check-ins or the confirm door.
+    """
+    return AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
+                     channel_id=channel_id,
+                     say_cb=reporter.say,
+                     progress_cb=reporter.progress,
+                     interim_cb=reporter.note,
+                     narration_cb=reporter.narration,
+                     narration_drop_cb=reporter.narration_drop,
+                     progress_done_cb=reporter.tool_done,
+                     confirm_cb=reporter.confirm,
+                     cancel_event=cancel_event,
+                     steer_cb=steer_cb,
+                     ask_door=ask_door)
+
+
+class CliDestination(Destination):
+    """A terminal: one line per event, coloured, no notifications to protect."""
+
+    name = "cli"
+    has_human = True
+    merge_tools = False      # a terminal line is free; show every call
+
+    def __init__(self, colour=True, out=None, ask=None):
+        self.colour = bool(colour)
+        self.out = out or sys.stdout
+        self._ask = ask     # callable(question, options, wait) -> answer
+
+    def _paint(self, text, code):
+        return f"\033[{code}m{text}\033[0m" if self.colour else text
+
+    def _emit(self, text):
+        try:
+            print(text, file=self.out, flush=True)
+        except Exception:
+            pass
+
+    def line(self, kind, text, src="main"):
+        tone = {"note": "2", "tool": "33", "tool_done": "33", "tool_fail": "31",
+                "checkin": "2", "say": "36", "ask": "35", "error": "31",
+                "final": "32", "status": "2"}.get(kind, "0")
+        self._emit(self._paint("  " + str(text), tone))
+        return text
+
+    def update(self, ref, kind, text, src="main"):
+        # A terminal cannot edit a line it has already printed, and rewriting with
+        # carriage returns fights the reader's scrollback. The Done line and the
+        # growing narration are what matter, so they print once, when they land.
+        if kind in ("final", "error", "note"):
+            self._emit(self._paint("  " + str(text),
+                                   "32" if kind != "error" else "31"))
+        return ref
+
+    def drop(self, ref):
+        pass
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+        if self._ask is None:
+            return None
+        try:
+            return self._ask(question, options, wait)
+        except Exception:
+            return None
 _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
         "leave": False, "stream": "", "streamed": "", "streamed_answer": ""}
 

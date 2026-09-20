@@ -470,8 +470,17 @@ def test_config_defaults_have_no_chat_or_failover_keys():
     check("no web section", "web" not in default)
     check("no failover list", "fallbacks" not in default["llm"])
     check("no cloud-fallback switch", "allow_cloud_fallback" not in default["llm"])
-    check("no stall watchdog keys",
-          not any(k.startswith(("stall_", "checkin_", "catch_up")) for k in default["agent"]))
+    # The stall watchdog and the catch-up sweep are chat-lane machinery: a console
+    # has no channel to fall behind on and nothing to recover after a socket gap.
+    # The check-in keys are NOT in that list any more, and that is the point of the
+    # shared reporting layer: the console draws the same tool lines and the same ⏳
+    # check-in as the other two lanes, so it declares the knobs it reads instead of
+    # hardcoding its own cadence (which is how three lanes drifted apart).
+    check("no chat-only watchdog keys",
+          not any(k.startswith(("stall_", "catch_up")) for k in default["agent"]))
+    check("the reporting knobs the console draws with are present",
+          all(k in default["agent"] for k in
+              ("checkin_steps", "checkin_tool_merge_seconds")))
     check("the budgets and the loop guard survive",
           all(k in default["agent"] for k in
               ("max_steps", "max_minutes", "loop_dedupe_after", "loop_stop_repeats",
