@@ -7362,6 +7362,15 @@ class Destination:
     has_human = False      # can ask() reach somebody?
     merge_tools = False    # is a line expensive (a notification) or free?
     max_lines = 0          # 0 = no limit; else roll the batch line at this many
+    # Does this lane want the call as it STARTS? Chat does not: the batch line on
+    # completion is its record, and a post per call would double the notifications
+    # a phone gets. A transcript does - "it is running this right now" is the
+    # whole point of watching a run in a browser or a terminal.
+    shows_calls = False
+    # Throttle for a line that grows. Chat throttles because every edit is a
+    # request to a server the operator's phone has to be woken for; a buffer and a
+    # terminal update as fast as the model writes. None = use the config knob.
+    stream_gap = None
 
     def line(self, kind, text, src="main"):
         raise NotImplementedError
@@ -7565,7 +7574,9 @@ class RunReporter:
             return
         cap = int(CONFIG["agent"].get("checkin_note_chars", 400) or 400)
         body = f"💬 {text[:cap].rstrip()}" + ("…" if len(text) > cap else "")
-        gap = float(CONFIG["agent"].get("checkin_stream_seconds", 2.0) or 0)
+        gap = self.dest.stream_gap
+        if gap is None:
+            gap = float(CONFIG["agent"].get("checkin_stream_seconds", 2.0) or 0)
         with self.lock:
             # A new turn opens a NEW line only when it does not start with the
             # same sentence the current line was opened with. Comparing against
@@ -7589,12 +7600,12 @@ class RunReporter:
             self.stream_text[src] = body
             self.last_stream[src] = now
         if fresh:
-            new_ref = self.dest.line("note", body, src)
+            new_ref = self.dest.line("narration", body, src)
             with self.lock:
                 self.stream_ref[src] = new_ref
                 self.stream_open[src] = body
         else:
-            self.dest.update(ref, "note", body, src)
+            self.dest.update(ref, "narration", body, src)
 
     def narration_live(self, src=None):
         with self.lock:
@@ -7618,7 +7629,11 @@ class RunReporter:
         the operator to the host log to find out what happened."""
         if not CONFIG["agent"].get("progress_updates", True):
             return
-        if not CONFIG["agent"].get("checkin_per_tool", True):
+        if not CONFIG["agent"].get("checkin_per_tool", True) and self.dest.merge_tools:
+            # `checkin_per_tool` was written to bound the NOTIFICATIONS a phone
+            # gets. A lane that merges its calls is that lane; a transcript that
+            # dropped its tool lines because a chat knob is off is just a page
+            # with nothing on it.
             return
         floor = float(CONFIG["agent"].get("checkin_tool_min_seconds", 0.0) or 0)
         if floor and elapsed < floor:
@@ -7683,12 +7698,32 @@ class RunReporter:
         if not CONFIG["agent"].get("progress_updates", True):
             return
         src = src or self.src
+        if isinstance(args, str) and args.startswith("ask_user:"):
+            # the harness naming what it is waiting for is not a tool call
+            if self.status_ref:
+                self.dest.update(self.status_ref, "status", str(args), src)
+            return
+        if name == "generating":
+            # A heartbeat ("13.4 tok/s"), not work: it must not count as a step.
+            # It used to, on the chat lane - ProgressReporter.steps counted every
+            # callback - so a check-in read "step 780" on a run that had made ~65
+            # tool calls. It shows the model's speed in the status line instead.
+            if self.status_ref:
+                self.dest.update(self.status_ref, "status",
+                                 str(args or "generating"), src)
+            return
         now = time.time()
+        with self.lock:
+            self.steps += 1
+            step_now = self.steps
+            if self.dest.shows_calls:
+                self.dest.line("tool",
+                               f"{name}({_tool_preview(name, args, limit=200)})",
+                               src)
         every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
         every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
         with self.lock:
-            self.steps += 1
-            steps = self.steps
+            steps = step_now
             checkin = bool(
                 (every_s and now - self.last_checkin >= every_s)
                 or (every_n and steps - self.last_checkin_step >= every_n))
@@ -7731,8 +7766,14 @@ class RunReporter:
             f"```\n{str(command)[:800]}\n```",
             ["yes", "no"], wait, "this conversation")
         if answer is None:
-            if CONFIG["agent"].get("confirm_without_door", "decline") == "allow":
-                return True
+            if not self.dest.has_human:
+                # nobody can be asked in this lane: the configured default decides
+                return CONFIG["agent"].get("confirm_without_door",
+                                           "decline") == "allow"
+            # Asked, and nobody said anything: that is a verdict, and the operator
+            # finds out by reading it rather than by wondering why nothing ran.
+            self.dest.line("system", f"⏱ no answer within {int(wait)}s — that "
+                                     f"command was skipped")
             return False
         # The operator's first word decides, in every lane: a button that says
         # "yes, run it" and a terminal that says "go" both mean yes, and one
@@ -7815,49 +7856,102 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                      ask_door=ask_door)
 
 
+
 class CliDestination(Destination):
-    """A terminal: one line per event, coloured, no notifications to protect."""
+    """A terminal: one line per event, coloured, no notifications to protect.
+
+    A terminal cannot edit a line it has already printed, so a growing narration
+    is printed as its new TAIL (which is what the console always did - the
+    callback hands over everything written so far, up to a few times a second, and
+    re-printing the whole thing would scroll the plan away). The line stays open
+    until something else is printed, and the reporter's drop() remembers the text
+    so the answer is not printed a second time when the run returns it.
+    """
 
     name = "cli"
     has_human = True
     merge_tools = False      # a terminal line is free; show every call
+    shows_calls = True       # a terminal that only reports finished calls is blind
+    stream_gap = 0.0         # no notification to protect: stream as it arrives
+    STATUS_REF = ("cli-status",)
 
-    def __init__(self, colour=True, out=None, ask=None):
+    TONES = {"note": "2", "narration": "32", "say": "36", "tool": "33",
+             "tool_done": "33", "tool_fail": "31", "checkin": "2",
+             "ask": "35", "system": "2", "error": "31", "final": "32"}
+
+    def __init__(self, colour=True, out=None, ask=None, on_drop=None):
         self.colour = bool(colour)
         self.out = out or sys.stdout
-        self._ask = ask     # callable(question, options, wait) -> answer
+        self._ask = ask          # callable(question, options, wait) -> answer text
+        self.on_drop = on_drop   # told what the streamed draft said, when it goes
+        self._refs = {}          # ref -> the text already printed for it
+        self._open = False       # a line printed without its newline yet
 
     def _paint(self, text, code):
         return f"\033[{code}m{text}\033[0m" if self.colour else text
 
-    def _emit(self, text):
+    def _write(self, text):
         try:
-            print(text, file=self.out, flush=True)
+            print(text, file=self.out, end="", flush=True)
         except Exception:
             pass
 
+    def _emit(self, text):
+        self._write(text + "\n")
+
+    def _close(self):
+        """Finish an open streamed line before anything else is printed."""
+        if self._open:
+            self._emit("")
+            self._open = False
+
     def line(self, kind, text, src="main"):
-        tone = {"note": "2", "tool": "33", "tool_done": "33", "tool_fail": "31",
-                "checkin": "2", "say": "36", "ask": "35", "error": "31",
-                "final": "32", "status": "2"}.get(kind, "0")
-        self._emit(self._paint("  " + str(text), tone))
-        return text
+        if kind == "status":
+            # the console has no status bar to hold this: the done line is the
+            # only thing worth printing, and it lands through update()
+            return self.STATUS_REF
+        self._close()
+        self._emit(self._paint("  " + str(text), self.TONES.get(kind, "0")))
+        ref = ("cli", len(self._refs))
+        self._refs[ref] = str(text)
+        return ref
 
     def update(self, ref, kind, text, src="main"):
-        # A terminal cannot edit a line it has already printed, and rewriting with
-        # carriage returns fights the reader's scrollback. The Done line and the
-        # growing narration are what matter, so they print once, when they land.
-        if kind in ("final", "error", "note"):
-            self._emit(self._paint("  " + str(text),
-                                   "32" if kind != "error" else "31"))
+        text = str(text)
+        if kind == "status":
+            return ref
+        if kind == "narration":
+            prev = self._refs.get(ref, "")
+            shown = prev if text.startswith(prev) else ""
+            tail = text[len(shown):]
+            if tail:
+                self._write(self._paint(("  " if not shown else "") + tail, "32"))
+                self._open = True
+                self._refs[ref] = text
+            return ref
+        self._close()
+        self._emit(self._paint("  " + text, self.TONES.get(kind, "0")))
+        self._refs[ref] = text
         return ref
 
     def drop(self, ref):
-        pass
+        """The streamed draft was the answer. It is already on the screen - a
+        terminal cannot take it back - so the CALLER is told what it said, and
+        printing the same words again is what gets skipped."""
+        self._close()
+        body = self._refs.get(ref, "")
+        if body.startswith("💬 "):
+            body = body[2:]
+        if self.on_drop:
+            try:
+                self.on_drop(body)
+            except Exception:
+                pass
 
     def ask(self, question, options=None, wait=300.0, label=None):
         if self._ask is None:
             return None
+        self._close()
         try:
             return self._ask(question, options, wait)
         except Exception:
@@ -8274,6 +8368,30 @@ def run_cli(once=None):
             print()
             return False
 
+    def ask_at_the_prompt(question, options, wait):
+        """The console's door: the question, then a line to answer on.
+
+        The same door shape as a chat post and a web question - the reporter asks,
+        the lane decides how a human answers it - so a confirmation is the same
+        code as the confirm prompt in chat, and `yes` means the same thing.
+        """
+        print(amber("  " + str(question)))
+        if options:
+            print(dim("  reply " + " / ".join(str(o) for o in options)))
+        try:
+            return input(green("  > "))
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+    def new_reporter():
+        """One per run: the check-in cadence and the done line are per run."""
+        return RunReporter(
+            CliDestination(colour=bool(_CLI["colour"]), out=sys.stdout,
+                           ask=ask_at_the_prompt,
+                           on_drop=lambda t: _CLI.__setitem__("streamed_answer", t)),
+            _cli_key())
+
     _CLI["inbox"] = queue.Queue()
     _CLI["steer"] = queue.Queue()
     _CLI["leave"] = False
@@ -8302,11 +8420,7 @@ def run_cli(once=None):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        print(AGENT.run(_cli_key(), once, progress_cb=progress,
-                        say_cb=say, progress_done_cb=progress_done,
-                        narration_cb=narration_stream,
-                        narration_drop_cb=narration_drop, interim_cb=narration,
-                        confirm_cb=confirm))
+        print(drive_run(_cli_key(), once, new_reporter()))
         _cli_usage_line()
         return
     while True:
@@ -8336,28 +8450,25 @@ def run_cli(once=None):
             return
         cancel = threading.Event()
         _CLI["stop"] = cancel
-        _CLI["stream"] = ""
-        _CLI["streamed"] = ""
-        _CLI["streamed_answer"] = ""
+        _CLI["streamed_answer"] = ""     # set by the destination when a draft goes
         answer = ""
+        failed = False
+        reporter = new_reporter()
         try:
-            answer = AGENT.run(_cli_key(), text, progress_cb=progress,
-                               say_cb=say, progress_done_cb=progress_done,
-                               narration_cb=narration_stream,
-                               narration_drop_cb=narration_drop, interim_cb=narration,
-                               confirm_cb=confirm, cancel_event=cancel,
+            answer = drive_run(_cli_key(), text, reporter, cancel_event=cancel,
                                steer_cb=steer)
         except KeyboardInterrupt:
             cancel.set()
             print(red("\n  (stopped)"))
-            continue
         except OperatorStop as e:
+            failed = True
             print(red("\n  (stopped: %s)" % e))
-            continue
         except Exception as e:
+            failed = True
             print(red("\n  run failed: %s: %s" % (type(e).__name__, e)))
         finally:
             _CLI["stop"] = None
+            reporter.finish(ok=not failed)
         while not _CLI["steer"].empty():    # typed too late for that run
             _CLI["inbox"].put(_CLI["steer"].get())
         if _CLI["leave"]:

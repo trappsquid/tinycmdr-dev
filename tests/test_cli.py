@@ -896,6 +896,50 @@ def test_the_console_lists_and_resumes_conversations():
         _shutil.rmtree(folder, ignore_errors=True)
 
 
+def test_the_console_reports_the_same_run_as_the_other_lanes():
+    """The console draws the SAME vocabulary as chat and the browser: the call as
+    it starts, the result line with its exit code and reason, the check-in, and a
+    done line. It used to have its own closures for all of that, which is how it
+    drifted; these are the shared reporter's, printed by this lane's destination."""
+    import io as _io
+    out = _io.StringIO()
+    rep = fb.RunReporter(fb.CliDestination(colour=False, out=out), "cli")
+    rep.progress("shell", '{"command": "df -h"}')
+    rep.tool_done("shell", {"command": "df -h"},
+                  "exit_code=1\npermission denied", 2.4)
+    shown = out.getvalue()
+    check("console: the call is shown as it starts", "df -h" in shown, shown)
+    check("console: the result carries the exit code", "[exit 1]" in shown, shown)
+    check("console: ...and the reason", "permission denied" in shown, shown)
+
+    # a growing narration prints its new TAIL: a terminal cannot edit a line, and
+    # re-printing the whole text scrolls the plan off the screen
+    out.truncate(0)
+    out.seek(0)
+    rep.narration("The disk is fine", False, True)
+    rep.narration("The disk is fine and nothing is hot", False, False)
+    streamed = out.getvalue()
+    check("console: a growing line prints only its new tail",
+          streamed.count("The disk is fine") == 1, streamed)
+
+    out.truncate(0)
+    out.seek(0)
+    rep.finish(ok=True)
+    check("console: the run signs off with a done line",
+          "Done" in out.getvalue() and "step(s)" in out.getvalue(), out.getvalue())
+
+    # the draft that turned out to be the answer is already on the screen; the
+    # console is told what it said so the caller does not print it twice
+    dropped = []
+    sink = _io.StringIO()
+    rep2 = fb.RunReporter(fb.CliDestination(colour=False, out=sink,
+                                            on_drop=dropped.append), "cli")
+    rep2.narration("**the manager box** confirmed.", True, True)
+    rep2.narration_drop()
+    check("console: a dropped draft is remembered for the caller",
+          bool(dropped) and dropped[0].startswith("**the manager box**"), dropped)
+
+
 def test_banner_reports_the_model_and_the_overhead():
     out = io.StringIO()
     real = sys.stdout

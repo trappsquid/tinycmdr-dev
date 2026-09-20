@@ -180,74 +180,94 @@ def main():
             check(probe in page, f"the page carries {probe}")
 
         # -- unit level: the heartbeat must not look like work ----------------
-        run = fb.WebRun("unitrun", "web")
-        run.on_progress("generating", "13.4 tok/s, 220 chars")
+        # A lane is a buffer plus the reporter every interface shares, so these
+        # are the REPORTER's checks, run through the web destination.
+        def web_lane(run_id="unitrun", session="web"):
+            b = fb.WebRun(run_id, session)
+            return b, fb.RunReporter(fb.WebDestination(b), session)
+
+        run, rep = web_lane()
+        rep.progress("generating", "13.4 tok/s, 220 chars")
         check(run.lines == [], "a 'generating' heartbeat adds no line")
-        check(run.steps == 0, "a heartbeat does not count as a tool call")
+        check(rep.steps == 0, "a heartbeat does not count as a tool call")
         check("tok/s" in run.status, "the heartbeat updates the status line instead")
-        run.on_tool_done("shell", {}, "exit_code=1\nerror: no such file", 0.4)
+        rep.tool_done("shell", {}, "exit_code=1\nerror: no such file", 0.4)
         check(run.lines and run.lines[-1]["kind"] == "tool_fail",
               "a failed tool output renders as tool_fail")
-        run.on_tool_done("shell", {}, "exit_code=0\nfine", 0.4)
+        rep.tool_done("shell", {}, "exit_code=0\nfine", 0.4)
         check(run.lines[-1]["kind"] == "tool_done", "...and a good one as tool_done")
-        run.on_progress("shell", '{"command": "df -h"}')
-        check(run.steps == 1 and run.lines[-1]["text"].startswith("shell("),
+        rep.progress("shell", '{"command": "df -h"}')
+        check(rep.steps == 1 and "df -h" in run.lines[-1]["text"],
               "a real tool call adds a line and counts one step")
 
         # -- unit level: narration GROWS one line, it does not stack ----------
         # The callbacks deliver cumulative snapshots; appending each one painted
         # ~190 near-identical lines for a 5-second run on a live box.
-        nar = fb.WebRun("narration", "web")
-        nar.on_narration("The sky is blue", False, True)
-        nar.on_narration("The sky is blue", False, False)   # the endpoint re-sends
-        nar.on_narration("The sky is blue because of Rayleigh scattering", False, False)
+        nar, nar_rep = web_lane("narration")
+        nar_rep.narration("The sky is blue", False, True)
+        nar_rep.narration("The sky is blue", False, False)   # the endpoint re-sends
+        nar_rep.narration("The sky is blue because of Rayleigh scattering", False, False)
         check(len(nar.lines) == 1, "streamed narration grows one line, not many")
         check(nar.lines[0]["text"].endswith("scattering"),
               "...and that line carries the newest text")
         check(nar.lines[0]["i"] == 0, "...keeping its index so the page repaints it")
-        nar.on_narration("**", False, False)
-        nar.on_narration("**", False, False)
-        nar.on_narration("**", False, False)
-        check(len(nar.lines) == 2,
-              "a repeated fragment is a no-op, not a new line each time")
-        nar.on_narration("A brand new thought", False, False)
-        check(len(nar.lines) == 3, "a genuinely new line still appends")
-        nar.on_interim("Checking what holds the lock:")
-        check(len(nar.lines) == 4 and nar.lines[-1]["kind"] == "thinking",
+        # One rule for every lane, and it is the chat lane's (v1.9.29): an
+        # identical fragment is a no-op, a fragment that does not extend the line
+        # replaces it in place, and a NEW TURN opens a new line. Comparing a new
+        # turn against the line's current text instead of the text it was OPENED
+        # with is what put nine identical posts on a looping run.
+        nar_rep.narration("**", False, False)
+        nar_rep.narration("**", False, False)
+        check(len(nar.lines) == 1,
+              "a fragment that does not extend the growing line replaces it in "
+              "place, it does not stack")
+        check(nar.lines[0]["text"] == "💬 **",
+              f"...and the line says the newest thing ({nar.lines[0]['text']!r})")
+        nar_rep.narration("A brand new thought", False, True)
+        check(len(nar.lines) == 2, "a new turn opens a new line")
+        nar_rep.note("Checking what holds the lock:")
+        check(len(nar.lines) == 3 and nar.lines[-1]["kind"] == "thinking",
               "an interim note gets its own line, marked as thinking")
-        nar.on_interim("Checking what holds the lock: the db file")
-        check(len(nar.lines) == 4, "and it grows in place too")
+        nar_rep.note("Checking what holds the lock: the db file")
+        check(len(nar.lines) == 3,
+              "a second note inside the gap does not add another line")
         # The agent flags EVERY turn's narration as final, so a run that goes on
         # to more tool calls emits several of them. Painting those as the answer
         # put an answer bubble above the tool lines with the real answer below.
-        mid = fb.WebRun("midanswer", "web")
-        mid.on_narration("Let me check the disk first.", True, True)
+        mid, mid_rep = web_lane("midanswer")
+        mid_rep.narration("Let me check the disk first.", True, True)
         check(mid.lines[-1]["kind"] == "say",
               "a final-flagged narration mid-run is not painted as the answer")
         check(mid.lines[-1]["uid"] == "midanswer#0",
               "...and every line carries a stable uid for the page to key on")
-        mid.on_progress("shell", '{"command": "df -h"}')
-        mid.on_tool_done("shell", {}, "exit_code=0", 0.2)
+        mid_rep.progress("shell", '{"command": "df -h"}')
+        mid_rep.tool_done("shell", {}, "exit_code=0", 0.2)
         check([l["kind"] for l in mid.lines] == ["say", "tool", "tool_done"],
               "the run keeps working after it has 'answered' once")
-        mid.on_narration("The disk is fine and nothing is running hot.", True, True)
+        mid_rep.narration("The disk is fine and nothing is running hot.", True, True)
         check(mid.lines[-1]["kind"] == "say",
               "the last narration is still not the answer until the run ends")
-        mid.finish()
-        check(mid.lines[-1]["kind"] == "final"
-              and mid.lines[-1]["text"].startswith("The disk is fine"),
-              "the run's last text becomes the answer once, at the end")
+        # The answer itself is posted by whoever drove the run (the browser run,
+        # the chat lane, one code path now): what the REPORTING layer guarantees
+        # is that the draft goes when it turns out to be that answer, so the same
+        # words are never on the screen twice.
+        before = len(mid.lines)
+        mid_rep.narration_drop()
+        check(len(mid.lines) == before - 1,
+              "the draft is taken back when it becomes the answer")
         check(mid.lines[0]["kind"] == "say",
-              "...and the earlier narration stays a 'say' line, so nothing is "
-              "drawn above and below the tool output")
-        sfin = fb.WebRun("saytofinal", "web")
-        sfin.on_interim("**")
-        sfin.on_narration("**the manager box** confirmed.", True, False)
-        check(len(sfin.lines) == 1 and sfin.lines[0]["kind"] in ("thinking", "say"),
-              "a 'thinking' fragment grows into the answer line, not beside it")
+              "...and the narration above the tool lines stays, so the plan does not "
+              "vanish with it")
+        sfin, sfin_rep = web_lane("saytofinal")
+        sfin_rep.note("**")
+        sfin_rep.narration("**the manager box** confirmed.", True, False)
+        check([l["kind"] for l in sfin.lines] == ["thinking", "say"],
+              f"the interstitial note and the streamed text are two tones on one "
+              f"vocabulary ({[l['kind'] for l in sfin.lines]})")
         sfin.finish()
-        check(len(sfin.lines) == 1 and sfin.lines[0]["kind"] == "final",
-              "and it becomes the answer when the run ends")
+        check(sfin.done and not any(l["kind"] == "final" for l in sfin.lines),
+              "ending the run does not invent an answer line - whoever drove the "
+              "run posts the answer, in every lane")
 
         page_src = fb.WEB_PAGE
         check("function reconcile(" in page_src and "l.uid" in page_src,
@@ -349,7 +369,12 @@ def main():
               "the first line is what the operator typed")
         check("tool" in kinds, "the tool call appears as it starts")
         check("tool_done" in kinds, "and its result appears when it finishes")
-        check(kinds[-1] == "final", "the answer arrives as a final line")
+        check(kinds[-1] == "final",
+              "the answer is the LAST thing the run produced, under everything "
+              "it did to find it")
+        check("Done" in (state.get("status") or ""),
+              f"and the done line lives in the lane's own status surface, the way "
+              f"the chat lane edits its status post ({state.get('status')!r})")
         check("disk is fine" in text, "the answer text is in the buffer")
         check(state.get("done") is True, "the run reports done")
         check(state.get("steps") == 1, f"one tool call counted ({state.get('steps')})")
@@ -438,7 +463,8 @@ def main():
         check(code == 200 and conv_run, f"a run starts in that conversation ({j})")
         lines, state = collect(base, conv_run)
         check(state.get("done") is True, "the run finishes")
-        check([l["kind"] for l in lines] == ["you", "final"],
+        check(lines[0]["kind"] == "you" and "final" in
+              [l["kind"] for l in lines],
               f"its lines are its own ({[l['kind'] for l in lines]})")
 
         logfile = workdir / "sessions" / f"{conv}.web.jsonl"
@@ -618,13 +644,14 @@ def main():
             channel = FakeChannel()
             rep = fb.ProgressReporter(channel, "chan-1", None, "web")
             mm_run = fb.WebRun("parity", "web")
+            web_rep = fb.RunReporter(fb.WebDestination(mm_run), "web")
 
             call = '{"command": "Get-ChildItem C:/temp -Recurse"}'
             failed = "exit_code=1\npermission denied while opening C:\\temp\\locked"
             rep.progress("shell", call)
-            mm_run.on_progress("shell", call)
+            web_rep.progress("shell", call)
             rep.tool_done("shell", call, failed, 2.4)
-            mm_run.on_tool_done("shell", call, failed, 2.4)
+            web_rep.tool_done("shell", call, failed, 2.4)
             mm_text = "\n".join(channel.timeline)
             web_text = "\n".join(l["text"] for l in mm_run.lines)
 
@@ -640,9 +667,9 @@ def main():
             for fact in ("2.4s", "exit 1", "permission denied"):
                 check(fact in mm_text and fact in web_text,
                       f"parity: the finished call reports '{fact}' in both lanes")
-            check(web_text.count("✗") == 1 and "✓" not in web_text,
-                  f"parity: a failed call is marked failed on the page "
-                  f"({web_text.splitlines()[-1][:70]!r})")
+            check(any(l["kind"] == "tool_fail" for l in mm_run.lines),
+                  "parity: a failed call is a tool_fail line, so the page draws it "
+                  "red (the chat lane says the same thing with a red bar)")
             check(any(l["kind"] == "tool_fail" for l in mm_run.lines),
                   "...and it is a tool_fail line, so the page can color it")
 
@@ -661,6 +688,7 @@ def main():
             # the browser unable to run work the chat lane would have run
             agent_cfg["confirm_patterns"] = ["echo CONFIRM-ME"]
             asked = fb.WebRun("confirm", "web")
+            asked_rep = fb.RunReporter(fb.WebDestination(asked), "web")
 
             def say_yes():
                 for _ in range(50):
@@ -683,7 +711,7 @@ def main():
             asked.opener = opener
             threading.Thread(target=say_yes, daemon=True).start()
             out = fb.tool_shell({"command": "echo CONFIRM-ME"},
-                                {"confirm_cb": asked.confirm})
+                                {"confirm_cb": asked_rep.confirm})
             check("DECLINED" not in out,
                   f"confirm: an approved command runs ({str(out)[:60]!r})")
             check(any(l["kind"] == "ask" for l in asked.lines),
@@ -695,7 +723,8 @@ def main():
 
             # no answer: the command is skipped, and the page says why
             quiet = fb.WebRun("confirm-timeout", "web")
-            verdict = quiet.confirm("echo CONFIRM-ME", wait=0.4)
+            quiet_rep = fb.RunReporter(fb.WebDestination(quiet), "web")
+            verdict = quiet_rep.confirm("echo CONFIRM-ME", wait=0.4)
             check(verdict is False, "confirm: silence is not consent")
             check(any("no answer" in l["text"] for l in quiet.lines),
                   "confirm: and the transcript shows the timeout, not a shrug")

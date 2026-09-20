@@ -7620,6 +7620,15 @@ class Destination:
     has_human = False      # can ask() reach somebody?
     merge_tools = False    # is a line expensive (a notification) or free?
     max_lines = 0          # 0 = no limit; else roll the batch line at this many
+    # Does this lane want the call as it STARTS? Chat does not: the batch line on
+    # completion is its record, and a post per call would double the notifications
+    # a phone gets. A transcript does - "it is running this right now" is the
+    # whole point of watching a run in a browser or a terminal.
+    shows_calls = False
+    # Throttle for a line that grows. Chat throttles because every edit is a
+    # request to a server the operator's phone has to be woken for; a buffer and a
+    # terminal update as fast as the model writes. None = use the config knob.
+    stream_gap = None
 
     def line(self, kind, text, src="main"):
         raise NotImplementedError
@@ -7823,7 +7832,9 @@ class RunReporter:
             return
         cap = int(CONFIG["agent"].get("checkin_note_chars", 400) or 400)
         body = f"💬 {text[:cap].rstrip()}" + ("…" if len(text) > cap else "")
-        gap = float(CONFIG["agent"].get("checkin_stream_seconds", 2.0) or 0)
+        gap = self.dest.stream_gap
+        if gap is None:
+            gap = float(CONFIG["agent"].get("checkin_stream_seconds", 2.0) or 0)
         with self.lock:
             # A new turn opens a NEW line only when it does not start with the
             # same sentence the current line was opened with. Comparing against
@@ -7847,12 +7858,12 @@ class RunReporter:
             self.stream_text[src] = body
             self.last_stream[src] = now
         if fresh:
-            new_ref = self.dest.line("note", body, src)
+            new_ref = self.dest.line("narration", body, src)
             with self.lock:
                 self.stream_ref[src] = new_ref
                 self.stream_open[src] = body
         else:
-            self.dest.update(ref, "note", body, src)
+            self.dest.update(ref, "narration", body, src)
 
     def narration_live(self, src=None):
         with self.lock:
@@ -7876,7 +7887,11 @@ class RunReporter:
         the operator to the host log to find out what happened."""
         if not CONFIG["agent"].get("progress_updates", True):
             return
-        if not CONFIG["agent"].get("checkin_per_tool", True):
+        if not CONFIG["agent"].get("checkin_per_tool", True) and self.dest.merge_tools:
+            # `checkin_per_tool` was written to bound the NOTIFICATIONS a phone
+            # gets. A lane that merges its calls is that lane; a transcript that
+            # dropped its tool lines because a chat knob is off is just a page
+            # with nothing on it.
             return
         floor = float(CONFIG["agent"].get("checkin_tool_min_seconds", 0.0) or 0)
         if floor and elapsed < floor:
@@ -7941,12 +7956,32 @@ class RunReporter:
         if not CONFIG["agent"].get("progress_updates", True):
             return
         src = src or self.src
+        if isinstance(args, str) and args.startswith("ask_user:"):
+            # the harness naming what it is waiting for is not a tool call
+            if self.status_ref:
+                self.dest.update(self.status_ref, "status", str(args), src)
+            return
+        if name == "generating":
+            # A heartbeat ("13.4 tok/s"), not work: it must not count as a step.
+            # It used to, on the chat lane - ProgressReporter.steps counted every
+            # callback - so a check-in read "step 780" on a run that had made ~65
+            # tool calls. It shows the model's speed in the status line instead.
+            if self.status_ref:
+                self.dest.update(self.status_ref, "status",
+                                 str(args or "generating"), src)
+            return
         now = time.time()
+        with self.lock:
+            self.steps += 1
+            step_now = self.steps
+            if self.dest.shows_calls:
+                self.dest.line("tool",
+                               f"{name}({_tool_preview(name, args, limit=200)})",
+                               src)
         every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
         every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
         with self.lock:
-            self.steps += 1
-            steps = self.steps
+            steps = step_now
             checkin = bool(
                 (every_s and now - self.last_checkin >= every_s)
                 or (every_n and steps - self.last_checkin_step >= every_n))
@@ -7989,8 +8024,14 @@ class RunReporter:
             f"```\n{str(command)[:800]}\n```",
             ["yes", "no"], wait, "this conversation")
         if answer is None:
-            if CONFIG["agent"].get("confirm_without_door", "decline") == "allow":
-                return True
+            if not self.dest.has_human:
+                # nobody can be asked in this lane: the configured default decides
+                return CONFIG["agent"].get("confirm_without_door",
+                                           "decline") == "allow"
+            # Asked, and nobody said anything: that is a verdict, and the operator
+            # finds out by reading it rather than by wondering why nothing ran.
+            self.dest.line("system", f"⏱ no answer within {int(wait)}s — that "
+                                     f"command was skipped")
             return False
         # The operator's first word decides, in every lane: a button that says
         # "yes, run it" and a terminal that says "go" both mean yes, and one
@@ -8073,49 +8114,102 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                      ask_door=ask_door)
 
 
+
 class CliDestination(Destination):
-    """A terminal: one line per event, coloured, no notifications to protect."""
+    """A terminal: one line per event, coloured, no notifications to protect.
+
+    A terminal cannot edit a line it has already printed, so a growing narration
+    is printed as its new TAIL (which is what the console always did - the
+    callback hands over everything written so far, up to a few times a second, and
+    re-printing the whole thing would scroll the plan away). The line stays open
+    until something else is printed, and the reporter's drop() remembers the text
+    so the answer is not printed a second time when the run returns it.
+    """
 
     name = "cli"
     has_human = True
     merge_tools = False      # a terminal line is free; show every call
+    shows_calls = True       # a terminal that only reports finished calls is blind
+    stream_gap = 0.0         # no notification to protect: stream as it arrives
+    STATUS_REF = ("cli-status",)
 
-    def __init__(self, colour=True, out=None, ask=None):
+    TONES = {"note": "2", "narration": "32", "say": "36", "tool": "33",
+             "tool_done": "33", "tool_fail": "31", "checkin": "2",
+             "ask": "35", "system": "2", "error": "31", "final": "32"}
+
+    def __init__(self, colour=True, out=None, ask=None, on_drop=None):
         self.colour = bool(colour)
         self.out = out or sys.stdout
-        self._ask = ask     # callable(question, options, wait) -> answer
+        self._ask = ask          # callable(question, options, wait) -> answer text
+        self.on_drop = on_drop   # told what the streamed draft said, when it goes
+        self._refs = {}          # ref -> the text already printed for it
+        self._open = False       # a line printed without its newline yet
 
     def _paint(self, text, code):
         return f"\033[{code}m{text}\033[0m" if self.colour else text
 
-    def _emit(self, text):
+    def _write(self, text):
         try:
-            print(text, file=self.out, flush=True)
+            print(text, file=self.out, end="", flush=True)
         except Exception:
             pass
 
+    def _emit(self, text):
+        self._write(text + "\n")
+
+    def _close(self):
+        """Finish an open streamed line before anything else is printed."""
+        if self._open:
+            self._emit("")
+            self._open = False
+
     def line(self, kind, text, src="main"):
-        tone = {"note": "2", "tool": "33", "tool_done": "33", "tool_fail": "31",
-                "checkin": "2", "say": "36", "ask": "35", "error": "31",
-                "final": "32", "status": "2"}.get(kind, "0")
-        self._emit(self._paint("  " + str(text), tone))
-        return text
+        if kind == "status":
+            # the console has no status bar to hold this: the done line is the
+            # only thing worth printing, and it lands through update()
+            return self.STATUS_REF
+        self._close()
+        self._emit(self._paint("  " + str(text), self.TONES.get(kind, "0")))
+        ref = ("cli", len(self._refs))
+        self._refs[ref] = str(text)
+        return ref
 
     def update(self, ref, kind, text, src="main"):
-        # A terminal cannot edit a line it has already printed, and rewriting with
-        # carriage returns fights the reader's scrollback. The Done line and the
-        # growing narration are what matter, so they print once, when they land.
-        if kind in ("final", "error", "note"):
-            self._emit(self._paint("  " + str(text),
-                                   "32" if kind != "error" else "31"))
+        text = str(text)
+        if kind == "status":
+            return ref
+        if kind == "narration":
+            prev = self._refs.get(ref, "")
+            shown = prev if text.startswith(prev) else ""
+            tail = text[len(shown):]
+            if tail:
+                self._write(self._paint(("  " if not shown else "") + tail, "32"))
+                self._open = True
+                self._refs[ref] = text
+            return ref
+        self._close()
+        self._emit(self._paint("  " + text, self.TONES.get(kind, "0")))
+        self._refs[ref] = text
         return ref
 
     def drop(self, ref):
-        pass
+        """The streamed draft was the answer. It is already on the screen - a
+        terminal cannot take it back - so the CALLER is told what it said, and
+        printing the same words again is what gets skipped."""
+        self._close()
+        body = self._refs.get(ref, "")
+        if body.startswith("💬 "):
+            body = body[2:]
+        if self.on_drop:
+            try:
+                self.on_drop(body)
+            except Exception:
+                pass
 
     def ask(self, question, options=None, wait=300.0, label=None):
         if self._ask is None:
             return None
+        self._close()
         try:
             return self._ask(question, options, wait)
         except Exception:
@@ -8276,7 +8370,8 @@ class MattermostDestination(Destination):
 
     @staticmethod
     def _color(kind):
-        return {"note": COLOR_NARRATION, "tool": COLOR_TOOL, "tool_done": COLOR_TOOL,
+        return {"note": COLOR_NARRATION, "narration": COLOR_NARRATION,
+                "tool": COLOR_TOOL, "tool_done": COLOR_TOOL,
                 "tool_fail": COLOR_FAIL, "checkin": COLOR_STATUS, "say": COLOR_STATUS,
                 "ask": COLOR_STATUS, "status": COLOR_TOOL,
                 "error": COLOR_FAIL}.get(kind, COLOR_STATUS)
@@ -8551,21 +8646,7 @@ class MattermostDispatcher:
             text = text[MAX_POST_LEN:]
 
     # -- confirmations (optional; only active if confirm_patterns set) ------
-    def confirm_cb_factory(self, channel_id, root_id):
-        def ask(command):
-            ev = threading.Event()
-            self.pending[channel_id] = {"event": ev, "answer": False}
-            self._post(channel_id, root_id,
-                       f"⚠️ This command matches a confirm-pattern. "
-                       f"Reply `yes` within 5 minutes to allow:\n```\n"
-                       f"{command[:800]}\n```")
-            ev.wait(300)
-            answer = self.pending.pop(channel_id, {"answer": False})["answer"]
-            self._post(channel_id, root_id,
-                       "✅ Confirmed, running." if answer
-                       else "🚫 Not confirmed — skipping that command.")
-            return answer
-        return ask
+
 
     def door_post(self, channel_id, question, options, wait, label=None):
         """Stage two of the ask_user door, and the reason the door spec makes `post`
@@ -9447,7 +9528,8 @@ function localRun(kind,text){          // slash-command output: not part of a ru
  return id;
 }
 function status(j){
- stateEl.textContent=j.done?('done in '+j.elapsed+'s, '+j.steps+' tool calls')
+ stateEl.textContent=j.done?((j.status&&j.status!=='done')?j.status
+   :('done in '+j.elapsed+'s, '+j.steps+' tool calls'))
    :((j.status||'working')+' - '+j.elapsed+'s, '+j.steps+' tool calls');
 }
 function busy(on){document.body.classList.toggle('busy',on);inp.placeholder=on
@@ -10295,19 +10377,7 @@ WEB_RUNS_LOCK = threading.Lock()
 WEB_RUN_KEEP = 40          # finished runs that stay pollable
 
 
-def _web_short_args(raw_args, limit=140):
-    """Tool args as one readable line for the page."""
-    if raw_args is None:
-        return ""
-    if not isinstance(raw_args, str):
-        try:
-            raw_args = json.dumps(raw_args)
-        except Exception:
-            raw_args = str(raw_args)
-    flat = re.sub(r"\s+", " ", raw_args).strip()
-    if len(flat) > limit:
-        flat = flat[:limit].rstrip() + "…"
-    return flat
+
 
 
 class WebRun:
@@ -10345,6 +10415,11 @@ class WebRun:
     def add(self, kind, text):
         with self.lock:
             self.rev += 1
+            if kind == "tool":
+                # what the page prints as "N tool calls". The reporter counts its
+                # own steps for the check-in cadence; this is the buffer's count of
+                # the lines it actually holds, and no heartbeat can inflate it.
+                self.steps += 1
             self.lines.append(self._line(kind, text))
             # A tool call ends this turn's thinking: the next fragment of model
             # text starts a NEW line instead of growing this turn's tool line.
@@ -10352,65 +10427,35 @@ class WebRun:
                 self.stream_i = None
             return self.lines[-1]["i"]
 
-    def _stamp(self, line, from_turn=False):
-        """Time shown beside a line: since the run, or since this turn began.
 
-        One clock for 'thinking' and the answer makes the page read as a story:
-        'thinking 12.3s' then the answer at 14.0s. A second per-turn clock on
-        the answer reset to 0.4s and looked like the page had lost track."""
-        line["t"] = round(time.time() - (self.turn_start if from_turn
-                                         else self.started), 1)
-        line["r"] = self.rev
 
-    def grow(self, kind, text, from_turn=False):
-        """Append a line, or update the trailing one instead.
+    def set_line(self, i, kind, text):
+        """Redraw a line the reporter already drew (it grew, or it is the status).
 
-        The narration/interim callbacks hand over snapshots of the model's text
-        as it streams (the Mattermost view edits one post as it grows), and the
-        endpoint re-sends the same fragment many times before it lengthens. One
-        buffer line per callback painted 95 lines for a 4-second run on a live
-        box. So: an identical fragment is a no-op, an extension of the last line
-        of the same kind replaces it in place (index kept, so the page repaints
-        the line it already drew), and anything else is a genuinely new line.
-
-        In-place growth bumps self.rev, so a poller that has already passed this
-        index can ask for 'what changed since rev N' and get the new text. Without
-        that the page could never see the final answer: the line it grew into had
-        an index behind the poll cursor.
-
-        Growth follows self.stream_i - the line the model's text is currently
-        growing - NOT simply the last line. The last line is a lie as soon as
-        anything else lands in the buffer: a mid-run steering echo was added as a
-        line of its own, and the very next text fragment then could not grow the
-        line it belonged to, so the page drew the same thinking text twice, one
-        node above the steer and one below it."""
+        The uid does not change: the page keys its nodes on it, so a line can be
+        repainted forever without ever being drawn twice.
+        """
         with self.lock:
-            i = self.stream_i
-            if i is not None and i < len(self.lines):
-                last = self.lines[i]
-                # 'say', 'thinking' and 'final' are the same streamed model
-                # text: the final flag only flips on the last chunk, and the
-                # interim callback is that same text before the turn ends. A
-                # fragment must be able to grow the line already there instead
-                # of drawing the same sentence a second time beside it.
-                same_text = ({last["kind"], kind} <= {"say", "final", "thinking"}
-                             or last["kind"] == kind)
-                if same_text:
-                    if text == last["text"]:
-                        return i
-                    if text.startswith(last["text"]):
-                        last["text"] = text
-                        last["kind"] = kind
-                        self.rev += 1
-                        self._stamp(last, from_turn)
-                        return i
+            if not isinstance(i, int) or not (0 <= i < len(self.lines)):
+                return
+            line = self.lines[i]
             self.rev += 1
-            line = self._line(kind, text)
-            if from_turn:
-                self._stamp(line, True)
-            self.lines.append(line)
-            self.stream_i = line["i"]
-            return line["i"]
+            line["kind"] = kind
+            line["text"] = text
+            line["r"] = self.rev
+            return i
+
+    def drop_line(self, i):
+        """Take a line back (the draft that turned out to be the answer)."""
+        with self.lock:
+            if not isinstance(i, int) or not (0 <= i < len(self.lines)):
+                return
+            self.rev += 1
+            self.lines.pop(i)
+            for n, line in enumerate(self.lines):
+                line["i"] = n
+                line["uid"] = f"{self.id}#{n}"
+                line["r"] = self.rev
 
     def view(self, since=0, rev=0):
         """Lines at/after an index, plus lines that grew in place.
@@ -10428,95 +10473,7 @@ class WebRun:
                     "status": self.status, "steps": self.steps}
 
     # -- callbacks handed to Agent.run ------------------------------------
-    def on_progress(self, name, raw_args):
-        if isinstance(raw_args, str) and raw_args.startswith("ask_user:"):
-            # The harness naming what it is waiting for is not a tool call: show the
-            # wait in the status line instead of drawing a tool node for it.
-            self.status = str(raw_args)
-            return
-        if name == "generating":
-            # a heartbeat ("12 tok/s"), not a tool call: it must not add a line
-            # or inflate the step count
-            self.status = str(raw_args or "")
-            return
-        self.steps += 1
-        self.status = str(name)
-        # a tool call ends this turn's thinking: the next fragment starts a new
-        # turn, and gets its own line instead of growing this one
-        self.turn_start = time.time()
-        # The same one-line preview Mattermost shows: the raw JSON of a shell call
-        # is a wall of escaped text, and the command is the part being watched.
-        self.add("tool", f"{name}({_tool_preview(name, raw_args, limit=200)})")
-        self.maybe_checkin(name, raw_args)
 
-    def maybe_checkin(self, name, raw_args):
-        """The ⏳ line every checkin_minutes / checkin_steps, on the same cadence
-        and with the same words as the Mattermost lane.
-
-        A browser always has the header (elapsed, steps), but the header is not the
-        record and it does not survive a reload: a run whose transcript holds only
-        tool lines reads as a spinner with no clock."""
-        if not CONFIG["agent"].get("progress_updates", True):
-            return
-        every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
-        every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
-        now = time.time()
-        with self.lock:
-            due = bool((every_s and now - self.last_checkin >= every_s)
-                       or (every_n and self.steps - self.last_checkin_step >= every_n))
-            if due:
-                self.last_checkin = now
-                self.last_checkin_step = self.steps
-                steps = self.steps
-        if due:
-            self.add("checkin", checkin_line(self.session_key, steps,
-                                             now - self.started, name, raw_args))
-
-    def on_tool_done(self, name, args, output, elapsed):
-        """What Mattermost shows for a finished call: the preview, the duration,
-        the exit code, and the REASON it failed.
-
-        '✗ failed read_file · 0.4s' is what the browser used to get, and it sends
-        the operator to the host log to find out what actually happened. The
-        reason line is the whole point of the report."""
-        rc, why = _failed_call(output)
-        line = f"{'✗' if (rc or why) else '✓'} {name}"
-        preview = _tool_preview(name, args)
-        if preview:
-            line += f" {preview}"
-        line += f" · {elapsed:.1f}s"
-        if rc:
-            line += f" [exit {rc}]"
-        if why:
-            line += f" — {why}"
-        self.add("tool_fail" if (rc or why) else "tool_done", line)
-
-    def on_narration(self, text, final, first):
-        """Model text, streaming, and never the answer until the run ends.
-
-        'final' from the agent means "this turn's narration is finished", not
-        "the run is over": a run that goes on to more tool calls emits a
-        final-flagged narration for EVERY turn. Painting those as the answer put
-        an answer bubble above the tool lines with the real answer below them
-        (the page looked like it was talking above and below itself). So text
-        always streams as 'say', and finish() promotes the run's last text to
-        the answer once, at the end."""
-        if text and text.strip():
-            i = self.grow("say", text.strip())
-            if final:
-                self.answered = True
-                if i is not None:
-                    self.answer_i = i
-
-    def on_interim(self, text):
-        """The model's text so far, before its turn ends.
-
-        Shown as 'thinking' - italic, dimmer, its own class - so it is visibly
-        not the answer yet, and so a tool call ends it cleanly instead of the
-        tool line being replaced by the growing text (that is how tool output
-        ended up scattered above and below the model's own text)."""
-        if text and text.strip():
-            self.grow("thinking", text.strip(), from_turn=True)
 
     def finish(self):
         """End of run: the last text the model produced is the answer.
@@ -10548,29 +10505,7 @@ class WebRun:
             self.asked = row
         return row
 
-    def confirm(self, command, wait=300.0):
-        """Ask the browser to approve a command that matched a confirm pattern.
 
-        Not a nicety: without a confirm_cb the shell tool returns
-        "DECLINED: command needs operator confirmation ... and none was given", so
-        on the web lane a dangerous-but-intended command silently never ran while
-        the same command in Mattermost was asked about and then ran. Same 300s
-        wait as that door."""
-        row = self.opener(f"⚠️ This command matches a confirm-pattern. Allow it?",
-                          ["yes, run it", "no, skip it"], wait, "the web page")
-        self.add("ask", "⚠️ Confirmation needed before this runs:\n"
-                 + str(command)[:800])
-        answered = row["ev"].wait(wait)
-        answer = str(row.get("answer") or "").strip().lower() if answered else ""
-        self.close_question(answered=bool(answer))
-        ok = answer.startswith(("y", "1", "ok", "approve", "run", "yes"))
-        if not answered:
-            self.add("system", f"⏱ no answer within {int(wait)}s - that command "
-                               f"was skipped")
-        else:
-            self.add("system", "✅ confirmed, running" if ok
-                     else "🚫 not confirmed - that command was skipped")
-        return ok
 
     def close_question(self, answered=False):
         with self.lock:
@@ -10611,36 +10546,99 @@ def _web_active_run(session_key="web"):
     return None
 
 
+class WebDestination(Destination):
+    """A browser conversation: the run's own line buffer, with stable uids.
+
+    Same vocabulary as the chat lane, drawn the way a page wants it: a line that
+    grows is updated in place (its uid never changes, so the page repaints the
+    node it already has), the live status lives in the run's header rather than
+    in the transcript, and the Done line is a line of its own so a reload still
+    shows how the run ended.
+    """
+
+    name = "web"
+    has_human = True          # the page can ask: a question row + /api/steer
+    merge_tools = False       # a browser line costs nothing: show every call
+    shows_calls = True        # ...including the call as it starts
+    stream_gap = 0.0          # a local buffer: update the growing line every delta
+    # the status slot, not a line: the page's header already shows elapsed and
+    # steps, and a line that rewrites itself every two seconds is noise in a
+    # transcript the operator reads later
+    STATUS_REF = ("web-status",)
+
+    # The reporter's tones, drawn with the classes the page already styles. Two
+    # lanes, one vocabulary: 'note' and 'narration' are the same words in chat
+    # (both 💬), and on the page the interstitial line reads as dimmer thinking
+    # while the streamed narration is the same amber italic as the chat bubble.
+    KINDS = {"note": "thinking", "narration": "say", "say": "say",
+             "tool": "tool", "tool_done": "tool_done", "tool_fail": "tool_fail",
+             "checkin": "checkin", "ask": "ask", "system": "system",
+             "final": "final", "error": "error"}
+
+    def __init__(self, run):
+        self.run = run
+
+    def line(self, kind, text, src="main"):
+        if kind == "status":
+            self.run.status = str(text)
+            return self.STATUS_REF
+        return self.run.add(self.KINDS.get(kind, "system"), str(text))
+
+    def update(self, ref, kind, text, src="main"):
+        if kind == "status" or ref == self.STATUS_REF:
+            # The header is this lane's status line, and the done line is what the
+            # chat lane edits its status post into. Appending it to the transcript
+            # instead put a footer under the ANSWER, and the answer is what the
+            # operator's eye should land on last.
+            self.run.status = str(text)
+            return ref
+        self.run.set_line(ref, self.KINDS.get(kind, "system"), str(text))
+        return ref
+
+    def drop(self, ref):
+        self.run.drop_line(ref)
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+        """Ask the page: a question row the operator answers with /api/steer.
+
+        Returns the operator's words, or None if nobody answered in the wait, so
+        the reporter's confirm is the same code here as in chat.
+        """
+        row = self.run.opener(question, options, wait, label)
+        numbered = [f"{i}. {o}" for i, o in enumerate(options or [], 1)]
+        tail = (" — " + " · ".join(numbered)) if numbered else ""
+        self.run.add("ask", "❓ " + str(question) + tail)
+        answered = row["ev"].wait(wait)
+        self.run.close_question(answered=bool(row.get("answer")))
+        return row.get("answer") if answered else None
 def _web_drive(run, text):
-    """Run the agent for a browser run, streaming lines into the buffer."""
+    """Run the agent for a browser run, reporting through the shared reporter.
+
+    Nothing here knows what a tool line or a check-in looks like: the run gets a
+    destination, the destination gets a reporter, and every word the operator
+    reads comes from the one implementation the other two lanes use.
+    """
     answer = ""
+    failed = False
     run.turn_start = time.time()
+    reporter = RunReporter(WebDestination(run), run.session_key)
     try:
-        answer = AGENT.run(run.session_key, text,
+        answer = drive_run(run.session_key, text, reporter,
                            ask_door=run,
-                           say_cb=lambda t: run.add("say", t),
-                           progress_cb=run.on_progress,
-                           progress_done_cb=run.on_tool_done,
-                           narration_cb=run.on_narration,
-                           interim_cb=run.on_interim,
-                           # Without this door the shell tool DECLINES any command
-                           # matching agent.confirm_patterns instead of asking: the
-                           # browser was quieter than Mattermost AND could not run
-                           # the work Mattermost would have asked about.
-                           confirm_cb=run.confirm,
                            cancel_event=run.cancel,
                            steer_cb=run.take_steer)
     except Exception as e:
+        failed = True
         log.exception("web run failed")
         run.add("error", f"⚠️ Something broke on my side: {e}")
     finally:
         with run.lock:
-            run.status = "done"
             run.done = True
             seen_final = run.answered
         if answer and not seen_final:
             run.answer_i = run.add("final", answer)
         run.finish()
+        reporter.finish(ok=not failed)
         # The conversation lives on disk, not in this process: this is what a
         # reload, a second browser or a restart repaints from. Fail-soft on
         # purpose - a disk problem must not turn a finished run into a failed one.

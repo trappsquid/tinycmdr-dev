@@ -707,6 +707,30 @@ def run_cli(once=None):
             print()
             return False
 
+    def ask_at_the_prompt(question, options, wait):
+        """The console's door: the question, then a line to answer on.
+
+        The same door shape as a chat post and a web question - the reporter asks,
+        the lane decides how a human answers it - so a confirmation is the same
+        code as the confirm prompt in chat, and `yes` means the same thing.
+        """
+        print(amber("  " + str(question)))
+        if options:
+            print(dim("  reply " + " / ".join(str(o) for o in options)))
+        try:
+            return input(green("  > "))
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return None
+
+    def new_reporter():
+        """One per run: the check-in cadence and the done line are per run."""
+        return RunReporter(
+            CliDestination(colour=bool(_CLI["colour"]), out=sys.stdout,
+                           ask=ask_at_the_prompt,
+                           on_drop=lambda t: _CLI.__setitem__("streamed_answer", t)),
+            _cli_key())
+
     _CLI["inbox"] = queue.Queue()
     _CLI["steer"] = queue.Queue()
     _CLI["leave"] = False
@@ -735,11 +759,7 @@ def run_cli(once=None):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        print(AGENT.run(_cli_key(), once, progress_cb=progress,
-                        say_cb=say, progress_done_cb=progress_done,
-                        narration_cb=narration_stream,
-                        narration_drop_cb=narration_drop, interim_cb=narration,
-                        confirm_cb=confirm))
+        print(drive_run(_cli_key(), once, new_reporter()))
         _cli_usage_line()
         return
     while True:
@@ -769,28 +789,25 @@ def run_cli(once=None):
             return
         cancel = threading.Event()
         _CLI["stop"] = cancel
-        _CLI["stream"] = ""
-        _CLI["streamed"] = ""
-        _CLI["streamed_answer"] = ""
+        _CLI["streamed_answer"] = ""     # set by the destination when a draft goes
         answer = ""
+        failed = False
+        reporter = new_reporter()
         try:
-            answer = AGENT.run(_cli_key(), text, progress_cb=progress,
-                               say_cb=say, progress_done_cb=progress_done,
-                               narration_cb=narration_stream,
-                               narration_drop_cb=narration_drop, interim_cb=narration,
-                               confirm_cb=confirm, cancel_event=cancel,
+            answer = drive_run(_cli_key(), text, reporter, cancel_event=cancel,
                                steer_cb=steer)
         except KeyboardInterrupt:
             cancel.set()
             print(red("\n  (stopped)"))
-            continue
         except OperatorStop as e:
+            failed = True
             print(red("\n  (stopped: %s)" % e))
-            continue
         except Exception as e:
+            failed = True
             print(red("\n  run failed: %s: %s" % (type(e).__name__, e)))
         finally:
             _CLI["stop"] = None
+            reporter.finish(ok=not failed)
         while not _CLI["steer"].empty():    # typed too late for that run
             _CLI["inbox"].put(_CLI["steer"].get())
         if _CLI["leave"]:
