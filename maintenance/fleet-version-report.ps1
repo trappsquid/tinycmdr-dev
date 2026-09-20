@@ -72,9 +72,17 @@ foreach ($u in $unix) {
     $cmd = "sha256sum $($u.path) 2>/dev/null || shasum -a 256 $($u.path); grep -m1 '^VERSION' $($u.path); $($u.dogcmd)"
     $out = (ssh -o BatchMode=yes -o ConnectTimeout=8 $u.alias $cmd 2>$null)
     if (-not $out) { Write-Output ("{0,-28} ssh unavailable" -f $u.name); continue }
-    $h = (($out -split '\s+')[0]).Substring(0, 16)
-    $v = (($out -split "`n" | Where-Object { $_ -match 'VERSION' }) -replace '.*"([^"]+)".*', '$1').Trim()
-    $dogRaw = (($out -split "`n") | Select-Object -Last 1).Trim()
+    # Parse PER HOST and never fall back to the previous host's values: a probe that
+    # returns no hash line means "there is no build at that path", which must be said
+    # out loud rather than dressed up as the last host's row (measured 2026-09-20,
+    # when the LAN model box was still unmigrated and printed as "in sync").
+    $h = $null; $v = $null; $dogRaw = ""
+    foreach ($line in @($out)) {
+        if ($line -match '^([0-9a-fA-F]{64})\s') { $h = $Matches[1].Substring(0, 16) }
+        elseif ($line -match 'VERSION\s*=\s*"([^"]+)"') { $v = $Matches[1] }
+        elseif ($line.Trim()) { $dogRaw = $line.Trim() }
+    }
+    if (-not $h) { Write-Output ("{0,-28} no build at {1}" -f $u.name, $u.path); continue }
     $dog = if ($u.kind -eq "restart") {
         if ($dogRaw -eq "always") { "systemd" } else { "NO WATCHDOG ($dogRaw)" }
     } else {
