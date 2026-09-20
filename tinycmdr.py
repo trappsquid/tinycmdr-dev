@@ -11582,6 +11582,36 @@ def run_cli(once=None):
 
 
 _LOCK_FH = None
+_LEGACY_LOCK_FH = None
+
+
+def _take_legacy_lock():
+    """Transition latch for the rename to tinycmdr: while a pre-rename launcher
+    (tinycmdr.py) still sits beside this file, an agent started BEFORE the rename
+    may be holding the old lock name. Take that lock too, so the two can never
+    run against one bot token at once.
+
+    Inert on a migrated host: no pre-rename launcher, nothing to take. Delete
+    this function with the launcher once the last host is migrated.
+    """
+    global _LEGACY_LOCK_FH
+    if not (BASE_DIR / "tinycmdr.py").exists():
+        return True
+    try:
+        if os.name == "nt":
+            import msvcrt
+            _LEGACY_LOCK_FH = open(BASE_DIR / "tinycmdr.lock", "a+b")
+            _LEGACY_LOCK_FH.seek(0)
+            msvcrt.locking(_LEGACY_LOCK_FH.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            _LEGACY_LOCK_FH = open(BASE_DIR / "tinycmdr.lock", "a")
+            fcntl.flock(_LEGACY_LOCK_FH, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    except Exception:
+        return True   # lock mechanics failed — never block startup on that
+    return True
 
 
 def acquire_single_instance_lock():
@@ -11604,25 +11634,30 @@ def acquire_single_instance_lock():
         return False
     except Exception:
         return True   # lock mechanics failed — never block startup on that
+    if not _take_legacy_lock():
+        _release_lock()
+        return False
     return True
 
 
 def _release_lock():
     """Drop the single-instance lock so a replacement process can take it."""
-    global _LOCK_FH
-    try:
-        if _LOCK_FH:
-            if os.name == "nt":
-                import msvcrt
-                try:
-                    _LOCK_FH.seek(0)
-                    msvcrt.locking(_LOCK_FH.fileno(), msvcrt.LK_UNLCK, 1)
-                except Exception:
-                    pass
-            _LOCK_FH.close()
-    except Exception:
-        pass
+    global _LOCK_FH, _LEGACY_LOCK_FH
+    for _fh in (_LOCK_FH, _LEGACY_LOCK_FH):
+        try:
+            if _fh:
+                if os.name == "nt":
+                    import msvcrt
+                    try:
+                        _fh.seek(0)
+                        msvcrt.locking(_fh.fileno(), msvcrt.LK_UNLCK, 1)
+                    except Exception:
+                        pass
+                _fh.close()
+        except Exception:
+            pass
     _LOCK_FH = None
+    _LEGACY_LOCK_FH = None
 
 
 def _note_restart(channel_id, root_id, by):
@@ -11891,7 +11926,8 @@ def main():
             sys.exit(2)
         if not acquire_single_instance_lock():
             log.critical("STARTUP ABORTED: another tinycmdr is already "
-                         "running from %s (tinycmdr.lock is held). Two "
+                         "running from %s (tinycmdr.lock or, during the rename, "
+                         "tinycmdr.lock is held). Two "
                          "instances on one bot token double-answer every "
                          "DM — kill the other one instead.", BASE_DIR)
             print(f"\n*** tinycmdr is already running from this folder ***\n"

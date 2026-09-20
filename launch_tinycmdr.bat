@@ -10,5 +10,5 @@ rem
 rem pythonw = no console window (runs quietly in background)
 rem python  = keeps a console window open so you can watch the log live
 
-cd /d "C:/Users/<user>\tinycmdr"
+cd /d "%~dp0"
 start "" "C:/Users/<user>\AppData\Local\Programs\Python\Python312\python.exe" tinycmdr.py

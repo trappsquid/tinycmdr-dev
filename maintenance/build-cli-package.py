@@ -33,8 +33,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-HOME = Path(os.path.expanduser("~"))
-BASE = HOME / "tinycmdr"
+BASE = Path(__file__).resolve().parent.parent   # the tree this script lives in
 SRC = BASE / "tinycmdr-cli.py"
 DIST = BASE / "dist"
 README = BASE / "maintenance" / "cli-readme.txt"

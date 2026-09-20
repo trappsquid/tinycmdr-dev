@@ -484,3 +484,52 @@ Stage 4 (the event log) is scoped in `minidsh-event-log-scope.md`: what today's 
 answer (0 per-call verdicts, arguments cut at ~211 B, 554 edits with no outcome on this host),
 the event kinds, the model-visible <=> logged invariant and its test, measured cost, three
 failure modes, and a shadow-first rollout. Waiting on five operator decisions.
+
+---
+
+## 2026-09-20 - renamed the project from tinycmdr to tinycmdr
+
+Scope was decided with the operator: publication surface and runtime identifiers
+both change, and the fleet's own boxes migrate afterwards in one deliberate pass
+rather than box-by-box (the old rule: one version per BATCH, restarts are the
+operator's call).
+
+Method, chosen so the change is auditable rather than plausible:
+
+* Frozen the tracked tree first (`snapshots/rename-freeze-<stamp>/`: a copy of all
+  98 tracked files plus a sha256 manifest), so every byte the rename changes can be
+  accounted for afterwards.
+* The rename itself is a pure BYTE substitution of exactly three case variants
+  (`tinycmdr`, `tinycmdr`, `tinycmdr` -> `tinycmdr`, `tinycmdr`, `tinycmdr`), 1,081
+  occurrences in 86 files. No regex, no decoding, no line-ending handling: a CRLF
+  file stays CRLF, which is why git still shows a readable diff.
+* 19 tracked files renamed (`tinycmdr.py`, `tinycmdr-cli.py`, `tinycmdr-supervise.py`,
+  `tinycmdr-service.vbs`, the installers, the restart scripts, four docs).
+* `CHANGELOG.md` and `docs/dev-log.md` keep their historical entries. The
+  changelog's TITLE was updated and a note added; falsifying past entries to say
+  `tinycmdr.py` about a release that shipped `tinycmdr.py` would be a lie.
+
+Two pieces of transition machinery, both temporary and both with a stated
+removal condition:
+
+* `tinycmdr.py` is now a compatibility launcher that runs `tinycmdr.py` and
+  translates the pre-rename environment names. It exists because a supervisor that
+  was already running when the rename landed holds the old path in memory and
+  relaunches by that name. Dev-tree only: never published.
+* `_take_legacy_lock()` in `tinycmdr.py` holds the OLD lock file name too while
+  that launcher is present. Two agents on one Mattermost bot token double-answer
+  every DM, and the lock file name changed in this rename, so without it a
+  pre-rename instance and a post-rename instance could both start. Inert on any
+  host that has no pre-rename launcher, i.e. every host after migration.
+
+Not done in this pass, deliberately:
+
+* The the manager box folder name (`C:/Users/<user>\tinycmdr`) is unchanged: the
+  running bot holds its log inside it, so Windows refuses the rename. It moves
+  with the restart.
+* The other five hosts keep both their old code and their old names until the
+  migration pass. Rule for the window: the tree's fleet scripts describe the
+  POST-migration state, so do not run them against a host that has not migrated.
+* A host's `.env` keys must be renamed AT THE SAME TIME as its code. On the manager box the
+  new key was added alongside the old one, so a restart at any moment stays safe;
+  the old key is dropped once the new code is confirmed running.

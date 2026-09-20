@@ -7,7 +7,9 @@ import os
 import re
 import sys
 
-P = os.path.join(os.path.expanduser("~"), "tinycmdr", "tinycmdr-cli.py")
+# the tree this script lives in, not one machine's home directory
+P = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                 "tinycmdr-cli.py")
 CR, LF = chr(13), chr(10)
 raw = open(P, "rb").read().decode("utf-8")
 NL = CR + LF if raw.count(CR + LF) == raw.count(LF) else LF

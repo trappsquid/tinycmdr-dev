@@ -18,8 +18,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from cli_blocks import (NEW_CLI, NEW_CONFIG, NEW_HEADER, NEW_MAIN, NEW_VALIDATOR,
                         ONE_ENDPOINT, HTTP_SHIM)  # noqa: E402
 
-SRC = os.path.join(os.path.expanduser("~"), "tinycmdr", "tinycmdr.py")
-DST = os.path.join(os.path.expanduser("~"), "tinycmdr", "tinycmdr-cli.py")
+# the tree this script lives in, not one machine's home directory
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SRC = os.path.join(BASE, "tinycmdr.py")
+DST = os.path.join(BASE, "tinycmdr-cli.py")
 
 raw = open(SRC, "rb").read().decode("utf-8")
 CR = chr(13)

@@ -9,10 +9,13 @@
 '     RestartOnFailure policy (3 attempts / 2 min) actually fires.
 ' The supervisor itself keeps the bot alive; this is only the outer safety net.
 '
-' Run by hand:  wscript //B //Nologo "C:/Users/<user>\tinycmdr\tinycmdr-service.vbs"
+' Run by hand:  wscript //B //Nologo "<this file>"
 Option Explicit
-Dim sh, rc
+Dim sh, fso, here, rc
 Set sh = CreateObject("WScript.Shell")
-sh.CurrentDirectory = "C:/Users/<user>\tinycmdr"
-rc = sh.Run("""C:/Users/<user>\AppData\Local\Programs\Python\Python312\pythonw.exe"" ""C:/Users/<user>\tinycmdr\tinycmdr-supervise.py""", 0, True)
+Set fso = CreateObject("Scripting.FileSystemObject")
+' the folder this file sits in, whatever it is called
+here = fso.GetParentFolderName(WScript.ScriptFullName)
+sh.CurrentDirectory = here
+rc = sh.Run("""C:/Users/<user>\AppData\Local\Programs\Python\Python312\pythonw.exe"" """ & here & "\tinycmdr-supervise.py""", 0, True)
 WScript.Quit rc

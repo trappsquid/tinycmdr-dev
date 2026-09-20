@@ -145,7 +145,7 @@ def main():
         # ---- the budget really counts wall clock -----------------------------
         fb.CONFIG["agent"]["scan_budget_seconds"] = 0.5
         try:
-            fb.run_capture = lambda argv, timeout: (time.sleep(0.3), 0, "x", "", False)[1:]
+            fb.run_capture = lambda argv, timeout, cancel=None: (time.sleep(0.3), 0, "x", "", False)[1:]
             out1 = fb.tool_shell({"command": RISKY[0]}, ctx)
             out2 = fb.tool_shell({"command": RISKY[0]}, ctx)
             out3 = fb.tool_shell({"command": RISKY[0]}, ctx)
@@ -162,7 +162,7 @@ def main():
         fb.reset_scan_spend("s")
         fb.CONFIG["agent"]["scan_budget_seconds"] = 0.5
         try:
-            fb.run_capture = lambda argv, timeout: (time.sleep(0.3), 0, "x", "", False)[1:]
+            fb.run_capture = lambda argv, timeout, cancel=None: (time.sleep(0.3), 0, "x", "", False)[1:]
             out4 = fb.tool_execute_code({"code": CODE_RISKY[0]}, ctx)
             out5 = fb.tool_execute_code({"code": CODE_RISKY[0]}, ctx)
             out6 = fb.tool_execute_code({"code": CODE_RISKY[0]}, ctx)
@@ -177,7 +177,7 @@ def main():
 
         # ---- what the model is told when the per-call ceiling fires ----------
         try:
-            fb.run_capture = lambda argv, timeout: (0, "partial listing", "", True)
+            fb.run_capture = lambda argv, timeout, cancel=None: (0, "partial listing", "", True)
             out = fb.tool_shell({"command": RISKY[0]}, ctx)
         finally:
             fb.run_capture = real_capture
@@ -189,7 +189,7 @@ def main():
 
         # A command that is NOT this shape keeps the original timeout message.
         try:
-            fb.run_capture = lambda argv, timeout: (0, "x", "", True)
+            fb.run_capture = lambda argv, timeout, cancel=None: (0, "x", "", True)
             out2 = fb.tool_shell({"command": "C:\\Python312\\python.exe -m pip list",
                                   "timeout": 15}, ctx)
         finally:

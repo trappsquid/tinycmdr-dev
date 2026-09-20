@@ -1,5 +1,11 @@
 # tinycmdr changelog (newest first, through 2.5.23, tinycmdr-cli 1.0.14)
 
+> **Renamed 2026-09-20: tinycmdr became tinycmdr.** Entries below were written while the project
+> carried the old name, and they keep the name they were written with: a path, task name or
+> env var quoted in a 2.5.x entry (`tinycmdr.py`, `tinycmdr_MM_TOKEN`, the "tinycmdr"
+> scheduled task) is what that release actually used. Current naming is `tinycmdr.py`,
+> `tinycmdr-cli.py`, `tinycmdr_MM_TOKEN`, and the task is `tinycmdr`.
+
 ## 2.5.23 - a run no longer starts blind to what the conversation already did (2026-09-20)
 
 the Windows test box lost the research it had done a few steps earlier in the same conversation and
