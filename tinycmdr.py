@@ -3668,8 +3668,13 @@ def tool_delegate_task(args, ctx):
                  or ctx.get("model"))
     if inherited:
         AGENT.model_overrides[key] = inherited
+    # Its own source tag, so its lines read as "↳ sub:...: ..." rather than as
+    # the main run's work, and so two subtasks running at once (one batch can
+    # start four) cannot grow each other's line.
+    sub_src = "sub:" + " ".join(str(task).split())[:24]
     try:
-        answer = AGENT.run(key, task, depth=ctx.get("depth", 0) + 1)
+        answer = AGENT.run(key, task, depth=ctx.get("depth", 0) + 1,
+                           source=sub_src, **_relay_callbacks(ctx, sub_src))
     finally:
         AGENT.model_overrides.pop(key, None)
         AGENT.reset(key)  # sub-agent context is throwaway
@@ -4062,33 +4067,46 @@ class Scheduler:
         # web conversation, or nowhere - and the callback list that used to be
         # repeated here now lives in drive_run, so a job cannot be wired
         # differently from a chat turn.
-        dest = (MattermostDestination(self.dispatcher, job["channel_id"], None)
-                if self.dispatcher and job.get("channel_id")
-                else NowhereDestination())
+        token = job.get("channel_id")
+        web_run = None
+        web_key = web_token_key(token)
+        if web_key:
+            # scheduled from a browser: it reports into that conversation, where
+            # the operator can read it (and the rail shows it working)
+            web_run = web_new_scheduled_run(web_key)
+        if web_run is not None:
+            dest = WebDestination(web_run)
+            door = web_run            # the conversation is the door as well
+            web_run.add("you", job["task"])
+        elif self.dispatcher and token and not web_key:
+            dest = MattermostDestination(self.dispatcher, token, None)
+            door = {"label": "answer in this channel",
+                    "opener": lambda q, opts, w, l:
+                        SCHEDULER._open_in_channel(token, key, q, opts, w),
+                    "post": lambda q, opts, w, l: True,
+                    "post_done": lambda text: report(token, text),
+                    "close_question": lambda answered:
+                        SCHEDULER.close_question(key, answered)}
+        else:
+            dest, door = NowhereDestination(), None
         rep = RunReporter(dest, key, label="⏰ Working…")
-        door = ({"label": "answer in this channel",
-                 "opener": lambda q, opts, w, l:
-                     SCHEDULER._open_in_channel(job.get("channel_id"), key,
-                                                q, opts, w),
-                 "post": lambda q, opts, w, l: True,
-                 "post_done": lambda text: report(job.get("channel_id"), text),
-                 "close_question": lambda answered:
-                     SCHEDULER.close_question(key, answered)}
-                if dest.has_human else None)
+        failed = False
         try:
             answer = drive_run(key,
                                "[Scheduled task — work autonomously, then report] "
                                + job["task"],
-                               rep, channel_id=job.get("channel_id"),
-                               ask_door=door)
+                               rep, channel_id=token, ask_door=door)
         except Exception as e:
+            failed = True
             answer = f"⚠️ scheduled job '{name}' failed: {e}"
-            rep.finish(ok=False)
-        else:
-            rep.finish(ok=True)
         finally:
             AGENT.model_overrides.pop(key, None)
-        report(job.get("channel_id"), f"⏰ **{name}**\n\n{answer}")
+        if web_run is not None:
+            _finish_web_run(web_run, rep, answer, failed=failed)
+        else:
+            rep.finish(ok=not failed)
+            if not web_key:
+                report(token, f"⏰ **{name}**\n\n{answer}")
 
     dispatcher = None   # set by run_bot so scheduled jobs can report progress
     # sched-<name> -> the row a job is parked on. Only a job WITH a reporting channel
@@ -6605,7 +6623,7 @@ class Agent:
             confirm_cb=None, depth=0, channel_id=None, cancel_event=None,
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
-            ask_door=None):
+            ask_door=None, source="main"):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
         replaces user_text for this turn only (history stores text only).
@@ -6644,7 +6662,16 @@ class Agent:
                    # ask_user's door: how this run reaches a human, and how it waits.
                    # Only a door that owns a blocking wait sets it (the Mattermost
                    # dispatcher, the web run, the CLI prompt).
-                   "ask_door": ask_door}
+                   "ask_door": ask_door,
+                   # What this run reports THROUGH, and under which source. A tool
+                   # that starts another run (delegate_task) hands these down so a
+                   # subtask is visible in every lane instead of silent in all of
+                   # them (measured: no callbacks at all until 2026-09-20).
+                   "source": source,
+                   "report": {"say": say_cb, "progress": progress_cb,
+                              "note": interim_cb, "narration": narration_cb,
+                              "drop": narration_drop_cb,
+                              "tool_done": progress_done_cb}}
             _delta_gate = {"t": 0.0, "streamed": False}
 
             def _on_delta(st):
@@ -7738,6 +7765,28 @@ def want_color(color):
     return color if CONFIG["agent"].get("color_coded", True) else None
 
 
+def _relay_callbacks(ctx, src):
+    """The parent's reporting callbacks, re-bound to a subtask's source.
+
+    delegate_task runs a second agent with the parent's reporter, tagged with its
+    own source. Before this, a delegated subtask reported NOTHING in any lane: it
+    called AGENT.run with no callbacks at all, so thirty minutes of work looked
+    like a run that had stopped.
+    """
+    rep = (ctx or {}).get("report") or {}
+
+    def bind(fn):
+        if not fn:
+            return None
+        return lambda *a, **kw: fn(*a, src=src, **kw)
+
+    return {"say_cb": bind(rep.get("say")),
+            "progress_cb": bind(rep.get("progress")),
+            "interim_cb": bind(rep.get("note")),
+            "narration_cb": bind(rep.get("narration")),
+            "narration_drop_cb": bind(rep.get("drop"))}
+
+
 class RunReporter:
     """What a run says about itself, written once for every interface.
 
@@ -7776,6 +7825,18 @@ class RunReporter:
             self.status_ref = self.dest.line("status", label)
 
     # -- what the operator reads ------------------------------------------
+    def _tag(self, text, src):
+        """Whose line is this? One reporter serves the run and its subtasks, so a
+        line that came from somewhere else says so instead of reading as the
+        main run's own work."""
+        return text if src in (None, self.src) else f"↳ {src}: {text}"
+
+    def _draw(self, kind, text, src="main"):
+        return self.dest.line(kind, self._tag(str(text), src), src)
+
+    def _redraw(self, ref, kind, text, src="main"):
+        return self.dest.update(ref, kind, self._tag(str(text), src), src)
+
     def checkin_text(self, steps, elapsed, name=None, args=None):
         return checkin_line(self.session_key, steps, elapsed, name, args)
 
@@ -7802,13 +7863,13 @@ class RunReporter:
             if now - self.last_note.get(src, 0.0) < gap:
                 return
             self.last_note[src] = now
-        self.dest.line("note", f"💬 {text}", src)
+        self._draw("note", f"💬 {text}", src)
 
     def say(self, text, src=None):
         """A line from the HARNESS, not the model: the notice that a run
         continued past its budget belongs here."""
         try:
-            self.dest.line("say", str(text), src or self.src)
+            self._draw("say", str(text), src or self.src)
         except Exception:
             log.debug("say() failed", exc_info=True)
 
@@ -7858,12 +7919,12 @@ class RunReporter:
             self.stream_text[src] = body
             self.last_stream[src] = now
         if fresh:
-            new_ref = self.dest.line("narration", body, src)
+            new_ref = self._draw("narration", body, src)
             with self.lock:
                 self.stream_ref[src] = new_ref
                 self.stream_open[src] = body
         else:
-            self.dest.update(ref, "narration", body, src)
+            self._redraw(ref, "narration", body, src)
 
     def narration_live(self, src=None):
         with self.lock:
@@ -7938,11 +7999,11 @@ class RunReporter:
         # good ones: the line has to read as "something in here broke"
         kind = "tool_fail" if failed else "tool_done"
         if ref is None:
-            new_ref = self.dest.line(kind, body, src)
+            new_ref = self._draw(kind, body, src)
             with self.lock:
                 self.tool_ref[src] = new_ref
         else:
-            self.dest.update(ref, kind, body, src)
+            self._redraw(ref, kind, body, src)
 
     @staticmethod
     def _batch_text(lines):
@@ -7975,9 +8036,8 @@ class RunReporter:
             self.steps += 1
             step_now = self.steps
             if self.dest.shows_calls:
-                self.dest.line("tool",
-                               f"{name}({_tool_preview(name, args, limit=200)})",
-                               src)
+                self._draw("tool",
+                           f"{name}({_tool_preview(name, args, limit=200)})", src)
         every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
         every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
         with self.lock:
@@ -7993,8 +8053,8 @@ class RunReporter:
                 self.last_edit = now
                 edit = self.status_ref
         if checkin:
-            self.dest.line("checkin", self.checkin_text(steps, now - self.t0,
-                                                        name, args), src)
+            self._draw("checkin", self.checkin_text(steps, now - self.t0,
+                                                    name, args), src)
         elif edit is not None:
             # Live visibility for the anti-loop machinery: if the model has tried
             # to repeat a call, the operator sees it happening rather than only
@@ -8030,8 +8090,8 @@ class RunReporter:
                                            "decline") == "allow"
             # Asked, and nobody said anything: that is a verdict, and the operator
             # finds out by reading it rather than by wondering why nothing ran.
-            self.dest.line("system", f"⏱ no answer within {int(wait)}s — that "
-                                     f"command was skipped")
+            self._draw("system", f"⏱ no answer within {int(wait)}s — that "
+                                 f"command was skipped")
             return False
         # The operator's first word decides, in every lane: a button that says
         # "yes, run it" and a terminal that says "go" both mean yes, and one
@@ -8040,8 +8100,8 @@ class RunReporter:
             if str(answer).strip() else ""
         ok = first in ("y", "yes", "yeah", "ok", "okay", "approve", "approved",
                        "run", "go", "confirm", "confirmed", "1", "true")
-        self.dest.line("system", "✅ confirmed, running" if ok
-                       else "🚫 not confirmed - that command was skipped")
+        self._draw("system", "✅ confirmed, running" if ok
+                   else "🚫 not confirmed - that command was skipped")
         return ok
 
     def finish(self, ok=True):
@@ -8093,7 +8153,8 @@ class NowhereDestination(Destination):
 
 
 def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
-              channel_id=None, cancel_event=None, steer_cb=None, ask_door=None):
+              channel_id=None, cancel_event=None, steer_cb=None, ask_door=None,
+              source="main"):
     """Run the agent, wired to ONE reporter. The only place these callbacks live.
 
     Three lanes used to build this keyword list three times with three different
@@ -8101,7 +8162,7 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
     the failure reasons, the check-ins or the confirm door.
     """
     return AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
-                     channel_id=channel_id,
+                     channel_id=channel_id, source=source,
                      say_cb=reporter.say,
                      progress_cb=reporter.progress,
                      interim_cb=reporter.note,
@@ -10198,6 +10259,15 @@ def web_delete_session(key):
     that key. Refused while a run is live in it - that run is still writing."""
     if _web_active_run(key) is not None:
         return "busy"
+    # A job that reports into this conversation would fire into nothing: it still
+    # runs, but the report the operator asked for has nowhere to land.
+    try:
+        token = f"{WEB_DEST_PREFIX}{key}"
+        for job in (SCHEDULER.jobs.values() if SCHEDULER else []):
+            if (job or {}).get("channel_id") == token:
+                return "scheduled"
+    except Exception:
+        pass
 
     def fn(st):
         before = len(st["sessions"])
@@ -10265,6 +10335,58 @@ def web_resolve_session(client, requested):
 
 
 # -- the conversation on disk: one line list per finished run --------------
+WEB_DEST_PREFIX = "web:"
+
+
+def web_token_key(token):
+    """The conversation a destination token names, or None.
+
+    A job stores WHERE it reports the same way a chat job stores a channel id -
+    one string on the job - so nothing new has to be added to the schedule tool
+    or to jobs.json. `web:<key>` means "report into that conversation".
+
+    This is what closes the channel_id gap: a job made from the browser used to
+    carry channel_id None, so it fired with no reporter at all and no place for
+    its answer to land.
+    """
+    if isinstance(token, str) and token.startswith(WEB_DEST_PREFIX):
+        key = token[len(WEB_DEST_PREFIX):]
+        return key if _web_key_ok(key) else None
+    return None
+
+
+def web_new_scheduled_run(key):
+    """A headless run inside a web conversation, for a scheduled job's report.
+
+    Returns None when that conversation is gone: the job still runs (the work
+    matters more than the report), and the log says where the report could not go.
+    """
+    if not (key and _web_key_ok(key) and web_entry(key) is not None):
+        log.warning("a scheduled job reports into conversation %r, which no longer "
+                    "exists - it will run and report to the log only", key)
+        return None
+    return _web_new_run(key)
+
+
+def _finish_web_run(run, reporter, answer, failed=False):
+    """End a browser run: the answer, the done line, and the record on disk.
+
+    One implementation for the run the page started and the run a scheduled job
+    put in the same conversation.
+    """
+    with run.lock:
+        run.done = True
+        seen_final = run.answered
+    if answer and not seen_final:
+        run.answer_i = run.add("final", answer)
+    run.finish()
+    reporter.finish(ok=not failed)
+    with run.lock:
+        written = list(run.lines)
+    _WEB_SAVED_AT.pop(run.id, None)
+    web_runlog_append(run.session_key, run.id, run.started, written)
+
+
 def _web_runlog_path(key):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
     return SESSIONS_DIR / f"{safe}.web.jsonl"
@@ -10650,6 +10772,9 @@ def _web_drive(run, text):
     reporter = RunReporter(WebDestination(run), run.session_key)
     try:
         answer = drive_run(run.session_key, text, reporter,
+                           # who this run is, for anything that has to report
+                           # somewhere later: a job scheduled here comes back here
+                           channel_id=f"{WEB_DEST_PREFIX}{run.session_key}",
                            ask_door=run,
                            cancel_event=run.cancel,
                            steer_cb=run.take_steer)
@@ -10658,20 +10783,10 @@ def _web_drive(run, text):
         log.exception("web run failed")
         run.add("error", f"⚠️ Something broke on my side: {e}")
     finally:
-        with run.lock:
-            run.done = True
-            seen_final = run.answered
-        if answer and not seen_final:
-            run.answer_i = run.add("final", answer)
-        run.finish()
-        reporter.finish(ok=not failed)
         # The conversation lives on disk, not in this process: this is what a
         # reload, a second browser or a restart repaints from. Fail-soft on
         # purpose - a disk problem must not turn a finished run into a failed one.
-        with run.lock:
-            written = list(run.lines)
-        _WEB_SAVED_AT.pop(run.id, None)
-        web_runlog_append(run.session_key, run.id, run.started, written)
+        _finish_web_run(run, reporter, answer, failed=failed)
 
 
 
@@ -11061,6 +11176,11 @@ def run_webui():
                         if verdict == "busy":
                             self._json({"error": "a run is still going in that "
                                                  "conversation - stop it first"}, 409)
+                            return
+                        if verdict == "scheduled":
+                            self._json({"error": "a scheduled job reports into "
+                                                 "that conversation - remove the "
+                                                 "job first"}, 409)
                             return
                         if verdict != "deleted":
                             self._json({"error": "no such conversation"}, 404)

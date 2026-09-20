@@ -3670,8 +3670,13 @@ def tool_delegate_task(args, ctx):
                  or ctx.get("model"))
     if inherited:
         AGENT.model_overrides[key] = inherited
+    # Its own source tag, so its lines read as "↳ sub:...: ..." rather than as
+    # the main run's work, and so two subtasks running at once (one batch can
+    # start four) cannot grow each other's line.
+    sub_src = "sub:" + " ".join(str(task).split())[:24]
     try:
-        answer = AGENT.run(key, task, depth=ctx.get("depth", 0) + 1)
+        answer = AGENT.run(key, task, depth=ctx.get("depth", 0) + 1,
+                           source=sub_src, **_relay_callbacks(ctx, sub_src))
     finally:
         AGENT.model_overrides.pop(key, None)
         AGENT.reset(key)  # sub-agent context is throwaway
@@ -6367,7 +6372,7 @@ class Agent:
             confirm_cb=None, depth=0, channel_id=None, cancel_event=None,
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
-            ask_door=None):
+            ask_door=None, source="main"):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
         replaces user_text for this turn only (history stores text only).
@@ -6406,7 +6411,16 @@ class Agent:
                    # ask_user's door: how this run reaches a human, and how it waits.
                    # Only a door that owns a blocking wait sets it (the Mattermost
                    # dispatcher, the web run, the CLI prompt).
-                   "ask_door": ask_door}
+                   "ask_door": ask_door,
+                   # What this run reports THROUGH, and under which source. A tool
+                   # that starts another run (delegate_task) hands these down so a
+                   # subtask is visible in every lane instead of silent in all of
+                   # them (measured: no callbacks at all until 2026-09-20).
+                   "source": source,
+                   "report": {"say": say_cb, "progress": progress_cb,
+                              "note": interim_cb, "narration": narration_cb,
+                              "drop": narration_drop_cb,
+                              "tool_done": progress_done_cb}}
             _delta_gate = {"t": 0.0, "streamed": False}
 
             def _on_delta(st):
@@ -7480,6 +7494,28 @@ def want_color(color):
     return color if CONFIG["agent"].get("color_coded", True) else None
 
 
+def _relay_callbacks(ctx, src):
+    """The parent's reporting callbacks, re-bound to a subtask's source.
+
+    delegate_task runs a second agent with the parent's reporter, tagged with its
+    own source. Before this, a delegated subtask reported NOTHING in any lane: it
+    called AGENT.run with no callbacks at all, so thirty minutes of work looked
+    like a run that had stopped.
+    """
+    rep = (ctx or {}).get("report") or {}
+
+    def bind(fn):
+        if not fn:
+            return None
+        return lambda *a, **kw: fn(*a, src=src, **kw)
+
+    return {"say_cb": bind(rep.get("say")),
+            "progress_cb": bind(rep.get("progress")),
+            "interim_cb": bind(rep.get("note")),
+            "narration_cb": bind(rep.get("narration")),
+            "narration_drop_cb": bind(rep.get("drop"))}
+
+
 class RunReporter:
     """What a run says about itself, written once for every interface.
 
@@ -7518,6 +7554,18 @@ class RunReporter:
             self.status_ref = self.dest.line("status", label)
 
     # -- what the operator reads ------------------------------------------
+    def _tag(self, text, src):
+        """Whose line is this? One reporter serves the run and its subtasks, so a
+        line that came from somewhere else says so instead of reading as the
+        main run's own work."""
+        return text if src in (None, self.src) else f"↳ {src}: {text}"
+
+    def _draw(self, kind, text, src="main"):
+        return self.dest.line(kind, self._tag(str(text), src), src)
+
+    def _redraw(self, ref, kind, text, src="main"):
+        return self.dest.update(ref, kind, self._tag(str(text), src), src)
+
     def checkin_text(self, steps, elapsed, name=None, args=None):
         return checkin_line(self.session_key, steps, elapsed, name, args)
 
@@ -7544,13 +7592,13 @@ class RunReporter:
             if now - self.last_note.get(src, 0.0) < gap:
                 return
             self.last_note[src] = now
-        self.dest.line("note", f"💬 {text}", src)
+        self._draw("note", f"💬 {text}", src)
 
     def say(self, text, src=None):
         """A line from the HARNESS, not the model: the notice that a run
         continued past its budget belongs here."""
         try:
-            self.dest.line("say", str(text), src or self.src)
+            self._draw("say", str(text), src or self.src)
         except Exception:
             log.debug("say() failed", exc_info=True)
 
@@ -7600,12 +7648,12 @@ class RunReporter:
             self.stream_text[src] = body
             self.last_stream[src] = now
         if fresh:
-            new_ref = self.dest.line("narration", body, src)
+            new_ref = self._draw("narration", body, src)
             with self.lock:
                 self.stream_ref[src] = new_ref
                 self.stream_open[src] = body
         else:
-            self.dest.update(ref, "narration", body, src)
+            self._redraw(ref, "narration", body, src)
 
     def narration_live(self, src=None):
         with self.lock:
@@ -7680,11 +7728,11 @@ class RunReporter:
         # good ones: the line has to read as "something in here broke"
         kind = "tool_fail" if failed else "tool_done"
         if ref is None:
-            new_ref = self.dest.line(kind, body, src)
+            new_ref = self._draw(kind, body, src)
             with self.lock:
                 self.tool_ref[src] = new_ref
         else:
-            self.dest.update(ref, kind, body, src)
+            self._redraw(ref, kind, body, src)
 
     @staticmethod
     def _batch_text(lines):
@@ -7717,9 +7765,8 @@ class RunReporter:
             self.steps += 1
             step_now = self.steps
             if self.dest.shows_calls:
-                self.dest.line("tool",
-                               f"{name}({_tool_preview(name, args, limit=200)})",
-                               src)
+                self._draw("tool",
+                           f"{name}({_tool_preview(name, args, limit=200)})", src)
         every_s = int(CONFIG["agent"].get("checkin_minutes") or 0) * 60
         every_n = int(CONFIG["agent"].get("checkin_steps") or 0)
         with self.lock:
@@ -7735,8 +7782,8 @@ class RunReporter:
                 self.last_edit = now
                 edit = self.status_ref
         if checkin:
-            self.dest.line("checkin", self.checkin_text(steps, now - self.t0,
-                                                        name, args), src)
+            self._draw("checkin", self.checkin_text(steps, now - self.t0,
+                                                    name, args), src)
         elif edit is not None:
             # Live visibility for the anti-loop machinery: if the model has tried
             # to repeat a call, the operator sees it happening rather than only
@@ -7772,8 +7819,8 @@ class RunReporter:
                                            "decline") == "allow"
             # Asked, and nobody said anything: that is a verdict, and the operator
             # finds out by reading it rather than by wondering why nothing ran.
-            self.dest.line("system", f"⏱ no answer within {int(wait)}s — that "
-                                     f"command was skipped")
+            self._draw("system", f"⏱ no answer within {int(wait)}s — that "
+                                 f"command was skipped")
             return False
         # The operator's first word decides, in every lane: a button that says
         # "yes, run it" and a terminal that says "go" both mean yes, and one
@@ -7782,8 +7829,8 @@ class RunReporter:
             if str(answer).strip() else ""
         ok = first in ("y", "yes", "yeah", "ok", "okay", "approve", "approved",
                        "run", "go", "confirm", "confirmed", "1", "true")
-        self.dest.line("system", "✅ confirmed, running" if ok
-                       else "🚫 not confirmed - that command was skipped")
+        self._draw("system", "✅ confirmed, running" if ok
+                   else "🚫 not confirmed - that command was skipped")
         return ok
 
     def finish(self, ok=True):
@@ -7835,7 +7882,8 @@ class NowhereDestination(Destination):
 
 
 def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
-              channel_id=None, cancel_event=None, steer_cb=None, ask_door=None):
+              channel_id=None, cancel_event=None, steer_cb=None, ask_door=None,
+              source="main"):
     """Run the agent, wired to ONE reporter. The only place these callbacks live.
 
     Three lanes used to build this keyword list three times with three different
@@ -7843,7 +7891,7 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
     the failure reasons, the check-ins or the confirm door.
     """
     return AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
-                     channel_id=channel_id,
+                     channel_id=channel_id, source=source,
                      say_cb=reporter.say,
                      progress_cb=reporter.progress,
                      interim_cb=reporter.note,

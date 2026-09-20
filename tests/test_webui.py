@@ -523,6 +523,69 @@ def main():
         check(code == 200 and (j.get("runs") or []) == [],
               "a deleted conversation reads as empty, not as an error")
 
+        # -- a delegated subtask is visible in the lane, tagged ---------------
+        # Until now delegate_task ran with NO callbacks at all: a subtask could
+        # work for half an hour and the lane showed nothing but the call that
+        # started it. It now reports through the parent's reporter under its own
+        # source, so its lines read as theirs.
+        del_run, del_rep = web_lane("delegate")
+        make_stub(fb, [], [
+            # the parent delegates, the SUBTASK does real work (a tool call), then
+            # answers: the working part is what used to be invisible
+            lambda p: tool_call_reply("delegate_task", {"task": "look at the disk"}),
+            lambda p: tool_call_reply("shell", {"command": "echo sub-working"}),
+            lambda p: text_reply("the sub-agent says the disk is fine"),
+        ])
+        fb.AGENT.run("delegate", "check the disk with a sub-agent",
+                     progress_cb=del_rep.progress, progress_done_cb=del_rep.tool_done,
+                     interim_cb=del_rep.note, narration_cb=del_rep.narration,
+                     say_cb=del_rep.say)
+        del_text = "\n".join(l["text"] for l in del_run.lines)
+        check("delegate_task" in del_text,
+              "the call that started the subtask is in the lane")
+        check("↳ sub:" in del_text,
+              f"a delegated subtask reports into the lane under its own source "
+              f"({[l['text'][:44] for l in del_run.lines[-3:]]})")
+        check("look at the disk" in del_text,
+              "...naming the subtask it belongs to")
+
+        # -- a job scheduled from a page reports INTO that conversation --------
+        # It used to carry channel_id None, so it fired with no reporter and no
+        # place for its answer: the operator scheduled work in the browser and
+        # never heard about it again.
+        job_conv = http(f"{base}/api/sessions", {"op": "new"}, client="A")[1]["key"]
+        fb.SCHEDULER.jobs["nightly"] = {"task": "check the backup",
+                                        "channel_id": f"web:{job_conv}",
+                                        "cron": "0 3 * * *", "next": 0}
+        seen_job = []
+        make_stub(fb, seen_job, [lambda p: text_reply("the backup job ran fine")])
+        saved_dispatcher = fb.SCHEDULER.dispatcher
+        try:
+            fb.SCHEDULER.dispatcher = None
+            fb.SCHEDULER._fire("nightly", fb.SCHEDULER.jobs["nightly"])
+        finally:
+            fb.SCHEDULER.dispatcher = saved_dispatcher
+        code, tr = http(f"{base}/api/session?key={job_conv}", client="A")
+        job_lines = [l for r in (tr.get("runs") or []) for l in r["lines"]]
+        job_text = "\n".join(l["text"] for l in job_lines)
+        check("check the backup" in job_text,
+              f"a job scheduled from a page reports into that conversation "
+              f"({job_lines[:2]})")
+        check("the backup job ran fine" in job_text,
+              "...and its answer lands there, not nowhere")
+        check("final" in [l["kind"] for l in job_lines],
+              "...as an answer line the operator can read")
+        code, j = http(f"{base}/api/sessions", {"op": "delete", "key": job_conv},
+                       client="A")
+        check(code == 409 and "job" in (j.get("error") or ""),
+              f"a conversation a job reports into cannot be deleted under it "
+              f"({code} {j.get('error')})")
+        fb.SCHEDULER.jobs.pop("nightly", None)
+        code, j = http(f"{base}/api/sessions", {"op": "delete", "key": job_conv},
+                       client="A")
+        check(code == 200 and j.get("deleted") == job_conv,
+              "...until the job that reports into it is gone")
+
         # -- a run is on disk WHILE it runs ------------------------------------
         # A run used to be written only when it finished, so a restart landing on
         # top of one left nothing: measured 2026-09-20, when a long browser
