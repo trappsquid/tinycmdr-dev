@@ -441,7 +441,7 @@ not a per-call cost. The win is that the number cannot grow back unnoticed.
 Compare like with like: the 13,898-char figure is the WHOLE registry; the 7,133 is the 13 tools
 that are always visible (the always-on payload, which is what a run pays for before its first call).
 
-## MiniDSH stage 3 shipped: the startup capability line (2026-09-19, 2.5.20 / cli 1.0.10)
+## MiniDSH stage 3 shipped: the startup capability line (2026-09-19, 2.5.20 / cli 1.0.11)
 
 One line at start, per lane, saying what the process can actually enforce:
 

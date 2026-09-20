@@ -150,7 +150,7 @@ sub('    """The two verbs this file uses, plus the exception type it catches."""
 # The enterprise build carries its OWN version, and it moves when its bytes move: 1.0.0 was
 # published before the config-drift fix, and re-cutting different bytes under a published
 # name would make the site's version-anchored claims untrue.
-sub_re(r'VERSION = "[0-9]+\.[0-9]+\.[0-9]+"', 'VERSION = "1.0.10"',
+sub_re(r'VERSION = "[0-9]+\.[0-9]+\.[0-9]+"', 'VERSION = "1.0.11"',
        "enterprise version number")
 
 # The visible-core list names the web tools, which this build cuts. core_tool_names()

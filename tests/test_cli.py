@@ -818,9 +818,6 @@ def test_banner_reports_the_model_and_the_overhead():
     check("banner: names the model", FIXTURE["llm"]["model"] in text)
     check("banner: states the prompt overhead", "prompt overhead" in text)
     check("banner: no chat vocabulary", "Mattermost" not in text and "channel" not in text)
-    check("banner: states its lane and what this process can enforce",
-          "lane cli" in text and "blocked_patterns" in text
-          and "memory ceiling" in text and "spawn backend" in text, text)
 
 
 # --- 5. the binary surface ---------------------------------------------------
@@ -899,6 +896,12 @@ def test_the_tool_loop_runs_against_a_local_endpoint():
         check("loop: the tool really ran", "mock-tool-ran" in (r.stdout + r.stderr))
         check("loop: the answer came back", "Answer from the mock" in r.stdout, r.stdout[-200:])
         check("loop: the usage line is printed", "tok over" in r.stdout)
+        # gated on a REAL one-shot run, not a direct banner call: the line lived in
+        # cli_banner() and --once never printed it (found after the fleet push, 2026-09-19).
+        check("loop: the run states its lane", "capabilities: lane cli" in r.stdout, r.stdout[:200])
+        check("loop: and what it can enforce",
+              "blocked_patterns" in r.stdout and "memory ceiling" in r.stdout
+              and "spawn backend" in r.stdout, r.stdout[:200])
         check("loop: no atlas.md was written for you", not (folder / "atlas.md").exists())
         check("loop: the agent did not touch config.json",
               json.loads((folder / "config.json").read_text(encoding="utf-8")

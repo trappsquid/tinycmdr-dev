@@ -372,7 +372,6 @@ def cli_banner():
               "cache-stable; live %s: notes + task ledger, sent trailing)"
               % (fmt_tokens(static + live), fmt_tokens(static),
                  len(REGISTRY.openai_schemas()), fmt_tokens(live))))
-    print(dim(capability_line("cli")))
     print(dim("type /help for the commands, /exit to quit\n"))
 
 
@@ -649,6 +648,10 @@ def run_cli(once=None):
         print(dim("  type at any time: a line is sent in at the next step, /stop "
                   "cancels the run,\n  Ctrl-C does the same. Nothing you type is "
                   "lost while it works.\n"))
+    print(dim(capability_line("cli")))
+    # reported for BOTH entry points. It used to live in cli_banner(), which a
+    # one-shot run never reaches, so `--once` - the CLI's most common entry -
+    # said nothing about what it could enforce (found after the fleet push).
     if once:
         print(AGENT.run("cli", once, progress_cb=progress,
                         say_cb=say, progress_done_cb=progress_done,
