@@ -3,9 +3,9 @@
 Source: https://github.com/earthwalker17/MiniDSH read 2026-09-19. Its thesis is "fewer concepts,
 stronger invariants"; the value for us is 8 ideas, of which none were implemented on that date.
 
-Status 2026-09-19: stages 1 and 2 are DONE (commits `848aad3`, `4e04b31` in the repo this file
-lives in; the measurements and the scope notes are in `dev-log.md`). Stages 3 and 4 are not
-started and each needs the operator's go before any bytes move.
+Status 2026-09-19: stages 1, 2 and 3 are DONE and stage 3 is DEPLOYED (commits `848aad3`,
+`4e04b31`, `e535548`; measurements and scope notes in `dev-log.md`). Stage 4 has a scoping doc
+(`minidsh-event-log-scope.md`) waiting on the operator's read; no code for it exists yet.
 
 Ground rules that apply to every stage below (operator rules, all earned the hard way):
 
@@ -54,7 +54,7 @@ note: the static block sits in the CACHED prefix (evidence: server checkpoints r
   79k prompt), so this saves a per-run prefill, not a per-call cost. Do not oversell it.
 ```
 
-## Stage 3 — startup line: what this host can actually enforce (small, needs operator's go)
+## Stage 3 — startup line: what this host can actually enforce — DONE + DEPLOYED 2026-09-19, 2.5.20 (commit e535548)
 
 The article's rule is that "no backend" is a supported, honestly reported state. We run with
 `blocked_patterns` empty and no write fence, which is fine on his boxes, but it is implied
@@ -66,7 +66,11 @@ one line at start: lane (Mattermost/web/cli), model route, blocked_patterns coun
   process has a memory ceiling (and its size), spawn backend if any
 ```
 
-## Stage 4 — the event log (the real job; needs scoping and the operator's go)
+## Stage 4 — the event log (the real job; scoped 2026-09-19, waiting on the operator's read)
+
+Scoping doc: `docs/minidsh-event-log-scope.md` (measured costs, event kinds, the
+model-visible <=> logged invariant, three failure modes, a staged rollout and five questions).
+Nothing is built until those questions are answered.
 
 The substrate for everything we currently argue about from proxies.
 
@@ -104,7 +108,6 @@ The scheduled job `minidsh-hardening` was REMOVED on 2026-09-19: it was armed fo
 to do stages 1-2, and the operator asked for those to be done that evening instead, so the job
 would only have re-run finished work. Do not re-create it.
 
-Stages 3 and 4 are both waiting on the operator's go. Stage 3 is a startup line (a behaviour
-change: it touches tinycmdr.py, so it is a batch with a version, pushes and restarts, and
-the Windows test box waits until its long run ends). Stage 4 needs a scoping doc he has read before any
-code is written.
+Stage 3 shipped as 2.5.20 on 2026-09-19 (the manager box, the other Windows box, the Linux test box, MacBook restarted; the Windows test box
+and the LAN model box held their bytes while a run was in flight). Stage 4 is scoped and waiting on the
+operator's answers to the five questions in `minidsh-event-log-scope.md`.

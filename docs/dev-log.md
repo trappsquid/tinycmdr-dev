@@ -440,3 +440,47 @@ not a per-call cost. The win is that the number cannot grow back unnoticed.
 
 Compare like with like: the 13,898-char figure is the WHOLE registry; the 7,133 is the 13 tools
 that are always visible (the always-on payload, which is what a run pays for before its first call).
+
+## MiniDSH stage 3 shipped: the startup capability line (2026-09-19, 2.5.20 / cli 1.0.10)
+
+One line at start, per lane, saying what the process can actually enforce:
+
+```
+capabilities: lane mattermost · model main -> http://a LAN address:8081/v1 · blocked_patterns 21 ·
+memory ceiling none this process can see (no cgroup on Windows) · spawn backend CREATE_NO_WINDOW
+```
+
+Logged by `run_bot` (before the mmpy_bot import, so a missing dependency still reports) and by
+`run_web_mode`; printed by the console lane in both builds (`run_cli` here, `cli_banner()` in
+`maintenance/cli_blocks.py`). It never enters a prompt, so the cached prefix is untouched and
+there is no config key to add. Gated by 9 checks in `test_checkin.py` and the banner check in
+`test_cli.py`.
+
+	the manager box + the other Windows box + the Linux test box + MacBook   bytes pushed, hash-verified, restarted by their own doors
+	the Windows test box, the LAN model box                       HOLD: a run was in flight on both (the LAN model box's was reading
+	                                       tinycmdr.py itself), so bytes follow when the runs end
+	back-up notices                        armed on all four BEFORE the restart, and all four bots
+	                                       posted "Back up - tinycmdr v2.5.20" in the operator's DMs
+	suites                                  checkin 113/0 (9 new), cli 150/0, disclosure both builds,
+	                                       stall 232/0, ledger 225/0 and 188/0+11 skipped
+
+What the line found on its first outing, which is the whole point of stage 3:
+
+```
+the manager box          model cloud              -> a LAN address:8081/v1   the DEFAULT NAME is the cloud
+                                                               fallback's alias, on a box whose
+                                                               primary is the LAN model
+the Linux test box     model deepseek-v4-flash  -> a LAN address:8081/v1   the name-collision trap the fleet
+                                                               standard exists to prevent
+MacBook       blocked_patterns 3       vs 21 everywhere else   per-host config drift, invisible
+                                                               until now
+```
+
+None of it was written down anywhere. Two of the three are the documented trap where a
+synthetic catalogue entry named after `llm.model` shadows a real cloud entry when the LAN box
+is unreachable.
+
+Stage 4 (the event log) is scoped in `minidsh-event-log-scope.md`: what today's log cannot
+answer (0 per-call verdicts, arguments cut at ~211 B, 554 edits with no outcome on this host),
+the event kinds, the model-visible <=> logged invariant and its test, measured cost, three
+failure modes, and a shadow-first rollout. Waiting on five operator decisions.
