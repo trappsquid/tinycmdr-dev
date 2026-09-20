@@ -95,6 +95,27 @@ def main():
         check(vis_tokens < all_tokens,
               f"the visible schemas cost less ({vis_tokens} < {all_tokens} tokens)")
 
+        # ---- the always-on payload has a budget, and the budget is gated ----
+        # A convention that is not gated does not hold. These schemas ride on EVERY
+        # call, so they are paid for before the first tool call of every run, and the
+        # prose had crept to 13,898 chars across the registry with nobody watching
+        # (measured 2026-09-19). The numbers below were measured the same day against
+        # this harness: 7,133 chars over 13 always-visible tools, fattest single
+        # schema ask_user at 1,078. It is a ceiling, not a target: when it fires, cut
+        # prose or drop a tool - raising the number is a decision, not a fix.
+        SCHEMA_BUDGET = 7600          # chars, measured 7,133 + ~6% headroom
+        TOOL_SCHEMA_CAP = 1200        # chars for one tool, fattest measured 1,078
+        always_on = fb.select_tool_schemas(None)
+        block = json.dumps(always_on)
+        check(len(block) <= SCHEMA_BUDGET,
+              f"the always-on schema block is inside its budget "
+              f"({len(block)} of {SCHEMA_BUDGET} chars, {fb.est_tokens(block)} tokens)")
+        sizes = sorted(((len(json.dumps(s)), s["function"]["name"]) for s in always_on),
+                       reverse=True)
+        check(sizes[0][0] <= TOOL_SCHEMA_CAP,
+              f"no single tool schema exceeds {TOOL_SCHEMA_CAP} chars "
+              f"(fattest {sizes[0][1]} {sizes[0][0]})")
+
         # ---- asking for a tool reveals it ----------------------------------
         out = fb.tool_find_tools({"query": EX_QUERY}, {"session_key": "s1"})
         check(EX in out and "args:" in out,
