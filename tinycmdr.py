@@ -10291,6 +10291,28 @@ def web_runlog(key):
     return out
 
 
+WEB_RUNLOG_CHECKPOINT = 20.0   # seconds between mid-run saves
+_WEB_SAVED_AT = {}
+
+
+def web_runlog_checkpoint(run):
+    """Save a run's lines WHILE it is still going.
+
+    A run was written to disk only when it FINISHED, so a restart landing on top
+    of one left nothing at all - measured on 2026-09-20, when a long browser task
+    was cut off mid-research and the conversation kept no trace of the work, the
+    tools it ran or what it had found. One small atomic write every twenty
+    seconds means the next one is cut off with its record intact.
+    """
+    now = time.time()
+    if now - _WEB_SAVED_AT.get(run.id, 0.0) < WEB_RUNLOG_CHECKPOINT:
+        return
+    _WEB_SAVED_AT[run.id] = now
+    lines = list(run.lines)          # no lock: the report never blocks the run
+    if lines:
+        web_runlog_append(run.session_key, run.id, run.started, lines)
+
+
 def web_runlog_append(key, run_id, started, lines):
     """Persist one finished run's lines. Fails SOFT: a disk problem must never
     turn a finished run into a failed one."""
@@ -10425,7 +10447,11 @@ class WebRun:
             # text starts a NEW line instead of growing this turn's tool line.
             if kind in ("tool", "tool_done", "tool_fail"):
                 self.stream_i = None
-            return self.lines[-1]["i"]
+            i = self.lines[-1]["i"]
+        # Outside the lock: what this run has done so far goes to disk, so a
+        # restart cannot swallow the whole run (see web_runlog_checkpoint).
+        web_runlog_checkpoint(self)
+        return i
 
 
 
@@ -10644,6 +10670,7 @@ def _web_drive(run, text):
         # purpose - a disk problem must not turn a finished run into a failed one.
         with run.lock:
             written = list(run.lines)
+        _WEB_SAVED_AT.pop(run.id, None)
         web_runlog_append(run.session_key, run.id, run.started, written)
 
 

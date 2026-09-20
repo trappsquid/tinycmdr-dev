@@ -523,6 +523,31 @@ def main():
         check(code == 200 and (j.get("runs") or []) == [],
               "a deleted conversation reads as empty, not as an error")
 
+        # -- a run is on disk WHILE it runs ------------------------------------
+        # A run used to be written only when it finished, so a restart landing on
+        # top of one left nothing: measured 2026-09-20, when a long browser
+        # research task was cut off and its conversation kept no trace of the
+        # work. Checkpointing is one small atomic write every twenty seconds.
+        ckpt_key = http(f"{base}/api/sessions", {"op": "new"}, client="A")[1]["key"]
+        ck_run = fb.WebRun("ckpt-run", ckpt_key)
+        saved_gap = fb.WEB_RUNLOG_CHECKPOINT
+        try:
+            fb.WEB_RUNLOG_CHECKPOINT = 0.0
+            ck_run.add("you", "a long job, still going")
+            ck_run.add("tool", "shell(Get-ChildItem C:/temp)")
+            ck_path = workdir / "sessions" / f"{ckpt_key}.web.jsonl"
+            on_disk = ck_path.read_text(encoding="utf-8") if ck_path.exists() else ""
+            check("Get-ChildItem C:/temp" in on_disk and "still going" in on_disk,
+                  "a running run is already on disk, so a restart cannot swallow it")
+            code, tr = http(f"{base}/api/session?key={ckpt_key}", client="A")
+            texts = [l["text"] for r in (tr.get("runs") or []) for l in r["lines"]]
+            check(sum(1 for t in texts if "still going" in t) == 1,
+                  f"...and the page shows it once, not twice ({texts})")
+        finally:
+            fb.WEB_RUNLOG_CHECKPOINT = saved_gap
+            http(f"{base}/api/sessions", {"op": "delete", "key": ckpt_key},
+                 client="A")
+
         # what a conversation holds is bounded, so a long-lived host cannot fill
         # its disk with one chat
         code, j = http(f"{base}/api/sessions", {"op": "new"}, client="A")
