@@ -1,4 +1,54 @@
-# tinycmdr changelog (newest first, through 2.5.9, tinycmdr-cli 1.0.9)
+# tinycmdr changelog (newest first, through 2.5.22, tinycmdr-cli 1.0.13)
+
+## 2.5.22 - one run, three interfaces, and a conversation that survives a reload (2026-09-20)
+
+Two faults in the same place: the browser lane could not keep a conversation, and every
+interface reported a run its own way. A page reload started a new session with no way back to
+the one you were in. The browser showed less of a run than Mattermost did (no exit codes, no
+failure reasons, no check-in). A job scheduled from the page fired with nowhere to report, and
+a delegated subtask reported nowhere at all, in any lane. Three reporting implementations had
+grown side by side: the chat lane's, the browser's callbacks, and the console's own closures.
+
+Conversations live on the host now. `web-sessions.json` is the registry (key, title, created,
+last_active), each conversation's runs are in `sessions/<key>.web.jsonl`, and `GET /api/sessions`,
+`GET /api/session`, `GET /api/events` are what the page paints from. A reload, a second browser
+and a bot restart all repaint the same conversation. A conversation belongs to the browser that
+created it, and the operator's token can list everything on the host. A run is written to disk
+every 20 seconds WHILE it runs, so a restart cannot swallow a run that was in flight. The console
+has the same vocabulary: `/sessions` and `/resume N`.
+
+The reporting layer is one implementation for all three lanes. `RunReporter` owns wording,
+cadence, caps, merging, the source tag, confirmation and the done line; a `Destination` is four
+verbs (`line`, `update`, `drop`, `ask`) plus what its lane prefers, as DATA: does it merge tool
+lines, does it show a call as it starts, how fast may a growing line grow, how many lines before
+a batch rolls over, can it ask a human. Mattermost, the browser, the console and nowheresville
+are the four destinations, and `drive_run()` is the only place a run's callbacks are wired, so a
+scheduled job cannot be wired differently from a chat turn. Differences between lanes are
+preferences, not branches: that is why the browser now shows a call as it starts, its exit code
+and its failure reason, and the check-in.
+
+- **A job scheduled from a browser reports into that conversation.** The job stores `web:<key>`
+  exactly where a chat job stores its channel id, so nothing new had to be added to the schedule
+  tool or to jobs.json. The conversation is the door as well, so an ask from a scheduled run
+  reaches the page. A conversation a job reports into refuses deletion, and a job whose
+  conversation is gone still runs and says so in the log.
+- **A delegated subtask is visible.** `delegate_task` passed no callbacks at all: a subtask could
+  work for half an hour and every lane showed only the call that started it. It now reports
+  through the parent's reporter under its own tag (`↳ sub:<task>: ...`), and merging,
+  streaming and batching are keyed per source, so four subtasks started by one batch cannot grow
+  each other's line. Only a main-source line can become a run's answer.
+- **Two behaviour changes worth naming.** A step count is work, not heartbeats: the check-in
+  number no longer climbs while a single tool runs (a 65-call run used to report "step 780").
+  The console build now carries the `checkin_*` config keys, because it draws the same line chat
+  draws.
+- Confirmation is one concept, not two: `confirm` is `ask` with a yes and a no. The reporter
+  asks, the destination answers (a post and a pending map in chat, a question row in the page,
+  the prompt in the console), and a command that needs confirmation can no longer run in the
+  browser without one: it used to return "no confirmation given" and never run there while chat
+  asked and ran it.
+- Gated by the suites: the web UI suite (conversations, panels, jobs, subtasks, the mid-run
+  checkpoint), the page harness, the real-browser suite, the console suite, and the ledger
+  suites for both builds.
 
 ## 2.5.20 - a host says out loud what it can actually enforce (2026-09-19)
 
@@ -9,7 +59,7 @@ and the answers differ per host and per lane, so nobody reading a log could tell
 was which.
 
 - **One line at start, in every lane.** `capabilities: lane mattermost · model main ->
-  http://a LAN address:8081/v1 · blocked_patterns 12 · memory ceiling none this process can see
+  http://<lan-box>:8081/v1 · blocked_patterns 12 · memory ceiling none this process can see
   (no cgroup on Windows) · spawn backend CREATE_NO_WINDOW (children get a hidden console)`.
   The line reports the lane (mattermost / web / cli), the model and the endpoint it goes to,
   how many blocked patterns are live (blank entries do not count as enforcement), whether the

@@ -478,7 +478,7 @@ def load_config():
 
 CONFIG = load_config()
 IS_WINDOWS = os.name == "nt"
-VERSION = "2.5.21"
+VERSION = "2.5.22"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
