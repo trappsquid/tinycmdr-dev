@@ -22,9 +22,8 @@ to this one, and nothing about how it works changed.
 - `tinycmdr_MM_TOKEN` became `tinycmdr_MM_TOKEN`. A host's `.env` and its code move
   together, never separately: a restart in between would leave the agent without its
   Mattermost token.
-- one instance latch, for the length of the rename: an agent started before it and
-  one started after it can never run at once against the same bot token, because
-  two agents on one token double-answer every DM.
+- one agent per folder, unchanged: a second start refuses rather than double-answering
+  every DM on one bot token.
 - the CLI build scripts locate the tree from their own path instead of `~/<name>`,
   so moving the folder can no longer break a build.
 - `tests/test_cost_guard.py` had 13 checks failing on a stub that never learned the
