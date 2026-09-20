@@ -111,6 +111,8 @@
     "_comment_atlas": "The machine atlas (item 2b). The harness hands the model the facts about the box it is on - os, shell, install path, and what lives where - because a small model does not look around and then guesses paths (the most common tool error on the graded eval). It rides the TRAILING state block, on the first turn of a run and again after any failure that reads like a wrong path, never in the system prompt. atlas.md is generated on each host at first run and is never shipped in a package, so no host's map travels to another box; hand-written '## notes' in it are the curated half.",
     "_comment_shell_facts": "States this process's rights in the trailing block on the first turn of a run: elevated or not, and what that means for admin-only work. Measured reason: a console build launched from an ordinary terminal on an administrator account hit Access is denied and reported it as a mystery. An account being an administrator is not the same as the process being elevated (UAC gives an admin two tokens).",
     "shell_facts": true,
+    "_comment_event_log": "Append one JSONL line per event to sessions/<key>.events.jsonl: run start/end, tool call, tool result WITH its outcome, arguments scrubbed and digested rather than stored raw. SHADOW ONLY - nothing reads it back yet and no prompt or history derives from it, so turning it on changes no behaviour. Off unless you ask for it; the fleet manager runs it to compare the events against tinycmdr.log.",
+    "event_log": false,
     "atlas_enabled": true,
     "atlas_file": "atlas.md",
     "atlas_max_chars": 2400,

@@ -287,6 +287,7 @@ DEFAULT_CONFIG = {
         "tool_carry": False,
         "tool_carry_chars": 8000,
         "shell_facts": True,
+        "event_log": False,
         "plan_from_request": True,
         "search_timeout": 60,
         "command_cost_guard": True,
@@ -375,7 +376,7 @@ def load_config():
 
 CONFIG = load_config()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.11"
+VERSION = "1.0.12"
 BUILD = "cli"          # this file is the enterprise build; tinycmdr.py in the repo is the bot
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
@@ -4699,6 +4700,163 @@ def _ensure_sessions_dir():
 
 
 # --------------------------------------------------------------------------
+# The event log (stage 4 of the MiniDSH plan): what happened, and how it ended
+# --------------------------------------------------------------------------
+# Why, measured on this host 2026-09-19: a tool call is recorded as
+#   shell({...}) -> 4471 chars
+# so the log knows a call happened and how big the result was, and nothing about whether it
+# worked. 554 edits here alone (edit_file 287, write_file 267) carry no outcome, which is
+# why every rework figure we have is a proxy built on the SHAPE of calls. This is the
+# substrate for the real answer: one append-only JSONL per session, beside the history it
+# describes.
+#
+# Scope, decided by the operator 2026-09-19: SHADOW ONLY. The events are written and nothing
+# reads them - no prompt, no history, no metric derives from this yet. Arguments are SCRUBBED
+# and digested, never stored raw, so a .env read or a command carrying a token cannot land in
+# the file. Off unless a host sets agent.event_log true in its own config.json.
+#
+# Properties, each one paid for by an incident:
+#   never raises            a log that can break a run is worse than no log (2026-09-18: the
+#                           notes guard froze a bot and the batch waiting on it waited for ever)
+#   append-only, per session  a kill leaves a readable prefix, and one session cannot corrupt
+#                           another's file
+#   the lock covers the HANDLE, never a tool call  (tool calls run in batches; the carry store
+#                           raced itself into WinError 5 on the rename)
+#   scrubbed in ONE place   so a field added later cannot leak a key by forgetting to scrub
+
+_EVENT_LOCK = threading.Lock()
+_EVENT_SEQ = {}
+_EVENT_RUN = {}
+_EVENT_WARNED = False
+_EVENT_ARGS_MAX = 600      # scrubbed argument text kept per call
+_EVENT_KEEP = 30           # session event files kept per host (the operator's answer, 30)
+
+
+def event_log_on():
+    """Shadow-only switch: a host opts in, the fleet default is off."""
+    return bool(CONFIG["agent"].get("event_log", False))
+
+
+def _event_path(session_key):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
+    return SESSIONS_DIR / f"{safe}.events.jsonl"
+
+
+def event(kind, session_key=None, run_id=None, **fields):
+    """Append one event. Returns the run id in play. Never raises, never blocks a run."""
+    global _EVENT_WARNED
+    key = session_key or ""
+    if not event_log_on():
+        return run_id or _EVENT_RUN.get(key, "")
+    try:
+        safe = {}
+        for name, value in fields.items():
+            safe[name] = scrub(value) if isinstance(value, str) else value
+        with _EVENT_LOCK:                      # the handle only, never a tool call
+            rid = run_id or _EVENT_RUN.get(key, "")
+            seq = _EVENT_SEQ.get(key, 0) + 1
+            _EVENT_SEQ[key] = seq
+            rec = {"ts": round(time.time(), 3), "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                   "session": key, "run": rid, "seq": seq, "kind": kind}
+            rec.update(safe)
+            line = json.dumps(rec, ensure_ascii=False, default=str)
+            _ensure_sessions_dir()
+            with _event_path(key).open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        return rid
+    except Exception as e:                     # a log is never worth a run
+        if not _EVENT_WARNED:
+            _EVENT_WARNED = True
+            log.warning("event log not written (%s); the run continues", e)
+        return run_id or _EVENT_RUN.get(key, "")
+
+
+def _event_args(args):
+    """(digest, length, scrubbed text): the digest survives redaction, so the same call is
+    recognisable later without the arguments themselves being on disk."""
+    try:
+        raw = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        raw = str(args)
+    digest = hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:12]
+    return digest, len(raw), scrub(raw[:_EVENT_ARGS_MAX])
+
+
+def _event_outcome(name, output):
+    """ok / exit code / size / digest / spill for a tool result.
+
+    Read from what the harness already knows: a refused or failed call comes back as an
+    "ERROR:" result, and a command's exit code is in its own output. This is the field the
+    rework question needs - it is what the log has never recorded.
+    """
+    text = output or ""
+    ok = not text.lstrip().startswith("ERROR")
+    code = None
+    m = re.search(r"exit_code=(-?\d+)", text)
+    if m:
+        code = int(m.group(1))
+        if code != 0:
+            ok = False
+    spill = ""
+    if "spill" in text and "omitted" in text:
+        m2 = re.search(r"spill[/\\]([^\s,'\"]+)", text)
+        spill = m2.group(1) if m2 else "spill"
+    return {"name": name, "ok": ok, "exit": code, "bytes": len(text),
+            "digest": hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:12],
+            "spill": spill}
+
+
+class _RunSpan:
+    """run.start / run.end around a whole run, however it exits.
+
+    A context manager, not a call at each return: run() has eight exits plus an exception
+    path, and an event log with holes in it answers nothing. The status on the way out is
+    what makes "the run threw" a fact in the file instead of a guess.
+    """
+
+    def __init__(self, session_key):
+        self.key = session_key or ""
+
+    def __enter__(self):
+        rid = os.urandom(4).hex()
+        _EVENT_RUN[self.key] = rid
+        try:
+            event("run.start", session_key=self.key)
+        except Exception:
+            pass
+        return rid
+
+    def __exit__(self, exc_type, exc, tb):
+        try:
+            if exc_type is None:
+                event("run.end", session_key=self.key, status="ok")
+            else:
+                event("run.end", session_key=self.key, status="exception",
+                      error="%s: %s" % (exc_type.__name__, exc))
+        except Exception:
+            pass
+        _EVENT_RUN.pop(self.key, None)
+        return False
+
+
+def prune_events(keep=None):
+    """Keep the newest N session event files. Touches nothing else in sessions/."""
+    keep = _EVENT_KEEP if keep is None else keep
+    removed = []
+    try:
+        files = sorted(SESSIONS_DIR.glob("*.events.jsonl"),
+                       key=lambda q: q.stat().st_mtime, reverse=True)
+        for old in files[keep:]:
+            try:
+                old.unlink()
+                removed.append(old.name)
+            except OSError:
+                pass
+    except Exception as e:
+        log.warning("event retention skipped: %s", e)
+    return removed
+
+# --------------------------------------------------------------------------
 # Carrying what the runs learned: tool results outlive their run (item 7b)
 # --------------------------------------------------------------------------
 # The gap, measured on the fleet manager 2026-09-17:
@@ -6207,7 +6365,7 @@ class Agent:
         the harness-side progress lines.
         say_cb(text): a line posted to the operator from the harness itself (not the
         model), e.g. the notice that a run continued past its budget."""
-        with self._lock(session_key):
+        with self._lock(session_key), _RunSpan(session_key):
             reset_scan_spend(session_key)   # a run starts with a fresh scan budget
             hist = self._history(session_key)
             hist.append({"role": "user", "content": user_text})
@@ -6770,6 +6928,14 @@ class Agent:
                         log.info("[%s] %s(%s) -> %d chars",
                                  session_key, name,
                                  json.dumps(args)[:120], len(output))
+                        # the event log (stage 4, shadow): the call, then how it ended.
+                        # This is the pair the whole stage exists for: the log has always
+                        # recorded the call and never the outcome.
+                        _digest, _alen, _aargs = _event_args(args)
+                        event("tool.call", session_key=session_key, name=name,
+                              args=_aargs, args_digest=_digest, args_len=_alen)
+                        event("tool.result", session_key=session_key,
+                              **_event_outcome(name, output))
                         # Loop guard: identical call + identical result is the
                         # signature of a stuck agent (typo'd path retried 30x,
                         # re-reading the same log, ...). The execution counter is
