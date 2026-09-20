@@ -34,6 +34,10 @@ DIST = ROOT / "dist"
 # files/dirs that ship, in package-relative form
 SHIP = [
     "tinycmdr.py",
+    # The watchdog the Windows scheduled task runs. It belongs to THIS package (the bot
+    # install), not to the hardened console build. Without it the installer's task points
+    # at a file that is not there, which is how boxes ended up with no respawn at all.
+    "tinycmdr-supervise.py",
     "field-notes.md",
     "requirements.txt",
     "config.example.json",
@@ -129,7 +133,8 @@ SECRET_LABELS = ("web ui token", "mattermost token", "allowed user id")
 ENV_PREFIX = "env "
 # Ships-as-code files must be neutral too: a host value here would be baked into
 # every install, which is exactly how this box's endpoint ended up in the code.
-APP_FILES = ("tinycmdr.py", "config.example.json", ".env.example", "README.md",
+APP_FILES = ("tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
+             ".env.example", "README.md",
              "CHANGELOG.md", "install/install-tinycmdr.ps1",
              "install/install-tinycmdr.sh", "maintenance/restart-tinycmdr.ps1",
              "maintenance/restart-tinycmdr.sh", "launch-tinycmdr.sh",
@@ -728,12 +733,17 @@ def main():
                     hard = (label in SECRET_LABELS or rel in APP_FILES)
                     (leak if hard else soft).append(f"{label} in {rel}")
             inner = hashlib.sha256(z.read(f"tinycmdr-{ver}/tinycmdr.py")).hexdigest()
+            # The installer's scheduled task runs the supervisor. A package without it
+            # installs a host whose task points at a missing file, so the package is
+            # refused here rather than shipping a dead watchdog.
+            guarded = [n for n in names if n.endswith("/tinycmdr-supervise.py")]
 
         live_inner = hashlib.sha256((ROOT / "tinycmdr.py").read_bytes()).hexdigest()
-        ok = (not bad and not leak and inner == live_inner)
+        ok = (not bad and not leak and inner == live_inner and bool(guarded))
         print(f"\nzip: {zip_path}")
         print(f"  {len(names)} entries, {zip_path.stat().st_size / 1024:.0f} KB")
         print(f"  tinycmdr.py in zip matches the live file: {inner == live_inner}")
+        print(f"  the watchdog rides in the package: {bool(guarded)}")
         print(f"  no forbidden filenames: {not bad}")
         print(f"  no secrets/ids anywhere: {not leak}")
         print(f"  fleet hostnames in skills (informational): {len(soft)}")

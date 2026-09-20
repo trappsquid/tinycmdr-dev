@@ -342,7 +342,8 @@ if ($VerifyOnly) {
 }
 
 # ----------------------------------------------------------------- 2. the app
-$required = @("tinycmdr.py", "config.example.json", ".env.example", "skills", "tests")
+$required = @("tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
+              ".env.example", "skills", "tests")
 foreach ($f in $required) {
     if (-not (Test-Path (Join-Path $Source $f))) { Fail "package is missing $f (run the installer from the extracted zip)" }
 }
@@ -422,7 +423,8 @@ if ($Force) {
     Start-Sleep -Seconds 2
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-$copy = @("tinycmdr.py", "requirements.txt", "config.example.json", ".env.example", "CHANGELOG.md", "README.md", "skills", "tests")
+$copy = @("tinycmdr.py", "tinycmdr-supervise.py", "requirements.txt", "config.example.json",
+          ".env.example", "CHANGELOG.md", "README.md", "skills", "tests")
 foreach ($item in $copy) {
     $src = Join-Path $Source $item
     if (Test-Path $src) { Copy-Item $src -Destination $InstallDir -Recurse -Force }
@@ -579,12 +581,21 @@ if ($EnableWeb) {
 # --------------------------------------------------------- 6. launcher + service
 Head "writing launcher"
 $vbs = @"
-' Launches tinycmdr hidden (no console window). Registered as the scheduled
-' task "$AppName". Run by hand:  wscript //B //Nologo "$InstallDir\tinycmdr-service.vbs"
+' Launches the tinycmdr SUPERVISOR hidden (no console window) and WAITS for it.
+' Registered as the scheduled task "$AppName". Run by hand:
+'   wscript //B //Nologo "$InstallDir\tinycmdr-service.vbs"
+'
+' The wait is load-bearing, and so is running the supervisor rather than the bot:
+'   * running tinycmdr.py directly exits at once, so the task always looked
+'     "Ready" even while the bot was dead, and RestartOnFailure could never fire;
+'   * while the supervisor runs the task shows Running, and when it exits its code
+'     propagates, so that policy does fire.
+' The supervisor is what keeps the bot alive (relaunch on exit 75 or a crash, a
+' readiness check, status JSON in logs/); this task is the outer safety net.
 Dim sh
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "$InstallDir"
-sh.Run """$($py.Path)"" tinycmdr.py", 0, False
+sh.Run """$($py.Path)"" tinycmdr-supervise.py", 0, True
 "@
 # pythonw keeps a window from appearing; fall back to python.exe if pythonw is absent
 $pyw = Join-Path (Split-Path $py.Path) "pythonw.exe"

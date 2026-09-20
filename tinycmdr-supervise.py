@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -52,12 +53,50 @@ STATUS_FILE = LOGS / "supervisor-status.json"
 BOT_STDOUT = LOGS / "bot-stdout.log"
 BOT_LOCK = BASE_DIR / "tinycmdr.lock"
 
-# The interpreter the launcher uses. A different one (a venv without mmpy_bot or
-# croniter) starts a degraded bot: schedule tool disabled, Mattermost driver
-# missing. Pinned deliberately — see the 20:44 run in tinycmdr.log.
-PYTHON = Path(os.environ.get(
-    "tinycmdr_PYTHON",
-    r"C:/Users/David Trapp/AppData/Local/Programs/Python/Python312/python.exe"))
+def find_python():
+    """The interpreter the bot is launched with, resolved on THIS machine.
+
+    A different one (a venv without mmpy_bot or croniter) starts a degraded bot: schedule
+    tool disabled, Mattermost driver missing - so the choice still matters. Order: an
+    explicit tinycmdr_PYTHON, then the interpreter running THIS process (the launcher
+    starts the supervisor with the very python the bot should use), then PATH, then the
+    usual Windows install locations.
+
+    No host path is baked in any more (2026-09-20): this file ships inside the package and
+    is installed on machines we have never seen, where a pinned
+    C:/Users/<someone>/.../python.exe is simply a supervisor that cannot start anything.
+    """
+    cands = []
+    override = (os.environ.get("tinycmdr_PYTHON") or "").strip()
+    if override:
+        cands.append(override)
+    if sys.executable:
+        cands.append(sys.executable)
+        try:
+            cands.append(str(Path(sys.executable).with_name("pythonw.exe")))
+        except ValueError:
+            pass
+    for name in ("pythonw.exe", "pythonw", "python3", "python"):
+        found = shutil.which(name)
+        if found:
+            cands.append(found)
+    local = (os.environ.get("LOCALAPPDATA") or "").strip()
+    if local:
+        for ver in ("313", "312", "311", "310"):
+            cands.append(str(Path(local) / "Programs" / "Python" / ("Python" + ver)
+                             / "python.exe"))
+    cands.extend(("/usr/bin/python3", "/usr/local/bin/python3"))
+    for c in cands:
+        try:
+            if c and Path(c).exists():
+                return Path(c)
+        except OSError:
+            continue
+    raise SystemExit("no python interpreter found for the bot: set tinycmdr_PYTHON to the "
+                     "one it should run under (it needs requests, mmpy_bot and croniter)")
+
+
+PYTHON = find_python()
 
 REQUIRED = ("requests", "mmpy_bot", "croniter")
 

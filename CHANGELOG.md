@@ -26,6 +26,16 @@ chars (~279k tokens).
   the tool output, copied exactly - no timer stamp, no button label. Tapping the answer to copy
   it never worked over plain `http://`, because `navigator.clipboard` needs a secure context;
   the copy now runs through the document, which works everywhere.
+- **The bot package now carries its watchdog.** `tinycmdr-supervise.py` was in no package at
+  all, and the installer's scheduled task launched `pythonw tinycmdr.py` directly - which exits
+  at once, so the task always read "Ready" even while the bot was dead and its RestartOnFailure
+  policy could never fire. Now: the task runs the supervisor and WAITS for it (Running while it
+  lives, an exit code that propagates when it dies), the installer copies the supervisor and
+  refuses a package without it, and the supervisor resolves its interpreter on the machine it is
+  installed on - override, then the python running it, then PATH, then the usual locations -
+  instead of pinning one machine's path, which is what kept it out of the package. The packager
+  refuses a kit whose zip lacks the file. This is the BOT package only: the hardened console
+  build has no supervisor and wants none.
 
 ## 2.5.22 - one run, three interfaces, and a conversation that survives a reload (2026-09-20)
 
