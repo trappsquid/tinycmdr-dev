@@ -301,14 +301,15 @@ def start_bot():
     fh.write("\n===== supervised start %s =====\n"
              % time.strftime("%Y-%m-%d %H:%M:%S"))
     fh.flush()
-    proc = subprocess.Popen([str(PYTHON), str(BOT)], cwd=str(BASE_DIR),
+    proc = subprocess.Popen([str(PYTHON), str(BOT)] + list(CHILD_ARGS), cwd=str(BASE_DIR),
                             stdout=fh, stderr=subprocess.STDOUT,
                             stdin=subprocess.DEVNULL, env=env,
                             creationflags=NO_WINDOW)
     STATUS["child_pid"] = proc.pid
     STATUS["child_started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
     save_status()
-    log("started bot: pid %d (%s)" % (proc.pid, PYTHON.name))
+    log("started bot: pid %d (%s)%s" % (proc.pid, PYTHON.name,
+                                        (" args=%s" % " ".join(CHILD_ARGS)) if CHILD_ARGS else ""))
     return proc, fh
 
 
@@ -392,7 +393,16 @@ def acquire_supervisor_lock():
         return True   # lock mechanics broken: never block on that
 
 
+# Extra arguments for the CHILD (tinycmdr.py). The supervisor used to launch a fixed
+# [python, tinycmdr.py], so a mode like --web could not be asked for. Set from our own argv in
+# main(): the supervisor's own switches (--status, --once) are consumed here, everything else
+# belongs to the agent.
+CHILD_ARGS = []
+
+
 def main(argv):
+    global CHILD_ARGS
+    CHILD_ARGS = [a for a in argv if a not in ("--status", "--once")]
     if "--status" in argv:
         try:
             print(STATUS_FILE.read_text(encoding="utf-8"))

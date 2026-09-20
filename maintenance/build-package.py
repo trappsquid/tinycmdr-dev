@@ -779,6 +779,24 @@ def main():
         print(f"  no forbidden filenames: {not tbad}")
         # macOS: the same staged tree as a zip (Finder extracts it), with the exec bits
         # written explicitly because the build host has no exec bit to copy. The launchd
+        # Every file the INSTALLER requires must be in the package. Dropping `tests` from the
+        # download made every install die with "package is missing tests (run the installer from
+        # the extracted zip)": the copy lists tolerate a missing file, this list does not, and
+        # -VerifyOnly never reaches it. Parse the list and fail the build instead.
+        inst = stage_dir / "install" / "install-tinycmdr.ps1"
+        if inst.exists():
+            m = re.search(r"\$required\s*=\s*@\(([^)]*)\)",
+                          inst.read_text(encoding="utf-8", errors="replace"))
+            if not m:
+                raise SystemExit("cannot read the installer's $required list: it guards every "
+                                 "install, so a build without it proves nothing")
+            need = re.findall(r'"([^"]+)"', m.group(1))
+            miss = [n for n in need if not (stage_dir / n).exists()]
+            if miss:
+                raise SystemExit("the installer requires file(s) the package does not carry: %s"
+                                 % ", ".join(miss))
+            print("  installer's required files all present: %d" % len(need))
+
         # plist is parsed here rather than trusted: launchd refusing a plist is the kind of
         # failure nobody sees until the install is already "done".
         mac_ok = True

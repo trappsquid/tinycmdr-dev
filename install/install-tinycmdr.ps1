@@ -342,8 +342,12 @@ if ($VerifyOnly) {
 }
 
 # ----------------------------------------------------------------- 2. the app
+# What the install cannot work without. Every name here must also be in the package: this
+# check is the one place where a file that stopped shipping is fatal instead of silent, and
+# the reader is the one who finds out. build-package.py verifies this list against the
+# staged package, so the two cannot drift apart again.
 $required = @("tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
-              ".env.example", "skills", "tests")
+              ".env.example", "skills")
 foreach ($f in $required) {
     if (-not (Test-Path (Join-Path $Source $f))) { Fail "package is missing $f (run the installer from the extracted zip)" }
 }
@@ -411,6 +415,18 @@ if ($MattermostToken) {
         if ($MattermostToken) { $tokenSource = "prompt" }
     }
 }
+
+# -------------------------------------------------------------------- the chat lane
+# A Mattermost account is OPTIONAL: the harness has three doors - a chat bot, the CLI
+# (`python tinycmdr.py --cli`) and the local page (`python tinycmdr.py --web` -> 127.0.0.1:8787,
+# which is dispatched before the token check). With no token there is no chat lane, and a
+# chat-lane task would exit immediately (tinycmdr.py refuses to start without a token, on
+# purpose: a missing token used to fail silently as "never connects") while the supervisor
+# respawned it every few seconds. So a token-less install registers the local page instead,
+# or nothing at all.
+$ChatLane = [bool]($MattermostToken) -and ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com")
+$LocalWeb = (-not $ChatLane) -and $EnableWeb
+$RegisterTask = (-not $SkipTask) -and ($ChatLane -or $LocalWeb)
 
 # ---------------------------------------------------------------- 3. copy files
 Head "copying the app"
@@ -502,8 +518,13 @@ if ($LoopbackModel) {
     Say "          machine. For a model elsewhere, pass -ModelBaseUrl"
     Say "          http://<model-host>:8081/v1 (or edit it in config.json)"
 }
-if ($MattermostUrl -eq "CHANGE-ME.example.com") { Say "NOTE    : edit $cfgPath (mattermost.url) before the bot will connect" }
-if (-not $AllowedUser) { Say "NOTE    : add your Mattermost user id to mattermost.allowed_users, or the bot ignores your DMs" }
+if ($ChatLane) {
+    if ($MattermostUrl -eq "CHANGE-ME.example.com") { Say "NOTE    : edit $cfgPath (mattermost.url) before the bot will connect" }
+    if (-not $AllowedUser) { Say "NOTE    : add your Mattermost user id to mattermost.allowed_users, or the bot ignores your DMs" }
+} else {
+    Say "NOTE    : no chat account - mattermost.url and allowed_users are unused for now,"
+    Say "          and two local doors already work (see the summary below)"
+}
 
 # ---------------------------------------------------------------------- 5. .env
 Head "writing .env"
@@ -559,7 +580,11 @@ if ($written.Count) {
     Say "env     : $($written -join ', ') written"
     if ($MattermostToken) { Say "          (bot token from $tokenSource)" }
 } else {
-    Say "NOTE    : no keys to write - put the bot token in $envPath (tinycmdr_MM_TOKEN=...)"
+    if ($ChatLane) {
+        Say "NOTE    : no keys to write - put the bot token in $envPath (tinycmdr_MM_TOKEN=...)"
+    } else {
+        Say "env     : no chat token - none needed for the two local doors"
+    }
 }
 if ($refused.Count) {
     Say "WARNING : refused redacted placeholder value(s): $($refused -join ', ')"
@@ -613,10 +638,27 @@ Set-Content (Join-Path $InstallDir "launch_tinycmdr.bat") $bat -Encoding ASCII
 Say "wrote   : tinycmdr-service.vbs, launch_tinycmdr.bat"
 
 # ------------------------------------------------------------ 7. scheduled task
-if (-not $SkipTask) {
+if (-not $SkipTask -and -not $RegisterTask) {
+    Head "scheduled task: skipped"
+    Say "no chat account and no -EnableWeb, so there is nothing to keep running in the"
+    Say "background. Both local doors work from a shell:"
+    Say "  python tinycmdr.py --cli        (a session in this window)"
+    Say "  python tinycmdr.py --web        (a page on http://127.0.0.1:$WebPort)"
+}
+if ($RegisterTask) {
     Head "registering the scheduled task"
-    $action = New-ScheduledTaskAction -Execute "wscript.exe" `
-                -Argument "//B //Nologo ""$InstallDir\tinycmdr-service.vbs"""
+    if ($LocalWeb) {
+        # No chat account: run the LOCAL PAGE, still under the supervisor so a crash is
+        # respawned. This is the one case where the task does not run the chat lane.
+        $pyw = Join-Path (Split-Path -Parent $py.Path) "pythonw.exe"
+        if (-not (Test-Path $pyw)) { $pyw = $py.Path }
+        $action = New-ScheduledTaskAction -Execute $pyw -Argument "tinycmdr-supervise.py --web"
+        $action.WorkingDirectory = $InstallDir
+        Say "mode    : local page only - no chat account, page on 127.0.0.1:$WebPort"
+    } else {
+        $action = New-ScheduledTaskAction -Execute "wscript.exe" `
+                    -Argument "//B //Nologo ""$InstallDir\tinycmdr-service.vbs"""
+    }
     # Which account the task runs as. "$env:USERDOMAIN\$env:USERNAME" is WRONG on a
     # machine that is not in a domain: USERDOMAIN is "WORKGROUP", which does not
     # resolve, and Register-ScheduledTask dies with "No mapping between account names
@@ -665,7 +707,7 @@ if (-not $SkipTask) {
 }
 
 # ------------------------------------------------------------ 8. start + verify
-if (-not $SkipTask -and -not $NoStart) {
+if ($RegisterTask -and -not $NoStart) {
     Head "starting and verifying"
     Start-ScheduledTask -TaskName $AppName
     Start-Sleep -Seconds 3
@@ -685,11 +727,28 @@ if (-not $SkipTask -and -not $NoStart) {
 
 Head "done - still to do"
 $todo = @()
-if (-not $MattermostToken) { $todo += "Mattermost bot token  -> $envPath  (tinycmdr_MM_TOKEN=...)" }
-if (-not $AllowedUser)     { $todo += "allowed_users         -> $cfgPath  (your Mattermost user id)" }
-if ($MattermostUrl -eq "CHANGE-ME.example.com") { $todo += "Mattermost server url -> $cfgPath  (mattermost.url)" }
+if (-not $ChatLane) {
+    Say "This install has NO chat account, which is a supported way to run it. Two doors are"
+    Say "open right now, and neither needs a chat server:"
+    Say ""
+    Say "  a session   :  cd $InstallDir ; python tinycmdr.py --cli"
+    Say "  a local page:  cd $InstallDir ; python tinycmdr.py --web"
+    Say "                 then open http://127.0.0.1:$WebPort"
+    if ($LocalWeb) {
+        Say "                 (this install already serves that page; its token is in"
+        Say "                  $InstallDir\web-token.txt)"
+    }
+    Say ""
+    Say "Add a Mattermost account whenever you want one:"
+    Say "  install-tinycmdr.cmd -Force -MattermostTokenFile <file with the token>"
+    Say ""
+}
+if (-not $MattermostToken) { $todo += "optional: Mattermost bot token -> $envPath  (tinycmdr_MM_TOKEN=...)" }
+if (-not $AllowedUser)     { $todo += "optional: allowed_users -> $cfgPath  (your Mattermost user id)" }
+if ($MattermostUrl -eq "CHANGE-ME.example.com") { $todo += "optional: Mattermost server url -> $cfgPath  (mattermost.url)" }
 if ($LoopbackModel) { $todo += "model endpoint        -> $cfgPath  (llm.base_url - loopback right now)" }
-if ($todo.Count -eq 0) { Say "nothing - this install is configured" }
+if ($todo.Count -eq 0 -and $ChatLane) { Say "nothing - this install is configured" }
+elseif (-not $ChatLane -and $todo.Count -eq 0) { Say "nothing required - both local doors work" }
 else { $n = 1; foreach ($t in $todo) { Say "$n. $t"; $n++ } }
 Say ""
 if ($todo.Count -gt 0) { Say "after editing, restart:  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName" }

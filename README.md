@@ -46,6 +46,13 @@ registers the task, and verifies the install — nothing to hand-edit.
 
 `install\install-tinycmdr.cmd` is the same thing from one level down; both take the same switches.
 
+**A chat account is optional.** The installer asks for a bot token, and if you do not give one it
+installs anyway: there is no chat lane, nothing tries to connect, and it hands you the two local
+doors instead — `python tinycmdr.py --cli` for a session in that window, or `python tinycmdr.py --web`
+for a page on `http://127.0.0.1:8787`. Add `-EnableWeb` and the scheduled task serves that page in
+the background, under the same watchdog as the chat build. On Linux and macOS the service runs the
+page for you the same way. Nothing has to be licensed, hosted or reachable for the harness to work.
+
 ```
 install-tinycmdr.cmd                     install / redo is just this
 install-tinycmdr.cmd -Force              redo in place (stops the running bot first)

@@ -199,9 +199,20 @@ if [ -z "$TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
         info "reusing the token already in $INSTALL_DIR/.env"
     fi
 fi
-[ -n "$TOKEN" ] || die "no bot token. Pass --token <t> or --token-file <f>.
-tinycmdr needs its own Mattermost bot account - two hosts must never share one
-token (both would answer the same DM)."
+# A chat account is OPTIONAL. The harness also runs as a session (--cli) and as a local page
+# (--web, 127.0.0.1:8787). With no token there is no chat lane, so the service runs the PAGE:
+# running the chat lane here would exit at once (tinycmdr.py refuses to start without a token,
+# on purpose) and Restart=always would loop it forever.
+APP_ARGS=""
+CHAT_LANE=1
+if [ -z "$TOKEN" ]; then
+    CHAT_LANE=0
+    APP_ARGS="--web"
+    info "no Mattermost bot token: installing WITHOUT a chat account"
+    info "the service will serve the local page: http://127.0.0.1:8787"
+    info "a session needs no service at all:   $INSTALL_DIR/tinycmdr.py --cli"
+    info "add a chat account later: re-run this installer with --token-file <file>"
+fi
 
 # --------------------------------------------------------------- defaults ---
 if [ -z "$MODEL_BASE_URL" ]; then MODEL_BASE_URL="$(jget "$DEFAULTS" model_base_url)"; fi
@@ -471,7 +482,7 @@ Type=simple
 User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$INSTALL_DIR
-ExecStart=$VENV_PY $INSTALL_DIR/tinycmdr.py
+ExecStart=$VENV_PY $INSTALL_DIR/tinycmdr.py $APP_ARGS
 Environment="HOME=/home/$RUN_USER"
 Environment="USER=$RUN_USER"
 Environment="LOGNAME=$RUN_USER"
@@ -540,10 +551,14 @@ if [ "$WEB_ON" = 1 ]; then
         info "                  if you want the page on this host."
     fi
 fi
-if grep -qE 'authenticated as|Starting bot' "$INSTALL_DIR/tinycmdr.log" 2>/dev/null; then
-    info "mattermost      : connected (the log shows the bot login)"
+if [ "$CHAT_LANE" = 1 ]; then
+    if grep -qE 'authenticated as|Starting bot' "$INSTALL_DIR/tinycmdr.log" 2>/dev/null; then
+        info "mattermost      : connected (the log shows the bot login)"
+    else
+        info "mattermost      : no login line yet - journalctl -u $SERVICE_NAME -n 50"
+    fi
 else
-    info "mattermost      : no login line yet - journalctl -u $SERVICE_NAME -n 50"
+    info "chat            : none (no token given) - the page is the door"
 fi
 
 cat <<EOF
@@ -555,6 +570,8 @@ tinycmdr is installed.
   logs     : journalctl -u $SERVICE_NAME -f    and    $INSTALL_DIR/tinycmdr.log
   restart  : sudo bash $INSTALL_DIR/maintenance/restart-tinycmdr.sh
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
+  session  : $VENV_PY $INSTALL_DIR/tinycmdr.py --cli
+  page     : $VENV_PY $INSTALL_DIR/tinycmdr.py --web   -> http://127.0.0.1:8787
   verify   : bash $HERE/$(basename "${BASH_SOURCE[0]}") --verify-only
   remove   : sudo bash $HERE/$(basename "${BASH_SOURCE[0]}") --uninstall
 EOF

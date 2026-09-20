@@ -320,9 +320,19 @@ if [ -z "$TOKEN" ]; then
     read -rs TOKEN
     echo
 fi
-[ -n "$TOKEN" ] || die "no Mattermost bot token given. Create a bot + token in Mattermost, then
-pass it with --token or --token-file."
-
+# A chat account is OPTIONAL: the harness also runs as a session (--cli) and as a local page
+# (--web, 127.0.0.1:8787). No token means no chat lane, so the agent runs the PAGE instead -
+# running the chat lane would exit at once (tinycmdr.py refuses to start without a token, on
+# purpose) and KeepAlive would loop it forever.
+APP_ARGS=""
+if [ -z "$TOKEN" ]; then
+    APP_ARGS="--web"
+    WEB_ON=1
+    info "no Mattermost bot token: installing WITHOUT a chat account"
+    info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
+    info "a session needs no service:         $INSTALL_DIR/tinycmdr.py --cli"
+    info "add a chat account later: re-run with --token-file <file>"
+fi
 # ---------------------------------------------------------------- config ---
 say "config"
 [ -n "$MM_URL_ARG" ] || MM_URL_ARG="$(jget "$DEFAULTS" mattermost_url)"
@@ -424,6 +434,20 @@ TPL="$SRC/install/com.tinycmdr.agent.plist"
 [ -f "$TPL" ] || die "package is missing install/com.tinycmdr.agent.plist"
 sed -e "s|__LABEL__|$LABEL|g" -e "s|__PYTHON__|$VPY|g" -e "s|__APP__|$INSTALL_DIR|g" \
     "$TPL" > "$PLIST"
+if [ -n "$APP_ARGS" ]; then
+    # run the local page instead of the chat lane: one more ProgramArguments entry, inserted
+    # after the script itself so launchd passes it to the agent.
+    python3 - "$PLIST" "$INSTALL_DIR/tinycmdr.py" "$APP_ARGS" <<'PY'
+import pathlib
+import sys
+plist, app, args = sys.argv[1], sys.argv[2], sys.argv[3]
+p = pathlib.Path(plist)
+text = p.read_text()
+needle = "<string>%s</string>" % app
+if needle in text and args not in text:
+    p.write_text(text.replace(needle, needle + "\n\t\t<string>%s</string>" % args, 1))
+PY
+fi
 plutil -lint "$PLIST" >/dev/null || die "the generated plist is not valid: $PLIST"
 info "wrote $PLIST"
 
