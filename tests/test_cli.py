@@ -818,6 +818,9 @@ def test_banner_reports_the_model_and_the_overhead():
     check("banner: names the model", FIXTURE["llm"]["model"] in text)
     check("banner: states the prompt overhead", "prompt overhead" in text)
     check("banner: no chat vocabulary", "Mattermost" not in text and "channel" not in text)
+    check("banner: states its lane and what this process can enforce",
+          "lane cli" in text and "blocked_patterns" in text
+          and "memory ceiling" in text and "spawn backend" in text, text)
 
 
 # --- 5. the binary surface ---------------------------------------------------

@@ -372,6 +372,7 @@ def cli_banner():
               "cache-stable; live %s: notes + task ledger, sent trailing)"
               % (fmt_tokens(static + live), fmt_tokens(static),
                  len(REGISTRY.openai_schemas()), fmt_tokens(live))))
+    print(dim(capability_line("cli")))
     print(dim("type /help for the commands, /exit to quit\n"))
 
 

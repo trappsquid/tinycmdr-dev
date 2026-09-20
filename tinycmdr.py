@@ -472,7 +472,7 @@ def load_config():
 
 CONFIG = load_config()
 IS_WINDOWS = os.name == "nt"
-VERSION = "2.5.19"
+VERSION = "2.5.20"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -1381,6 +1381,39 @@ def shell_rights_line():
     return ("Shell: %s, not root. System changes fail with Permission denied. Use `sudo -n` "
             "only if it is known to be passwordless here; otherwise say what needs root and "
             "let the operator run it." % shell)
+
+
+def capability_line(lane):
+    """One line at start: what THIS process can actually enforce, and what it cannot.
+
+    The article's rule is that "no backend" is a supported state, but it has to be said
+    out loud. Until now the posture was only implied: blocked_patterns set or empty, a
+    memory ceiling or none, a spawn backend or none - and the answers differ per host and
+    per lane, so nobody reading a log could tell which host was which. Reported ONCE, at
+    start, for whoever reads the log: it is not for the model, so it never enters a prompt.
+
+    "none" is a real answer, not a failure and not a gap to fill in later.
+    """
+    llm = CONFIG.get("llm") or {}
+    route = "%s -> %s" % (llm.get("model") or "(default)",
+                          llm.get("base_url") or "(no base_url set!)")
+    patterns = [p for p in (CONFIG["agent"].get("blocked_patterns") or [])
+                if str(p).strip()]
+    cap = _self_mem_cap_mb()
+    if cap:
+        ceiling = "%.1f GiB (cgroup, this unit plus its children)" % (cap / 1024.0)
+    elif IS_WINDOWS:
+        ceiling = "none this process can see (no cgroup on Windows)"
+    else:
+        ceiling = "none"
+    if "creationflags" in hidden_proc_kwargs():
+        backend = "CREATE_NO_WINDOW (children get a hidden console)"
+    else:
+        backend = "inherited console and session (no spawn flags)"
+    return ("capabilities: lane %s · model %s · blocked_patterns %d · memory ceiling %s"
+            " · spawn backend %s" % (lane, route, len(patterns), ceiling, backend))
+
+
 
 
 # --------------------------------------------------------------------------
@@ -9741,6 +9774,7 @@ def run_bot():
         asyncio.get_event_loop()
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
+    log.info("%s", capability_line("mattermost"))
     try:
         from mmpy_bot import Bot, Plugin, Settings, listen_to
     except ImportError as exc:
@@ -9819,6 +9853,7 @@ def run_bot():
 def run_cli(once=None):
     print(f"tinycmdr CLI — model {CONFIG['llm']['model']} "
           f"@ {CONFIG['llm']['base_url']}")
+    print(capability_line("cli"))
     static = est_tokens(build_system_prompt() + json.dumps(select_tool_schemas(None)))
     live = est_tokens(volatile_context())
     print(f"prompt overhead ≈ {static + live} tokens "
@@ -10162,6 +10197,7 @@ def run_web_mode():
     Mattermost account, no bot token, no chat server to stand up, and the
     page streams what the agent is doing while it works."""
     web = CONFIG.setdefault("web", {}) or {}
+    log.info("%s", capability_line("web"))
     if not web.get("enabled", False):
         # The bot build leaves the port closed unless it is asked for, so a
         # machine running the chat build does not quietly serve a chat page.

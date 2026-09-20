@@ -1,5 +1,28 @@
 # tinycmdr changelog (newest first, through 2.5.9, tinycmdr-cli 1.0.9)
 
+## 2.5.20 - a host says out loud what it can actually enforce (2026-09-19)
+
+Stage 3 of the MiniDSH hardening plan, from the article's rule that "no backend" is a
+supported state but it has to be REPORTED. The fleet's posture was implied rather than
+written: blocked_patterns set or empty, a memory ceiling or none, a spawn backend or none,
+and the answers differ per host and per lane, so nobody reading a log could tell which host
+was which.
+
+- **One line at start, in every lane.** `capabilities: lane mattermost · model main ->
+  http://a LAN address:8081/v1 · blocked_patterns 12 · memory ceiling none this process can see
+  (no cgroup on Windows) · spawn backend CREATE_NO_WINDOW (children get a hidden console)`.
+  The line reports the lane (mattermost / web / cli), the model and the endpoint it goes to,
+  how many blocked patterns are live (blank entries do not count as enforcement), whether the
+  OS caps this process's memory and to what, and which spawn backend children get. "none" is
+  a real answer, not a failure.
+- It is reported ONCE, at start, for whoever reads the log. It is not for the model and it
+  never enters a prompt - the cached prefix stays byte-identical.
+- Written to tinycmdr.log for the Mattermost and web lanes, and printed by `cli_banner()` in
+  the console build. Gated by 9 checks in `tests/test_checkin.py`, plus a banner check in
+  `tests/test_cli.py`, so a lane that stops reporting, or a pattern list counted wrong, fails
+  a suite instead of quietly going stale.
+
+
 ## 2.5.9 - the harness stops re-reading its own prompt, and a run cannot freeze on a note (2026-09-18)
 
 A day of measuring the harness against its own traffic, plus one self-inflicted freeze found by

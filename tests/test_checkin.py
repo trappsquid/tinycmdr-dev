@@ -756,6 +756,45 @@ def test_red_is_only_for_failures():
         fb.CONFIG["agent"].update(saved)
 
 
+def test_capability_line_reports_what_this_process_can_enforce():
+    """Stage 3 of the MiniDSH plan: the honest state, said out loud.
+
+    A host's posture was implied - blocked_patterns set or empty, a memory ceiling or
+    none, a spawn backend or none - and it differs per host and per lane, so a reader of
+    the log could not tell them apart. It is read ONCE at start: this is for the operator,
+    never for the model, so it must stay out of the prompt.
+    """
+    line = fb.capability_line("mattermost")
+    check("capability: it is one line", "\n" not in line and "\r" not in line, line)
+    check("capability: names the lane", "lane mattermost" in line, line)
+    check("capability: names the model and the endpoint it goes to",
+          str(fb.CONFIG["llm"].get("model")) in line
+          and str(fb.CONFIG["llm"].get("base_url")) in line, line)
+    live = [p for p in (fb.CONFIG["agent"].get("blocked_patterns") or [])
+            if str(p).strip()]
+    check("capability: counts the live blocked patterns",
+          ("blocked_patterns %d " % len(live)) in line, line)
+    check("capability: states a ceiling, and its size when there is one",
+          "memory ceiling none" in line or "GiB (cgroup" in line, line)
+    check("capability: names the spawn backend",
+          "spawn backend CREATE_NO_WINDOW" in line
+          or "spawn backend inherited console" in line, line)
+
+    saved = fb.CONFIG["agent"].get("blocked_patterns")
+    try:
+        fb.CONFIG["agent"]["blocked_patterns"] = ["rm -rf /", "", "   ", "mkfs"]
+        edited = fb.capability_line("cli")
+        check("capability: blank patterns are not counted as enforcement",
+              "blocked_patterns 2 " in edited, edited)
+        check("capability: the lane is not hardcoded", "lane cli" in edited, edited)
+        fb.CONFIG["agent"]["blocked_patterns"] = []
+        check("capability: an empty list reads as 0, not as absent",
+              "blocked_patterns 0 " in fb.capability_line("web"),
+              fb.capability_line("web"))
+    finally:
+        fb.CONFIG["agent"]["blocked_patterns"] = saved
+
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

@@ -375,7 +375,7 @@ def load_config():
 
 CONFIG = load_config()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.9"
+VERSION = "1.0.10"
 BUILD = "cli"          # this file is the enterprise build; tinycmdr.py in the repo is the bot
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
@@ -1463,6 +1463,39 @@ def shell_rights_line():
     return ("Shell: %s, not root. System changes fail with Permission denied. Use `sudo -n` "
             "only if it is known to be passwordless here; otherwise say what needs root and "
             "let the operator run it." % shell)
+
+
+def capability_line(lane):
+    """One line at start: what THIS process can actually enforce, and what it cannot.
+
+    The article's rule is that "no backend" is a supported state, but it has to be said
+    out loud. Until now the posture was only implied: blocked_patterns set or empty, a
+    memory ceiling or none, a spawn backend or none - and the answers differ per host and
+    per lane, so nobody reading a log could tell which host was which. Reported ONCE, at
+    start, for whoever reads the log: it is not for the model, so it never enters a prompt.
+
+    "none" is a real answer, not a failure and not a gap to fill in later.
+    """
+    llm = CONFIG.get("llm") or {}
+    route = "%s -> %s" % (llm.get("model") or "(default)",
+                          llm.get("base_url") or "(no base_url set!)")
+    patterns = [p for p in (CONFIG["agent"].get("blocked_patterns") or [])
+                if str(p).strip()]
+    cap = _self_mem_cap_mb()
+    if cap:
+        ceiling = "%.1f GiB (cgroup, this unit plus its children)" % (cap / 1024.0)
+    elif IS_WINDOWS:
+        ceiling = "none this process can see (no cgroup on Windows)"
+    else:
+        ceiling = "none"
+    if "creationflags" in hidden_proc_kwargs():
+        backend = "CREATE_NO_WINDOW (children get a hidden console)"
+    else:
+        backend = "inherited console and session (no spawn flags)"
+    return ("capabilities: lane %s · model %s · blocked_patterns %d · memory ceiling %s"
+            " · spawn backend %s" % (lane, route, len(patterns), ceiling, backend))
+
+
 
 
 # --------------------------------------------------------------------------
@@ -7183,6 +7216,7 @@ def cli_banner():
               "cache-stable; live %s: notes + task ledger, sent trailing)"
               % (fmt_tokens(static + live), fmt_tokens(static),
                  len(REGISTRY.openai_schemas()), fmt_tokens(live))))
+    print(dim(capability_line("cli")))
     print(dim("type /help for the commands, /exit to quit\n"))
 
 
