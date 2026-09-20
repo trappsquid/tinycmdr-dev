@@ -751,7 +751,8 @@ if ($todo.Count -eq 0 -and $ChatLane) { Say "nothing - this install is configure
 elseif (-not $ChatLane -and $todo.Count -eq 0) { Say "nothing required - both local doors work" }
 else { $n = 1; foreach ($t in $todo) { Say "$n. $t"; $n++ } }
 Say ""
-if ($todo.Count -gt 0) { Say "after editing, restart:  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName" }
+if ($todo.Count -gt 0 -and $RegisterTask) { Say "after editing, restart:  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName" }
+if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --cli   (or --web)" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($EnableWeb) { Say "web page: http://127.0.0.1:$WebPort  (token in web-token.txt)" }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (or --cli)"
