@@ -39,11 +39,19 @@ net session >nul 2>&1
 if errorlevel 1 (
     if "%NOELEV%"=="1" goto run
     if not "%FB_NOELEV%"=="1" if not "%NOELEV%"=="1" (
+        rem Switches typed here have to survive the elevation: the first version forwarded
+        rem -File <ps1> only, so -Force / -MattermostTokenFile went nowhere and the elevated
+        rem window did the default install instead. An empty %* must not become an empty
+        rem argument, so it is only appended when there is something to append.
+        set "FB_ARGS="
+        if not "%*"=="" set "FB_ARGS=,'%*'"
         echo Asking for administrator rights ^(needed for the scheduled task^)...
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%PS1%'"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%PS1%'%FB_ARGS%"
         echo.
         echo The installer is running in the elevated window that just opened.
         echo This window can be closed.
+        echo.
+        echo If that window closes without a word, read %LOG%
         timeout /t 10 >nul
         exit /b 0
     )

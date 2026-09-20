@@ -27,7 +27,7 @@
 #   --web-port <p>        local web/API port (default 8788, loopback only)
 #   --no-web              leave the local web port closed
 #   --python <path>       interpreter to build the venv from (default: 3.12, else 3.11/3.10)
-#   --label <l>           launchd label (default com.trapp.tinycmdr)
+#   --label <l>           launchd label (default com.tinycmdr.agent)
 #   --secrets-file <f>    extra KEY=VALUE lines for .env (search keys etc)
 #   --no-launchd          install the files only; do not register the agent
 #                         (also the way to dry-run this installer off macOS)
@@ -45,7 +45,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
 INSTALL_DIR="${tinycmdr_DIR:-$HOME/tinycmdr}"
-LABEL="${tinycmdr_LABEL:-com.trapp.tinycmdr}"
+LABEL="${tinycmdr_LABEL:-com.tinycmdr.agent}"
 LOGDIR="$INSTALL_DIR/logs"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST="$PLIST_DIR/$LABEL.plist"
@@ -268,7 +268,7 @@ if [ "$FORCE" = 1 ]; then
     done
 fi
 
-for f in tinycmdr.py requirements.txt config.example.json README.md CHANGELOG.md; do
+for f in tinycmdr.py requirements.txt config.example.json README.md; do
     if [ -f "$SRC/$f" ]; then
         cp -f "$SRC/$f" "$INSTALL_DIR/$f"
     elif [ -f "$INSTALL_DIR/$f" ]; then
@@ -286,9 +286,6 @@ fi
 mkdir -p "$INSTALL_DIR/maintenance"
 for f in restart-tinycmdr-macos.sh restart-tinycmdr.sh; do
     [ -f "$SRC/maintenance/$f" ] && cp -f "$SRC/maintenance/$f" "$INSTALL_DIR/maintenance/$f"
-done
-for f in launch-tinycmdr.sh; do
-    [ -f "$SRC/$f" ] && cp -f "$SRC/$f" "$INSTALL_DIR/$f"
 done
 info "files copied"
 
@@ -423,8 +420,8 @@ fi
 
 say "launchd agent"
 mkdir -p "$PLIST_DIR"
-TPL="$SRC/install/com.trapp.tinycmdr.plist"
-[ -f "$TPL" ] || die "package is missing install/com.trapp.tinycmdr.plist"
+TPL="$SRC/install/com.tinycmdr.agent.plist"
+[ -f "$TPL" ] || die "package is missing install/com.tinycmdr.agent.plist"
 sed -e "s|__LABEL__|$LABEL|g" -e "s|__PYTHON__|$VPY|g" -e "s|__APP__|$INSTALL_DIR|g" \
     "$TPL" > "$PLIST"
 plutil -lint "$PLIST" >/dev/null || die "the generated plist is not valid: $PLIST"

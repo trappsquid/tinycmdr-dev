@@ -6,7 +6,9 @@ ledger, and reports back with its own evidence. No framework, no server — one
 Python file plus a skills folder.
 
 - Version: see `VERSION` in `tinycmdr.py`
-- Changelog: `CHANGELOG.md`
+- Changelog: in the source repository (see the link above), not shipped here
+- Downloads are runtime only: the harness, the installers, the config templates and the skill
+  folder. The test suites live in the repository.
 - Runs as a Mattermost **bot account**, driven by DM (or any channel it is in)
 
 ## Try it without a chat server
@@ -35,10 +37,14 @@ All three need one thing first: an OpenAI-compatible model endpoint in `config.j
 
 ## Install on a new Windows host
 
-Extract the package anywhere and **double-click `install\install-tinycmdr.cmd`**. On a fleet host that
-is the whole job: it reads `install\fleet-defaults.json` from the package (the fleet's Mattermost
-host, model endpoint and allowed user), reuses the bot token from an existing `.env`, asks for one
-only if there is none, registers the task, and verifies the install — nothing to hand-edit.
+Extract the package anywhere and **double-click `INSTALL-WINDOWS.cmd`**, the file next to this one.
+It asks for administrator rights (needed for the scheduled task), keeps its window open so you can
+read it, and logs everything to `%TEMP%\tinycmdr-install.log`. On a fleet host that is the whole job:
+it reads `install\fleet-defaults.json` from the package (the fleet's Mattermost host, model endpoint
+and allowed user), reuses the bot token from an existing `.env`, asks for one only if there is none,
+registers the task, and verifies the install — nothing to hand-edit.
+
+`install\install-tinycmdr.cmd` is the same thing from one level down; both take the same switches.
 
 ```
 install-tinycmdr.cmd                     install / redo is just this
@@ -51,18 +57,22 @@ Switches always win over `fleet-defaults.json`. If the package has no `install\f
 (a standalone download rather than a fleet package), pass `-MattermostUrl`, `-MattermostTokenFile`,
 `-AllowedUser` and `-ModelBaseUrl` yourself, or answer the installer's prompt.
 
-From a shell, either of these works:
+**Read this before you run anything by hand.** Do **not** double-click `install\install-tinycmdr.ps1`,
+and do not use right-click → "Run with PowerShell". Most Windows machines ship with the script
+execution policy set to Restricted, so that window opens, prints `running scripts is disabled on this
+system`, and closes before you can read a word of it. That is a Windows setting, not a fault in this
+package, and the `.cmd` above already handles it.
+
+To run the installer from a shell instead, be in the package root and pass the policy explicitly
+(replace the CD path with where you extracted it):
 
 ```powershell
+cd "$env:USERPROFILE\Downloads\tinycmdr-1.0.0-win-public\tinycmdr-1.0.0"
 powershell -ExecutionPolicy Bypass -File .\install\install-tinycmdr.ps1 -MattermostUrl chat.example.com
 ```
 
-Do **not** run the `.ps1` by double-clicking it or via right-click → "Run with PowerShell": many
-Windows machines ship with the script execution policy set to Restricted, so the window opens, prints
-`sorry, running scripts is disabled on this system`, and closes before you can read it. If you see a
-window vanish like that, that is what happened — use the `.cmd`, or pass `-ExecutionPolicy Bypass`
-explicitly. Everything the installer does is transcribed to `%TEMP%\tinycmdr-install.log`, so a
-failure always leaves the reason on disk.
+Everything the installer does is transcribed to `%TEMP%\tinycmdr-install.log`, so a failure always
+leaves the reason on disk, even when the window itself was gone before you could read it.
 
 It will:
 
@@ -226,15 +236,6 @@ Logs: `tinycmdr.log` in the install folder. Restart: `maintenance\restart-tinycm
 ## Verifying an install
 
 ```powershell
-# the tests that ship with it (no Mattermost, no token, no port)
-python tests\test_stall.py ; python tests\test_ledger.py ; python tests\test_checkin.py
-#   Linux: venv/bin/python tests/test_stall.py   (same for ledger and checkin)
-#   They are hermetic: run them here, in CI, or straight from an unzipped package
-#   (the suites stage their own throwaway config.json; nothing is port-bound).
-#   Install requirements.txt first. A suite runs on Windows and Linux, and a check
-#   whose subject is absent on your host (no PowerShell, no chat driver) reports
-#   "skip" with the reason rather than failing, so a skip is never a hidden pass.
-
 # one local turn through the agent - proves the app AND the model endpoint work
 python tinycmdr.py --once "reply with the single word: READY"
 python tinycmdr.py --once "/status"
@@ -257,14 +258,14 @@ Remove-Item C:\tinycmdr -Recurse -Force      # take .env and notes.md with it if
 ## Files
 
 ```
+INSTALL-WINDOWS.cmd     START HERE on Windows: installs it there, asks for administrator rights
 tinycmdr.py              the whole agent (single file, versioned)
 config.example.json      every config key with fake values; installer copies it to config.json
 .env.example             secrets template; installer copies it to .env
 skills/                  markdown runbooks the agent loads on demand (see "Adding skills")
-tests/                   test suites (run them after any edit)
-install/                 installer for new hosts
-maintenance/             host-maintenance scripts (restart helper is generic)
+field-notes.md           known failures, matched against a failed tool result and appended to it
+install/                 installers for Windows, Linux and macOS
+maintenance/             the restart helper
 cli/tinycmdr-cli.py      the same agent, console only, no chat layer at all (see "Try it")
 cli/README.txt           what that file is and which one to run
-CHANGELOG.md             what changed and why, version by version
 ```

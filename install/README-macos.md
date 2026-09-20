@@ -60,7 +60,7 @@ your shell history.
 
 Logs: `~/tinycmdr/tinycmdr.log`, plus `~/tinycmdr/logs/launchd.out.log` and
 `launchd.err.log`. The launchd agent itself is
-`~/Library/LaunchAgents/com.trapp.tinycmdr.plist`.
+`~/Library/LaunchAgents/com.tinycmdr.agent.plist`.
 
 `/restart` in Mattermost also works: the bot spawns its own replacement and exits 0,
 and the agent is set to restart only on a **non-zero** exit, so the two do not race.

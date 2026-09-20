@@ -424,7 +424,7 @@ if ($Force) {
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $copy = @("tinycmdr.py", "tinycmdr-supervise.py", "requirements.txt", "config.example.json",
-          ".env.example", "CHANGELOG.md", "README.md", "skills", "tests")
+          ".env.example", "README.md", "skills")
 foreach ($item in $copy) {
     $src = Join-Path $Source $item
     if (Test-Path $src) { Copy-Item $src -Destination $InstallDir -Recurse -Force }

@@ -43,18 +43,20 @@ SHIP = [
     "config.example.json",
     ".env.example",
     "README.md",
-    "CHANGELOG.md",
+    # The door a reader actually finds: it sits in the package root, while the installer
+    # itself is one level down and the .ps1 beside it is refused by stock Windows (the
+    # script execution policy is Restricted there, so that window closes before it can be
+    # read). A root-level .cmd is what a person double-clicks.
+    "INSTALL-WINDOWS.cmd",
     "install/install-tinycmdr.ps1",
     "install/install-tinycmdr.cmd",
     "install/install-tinycmdr.sh",
     "install/install-tinycmdr-macos.sh",
-    "install/com.trapp.tinycmdr.plist",
+    "install/com.tinycmdr.agent.plist",
     "install/README-macos.md",
     "maintenance/restart-tinycmdr.ps1",
     "maintenance/restart-tinycmdr.sh",
-    "launch-tinycmdr.sh",
     "skills",
-    "tests",
 ]
 
 # The console-only build of the same agent travels inside this package, so one
@@ -133,12 +135,12 @@ SECRET_LABELS = ("web ui token", "mattermost token", "allowed user id")
 ENV_PREFIX = "env "
 # Ships-as-code files must be neutral too: a host value here would be baked into
 # every install, which is exactly how this box's endpoint ended up in the code.
-APP_FILES = ("tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
+APP_FILES = ("INSTALL-WINDOWS.cmd", "tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
              ".env.example", "README.md",
              "CHANGELOG.md", "install/install-tinycmdr.ps1",
              "install/install-tinycmdr.sh", "maintenance/restart-tinycmdr.ps1",
              "maintenance/restart-tinycmdr.sh", "launch-tinycmdr.sh",
-             "install/install-tinycmdr-macos.sh", "install/com.trapp.tinycmdr.plist",
+             "install/install-tinycmdr-macos.sh", "install/com.tinycmdr.agent.plist",
              "maintenance/restart-tinycmdr-macos.sh")
 
 # --------------------------------------------------------------- public build ---
@@ -240,6 +242,8 @@ PUBLIC_FORBIDDEN = (
     r"the Linux box", r"(?i)security onion", r"\ba bot account\b", r"\bDavid\b",
     r"<user>",
     r"<id>", r"\b[a-z0-9]{26}\b", r"the file share",
+    r"com\.trapp", r"(?i:\btrapp\b)",
+    r"com\.trapp", r"(?i:\btrapp\b)",
     r"tvly-[A-Za-z0-9]{8,}", r"sk-[A-Za-z0-9]{20,}",
     r"C:\\Users\\David", r"/home/<user>",
 )
@@ -674,32 +678,22 @@ def main():
             if len(files) > 8:
                 print(f"  ... and {len(files) - 8} more")
 
-        # manifest. MANIFEST.txt counts itself: listing the files before writing
-        # it made the tally one short, and a reader can see that.
-        files = sorted([f for f in stage_dir.rglob("*") if f.is_file()]
-                       + [stage_dir / "MANIFEST.txt"])
-        lines = [
-            f"tinycmdr {ver} — "
-            + ("community release (Windows, Linux and macOS installers)" if public
-               else "fleet package (Windows, Linux and macOS installers)"),
-            "" if public else f"built from {ROOT}",
-            "",
-            "sha256 of the files that matter:",
-        ]
+        # The hashes are PRINTED, not shipped. They are how a build gets verified here; a
+        # manifest file in the download is one more document a reader has to decide about,
+        # and nothing in the code reads it.
+        files = sorted(f for f in stage_dir.rglob("*") if f.is_file())
+        print("  sha256 of the files that matter:")
         for rel in ("tinycmdr.py", "config.example.json", ".env.example",
+                    "INSTALL-WINDOWS.cmd",
                     "install/install-tinycmdr.ps1", "install/install-tinycmdr.cmd",
                     "install/install-tinycmdr.sh",
                     "install/install-tinycmdr-macos.sh",
-                    "install/com.trapp.tinycmdr.plist",
+                    "install/com.tinycmdr.agent.plist",
                     "cli/tinycmdr-cli.py"):
             p = stage_dir / rel
             if p.exists():
-                h = hashlib.sha256(p.read_bytes()).hexdigest()
-                lines.append(f"  {h}  {rel}")
-        lines += ["", f"{len(files)} files:", ""]
-        lines += [f"  {f.relative_to(stage_dir)}" for f in files]
-        (stage_dir / "MANIFEST.txt").write_text("\n".join(lines) + "\n",
-                                                encoding="utf-8")
+                print("    %s  %s" % (hashlib.sha256(p.read_bytes()).hexdigest()[:16], rel))
+        print("  %d files in the package" % len(files))
 
         DIST.mkdir(exist_ok=True)
         suffix = "-public" if public else ""
@@ -805,7 +799,7 @@ def main():
                 macbad = [n for n in mac_names
                           if pathlib.PurePosixPath(n).name in FORBIDDEN_NAMES]
                 macinner = hashlib.sha256(z.read(f"tinycmdr-{ver}/tinycmdr.py")).hexdigest()
-                rendered = (z.read(f"tinycmdr-{ver}/install/com.trapp.tinycmdr.plist")
+                rendered = (z.read(f"tinycmdr-{ver}/install/com.tinycmdr.agent.plist")
                             .decode("utf-8")
                             .replace("__LABEL__", "com.example.test")
                             .replace("__PYTHON__", "/tmp/venv/bin/python")

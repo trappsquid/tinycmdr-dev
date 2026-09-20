@@ -256,9 +256,9 @@ if [ "$FORCE" = 1 ] && [ -d "$INSTALL_DIR" ]; then
     done
 fi
 mkdir -p "$INSTALL_DIR"
-for item in tinycmdr.py requirements.txt README.md CHANGELOG.md \
-            config.example.json .env.example launch-tinycmdr.sh \
-            skills tests install maintenance; do
+for item in tinycmdr.py requirements.txt README.md \
+            config.example.json .env.example \
+            skills install maintenance; do
     if [ -e "$SRC/$item" ]; then
         cp -a "$SRC/$item" "$INSTALL_DIR/"
     fi
