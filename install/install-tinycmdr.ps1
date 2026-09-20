@@ -617,14 +617,36 @@ if (-not $SkipTask) {
     Head "registering the scheduled task"
     $action = New-ScheduledTaskAction -Execute "wscript.exe" `
                 -Argument "//B //Nologo ""$InstallDir\tinycmdr-service.vbs"""
-    $tLogon = New-ScheduledTaskTrigger -AtLogOn -User "$env:USERDOMAIN\$env:USERNAME"
+    # Which account the task runs as. "$env:USERDOMAIN\$env:USERNAME" is WRONG on a
+    # machine that is not in a domain: USERDOMAIN is "WORKGROUP", which does not
+    # resolve, and Register-ScheduledTask dies with "No mapping between account names
+    # and security IDs was done" (measured on bot-aTOWER 2026-09-20, where the previous
+    # install had used the bare account name and worked). Resolve a real account
+    # first: the domain only when there is one, then the machine name, then the bare
+    # user name, and prove each by translating it to a SID.
+    $acct = $null
+    $cands = @()
+    if ($env:USERDOMAIN -and $env:USERDOMAIN -ne "WORKGROUP") { $cands += "$env:USERDOMAIN\$env:USERNAME" }
+    $cands += "$env:COMPUTERNAME\$env:USERNAME"
+    $cands += $env:USERNAME
+    foreach ($c in $cands) {
+        try {
+            $null = (New-Object System.Security.Principal.NTAccount($c)).Translate([System.Security.Principal.SecurityIdentifier])
+            $acct = $c
+            break
+        } catch { }
+    }
+    if (-not $acct) { Fail "no account for the scheduled task resolves ($($cands -join ', '))" }
+    Say "account : $acct"
+
+    $tLogon = New-ScheduledTaskTrigger -AtLogOn -User $acct
     $tLogon.Delay = "PT30S"                            # let the network/Docker settle first
     $tBoot  = New-ScheduledTaskTrigger -AtStartup
     $tBoot.Delay = "PT4M"
     $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
              -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 2) `
              -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" `
+    $principal = New-ScheduledTaskPrincipal -UserId $acct `
                    -LogonType S4U -RunLevel Limited              # headless: runs with or without a logon
     try {
         Register-ScheduledTask -TaskName $AppName -Action $action -Trigger @($tLogon, $tBoot) `
@@ -633,7 +655,7 @@ if (-not $SkipTask) {
         Say "task    : $AppName registered (logon +30s, boot +4min, S4U)"
     } catch {
         Say "S4U registration failed ($($_.Exception.Message)) - falling back to interactive logon"
-        $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive
+        $principal = New-ScheduledTaskPrincipal -UserId $acct -LogonType Interactive
         Register-ScheduledTask -TaskName $AppName -Action $action -Trigger @($tLogon, $tBoot) `
             -Settings $set -Principal $principal -Force `
             -Description "tinycmdr: Mattermost ops agent (@$BotName)" | Out-Null
