@@ -43,7 +43,20 @@ DUMP = r"""
   const log = document.getElementById('log');
   const runs = [...log.querySelectorAll(':scope > .run')].map(r => ({
     run: r.dataset.run,
-    lines: [...r.children].map(d => ({cls: d.className, txt: d.textContent}))}));
+    // txt is what the line READS as: the timer stamp is shown to the reader, but a
+    // copy button's own label is chrome. boxText() drops both, so the stamp is put
+    // back here - otherwise adding a button would look like the page had changed
+    // the agent's words.
+    lines: [...r.children].map(d => {
+      const kids = Array.from(d.children || []);
+      const st = kids.find(x => x.className === 'stamp');
+      const body = (typeof boxText === 'function') ? boxText(d) : d.textContent;
+      // the renderer's own helper classes are not the line's kind: 'msg final copyable'
+      // is a final line, and this report is compared against the server's kinds
+      const cls = (d.className || '').split(' ')
+        .filter(c => c && c !== 'copyable').join(' ');
+      return {cls: cls, txt: (st ? st.textContent : '') + body};
+    })}));
   const stop = document.getElementById('stop');
   return {runs: runs, busy: document.body.classList.contains('busy'),
           state: document.getElementById('state').textContent,
@@ -87,7 +100,18 @@ def server_lines(base, run_id):
 
 
 def expected_text(l):
-    stamp = f"{l['t']}s" if l["kind"] in ("final", "thinking") else ""
+    """What the page should show for a line: the stamp as JS would print it, then the text.
+
+    JavaScript's String(0.0) is "0" while Python's str(0.0) is "0.0", so an answer that
+    lands at exactly 0 elapsed (or any whole number of seconds) has to be formatted the
+    way the browser does, or the comparison fails on a page that is right.
+    """
+    stamp = ""
+    if l["kind"] in ("final", "thinking"):
+        num = str(l["t"])
+        if num.endswith(".0"):
+            num = num[:-2]
+        stamp = num + "s"
     return stamp + l["text"]
 
 
@@ -179,6 +203,10 @@ def main():
               "the page no longer keys lines by index (that is how a new line "
               "overwrote an older one at the top)")
         check("/api/live" in html, "a reloaded page asks which run is live")
+        check("copyb" in html and "attachCopy" in html,
+              "the page ships click-to-copy on the agent's boxes")
+        check("execCommand" in html,
+              "...through the document, because the LAN page is plain http")
 
         pw = sync_playwright().start()
         try:
@@ -338,7 +366,11 @@ def main():
           const grew = c.children.length, moved = idOf(node), txt = node.textContent;
           reconcile(id, [L(0), Object.assign(L(1), {text: 'line 1 grew'}), L(2),
                          {uid: 'recon-unit#3', i: 3, kind: 'final', t: 9, text: 'done'}]);
-          const added = c.children.length, last = c.children[c.children.length-1].textContent;
+          const box = c.children[c.children.length-1];
+          const st = Array.from(box.children || []).find(x => x.className === 'stamp');
+          const added = c.children.length;
+          const last = (st ? st.textContent : '')
+            + ((typeof boxText === 'function') ? boxText(box) : box.textContent);
           reconcile(id, [L(0), L(1)]);
           const dropped = c.children.length;
           return {first, twice, grew, moved, txt, added, last, dropped};
@@ -352,6 +384,67 @@ def main():
               "E: a new line lands at the end, with its timestamp")
         check(res["dropped"] == 2,
               "E: a line the server dropped is removed from the page")
+
+        # -- G. the copy button on an answer, in a real browser ---------------
+        # The operator asked for click-to-copy in the upper right of the agent's
+        # boxes. Over plain http (the LAN) there is no navigator.clipboard at all,
+        # so this grades the path that really runs there, in a real engine, and
+        # what the clipboard would hold: the answer exactly, without the timer
+        # stamp and without the button's own label.
+        G_ANSWER = ("install steps:" + chr(10) + chr(10) + "docker compose up -d"
+                    + chr(10) + chr(10) + "then open the page")
+        seen = []
+        tw.make_stub(fb, seen, [lambda p: tw.text_reply(G_ANSWER)])
+        page.fill("#in", "G: give me the install steps")
+        page.press("#in", "Enter")
+        check(wait_for(lambda: len(seen) == 1), "G: the run reached the model")
+        # the run id comes from the PAGE: asking /api/live races the stub's instant
+        # reply, and a null id makes the wait below time out on a healthy run
+        run_g = page.evaluate("() => { const n = [...document.querySelectorAll('[data-run]')].pop();"
+                              " return n ? n.dataset.run : null; }")
+        check(bool(run_g), f"G: the answer has its own run in the transcript ({run_g})")
+        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_g}&since=0")[1].get("done")),
+              "G: the run finished")
+        time.sleep(0.8)
+        compare(base, page, run_g, "G: the answer the button copies from")
+        try:
+            page.context.grant_permissions(["clipboard-read", "clipboard-write"])
+        except Exception:
+            pass
+        res = page.evaluate(r"""
+        (() => {
+          const boxes = Array.from(document.querySelectorAll('.msg.final'));
+          const box = boxes[boxes.length - 1];        // the newest answer, not the first
+          if (!box) { return {err: 'no answer box'}; }
+          const btn = box.querySelector('.copyb');
+          if (!btn) { return {err: 'the answer has no copy button'}; }
+          const r = btn.getBoundingClientRect(), b = box.getBoundingClientRect();
+          const corner = (r.right > b.right - 90) && (r.top < b.top + 44) && (r.right <= b.right + 1);
+          const would = boxText(box);
+          btn.click();
+          return {err: null, corner: corner, label: btn.textContent,
+                  done: btn.className.indexOf('done') >= 0, would: would};
+        })()
+        """)
+        check(res.get("err") is None, f"G: {res.get('err') or 'the answer carries a copy button'}")
+        check(res.get("corner"), "G: it sits in the box's upper right corner")
+        check(res.get("label") == "copied" and res.get("done"),
+              f"G: clicking it copies on a plain-http page ({res.get('label')!r})")
+        check(res.get("would") == G_ANSWER,
+              f"G: and the copy holds the answer exactly - no timer, no button "
+              f"label ({res.get('would')!r})")
+        try:
+            clip = page.evaluate("() => navigator.clipboard.readText()")
+        except Exception:
+            clip = ""
+        if clip:
+            # Windows normalises a clipboard copy to CRLF on the way out
+            check(clip.replace("\r\n", "\n") == G_ANSWER,
+                  f"G: the system clipboard really holds it ({clip[:40]!r})")
+        else:
+            print("     (this engine will not hand the clipboard back; the click "
+                  "path was graded)")
+        page.evaluate("() => { const b = document.querySelector('.copyb'); if (b) b.blur(); }")
 
         # -- F. crash recovery: no chat server, no plumbing needed -----------
         code, j = http(f"{base}/api/health", token=None)

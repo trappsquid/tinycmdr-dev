@@ -1,4 +1,31 @@
-# tinycmdr changelog (newest first, through 2.5.22, tinycmdr-cli 1.0.13)
+# tinycmdr changelog (newest first, through 2.5.23, tinycmdr-cli 1.0.14)
+
+## 2.5.23 - a run no longer starts blind to what the conversation already did (2026-09-20)
+
+the Windows test box lost the research it had done a few steps earlier in the same conversation and
+re-ran searches it had already run. It was not forgetting: a run boundary keeps MESSAGES, not
+tool results, so run 8 began with no access to run 5's findings, and the carried-over block
+that exists to compensate stopped rendering the moment its 8,000-char budget was spent -
+newest-first - so anything older than the last few results disappeared without a trace while
+the transcript on disk still held all of it. Measured across the fleet's own logs: 25% of tool
+calls (363 of 1,428) repeat a call from an earlier run of the same session, re-buying 1.1M
+chars (~279k tokens).
+
+- **Out of budget for the text is not out of things to say.** A call whose full result no
+  longer fits is now NAMED in a bounded index under the carried results - one line each (tool,
+  args, age, size) - so the model can see that it already asked, instead of paying for the same
+  question twice. The carried results still obey `tool_carry_chars`; the index obeys its own
+  bound (`_CARRY_INDEX_LINES`, `_CARRY_INDEX_CHARS`).
+- **`search_sessions` could not read any session that had ever run a tool.** A carry sidecar
+  (`*.carry.json`) has a dict root and sorts BEFORE the transcript, so the loop iterated its
+  string keys and died with `'str' object has no attribute 'get'` on the first one: the tool
+  built to recall a session crashed before it read a message. Found by the Windows test box on its own
+  build, folded in here, with the regression test it did not write (a session whose transcript
+  and sidecar both match comes back with both).
+- **A copy button on the agent's own boxes** (upper right, appears on hover): the answer and
+  the tool output, copied exactly - no timer stamp, no button label. Tapping the answer to copy
+  it never worked over plain `http://`, because `navigator.clipboard` needs a secure context;
+  the copy now runs through the document, which works everywhere.
 
 ## 2.5.22 - one run, three interfaces, and a conversation that survives a reload (2026-09-20)
 

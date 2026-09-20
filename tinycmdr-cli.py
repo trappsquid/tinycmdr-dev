@@ -388,7 +388,7 @@ def load_config():
 
 CONFIG = load_config()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.13"
+VERSION = "1.0.14"
 BUILD = "cli"          # this file is the enterprise build; tinycmdr.py in the repo is the bot
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
@@ -3643,14 +3643,34 @@ def tool_search_sessions(args, ctx):
     hits = []
     for f in sorted(SESSIONS_DIR.glob("*.json")):
         try:
-            msgs = json.loads(f.read_text(encoding="utf-8"))
+            loaded = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
+        # TWO shapes live in this folder: the transcript (*.json -> a list of message
+        # dicts) and the carry sidecar (*.carry.json -> {run, entries, ...}). Iterating a
+        # dict yields its string keys, so the old unguarded m.get("content") raised
+        # 'str' object has no attribute 'get' on the first sidecar in sorted() order and
+        # killed the WHOLE search before it read one message - the tool could not recall
+        # the session it was running in (measured 2026-09-20 on a fleet box: the search died
+        # on its own .carry.json while the research it was asked for sat in the transcript).
+        if isinstance(loaded, dict):
+            msgs = [v for val in loaded.values() if isinstance(val, list) for v in val]
+        elif isinstance(loaded, list):
+            msgs = loaded
+        else:
+            continue
         for m in msgs:
+            if not isinstance(m, dict):
+                continue
             c = m.get("content")
+            if c is None:
+                # A carry entry has no "content": its text lives in args/out.
+                c = " ".join(str(v) for v in (m.get("args"), m.get("out"),
+                                              m.get("task"), m.get("note")) if v)
             if isinstance(c, str) and query in c.lower():
                 snippet = re.sub(r"\s+", " ", c)[:200]
-                hits.append(f"[{f.stem}] {m.get('role')}: {snippet}")
+                hits.append(f"[{f.stem}] {m.get('role') or m.get('tool') or 'entry'}: "
+                            f"{snippet}")
         if len(hits) >= 25:
             break
     if not hits:
@@ -4906,6 +4926,10 @@ _CARRY = {}
 _CARRY_LOCK = threading.Lock()
 _CARRY_MAX_ENTRY = 4000        # chars kept of any single result
 _CARRY_MAX_ENTRIES = 40
+# A call whose full text no longer fits the budget still gets ONE line in the block. The
+# count and the size are both bounded, because this is paid for on every turn of every run.
+_CARRY_INDEX_LINES = 24
+_CARRY_INDEX_CHARS = 2200
 _CARRY_SKIP = {"plan", "task", "remember", "list_tools", "find_tools",
                "skill_list", "notes", "todo"}
 _CARRY_BANNER = (
@@ -4914,6 +4938,13 @@ _CARRY_BANNER = (
     "remember their own tools. Anything marked (changed) has been written since it was "
     "captured: read it again before relying on exact contents. Command output can be out of "
     "date - re-run anything whose freshness matters.]")
+
+
+_CARRY_INDEX_HEAD = (
+    "[HARNESS: calls this conversation has ALREADY made, older than the results carried "
+    "above. Do not run one of them again to learn the same thing - if the answer you need "
+    "is not in the carried results, say so and use the call's output where it was stored, "
+    "or re-run it deliberately.]")
 
 
 def _carry_path(key):
@@ -5040,6 +5071,7 @@ def tool_carry_block(key):
     run_no = int(st.get("run") or 0)
     budget = int(CONFIG["agent"].get("tool_carry_chars") or 8000)
     rows, used = [], 0
+    index, index_used = [], 0        # one line each for the calls whose text did not fit
     for e in reversed(st.get("entries") or []):
         if int(e.get("run") or 0) >= run_no:
             continue                       # captured during THIS run: the model has seen it
@@ -5051,12 +5083,31 @@ def tool_carry_block(key):
                  % (e.get("tool"), e.get("args") or "", _carry_age(e.get("at")),
                     _carry_stale(e), cut, body))
         if rows and used + len(block) + 2 > budget:
-            break
+            # Out of room for the full TEXT - but not out of things worth saying. A call
+            # this conversation already made has to stay visible, or the model pays for the
+            # same question twice: measured on the fleet's own logs 2026-09-20, 25% of tool
+            # calls repeated a call from an earlier run of the same session (~279k tokens
+            # re-bought), including a web search re-run three runs after it was answered,
+            # because the old code simply stopped rendering here.
+            args_head = e.get("args") or ""
+            if len(args_head) > 64:
+                args_head = args_head[:64] + "..."
+            line = ("--- %s(%s)%s -> %d chars"
+                    % (e.get("tool"), args_head, _carry_age(e.get("at")), len(body)))
+            if (len(index) >= _CARRY_INDEX_LINES
+                    or index_used + len(line) + 1 > _CARRY_INDEX_CHARS):
+                break
+            index.append(line)
+            index_used += len(line) + 1
+            continue
         rows.append(block)
         used += len(block) + 2
-    if not rows:
+    if not rows and not index:
         return ""
-    return _CARRY_BANNER + "\n\n" + "\n\n".join(rows)
+    out = _CARRY_BANNER + "\n\n" + "\n\n".join(rows)
+    if index:
+        out += "\n\n" + _CARRY_INDEX_HEAD + "\n" + "\n".join(index)
+    return out
 
 
 def tool_carry_begin(key):

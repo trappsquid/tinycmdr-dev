@@ -156,9 +156,20 @@ def main():
                                   ("result %d " % i) + "y" * 1500)
         fb.tool_carry_begin(key)
         small = fb.tool_carry_block(key)
-        check(len(small) <= 3200, f"the block obeys tool_carry_chars ({len(small)} chars)")
-        check("command=c5" in small and "command=c0" not in small,
-              "  newest first, oldest dropped")
+        # Two bounds now, and both matter: the RESULTS still obey tool_carry_chars, and a
+        # call whose text no longer fits is still NAMED in a bounded index below them. The
+        # old contract dropped it entirely, so the model could not tell it had already
+        # asked - measured on the fleet's own logs 2026-09-20: 25% of tool calls repeated a
+        # call from an earlier run of the same session (~279k tokens re-bought).
+        body, _sep, idx = small.partition(fb._CARRY_INDEX_HEAD)
+        check(len(body) <= 3200,
+              f"the carried results obey tool_carry_chars ({len(body)} chars)")
+        check(len(idx) <= fb._CARRY_INDEX_CHARS + 2,
+              f"the index obeys its own bound ({len(idx) if _sep else 0} chars)")
+        check("command=c5" in small and "result 5" in small,
+              "  the newest result rides in full")
+        check("command=c0" in small and "result 0" not in small,
+              "  an older call is still named, with no body")
         fb.CONFIG["agent"]["tool_carry_chars"] = 16000
 
         # ---- entries are capped ------------------------------------------------

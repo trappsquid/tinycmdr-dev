@@ -263,6 +263,18 @@ function fetchShim(url, opts) {
 }
 globalThis.fetch = fetchShim;
 
+// ---------------------------------------- the clipboard a plain-http page has
+// navigator does not exist in Node, and the LAN page is served over http:// (not a
+// secure context), so the path that really runs there is the document one. Capture
+// what the selection would have copied, the way execCommand would have.
+const copied = [];
+globalThis.document.execCommand = (cmd) => {
+  const kids = (globalThis.document.body && globalThis.document.body.children) || [];
+  const ta = kids[kids.length - 1];
+  if (cmd === 'copy' && ta && ta.value !== undefined) { copied.push(ta.value); }
+  return true;
+};
+
 // -------------------------------------------------------------- fake clock
 let timers = [];
 globalThis.setTimeout = (fn) => { timers.push(fn); return timers.length; };
@@ -300,13 +312,22 @@ loadPage();
 
 // Each run draws into its own container (div.run, display:contents), so a line
 // is that container's child - not a direct child of #log.
-function rendered() {
+function logNodes() {
   const out = [];
   for (const c of byId.log.children) {
     const kids = (c.className === 'run' && c.children.length) ? c.children : [c];
-    for (const k of kids) { out.push({ cls: k.className, text: k.textContent }); }
+    for (const k of kids) { out.push(k); }
   }
   return out;
+}
+
+function rendered() {
+  return logNodes().map((k) => ({
+    cls: k.className,
+    text: k.textContent,
+    // the copy button is a child element, so it survives in the render report
+    hasCopy: (k.children || []).some((c) => c.className === 'copyb'),
+  }));
 }
 
 function noteState() {
@@ -340,6 +361,17 @@ async function main() {
       for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
     } else if (step.kind === 'polls') {
       for (let i = 0; i < (step.n || 1); i++) { await tick(); }
+    } else if (step.kind === 'copy') {
+      // click the copy button on the box that contains <text>: the real path
+      const target = logNodes().find((k) => (step.cls === undefined || k.className.indexOf(step.cls) >= 0)
+        && k.textContent.indexOf(step.text) >= 0);
+      if (!target) {
+        errors.push('copy step: no box contains ' + JSON.stringify(step.text));
+      } else {
+        const b = (target.children || []).find((c) => c.className === 'copyb');
+        if (!b) { errors.push('copy step: that box has no copy button'); }
+        else { for (const fn of (b.listeners.click || [])) { await fn({ stopPropagation() {} }); } }
+      }
     }
   }
   const out = {
@@ -350,6 +382,7 @@ async function main() {
     events,
     note: noteState(),
     pages,
+    copied,
     errors,
   };
   process.stdout.write(JSON.stringify(out));
@@ -358,5 +391,5 @@ async function main() {
 main().catch((e) => {
   errors.push('driver failed: ' + e.message);
   process.stdout.write(JSON.stringify({ rendered: rendered(), runs: [], events,
-                                        note: noteState(), pages, errors }));
+                                        note: noteState(), pages, copied, errors }));
 });

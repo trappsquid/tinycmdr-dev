@@ -54,6 +54,28 @@ def main():
         rows = [json.loads(l) for l in body.splitlines() if l.strip()]
         check(len(rows) == before - 1, f"one line per non-system message ({len(rows)})")
         check(all(r.get("why") == "compact" for r in rows), "each line says why it was written")
+        # -- search_sessions reads BOTH shapes that live in sessions/ -----------
+        # A carry sidecar (*.carry.json) has a dict root and sorted() puts it BEFORE the
+        # transcript, so the old loop iterated its string keys and died with "'str' object
+        # has no attribute 'get'" on the first sidecar: the tool built to recall a session
+        # could not read any session that had ever run a tool. Found by the Windows test box on its
+        # own build 2026-09-20, after it lost a conversation's research to a run boundary.
+        sk = "mm-recall-demo"
+        (fb.SESSIONS_DIR / f"{sk}.json").write_text(json.dumps([
+            {"role": "user", "content": "how do I get Toast to take AV1"},
+            {"role": "assistant", "content": "Toast's input list has no AV1; QuickTime gates it"}]))
+        (fb.SESSIONS_DIR / f"{sk}.carry.json").write_text(json.dumps({"run": 5, "entries": [
+            {"tool": "web_search", "args": '{"query": "Roxio Toast AV1"}',
+             "out": "Toast 20 refuses AV1 in mp4; the white preview is the refusal",
+             "at": 1789900000, "run": 5}]}))
+        out = fb.tool_search_sessions({"query": "av1"}, {})
+        check("Toast" in out,
+              f"search_sessions survives a carry sidecar ({out[:60]!r})")
+        check("refuses AV1" in out,
+              "...and recalls what a carried tool result said")
+        check(f"[{sk}] assistant" in out,
+              "...while still reading the transcript itself")
+
         check(json.loads((fb.SESSIONS_DIR / f"{key}.transcript.jsonl").read_text(encoding="utf-8")
                          .splitlines()[0]).get("role") == "user",
               "and the first line is the oldest message, in order")

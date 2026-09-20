@@ -273,6 +273,41 @@ def main():
     check(not has(res, "old question"),
           "and the other conversation's lines do not bleed into it")
 
+    # -- the copy button: on the answer and on command output, not on chatter --
+    # The operator asked for a quick click-to-copy on the agent's boxes, upper right.
+    # The clipboard is the thing that has to be right: the timestamp on an answer is
+    # chrome and the button's own label is not content, so neither may be copied.
+    answer = "here is how:\n\ndocker ps\n\nthat is the list"
+    tool_out = "Get-ChildItem C:/temp" + chr(10) + "C:\\temp\\notes.txt"
+    sc = {
+        "runs": [[["thinking", "thinking about the disk"],
+                  ["tool", "shell(Get-ChildItem C:/temp)"],
+                  ["tool_done", tool_out],
+                  ["final", answer]]],
+        "steps": [
+            {"kind": "message", "text": "look at the disk", "polls": 14},
+            {"kind": "copy", "text": "docker ps", "cls": "final"},
+            {"kind": "copy", "text": "Get-ChildItem", "cls": "tool_done"},
+            {"kind": "polls", "n": 2},
+        ],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the copy path runs clean ({res['errors'][:1]})")
+    fin = [r for r in res["rendered"] if r["cls"].endswith("final")]
+    tool = [r for r in res["rendered"] if r["cls"].endswith("tool_done")]
+    think = [r for r in res["rendered"] if r["cls"].endswith("thinking")]
+    check(fin and fin[0]["hasCopy"], "the answer box carries a copy button")
+    check(tool and tool[0]["hasCopy"], "a command-output box carries one too")
+    check(think and not think[0]["hasCopy"],
+          "narration does not: the transcript stays quiet to read")
+    copied = res.get("copied") or []
+    check(len(copied) == 2, f"both clicks put text on the clipboard ({len(copied)})")
+    check(bool(copied) and copied[0] == answer,
+          f"an answer is copied EXACTLY - no timer, no button label "
+          f"({copied[:1]!r})")
+    check(len(copied) > 1 and copied[1] == tool_out,
+          "...and a tool box copies its own output, line breaks and all")
+
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0
 
