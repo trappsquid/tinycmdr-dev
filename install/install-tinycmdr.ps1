@@ -620,8 +620,9 @@ if (-not $SkipTask) {
     # Which account the task runs as. "$env:USERDOMAIN\$env:USERNAME" is WRONG on a
     # machine that is not in a domain: USERDOMAIN is "WORKGROUP", which does not
     # resolve, and Register-ScheduledTask dies with "No mapping between account names
-    # and security IDs was done" (measured on bot-aTOWER 2026-09-20, where the previous
-    # install had used the bare account name and worked). Resolve a real account
+    # and security IDs was done" (measured on a fresh install on a Windows host in a
+    # workgroup, where the previous install used the bare account name and worked).
+    # Resolve a real account
     # first: the domain only when there is one, then the machine name, then the bare
     # user name, and prove each by translating it to a SID.
     $acct = $null

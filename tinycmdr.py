@@ -131,7 +131,7 @@ DEFAULT_CONFIG = {
         # unexplained 0.6 came from: a default nobody remembered choosing, which
         # applied whenever config.json did not override it.
         "max_turns": 100,
-        "max_context_tokens": 24000,
+        "max_context_tokens": 131072,
         # Cap on generated tokens per LLM call. Llama.cpp-class servers default
         # to max_tokens/n_predict = -1 (unlimited), so on a slow local model one
         # call can generate for many minutes and blow the run's time budget.
@@ -143,7 +143,7 @@ DEFAULT_CONFIG = {
         "max_tokens": 16384,
         "final_max_tokens": 8192,     # forced wrap-up call at the budget limit
         "max_tokens_ceiling": 65536,  # one-shot retry cap when cut off mid-think
-        "request_timeout": 600,
+        "request_timeout": 1200,
         # Hard wall-clock bound = request_timeout + request_grace. requests'
         # timeout bounds INACTIVITY, not total time: an endpoint that trickles
         # a byte every few seconds keeps a connection alive indefinitely and
@@ -191,8 +191,14 @@ DEFAULT_CONFIG = {
     },
     "agent": {
         "bot_name": socket.gethostname(),
-        "history_exchanges": 10,
-        "tool_output_max_chars": 6000,
+        "history_exchanges": 20,
+        # ask_user: a run that needs a decision STOPS and asks the operator instead of
+        # guessing at it. ON by default since 1.0.0 - the answering door is per lane (the
+        # Mattermost dispatcher, the web run, the CLI prompt) and a lane without one refuses
+        # the tool rather than blocking. A question waits ask_user_wait_seconds.
+        "ask_user": True,
+        "ask_user_wait_seconds": 120,
+        "tool_output_max_chars": 10000,
         "fetch_max_chars": 12000,
         # Over-cap results are SPILLED, not shredded: the full text goes to spill/ and the
         # model gets both ends plus the path (measured 2026-09-18: a 30,045-char result lost
@@ -253,13 +259,16 @@ DEFAULT_CONFIG = {
         # run, and 37 of 48 skill reads were repeats, each also a whole model round trip.
         # Not eviction: 200k budget, zero compaction events ever. This carries the results
         # themselves, newest first, bounded, age-stamped, with a changed-file marker.
-        # Measured on the fleet manager (two samples: 80% and 78% less source text re-bought
-        # in the later runs of a session), but on FOUR measured runs per leg with a mixed
-        # wall clock, and its failure mode - answering from stale carried text - is the least
-        # tested thing in this build. OFF by default for this release; a host that wants the
-        # evidence turns it on in its own config.json; the fleet manager does, on purpose,
-        # because that is where the logs that measure it live.
-        "tool_carry": False,
+        # Measured on the fleet manager: 80% and 78% less source text re-bought in the later
+        # runs of a session (25% of tool calls repeated a call from an earlier run, ~279k
+        # tokens re-bought, worst case 143 repeats in a single conversation). ON by default
+        # since 1.0.0. What held it back - answering from stale carried text - now has a
+        # guard: _carry_stale re-stats the file an entry came from and says "(changed since:
+        # read it again before trusting the text below)", and tests/test_tool_carry.py
+        # asserts both directions. The block rides after the system prompt and is
+        # byte-identical for every call of a run, so it costs one prefix reset per run,
+        # never one per turn.
+        "tool_carry": True,
         "tool_carry_chars": 8000,
         # shell_facts: state this process's rights (elevated or not) in the trailing block on
         # the first turn of a run. A non-elevated console on an administrator account is the
@@ -271,12 +280,12 @@ DEFAULT_CONFIG = {
         # now: nothing reads it back and no prompt or history derives from it. Arguments
         # are scrubbed and digested, never stored raw, so a .env read cannot land in the
         # file. Off unless a host turns it on in its own config.json.
-        "event_log": False,
+        "event_log": True,
         # plan_from_request: when a request lists its own steps ("1. ... 2. ..."), the
         # harness parses them into the plan. Measured necessity: the model was offered the
         # plan tool in 16 graded runs and called it zero times.
         "plan_from_request": True,
-        "shell_timeout": 180,
+        "shell_timeout": 300,
         # A recursive walk from a BROAD root is the one command shape measured to
         # eat whole minutes of the operator's time: one graded sample spent 608 of
         # a 1193-second leg on a single
@@ -294,7 +303,7 @@ DEFAULT_CONFIG = {
         # budget rather than an unbounded sequence of walks.
         "command_cost_guard": True,
         "scan_budget_seconds": 120,   # per RUN, shell + execute_code together
-        "notes_max_chars": 4000,  # newest notes carried in the system prompt
+        "notes_max_chars": 8000,  # newest notes carried in the system prompt
         # A single remember call is capped AT WRITE TIME. A 480KB note (seen in
         # the wild) otherwise poisons every later call in the session, because
         # it overflows the context window on each request and no amount of
@@ -4165,10 +4174,10 @@ def _schema(description, properties, required):
 # the operator never saw.
 #
 # Gates, because the harness spends its budget on an unattended box:
-#   * OFF by default (`agent.ask_user` in config.json). With it off the tool refuses and
+#   * ON by default since 1.0.0 (`agent.ask_user` in config.json). With it off the tool refuses and
 #     tells the model to state its assumption and carry on.
 #   * One question per session at a time; a question waits `agent.ask_user_wait_seconds`
-#     (default 300, hard cap 900) and then returns "no answer - apply your judgment".
+#     (default 120, hard cap 900) and then returns "no answer - apply your judgment".
 #   * The MODEL never gives itself time: it may ask for an order of magnitude, and that
 #     is capped and floored by the config.
 #   * A /stop, a restart, or the stall watchdog releases the wait immediately.

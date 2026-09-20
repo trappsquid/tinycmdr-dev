@@ -173,8 +173,27 @@ def test_the_reference_config_parses_and_matches_the_defaults():
     # every behaviour key the build ships a default for (paths are the installer's business)
     SKIP_PATHS = {"notes_file", "notes_archive_file", "sessions_dir", "tasks_file", "log_file",
                   "tools_dir", "skills_dir", "atlas_file", "field_notes_file", "debug_dump_dir"}
+    # The defaults of the BUILD THIS FILE BELONGS TO, read from source: the console build
+    # generates its own example, so the root one is the app's reference.
+    code_defaults = fb.DEFAULT_CONFIG
+    bot_src = BASE / "tinycmdr.py"
+    if bot_src.exists():
+        try:
+            import ast
+            from pathlib import Path as _P
+            _tree = ast.parse(bot_src.read_text(encoding="utf-8", errors="replace"))
+            for _n in _tree.body:
+                if (isinstance(_n, ast.Assign) and _n.targets
+                        and getattr(_n.targets[0], "id", "") == "DEFAULT_CONFIG"):
+                    _ns = {"socket": socket, "os": os, "Path": _P, "str": str}
+                    exec(compile(ast.Module(body=[_n], type_ignores=[]), "<defaults>", "exec"), _ns)
+                    code_defaults = _ns["DEFAULT_CONFIG"]
+                    break
+        except Exception as e:
+            check("the app defaults can be read from source", False, "%s: %s" % (type(e).__name__, e))
+
     missing = []
-    for section, keys in fb.DEFAULT_CONFIG.items():
+    for section, keys in code_defaults.items():
         if section.startswith("_") or section not in ex:
             continue
         for key in keys:
@@ -185,16 +204,30 @@ def test_the_reference_config_parses_and_matches_the_defaults():
     check("the reference config documents every shipped behaviour key (%d missing)"
           % len(missing), not missing, ", ".join(sorted(missing)[:8]))
 
-    # the numbers that decide how long a task may run must match what the code ships
+    # Carrying the key is not enough - the VALUE has to be the one the code ships. A
+    # presence check cannot see a wrong number, which is how a two-pattern seatbelt and a
+    # 40-turn ceiling sat in this file long after the code had moved on.
+    HOST_SPECIFIC = {
+        "llm": {"base_url", "model", "fallbacks"},          # the installer/user points these
+        "mattermost": {"url", "token", "allowed_users"},     # per deployment
+        "agent": {"bot_name"},                               # the host's name
+    }
     drift = []
-    for key in ("max_steps", "max_minutes", "search_timeout", "command_cost_guard",
-                "scan_budget_seconds", "tool_output_max_chars"):
-        if key in fb.DEFAULT_CONFIG.get("agent", {}) and \
-           ex.get("agent", {}).get(key) != fb.DEFAULT_CONFIG["agent"][key]:
-            drift.append("%s example=%r code=%r" % (key, ex["agent"].get(key),
-                                                    fb.DEFAULT_CONFIG["agent"][key]))
-    check("the reference config's budgets match the code defaults (%d drifted)" % len(drift),
-          not drift, "; ".join(drift))
+    for section, keys in code_defaults.items():
+        if section.startswith("_") or section not in ex:
+            continue
+        for key, want in keys.items():
+            if key.startswith("_") or key in SKIP_PATHS or key in HOST_SPECIFIC.get(section, ()):
+                continue
+            got = ex[section].get(key)
+            if got != want:
+                if isinstance(want, list):
+                    drift.append("%s.%s: example has %d entry/ies, code has %d"
+                                 % (section, key, len(got or []), len(want)))
+                else:
+                    drift.append("%s.%s: example=%r code=%r" % (section, key, got, want))
+    check("the reference config ships the code's own values (%d drifted)" % len(drift),
+          not drift, "; ".join(drift[:6]))
 
 
 # --- 1. portability ----------------------------------------------------------

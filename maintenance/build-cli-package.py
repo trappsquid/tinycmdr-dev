@@ -72,6 +72,25 @@ ATLAS_APPEARS_LATER = {"sessions", "notes.md", "tasks.json", "tasks.md", "tinycm
                        "state.json"}
 
 
+def _shipped_defaults(path):
+    """Read DEFAULT_CONFIG out of the build so the example cannot name a number it does not
+    ship. max_steps and max_minutes had both drifted (100/30 documented against 250/75
+    shipped) before this was derived. Refuses rather than guess: a stale reference config is
+    a wrong answer to a reader's first question.
+    """
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+    except Exception as e:
+        raise SystemExit("cannot read the build's defaults (%s: %s)" % (type(e).__name__, e))
+    for n in tree.body:
+        if (isinstance(n, ast.Assign) and n.targets
+                and getattr(n.targets[0], "id", "") == "DEFAULT_CONFIG"):
+            ns = {"socket": __import__("socket"), "os": os, "Path": Path, "str": str}
+            exec(compile(ast.Module(body=[n], type_ignores=[]), "<defaults>", "exec"), ns)
+            return ns["DEFAULT_CONFIG"]
+    raise SystemExit("no DEFAULT_CONFIG in %s" % path)
+
+
 def write_atlas(root: Path, platform: str):
     """Put this platform's atlas beside the agent as atlas.md."""
     src = ATLAS[platform]
@@ -136,7 +155,10 @@ def build_folder(root: Path, platform: str):
     # agent is allowed to reach, its key, the model id, and an optional CA bundle.
     # Every other setting has a default inside the build (DEFAULT_CONFIG), so nothing
     # else needs to appear here for the agent to run.
-    (root / "config.example.json").write_text(json.dumps({
+    _D = _shipped_defaults(SRC)
+    _llm = _D.get("llm", {})
+    _ag = _D.get("agent", {})
+    example = {
         "_readme": ("NOT the config: this file is only the template. Copy it to config.json "
                     "(or rename it) and fill in the three fields under llm - base_url, "
                     "api_key, model. The agent itself never writes a config.json, so this "
@@ -154,27 +176,42 @@ def build_folder(root: Path, platform: str):
             # max_context_tokens must fit the endpoint's real window per request, with room
             # for max_tokens and the tool schemas: ~100000 for a 128k endpoint, 900000 for a
             # 1M-token model.
-            "max_turns": 100,
-            "max_context_tokens": 500000,
-            "max_tokens": 16384,
-            "final_max_tokens": 8192,
+            "max_turns": _llm.get("max_turns"),
+            "max_context_tokens": _llm.get("max_context_tokens"),
+            "max_tokens": _llm.get("max_tokens"),
+            "final_max_tokens": _llm.get("final_max_tokens"),
         },
         "agent": {
             # These three decide how long a run may go, and all three force a report when
             # they are reached. Raise them for debugging or an investigation, lower them for
             # unattended work.
-            "max_steps": 100,
-            "max_minutes": 30,
+            "max_steps": _ag.get("max_steps"),
+            "max_minutes": _ag.get("max_minutes"),
             # atlas.md sits beside this file: a map of the machine, shipped with the build
             # and never regenerated, so edit it to match the machine you are on. It rides
             # the first turn of a run (and again after a failure that looks like a wrong
             # path). Set atlas_enabled to false to keep it out of the prompt entirely, or
             # point atlas_file at your own file.
-            "atlas_enabled": True,
-            "atlas_file": "atlas.md",
-            "atlas_max_chars": 2400,
+            "atlas_enabled": _ag.get("atlas_enabled"),
+            "atlas_file": _ag.get("atlas_file"),
+            "atlas_max_chars": _ag.get("atlas_max_chars"),
         },
-    }, indent=2) + "\n", encoding="utf-8")
+    }
+    # Self-check before the archive exists: every key this example documents must equal the
+    # value the build ships. Deriving them above should make that true by construction; this
+    # is what says so out loud, and it fails the build rather than shipping the disagreement.
+    _drift = []
+    for _sect, _kv in example.items():
+        if _sect.startswith("_") or not isinstance(_kv, dict):
+            continue
+        _want = _D.get(_sect, {})
+        for _k, _v in _kv.items():
+            if _k in _want and _want[_k] != _v:
+                _drift.append("%s.%s example=%r build=%r" % (_sect, _k, _v, _want[_k]))
+    if _drift:
+        raise SystemExit("refusing to write a reference config that disagrees with the "
+                         "build: %s" % "; ".join(_drift))
+    (root / "config.example.json").write_text(json.dumps(example, indent=2) + "\n", encoding="utf-8")
     (root / "skills").mkdir(exist_ok=True)
     (root / "skills" / "PUT-YOUR-RUNBOOKS-HERE.txt").write_text(SKILLS_NOTE, encoding="utf-8")
     (root / "tools").mkdir(exist_ok=True)

@@ -207,7 +207,7 @@ DEFAULT_CONFIG = {
         "max_tokens": 16384,
         "final_max_tokens": 8192,     # forced wrap-up call at the budget limit
         "max_tokens_ceiling": 65536,  # one-shot retry cap when cut off mid-think
-        "request_timeout": 600,
+        "request_timeout": 1200,
         # Hard wall-clock bound = request_timeout + request_grace. The timeout
         # bounds INACTIVITY, not total time: an endpoint that trickles a byte
         # every few seconds keeps a connection alive forever.
@@ -220,14 +220,14 @@ DEFAULT_CONFIG = {
     },
     "agent": {
         "bot_name": socket.gethostname(),
-        "history_exchanges": 10,
-        "tool_output_max_chars": 6000,
+        "history_exchanges": 20,
+        "tool_output_max_chars": 10000,
         "fetch_max_chars": 12000,
-        "shell_timeout": 180,
+        "shell_timeout": 300,
         # Which interpreter the shell tool uses on Windows: "powershell" or "cmd".
         # cmd is for hosts where PowerShell is restricted or removed.
         "shell": "powershell",
-        "notes_max_chars": 4000,      # newest notes carried in the system prompt
+        "notes_max_chars": 8000,      # newest notes carried in the system prompt
         "notes_max_note_chars": 1200,  # cap on ONE remember call, at write time
         "notes_keep_entries": 60,     # entries kept in notes.md before ageing out
         "notes_archive_days": 45,     # older than this -> notes-archive.md
@@ -253,18 +253,30 @@ DEFAULT_CONFIG = {
         "show_usage": True,     # token/time footer after each run
         "confirm_patterns": [],  # commands matching these need a 'yes' reply
         "blocked_patterns": [
-            r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(\s|$|\*)",
-            r"rm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+/(\s|$|\*)",
-            r"\bmkfs\b", r"\bdd\s+.*of=/dev/", r":\(\)\s*\{",
-            r"\bshutdown\b", r"\bpoweroff\b", r"\breboot\b",
-            r">\s*/dev/sd", r"\bformat\s+[a-zA-Z]:",
-            r"remove-item\b[^|;]*-recurse[^|;]*-force",
-            r"\b(stop|restart)-computer\b",
-            r"\bformat-volume\b", r"\bclear-disk\b", r"\binitialize-disk\b",
-            r"\bcipher\s+/w\b", r"\bvssadmin\s+delete\s+shadows\b",
-            r"\brd\s+/s\b", r"\brmdir\s+/s\b", r"\bdel\s+/[a-z]*[sq]",
-            r"-encodedcommand\b",
+            "rm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+/(?![A-Za-z0-9_./~-])",
+            "rm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+/(?![A-Za-z0-9_./~-])",
+            "\\bmkfs\\b",
+            "\\bdd\\s+.*of=/dev/",
+            ":\\(\\)\\s*\\{",
+            "\\bshutdown\\b",
+            "\\bpoweroff\\b",
+            "\\breboot\\b",
+            ">\\s*/dev/sd",
+            "\\bformat\\s+[a-zA-Z]:",
+            "remove-item\\b[^|;]*-recurse[^|;]*-force",
+            "\\b(stop|restart)-computer\\b",
+            "\\bformat-volume\\b",
+            "\\bclear-disk\\b",
+            "\\binitialize-disk\\b",
+            "\\bcipher\\s+/w\\b",
+            "\\bvssadmin\\s+delete\\s+shadows\\b",
+            "\\brd\\s+/s\\b",
+            "\\brmdir\\s+/s\\b",
+            "\\bdel\\s+/[a-z]*[sq]",
+            "-encodedcommand\\b",
         ],
+        "ask_user": True,
+        "ask_user_wait_seconds": 120,
         "spill_output": True,
         "spill_keep": 50,
         "digest_enabled": True,
@@ -284,10 +296,10 @@ DEFAULT_CONFIG = {
         "atlas_enabled": True,
         "atlas_file": "atlas.md",
         "atlas_max_chars": 2400,
-        "tool_carry": False,
+        "tool_carry": True,
         "tool_carry_chars": 8000,
         "shell_facts": True,
-        "event_log": False,
+        "event_log": True,
         "plan_from_request": True,
         "search_timeout": 60,
         "command_cost_guard": True,
@@ -388,7 +400,7 @@ def load_config():
 
 CONFIG = load_config()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.14"
+VERSION = "1.0.15"
 BUILD = "cli"          # this file is the enterprise build; tinycmdr.py in the repo is the bot
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
@@ -3960,10 +3972,10 @@ def _schema(description, properties, required):
 # the operator never saw.
 #
 # Gates, because the harness spends its budget on an unattended box:
-#   * OFF by default (`agent.ask_user` in config.json). With it off the tool refuses and
+#   * ON by default since 1.0.0 (`agent.ask_user` in config.json). With it off the tool refuses and
 #     tells the model to state its assumption and carry on.
 #   * One question per session at a time; a question waits `agent.ask_user_wait_seconds`
-#     (default 300, hard cap 900) and then returns "no answer - apply your judgment".
+#     (default 120, hard cap 900) and then returns "no answer - apply your judgment".
 #   * The MODEL never gives itself time: it may ask for an order of magnitude, and that
 #     is capped and floored by the config.
 #   * A /stop, a restart, or the stall watchdog releases the wait immediately.

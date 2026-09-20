@@ -86,10 +86,12 @@ def main():
         src.write_text("\n".join("line %d" % i for i in range(1, 401)) + "\n",
                        encoding="utf-8")
 
-        # The release default is OFF (thin evidence, untested failure mode: see the config
-        # comment). Everything below this line tests the mechanism as a host enables it.
-        check(fb.CONFIG["agent"].get("tool_carry") is False,
-              "the carry ships OFF by default and a host turns it on")
+        # The release default is ON since 1.0.0. What held it back was the stale-text
+        # failure mode; that now has a guard (_carry_stale re-stats the file an entry came
+        # from) and this suite asserts both of its directions below. Everything under this
+        # line tests the mechanism as it runs, and the OFF switch is tested with it.
+        check(fb.CONFIG["agent"].get("tool_carry") is True,
+              "the carry ships ON by default and a host with a reason turns it off")
         fb.CONFIG["agent"]["tool_carry"] = True
         check(fb.CONFIG["agent"].get("tool_carry_chars") == 8000,
               "and bounded by tool_carry_chars (8000: the declared payload ceiling)")
