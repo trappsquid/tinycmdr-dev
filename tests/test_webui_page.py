@@ -224,6 +224,55 @@ def main():
     check(-1 < where(res, "check the disk") < where(res, "the answer"),
           "and draws it below the message, in order")
 
+    # -- 5. the rail: a new conversation must not inherit the old transcript --
+    # The lane used to have exactly one conversation, so "new" was the same as
+    # wiped-and-forgotten. Now the page keeps two apart, and a reload of the new
+    # one paints only the new one - from the server, not from this browser.
+    sc = {
+        "runs": [[["final", "old answer"]], [["final", "fresh answer"]]],
+        "steps": [
+            {"kind": "message", "text": "old question", "polls": 14},
+            {"kind": "call", "fn": "newConversation", "polls": 6,
+             "args": []},
+            {"kind": "message", "text": "fresh question", "polls": 14},
+        ],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the rail scenario runs clean ({res['errors'][:1]})")
+    check(res["state"].get("sessionKey") == "web-new1",
+          f"the page switched to the conversation the server made "
+          f"({res['state'].get('sessionKey')})")
+    check(res["state"].get("sessions") and
+          any(s["key"] == "web-new1" for s in res["state"]["sessions"]),
+          "and that conversation is in the rail")
+    check(has(res, "fresh question") and has(res, "fresh answer"),
+          "the new conversation holds its own message and its own answer")
+    check(not has(res, "old question"),
+          "the old conversation's message is not in it")
+    check(not has(res, "old answer"), "nor is its answer")
+    check(len(res["runs"]) == 2,
+          f"the host ran two tasks in two conversations ({len(res['runs'])})")
+
+    # ...and a reload of the new conversation paints it from the server
+    sc = {
+        "runs": [[["final", "old answer"]], [["final", "fresh answer"]]],
+        "steps": [
+            {"kind": "message", "text": "old question", "polls": 14},
+            {"kind": "call", "fn": "newConversation", "polls": 6, "args": []},
+            {"kind": "message", "text": "fresh question", "polls": 14},
+            {"kind": "reload", "polls": 6},
+        ],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the reloaded rail is clean ({res['errors'][:1]})")
+    check(res["state"].get("sessionKey") == "web-new1",
+          f"a reload comes back to the conversation it was in "
+          f"({res['state'].get('sessionKey')})")
+    check(count(res, "fresh question") == 1,
+          f"the message is painted once from the server ({count(res, 'fresh question')})")
+    check(not has(res, "old question"),
+          "and the other conversation's lines do not bleed into it")
+
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0
 

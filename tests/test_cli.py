@@ -806,6 +806,87 @@ def test_verbs_answer_and_do_not_crash():
     check("verbs: everything answered without raising", len(PASSES) > 0)
 
 
+def test_the_console_lists_and_resumes_conversations():
+    """A terminal that can only ever be one conversation forgets everything the
+    moment you close it. /sessions and /resume make the saved conversations
+    reachable from the console, the same way the web rail does."""
+    import json as _json
+    import tempfile as _tempfile
+    import time as _time
+    out = io.StringIO()
+    real, real_dir = sys.stdout, fb.SESSIONS_DIR
+
+    def verdict(name, ok, detail=""):
+        """Report through the real stdout: this test points sys.stdout at a
+        StringIO to capture what the VERBS print, and a check that lands in there
+        is a check nobody reads."""
+        held = sys.stdout
+        sys.stdout = real
+        try:
+            check(name, ok, detail)
+        finally:
+            sys.stdout = held
+    folder = Path(_tempfile.mkdtemp(prefix="fb-cli-sessions-"))
+    (folder / "sessions").mkdir()
+    older = folder / "sessions" / "alpha.json"
+    newer = folder / "sessions" / "beta.json"
+    older.write_text(_json.dumps([{"role": "user", "content": "one"},
+                                  {"role": "assistant", "content": "a"}]), encoding="utf-8")
+    newer.write_text(_json.dumps([{"role": "user", "content": "two"},
+                                  {"role": "assistant", "content": "b"},
+                                  {"role": "user", "content": "three"},
+                                  {"role": "assistant", "content": "c"}]), encoding="utf-8")
+    now = _time.time()
+    os.utime(older, (now - 600, now - 600))
+    os.utime(newer, (now, now))
+    saved_key = fb._CLI.get("session")
+    try:
+        fb.SESSIONS_DIR = folder / "sessions"
+        sys.stdout = out
+        fb._cli_command("/sessions")
+        listed = out.getvalue()
+        verdict("current: /sessions lists what is saved",
+              "alpha" in listed and "beta" in listed)
+        verdict("current: the newest conversation is first",
+              listed.index("beta") < listed.index("alpha"))
+        verdict("current: it shows how much is in each",
+              "2 exchange(s)" in listed and "1 exchange(s)" in listed)
+        out.truncate(0), out.seek(0)
+        fb._cli_command("/resume 1")
+        resumed = out.getvalue()
+        verdict("current: /resume 1 continues the newest one",
+              fb._cli_key() == "beta", fb._cli_key())
+        verdict("current: and says which one", "beta" in resumed)
+        out.truncate(0), out.seek(0)
+        fb._cli_command("/status")
+        verdict("current: /status names the conversation in use",
+              "beta" in out.getvalue())
+        out.truncate(0), out.seek(0)
+        fb._cli_command("/resume 9")
+        verdict("current: an out-of-range choice is refused, not guessed",
+              fb._cli_key() == "beta" and "pick N" in out.getvalue())
+        out.truncate(0), out.seek(0)
+        fb._cli_command("/help")
+        verdict("current: /help documents them",
+              "/sessions" in out.getvalue() and "/resume" in out.getvalue())
+        out.truncate(0), out.seek(0)
+        fb._cli_command("/new")
+        verdict("current: /new clears the conversation that is in use",
+              not newer.exists() and older.exists(),
+              f"{newer.exists()} {older.exists()}")
+        fb.SESSIONS_DIR = folder / "empty"
+        out.truncate(0), out.seek(0)
+        fb._cli_command("/sessions")
+        verdict("current: an empty folder says so, it does not traceback",
+              "no saved conversations" in out.getvalue())
+    finally:
+        sys.stdout = real
+        fb.SESSIONS_DIR = real_dir
+        fb._CLI["session"] = saved_key
+        import shutil as _shutil
+        _shutil.rmtree(folder, ignore_errors=True)
+
+
 def test_banner_reports_the_model_and_the_overhead():
     out = io.StringIO()
     real = sys.stdout

@@ -46,5 +46,6 @@ skills/
 .env.*
 !.env.example
 web-token.txt.*
+web-sessions.json
 a.txt
 lines.txt*

@@ -7356,6 +7356,8 @@ HELP_TEXT = ("\n"
              "  /help            this list\n"
              "  /new             forget the conversation so far and start clean\n"
              "  /model [NAME]    show the model in use, or switch to NAME\n"
+             "  /sessions        the conversations saved in this folder\n"
+             "  /resume N        continue one of them in this window\n"
              "  /status          version, endpoint, context use, notes, tasks, skills\n"
              "  /tasks           the task ledger for this machine\n"
              "  /notes           what it has written down about this machine\n"
@@ -7385,11 +7387,80 @@ def cli_banner():
     print(dim("type /help for the commands, /exit to quit\n"))
 
 
+def _cli_key():
+    """Which conversation this console is in. 'cli' until /resume says otherwise."""
+    return _CLI.get("session") or "cli"
+
+
+def _cli_session_rows():
+    """Saved conversations, newest first: key, exchanges, when it was last used.
+
+    A session key IS a filename here (the agent writes sessions/<key>.json), so
+    this reads what is on disk rather than keeping a second list that could
+    disagree with it.
+    """
+    rows = []
+    try:
+        files = list(SESSIONS_DIR.glob("*.json"))
+    except OSError:
+        files = []
+    for f in files:
+        if f.name.startswith("export-"):
+            continue        # /save exports, not conversations
+        try:
+            hist = json.loads(f.read_text(encoding="utf-8"))
+        except Exception:
+            continue        # a damaged session is not a reason to fail here
+        if not isinstance(hist, list):
+            continue
+        rows.append({"key": f.stem, "messages": len(hist),
+                     "exchanges": sum(1 for m in hist if isinstance(m, dict)
+                                      and m.get("role") == "user"),
+                     "mtime": f.stat().st_mtime})
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    return rows
+
+
+def _cli_sessions():
+    rows = _cli_session_rows()
+    if not rows:
+        print(dim("  no saved conversations yet"))
+        return rows
+    cur = _cli_key()
+    for i, r in enumerate(rows, 1):
+        print("  %s %2d. %-30s %3d exchange(s)  %s"
+              % ("*" if r["key"] == cur else " ", i, r["key"][:30],
+                 r["exchanges"],
+                 time.strftime("%Y-%m-%d %H:%M", time.localtime(r["mtime"]))))
+    print(dim("  /resume N continues one of them here; * is the one in use"))
+    return rows
+
+
+def _cli_resume(rest):
+    rows = _cli_session_rows()
+    if not rows:
+        print(dim("  no saved conversations yet"))
+        return
+    try:
+        n = int((rest or "").split()[0])
+    except (IndexError, ValueError):
+        n = 0
+    if not 1 <= n <= len(rows):
+        print(dim("  /resume N - pick N from /sessions"))
+        return
+    key = rows[n - 1]["key"]
+    _CLI["session"] = key
+    s = AGENT.stats(key)
+    print(green("  now in '%s' - %d exchange(s), %s"
+                % (key, s["exchanges"], fmt_tokens(s["est_tokens"]))))
+    print(dim("  /new clears it; /sessions lists the others"))
+
+
 def _cli_usage_line():
-    u = AGENT.last_usage.get("cli")
+    u = AGENT.last_usage.get(_cli_key())
     if not u or not u.get("calls"):
         return
-    s = AGENT.stats("cli")
+    s = AGENT.stats(_cli_key())
     budget = AGENT._context_budget()
     pct = 100 * s["est_tokens"] // max(1, budget)
     print(dim("  %s - %s step(s) in %ss - context ~%s/%s (%d%%)"
@@ -7438,7 +7509,7 @@ def _cli_command(text):
         print(HELP_TEXT)
         return True
     if verb in ("/new", "/reset"):
-        AGENT.reset("cli")
+        AGENT.reset(_cli_key())
         print(green("  (context cleared, this machine's notes and ledger stay)"))
         return True
     if verb == "/model":
@@ -7449,9 +7520,15 @@ def _cli_command(text):
         CONFIG["llm"]["model"] = rest
         print("  model is now %s (this session)" % green(rest))
         return True
+    if verb in ("/sessions", "/conversations"):
+        _cli_sessions()
+        return True
+    if verb == "/resume":
+        _cli_resume(rest)
+        return True
     if verb == "/status":
-        u = AGENT.last_usage.get("cli") or {}
-        s = AGENT.stats("cli")
+        u = AGENT.last_usage.get(_cli_key()) or {}
+        s = AGENT.stats(_cli_key())
         budget = AGENT._context_budget()
         t = load_tasks()
         items = t.get("items") or []
@@ -7468,6 +7545,7 @@ def _cli_command(text):
               % (fmt_tokens(s["est_tokens"]), fmt_tokens(budget),
                  100 * s["est_tokens"] // max(1, budget), s["exchanges"]))
         print("  last run   %s" % (fmt_usage(u) if u.get("calls") else "nothing yet"))
+        print("  session    %s (%d exchange(s))" % (_cli_key(), s["exchanges"]))
         print("  notes      %d chars in notes.md" % notes)
         print("  tasks      %d open of %d" % (len(opened), len(items)))
         print("  skills     %d runbooks" % len(skill_index()))
@@ -7501,7 +7579,8 @@ def _cli_command(text):
     return True
 
 
-FAST_VERBS = ("/stop", "/help", "/?", "/usage", "/exit", "/quit", "/bye")
+FAST_VERBS = ("/stop", "/help", "/?", "/usage", "/exit", "/quit", "/bye",
+              "/sessions", "/conversations")
 
 
 def _cli_while_running(line):
@@ -7536,6 +7615,9 @@ def _cli_while_running(line):
         return True
     if verb == "/usage":
         _cli_usage_line()
+        return True
+    if verb in ("/sessions", "/conversations"):
+        _cli_sessions()
         return True
     return False
 
@@ -7663,7 +7745,7 @@ def run_cli(once=None):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        print(AGENT.run("cli", once, progress_cb=progress,
+        print(AGENT.run(_cli_key(), once, progress_cb=progress,
                         say_cb=say, progress_done_cb=progress_done,
                         narration_cb=narration_stream,
                         narration_drop_cb=narration_drop, interim_cb=narration,
@@ -7691,7 +7773,7 @@ def run_cli(once=None):
             continue
         if text.lower() in ("reset", "exit", "quit"):
             if text.lower() == "reset":
-                AGENT.reset("cli")
+                AGENT.reset(_cli_key())
                 print(green("  (context cleared)"))
                 continue
             return
@@ -7702,7 +7784,7 @@ def run_cli(once=None):
         _CLI["streamed_answer"] = ""
         answer = ""
         try:
-            answer = AGENT.run("cli", text, progress_cb=progress,
+            answer = AGENT.run(_cli_key(), text, progress_cb=progress,
                                say_cb=say, progress_done_cb=progress_done,
                                narration_cb=narration_stream,
                                narration_drop_cb=narration_drop, interim_cb=narration,

@@ -84,7 +84,12 @@ class El {
 // every id the page looks up at load; a missing one makes getElementById return
 // null and the page dies on the next property write
 const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
-             'note', 'notetext', 'noteact'];
+             'note', 'notetext', 'noteact',
+             // the rail, the meter and the panel drawer: a missing id makes
+             // getElementById null and the page dies on its first write
+             'rail', 'sessions', 'title', 'model', 'meterfill', 'drawer', 'panel',
+             'pal', 'host', 'allclients', 'menu', 'tools', 'newchat', 'tabs',
+             'panelclose'];
 const byId = {};
 function freshDom() {
   for (const id of IDS) { byId[id] = new El(id === 'in' ? 'textarea' : 'div'); }
@@ -92,6 +97,7 @@ function freshDom() {
 }
 
 globalThis.document = {
+  addEventListener: () => {},
   getElementById: (id) => byId[id] || null,
   createElement: (tag) => new El(tag),
   createTextNode: (t) => { const e = new El('#text'); e._text = String(t); return e; },
@@ -142,8 +148,9 @@ function grow(r, kind, text) {
   return l;
 }
 
-function startRun(spec) {
-  const r = { id: 'r' + (++runSeq), spec, cursor: 0, lines: [], rev: 0, stream_i: null, done: false };
+function startRun(spec, conv) {
+  const r = { id: 'r' + (++runSeq), conv: conv || 'web', spec, cursor: 0, lines: [],
+              rev: 0, stream_i: null, done: false };
   runs.push(r); active = r;
   return r;
 }
@@ -178,9 +185,51 @@ function pollRun(id, since, rev) {
 
 const jres = (o) => Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(o) });
 
+// the conversations the fake host knows about. One to start with, the same way
+// a real host has the shared conversation; the page is expected to read the list
+// at boot, open one, and paint it from /api/session.
+let convSeq = 0;
+const sessions = [{ key: 'web', title: 'the shared conversation', created: 0,
+                    last_active: 0, exchanges: 0, tokens: 0, model: 'main',
+                    owner: 'shared', live: null }];
+
 function fetchShim(url, opts) {
   const body = opts && opts.body ? JSON.parse(opts.body) : {};
   if (url.indexOf('/api/health') === 0) { return jres({ ok: true, version: 'harness' }); }
+  if (url.indexOf('/api/sessions') === 0) {
+    if (opts && opts.method === 'POST') {
+      if (body.op === 'new') {
+        const k = 'web-new' + (++convSeq);
+        sessions.unshift({ key: k, title: 'a new conversation', created: 0,
+                           last_active: 0, exchanges: 0, tokens: 0, model: 'main',
+                           owner: 'mine', live: null });
+        return jres({ key: k, sessions: sessions });
+      }
+      if (body.op === 'open') { return jres({ open: body.key }); }
+      if (body.op === 'rename') { return jres({ ok: true, sessions: sessions }); }
+      if (body.op === 'delete') { return jres({ deleted: body.key, sessions: [] }); }
+      return jres({ error: 'unknown op' });
+    }
+    return jres({ sessions: sessions, open: 'web', budget: 200000,
+                  host: 'harness', version: 'harness' });
+  }
+  if (url.indexOf('/api/session?') === 0) {
+    // what a reload paints: THIS conversation's runs, in order
+    const key = (url.split('key=')[1] || 'web').split('&')[0];
+    const mine = runs.filter((r) => r.conv === key);
+    return jres({ key: key, runs: mine.map((r) => ({ run_id: r.id, lines: r.lines,
+                                                    live: !r.done })) });
+  }
+  if (url.indexOf('/api/commands') === 0) {
+    return jres({ commands: [{ cmd: '/new', help: 'fresh conversation' },
+                             { cmd: '/status', help: 'this host' }] });
+  }
+  if (url.indexOf('/api/tasks') === 0) { return jres({ items: [], next_id: 1 }); }
+  if (url.indexOf('/api/jobs') === 0) { return jres({ jobs: [], scheduler: false }); }
+  if (url.indexOf('/api/log') === 0) { return jres({ lines: [], path: 'tinycmdr.log' }); }
+  if (url.indexOf('/api/inventory') === 0) {
+    return jres({ skills: [], tools: [], spill: { files: 0, bytes: 0 } });
+  }
   if (url.indexOf('/api/live') === 0) {
     // a page that just loaded asks who is running instead of posting a message
     // and having the server turn that into a steer of the run already going
@@ -205,7 +254,7 @@ function fetchShim(url, opts) {
       return jres({ run_id: active.id, busy: true, steered: true });
     }
     const spec = scenario.runs[runs.length];
-    const r = startRun(spec);
+    const r = startRun(spec, body.session);
     addLine(r, 'you', body.message);
     return jres({ run_id: r.id, busy: false });
   }
@@ -230,7 +279,10 @@ async function tick() {
 // The script is evaluated as the body of a function (so a "reload" can
 // re-evaluate it cleanly) and exports the two functions the driver drives. The
 // page source itself is untouched: this appended line is the whole difference.
-const EXPORTS = "\n;globalThis.__page={send:send,stop:stop};";
+const EXPORTS = "\n;globalThis.__page={send:send,stop:stop,"
+  + "newConversation:newConversation,openSession:openSession,"
+  + "renameSession:renameSession,state:function(){return {sessionKey:sessionKey,"
+  + "sessions:sessions};}};";
 
 function loadPage() {
   pages++;
@@ -275,16 +327,24 @@ async function main() {
       await page().send();
       for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
     } else if (step.kind === 'reload') {
-      // a browser reload: fresh DOM, the transcript comes back from localStorage,
-      // and the page has to work out on its own that a run is still going
+      // a browser reload: fresh DOM, the transcript comes back from the SERVER
+      // (/api/session), and the page has to work out on its own that a run is
+      // still going and re-attach to it
       loadPage();
       const n = step.polls || 3;
       for (let i = 0; i < n; i++) { await tick(); }
+    } else if (step.kind === 'call') {
+      // drive the rail the way a click does
+      const fn = page()[step.fn];
+      if (typeof fn === 'function') { await fn.apply(null, step.args || []); }
+      for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
     } else if (step.kind === 'polls') {
       for (let i = 0; i < (step.n || 1); i++) { await tick(); }
     }
   }
   const out = {
+    state: (globalThis.__page && globalThis.__page.state)
+      ? globalThis.__page.state() : {},
     rendered: rendered(),
     runs: runs.map((r) => ({ id: r.id, lines: r.lines.map((l) => ({ i: l.i, kind: l.kind, text: l.text })) })),
     events,

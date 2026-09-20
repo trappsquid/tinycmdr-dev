@@ -8965,7 +8965,8 @@ class MattermostDispatcher:
 # Fallback web UI — same agent, no Mattermost required
 # --------------------------------------------------------------------------
 
-WEB_PAGE = """<!doctype html><html><head><meta charset=utf-8>
+WEB_PAGE = """
+<!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name=theme-color content="#1a1d23">
 <meta name=mobile-web-app-capable content=yes>
@@ -8977,20 +8978,49 @@ WEB_PAGE = """<!doctype html><html><head><meta charset=utf-8>
 <link rel=apple-touch-icon href="/icon.png">
 <title>tinycmdr</title><style>
 :root{--bg:#1a1d23;--panel:#14161a;--line:#2b2f36;--fg:#e6e6e6;--dim:#8b939e;
---you:#2b5278;--tool:#7fa8d4;--ok:#5fbf7f;--bad:#e0736a;--say:#c9b47a}
+--you:#2b5278;--tool:#7fa8d4;--ok:#5fbf7f;--bad:#e0736a;--say:#c9b47a;--accent:#4a76a8}
 *{box-sizing:border-box}
 body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;
 margin:0;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
-header{display:flex;align-items:center;gap:12px;padding:9px 14px;background:var(--panel);
+header{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);
 border-bottom:1px solid var(--line);font-size:13px;color:var(--dim);flex:0 0 auto}
 header b{color:var(--fg);font-weight:600}
 header .grow{flex:1}
+header .chip{background:var(--line);border-radius:20px;padding:2px 10px;font-size:12px;
+white-space:nowrap}
+header #title{color:var(--fg);max-width:38vw;overflow:hidden;text-overflow:ellipsis;
+white-space:nowrap;cursor:pointer}
 header #stop{display:none;background:#8a3b34;padding:5px 14px;font-size:13px}
 body.busy header #stop{display:inline-block}
+header .icon{background:transparent;color:var(--dim);padding:2px 8px;font-size:16px;border-radius:6px}
+header .icon:hover{background:var(--line);color:var(--fg)}
+#meter{flex:0 0 auto;height:3px;background:#20242b}
+#meterfill{height:100%;width:0;background:var(--accent);transition:width .3s}
 #note{flex:0 0 auto;background:#1d2530;border-bottom:1px solid var(--line);color:#a9b6c6;
 font-size:12.5px;padding:6px 14px;display:none;gap:10px;align-items:center}
 #note.show{display:flex}
+#note span{flex:1}
 #note button{padding:3px 10px;font-size:12.5px}
+main{flex:1;display:flex;min-height:0;position:relative}
+#rail{width:255px;flex:0 0 auto;background:var(--panel);border-right:1px solid var(--line);
+display:flex;flex-direction:column;min-height:0}
+#rail.hide{display:none}
+#newchat{margin:10px;background:var(--line);color:var(--fg);padding:8px;border-radius:8px;
+text-align:left;font-size:13.5px}
+#newchat:hover{background:#343a44}
+#sessions{flex:1;overflow-y:auto;padding:0 6px 8px}
+.row{padding:7px 9px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:2px}
+.row:hover{background:#20242b}
+.row.on{background:#26313f}
+.row .t{font-size:13.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row .m{font-size:11.5px;color:var(--dim);display:flex;gap:7px;align-items:center}
+.row .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
+.row .dot.work{background:var(--say);animation:pulse 1.4s infinite}
+.row.other .t{color:#9aa3ad}
+@keyframes pulse{50%{opacity:.35}}
+#railfoot{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;color:var(--dim)}
+#railfoot label{display:flex;gap:7px;align-items:center;cursor:pointer}
+#logwrap{flex:1;display:flex;min-width:0;flex-direction:column}
 #log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;scroll-behavior:smooth}
 .run{display:contents}
 .msg{max-width:860px;padding:9px 13px;border-radius:10px;white-space:pre-wrap;word-break:break-word;
@@ -8999,7 +9029,8 @@ font-size:15px}
 .say{align-self:flex-start;color:var(--say);background:transparent;padding:2px 13px;font-style:italic}
 .thinking{align-self:flex-start;color:#767f8d;background:transparent;padding:2px 13px;
 font-style:italic;font-size:13.5px}
-.final{align-self:flex-start;background:var(--line)}
+.final{align-self:flex-start;background:var(--line);cursor:copy}
+.ask{align-self:flex-start;background:#2b2a1f;color:#e2cf8a;border:1px solid #4a442b}
 .tool{align-self:flex-start;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--tool);
 background:transparent;padding:0 13px;white-space:pre-wrap}
 .tool_done{align-self:flex-start;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--ok);
@@ -9009,52 +9040,130 @@ background:transparent;padding:0 13px}
 .system{align-self:center;color:var(--dim);font-size:12.5px}
 .error{align-self:flex-start;color:var(--bad)}
 .stamp{color:#5c636d;font-size:11px;margin-right:7px}
-#bar{display:flex;gap:8px;padding:12px;background:var(--panel);border-top:1px solid var(--line);flex:0 0 auto}
+#drawer{position:absolute;top:0;right:0;bottom:0;width:370px;max-width:92vw;background:var(--panel);
+border-left:1px solid var(--line);display:none;flex-direction:column}
+#drawer.show{display:flex}
+#tabs{display:flex;gap:4px;padding:8px;border-bottom:1px solid var(--line);flex:0 0 auto}
+#tabs button{background:transparent;color:var(--dim);padding:5px 10px;font-size:13px}
+#tabs button.on{background:var(--line);color:var(--fg)}
+#panel{flex:1;overflow-y:auto;padding:10px 12px;font-size:13px}
+#panel .p{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #23272e;align-items:flex-start}
+#panel .p .g{flex:0 0 auto;font-size:11px;color:var(--dim);min-width:52px}
+#panel .p .b{flex:1;white-space:pre-wrap;word-break:break-word}
+#panel .p.done .b{color:var(--dim)}
+#panel .p .n{color:var(--dim);font-size:11.5px;margin-top:3px}
+#panel .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;white-space:pre-wrap;
+word-break:break-all;color:#c3cad3}
+#panel h4{margin:2px 0 8px;font-size:12px;color:var(--dim);font-weight:600;text-transform:uppercase}
+#bar{position:relative;display:flex;gap:8px;padding:12px;background:var(--panel);
+border-top:1px solid var(--line);flex:0 0 auto}
 #in{flex:1;background:var(--line);border:1px solid #3a3f47;border-radius:8px;color:var(--fg);
 padding:10px 12px;font:inherit;resize:none;max-height:30dvh}
 #in:focus{outline:none;border-color:#4a76a8}
-button{background:#4a76a8;border:0;border-radius:8px;color:#fff;padding:0 18px;font:inherit;cursor:pointer}
+#pal{position:absolute;left:12px;right:12px;bottom:100%;margin-bottom:6px;background:var(--panel);
+border:1px solid var(--line);border-radius:10px;max-height:40dvh;overflow-y:auto;
+box-shadow:0 10px 30px rgba(0,0,0,.45);z-index:9}
+#pal.hide{display:none}
+#pal div{padding:7px 12px;font-size:13px;cursor:pointer;display:flex;gap:10px}
+#pal div.on{background:#26313f}
+#pal .c{color:var(--fg);font-family:ui-monospace,Consolas,monospace}
+#pal .h{color:var(--dim)}
+button{background:var(--accent);border:0;border-radius:8px;color:#fff;padding:0 18px;font:inherit;cursor:pointer}
 button:hover{background:#5585b8}
+@media(max-width:760px){
+ #rail{position:absolute;top:0;bottom:0;left:0;z-index:8;box-shadow:0 0 30px rgba(0,0,0,.5)}
+ header #title{max-width:26vw}
+}
 </style></head><body>
-<header><b>tinycmdr</b><span id=ver></span><span class=grow></span><span id=state>idle</span>
-<button id=stop>Stop</button></header>
+<header>
+<button id=menu class=icon title="conversations">&#9776;</button>
+<b>tinycmdr</b><span id=ver></span>
+<span id=title title="click to rename"></span>
+<span class=grow></span>
+<span id=model class=chip></span><span id=state>idle</span>
+<button id=stop>Stop</button>
+<button id=tools class=icon title="tasks, jobs, log, inventory">&#8943;</button>
+</header>
+<div id=meter><div id=meterfill></div></div>
 <div id=note><span id=notetext></span><button id=noteact style="display:none"></button></div>
-<div id=log></div>
-<div id=bar><textarea id=in rows=1 placeholder="Message tinycmdr... ( /help )" autofocus></textarea>
+<main>
+<aside id=rail>
+<button id=newchat>+ New conversation</button>
+<div id=sessions></div>
+<div id=railfoot>
+<label><input id=allclients type=checkbox> show every conversation on this host</label>
+<div id=host></div>
+</div>
+</aside>
+<div id=logwrap><div id=log></div></div>
+<aside id=drawer>
+<div id=tabs>
+<button data-p=tasks>Tasks</button><button data-p=jobs>Jobs</button>
+<button data-p=log>Log</button><button data-p=inventory>Skills</button>
+<button id=panelclose style="margin-left:auto;background:transparent;color:var(--dim)">&#10005;</button>
+</div>
+<div id=panel></div>
+</aside>
+</main>
+<div id=bar>
+<div id=pal class=hide></div>
+<textarea id=in rows=1 placeholder="Message tinycmdr... ( / for commands )" autofocus></textarea>
 <button id=send>Send</button></div>
 <script>
-// The transcript is a pure function of the server's ordered line list.
+// The transcript is a pure function of the server's ordered line lists.
 //
-// Earlier versions appended one node per poll and keyed nodes by line index,
-// which is why lines could land at the top of the page, overwrite an older
-// message, or be drawn twice (once by this page and once by the server's echo).
-// Nothing here appends "politely": every poll hands over the run's complete,
-// ordered lines, each carrying a stable uid, and the DOM is reconciled to match
-// it. Repeats are no-ops, growth repaints in place, order comes from the server.
+// Every poll hands over a run's complete, ordered lines, each carrying a stable
+// uid, and the DOM is reconciled to match it: repeats are no-ops, growth repaints
+// in place, order comes from the server. That contract is unchanged - what is new
+// is that a conversation is a thing the server keeps. The page names itself once
+// (X-tinycmdr-Client), owns the conversations it makes, and paints a reload or a
+// second device from /api/session instead of from this browser's localStorage.
 const log=document.getElementById('log'),inp=document.getElementById('in'),
       sendBtn=document.getElementById('send'),stopBtn=document.getElementById('stop'),
       stateEl=document.getElementById('state'),noteEl=document.getElementById('note'),
       noteText=document.getElementById('notetext'),noteAct=document.getElementById('noteact'),
-      verEl=document.getElementById('ver');
+      verEl=document.getElementById('ver'),railEl=document.getElementById('rail'),
+      sessEl=document.getElementById('sessions'),titleEl=document.getElementById('title'),
+      modelEl=document.getElementById('model'),meterFill=document.getElementById('meterfill'),
+      drawerEl=document.getElementById('drawer'),panelEl=document.getElementById('panel'),
+      palEl=document.getElementById('pal'),hostEl=document.getElementById('host'),
+      allEl=document.getElementById('allclients'),menuBtn=document.getElementById('menu'),
+      toolsBtn=document.getElementById('tools'),newBtn=document.getElementById('newchat'),
+      tabsEl=document.getElementById('tabs'),closePanelBtn=document.getElementById('panelclose');
 const PAGE_VER="{{VERSION}}";
 let token=localStorage.fb_token||'';
 if(!token){token=prompt('tinycmdr token (leave empty if loopback):')||'';localStorage.fb_token=token;}
-const H={'Content-Type':'application/json','X-tinycmdr-Token':token};
-let runId=null, gen=0, timer=null, fails=0, localSeq=0;
+// One id per browser, made once. It is what makes a conversation YOURS on a host
+// that other people also use; it is not a secret, so it stays in localStorage.
+let clientId=localStorage.fb_client||'';
+if(!clientId){clientId='c'+Math.random().toString(36).slice(2,10)+Date.now().toString(36);
+ localStorage.fb_client=clientId;}
+function H(extra){
+ const h={'Content-Type':'application/json','X-tinycmdr-Token':token,
+          'X-tinycmdr-Client':clientId};
+ if(extra)for(const k in extra)h[k]=extra[k];
+ return h;
+}
+let runId=null, gen=0, timer=null, fails=0, localSeq=0, sessionKey=null,
+    sessions=[], budget=0, panelWhich=null, commands=[], palAt=-1, hist=[], histAt=-1,
+    lastRail=0;
 const runs=new Map();          // run id -> {el, nodes:Map(uid->node), txt:Map(uid->string), data:[]}
-const STORE='fb_transcript_v2';
 
 function note(text,action){
  noteText.textContent=text||'';
  noteEl.classList.toggle('show',!!text);
  if(action){noteAct.textContent=action[0];noteAct.style.display='inline-block';
-  noteAct.onclick=action[1];}else{noteAct.style.display='none';noteAct.onclick=null;}
+  noteAct.onclick=function(){note('');action[1]();};}
+ else{noteAct.style.display='none';noteAct.onclick=null;}
 }
 function ensureRun(id){
  let r=runs.get(id);
  if(!r){const el=document.createElement('div');el.className='run';el.dataset.run=id;
-  log.appendChild(el);r={el,nodes:new Map(),txt:new Map(),data:[]};runs.set(id,r);}
+  log.appendChild(el);r={el:el,nodes:new Map(),txt:new Map(),data:[]};runs.set(id,r);}
  return r;
+}
+function clearLog(){
+ log.textContent='';runs.clear();
 }
 function lineStamp(l){return (l.kind==='final'||l.kind==='thinking')?(l.t+'s'):null;}
 function paint(node,l){
@@ -9079,15 +9188,14 @@ function reconcile(id,lines){
   const sig=l.kind+'|'+lineStamp(l)+'|'+l.text;
   if(r.txt.get(l.uid)!==sig){paint(node,l);r.txt.set(l.uid,sig);}
    // keep the DOM in the server's order, but only touch it when a line is
-  // actually out of place: re-appending every node on every poll is a
-  // layout storm on a phone and makes the transcript flicker.
+   // actually out of place: re-appending every node on every poll is a
+   // layout storm on a phone and makes the transcript flicker.
   if(r.el.children[pos]!==node)r.el.insertBefore(node,r.el.children[pos]||null);
   pos++;
  }
- for(const [uid,node] of [...r.nodes])if(!seen.has(uid)){node.remove();r.nodes.delete(uid);r.txt.delete(uid);}
+ for(const pair of [...r.nodes])if(!seen.has(pair[0])){pair[1].remove();r.nodes.delete(pair[0]);r.txt.delete(pair[0]);}
  r.data=lines;
- save();
- if(near||lines.length!==r.data.length)log.scrollTop=log.scrollHeight;
+ if(near&&runs.size===1)log.scrollTop=log.scrollHeight;
  return r;
 }
 function localRun(kind,text){          // slash-command output: not part of a run
@@ -9095,52 +9203,239 @@ function localRun(kind,text){          // slash-command output: not part of a ru
  reconcile(id,[{uid:id+'#0',kind:kind,text:text,t:null,i:0}]);
  return id;
 }
-function save(){
- try{
-  const out=[];
-  for(const [id,r] of runs)if(r.data&&r.data.length)out.push({run:id,lines:r.data});
-  while(out.length>25)out.shift();
-  localStorage[STORE]=JSON.stringify(out);
- }catch(e){}
-}
-function restore(){
- try{
-  const raw=localStorage[STORE];if(!raw)return;
-  for(const entry of (JSON.parse(raw)||[]))if(entry&&entry.run)reconcile(entry.run,entry.lines||[]);
- }catch(e){}
-}
 function status(j){
  stateEl.textContent=j.done?('done in '+j.elapsed+'s, '+j.steps+' tool calls')
    :((j.status||'working')+' - '+j.elapsed+'s, '+j.steps+' tool calls');
 }
 function busy(on){document.body.classList.toggle('busy',on);inp.placeholder=on
-  ?'Steer it mid-run (/stop to cancel)...':'Message tinycmdr... ( /help )';}
-
+  ?'Steer it mid-run (/stop to cancel)...':'Message tinycmdr... ( / for commands )';}
+function clip(text){
+ try{
+  if(typeof navigator!=='undefined'&&navigator.clipboard&&navigator.clipboard.writeText){
+   navigator.clipboard.writeText(text);note('answer copied');}
+ }catch(e){}
+}
+// ---------------------------------------------------------------- conversations
+function age(ts){
+ if(!ts)return '';
+ const s=Math.max(0,Math.floor(Date.now()/1000-ts));
+ if(s<90)return 'just now';
+ if(s<5400)return Math.floor(s/60)+'m ago';
+ if(s<172800)return Math.floor(s/3600)+'h ago';
+ return Math.floor(s/86400)+'d ago';
+}
+function renderRail(){
+ sessEl.textContent='';
+ for(const s of sessions){
+  const row=document.createElement('div');
+  row.className='row'+(s.key===sessionKey?' on':'')+(s.owner==='other'?' other':'');
+  row.dataset.key=s.key;
+  const t=document.createElement('div');t.className='t';t.textContent=s.title;row.appendChild(t);
+  const m=document.createElement('div');m.className='m';
+  if(s.live){const d=document.createElement('span');d.className='dot work';m.appendChild(d);}
+  else if(s.owner==='mine'){const d=document.createElement('span');d.className='dot';
+   d.style.background='#3a4048';m.appendChild(d);}
+  const a=document.createElement('span');a.textContent=age(s.last_active);m.appendChild(a);
+  if(s.exchanges){const e=document.createElement('span');
+   e.textContent=s.exchanges+' exchange'+(s.exchanges===1?'':'s');m.appendChild(e);}
+  if(s.live){const l=document.createElement('span');
+   l.textContent='working '+s.live.steps+' steps';m.appendChild(l);}
+  else if(s.model){const mo=document.createElement('span');mo.textContent=s.model;m.appendChild(mo);}
+  row.appendChild(m);
+  row.onclick=function(){openSession(s.key);};
+  sessEl.appendChild(row);
+ }
+ const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
+ titleEl.textContent=cur?cur.title:'';
+ const used=cur?cur.tokens:0;
+ meterFill.style.width=(budget?Math.min(100,Math.round(100*used/budget)):0)+'%';
+ meterFill.style.background=used>budget*0.8?'var(--bad)':'var(--accent)';
+ modelEl.textContent=cur?(cur.model||''):'';
+}
+async function loadSessions(){
+ const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
+ if(!r.ok)return null;
+ const j=await r.json();
+ sessions=j.sessions||[];budget=j.budget||0;
+ hostEl.textContent=(j.host||'')+' · v'+(j.version||'');
+ if(!sessionKey)sessionKey=j.open||null;
+ renderRail();
+ return j;
+}
+async function openSession(key,quiet){
+ if(!key)return;
+ sessionKey=key;localStorage.fb_session=key;runId=null;busy(false);
+ clearLog();renderRail();
+ try{await fetch('/api/sessions',{method:'POST',headers:H(),
+   body:JSON.stringify({op:'open',key:key})});}catch(e){}
+ try{
+  const r=await fetch('/api/session?key='+encodeURIComponent(key),{headers:H()});
+  if(r.ok){const j=await r.json();
+   for(const run of (j.runs||[]))reconcile(run.run_id,run.lines||[]);}
+  else note('could not load that conversation ('+r.status+')');
+ }catch(e){note('could not load that conversation: '+e);}
+ if(!quiet)note('');
+ await loadSessions();
+ await attach();
+}
+async function newConversation(){
+ const r=await fetch('/api/sessions',{method:'POST',headers:H(),
+  body:JSON.stringify({op:'new'})});
+ const j=await r.json().catch(function(){return {};});
+ if(j.key){await loadSessions();await openSession(j.key);}
+ else note('could not start a conversation: '+(j.error||r.status));
+}
+function renameSession(){
+ const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
+ if(!cur)return;
+ const name=prompt('name this conversation:',cur.title);
+ if(name===null)return;
+ fetch('/api/sessions',{method:'POST',headers:H(),
+  body:JSON.stringify({op:'rename',key:sessionKey,title:name})})
+  .then(function(){return loadSessions();});
+}
+function deleteSession(){
+ const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
+ if(!cur)return;
+ note('delete "'+cur.title+'" and everything it said?',['Delete',function(){
+  fetch('/api/sessions',{method:'POST',headers:H(),
+   body:JSON.stringify({op:'delete',key:sessionKey})})
+   .then(function(r){return r.json().then(function(j){return [r.status,j];});})
+   .then(function(pair){
+    const code=pair[0],j=pair[1];
+    if(code!==200){note(j.error||'could not delete that conversation');return;}
+    sessionKey=null;runId=null;clearLog();busy(false);
+    return loadSessions().then(function(){
+     return openSession(sessions[0]?sessions[0].key:'web',true);});
+   });
+ }]);
+}
+// ------------------------------------------------------------------- panels
+function panelRow(cls,left,body,meta){
+ const d=document.createElement('div');d.className='p'+(cls?' '+cls:'');
+ const g=document.createElement('div');g.className='g';g.textContent=left||'';d.appendChild(g);
+ const b=document.createElement('div');b.className='b';b.textContent=body||'';d.appendChild(b);
+ if(meta){const n=document.createElement('div');n.className='n';n.textContent=meta;
+  b.appendChild(n);}
+ return d;
+}
+function renderPanel(which,j){
+ panelEl.textContent='';
+ if(which==='tasks'){
+  const items=j.items||[];
+  const head=document.createElement('h4');
+  head.textContent=items.length+' in the ledger';
+  panelEl.appendChild(head);
+  for(const t of items)
+   panelEl.appendChild(panelRow(t.status==='done'?'done':'',
+     '#'+t.id+' '+(t.desc||''),null,
+     [t.status,t.updated].filter(function(x){return x;}).join(' · ')));
+  if(!items.length)panelEl.appendChild(panelRow('','nothing in the ledger',''));
+ }else if(which==='jobs'){
+  const head=document.createElement('h4');
+  head.textContent=(j.jobs||[]).length+' scheduled'+(j.croniter?'':' — croniter missing, nothing fires');
+  panelEl.appendChild(head);
+  for(const job of (j.jobs||[]))
+   panelEl.appendChild(panelRow('','['+job.cron+'] '+(job.task||''),null,
+     (job.next_iso?('next '+job.next_iso):'no next run')+(job.model?' · '+job.model:'')));
+  if(!(j.jobs||[]).length)
+   panelEl.appendChild(panelRow('','no jobs on this host','anything recurring shows up here'));
+ }else if(which==='log'){
+  const head=document.createElement('h4');
+  head.textContent=j.path+' — last '+((j.lines||[]).length)+' lines';
+  panelEl.appendChild(head);
+  const pre=document.createElement('div');pre.className='mono';
+  pre.textContent=(j.lines||[]).join(String.fromCharCode(10));
+  panelEl.appendChild(pre);
+ }else if(which==='inventory'){
+  const head=document.createElement('h4');
+  head.textContent=(j.skills||[]).length+' skills · '+((j.tools||[]).length)+' custom tools';
+  panelEl.appendChild(head);
+  panelEl.appendChild(panelRow('','spill: '+(j.spill.files||0)+' files, '+
+   Math.round((j.spill.bytes||0)/1024)+' KB',''));
+  panelEl.appendChild(panelRow('','notes.md: '+(j.notes_kb||0)+' KB',''));
+  for(const t of (j.tools||[]))panelEl.appendChild(panelRow('','tool: '+t,''));
+  for(const s of (j.skills||[]))panelEl.appendChild(panelRow('','skill: '+s,''));
+ }
+}
+const PANELS={tasks:'/api/tasks',jobs:'/api/jobs',log:'/api/log',
+              inventory:'/api/inventory'};
+async function refreshPanel(){
+ if(!panelWhich)return;
+ const r=await fetch(PANELS[panelWhich]||'/api/tasks',{headers:H()});
+ if(!r.ok)return;
+ const j=await r.json().catch(function(){return {};});
+ const at=panelEl.scrollTop;
+ renderPanel(panelWhich,j);
+ if(panelWhich!=='log')panelEl.scrollTop=at;
+}
+function showPanel(which){
+ panelWhich=which;drawerEl.classList.add('show');
+ for(const b of tabsEl.children)
+  if(b.dataset&&b.dataset.p)b.className=(b.dataset.p===which?'on':'');
+ refreshPanel();
+}
+async function loadCommands(){
+ try{const r=await fetch('/api/commands',{headers:H()});
+  if(r.ok)commands=(await r.json()).commands||[];}catch(e){}
+}
+// ------------------------------------------------------------ the composer
+function palette(){
+ const v=inp.value;
+ palAt=-1;palEl.textContent='';
+ if(!v||v[0]!=='/'||v.indexOf(' ')>0){palEl.classList.add('hide');return;}
+ const hits=commands.filter(function(c){return c.cmd.indexOf(v)===0;});
+ if(!hits.length){palEl.classList.add('hide');return;}
+ hits.forEach(function(c,i){
+  const d=document.createElement('div');d.className=(i===0?'on':'');
+  const a=document.createElement('span');a.className='c';a.textContent=c.cmd;
+  const b=document.createElement('span');b.className='h';b.textContent=c.help;
+  d.appendChild(a);d.appendChild(b);
+  d.onclick=function(){inp.value=c.cmd+' ';palEl.classList.add('hide');inp.focus();};
+  palEl.appendChild(d);
+ });
+ palAt=0;palEl.classList.remove('hide');
+}
+function palMove(dir){
+ if(palEl.classList.contains('hide'))return false;
+ const kids=[...palEl.children];if(!kids.length)return false;
+ palAt=(palAt+dir+kids.length)%kids.length;
+ kids.forEach(function(k,i){k.className=(i===palAt?'on':'');});
+ return true;
+}
+function palTake(){
+ if(palEl.classList.contains('hide'))return false;
+ const kid=palEl.children[palAt];if(!kid)return false;
+ inp.value=kid.children[0].textContent+' ';
+ palEl.classList.add('hide');palAt=-1;
+ return true;
+}
 async function stop(){
- if(!runId)return;
+ if(!runId){note('nothing is running here');return;}
  stateEl.textContent='stopping...';
- try{const r=await fetch('/api/stop',{method:'POST',headers:H,
+ try{const r=await fetch('/api/stop',{method:'POST',headers:H(),
    body:JSON.stringify({run_id:runId})});
-  const j=await r.json().catch(()=>({}));
+  const j=await r.json().catch(function(){return {};});
   if(!r.ok)note('could not stop: '+(j.error||r.status));else note('');
  }catch(e){note('stop failed: '+e);}
 }
-
 async function post(path,payload){
- const r=await fetch(path,{method:'POST',headers:H,body:JSON.stringify(payload)});
- const j=await r.json().catch(()=>({}));
+ const r=await fetch(path,{method:'POST',headers:H(),body:JSON.stringify(payload)});
+ const j=await r.json().catch(function(){return {};});
  return {status:r.status,j:j};
 }
-
 async function send(){
  const t=inp.value.trim();if(!t)return;
+ palEl.classList.add('hide');
  inp.value='';inp.style.height='auto';
- if(t==='/clear'){log.textContent='';runs.clear();try{localStorage.removeItem(STORE);}catch(e){}
-  note('transcript cleared');return;}
+ hist.unshift(t);histAt=-1;
+ localStorage.fb_draft='';
+ if(t==='/clear'){clearLog();note('transcript cleared (the conversation is still on the server)');return;}
+ if(t==='/sessions'||t==='/conversations'){railEl.classList.remove('hide');renderRail();note('');return;}
+ if(t==='/new chat'||t==='/new'){return newConversation();}
  if(t==='/stop'||t==='stop'){return stop();}
  if(t.startsWith('/')){                       // agent command, answered inline
-  if(runId&&t!=='/status'){note('a run is going - /stop first, or park it as a steer');return;}
-  const {status:code,j}=await post('/api/chat',{message:t});
+  const {status:code,j}=await post('/api/run',{message:t,session:sessionKey});
   localRun(code===200?'say':'error',j.reply||j.error||'(no reply)');
   return;
  }
@@ -9156,16 +9451,14 @@ async function send(){
  }
  return start(t);
 }
-
 async function start(t){
- const {status:code,j}=await post('/api/run',{message:t});
+ const {status:code,j}=await post('/api/run',{message:t,session:sessionKey});
  if(code!==200||j.error){note('could not send: '+(j.error||code));return;}
  if(j.immediate){localRun('say',j.reply);return;}
  runId=j.run_id;fails=0;busy(true);stateEl.textContent='starting';
  note(j.steered?'a run was already going - that message went into it as a steer':'');
  poll(++gen);
 }
-
 async function poll(my){
  if(my!==gen||!runId)return;
  const id=runId;
@@ -9173,50 +9466,93 @@ async function poll(my){
   // from zero every time: the whole (small) ordered buffer, reconciled by uid.
   // A cursor cannot lose a line that grew in place, or re-create one it has
   // already drawn, and a reload cannot end up with two copies of anything.
-  const r=await fetch('/api/events?run_id='+id+'&since=0',
-    {headers:{'X-tinycmdr-Token':token}});
+  const r=await fetch('/api/events?run_id='+id+'&since=0',{headers:H()});
   if(r.ok){
    const j=await r.json();fails=0;
    reconcile(id,j.lines||[]);
    status(j);
-   if(j.done){if(runId===id)runId=null;busy(false);return;}
+   // the rail and the open panel refresh on a slower clock than the run itself:
+   // rebuilding them on every poll is a layout storm that buys nothing.
+   if(Date.now()-lastRail>3000){lastRail=Date.now();loadSessions();
+    if(panelWhich)refreshPanel();}
+   if(j.done){if(runId===id)runId=null;busy(false);
+    loadSessions();if(panelWhich)refreshPanel();return;}
   }else if(r.status===404){
    note('that run is no longer on the server');if(runId===id)runId=null;busy(false);return;
   }else{fails++;stateEl.textContent='connection trouble, retrying';}
  }catch(e){fails++;stateEl.textContent='connection trouble, retrying';}
- timer=setTimeout(()=>poll(my),fails?Math.min(5000,700*fails):700);
+ timer=setTimeout(function(){poll(my);},fails?Math.min(5000,700*fails):700);
 }
-
 async function versionCheck(){
  try{
   const r=await fetch('/api/health');const j=await r.json();
   verEl.textContent=j.version||'';
   if(j.version&&PAGE_VER&&j.version!==PAGE_VER){
    note('this page is '+PAGE_VER+', the server is '+j.version+' - stale client code',
-     ['Reload',()=>location.replace('/?v='+j.version)]);
+     ['Reload',function(){location.replace('/?v='+j.version);}]);
   }
  }catch(e){}
 }
-
 sendBtn.onclick=send;stopBtn.onclick=stop;
-inp.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}});
-inp.addEventListener('input',()=>{inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,240)+'px';});
+titleEl.onclick=renameSession;
+menuBtn.onclick=function(){railEl.classList.toggle('hide');};
+toolsBtn.onclick=function(){if(panelWhich&&drawerEl.classList.contains('show')){
+  drawerEl.classList.remove('show');panelWhich=null;}else showPanel('tasks');};
+closePanelBtn.onclick=function(){drawerEl.classList.remove('show');panelWhich=null;};
+newBtn.onclick=newConversation;
+allEl.onchange=function(){loadSessions();};
+for(const b of tabsEl.children)if(b.dataset&&b.dataset.p)
+ b.onclick=function(){showPanel(b.dataset.p);};
+inp.addEventListener('input',function(){
+ inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,240)+'px';
+ palette();
+ localStorage.fb_draft=inp.value;
+});
+inp.addEventListener('keydown',function(e){
+ if(e.key==='Escape'){palEl.classList.add('hide');if(runId)e.preventDefault(),stop();return;}
+ if(e.key==='ArrowDown'&&palMove(1)){e.preventDefault();return;}
+ if(e.key==='ArrowUp'){
+  if(palMove(-1)){e.preventDefault();return;}
+  if(!inp.value&&hist.length){histAt=Math.min(histAt+1,hist.length-1);
+   inp.value=hist[histAt];e.preventDefault();return;}
+ }
+ if(e.key==='Tab'&&palTake()){e.preventDefault();return;}
+ if(e.key==='Enter'&&!e.shiftKey){
+  if(!palEl.classList.contains('hide')&&!inp.value.includes(' ')){palTake();e.preventDefault();return;}
+  e.preventDefault();send();}
+});
+document.addEventListener('keydown',function(e){      // ctrl/cmd+K: the conversation rail
+ if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K'))
+  {e.preventDefault();railEl.classList.toggle('hide');}
+});
+log.addEventListener('click',function(e){             // tap the answer to copy it
+ const n=e.target;
+ if(n&&n.className&&n.className.indexOf('final')>=0)clip(n.textContent);
+});
 async function attach(){
  try{
-  const r=await fetch('/api/live',{headers:{'X-tinycmdr-Token':token}});
+  const r=await fetch('/api/live?session='+encodeURIComponent(sessionKey||''),
+    {headers:H()});
   if(!r.ok)return;
   const j=await r.json();
   if(j.run_id&&j.run_id!==runId){runId=j.run_id;fails=0;busy(true);poll(++gen);}
  }catch(e){}
 }
-(async()=>{
- restore();
- note('no chat server needed: this page drives the same agent. /help for commands, '
-  +'/clear wipes this transcript');
+(async function(){
+ localStorage.fb_draft=localStorage.fb_draft||'';
+ inp.value=localStorage.fb_draft;
+ note('no chat server needed: this page drives the same agent. / for commands, '+
+  'the rail on the left is every conversation this browser has had');
  await versionCheck();
+ await loadCommands();
+ await loadSessions();
+ const want=localStorage.fb_session;
+ const have=sessions.some(function(s){return s.key===want;});
+ if(want&&have){await openSession(want,true);}
+ else{await openSession(sessionKey||'web',true);}
  setInterval(versionCheck,20000);
- window.addEventListener('focus',versionCheck);
- await attach();
+ setInterval(loadSessions,5000);
+ window.addEventListener('focus',function(){versionCheck();loadSessions();});
 })();
 </script></body></html>
 """
@@ -9347,15 +9683,365 @@ def _web_command(text, key="web"):
         return ("reply", "🛑 Stop requested — the current step finishes first.")
     if low == "/help":
         return ("reply",
-                "Commands: /new fresh session · /status · /stop · /undo [N] · "
-                "/retry · /model [name|list] [--global] · /restart · "
-                "/version · /help\n"
-                "Everything else is a task for the agent.")
+                "Commands:\n"
+                + "\n".join(f"{c} — {h}" for c, h in WEB_COMMANDS)
+                + "\nEverything else is a task for the agent.")
     if low.startswith("/"):
         return ("reply", "Unknown command — try /help.")
     return ("task", text)
 
 
+# -- web conversations: one host, many conversations, a browser owns its own --
+# The web lane used to hardcode the session key "web": every browser, on every
+# device, talked into one conversation, and nothing could list or reopen one.
+# A conversation is now an ordinary agent session - its history, carry, transcript
+# and event files follow the key exactly like a Mattermost channel's do - plus one
+# file of its own, sessions/<key>.web.jsonl: the ordered line list of each finished
+# run. That file is what lets a reload, a second browser or the same browser
+# tomorrow repaint the conversation instead of starting from a blank page.
+#
+# Ownership, because this build ships to other people: a conversation belongs to
+# the browser that created it (X-tinycmdr-Client, an id the page makes once and
+# keeps in localStorage), so two people pointed at one host never see each other's
+# chats. An empty owner means the shared conversation - what /api/chat and any
+# script without a client header drive, and what a pre-existing sessions/web.json
+# is adopted as. The token holder can ask for every conversation on the host.
+WEB_STATE_FILE = BASE_DIR / "web-sessions.json"
+WEB_STATE_LOCK = threading.Lock()
+WEB_SESSION_MAX = 50            # conversations kept per client
+WEB_RUNLOG_KEEP = 60            # finished runs kept per conversation
+WEB_RUNLOG_MAX_CHARS = 500_000  # ...and a ceiling on the file itself
+WEB_RUNLOG_LOCK = threading.Lock()
+WEB_KEY_RX = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+
+
+def _web_key_ok(key):
+    """A session key becomes a filename, so it is checked, never trusted."""
+    return bool(key) and bool(WEB_KEY_RX.match(key)) and not key.startswith(".")
+
+
+def _web_client(headers):
+    """The browser's own id. Scripts send none and get the shared conversation."""
+    raw = (headers.get("X-tinycmdr-Client") or "").strip()
+    return re.sub(r"[^A-Za-z0-9]", "", raw)[:32]
+
+
+def _web_state(mutate=None):
+    """The conversation registry: {sessions: [...], open: {client: key}}.
+
+    Reads and writes both go through here, and a mutation holds ONE lock for the
+    whole load-modify-save. Nothing inside a mutate callback may call back into
+    _web_state - a plain Lock taken twice in one thread is a deadlock, which is
+    exactly how the notes guard froze a bot once."""
+    with WEB_STATE_LOCK:
+        try:
+            st = json.loads(WEB_STATE_FILE.read_text(encoding="utf-8"))
+            if not isinstance(st, dict):
+                st = {}
+        except Exception:
+            st = {}
+        if not isinstance(st.get("sessions"), list):
+            st["sessions"] = []
+        if not isinstance(st.get("open"), dict):
+            st["open"] = {}
+        if mutate is None:
+            return st
+        out = mutate(st)
+        try:
+            atomic_write_text(WEB_STATE_FILE, json.dumps(st, indent=1))
+        except Exception as e:
+            log.error("could not save %s: %s", WEB_STATE_FILE.name, e)
+        return out
+
+
+def web_adopt_legacy():
+    """A conversation that predates the registry (sessions/web.json) is adopted
+    once, as the shared conversation, so it stays reachable in the rail."""
+    if WEB_STATE_FILE.exists():
+        return
+    path = AGENT._session_path("web")
+    if not path.exists():
+        return
+
+    def fn(st):
+        st["sessions"].append({"key": "web", "client": "", "title": "",
+                               "created": path.stat().st_mtime,
+                               "last_active": path.stat().st_mtime})
+        return True
+
+    _web_state(fn)
+    log.info("web conversation 'web' adopted into the conversation registry")
+
+
+def web_entry(key):
+    """The registry entry for one key, or None."""
+    for s in _web_state()["sessions"]:
+        if isinstance(s, dict) and s.get("key") == key:
+            return s
+    return None
+
+
+def web_title(entry):
+    """What the rail shows: the operator's own name for it, else the first thing
+    they asked in it, else when it was made."""
+    t = (entry.get("title") or "").strip()
+    if t:
+        return t
+    try:
+        for m in AGENT._history(entry.get("key") or ""):
+            if isinstance(m, dict) and m.get("role") == "user":
+                first = str(m.get("content") or "").strip().splitlines()
+                if first and first[0].strip():
+                    return first[0].strip()[:70]
+    except Exception:
+        pass
+    # An empty conversation is named as such: the rail already says when it was
+    # last used, and a row titled "2026-09-20 09:18" reads like a task, not a
+    # chat you have not said anything in yet.
+    return "new conversation"
+
+
+def web_session_brief(entry, client):
+    """One row of the rail: the conversation plus what it is doing right now."""
+    key = entry.get("key") or ""
+    try:
+        st = AGENT.stats(key)
+    except Exception:
+        st = {"exchanges": 0, "est_tokens": 0}
+    live = _web_active_run(key)
+    owner = entry.get("client") or ""
+    return {"key": key, "title": web_title(entry),
+            "created": entry.get("created"), "last_active": entry.get("last_active"),
+            "exchanges": st.get("exchanges", 0), "tokens": st.get("est_tokens", 0),
+            "model": AGENT.model_overrides.get(key) or CONFIG["llm"]["model"],
+            "owner": ("mine" if owner and owner == client
+                      else ("shared" if not owner else "other")),
+            "live": ({"run_id": live.id, "steps": live.steps, "status": live.status,
+                      "elapsed": round(time.time() - live.started, 1)}
+                     if live is not None else None)}
+
+
+def web_sessions(client, include_all=False):
+    """The conversations this browser may see, newest activity first."""
+    web_adopt_legacy()
+    rows = []
+    for entry in _web_state()["sessions"]:
+        if not isinstance(entry, dict) or not _web_key_ok(entry.get("key") or ""):
+            continue
+        owner = entry.get("client") or ""
+        if owner and owner != client and not include_all:
+            continue
+        rows.append(web_session_brief(entry, client))
+    rows.sort(key=lambda r: r.get("last_active") or 0, reverse=True)
+    return rows
+
+
+def web_new_session(client, title=""):
+    """A fresh conversation, owned by this browser."""
+    key = "web-" + os.urandom(4).hex()
+
+    def fn(st):
+        st["sessions"].append({"key": key, "client": client, "title": title or "",
+                               "created": time.time(), "last_active": time.time()})
+        if client:
+            st["open"][client] = key
+        mine = [s for s in st["sessions"] if (s.get("client") or "") == client]
+        if len(mine) > WEB_SESSION_MAX:      # the oldest ones stay on disk, unlisted
+            drop = sorted(mine, key=lambda s: s.get("last_active") or 0
+                          )[0:len(mine) - WEB_SESSION_MAX]
+            gone = {s.get("key") for s in drop}
+            st["sessions"] = [s for s in st["sessions"]
+                              if s.get("key") not in gone]
+        return key
+
+    return _web_state(fn)
+
+
+def web_rename_session(key, title):
+    def fn(st):
+        for s in st["sessions"]:
+            if s.get("key") == key:
+                s["title"] = (title or "").strip()[:80]
+                return True
+        return False
+
+    return bool(_web_state(fn))
+
+
+def web_delete_session(key):
+    """Forget a conversation: the registry entry and every file that belongs to
+    that key. Refused while a run is live in it - that run is still writing."""
+    if _web_active_run(key) is not None:
+        return "busy"
+
+    def fn(st):
+        before = len(st["sessions"])
+        st["sessions"] = [s for s in st["sessions"] if s.get("key") != key]
+        st["open"] = {c: k for c, k in st["open"].items() if k != key}
+        return len(st["sessions"]) != before
+
+    if not _web_state(fn):
+        return "missing"
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+    for suffix in (".json", ".web.jsonl", ".carry.json", ".transcript.jsonl",
+                   ".events.jsonl"):
+        try:
+            (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
+        except Exception as e:
+            log.warning("could not remove %s%s: %s", safe, suffix, e)
+    AGENT.histories.pop(key, None)
+    AGENT.model_overrides.pop(key, None)
+    log.info("web conversation %s deleted", key)
+    return "deleted"
+
+
+def web_set_open(client, key):
+    if not client:
+        return False
+
+    def fn(st):
+        st["open"][client] = key
+        return True
+
+    return bool(_web_state(fn))
+
+
+def web_open_key(client):
+    """Which conversation this browser had open last."""
+    if not client:
+        return None
+    key = _web_state()["open"].get(client)
+    return key if _web_key_ok(key or "") else None
+
+
+def web_touch(key):
+    """Mark a conversation as just used (called when a run starts in it)."""
+    def fn(st):
+        for s in st["sessions"]:
+            if s.get("key") == key:
+                s["last_active"] = time.time()
+                return True
+        st["sessions"].append({"key": key, "client": "", "title": "",
+                               "created": time.time(), "last_active": time.time()})
+        return True
+
+    try:
+        _web_state(fn)
+    except Exception as e:
+        log.warning("could not touch web conversation %s: %s", key, e)
+
+
+def web_resolve_session(client, requested):
+    """The conversation a request means: what it asked for, else what this
+    browser had open, else the shared one. Never anything outside the host."""
+    if requested and _web_key_ok(requested):
+        return requested
+    return web_open_key(client) or "web"
+
+
+# -- the conversation on disk: one line list per finished run --------------
+def _web_runlog_path(key):
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
+    return SESSIONS_DIR / f"{safe}.web.jsonl"
+
+
+def web_runlog(key):
+    """Finished runs of one conversation, oldest first. A damaged line is
+    skipped, never fatal: a transcript is a view, not the work."""
+    try:
+        raw = _web_runlog_path(key).read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(rec, dict) and isinstance(rec.get("lines"), list):
+            out.append(rec)
+    return out
+
+
+def web_runlog_append(key, run_id, started, lines):
+    """Persist one finished run's lines. Fails SOFT: a disk problem must never
+    turn a finished run into a failed one."""
+    if not lines:
+        return
+    rec = {"run_id": run_id, "started": round(started or 0, 3),
+           "lines": lines}
+    with WEB_RUNLOG_LOCK:
+        try:
+            _ensure_sessions_dir()
+            recs = web_runlog(key)
+            recs = [r for r in recs if r.get("run_id") != run_id]
+            recs.append(rec)
+            while len(recs) > WEB_RUNLOG_KEEP:
+                recs.pop(0)
+            text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
+            while len(text) > WEB_RUNLOG_MAX_CHARS and len(recs) > 1:
+                recs.pop(0)
+                text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
+            atomic_write_text(_web_runlog_path(key), text + "\n")
+        except Exception as e:
+            log.warning("could not write the web run log for %s: %s", key, e)
+
+
+def web_history_lines(key):
+    """A transcript for a conversation that predates the run log: history as it
+    stands (the operator's turns and the answers, no tool lines)."""
+    out = []
+    try:
+        hist = AGENT._history(key)
+    except Exception:
+        return out
+    for m in hist:
+        if not isinstance(m, dict):
+            continue
+        role, text = m.get("role"), m.get("content")
+        if role not in ("user", "assistant"):
+            continue
+        if not isinstance(text, str) or not text.strip():
+            continue
+        i = len(out)
+        out.append({"i": i, "uid": f"history-{key}#{i}",
+                    "kind": "you" if role == "user" else "final",
+                    "text": text.strip(), "t": None, "r": 0})
+    return out
+
+
+def web_transcript(key):
+    """The ordered line lists of a conversation: what is on disk, with the live
+    run merged in if one is going. Keyed by run id, so a run that is both
+    recorded and still in memory is drawn once."""
+    runs, order = {}, []
+    for rec in web_runlog(key):
+        rid = rec.get("run_id") or "run"
+        if rid not in runs:
+            order.append(rid)
+        runs[rid] = {"run_id": rid, "lines": rec.get("lines") or [],
+                     "live": False}
+    if not runs and key:
+        hist = web_history_lines(key)
+        if hist:
+            rid = f"history-{key}"
+            order.append(rid)
+            runs[rid] = {"run_id": rid, "lines": hist, "live": False}
+            web_runlog_append(key, rid, 0, hist)
+    live = _web_active_run(key)
+    if live is not None:
+        with live.lock:
+            snap = {"run_id": live.id, "lines": list(live.lines),
+                    "live": True, "done": live.done, "status": live.status,
+                    "steps": live.steps,
+                    "elapsed": round(time.time() - live.started, 1)}
+        if live.id not in runs:
+            order.append(live.id)
+        runs[live.id] = snap
+    return {"runs": [runs[r] for r in order if runs.get(r, {}).get("lines")]}
 # -- live runs for the local web UI --------------------------------------
 # The page polls /api/events while a run is in flight, so a browser sees the
 # same thing Mattermost shows: what the agent is doing while it works, not a
@@ -9641,8 +10327,127 @@ def _web_drive(run, text):
         if answer and not seen_final:
             run.answer_i = run.add("final", answer)
         run.finish()
+        # The conversation lives on disk, not in this process: this is what a
+        # reload, a second browser or a restart repaints from. Fail-soft on
+        # purpose - a disk problem must not turn a finished run into a failed one.
+        with run.lock:
+            written = list(run.lines)
+        web_runlog_append(run.session_key, run.id, run.started, written)
 
 
+
+# -- the page's panels: what this host already keeps, read only -------------
+# Everything here is per host and already on disk (the ledger, the scheduler's
+# jobs, the log, the skill and tool inventory). None of it was reachable from a
+# browser, so the same facts had to be asked for in chat. Read-only on purpose:
+# the model owns these files, and a page that writes them is a second writer with
+# no lock discipline.
+WEB_COMMANDS = (
+    ("/new", "start a fresh conversation"),
+    ("/status", "this host: model, context, limits, uptime"),
+    ("/stop", "cancel the run that is going"),
+    ("/undo [N]", "drop the last N exchanges"),
+    ("/retry", "run my last request again"),
+    ("/model [name|list] [--global]", "show, list or switch the model"),
+    ("/restart", "restart the bot"),
+    ("/version", "the version this page is talking to"),
+    ("/help", "this list"),
+)
+
+
+def web_commands(active):
+    return [{"cmd": c, "help": h, "active": c.lower() in (active or "")}
+            for c, h in WEB_COMMANDS]
+
+
+def web_tasks_view():
+    """The ledger, newest first. `load_tasks` salvages a damaged file and never
+    raises, so a broken ledger shows as what survived rather than as a 500."""
+    t = load_tasks()
+    items = []
+    for it in t.get("items") or []:
+        if not isinstance(it, dict):
+            continue
+        items.append({"id": it.get("id"), "desc": it.get("desc") or "",
+                      "status": it.get("status") or "", "note": it.get("note") or "",
+                      "created": it.get("created") or "",
+                      "updated": it.get("updated") or ""})
+    items.reverse()
+    return {"items": items, "next_id": t.get("next_id")}
+
+
+def web_jobs_view():
+    """Scheduled jobs and when each one fires next."""
+    jobs = []
+    try:
+        sched = SCHEDULER
+    except NameError:
+        sched = None
+    if sched is not None:
+        with sched.lock:
+            snapshot = dict(sched.jobs)
+        for name, j in sorted(snapshot.items()):
+            nxt = j.get("next")
+            try:
+                nxt = float(nxt)
+            except (TypeError, ValueError):
+                nxt = 0.0
+            jobs.append({"name": name, "cron": j.get("cron") or "",
+                         "task": (j.get("task") or "")[:200],
+                         "model": j.get("model") or "",
+                         "next": nxt or None,
+                         "next_iso": (time.strftime("%Y-%m-%d %H:%M",
+                                                    time.localtime(nxt)) if nxt else ""),
+                         "in_seconds": (round(nxt - time.time()) if nxt else None)})
+    return {"jobs": jobs, "scheduler": sched is not None,
+            "croniter": bool(getattr(sched, "ok", False))}
+
+
+def web_log_tail(lines=120):
+    """The tail of this host's log, read from the end: the file is big enough
+    (megabytes) that slurping it for a panel would be silly."""
+    path = BASE_DIR / "tinycmdr.log"
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - 200_000))
+            text = f.read().decode("utf-8", "replace")
+    except OSError:
+        return {"lines": [], "path": path.name, "bytes": 0}
+    try:
+        want = max(1, min(int(lines), 500))
+    except (TypeError, ValueError):
+        want = 120
+    return {"lines": text.splitlines()[-want:], "path": path.name, "bytes": size}
+
+
+def web_inventory():
+    """What this bot can do: its skills, its own custom tools, and what the
+    tool-result spill folder is holding."""
+    try:
+        # skill_index() returns a LIST of records, not a mapping: sorting it
+        # directly raises, and a bare except here reported a host with 108 skills
+        # as having none (found on the live box, not in the suite).
+        skills = sorted(s.get("name") or "?" for s in skill_index())
+    except Exception as e:
+        log.warning("could not read the skill index for the panel: %s", e)
+        skills = []
+    try:
+        tools = sorted(REGISTRY.custom)
+    except Exception:
+        tools = []
+    spill = {"files": 0, "bytes": 0}
+    try:
+        for f in _spill_dir().glob("*.txt"):
+            spill["files"] += 1
+            spill["bytes"] += f.stat().st_size
+    except Exception:
+        pass
+    return {"skills": skills, "tools": tools, "spill": spill,
+            "host": socket.gethostname(), "version": VERSION,
+            "notes_kb": round((NOTES_FILE.stat().st_size / 1024)
+                              if NOTES_FILE.exists() else 0, 1)}
 def run_webui():
     """Start the local web UI (chat + live run view + /api/health) on a
     daemon thread.  No-op if disabled.  Returns the server so a caller that
@@ -9736,6 +10541,32 @@ def run_webui():
                 except ValueError:
                     rev = 0
                 self._json(run.view(since, rev))
+            elif self.path.startswith("/api/sessions"):
+                # The rail: what conversations this browser has, newest first.
+                # ?all=1 is the token holder's view of every conversation on this
+                # host, which is what the operator uses on their own box.
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                q = self._query()
+                client = _web_client(self.headers)
+                self._json({"sessions": web_sessions(client, q.get("all") == "1"),
+                            "open": web_resolve_session(client, q.get("session")),
+                            "client": client, "budget": AGENT._context_budget(),
+                            "host": socket.gethostname(), "version": VERSION})
+            elif self.path.startswith("/api/session?"):
+                # One conversation as ordered line lists per run - what a reload
+                # paints, so a browser that lost its localStorage still sees the
+                # conversation and can go on with it instead of a blank page.
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                q = self._query()
+                client = _web_client(self.headers)
+                key = web_resolve_session(client, q.get("key") or q.get("session"))
+                out = web_transcript(key)
+                out["key"] = key
+                self._json(out)
             elif self.path.startswith("/api/live"):
                 # A page that just loaded (reload, second tab, phone waking up)
                 # has no run id and used to guess: it posted a message, which
@@ -9745,8 +10576,39 @@ def run_webui():
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
                     return
-                live = _web_active_run("web")
+                q = self._query()
+                live = _web_active_run(
+                    web_resolve_session(_web_client(self.headers),
+                                        q.get("session")))
                 self._json({"run_id": live.id if live else None})
+            elif self.path.startswith("/api/commands"):
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                client = _web_client(self.headers)
+                q = self._query()
+                self._json({"commands": web_commands(q.get("prefix")),
+                            "session": web_resolve_session(client, q.get("session"))})
+            elif self.path.startswith("/api/tasks"):
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json(web_tasks_view())
+            elif self.path.startswith("/api/jobs"):
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json(web_jobs_view())
+            elif self.path.startswith("/api/log"):
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json(web_log_tail(self._query().get("lines")))
+            elif self.path.startswith("/api/inventory"):
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json(web_inventory())
             elif self.path.startswith("/manifest.webmanifest"):
                 self._send(WEB_MANIFEST, 200, "application/manifest+json")
             elif self.path.startswith("/icon.png"):
@@ -9783,10 +10645,13 @@ def run_webui():
             except Exception:
                 pass
 
-        def _start_run(self, text):
+        def _start_run(self, text, key="web"):
             """Kick off a browser run on its own thread; the page polls for
-            lines.  One run per session at a time."""
-            busy = _web_active_run("web")
+            lines.  One run per CONVERSATION at a time - two conversations may
+            both be working, which is what makes parking one and opening another
+            possible instead of queueing behind it."""
+            web_touch(key)
+            busy = _web_active_run(key)
             if busy is not None:
                 # A tab that reloaded (or a second tab) does not know a run is
                 # live, and its message used to be dropped on the floor. Queue
@@ -9799,11 +10664,11 @@ def run_webui():
                          busy.id)
                 self._json({"run_id": busy.id, "busy": True, "steered": True})
                 return
-            run = _web_new_run("web")
+            run = _web_new_run(key)
             run.add("you", text)
             threading.Thread(target=_web_drive, args=(run, text),
                              daemon=True, name=f"webrun-{run.id}").start()
-            log.info("web run %s started from the browser", run.id)
+            log.info("web run %s started from the browser in %s", run.id, key)
             self._json({"run_id": run.id, "busy": False})
 
         def do_POST(self):
@@ -9820,12 +10685,53 @@ def run_webui():
                 if not text:
                     self._json({"error": "empty message"}, 400)
                     return
-                kind, payload = _web_command(text)
+                client = _web_client(self.headers)
+                key = web_resolve_session(client, body.get("session"))
+                kind, payload = _web_command(text, key)
                 if kind != "task":
                     # fast-path commands answer immediately, like /api/chat
-                    self._json({"reply": payload, "immediate": True})
+                    self._json({"reply": payload, "immediate": True, "session": key})
                     return
-                self._start_run(payload)
+                web_set_open(client, key)
+                self._start_run(payload, key)
+                return
+            if self.path.startswith("/api/sessions"):
+                if not self._auth_ok():
+                    self._drain()
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                body = self._body() or {}
+                op = (body.get("op") or "").strip()
+                key = (body.get("key") or "").strip()
+                client = _web_client(self.headers)
+                if op == "new":
+                    made = web_new_session(client, (body.get("title") or "").strip()[:80])
+                    log.info("web conversation %s created", made)
+                    self._json({"key": made, "sessions": web_sessions(client)})
+                    return
+                if op in ("rename", "delete", "open"):
+                    if not _web_key_ok(key) or web_entry(key) is None:
+                        self._json({"error": "no such conversation"}, 404)
+                        return
+                    if op == "rename":
+                        web_rename_session(key, body.get("title") or "")
+                        self._json({"ok": True, "sessions": web_sessions(client)})
+                        return
+                    if op == "delete":
+                        verdict = web_delete_session(key)
+                        if verdict == "busy":
+                            self._json({"error": "a run is still going in that "
+                                                 "conversation - stop it first"}, 409)
+                            return
+                        if verdict != "deleted":
+                            self._json({"error": "no such conversation"}, 404)
+                            return
+                        self._json({"deleted": key, "sessions": web_sessions(client)})
+                        return
+                    web_set_open(client, key)
+                    self._json({"open": key})
+                    return
+                self._json({"error": "unknown op"}, 400)
                 return
             if self.path.startswith("/api/steer"):
                 if not self._auth_ok():

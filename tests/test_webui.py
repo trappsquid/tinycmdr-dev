@@ -87,12 +87,14 @@ def blob(payload):
     return "\n".join(str(m.get("content") or "") for m in payload.get("messages", []))
 
 
-def _http_once(url, payload=None, token=TOKEN, timeout=15):
+def _http_once(url, payload=None, token=TOKEN, timeout=15, client=None):
     data = None if payload is None else json.dumps(payload).encode()
     req = urllib.request.Request(url, data=data)
     req.add_header("Content-Type", "application/json")
     if token is not None:
         req.add_header("X-tinycmdr-Token", token)
+    if client is not None:
+        req.add_header("X-tinycmdr-Client", client)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode() or "{}")
@@ -103,7 +105,7 @@ def _http_once(url, payload=None, token=TOKEN, timeout=15):
             return e.code, {}
 
 
-def http(url, payload=None, token=TOKEN, timeout=15, attempts=3):
+def http(url, payload=None, token=TOKEN, timeout=15, attempts=3, client=None):
     """One call, retried on a connection-level abort.
 
     Answering an unauthorized POST while its body was still being written made
@@ -113,7 +115,7 @@ def http(url, payload=None, token=TOKEN, timeout=15, attempts=3):
     last = None
     for i in range(attempts):
         try:
-            return _http_once(url, payload, token, timeout)
+            return _http_once(url, payload, token, timeout, client)
         except (ConnectionError, OSError) as e:
             last = e
             time.sleep(0.2)
@@ -400,6 +402,186 @@ def main():
         code, j = http(f"{base}/api/chat", {"message": "just answer me"})
         check("plain sync answer" in (j.get("reply") or ""),
               "/api/chat still runs a full turn and returns the answer")
+
+        # -- conversations: a browser owns its own, and they survive a reload --
+        # The lane used to hardcode one session key, so nothing could be listed
+        # or reopened. What is checked here is the whole point of the change: a
+        # conversation is on disk, a reload paints it back, and another browser
+        # cannot see it unless it is handed the key.
+        code, j = http(f"{base}/api/sessions", token=None)
+        check(code == 401, "/api/sessions refuses a missing token")
+        code, j = http(f"{base}/api/sessions", client="A")
+        check(code == 200 and j.get("sessions") is not None,
+              "/api/sessions answers a browser")
+        check(j.get("client") == "A", "the server reads the browser id it was sent")
+        check(j.get("open") == "web",
+              "a browser with nothing open lands on the shared conversation")
+
+        code, j = http(f"{base}/api/sessions", {"op": "new"}, client="A")
+        conv = j.get("key")
+        check(code == 200 and conv and conv.startswith("web-"),
+              f"a new conversation is created ({conv})")
+        check(j["sessions"][0]["key"] == conv and j["sessions"][0]["owner"] == "mine",
+              "...and it is this browser's")
+        code, j = http(f"{base}/api/sessions", client="B")
+        check(all(s["key"] != conv for s in j["sessions"]),
+              "another browser does not see it")
+        code, j = http(f"{base}/api/sessions?all=1", client="B")
+        check(any(s["key"] == conv for s in j["sessions"]),
+              "the token holder can ask for every conversation on the host")
+
+        seen4 = []
+        make_stub(fb, seen4, [lambda p: text_reply("nothing much is running.")])
+        code, j = http(f"{base}/api/run",
+                       {"message": "what is running", "session": conv}, client="A")
+        conv_run = j.get("run_id")
+        check(code == 200 and conv_run, f"a run starts in that conversation ({j})")
+        lines, state = collect(base, conv_run)
+        check(state.get("done") is True, "the run finishes")
+        check([l["kind"] for l in lines] == ["you", "final"],
+              f"its lines are its own ({[l['kind'] for l in lines]})")
+
+        logfile = workdir / "sessions" / f"{conv}.web.jsonl"
+        check(wait_for(lambda: logfile.exists(), timeout=5),
+              "the finished run is on disk, so a reload has something to paint")
+        code, tr = http(f"{base}/api/session?key={conv}", client="A")
+        check(code == 200 and tr.get("key") == conv, "the conversation is readable")
+        check(len(tr.get("runs") or []) == 1
+              and tr["runs"][0]["run_id"] == conv_run,
+              "it holds exactly the run that was just done")
+        check([l["text"] for l in tr["runs"][0]["lines"]] ==
+              [l["text"] for l in lines],
+              "and the painted lines match the run, in order")
+        check(all(l.get("uid") for l in tr["runs"][0]["lines"]),
+              "the lines keep their uids, so the page can key on them")
+
+        # a restart: the in-memory run is gone and the file is all that is left
+        fb.AGENT.histories.pop(conv, None)
+        fb.WEB_RUNS.clear()
+        code, tr = http(f"{base}/api/session?key={conv}", client="A")
+        check(code == 200 and tr["runs"][0]["run_id"] == conv_run,
+              "a restart does not lose the conversation")
+        code, j = http(f"{base}/api/live?session={conv}", client="A")
+        check(code == 200 and j.get("run_id") is None,
+              "/api/live is scoped to the conversation it is asked about")
+
+        code, j = http(f"{base}/api/sessions",
+                       {"op": "rename", "key": conv, "title": "disk checks"},
+                       client="A")
+        row = next(s for s in j["sessions"] if s["key"] == conv)
+        check(row.get("title") == "disk checks", "a conversation can be renamed")
+        code, j = http(f"{base}/api/sessions", {"op": "open", "key": conv},
+                       client="A")
+        check(j.get("open") == conv, "a browser can say which one it has open")
+        code, j = http(f"{base}/api/sessions", client="A")
+        check(j.get("open") == conv, "...and the list reports it back")
+        code, j = http(f"{base}/api/sessions", {"op": "open", "key": "web"},
+                       client="A")
+        check(j.get("open") == "web", "and switch back")
+
+        code, j = http(f"{base}/api/session?key=../../config.json", client="A")
+        check(code == 200 and j.get("key") == "web",
+              "a key that is not a key falls back to the shared conversation")
+        code, j = http(f"{base}/api/sessions",
+                       {"op": "delete", "key": "../../config.json"}, client="A")
+        check(code == 404, "...and cannot be deleted")
+        code, j = http(f"{base}/api/sessions", {"op": "nonsense"}, client="A")
+        check(code == 400, "an unknown op is a 400, not a silent success")
+
+        code, j = http(f"{base}/api/sessions", {"op": "delete", "key": conv},
+                       client="A")
+        check(code == 200 and j.get("deleted") == conv, "a conversation can be deleted")
+        check(not logfile.exists(), "...and its run log goes with it")
+        check(all(s["key"] != conv for s in j["sessions"]), "...and it leaves the list")
+        code, j = http(f"{base}/api/session?key={conv}", client="A")
+        check(code == 200 and (j.get("runs") or []) == [],
+              "a deleted conversation reads as empty, not as an error")
+
+        # what a conversation holds is bounded, so a long-lived host cannot fill
+        # its disk with one chat
+        code, j = http(f"{base}/api/sessions", {"op": "new"}, client="A")
+        capped = j.get("key")
+        fb.web_runlog_append(capped, "r1", 0,
+                            [{"i": 0, "uid": "r1#0", "kind": "you",
+                              "text": "x" * 50, "t": 0, "r": 0}])
+        fb.WEB_RUNLOG_KEEP = 3
+        for n in range(6):
+            fb.web_runlog_append(capped, f"r{n + 2}", 0,
+                                [{"i": 0, "uid": f"r{n + 2}#0", "kind": "you",
+                                  "text": "y", "t": 0, "r": 0}])
+        kept = fb.web_runlog(capped)
+        check(len(kept) == 3, f"the run log keeps the newest few ({len(kept)})")
+        check(kept[-1]["run_id"] == "r7", "...and the newest one is the last")
+        fb.WEB_RUNLOG_KEEP = 60
+        http(f"{base}/api/sessions", {"op": "delete", "key": capped}, client="A")
+
+        # -- the panels: the host's own ledger, jobs, log and inventory --------
+        # None of this was reachable from a browser, so the same facts were
+        # fetched by typing a command into the chat. Read-only on purpose.
+        for path in ("/api/tasks", "/api/jobs", "/api/log", "/api/inventory",
+                     "/api/commands"):
+            code, _ = http(f"{base}{path}", token=None)
+            check(code == 401, f"{path} refuses a missing token")
+
+        code, j = http(f"{base}/api/commands")
+        cmds = j.get("commands") or []
+        check(code == 200 and any(c.get("cmd") == "/status" for c in cmds),
+              "the command list is served, so the composer can complete it")
+        check(all(c.get("help") for c in cmds),
+              "every command carries its one-line explanation")
+
+        code, j = http(f"{base}/api/run", {"message": "/help"})
+        helptext = j.get("reply") or ""
+        check(code == 200 and all(c["cmd"] in helptext for c in cmds),
+              "/help is generated from that same list, so the two cannot drift")
+
+        code, j = http(f"{base}/api/tasks")
+        check(code == 200 and isinstance(j.get("items"), list),
+              "the ledger is readable (empty on a fresh install, not an error)")
+        code, j = http(f"{base}/api/jobs")
+        check(code == 200 and isinstance(j.get("jobs"), list)
+              and "scheduler" in j,
+              "the scheduler's jobs are readable")
+        code, j = http(f"{base}/api/log?lines=5")
+        check(code == 200 and isinstance(j.get("lines"), list)
+              and len(j["lines"]) <= 5 and j.get("path") == "tinycmdr.log",
+              f"the log tail is capped at what was asked for "
+              f"({len(j.get('lines') or [])} lines)")
+        code, j = http(f"{base}/api/inventory")
+        check(code == 200 and isinstance(j.get("skills"), list)
+              and isinstance(j.get("tools"), list) and "spill" in j,
+              "the skill, tool and spill inventory is readable")
+
+        # ...and it lists the skills a host actually has. A panel that quietly
+        # reports "0 skills" on a box with 108 of them looked fine in the suite
+        # until this: the first cut sorted the records instead of the names.
+        skills_dir = workdir / "skills" / "demo-skill"
+        skills_dir.mkdir(parents=True)
+        (skills_dir / "SKILL.md").write_text(
+            "---\nname: demo-skill\ndescription: a runbook this panel must show\n---\n\nbody\n",
+            encoding="utf-8")
+        saved = fb.SKILLS_DIR
+        try:
+            fb.SKILLS_DIR = workdir / "skills"
+            code, j = http(f"{base}/api/inventory")
+            check(code == 200 and "demo-skill" in (j.get("skills") or []),
+                  f"the inventory names the skills on this host ({j.get('skills')})")
+        finally:
+            fb.SKILLS_DIR = saved
+        check(j.get("version") == fb.VERSION and j.get("host"),
+              "and it names the host and version it came from")
+
+        # -- a read never writes a registry entry ------------------------------
+        # The build's rule is that opening it does nothing: the registry grows on
+        # an operator action, never because a page asked a question.
+        reg = workdir / "web-sessions.json"
+        before = reg.read_text(encoding="utf-8") if reg.exists() else "{}"
+        http(f"{base}/api/health")
+        http(f"{base}/api/session?key=web-00000000", client="A")
+        http(f"{base}/api/sessions", client="A")
+        after = reg.read_text(encoding="utf-8") if reg.exists() else "{}"
+        check(after == before,
+              "reading a page or an unknown conversation does not grow the registry")
 
         srv.shutdown()
         srv.server_close()

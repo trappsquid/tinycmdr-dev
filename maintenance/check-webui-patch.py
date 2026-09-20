@@ -1,70 +1,96 @@
-"""Confirm the web-UI patch is present in tinycmdr.py.
+"""Check that the web page and the web server still agree with each other.
 
 Run:  python maintenance/check-webui-patch.py [path]
-Exit 0 only when every marker is there - a parallel edit_file write clobbered
-one of these once and the suite still passed, so the patch itself gets checked.
 
-This is the ONLY check that guards the client half of the page: the Python
-suites drive the HTTP endpoints and never look at the JavaScript inside
-WEB_PAGE. (tests/test_webui_page.py now runs that JavaScript in Node; that one
-catches behaviour, this one catches the patch being reverted wholesale.)
+This is the contract check for the page half of the web UI. The Python suites
+drive the HTTP endpoints; tests/test_webui_page.py runs the page's JavaScript in
+Node. Neither one notices the failure this catches: a page that calls an endpoint
+the server does not route (or sends a header name the server does not read). A
+browser shows that as a silent 404 and a dead button, and every suite stays green.
+
+It is written against the CONTRACT on purpose - the paths the page fetches, the
+names both halves agree on - not against implementation markers. The previous
+version listed exact strings from one generation of the renderer; when that
+renderer was replaced the script went from meaningless-green to
+permanently-red, which is worse than not having it.
+
+Exit 0 only when every check passes. Skips (exit 0) for a build with no web
+layer, and skips the JavaScript parse when node is not installed.
 """
-import ast
+import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
-src = Path(sys.argv[1] if len(sys.argv) > 1 else "tinycmdr.py")
-s = src.read_text(encoding="utf-8")
-ast.parse(s)
+src_path = Path(sys.argv[1] if len(sys.argv) > 1 else "tinycmdr.py")
+src = src_path.read_text(encoding="utf-8")
 
-MARKERS = {
-    # -- client: the renderer ------------------------------------------------
-    "client: nodes are keyed by run AND index": "const key=(i===undefined||i===null)?null:(runId+'#'+i);",
-    "client: a re-sent line repaints in place": "if(d){render(d,kind,text,t);return d;}",
-    "client: poll sends both cursors": "'&since='+since+'&rev='+revSeen",
-    "client: in-place updates are repainted": "for(const l of j.updates||[])",
-    "client: the rev cursor is advanced": "if(typeof j.rev==='number')revSeen=j.rev;",
-    "client: a failed poll re-arms the timer": "timer=setTimeout(poll,fails?Math.min(5000,700*fails):700);",
-    "client: a steer that lost its run is resent": "runId=null;busy(false);inp.value=t;inflight=false;return send();",
-    "client: /clear exists": "if(t==='/clear')",
-    "client: the transcript survives a reload": "localStorage[LOGKEY]=JSON.stringify(history)",
-    # -- server: the run buffer ---------------------------------------------
-    "server: WebRun.grow exists": "def grow(self, kind, text, from_turn=False):",
-    "server: growth follows the streaming line": "i = self.stream_i",
-    "server: a tool call ends the turn": 'if kind in ("tool", "tool_done", "tool_fail"):',
-    "server: a revision counter exists": "self.rev += 1",
-    "server: view returns in-place updates": '"updates": [l for l in self.lines',
-    "server: narration grows one line": 'self.grow("say", text.strip())',
-    "server: the final answer grows too": 'self.grow("final", text.strip())',
-    "server: interim text is its own class": 'self.grow("thinking", text.strip(), from_turn=True)',
-    "server: a busy run takes the message as a steer": "queued as steer",
-}
+if 'WEB_PAGE = """' not in src:
+    print(f"{src_path}: no web layer in this build - nothing to check")
+    sys.exit(0)
 
-bad = []
-for label, needle in MARKERS.items():
-    ok = needle in s
-    print(("ok   " if ok else "FAIL ") + label)
+start = src.index('WEB_PAGE = """') + len('WEB_PAGE = """')
+end = src.index('"""', start)
+page = src[start:end]
+fail = []
+
+
+def check(ok, what):
+    print(("ok   " if ok else "FAIL ") + what)
     if not ok:
-        bad.append(label)
+        fail.append(what)
 
-if "add('you',t+'   (steering)')" in s:
-    print("FAIL client: steer still echoes locally")
-    bad.append("steer echo")
 
-# /api/events must emit exactly one JSON document per request. A stray second
-# _json() call shipped for months and made page.poll()'s r.json() throw on every
-# single poll of every single run. /api/health emits that same document on
-# purpose, so there must be exactly one occurrence in total.
-n_doc = s.count('self._json({"ok": True, "version": VERSION})')
-print(("ok   " if n_doc == 1 else "FAIL ")
-      + f"{n_doc} one-document health replies (want exactly 1: health only)")
-if n_doc != 1 or "run.view(since, rev))\n                self._json(" in s:
-    bad.append("duplicate JSON document")
+# -- what the page asks the server for, and what the server routes ----------
+page_paths = set()
+for raw in re.findall(r"(?:fetch|post)\(\s*'([^']+)'", page):
+    page_paths.add(raw.split("?")[0])
+page_paths |= set(re.findall(r"href=[\"']?(/[^\"' >]+)", page))
+page_paths |= set(re.findall(r"src=[\"']?(/[^\"' >]+)", page))
+page_paths.discard("/")
 
-n_you = s.count("add('you'")
-print(("ok   " if n_you == 1 else "FAIL ") + f"page has {n_you} 'you' echo site(s), want 1")
-if n_you != 1:
-    bad.append("you echo count")
+routed = set(re.findall(r'self\.path\.startswith\("(/[^"]+)"\)', src))
+routed |= set(re.findall(r'self\.path == "(/[^"]*)"', src))
+# a route written as "/api/session?" and a call written as "/api/session?key=x"
+# are the same path; the query tail is not part of the contract
+routed |= {p.rstrip("?=") for p in list(routed)}
 
-print("all web-UI patch markers present" if not bad else f"MISSING: {bad}")
-sys.exit(1 if bad else 0)
+missing = sorted(p for p in page_paths if p not in routed)
+check(not missing, f"every path the page calls is routed by the server ({missing})")
+
+# -- the handshake: one header name, written once ---------------------------
+sent = set(re.findall(r"'(X-tinycmdr-[A-Za-z-]+)'", page))
+read = set(re.findall(r'headers\.get\("(X-tinycmdr-[A-Za-z-]+)"\)', src))
+check(bool(sent) and sent == read,
+      f"the token header name matches on both sides ({sorted(sent)} vs {sorted(read)})")
+
+# -- the page is stamped with its version, in exactly one place -------------
+check(page.count("{{VERSION}}") == 1,
+      f"the page carries one version placeholder ({page.count('{{VERSION}}')})")
+check(src.count('WEB_PAGE.replace("{{VERSION}}", VERSION)') == 1,
+      "the server substitutes it when serving the page")
+
+# -- one JSON document per request (a stray second reply broke every poll) --
+n_doc = src.count('self._json({"ok": True, "version": VERSION})')
+check(n_doc == 1, f"exactly one health reply document ({n_doc})")
+
+# -- the page parses -------------------------------------------------------
+node = shutil.which("node") or shutil.which("node.exe")
+if not node:
+    print("skip the page JavaScript does not parse (node not installed)")
+else:
+    script = re.search(r"<script>(.*)</script>", page, re.S)
+    check(script is not None, "the page has a script block")
+    if script:
+        with tempfile.TemporaryDirectory() as td:
+            js = Path(td) / "page.js"
+            js.write_text(script.group(1), encoding="utf-8")
+            proc = subprocess.run([node, "--check", str(js)],
+                                  capture_output=True, text=True)
+        check(proc.returncode == 0,
+              f"the page JavaScript parses ({(proc.stderr or '').strip()[:200]})")
+
+print("web UI page/server contract holds" if not fail else f"MISSING: {fail}")
+sys.exit(1 if fail else 0)
