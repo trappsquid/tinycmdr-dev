@@ -958,3 +958,37 @@ console build; a computed-style read-back through headless Edge against an insta
 started from this tree (the live bot serves the code it loaded at its last restart, so
 a styling change cannot be seen through it) showing each tone's bar, tint and colour;
 and pictures of both lanes (`hermes-tmp/page-look.png`, `hermes-tmp/cli-look.html`).
+
+### The console got a screen (2026-09-21, afternoon)
+
+The operator's verdict on the presentation pass was "not worth shipping in its
+condition ... we need to completely shift to a TUI method for the CLI instance",
+naming Hermes' own CLI as the reference. So the console build draws now:
+
+- **The stack is the one Hermes uses**: rich for the boxed banner, one card per tone
+  and Markdown for an answer, prompt_toolkit for putting it on the terminal. Both
+  are imported lazily and only when `tui_wanted()` says a real console is there, and
+  both are OPTIONAL in `requirements.txt` - the console build's "dependencies: none"
+  promise survives: without them, with a pipe, or with `tinycmdr_PLAIN=1`, every line
+  prints plainly, exactly as before.
+- **The lane stays one lane**: `CliDestination(screen=...)` hands the same text to a
+  screen instead of painting an ANSI line. A call is a cyan "call" card, a result is
+  green, a failure red, the answer is the accent card with Markdown, and the run's
+  done line goes to the status line rather than wearing the answer's card - in the
+  CLI lane a `final` UPDATE is the done line, not an answer.
+- **What reaches the terminal is an ANSI string**, never rich markup and never raw
+  ESC bytes through a proxy (prompt_toolkit sanitizes those into visible `[1;33m`
+  garbage - the trap Hermes' own comment warns about).
+
+Evidence: `tests/test_tui.py` (22 checks: the pipe/tinycmdr_PLAIN refusals, each
+tone's card and colour, the Markdown answer, the done-line/vs-answer split, the
+plain path untouched with no screen, real SGR in the output with no markup leak, the
+status throttle, the narration passthrough, the SVG record), 23 suites green, the
+CLI legs green, `test_cli` 167/0 against the regenerated build, and
+`hermes-tmp/tui-look-real.py` - the picture drawn by the screen's own SVG record
+driven through the real RunReporter, so what it shows is what a terminal shows.
+
+Still open: the bot build's own `--cli` lane (tinycmdr.py's older console) does not
+build a screen yet, and the input line is still the plain one - prompt_toolkit
+owning stdin is what buys history, editing and a status line that updates in place
+instead of on a timer.
