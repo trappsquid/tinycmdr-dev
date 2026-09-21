@@ -594,6 +594,20 @@ _CONTEXT_OVERFLOW_RE = re.compile(
     r"too many tokens|exceeds? .{0,20}(context|token)|prompt is too long|"
     r"max_model_len|n_ctx|reduce the length|input is too long)", re.I)
 
+# What a request spends OUTSIDE the messages payload: the system block, the tool
+# schemas, the reply itself, and the estimator's known optimism. A configured
+# llm.max_context_tokens is clamped by what the endpoint actually serves minus
+# this, so a budget written for a bigger window cannot send a prompt that leaves
+# no room to answer (2026-09-21).
+REPLY_HEADROOM = 7000
+
+# How many times a run may re-ask after the model returned NO answer at all (empty
+# content, no tool call). Deliberately separate from agent.auto_continue_max: a
+# model that produced nothing did not spend the task's budget, and a run must not
+# end on the harness's own note about it. Small, because an endpoint that answers
+# every call with nothing must not be able to spin.
+NO_ANSWER_CONTINUES = 1
+
 
 class InfraError(RuntimeError):
     """Every endpoint failed at the transport level. The model never got a
@@ -950,6 +964,44 @@ def _record_attempt(usage, url, outcome, detail="", secs=0.0):
         usage["retries"] = usage.get("retries", 0) + 1
     if outcome in ("error", "abandoned"):
         usage["abandoned"] = usage.get("abandoned", 0) + 1
+
+
+def _detect_window(base_url, headers, timeout=10):
+    """Ask an endpoint how many tokens it serves per request; 0 when it does not say.
+
+    Two routes, because there is no standard one: vLLM reports max_model_len,
+    llama.cpp carries n_ctx under meta on /v1/models, and any llama.cpp build
+    answers /props at the server root. Read-only metadata, never a model call, so
+    it is safe to ask a box that is busy serving somebody else.
+    """
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        return 0
+    detected = None
+    try:
+        models = (requests.get(base + "/models", headers=headers,
+                               timeout=timeout).json().get("data") or [])
+        want = CONFIG["llm"]["model"]
+        entry = next((m for m in models if m.get("id") == want),
+                     models[0] if models else {})
+        detected = entry.get("max_model_len")               # vLLM
+        if not detected:
+            detected = (entry.get("meta") or {}).get("n_ctx")   # llama.cpp
+    except Exception as e:
+        log.debug("window detect: /models on %s did not answer: %s", base, e)
+    if not detected:
+        try:
+            root = base[:-3] if base.endswith("/v1") else base
+            props = requests.get(root + "/props", headers=headers,
+                                 timeout=timeout).json()
+            detected = ((props.get("default_generation_settings") or {})
+                        .get("n_ctx") or props.get("n_ctx"))
+        except Exception as e:
+            log.debug("window detect: /props on %s did not answer: %s", base, e)
+    try:
+        return int(detected) if detected else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 
@@ -6194,51 +6246,58 @@ class Agent:
                 total += est_tokens(json.dumps(m["tool_calls"]))
         return total
 
+    def _endpoint_window(self):
+        """What this endpoint serves per request, or 0 when it does not say.
+
+        Cached for the process: it is metadata (one /v1/models or /props GET), not
+        a model call. A generation that stopped at this number stopped because the
+        WINDOW filled, not because the output cap was small."""
+        if not hasattr(self, "_window_cache"):
+            self._window_cache = _detect_window(CONFIG["llm"]["base_url"],
+                                                self.headers)
+        return self._window_cache
+
     def _context_budget(self):
-        """Resolve the token budget for the messages payload. 'auto' (or a
-        blank/zero value) asks the server via /v1/models — works on vLLM and
-        some other servers; falls back to a conservative 8000 with a warning."""
+        """Resolve the token budget for the messages payload.
+
+        The endpoint is asked what it serves, and the tighter of that (less
+        REPLY_HEADROOM and the configured reply) and the configured number wins.
+        A budget is only as good as the box it was written for: measured
+        2026-09-21, .47 was restarted serving 131,072 per request while its host
+        still said 200000, so nothing ever compacted, the payload grew to 126,261
+        tokens, and the next turn had 4,808 tokens of room to answer in - cut off
+        mid-think with no answer at all. 'auto' (or blank/zero) means the same
+        thing the old comment meant: use what the server says. A server that does
+        not answer keeps the configured value; with nothing configured and nothing
+        detected, fall back to a conservative 8000.
+        """
         if hasattr(self, "_budget_cache"):
             return self._budget_cache
         val = CONFIG["llm"].get("max_context_tokens")
+        detected = self._endpoint_window()
+        room = REPLY_HEADROOM + int(CONFIG["llm"].get("max_tokens") or 0)
+        fits = max(4000, int(detected) - room) if detected else 0
         if val in (None, "", 0, "auto"):
-            detected = None
-            try:
-                base = CONFIG["llm"]["base_url"].rstrip("/")
-                r = requests.get(base + "/models",
-                                 headers=self.headers, timeout=10)
-                models = r.json().get("data", [])
-                want = CONFIG["llm"]["model"]
-                entry = next((m for m in models if m.get("id") == want),
-                             models[0] if models else {})
-                detected = entry.get("max_model_len")  # vLLM
-                if not detected:
-                    # llama.cpp /v1/models carries it under meta.n_ctx
-                    detected = (entry.get("meta") or {}).get("n_ctx")
-                if not detected:
-                    # llama.cpp fallback: /props at the server root
-                    root = base[:-3] if base.endswith("/v1") else base
-                    rp = requests.get(root + "/props", headers=self.headers,
-                                      timeout=10)
-                    props = rp.json()
-                    detected = ((props.get("default_generation_settings")
-                                 or {}).get("n_ctx") or props.get("n_ctx"))
-            except Exception as e:
-                log.warning("context auto-detect failed: %s", e)
-            if detected:
-                # reserve headroom for the reply + tool schemas
-                budget = max(4000, int(detected) - 7000)
-                log.info("context auto-detect: server reports %s, "
-                         "using messages budget %s", detected, budget)
+            if fits:
+                budget = fits
+                log.info("context: server reports %s per request, using messages "
+                         "budget %s", detected, budget)
             else:
                 budget = 8000
-                log.warning("could not auto-detect context length — using a "
-                            "conservative %s. Set llm.max_context_tokens "
+                log.warning("could not detect the endpoint's context length — "
+                            "using a conservative %s. Set llm.max_context_tokens "
                             "explicitly in config.json.", budget)
-            self._budget_cache = budget
         else:
-            self._budget_cache = int(val)
-        return self._budget_cache
+            budget = int(val)
+            if fits and budget > fits:
+                log.warning("llm.max_context_tokens is %d but %s serves %s per "
+                            "request (less %d for the reply and tool schemas) - "
+                            "using %d for this run",
+                            budget, CONFIG["llm"]["base_url"], detected, room,
+                            fits)
+                budget = fits
+        self._budget_cache = budget
+        return budget
 
     def _drop_oldest_block(self, messages, marker):
         """Delete the oldest whole exchange, leaving `marker` as its stand-in.
@@ -6588,6 +6647,24 @@ class Agent:
                 if finish == "length" and cap and usage is not None:
                     got = int((data.get("usage") or {})
                               .get("completion_tokens") or 0)
+                    _pt = int((data.get("usage") or {})
+                              .get("prompt_tokens") or 0)
+                    _win = self._endpoint_window()
+                    if _win and _pt and _pt + got >= _win - 8:
+                        # The request FILLED the endpoint's window, so the answer
+                        # had nowhere to go. That is not an output cap, and raising
+                        # max_tokens buys the identical wall (measured 2026-09-21:
+                        # 126,261 prompt tokens in a 131,072 slot -> 4,808
+                        # generated, truncated=1, then 4,759 at a 65,536 ceiling).
+                        # Hand it to the run loop, which shrinks the prompt and
+                        # re-asks this same turn.
+                        _record_attempt(usage, url, "window",
+                                        f"prompt {_pt} + {got} of {_win}", secs)
+                        raise ContextOverflow(
+                            f"the model filled this endpoint's context window "
+                            f"({_pt} prompt + {got} generated tokens of {_win}) and "
+                            f"was cut off before answering - the output cap was not "
+                            f"the limit")
                     if got and got < cap * 0.9:
                         # Suspected clamp: compare what came back against the
                         # cap actually SENT, not the one we meant to send — a
@@ -6796,6 +6873,10 @@ class Agent:
             # Segments: a run that lands on a cap may hand the same task to a fresh one
             # instead of stopping (see the budget branch). _seg_cap bounds that.
             _segments = 0
+            # No-answer retries for this run (see the final-answer branch). A run the
+            # MODEL failed to answer is not a run that used its budget, so this has
+            # its own small bound instead of spending a continuation segment.
+            _no_answer = 0
             _seg_raw = CONFIG["agent"].get("auto_continue_max")
             # 0 must mean 0 here, so no `or` default: an `or` turned an explicit
             # "no continuation" setting back into 2 (caught by tests/test_ledger.py).
@@ -7037,37 +7118,65 @@ class Agent:
                                         "with what you already have.")})
                                 continue
                             if fr == "length" and rchars:
-                                tried = ("even after retrying with a larger "
-                                         "max_tokens " if usage.get("escalated")
-                                         else "")
+                                tried = (" even after retrying with a "
+                                         "larger max_tokens"
+                                         if usage.get("escalated") else "")
                                 answer = (
-                                    f"⚠️ The model spent its whole output "
-                                    f"budget thinking ({rchars} chars of "
-                                    f"reasoning on the last call) and was cut "
-                                    f"off before answering "
-                                    f"{tried}(finish_reason=length). Raise "
+                                    f"⚠️ No answer: the model spent the "
+                                    f"whole output budget thinking "
+                                    f"({rchars} chars of reasoning, "
+                                    f"finish_reason=length){tried}. Raise "
                                     f"llm.max_tokens / llm.max_tokens_ceiling "
-                                    f"in config.json (the local server's "
-                                    f"n_predict also caps it). Don't set "
-                                    f"llm.no_think on the LAN boxes — they're "
-                                    f"meant to think.")
+                                    f"in config.json. Send anything to "
+                                    f"continue.")
                             elif rchars:
                                 twice = (" twice" if usage.get("empty_retry")
                                          else "")
                                 answer = (
-                                    f"⚠️ The model ended its turn with no "
-                                    f"answer{twice}: only {rchars} chars of "
-                                    f"reasoning and finish_reason={fr}. That is "
-                                    f"a degenerate generation, not a max_tokens "
-                                    f"cut, and llm.no_think is not the fix on "
-                                    f"these boxes (they are meant to think). "
-                                    f"Send anything and it picks the task up "
-                                    f"from here.")
+                                    f"⚠️ No answer: the model ended its "
+                                    f"turn after only {rchars} chars of "
+                                    f"reasoning{twice} (finish_reason={fr}), "
+                                    f"a degenerate generation rather than an "
+                                    f"output cut. Send anything and it picks "
+                                    f"the task up from here.")
                             else:
                                 answer = "(empty response from model)"
                             status = ("truncated"
                                       if (fr == "length" and rchars)
                                       else "empty")
+                        # A run must not end on the HARNESS's own note when the
+                        # generation was CUT rather than refused: a length cut is a
+                        # request that can be asked differently, so the task gets
+                        # another turn. (A model that ends its own turn with nothing
+                        # TWICE is a degenerate generation and is reported instead -
+                        # see test_checkin's two-empty-turns case.) Drop the silent
+                        # assistant turn first: a transcript whose last word is the
+                        # model's silence invites the same silence again. Bounded by
+                        # NO_ANSWER_CONTINUES and by the run's own step and wall
+                        # budgets, so a dead endpoint cannot spin.
+                        if (status == "truncated" and not spun
+                                and _no_answer < NO_ANSWER_CONTINUES
+                                and steps < max_steps
+                                and (time.time() - t0) < max_seconds):
+                            _no_answer += 1
+                            if messages and messages[-1] is reply:
+                                messages.pop()
+                            messages.append({"role": "user", "content": (
+                                "SYSTEM: your previous turn came back with NO "
+                                "answer at all - no text, no tool call - so the run "
+                                "nearly stopped there. Continue the task now: make "
+                                "the next tool call, or write your report with what "
+                                "you already have.")})
+                            _note = ("the model returned no answer - re-asking "
+                                     f"({_no_answer} of {NO_ANSWER_CONTINUES})")
+                            log.warning("[%s] %s", session_key, _note)
+                            if say_cb:
+                                try:
+                                    say_cb(_note)
+                                except Exception:
+                                    log.debug("no-answer notice failed",
+                                              exc_info=True)
+                            continue
                         if _delta_gate["streamed"] and narration_drop_cb:
                             # The streamed text WAS this answer; the caller posts the
                             # real one (annotated, chunked), so the draft goes.

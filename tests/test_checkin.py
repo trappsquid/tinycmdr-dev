@@ -458,10 +458,37 @@ def test_two_empty_turns_end_the_run_with_honest_text():
         {"role": "assistant", "content": "", "reasoning_content": "Hmm again"},
     ])
     check("two empty turns: exactly one retry", len(seen) == 2, len(seen))
-    check("two empty turns: the warning comes back", "no answer" in out, out)
+    check("two empty turns: the warning comes back",
+          "No answer" in out and "degenerate" in out, out)
     check("two empty turns: it says it asked twice", "twice" in out, out)
     check("two empty turns: it does not send the operator to llm.no_think",
           "set llm.no_think: true" not in out, out)
+
+
+
+def test_a_cut_turn_with_no_answer_is_asked_again():
+    """finish=length with the reasoning spent and nothing said is a CUT, not a
+    refusal: the run gets another turn in the same task instead of ending on the
+    harness's own note (2026-09-21: a run was cut off mid-think at 08:06 and the
+    conversation sat dead until the operator posted again four hours later)."""
+    cut = {"role": "assistant", "content": "", "reasoning_content": "x" * 900,
+           "finish_reason": "length"}
+    out, seen = scripted_run_with_usage([
+        dict(cut), dict(cut),
+        {"role": "assistant", "content": "Back on it: the window moved.",
+         "finish_reason": "stop"},
+    ])
+    check("a cut turn is asked again after the empty retry", len(seen) == 3,
+          len(seen))
+    check("the run does not end on the harness note",
+          out.startswith("Back on it"), out)
+    if len(seen) == 3:
+        check("the re-ask names the silence",
+              seen[2][-1].get("role") == "user"
+              and "NO answer" in str(seen[2][-1].get("content")), seen[2][-1])
+    out2, seen2 = scripted_run_with_usage([dict(cut), dict(cut), dict(cut)])
+    check("the re-ask is bounded and then it reports honestly",
+          len(seen2) == 3 and "No answer" in out2, (len(seen2), out2[:80]))
 
 
 # ------------------------------------------- v1.9.29: streamed narration

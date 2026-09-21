@@ -777,3 +777,43 @@ install from the rebuilt public zip, non-interactive into a throwaway folder, gr
 existing token moved into `.env` unchanged (so the link he already has still works), `config.json`
 cleared, `web-token.txt` deleted, restarted at 20:25 (`bot ready in 0s`), and
 `python tinycmdr-cli.py --version` in `C:\tinycmdr` returns rc=0 where the old build refused.
+
+## The endpoint's window is the truth, and a run cannot end on a no-answer note (2026-09-21)
+
+the LAN model box's overnight run died at 08:06 and that conversation sat dead for four hours until the operator
+posted again. The box it talks to had been restarted serving **131,072 tokens per request** (the
+`-np 2` MTP arms on .47), while the host still said `llm.max_context_tokens: 200000`. Nothing ever
+compacted, the payload grew to 126,261 tokens, and the next turn had 4,808 tokens of room to answer
+in. The server's own log says it plainly:
+
+```
+slot operator(): new prompt, n_ctx_slot = 131072, task.n_tokens = 126261
+slot release:    stop processing: n_tokens = 131071, truncated = 1
+```
+
+The harness read that as "the server is clamping output below the requested cap", retried at the
+65,536 ceiling (4,759 tokens, the identical wall), fired its empty-answer retry, and then posted its
+own warning as the run's answer: the run ended there. `max_tokens` could never have moved that wall,
+and nothing continues a run that ended on a diagnostic.
+
+- `_detect_window()` asks the endpoint what it serves (vLLM `max_model_len`, llama.cpp `meta.n_ctx` on
+  `/v1/models`, `/props` at the root) and `_context_budget()` clamps a configured number by it:
+  `min(configured, served - REPLY_HEADROOM - max_tokens)`, with a warning naming both numbers. `auto`
+  keeps its old meaning. Measured on the manager box's own config against the live box: 200000 -> 107688.
+- A `finish_reason=length` with no answer whose prompt + generated reached that window raises
+  `ContextOverflow` instead of escalating the cap, so the run loop's existing shrink-and-re-ask path
+  takes it. The misleading "the server is clamping" line is not written in that case.
+- A model that returned nothing on a CUT turn (status `truncated`) is asked again once, in the same
+  task, bounded by `NO_ANSWER_CONTINUES = 1` plus the run's step and wall budgets, and the channel is
+  told. A model that ends its own turn with nothing twice (`finish_reason=stop`) is still reported
+  rather than asked a third time: that was a deliberate call and it stands.
+
+The two chat-facing warnings were reworded in the same pass, for the public build: they carried an
+operator note ("Don't set llm.no_think on the LAN boxes - they're meant to think") and sent the reader
+after `max_tokens` for a failure that was the window. Both are two short reader-facing lines now, and
+the detail lives in the log.
+
+Evidence: `tests/test_ledger.py` gained the budget-clamp and the window-full-cut checks (231 checks),
+`tests/test_checkin.py` the cut-turn re-ask and its bound (117), and all 22 suites are green plus the
+CLI legs (`tinycmdr_TEST_APP`/`tinycmdr_SRC=tinycmdr-cli.py`). Both new gates were seen red before green:
+with the window stub cleared the cut test took the clamp path, and the budget test returned 200000.

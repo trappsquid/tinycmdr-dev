@@ -848,9 +848,11 @@ def test_force_shrink():
 # --------------------------------------------------------------------------
 
 def _budget_clear():
-    """_context_budget() memoises on the instance — drop it when a test
-    changes llm.max_context_tokens, or the previous test's value sticks."""
+    """_context_budget()/_endpoint_window() memoise on the instance — drop both
+    when a test changes llm.max_context_tokens or stubs the served window, or the
+    previous test's value sticks."""
     fb.AGENT.__dict__.pop("_budget_cache", None)
+    fb.AGENT.__dict__.pop("_window_cache", None)
 
 
 def test_system_prompt_is_static_state_is_trailing():
@@ -1805,6 +1807,85 @@ def test_a_failed_atomic_write_still_leaves_a_parseable_ledger():
           not list(TMP.glob("*.tmp-*")), sorted(p.name for p in TMP.iterdir()))
 
 
+
+# ------------------------- 2026-09-21: the endpoint's window is the truth
+
+
+def _window_stub(value):
+    """Pretend the endpoint reported `value` tokens per request (0 = it said
+    nothing). _context_budget/_endpoint_window memoise on the instance, so both
+    caches have to go."""
+    _budget_clear()
+    fb.AGENT.__dict__["_window_cache"] = value
+
+
+def test_the_budget_is_clamped_by_what_the_endpoint_serves():
+    """A host that says 200000 while the box actually serves 131072 sent a 126,261
+    token prompt with 4,808 tokens of room to answer in and lost the turn
+    (2026-09-21). The server's number is the truth: a configured budget that
+    exceeds it is clamped, never trusted, and the clamp is not silent."""
+    saved_cfg = fb.CONFIG
+    try:
+        cfg = isolated_config()
+        cfg["llm"]["max_context_tokens"] = 200000
+        cfg["llm"]["max_tokens"] = 16384
+        _window_stub(131072)
+        got = fb.AGENT._context_budget()
+        check("the served window clamps a bigger budget",
+              got == 131072 - fb.REPLY_HEADROOM - 16384, got)
+        _window_stub(262144)
+        check("a roomier server does not raise the configured budget",
+              fb.AGENT._context_budget() == 200000, fb.AGENT._context_budget())
+        _window_stub(0)
+        check("a server that does not say keeps the configured budget",
+              fb.AGENT._context_budget() == 200000, fb.AGENT._context_budget())
+        cfg["llm"]["max_context_tokens"] = "auto"
+        _window_stub(131072)
+        check("auto still means what the server says",
+              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
+              fb.AGENT._context_budget())
+    finally:
+        fb.AGENT.__dict__.pop("_window_cache", None)
+        _budget_clear()
+        fb.CONFIG = saved_cfg
+
+
+def test_a_length_cut_that_fills_the_window_is_an_overflow_not_a_cap():
+    """finish_reason=length with no answer, where prompt + generated reached the
+    endpoint's own n_ctx, is the WINDOW closing - not a small max_tokens. Raising
+    the cap buys the identical wall (measured: 4,808 tokens, then 4,759 at a 65,536
+    ceiling). It has to come back as ContextOverflow, which the agent loop answers
+    by shrinking the prompt and re-asking this same turn."""
+    saved_cfg = fb.CONFIG
+    try:
+        cfg = isolated_config()
+        cfg["llm"]["max_tokens"] = 16384
+        _window_stub(131072)
+        usage = {}
+        cut = FakeResp(200, body={
+            "choices": [{"message": {"content": "",
+                                     "reasoning_content": "think " * 200},
+                         "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 126261, "completion_tokens": 4808}})
+        raised = None
+        try:
+            _r, calls = with_fake_post([cut, ok_resp("should never be reached")],
+                                       lambda: fb.AGENT._chat(
+                                           [{"role": "user", "content": "hi"}],
+                                           usage=usage))
+            check("a window-full cut never retries at a bigger cap",
+                  len(calls) == 1, calls)
+        except fb.ContextOverflow as e:
+            raised = str(e)
+        check("a window-full cut raises ContextOverflow",
+              raised is not None and "context window" in raised, raised)
+        check("the window attempt is recorded",
+              "window" in [a["outcome"] for a in usage.get("attempts", [])],
+              usage)
+    finally:
+        fb.AGENT.__dict__.pop("_window_cache", None)
+        _budget_clear()
+        fb.CONFIG = saved_cfg
 def main():
     # One suite serves both builds. The chatless CLI build (tinycmdr_SRC=tinycmdr-cli.py)
     # carries no failover list and no restart handover, so the tests that describe those
