@@ -46,6 +46,12 @@ registers the task, and verifies the install — nothing to hand-edit.
 
 `install\install-tinycmdr.cmd` is the same thing from one level down; both take the same switches.
 
+**It asks you.** Double-clicked, the installer runs a short interview: how you want to talk to
+it (a local page, a Mattermost bot, or a session by hand), then the model endpoint and model id,
+then it shows what it is about to do and waits for a yes. Nothing is written before that.
+Every switch below still works, and `-NonInteractive` (or a redirected stdin) skips the
+questions for scripts and fleet pushes.
+
 **A chat account is optional.** The installer asks for a bot token, and if you do not give one it
 installs anyway: there is no chat lane, nothing tries to connect, and it hands you the two local
 doors instead — `python tinycmdr.py --cli` for a session in that window, or `python tinycmdr.py --web`

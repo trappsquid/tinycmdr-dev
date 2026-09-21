@@ -48,7 +48,9 @@ param(
     [switch] $NoStart,
     [switch] $NoPause,                           # for scripted runs (the .cmd uses this)
     [switch] $VerifyOnly,                        # just probe -InstallDir and stop
-    [switch] $Uninstall                          # remove the task and the folder
+    [switch] $Uninstall,                         # remove the task and the folder
+    [switch] $NonInteractive                     # never ask: for scripts and fleet pushes
+                                                 # (a redirected stdin also means "do not ask")
 )
 
 $ErrorActionPreference = "Stop"
@@ -379,6 +381,126 @@ if ($SecretsFile) {
     Say "secrets : $($secrets.Count) key(s) from $SecretsFile"
 }
 
+# --------------------------------------------------------------- asking the user
+# The .cmd wrapper always passes -NoPause, and that flag is only about keeping the window open at
+# the end. Questions are a separate decision: a real console, and not -NonInteractive. Gating them
+# on -NoPause is exactly how a double-click ended up asking nothing.
+$Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:tinycmdr_ASK)
+$Lane = 0
+
+function Ask-Text {
+    param([string] $Prompt, [string] $Default = "", [switch] $Secret)
+    # ${Prompt} - a bare "$Prompt:" reads as a scoped variable to PowerShell
+    $shown = if ($Default) { "${Prompt} [$Default]: " } else { "${Prompt}: " }
+    if ($Secret -and -not $Default) { $shown = "${Prompt}: " }
+    while ($true) {
+        if ($Secret) {
+            $sec = Read-Host $shown -AsSecureString
+            $val = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                       [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+        } else {
+            $val = Read-Host $shown
+        }
+        if ($val -and $val.Trim()) { return $val.Trim() }
+        if ($Default) { return $Default }
+        Write-Host "  (this one is needed - please type something)"
+    }
+}
+
+function Ask-Menu {
+    param([string] $Title, [string[]] $Options, [int] $Default = 1)
+    Write-Host ""
+    Write-Host $Title
+    for ($i = 0; $i -lt $Options.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $Options[$i]) }
+    while ($true) {
+        $a = (Read-Host ("Choose 1-{0} (Enter = {1})" -f $Options.Count, $Default)).Trim()
+        if (-not $a) { return $Default }
+        $n = 0
+        if ([int]::TryParse($a, [ref] $n) -and $n -ge 1 -and $n -le $Options.Count) { return $n }
+        Write-Host "  Please type one of the numbers."
+    }
+}
+
+function Ask-Yes {
+    param([string] $Prompt, [bool] $Default = $true)
+    $d = if ($Default) { "Y/n" } else { "y/N" }
+    while ($true) {
+        $a = (Read-Host "$Prompt [$d]").Trim().ToLower()
+        if (-not $a) { return $Default }
+        if ($a -in @("y", "yes")) { return $true }
+        if ($a -in @("n", "no")) { return $false }
+        Write-Host "  Please answer y or n."
+    }
+}
+
+if ($Ask) {
+    Head "three ways to talk to it"
+    Write-Host ""
+    Write-Host "tinycmdr answers messages. Pick how it should get them - the first one needs nothing"
+    Write-Host "else installed, hosted or reachable."
+    $Lane = Ask-Menu "How should you talk to it?" @(
+        "A local page on this machine (http://127.0.0.1:$WebPort) - no chat server needed",
+        "A Mattermost bot account (paste a bot token from your server)",
+        "Neither - I will run a session by hand when I want one")
+
+    if ($Lane -eq 1) { $EnableWeb = $true }
+
+    if ($Lane -eq 2) {
+        Write-Host ""
+        $known = if ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com") { $MattermostUrl } else { "" }
+        if ($known) { Write-Host "  (leave blank to keep ${known})" }
+        $MattermostUrl = Ask-Text "Mattermost server, no https:// (e.g. chat.example.com)" $known
+        # The secrets file is read before this, so a token handed over with -SecretsFile or a
+        # package default is never asked for twice.
+        if (-not $MattermostToken -and $secrets["tinycmdr_MM_TOKEN"]) {
+            $MattermostToken = $secrets["tinycmdr_MM_TOKEN"]
+            $tokenSource = "the secrets file"
+        }
+        if (-not $MattermostToken) {
+            $in = Ask-Text "Bot token (input hidden; paste and press Enter)" -Secret
+            if ($in) { $MattermostToken = $in; $tokenSource = "prompt" }
+        } else {
+            Write-Host "  (a token is already known from the package, the secrets file or .env - kept)"
+        }
+        $u = Ask-Text "Your Mattermost user id (optional, but without it the bot ignores your DMs)"
+        if ($u) { $AllowedUser = $u }
+    }
+
+    Write-Host ""
+    Write-Host "Which model should it use? Any OpenAI-compatible endpoint: llama.cpp, Ollama, vLLM,"
+    Write-Host "or a hosted provider."
+    $mb = if ($ModelBaseUrl) { $ModelBaseUrl } else { "http://127.0.0.1:8081/v1" }
+    $ModelBaseUrl = Ask-Text "Model endpoint" $mb
+    $Model = Ask-Text "Model id" $(if ($Model -and $Model -ne "main") { $Model } else { "main" })
+
+    $isLocal = $ModelBaseUrl -match "127\.0\.0\.1|localhost|10\.|192\.168\.|::1"
+    $ModelKey = ""
+    if (-not $isLocal) {
+        Write-Host ""
+        Write-Host "  That endpoint is on the network, so it probably wants an API key."
+        $ModelKey = Ask-Text "API key for it (blank if it needs none)" -Secret
+    }
+
+    Write-Host ""
+    Write-Host "  ---- about to install ----"
+    Write-Host ("  folder       : {0}" -f $InstallDir)
+    # the bot name is resolved later (a switch, fleet-defaults, then this machine's name), so
+    # the summary has to resolve it the same way or it prints a bare "@"
+    $nameNow = if ($BotName) { $BotName } else { $env:COMPUTERNAME.ToLower() }
+    Write-Host ("  how you talk : {0}" -f @(
+        "a local page on http://127.0.0.1:$WebPort",
+        "Mattermost bot on $MattermostUrl as @$nameNow",
+        "a session you start yourself")[$Lane - 1])
+    Write-Host ("  model        : {0} at {1}" -f $Model, $ModelBaseUrl)
+    if ($ModelKey) { Write-Host "  model key    : given (stored in config.json's llm.api_key)" }
+    Write-Host ""
+    if (-not (Ask-Yes "Install now?" $true)) {
+        Say "nothing was changed"
+        try { Stop-Transcript | Out-Null } catch { }
+        exit 0
+    }
+}
+
 # resolve the bot token before touching anything: -MattermostToken, the secrets
 # file, a token file, an existing .env (so a -Force redo keeps it), then ask
 $tokenSource = ""
@@ -473,6 +595,12 @@ $cfg.mattermost.allowed_users = if ($AllowedUser) { @($AllowedUser) } else { @()
 if (-not $ModelBaseUrl) { $ModelBaseUrl = "http://127.0.0.1:8081/v1" }
 $cfg.llm.base_url             = $ModelBaseUrl
 $cfg.llm.model                = $Model
+if ($ModelKey) {
+    # The primary's key is not env-resolved (only fallback entries have api_key_env), so a
+    # hosted endpoint that needs a key carries it here. A key in .env plus a fallback entry is
+    # the tidier shape - see README, "Model endpoints".
+    $cfg.llm.api_key          = $ModelKey
+}
 # The local chat page is opt-in. tinycmdr is driven from Mattermost; a fresh
 # install has no reason to open a port, and local checks don't need one.
 # The template's web block is off, and the local chat page is opt-in per host, so
@@ -754,6 +882,21 @@ Say ""
 if ($todo.Count -gt 0 -and $RegisterTask) { Say "after editing, restart:  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName" }
 if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --cli   (or --web)" }
 Say "logs: $InstallDir\tinycmdr.log"
+if ($Ask) {
+    if ($Lane -eq 1) {
+        Say "the page: http://127.0.0.1:$WebPort   (token in $InstallDir\web-token.txt)"
+        if (Ask-Yes "Open that page in your browser now?" $true) {
+            Start-Process "http://127.0.0.1:$WebPort" | Out-Null
+        }
+    } elseif ($Lane -eq 2) {
+        Say "DM the bot account on $MattermostUrl and it will answer."
+    } else {
+        if (Ask-Yes "Open a session now?" $true) {
+            Say "starting a session - type your task, Ctrl-C to leave"
+            try { & $py.Path (Join-Path $InstallDir "tinycmdr.py") --cli } catch { }
+        }
+    }
+}
 if ($EnableWeb) { Say "web page: http://127.0.0.1:$WebPort  (token in web-token.txt)" }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (or --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"
