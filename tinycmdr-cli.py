@@ -8,13 +8,18 @@ like, make sure Python is installed, run it (double-click this file, or
 and edits files, reads a URL you hand it, writes its own notes and tools, and keeps
 the conversation in ./sessions. There is no web search and no third-party service
 involved: the only network destination is the model endpoint in config.json.
+A card per call, result and answer, with a boxed banner: that is the screen when a
+terminal is there to draw on.
 
 Installed the harness? The installer puts this file beside tinycmdr.py, and this
 build then reads that config.json, that .env and the same sessions and notes as the
 bot and the page: one folder, one set of files, whichever door you use.
 
-Dependencies: none. Standard library only, so there is no pip step and nothing to
-install besides Python itself.
+Dependencies: none required. This build runs on the standard library alone, so there
+is no pip step and nothing to install besides Python. Two optional libraries turn the
+console into the card UI (rich + prompt_toolkit): the installer brings them in, and
+without them every line prints plainly, exactly as it does when the output is a pipe
+or you set tinycmdr_PLAIN=1.
 Config: config.json next to this file (config.example.json is the reference, and the
         installer's own copy is already filled in). Nothing is ever written for you,
         and opening this file creates nothing: the log, notes, sessions and tools
@@ -8169,6 +8174,172 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
 
 
 
+# ------------------------------------------------------------------ the TUI screen
+# What a terminal can show that a line of text cannot: a boxed banner, one card per
+# tone with its border carrying the meaning, and the run's own line kept current.
+# The plain path is not a legacy fallback - a redirected stdout is what logs, the
+# supervisor, the suites and a screenshot read, and on Windows driving the terminal
+# with no console raises - so every card here is decoration on the same text.
+TUI_KINDS = {
+    "tool":      ("call",     "cyan"),
+    "tool_done": ("result",   "#5fbf7f"),
+    "tool_fail": ("failed",   "red"),
+    "ask":       ("question", "magenta"),
+    "final":     ("answer",   "blue"),
+    "error":     ("error",    "red"),
+    "checkin":   (None,       "dim"),
+    "note":      (None,       "white"),
+    "narration": (None,       "white"),
+    "say":       (None,       "white"),
+    "system":    (None,       "dim"),
+}
+TUI_STATUS_EVERY = 5.0        # seconds between the run's own lines
+
+
+def tui_wanted():
+    """Draw the screen? A real console both ways, the two libraries, and no opt-out.
+
+    tinycmdr_PLAIN=1 (or a pipe, a redirect, a cron job) means plain lines - the same
+    lines the TUI draws, which is why nothing is only visible in the screen.
+    """
+    if os.environ.get("tinycmdr_PLAIN"):
+        return False
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+    except Exception:
+        return False
+    for mod in ("rich", "prompt_toolkit"):
+        try:
+            __import__(mod)
+        except Exception:
+            return False
+    return True
+
+
+class TuiScreen:
+    """Cards, a banner and a status line, drawn with rich and printed by prompt_toolkit.
+
+    Rich is asked for an ANSI string first: handing prompt_toolkit raw ESC bytes gets
+    them sanitized into visible "[1;33m" artifacts, which is exactly the kind of
+    garbage this class exists to delete.
+    """
+
+    def __init__(self, out=None, width=None):
+        from rich.console import Console
+        self._Console = Console
+        self.out = out or sys.stdout
+        self.width = width or self._width()
+        self.shown = []               # every renderable, in order, for the record
+        self.status = ""
+        self._status_at = 0.0
+        self._plain_fallback = False
+
+    @staticmethod
+    def _width():
+        try:
+            return max(64, min(os.get_terminal_size().columns, 118))
+        except Exception:
+            return 96
+
+    # -- drawing -----------------------------------------------------------
+    def _ansi(self, renderable):
+        import io
+        con = self._Console(file=io.StringIO(), force_terminal=True, width=self.width,
+                            color_system="truecolor", highlight=False)
+        buf = con.file
+        con.print(renderable)
+        self.shown.append(renderable)
+        return buf.getvalue().rstrip("\n")
+
+    def _put(self, ansi):
+        if not self._plain_fallback:
+            try:
+                from prompt_toolkit import print_formatted_text
+                from prompt_toolkit.formatted_text import ANSI
+                print_formatted_text(ANSI(ansi), file=self.out)
+                return
+            except Exception:
+                self._plain_fallback = True
+        print(ansi, file=self.out, flush=True)
+
+    def _panel(self, title, colour, body, foot=""):
+        from rich import box
+        from rich.panel import Panel
+        from rich.text import Text
+        head = Text(title, style=f"bold {colour}")
+        if foot:
+            head.append("   " + foot, style="dim")
+        self._put(self._ansi(Panel(body, title=head, title_align="left",
+                                   border_style=colour, box=box.ROUNDED,
+                                   padding=(0, 1))))
+
+    # -- the pieces the console asks for -----------------------------------
+    def banner(self, title, rows, hint=""):
+        from rich import box
+        from rich.panel import Panel
+        from rich.text import Text
+        body = Text()
+        for label, value in rows:
+            body.append(label.ljust(10), style="dim")
+            body.append(value + "\n", style="white")
+        if hint:
+            body.append(hint, style="dim")
+        head = Text(title, style="bold white")
+        self._put(self._ansi(Panel(body, title=head, title_align="left",
+                                   border_style="blue", box=box.ROUNDED,
+                                   padding=(0, 1))))
+
+    def card(self, kind, text, foot=""):
+        """One tone, one card. The ask and the answer get their own look because they
+        are the two things a reader must not miss."""
+        from rich.text import Text
+        title, colour = TUI_KINDS.get(kind, (None, "white"))
+        text = str(text)
+        if title is None:
+            style = "dim" if kind in ("checkin", "system") else "white"
+            self._put(self._ansi(Text("  " + text, style=style)))
+            return
+        if title == "answer":
+            from rich.markdown import Markdown
+            body = Markdown(text)
+        else:
+            body = Text(text, style="white")
+        self._panel(title, colour, body, foot)
+
+    def status_line(self, text):
+        """The run's own line. Throttled: it is the same line every second, and a
+        terminal has no place to keep it without owning the cursor."""
+        now = time.time()
+        if text == self.status or (now - self._status_at) < TUI_STATUS_EVERY:
+            self.status = text
+            return
+        self.status = text
+        self._status_at = now
+        from rich.text import Text
+        self._put(self._ansi(Text("  " + text, style="dim")))
+
+    def note_line(self, text, style="dim"):
+        from rich.text import Text
+        self._put(self._ansi(Text("  " + str(text), style=style)))
+
+    def raw_ansi(self, text):
+        """Text that is ALREADY painted (the streamed narration, the closing blank):
+        straight through, so a growing line keeps growing in the screen too."""
+        if text.strip():
+            self._put(text)
+
+    # -- for review and for the tests --------------------------------------
+    def export_svg(self, path, title="tinycmdr console"):
+        con = self._Console(record=True, force_terminal=True, width=self.width,
+                            color_system="truecolor")
+        for renderable in self.shown:
+            con.print(renderable)
+        path = Path(path)
+        path.write_text(con.export_svg(title=title), encoding="utf-8")
+        return path
+
+
 class CliDestination(Destination):
     """A terminal: one line per event, coloured, no notifications to protect.
 
@@ -8211,8 +8382,9 @@ class CliDestination(Destination):
         text = re.sub(r"`([^`]+)`", r"\1", str(text))
         return re.sub(r"^\s*\U0001F527\s*", "", text)
 
-    def __init__(self, colour=True, out=None, ask=None, on_drop=None):
+    def __init__(self, colour=True, out=None, ask=None, on_drop=None, screen=None):
         self.colour = bool(colour)
+        self.screen = screen      # a TuiScreen, or None for plain painted lines
         self.out = out or sys.stdout
         self._ask = ask          # callable(question, options, wait) -> answer text
         self.on_drop = on_drop   # told what the streamed draft said, when it goes
@@ -8243,8 +8415,11 @@ class CliDestination(Destination):
             # only thing worth printing, and it lands through update()
             return self.STATUS_REF
         self._close()
-        self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
-                               self.TONES.get(kind, "0")))
+        if self.screen is not None:
+            self.screen.card(kind, self._plain(text))
+        else:
+            self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
+                                   self.TONES.get(kind, "0")))
         ref = ("cli", len(self._refs))
         self._refs[ref] = str(text)
         return ref
@@ -8252,6 +8427,8 @@ class CliDestination(Destination):
     def update(self, ref, kind, text, src="main"):
         text = str(text)
         if kind == "status":
+            if self.screen is not None:
+                self.screen.status_line(self._plain(text))
             return ref
         if kind == "narration":
             prev = self._refs.get(ref, "")
@@ -8264,8 +8441,16 @@ class CliDestination(Destination):
                 self._refs[ref] = text
             return ref
         self._close()
-        self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
-                               self.TONES.get(kind, "0")))
+        if self.screen is not None:
+            # a "final" UPDATE is the run's done line, not an answer: the answer is
+            # a line of its own, and only a real one gets the brightest card
+            if kind == "final":
+                self.screen.status_line(self._plain(text))
+            else:
+                self.screen.card(kind, self._plain(text))
+        else:
+            self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
+                                   self.TONES.get(kind, "0")))
         self._refs[ref] = text
         return ref
 
@@ -8385,16 +8570,34 @@ HELP_TEXT = ("\n"
 
 
 def cli_banner():
+    static = est_tokens(build_system_prompt() + json.dumps(REGISTRY.openai_schemas()))
+    live = est_tokens(volatile_context())
+    overhead = ("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas, "
+                "cache-stable; live %s: notes + task ledger, sent trailing)"
+                % (fmt_tokens(static + live), fmt_tokens(static),
+                   len(REGISTRY.openai_schemas()), fmt_tokens(live)))
+    screen = tui_screen()
+    if screen is not None:
+        screen.banner("tinycmdr %s" % VERSION, [
+            ("model", "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])),
+            ("folder", str(BASE_DIR)),
+            ("context", "%s usable per turn" % fmt_tokens(AGENT._context_budget())),
+            ("prompt", overhead),
+        ], hint="type /help for the commands, /exit to quit")
+        return
     print("tinycmdr %s (%s build) - %s at %s" % (VERSION, BUILD, green(CONFIG["llm"]["model"]),
                                                 CONFIG["llm"]["base_url"]))
     print(dim("folder %s" % BASE_DIR))
-    static = est_tokens(build_system_prompt() + json.dumps(REGISTRY.openai_schemas()))
-    live = est_tokens(volatile_context())
-    print(dim("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas, "
-              "cache-stable; live %s: notes + task ledger, sent trailing)"
-              % (fmt_tokens(static + live), fmt_tokens(static),
-                 len(REGISTRY.openai_schemas()), fmt_tokens(live))))
+    print(dim(overhead))
     print(dim("type /help for the commands, /exit to quit\n"))
+
+
+def tui_screen():
+    """The screen for this console, or None for plain lines. Built once per process:
+    the banner, the cards and the done line all come from the same one."""
+    if "screen" not in _CLI:
+        _CLI["screen"] = TuiScreen() if tui_wanted() else None
+    return _CLI["screen"]
 
 
 def _cli_key():
@@ -8747,7 +8950,7 @@ def run_cli(once=None):
         """One per run: the check-in cadence and the done line are per run."""
         return RunReporter(
             CliDestination(colour=bool(_CLI["colour"]), out=sys.stdout,
-                           ask=ask_at_the_prompt,
+                           ask=ask_at_the_prompt, screen=tui_screen(),
                            on_drop=lambda t: _CLI.__setitem__("streamed_answer", t)),
             _cli_key())
 
@@ -8840,7 +9043,11 @@ def run_cli(once=None):
             elif shown and shown.startswith(answer.strip()):
                 body = ""                   # already on screen in full
             if body.strip():
-                print(answer_block(body))
+                screen = tui_screen()
+                if screen is not None:
+                    screen.card("final", body)
+                else:
+                    print(answer_block(body))
         _cli_usage_line()
         print()
 

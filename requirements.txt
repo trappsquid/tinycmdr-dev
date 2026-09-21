@@ -1,9 +1,14 @@
 # tinycmdr's dependencies - the set its own header declares:
-#   pip install requests mmpy_bot croniter
-# requests  : HTTP (Mattermost REST, LLM calls, tools)
-# mmpy_bot  : the Mattermost client (WebSocket + listener dispatch). REQUIRED:
-#             without it the bot starts and never connects.
-# croniter  : optional; enables the `schedule` tool
+#   pip install requests mmpy_bot croniter rich prompt_toolkit
+# requests       : HTTP (Mattermost REST, LLM calls, tools)
+# mmpy_bot       : the Mattermost client (WebSocket + listener dispatch). REQUIRED:
+#                  without it the bot starts and never connects.
+# croniter       : optional; enables the `schedule` tool
+# rich,          : optional; the console's screen - the boxed banner, one card
+# prompt_toolkit   per tone, the run's own line. Without them, and whenever the
+#                  output is a pipe or tinycmdr_PLAIN=1, every line prints plainly.
 requests>=2.31
 mmpy_bot>=2.2.1
 croniter
+rich>=13
+prompt_toolkit>=3.0

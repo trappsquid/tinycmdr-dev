@@ -8,13 +8,18 @@ like, make sure Python is installed, run it (double-click this file, or
 and edits files, reads a URL you hand it, writes its own notes and tools, and keeps
 the conversation in ./sessions. There is no web search and no third-party service
 involved: the only network destination is the model endpoint in config.json.
+A card per call, result and answer, with a boxed banner: that is the screen when a
+terminal is there to draw on.
 
 Installed the harness? The installer puts this file beside tinycmdr.py, and this
 build then reads that config.json, that .env and the same sessions and notes as the
 bot and the page: one folder, one set of files, whichever door you use.
 
-Dependencies: none. Standard library only, so there is no pip step and nothing to
-install besides Python itself.
+Dependencies: none required. This build runs on the standard library alone, so there
+is no pip step and nothing to install besides Python. Two optional libraries turn the
+console into the card UI (rich + prompt_toolkit): the installer brings them in, and
+without them every line prints plainly, exactly as it does when the output is a pipe
+or you set tinycmdr_PLAIN=1.
 Config: config.json next to this file (config.example.json is the reference, and the
         installer's own copy is already filled in). Nothing is ever written for you,
         and opening this file creates nothing: the log, notes, sessions and tools
@@ -404,16 +409,34 @@ HELP_TEXT = ("\n"
 
 
 def cli_banner():
+    static = est_tokens(build_system_prompt() + json.dumps(REGISTRY.openai_schemas()))
+    live = est_tokens(volatile_context())
+    overhead = ("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas, "
+                "cache-stable; live %s: notes + task ledger, sent trailing)"
+                % (fmt_tokens(static + live), fmt_tokens(static),
+                   len(REGISTRY.openai_schemas()), fmt_tokens(live)))
+    screen = tui_screen()
+    if screen is not None:
+        screen.banner("tinycmdr %s" % VERSION, [
+            ("model", "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])),
+            ("folder", str(BASE_DIR)),
+            ("context", "%s usable per turn" % fmt_tokens(AGENT._context_budget())),
+            ("prompt", overhead),
+        ], hint="type /help for the commands, /exit to quit")
+        return
     print("tinycmdr %s - %s at %s" % (VERSION, green(CONFIG["llm"]["model"]),
                                       CONFIG["llm"]["base_url"]))
     print(dim("folder %s" % BASE_DIR))
-    static = est_tokens(build_system_prompt() + json.dumps(REGISTRY.openai_schemas()))
-    live = est_tokens(volatile_context())
-    print(dim("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas, "
-              "cache-stable; live %s: notes + task ledger, sent trailing)"
-              % (fmt_tokens(static + live), fmt_tokens(static),
-                 len(REGISTRY.openai_schemas()), fmt_tokens(live))))
+    print(dim(overhead))
     print(dim("type /help for the commands, /exit to quit\n"))
+
+
+def tui_screen():
+    """The screen for this console, or None for plain lines. Built once per process:
+    the banner, the cards and the done line all come from the same one."""
+    if "screen" not in _CLI:
+        _CLI["screen"] = TuiScreen() if tui_wanted() else None
+    return _CLI["screen"]
 
 
 def _cli_key():
@@ -766,7 +789,7 @@ def run_cli(once=None):
         """One per run: the check-in cadence and the done line are per run."""
         return RunReporter(
             CliDestination(colour=bool(_CLI["colour"]), out=sys.stdout,
-                           ask=ask_at_the_prompt,
+                           ask=ask_at_the_prompt, screen=tui_screen(),
                            on_drop=lambda t: _CLI.__setitem__("streamed_answer", t)),
             _cli_key())
 
@@ -859,7 +882,11 @@ def run_cli(once=None):
             elif shown and shown.startswith(answer.strip()):
                 body = ""                   # already on screen in full
             if body.strip():
-                print(answer_block(body))
+                screen = tui_screen()
+                if screen is not None:
+                    screen.card("final", body)
+                else:
+                    print(answer_block(body))
         _cli_usage_line()
         print()
 
