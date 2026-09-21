@@ -15,6 +15,11 @@ installer refuses 3.13+ and tells you this.
 
 No Homebrew? Install Python 3.12 from python.org instead; the installer finds it.
 
+Nothing at all, and no Homebrew either? The installer OFFERS to fetch a private
+Python 3.12 for you when it cannot find one (or run it with `--install-python` to
+skip the question). It uses `uv`, needs no password, and puts the interpreter
+inside the install folder, so removing that folder removes it too.
+
 ## 2. A Mattermost bot account for this Mac
 
 The Mac needs its OWN bot account. If it reuses one that another agent already

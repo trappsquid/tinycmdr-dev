@@ -27,6 +27,8 @@
 #   --web-port <p>        local web/API port (default 8788, loopback only)
 #   --no-web              leave the local web port closed
 #   --python <path>       interpreter to build the venv from (default: 3.12, else 3.11/3.10)
+#   --install-python      fetch a private python 3.12 with uv when none is here
+#                         (the installer also OFFERS this when it finds no 3.10-3.12)
 #   --label <l>           launchd label (default com.tinycmdr.agent)
 #   --secrets-file <f>    extra KEY=VALUE lines for .env (search keys etc)
 #   --no-launchd          install the files only; do not register the agent
@@ -60,9 +62,9 @@ DEFAULT_MODEL="main"
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
 MM_URL_ARG=""; SECRETS_FILE=""
 WEB_PORT="8788"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
-NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0
+NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0; INSTALL_PYTHON=0
 
-usage() { sed -n '3,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -86,6 +88,7 @@ while [ $# -gt 0 ]; do
         --verify-only)     VERIFY_ONLY=1; shift ;;
         --uninstall)       UNINSTALL=1; shift ;;
         --force-python)    FORCE_PYTHON=1; shift ;;
+        --install-python)  INSTALL_PYTHON=1; shift ;;
         -h|--help)         usage; exit 0 ;;
         *) echo "install-tinycmdr-macos.sh: unknown switch '$1'" >&2; usage >&2; exit 2 ;;
     esac
@@ -149,6 +152,52 @@ fi
 # ---------------------------------------------------------------- python ---
 # The interpreter matters: mmpy_bot resolves to 2.2.1 on 3.10-3.12, and to an
 # ancient broken release on 3.13+, where the bot starts and never connects.
+tty_ask() {   # a real terminal, and the answer is yes: nothing is ever fetched from a pipe
+    [ -t 0 ] || return 1
+    printf '    %s [Y/n] ' "$1"
+    local a=""
+    read -r a || return 1
+    case "$a" in ""|y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+fetch_python() {
+    # A python for THIS install, fetched with uv INTO THE INSTALL FOLDER, so
+    # uninstalling the folder takes it away again and the interpreter is never
+    # shared with anything else. uv's own download cache goes to ~/.cache/uv
+    # (reusable, unlike the interpreter); nothing else touches $HOME, no
+    # password, no Homebrew, no system change. Measured on an M-series Mac:
+    # about a second for the uv bootstrap, 943 ms for the interpreter, 71 MB
+    # on disk, and a venv built on it pip-installs mmpy_bot 2.34.2 and runs the
+    # shipped console build (rc=0).
+    # STDOUT IS THE RESULT: every progress line goes to stderr, or the caller's
+    # PY="$(fetch_python)" captures chatter and then cannot run it.
+    local tools="$INSTALL_DIR/.tools" pydir="$INSTALL_DIR/.python" uv="" boot=""
+    mkdir -p "$tools" "$pydir" || die "could not create the python folders in $INSTALL_DIR"
+    uv="$(command -v uv 2>/dev/null || true)"
+    local c
+    for c in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+        [ -n "$uv" ] && break
+        [ -x "$c" ] && uv="$c"
+    done
+    if [ ! -x "$uv" ]; then
+        printf '    %s\n' "uv is not here either: fetching it first (a copy inside $tools)" >&2
+        boot="$(mktemp -t tinycmdr-uv)"
+        curl -fsSL https://astral.sh/uv/install.sh -o "$boot" \
+            || die "could not download uv. Install a python yourself (brew install python@3.12,
+or python.org), then re-run with --python <its path>."
+        UV_INSTALL_DIR="$tools" UV_NO_MODIFY_PATH=1 sh "$boot" >/dev/null 2>&1 \
+            || die "the uv bootstrap failed - its output is in $LOG"
+        rm -f "$boot"
+        uv="$tools/uv"
+    fi
+    [ -x "$uv" ] || die "uv did not install"
+    printf '    %s\n' "fetching python 3.12 with $uv" >&2
+    UV_PYTHON_INSTALL_DIR="$pydir" "$uv" python install --no-bin 3.12 \
+        || die "uv could not fetch python 3.12 - its output is in $LOG"
+    UV_PYTHON_INSTALL_DIR="$pydir" "$uv" python find 3.12 \
+        || die "uv installed nothing findable under $pydir"
+}
+
 pick_python() {
     if [ -n "$PY_ARG" ]; then
         [ -x "$PY_ARG" ] || die "--python $PY_ARG is not executable"
@@ -162,30 +211,51 @@ pick_python() {
             echo "$(command -v "$cand")"; return 0
         fi
     done
-    die "no python3 found. Install one with:  brew install python@3.12  (or python.org)"
+    echo ""                      # nothing at all: check_python can fetch one
 }
+
+# Validates $PY and REPLACES it when this machine has no usable interpreter and a
+# download is allowed (--install-python, or a yes at the prompt).
 check_python() {
-    local py="$1" v
-    v="$("$py" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" \
-        || die "$py could not run"
-    info "python: $py ($v)"
-    case "$v" in
-        3.10|3.11|3.12) : ;;
-        3.13|3.14|3.15|3.16|3.17|3.18|3.19|3.2[0-9])
-            if [ "$FORCE_PYTHON" = 1 ]; then
-                warn "python $v is newer than anything this was tested on (--force-python)"
-            else
+    local v tries=0
+    while :; do
+        if [ -z "$PY" ]; then
+            v="none found"
+        else
+            v="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" \
+                || die "$PY could not run"
+        fi
+        case "$v" in
+            3.10|3.11|3.12)
+                info "python: $PY ($v)"
+                return 0 ;;
+            3.13|3.14|3.15|3.16|3.17|3.18|3.19|3.2[0-9])
+                if [ "$FORCE_PYTHON" = 1 ]; then
+                    warn "python $v is newer than anything this was tested on (--force-python)"
+                    info "python: $PY ($v)"
+                    return 0
+                fi
                 die "python $v resolves an ancient, broken mmpy_bot (the bot starts and never
 connects). Use 3.12:  brew install python@3.12   then re-run with --python
-/opt/homebrew/bin/python3.12   (or pass --force-python to try anyway)"
-            fi ;;
-        *) die "python $v is not supported (need 3.10, 3.11 or 3.12)" ;;
-    esac
+/opt/homebrew/bin/python3.12   (or pass --force-python to try anyway)" ;;
+            *)
+                if [ "$tries" = 0 ] && [ -z "$PY_ARG" ] \
+                   && { [ "$INSTALL_PYTHON" = 1 ] || tty_ask "no python 3.10-3.12 on this Mac ($v). Fetch a private python 3.12 now (uv, no password, ~66 MB)?"; }; then
+                    say "python"
+                    tries=1
+                    PY="$(fetch_python)"
+                    continue
+                fi
+                die "python $v is not supported (need 3.10, 3.11 or 3.12).
+Install one with:  brew install python@3.12   (or python.org), then re-run with --python <its path>,
+or let this installer fetch one for you:  --install-python" ;;
+        esac
+    done
 }
 
 if [ "$VERIFY_ONLY" != 1 ]; then
     PY="$(pick_python)"
-    check_python "$PY"
+    check_python                 # may replace $PY with a freshly fetched one
 fi
 
 # ---------------------------------------------------------------- json helpers ---
