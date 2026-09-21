@@ -904,3 +904,57 @@ still cannot be removed: a process holds the directory, zero items inside.
    `posted startup notice to <id> (downtime 7s)`. The new pair reads `High`
    again, the task shows `Running | Highest | S4U`. This is the probe trap already in the skill,
    sharpened: the *uninstall* path is not scoped either.
+
+### The macOS installer fetches its own python, and the two transcript lanes got a presentation pass (2026-09-21)
+
+Both came out of the walk. The installer first, because a stock Mac has only
+`/usr/bin/python3` 3.9.6 and that is the first wall a reader meets:
+
+- `--install-python` (mirroring the Windows installer's `-InstallPython`) and an
+  interactive OFFER when no 3.10-3.12 is found on a real terminal. Nothing is ever
+  fetched from a pipe: `-NonInteractive`/redirected stdin keeps the refusal, which
+  now names the switch as well as `brew`/python.org.
+- The route is uv (already part of this fleet's toolkit, and no password): the uv
+  bootstrap if uv is absent, then `uv python install --no-bin 3.12`. The interpreter
+  lands in `<install>/.python`, uv in `<install>/.tools`, so uninstalling the folder
+  takes both away; `--no-bin` keeps shims out of `~/.local/bin`; only uv's own
+  download cache touches `$HOME`.
+- Measured on the Mac: 943 ms for CPython 3.12.14, 71 MB, and a venv built on it
+  pip-installs mmpy_bot 2.34.2 and runs the shipped console build (rc=0). Proven in
+  four lanes: piped (refusal, nothing downloaded), `--install-python` with uv
+  present, a bare machine with faked HOME (uv bootstrap into the install dir), and
+  the offer answered `y` on a pty.
+- Two traps cost a round each and are worth remembering: `fetch_python`'s progress
+  lines went to STDOUT and `PY="$(fetch_python)"` captured the chatter, so the
+  installer reported "could not run" on an interpreter that ran fine (progress now
+  goes to stderr, stdout is only the path); and a one-line edit made with Python's
+  `write_text` on Windows turned the LF shell script into CRLF, which dies on macOS
+  at `set -euo pipefail\r`. Scratch edits of a shipped shell script are BYTES.
+
+Then the operator's look at the two transcript lanes ("the reasoning stream is not
+helpful"; "the cli version is abysmally bad at presentation ... only white and green
+colored text which shows up as different things including the answer"):
+
+- **The reasoning stream is off on the page** (`WebDestination.shows_reasoning =
+  False`). The machinery stays; a lane that wants it sets the flag. The page shows
+  what the model SAYS and what it RUNS. The "working" indicator after a send is
+  untouched (the run's own line plus the rail's pulsing dot).
+- **The page's tones are cards**: a 3px accent bar, a tint, and a ▸ glyph on a call,
+  all in CSS and `::before` so a line's `textContent` is still exactly what the model
+  or the tool said - which is what the page suite grades. The answer (`.final`) is
+  the brightest card on the page. Done and failed calls carry the reporter's own mark
+  plus their tint, so no line wears two.
+- **The console announces the answer**: a dim rule, then the text in bold bright
+  white (`answer_block()` in `cli_blocks.py`), for the interactive loop and `--once`
+  alike; the prompt is bold cyan, so `you>` stops looking like the agent's output.
+- **The console's tones read as importance**: narration and the run's own lines are
+  quiet, a call is cyan and its result green (bold red for a failure), and the Done
+  line is dim green rather than the same green as everything else. The lane also
+  stops showing chat idioms literally: backticks around a tool name, and the 🔧 on a
+  line that now carries its own ✔/✘.
+
+Evidence: 22 suites green plus the CLI legs, `test_cli` 167/0 against the regenerated
+console build; a computed-style read-back through headless Edge against an instance
+started from this tree (the live bot serves the code it loaded at its last restart, so
+a styling change cannot be seen through it) showing each tone's bar, tint and colour;
+and pictures of both lanes (`hermes-tmp/page-look.png`, `hermes-tmp/cli-look.html`).
