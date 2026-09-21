@@ -379,6 +379,7 @@ def load_config():
                 cfg[section] = values
     # Environment variables override secrets (handy for services).
     env_map = {
+        "tinycmdr_TG_TOKEN": ("telegram", "token"),
         "tinycmdr_WEB_TOKEN": ("web", "token"),
         "tinycmdr_MODEL": ("llm", "model"),
         "tinycmdr_BASE_URL": ("llm", "base_url"),
@@ -8486,7 +8487,7 @@ class CliDestination(Destination):
             return self._ask(question, options, wait)
         except Exception:
             return None
-
+
 # ------------------------------------------------------------------ the console
 # Shared by both builds: the bot's `--cli` and tinycmdr-cli.py run THIS code.
 # build-cli-source.py cuts the Mattermost layer up to the line above, so nothing

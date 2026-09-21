@@ -1055,3 +1055,40 @@ landed twice - this week's banner, cards, keys and input line all did.
 Evidence: build clean, one `def run_cli` per file, `tinycmdr-cli.py --version` names
 the build, test_cli 167/0 and test_tui 25/0 against BOTH builds, 23 suites green, and
 both consoles driven in a pty (banner, `you> `, toolbar, `/help`, Ctrl-D).
+
+### The Telegram lane (2026-09-21, the fourth door)
+
+Asked for the cost, then told to build it. Landed as one batch:
+
+- **TelegramDestination** - the same reporting vocabulary, drawn for Telegram: ONE
+  growing message per run (a line per tool call would be a wall of notifications and
+  it collides with the API's edit rate of about one per second per chat), the answer
+  posted on its own so the chatter never buries it, and questions asked with inline
+  buttons as well as by text.
+- **TelegramClient** - the Bot API over the requests the bot lane already ships: long
+  polling, so no webhook, no certificate, no inbound port and NO new dependency. HTML
+  parse mode with three characters escaped (MarkdownV2 needs eighteen and one of them
+  is '-'), `backticks` rendered as <code>, and a 4096-character split that cuts on
+  paragraphs, then lines, then words, and never drops a word.
+- **TelegramPoller / run_telegram()** - one worker per chat (a chat's second task
+  queues behind its first; two chats never wait on each other), DM only, and the
+  allowed list is a GATE: a stranger's message is logged and ignored, never answered.
+  /help, /new, /usage and /stop work; anything else is a task.
+- **The unified backend is the point**: same Agent, same notes/tasks/atlas/skills,
+  same sessions corpus as the chat and page lanes. Each chat gets its own conversation
+  named telegram-<chat id>, resumable from any other door.
+- Config: telegram.{token,allowed_users} plus tinycmdr_TG_TOKEN in .env beside the
+  Mattermost key. The validator refuses to start when a token is set with an empty
+  allowed_users, and Mattermost's own complaints now apply only when Mattermost is the
+  door. `tinycmdr.py --telegram` runs the lane by hand; a Telegram-only install takes it
+  in the default branch of main(). Tokens are never shared between lanes: different
+  clouds, different accounts, one bot per host - the rule the Mattermost lane lives by.
+
+Evidence: tests/test_telegram.py, 34 checks (escaping and injection, the split ceiling,
+one message instead of many, the throttle, the fold-away count, the answer as its own
+reply, buttons and typed answers landing in the slot a question reads, the gate against
+strangers and groups, the verbs, the per-chat conversation name), plus the full suite.
+
+Still open before this is a shipped door: the installers' lane wizard wants a fourth
+choice, README and .env.example want the door named, and a live end-to-end test needs a
+bot token that only the operator can create in BotFather.
