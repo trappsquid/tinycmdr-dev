@@ -1015,3 +1015,43 @@ Both follow-ups from the screen:
 Verified by driving the real console in a pty: banner, `you> ` and the toolbar
 render; `/help` answers and the prompt returns; Ctrl-D exits clean; `tinycmdr_PLAIN=1`
 still prints the old plain lines; `python tinycmdr.py --cli` draws the banner.
+
+### Debloat pass one (2026-09-21): what left the tree, and where it went
+
+The audit's cuts, applied. Three plan docs whose work shipped
+(`tinycmdr-cli-plan.md`, `tinycmdr-harness-scaffolding-plan.md`,
+`minidsh-hardening-plan.md`), eight consumed one-shot maintenance scripts
+(`_apply_askuser*.py`, `_extracted_web_js.js`, `ab-console-flash.py`,
+`watch-console-flash.ps1`, `win-open-diag.ps1`, `ht-enable.ps1`,
+`bios-settings-dump.ps1`) and the untracked `.archive/` (2.1 MB of pre-1.0 files)
+are gone; every one of them was copied to `Z:\VPS Admin\tinycmdr-historical\`
+first, so the citations elsewhere in this log still have a destination.
+
+Also fixed: `listy()` was called twice in the bot build's `--cli` ask path and
+defined nowhere - the first ask_user question with options would have raised
+NameError. It renders the options the way the console lane does now
+(`" / ".join(...)`).
+
+### Debloat pass two: one console, both builds (2026-09-21)
+
+The audit's biggest cut, applied. tinycmdr.py had a console of its own and
+build-cli-source.py replaced it with the CLI build's copy, so every console change
+landed twice - this week's banner, cards, keys and input line all did.
+
+- The console now lives in tinycmdr.py's shared region (the reader and its steering,
+  the slash verbs, the reporter wiring, the screen and its prompt_toolkit session).
+  Both builds run THAT code: `tinycmdr.py --cli` and tinycmdr-cli.py are one console.
+- build-cli-source.py no longer imports or splices NEW_CLI, and the 660-line NEW_CLI
+  string is gone from cli_blocks.py (1125 -> 465 lines). Its cut of the Mattermost
+  layer used to end at `def run_cli(`; with the console now sitting above that name,
+  the cut swallowed the console's own helpers and the fix step then failed its
+  "banner names the build" check. The cut ends at a marker comment above the console,
+  and that check is a presence assertion instead of a rewrite: the console derives
+  its title, appending "(cli build)" when the build defines BUILD.
+- The bot build gains the slash verbs and the steering reader it never had; the tree
+  loses a whole second console (net -116 lines across the two files). An unused
+  definition is how the two copies drifted apart in the first place.
+
+Evidence: build clean, one `def run_cli` per file, `tinycmdr-cli.py --version` names
+the build, test_cli 167/0 and test_tui 25/0 against BOTH builds, 23 suites green, and
+both consoles driven in a pty (banner, `you> `, toolbar, `/help`, Ctrl-D).

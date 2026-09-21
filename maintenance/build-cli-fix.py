@@ -394,11 +394,13 @@ sub('        print("tinycmdr %s (python %s, %s)"' + NL
     + '              % (VERSION, BUILD, platform.python_version(), BASE_DIR))',
     "--version names the build")
 
-sub('    print("tinycmdr %s - %s at %s" % (VERSION, green(CONFIG["llm"]["model"]),' + NL
-    + '                                      CONFIG["llm"]["base_url"]))',
-    '    print("tinycmdr %s (%s build) - %s at %s" % (VERSION, BUILD, green(CONFIG["llm"]["model"]),' + NL
-    + '                                                CONFIG["llm"]["base_url"]))',
-    "banner names the build")
+# The console derives its own title now (`name` gains " (cli build)" when this file
+# defines BUILD), so there is nothing left to rewrite here - but the property must not
+# vanish unnoticed. Audit, 2026-09-21: one console, shared by both builds.
+if 'name += " (%s build)" % BUILD' not in s:
+    print("REFUSING: the console banner no longer names the build")
+    sys.exit(1)
+applied.append("%-34s %d" % ("banner names the build", 1))
 
 # --- startup is inert: opening this build creates nothing ----------------------
 # Operator requirement (2026-09-14): "nothing is created at startup or checked".

@@ -8486,6 +8486,11 @@ class CliDestination(Destination):
             return self._ask(question, options, wait)
         except Exception:
             return None
+
+# ------------------------------------------------------------------ the console
+# Shared by both builds: the bot's `--cli` and tinycmdr-cli.py run THIS code.
+# build-cli-source.py cuts the Mattermost layer up to the line above, so nothing
+# in here is replaced - one console, one place to change (audit, 2026-09-21).
 _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
         "leave": False, "stream": "", "streamed": "", "streamed_answer": ""}
 
@@ -8580,6 +8585,9 @@ HELP_TEXT = ("\n"
 
 
 def cli_banner():
+    name = "tinycmdr %s" % VERSION
+    if "BUILD" in globals():          # the console build sets BUILD; the bot does not
+        name += " (%s build)" % BUILD
     static = est_tokens(build_system_prompt() + json.dumps(REGISTRY.openai_schemas()))
     live = est_tokens(volatile_context())
     overhead = ("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas, "
@@ -8588,15 +8596,15 @@ def cli_banner():
                    len(REGISTRY.openai_schemas()), fmt_tokens(live)))
     screen = tui_screen()
     if screen is not None:
-        screen.banner("tinycmdr %s" % VERSION, [
+        screen.banner(name, [
             ("model", "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])),
             ("folder", str(BASE_DIR)),
             ("context", "%s usable per turn" % fmt_tokens(AGENT._context_budget())),
             ("prompt", overhead),
         ], hint="type /help for the commands, /exit to quit")
         return
-    print("tinycmdr %s (%s build) - %s at %s" % (VERSION, BUILD, green(CONFIG["llm"]["model"]),
-                                                CONFIG["llm"]["base_url"]))
+    print("%s - %s at %s" % (name, green(CONFIG["llm"]["model"]),
+                                      CONFIG["llm"]["base_url"]))
     print(dim("folder %s" % BASE_DIR))
     print(dim(overhead))
     print(dim("type /help for the commands, /exit to quit\n"))
@@ -9145,6 +9153,8 @@ def _cli_sigint(signum, frame):
         print(red("\n  (stopping - the call in flight is being closed)"))
         return
     raise KeyboardInterrupt
+
+
 def missing_config_text():
     """The steps from "no config.json" to a running agent. Writes nothing."""
     name = "config.example.json"

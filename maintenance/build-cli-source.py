@@ -15,7 +15,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cli_blocks import (NEW_CLI, NEW_CONFIG, NEW_HEADER, NEW_MAIN, NEW_VALIDATOR,
+from cli_blocks import (NEW_CONFIG, NEW_HEADER, NEW_MAIN, NEW_VALIDATOR,
                         ONE_ENDPOINT, HTTP_SHIM)  # noqa: E402
 
 # the tree this script lives in, not one machine's home directory
@@ -259,20 +259,16 @@ lines[ra:rb + 1] = ONE_ENDPOINT.splitlines()
 
 # ------------------------------------ 7. chat layer + model_command + lock
 ma = one("def model_command(")
-mb = one("def run_cli(")
+mb = one("# ------------------------------------------------------------------ the console") - 1
 cut(ma, mb, "model_command + Mattermost layer")
 
 la = one_line(r"_LOCK_FH = None$", "lock sentinel")
 lb = one("def validate_startup_config(")
 cut(la, lb, "lock + restart + allowed_users")
 
-# ------------------------------------------------- 8. new cli, validator, main
-ca = one("def run_cli(once=None):")
-cb = one("def validate_startup_config(") - 1
-log.append("replace  %-38s %5d lines -> %d" % ("run_cli -> CLI", cb - ca + 1,
-                                               NEW_CLI.count("\n") + 1))
-lines[ca:cb + 1] = NEW_CLI.splitlines()
-
+# ------------------------------------------------- 8. validator + main
+# The console is NOT replaced any more: it lives in tinycmdr.py's shared region, so
+# the CLI build inherits it and a console change lands once (audit finding, 2026-09-21).
 va = one("def validate_startup_config():")
 log.append("replace  %-38s %5d lines -> %d" % ("validator + main", len(lines) - va,
                                                (NEW_VALIDATOR + NEW_MAIN).count("\n") + 2))
