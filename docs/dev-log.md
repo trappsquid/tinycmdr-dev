@@ -842,3 +842,65 @@ the LAN model box is NOT in this push and is the one host still on the old name 
 and the new build is `tinycmdr.py`, so it needs the rename migration (a stop/start, which the operator
 has claimed). The report says `no build at /home/<user>/tinycmdr/tinycmdr.py` for it, which is the
 honest answer, not drift.
+
+### The walk prep: artifacts rebuilt on the fixed tree, and what the reader path found (2026-09-21 morning)
+
+The tree moved after the 1.0.0-rc tag (the endpoint-window fix and the reworded no-answer warnings),
+so last night's artifacts could no longer represent what ships: a walk over them would have graded
+bytes he had already rejected. All five share artifacts were rebuilt from HEAD, re-gated and
+republished, and the plan's hash block was updated in both copies:
+
+```
+tinycmdr-1.0.0-win-public.zip           5d83f60513d14fae   (18 files, 366 KB)
+tinycmdr-1.0.0-linux-public.tar.gz      ae1a9e6709d35935
+tinycmdr-1.0.0-macos-public.zip         63c2274a70b55837
+tinycmdr-cli-1.0.0-win-public.zip       db32c17fd5f965c1   (test_cli 167/0 on a clean unpack)
+tinycmdr-cli-1.0.0-linux-public.tar.gz  ecda2b087eaef122
+```
+
+Sidecars rewritten in the house shape (`<hash>  <name>`, LF) and verified on the share with
+`sha256sum -c`; the packagers' own gates (public gate, syntax floor, atlas layout, clean unpack)
+all passed on the rebuilt bytes. The install probe was re-run for the same reason and came back
+11/11 on the new zip (`hermes-tmp/wininstall-unified-probe.py`).
+
+The other two arms, from the SHIPPED archives rather than the tree:
+
+- **Linux, on python 3.10.12 (the floor the download promises):** the tarball extracts to 18 files,
+  `install/install-tinycmdr.sh` is executable, `tinycmdr-cli.py --version` reports
+  `tinycmdr 1.0.0 (cli build, python 3.10.12, ...)` rc=0, its no-config start prints the copy steps
+  and exits 2, and a file-list snapshot before/after shows opening it creates NOTHING.
+- **macOS:** the zip verifies against the share sidecar and extracts to 18 files; the installer
+  refuses a stock Mac's `/usr/bin/python3` (3.9.6) with `*** python 3.9 is not supported (need 3.10,
+  3.11 or 3.12)`, rc=1, creating nothing. The message does not say how to get one (that is the first
+  wall a macOS reader meets, since a stock Mac ships only 3.9) - raised as an open item.
+
+the Windows test box was put back to a clean machine state for his walk: task `tinycmdr` unregistered, the
+pythonw pair killed, `C:\tinycmdr` removed (state copied to
+`hermes-tmp/release/tinycmdr-the Windows test box-preclean-20260921-0707`, 32 files incl. .env), and its
+Downloads refreshed with the rebuilt zip + sidecar (hashes equal to the share's). `C:\tinycmdr`
+still cannot be removed: a process holds the directory, zero items inside.
+
+**Three findings from the reader path itself (the walk's step 6 is what surfaced them):**
+
+1. **A `-Force` redo RESETS `config.json`.** Measured on a probe install with markers written by
+   hand: `llm.model=marker-model`, `llm.base_url=http://127.0.0.1:9/v1`, `allowed_users=['marker-user']`,
+   `agent.bot_name=marker-bot` all came back as `main`, `http://127.0.0.1:8081/v1`, `[]`, `the manager box`
+   after one `-Force` run. The installer copies `config.example.json` over the live file first
+   (install-tinycmdr.ps1:629) and then fills in only what it was given or asked. An empty allowlist is
+   a bot that starts, aborts and looks dead - the Windows test box's own log shows exactly that abort twice on
+   2026-09-20 19:45. The .env side is careful by design (the bot token is explicitly kept "so a
+   -Force redo keeps it"); config.json has no such care.
+2. **A redo generates a NEW page token**, so the ready link the reader saved stops working (the page
+   then 401s and re-asks, naming .env, so it is recoverable but surprising). Same code path: with
+   `-EnableWeb` and no typed choice, `$webToken` is a fresh random value every run
+   (install-tinycmdr.ps1:634-637).
+3. **`-Uninstall` removes the task by NAME, not by install.** Uninstalling the throwaway probe
+   install on the manager box removed the manager box's OWN `tinycmdr` task (the probe had used `-SkipTask`, so it never
+   registered one). The bot kept running, untracked by the scheduler. Recovered: the running pair's
+   tokens were read first to learn the run level it must be put back with (both `High`/elevated), the
+   task was re-registered with the installer's own recipe plus `-RunLevel Highest`, the untracked
+   supervisor and child were stopped in that order (supervisor first, or it respawns the child into a
+   lock the new supervisor then waits on), the task was started, and the bot posted its own
+   `posted startup notice to <id> (downtime 7s)`. The new pair reads `High`
+   again, the task shows `Running | Highest | S4U`. This is the probe trap already in the skill,
+   sharpened: the *uninstall* path is not scoped either.
