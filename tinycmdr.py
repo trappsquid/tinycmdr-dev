@@ -9583,8 +9583,26 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       toolsBtn=document.getElementById('tools'),newBtn=document.getElementById('newchat'),
       tabsEl=document.getElementById('tabs'),closePanelBtn=document.getElementById('panelclose');
 const PAGE_VER="{{VERSION}}";
-let token=localStorage.fb_token||'';
-if(!token){token=prompt('tinycmdr token (leave empty if loopback):')||'';localStorage.fb_token=token;}
+// The token comes from the link first (the installer prints one that contains it), then from
+// last time. The old prompt said "leave empty if loopback", which was wrong the moment an
+// install HAD a token: empty means unauthorized, and nothing said where the token was.
+let token='';
+try{token=new URLSearchParams(location.search).get('token')||'';}catch(e){}
+if(!token){token=localStorage.fb_token||'';}
+function askToken(retry){
+ const msg=retry
+   ? 'That token was not accepted.\n\nIt is in web-token.txt in the tinycmdr folder on that '
+     +'machine (the installer prints the full path, and the link it prints contains the token).'
+   : 'This page needs its access token.\n\nIt is in web-token.txt in the tinycmdr folder '
+     +'on that machine - or use the link the installer printed, which carries the token.';
+ const a=prompt(msg+(!retry?'\n\nIf this install has no token, leave this empty.':''))||'';
+ if(a){token=a;}
+ return a;
+}
+if(!token){askToken(false);}
+if(token){localStorage.fb_token=token;}
+// keep the address bar usable as a bookmark without the token sitting in it
+if(location.search){try{history.replaceState(null,'',location.pathname);}catch(e){}}
 // One id per browser, made once. It is what makes a conversation YOURS on a host
 // that other people also use; it is not a secret, so it stays in localStorage.
 let clientId=localStorage.fb_client||'';
@@ -9956,6 +9974,14 @@ async function send(){
 }
 async function start(t){
  const {status:code,j}=await post('/api/run',{message:t,session:sessionKey});
+ if(code===401){
+   // The server wants a token and this browser does not have the right one: ask again, once,
+   // instead of printing "unauthorized" at somebody who was never told what to type.
+   delete localStorage.fb_token;token='';
+   if(askToken(true)){localStorage.fb_token=token;note('token saved - try that again');}
+   else{note('no token given - this install needs one (web-token.txt)');}
+   return;
+ }
  if(code!==200||j.error){note('could not send: '+(j.error||code));return;}
  if(j.immediate){localRun('say',j.reply);return;}
  runId=j.run_id;fails=0;busy(true);stateEl.textContent='starting';

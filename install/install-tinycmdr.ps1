@@ -518,6 +518,16 @@ if ($Ask) {
         $ModelKey = Ask-Text "API key for it (blank if it needs none)" -Secret
     }
 
+    if ($EnableWeb) {
+        # Generated, but typeable: Enter accepts this one. Asked here, before the confirmation, so
+        # the summary can show it and nobody agrees to something they have not seen.
+        $suggested = -join ((48..57) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+        Write-Host ""
+        Write-Host "The page is protected by a token, so nothing else on this machine can drive the agent."
+        Write-Host "Press Enter to accept the generated one, or type your own password."
+        $script:WebTokenChoice = Ask-Text "Page token" $suggested
+    }
+
     Write-Host ""
     Write-Host "  ---- about to install ----"
     Write-Host ("  folder       : {0}" -f $InstallDir)
@@ -622,7 +632,8 @@ if (-not $BotName) {
 }
 if (-not $MattermostUrl) { $MattermostUrl = "CHANGE-ME.example.com" }
 $webToken = if ($EnableWeb) {
-    -join (1..48 | ForEach-Object { "{0:x}" -f (Get-Random -Maximum 16) })
+    if ($script:WebTokenChoice) { $script:WebTokenChoice }   # the user's own, or the suggestion
+    else { -join (1..48 | ForEach-Object { "{0:x}" -f (Get-Random -Maximum 16) }) }
 } else { "" }
 
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
@@ -764,7 +775,10 @@ if (-not $secrets["TAVILY_API_KEY"] -and -not $secrets["ANYSEARCH_API_KEY"]) {
 if ($EnableWeb) {
     # No BOM: this is pasted into an HTTP header, where one stray byte is a 401.
     Write-Utf8NoBom (Join-Path $InstallDir "web-token.txt") $webToken
-    Say "web page: http://127.0.0.1:$WebPort  (token in web-token.txt)"
+    Say "web page: http://127.0.0.1:$WebPort"
+    Say "          token: $InstallDir\web-token.txt"
+    Say "          ready link (already carries the token, nothing to type):"
+    Say "          http://127.0.0.1:$WebPort/?token=$webToken"
 } else {
     Say "web page: off - local checks need no port:  tinycmdr.py --once ""<task>"""
 }
@@ -923,9 +937,11 @@ Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
     if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
     if ($WantWeb) {
-        Say "the page: http://127.0.0.1:$WebPort   (token in $InstallDir\web-token.txt)"
-        if (Ask-Yes "Open that page in your browser now?" $true) {
-            Start-Process "http://127.0.0.1:$WebPort" | Out-Null
+        Say "the page: http://127.0.0.1:$WebPort"
+        Say "  the link below already carries the token, so there is nothing to type:"
+        Say "  http://127.0.0.1:$WebPort/?token=$webToken"
+        if (Ask-Yes "Open it now?" $true) {
+            Start-Process "http://127.0.0.1:$WebPort/?token=$webToken" | Out-Null
         }
     }
     if ($WantCli) {
@@ -939,7 +955,11 @@ if ($Ask) {
         Say "nothing selected - the harness is installed and does not run in the background."
     }
 }
-if ($EnableWeb) { Say "web page: http://127.0.0.1:$WebPort  (token in web-token.txt)" }
+if ($EnableWeb) {
+    Say "web page : http://127.0.0.1:$WebPort"
+    Say "  the link to use (token included): http://127.0.0.1:$WebPort/?token=$webToken"
+    Say "  token also in $InstallDir\web-token.txt"
+}
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (or --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"
 try { Stop-Transcript | Out-Null } catch { }
