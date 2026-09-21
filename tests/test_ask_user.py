@@ -43,6 +43,10 @@ fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_under_test_ask"] = fb
 spec.loader.exec_module(fb)
 
+# This suite is about dedup, the wait cap, the one-option rule and /stop. The timeout
+# semantics have their own test, which pops this key itself (audit fix, 2026-09-21).
+fb.CONFIG["agent"]["ask_timeout_continues"] = True
+
 PASSES, FAILURES, SKIPPED = [], [], []
 
 
@@ -285,28 +289,43 @@ def test_stop_releases_a_parked_run_at_once():
         fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
 
 
-def test_a_timeout_hands_the_decision_back():
+def test_an_unanswered_question_stops_the_run():
+    """The audit's finding, 2026-09-21: a run must not invent the operator's intent for
+    the very decisions that get asked about. In the campaign that was an unapproved
+    production restart, and then an outage."""
     saved = fb.CONFIG["agent"].get("ask_user")
     saved_wait = fb.CONFIG["agent"].get("ask_user_wait_seconds")
     fb.CONFIG["agent"]["ask_user"] = True
     fb.CONFIG["agent"]["ask_user_wait_seconds"] = 6      # the whole point: bounded
+    fb.CONFIG["agent"].pop("ask_timeout_continues", None)
     d = dispatcher()
     try:
         door = d.ask_door_factory("chan-t", "sess-t")
         t0 = time.time()
-        out = fb.tool_ask_user({"question": "Which of the two?",
-                                "options": ["a", "b"]},
-                               {"session_key": "sess-t", "ask_door": door})
+        raised, out = None, ""
+        try:
+            out = fb.tool_ask_user({"question": "Which of the two?",
+                                    "options": ["a", "b"]},
+                                   {"session_key": "sess-t", "ask_door": door})
+        except fb.OperatorStop as e:
+            raised = e
         dt = time.time() - t0
         check("the wait is bounded by the config", 5.0 < dt < 12.0, "%.1fs" % dt)
-        check("the model is told nobody answered", "NO ANSWER" in out, out[:160])
-        check("and to state its assumption", "assumption" in out, out[:200])
-        check("and not to ask again", "Do not wait again" in out, out[:220])
+        check("an unanswered question STOPS the run instead of guessing",
+              raised is not None, out[:160])
+        check("and the stop says why", "nobody answered" in str(raised), str(raised)[:120])
         check("the operator is told what happened",
               any("No answer" in t for _, t in d.posted), [t for _, t in d.posted][-2:])
+        # the old shape stays available per box, deliberately, and only by config
+        fb.CONFIG["agent"]["ask_timeout_continues"] = True
+        out = fb.tool_ask_user({"question": "Which of the two?", "options": ["a", "b"]},
+                               {"session_key": "sess-t", "ask_door": door})
+        check("ask_timeout_continues hands the decision back, as it used to",
+              "NO ANSWER" in out and "assumption" in out, out[:200])
     finally:
         fb.CONFIG["agent"]["ask_user"] = saved
         fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
+        fb.CONFIG["agent"]["ask_timeout_continues"] = True   # the suite's baseline
 
 
 def test_the_model_cannot_grant_itself_a_longer_wait():
