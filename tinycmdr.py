@@ -8511,6 +8511,7 @@ class TuiScreen:
         self.width = width or self._width()
         self.shown = []               # every renderable, in order, for the record
         self.status = ""
+        self.on_status = None         # set by a console that shows it under the input
         self._status_at = 0.0
         self._plain_fallback = False
 
@@ -8587,8 +8588,17 @@ class TuiScreen:
         self._panel(title, colour, body, foot)
 
     def status_line(self, text):
-        """The run's own line. Throttled: it is the same line every second, and a
-        terminal has no place to keep it without owning the cursor."""
+        """The run's own line.
+
+        A console that owns the input line (prompt_toolkit's toolbar) is handed the
+        text instead: it redraws in place, so no printing and no throttle. Without
+        one, this prints, throttled to TUI_STATUS_EVERY seconds - a terminal cannot
+        keep a line current without owning the cursor.
+        """
+        if self.on_status is not None:
+            self.status = str(text)
+            self.on_status(text)
+            return
         now = time.time()
         if text == self.status or (now - self._status_at) < TUI_STATUS_EVERY:
             self.status = text
@@ -11997,21 +12007,39 @@ def run_bot():
 # --------------------------------------------------------------------------
 
 def run_cli(once=None):
-    print(f"tinycmdr CLI — model {CONFIG['llm']['model']} "
-          f"@ {CONFIG['llm']['base_url']}")
-    print(capability_line("cli"))
+    # The same screen the console build draws (rich cards, boxed banner), built here
+    # too so `tinycmdr.py --cli` is the same console as `tinycmdr-cli.py`. None when
+    # there is no terminal or the two libraries are absent: then every line prints
+    # plainly, exactly as it did before.
+    screen = TuiScreen() if tui_wanted() else None
     static = est_tokens(build_system_prompt() + json.dumps(select_tool_schemas(None)))
     live = est_tokens(volatile_context())
-    print(f"prompt overhead ≈ {static + live} tokens "
-          f"(static {static}: system prompt + {len(select_tool_schemas(None))} "
-          f"visible tool schemas of {len(CORE_TOOLS) + len(REGISTRY.custom)} on this box "
-          f"— cache-stable; live {live}: notes + task ledger, sent "
-          f"trailing so a write does not invalidate the prefix cache)")
-    print("type 'reset' to clear context, Ctrl-C to quit\n")
+    overhead = (f"prompt overhead ≈ {static + live} tokens "
+                f"(static {static}: system prompt + {len(select_tool_schemas(None))} "
+                f"visible tool schemas of {len(CORE_TOOLS) + len(REGISTRY.custom)} "
+                f"on this box — cache-stable; live {live}: notes + task ledger, sent "
+                f"trailing so a write does not invalidate the prefix cache)")
+    if screen is not None:
+        screen.banner(f"tinycmdr {VERSION}", [
+            ("model", f"{CONFIG['llm']['model']} at {CONFIG['llm']['base_url']}"),
+            ("folder", str(BASE_DIR)),
+            ("context", f"{fmt_tokens(AGENT._context_budget())} usable per turn"),
+            ("prompt", overhead),
+        ], hint=capability_line("cli") + " · type 'reset' to clear context, Ctrl-D to quit")
+    else:
+        print(f"tinycmdr CLI — model {CONFIG['llm']['model']} "
+              f"@ {CONFIG['llm']['base_url']}")
+        print(capability_line("cli"))
+        print(overhead)
+        print("type 'reset' to clear context, Ctrl-C to quit\n")
 
     def progress(name, args):
         short = args if isinstance(args, str) else json.dumps(args)
-        print(f"  → {name}: {short.replace(chr(10), ' ')[:140]}")
+        short = short.replace(chr(10), " ")[:140]
+        if screen is not None:
+            screen.card("tool", f"{name}({short})")
+            return
+        print(f"  → {name}: {short}")
 
     def confirm(command):
         try:
@@ -12054,13 +12082,21 @@ def run_cli(once=None):
             return
         s = AGENT.stats("cli")
         budget = AGENT._context_budget()
-        print(f"  ─ {fmt_usage(u)} · {u['steps']} step(s) in "
-              f"{int(u['secs'])}s · ctx ~{fmt_tokens(s['est_tokens'])}/"
-              f"{fmt_tokens(budget)} ({100 * s['est_tokens'] // max(1, budget)}%)")
+        line = (f"  ─ {fmt_usage(u)} · {u['steps']} step(s) in "
+                f"{int(u['secs'])}s · ctx ~{fmt_tokens(s['est_tokens'])}/"
+                f"{fmt_tokens(budget)} ({100 * s['est_tokens'] // max(1, budget)}%)")
+        if screen is not None:
+            screen.status_line(line)
+            return
+        print(line)
 
     if once:
-        print(AGENT.run("cli", once, progress_cb=progress,
-                        confirm_cb=confirm, ask_door=cli_ask_door("cli")))
+        answer = AGENT.run("cli", once, progress_cb=progress,
+                           confirm_cb=confirm, ask_door=cli_ask_door("cli"))
+        if screen is not None:
+            screen.card("final", answer)
+        else:
+            print(answer)
         usage_line()
         return
     while True:
@@ -12076,8 +12112,12 @@ def run_cli(once=None):
             print("(context cleared)")
             continue
         try:
-            print("\n" + AGENT.run("cli", text, progress_cb=progress,
-                                   confirm_cb=confirm, ask_door=cli_ask_door("cli")) + "\n")
+            answer = AGENT.run("cli", text, progress_cb=progress,
+                               confirm_cb=confirm, ask_door=cli_ask_door("cli"))
+            if screen is not None:
+                screen.card("final", answer)
+            else:
+                print("\n" + answer + "\n")
             usage_line()
         except KeyboardInterrupt:
             print("\n(interrupted)")

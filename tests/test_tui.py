@@ -119,6 +119,23 @@ scr4.raw_ansi("  the model is saying this")
 check("a growing line is passed through as it arrives",
       "the model is saying this" in scr4.out.getvalue())
 
+if hasattr(fb, "_tui_toolbar"):
+    check("with no screen there is no prompt_toolkit session",
+          fb._tui_session() is None)
+    fb._CLI["status"] = "working · 3 steps · 12s"
+    toolbar = str(fb._tui_toolbar())
+    check("the toolbar carries the run's line and the keys",
+          "working · 3 steps · 12s" in toolbar and "Ctrl-D" in toolbar)
+    fb._CLI.pop("status", None)
+    fb._CLI.pop("session", None)
+
+scr5 = fb.TuiScreen(out=io.StringIO(), width=100)
+seen = []
+scr5.on_status = lambda t: seen.append(t)
+scr5.status_line("working · 1s")
+check("a screen with a toolbar hands the text over instead of printing",
+      seen == ["working · 1s"] and not scr5.shown, str(scr5.shown))
+
 svg = BASE / "tests" / "eval-runs" / "tui-preview.svg"
 svg.parent.mkdir(parents=True, exist_ok=True)
 written = screen.export_svg(svg)

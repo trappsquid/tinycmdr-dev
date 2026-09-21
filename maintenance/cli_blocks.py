@@ -431,6 +431,62 @@ def cli_banner():
     print(dim("type /help for the commands, /exit to quit\n"))
 
 
+def _tui_session():
+    """The prompt_toolkit session, or None. Built once, and only with a screen.
+
+    History is in memory on purpose: a history FILE would be one more file in a
+    folder whose rule is that opening the build creates nothing but the log's first
+    line, and up-arrow within the session is the part that matters.
+    """
+    if "session" in _CLI:
+        return _CLI["session"]
+    _CLI["session"] = None
+    if tui_screen() is not None:
+        try:
+            from prompt_toolkit import PromptSession
+            from prompt_toolkit.history import InMemoryHistory
+            from prompt_toolkit.styles import Style
+            _CLI["session"] = PromptSession(
+                history=InMemoryHistory(),
+                bottom_toolbar=_tui_toolbar,
+                enable_history_search=True,
+                style=Style.from_dict({
+                    "prompt": "ansicyan bold",
+                    "bottom-toolbar": "bg:#1b1f27 #8b939e",
+                }))
+            _CLI["screen"].on_status = _tui_on_status
+        except Exception:
+            _CLI["session"] = None
+    return _CLI["session"]
+
+
+def _tui_toolbar():
+    """The line under the input: the run's own line, and the keys that matter."""
+    from prompt_toolkit.formatted_text import FormattedText
+    status = (_CLI.get("status") or "").strip()
+    tail = "/help · /stop cancels a run · Ctrl-C stops one · Ctrl-D quits"
+    return FormattedText([("class:bottom-toolbar",
+                           " " + (status + "      " if status else "") + tail)])
+
+
+def _tui_on_status(text):
+    """The run reported something: show it under the input, where it cannot be
+    mistaken for part of the transcript, and leave it there for the next prompt."""
+    _CLI["status"] = str(text)
+    sess = _CLI.get("session")
+    if sess is not None:
+        try:
+            sess.app.invalidate()
+        except Exception:
+            pass
+
+
+def _tui_prompt_text():
+    """'you> ' in the session's own style, so it stops looking like agent output."""
+    from prompt_toolkit.formatted_text import FormattedText
+    return FormattedText([("class:prompt", "you> ")])
+
+
 def tui_screen():
     """The screen for this console, or None for plain lines. Built once per process:
     the banner, the cards and the done line all come from the same one."""
@@ -681,12 +737,30 @@ def _cli_reader():
     would lose whatever was typed at the wrong moment, which is the bug this
     exists to fix. A run in flight is _CLI["stop"] being set.
     """
+    session = _tui_session()
     while True:
-        raw = sys.stdin.readline()
-        if raw == "":                       # EOF: Ctrl-D, /exit, or a closed pipe
-            _CLI["inbox"].put(None)
-            return
-        line = raw.rstrip("\r\n").strip()
+        line = None
+        if session is not None and _CLI.get("stop") is None:
+            # Idle: prompt_toolkit reads the line (editing, history, the status line
+            # under it). Mid-run the reads stay plain on purpose - the run's own
+            # questions answer through stdin too, and two owners of a terminal in raw
+            # mode is how a typed answer lands in the wrong place.
+            try:
+                line = session.prompt(_tui_prompt_text()).strip()
+            except KeyboardInterrupt:        # Ctrl-C at the prompt: what SIGINT does
+                _cli_sigint(None, None)
+                continue
+            except EOFError:                 # Ctrl-D
+                _CLI["inbox"].put(None)
+                return
+            except Exception:
+                session = None               # prompt_toolkit gave up: plain lines
+        if line is None:
+            raw = sys.stdin.readline()
+            if raw == "":                    # EOF: Ctrl-D, /exit, or a closed pipe
+                _CLI["inbox"].put(None)
+                return
+            line = raw.rstrip("\r\n").strip()
         if not line:
             continue
         if _CLI.get("stop") is not None:
@@ -827,7 +901,8 @@ def run_cli(once=None):
     while True:
         if _CLI["leave"]:
             return
-        print(prompt("you> "), end="", flush=True)
+        if _tui_session() is None:      # with a session, prompt_toolkit draws it
+            print(prompt("you> "), end="", flush=True)
         try:
             text = _CLI["inbox"].get()
         except KeyboardInterrupt:
