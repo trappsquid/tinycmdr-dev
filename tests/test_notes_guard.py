@@ -220,6 +220,20 @@ def main():
         # is that it must fail loudly on a timeout instead of hanging this suite.
         test_the_authorship_guard_cannot_deadlock_on_its_first_call()
 
+        # the audit's fix (2026-09-21): never truncate a note inside the prompt
+        long_note = "x" * (int(fb.CONFIG["agent"].get("notes_max_note_chars") or 1200) * 5)
+        out = fb.tool_remember({"note": long_note}, {})
+        check(out.startswith("ERROR") and "per-note limit" in out,
+              "an extreme note is REFUSED, not truncated")
+        check(long_note[:200] not in fb.NOTES_FILE.read_text(encoding="utf-8"),
+              "...and nothing half-true was written")
+        mid = ("measurement: " + "detail " * 120).strip()
+        out = fb.tool_remember({"note": mid}, {})
+        check(out.startswith("OK") and mid in fb.NOTES_FILE.read_text(encoding="utf-8"),
+              "a long but sane note is stored WHOLE")
+        check("clipped" not in fb.NOTES_FILE.read_text(encoding="utf-8"),
+              "...with no clipped marker riding into future prompts")
+
         print()
         if FAILS:
             print(f"{len(FAILS)} check(s) FAILED")

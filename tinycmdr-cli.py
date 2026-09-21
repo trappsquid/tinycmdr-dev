@@ -49,6 +49,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import functools
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -2739,6 +2740,8 @@ def tool_shell(args, ctx):
         if re.search(pat, command):
             confirm_hit = pat
             break
+    if not confirm_hit:
+        confirm_hit = _endpoint_self_harm(command)
     if confirm_hit:
         cb = ctx.get("confirm_cb")
         approved = cb(command) if cb else False
@@ -2892,6 +2895,31 @@ def _edit_find_fuzzy(lines, old_lines):
     return None, "ambiguous (%d candidate regions)" % len(hits)
 
 
+_STOP_VERBS = re.compile(
+    r"\b(systemctl\s+(restart|stop|kill|start)|docker\s+(restart|stop|kill)"
+    r"|pkill|killall|kill\b|taskkill|Stop-Process|Stop-Service|service\s+\S+\s+(stop|restart))\b",
+    re.I)
+
+
+def _endpoint_self_harm(command):
+    """True-ish when a command stops or restarts the endpoint THIS bot is talking to.
+
+    The campaign harness restarted its own model endpoint 46 times in one campaign and
+    one of those restarts took production down (audit, 2026-09-21). Matched on the
+    host:port in llm.base_url, because the bot cannot tell a safe restart from its own.
+    """
+    base = str((CONFIG.get("llm") or {}).get("base_url") or "")
+    if not base or not _STOP_VERBS.search(str(command)):
+        return None
+    host = re.sub(r"^[a-z]+://", "", base).split("/")[0]
+    name, _, port = host.partition(":")
+    if name and name in str(command):
+        return "the endpoint this bot talks to (%s)" % host
+    if port and (":" + port) in str(command):
+        return "the endpoint this bot talks to (port %s)" % port
+    return None
+
+
 def tool_edit_file(args, ctx):
     """Surgical string replacement in a file (Hermes patch equivalent).
 
@@ -3042,6 +3070,32 @@ def tool_read_file(args, ctx):
     return f"{path} {header}\n" + cap_output("read_file", body, "file content")
 
 
+_PATH_LOCKS = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path):
+    """One lock per PATH, not per tool: a batch that edits two files in parallel is
+    fine, two calls to the same file are not."""
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(str(path or ""), threading.Lock())
+
+
+def serialized_by_path(fn):
+    """Mutating tools wear this, so parallel calls cannot read-modify-write the same
+    file and silently lose an edit (audit of the campaign harness, 2026-09-21: four
+    parallel edits to one launcher lost two, and left production on a binary with no
+    draft model)."""
+    @functools.wraps(fn)
+    def wrapper(args, ctx):
+        args = args or {}
+        with _path_lock(args.get("path") or args.get("file") or ""):
+            return fn(args, ctx)
+    return wrapper
+
+
+@serialized_by_path
+@serialized_by_path
 def tool_write_file(args, ctx):
     path = Path(args["path"]).expanduser()
     try:
@@ -3289,12 +3343,16 @@ def tool_remember(args, ctx):
     if not note:
         return "ERROR: the note is empty."
     cap = int(CONFIG["agent"].get("notes_max_note_chars") or 1200)
+    if len(note) > cap * 4:
+        # NEVER truncate. A mutilated fact is worse than a missing one: the clipped
+        # text rides in every future prompt, so the model reasons from half a sentence
+        # and re-derives the rest - the redo pattern an audit of the campaign harness
+        # found on the root-cause notes (2026-09-21). Refuse, and name the way out.
+        return ("ERROR: that note is %d chars and the per-note limit is %d. Truncating "
+                "it would leave a half-true fact in every future prompt. Put the long "
+                "version in a file (notes/<topic>.md or a project doc), then remember "
+                "ONE line: the path and the conclusion." % (len(note), cap))
     clipped = 0
-    if len(note) > cap:
-        clipped = len(note) - cap
-        note = (note[:cap] + f" …[clipped {clipped} chars — this note is "
-                "re-sent in EVERY future prompt, so keep it short; put long "
-                "content in a file and note the path here]")
     timestamp = time.strftime("%Y-%m-%d %H:%M")
     with NOTES_FILE.open("a", encoding="utf-8") as f:
         f.write(f"- [{timestamp}] {note}\n")
