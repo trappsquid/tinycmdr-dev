@@ -817,3 +817,28 @@ Evidence: `tests/test_ledger.py` gained the budget-clamp and the window-full-cut
 `tests/test_checkin.py` the cut-turn re-ask and its bound (117), and all 22 suites are green plus the
 CLI legs (`tinycmdr_TEST_APP`/`tinycmdr_SRC=tinycmdr-cli.py`). Both new gates were seen red before green:
 with the window stub cleared the cut test took the clamp path, and the budget test returned 200000.
+
+### Fleet push: 1.0.0 + 135222206675e8cb (2026-09-21, after the window fix)
+
+Pushed `tinycmdr.py` to every migrated host and restarted each one through its own door, with the
+back-up notice armed first so the restart is visible in that bot's own channel. Nothing here is a new
+version: the fix rides the 1.0.0 bytes the fleet already carried.
+
+```
+the manager box      own web door /restart      notice -> <id>   06:59:33  pid 636
+the other Windows box   child killed, supervisor   notice -> <id>   06:56:58  pid 6116
+the Windows test box child killed, supervisor   (page lane, no chat channel to notice)  06:57:20  pid 50312
+MacBook   launchctl kickstart -k     notice -> <id>    06:58:35  pid 26721
+the Linux test box systemctl restart tinycmdr  notice -> <id>    13:58:14
+```
+
+Proof: five hosts read `1.0.0  135222206675e8cb  in sync` with a watchdog column in
+`maintenance/fleet-version-report.ps1`; each bot logged a fresh `connected to Mattermost as @<bot>`
+and (chat lanes) `posted startup notice to <id>`. The Mac printed the new clamp at startup
+(`llm.max_context_tokens is 110000 but ... serves 131072 ... using 107688`), which is the fix running.
+
+the LAN model box is NOT in this push and is the one host still on the old name and 2.5.23 (`~/tinycmdr`,
+`tinycmdr.service`, `tinycmdr_MM_TOKEN`). Bytes alone do nothing there: its unit runs `tinycmdr.py`
+and the new build is `tinycmdr.py`, so it needs the rename migration (a stop/start, which the operator
+has claimed). The report says `no build at /home/<user>/tinycmdr/tinycmdr.py` for it, which is the
+honest answer, not drift.
