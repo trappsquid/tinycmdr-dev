@@ -4543,6 +4543,16 @@ def ask_operator(session_key, question, ctx=None, options=None, timeout=None,
         except Exception:
             pass
         return "stopped", "the run was cancelled while the question was open"
+    if not CONFIG["agent"].get("ask_timeout_continues", False):
+        # Nobody answered. Carrying on means the bot invents the operator's intent
+        # for the very decisions that get asked about - in the campaign that was a
+        # production restart nobody approved, then an outage (audit, 2026-09-21).
+        try:
+            door["post_done"]("⏳ No answer — stopping here rather than acting on "
+                              "an assumption. Answer and I will pick it up.")
+        except Exception:
+            pass
+        raise OperatorStop(f"nobody answered within {int(wait)}s")
     try:
         door["post_done"]("⌛ No answer — I am applying my own judgment and will say "
                           "what I assumed.")
