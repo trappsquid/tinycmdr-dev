@@ -253,6 +253,20 @@ def main():
               "the page goes idle again when the run ends")
         check(st["sendVisible"], "Send stays visible (a hidden button mid-run "
                                  "left a phone with no way to steer)")
+        # -- the run's own line: working -> Done, IN the transcript -------------
+        # It used to live in the page header alone, and the header goes back to
+        # "idle" on reload - so a reloaded page held no record of how the run
+        # ended, while the chat lane keeps its Done post in the thread for good.
+        dom_a = run_lines(page.evaluate(DUMP), run_a) or []
+        status = [t for c, t in dom_a if c == "checkin"]
+        check(len(status) == 1,
+              f"A: the run has exactly one own line in the transcript ({len(status)})")
+        check(status and status[0].startswith("✅ Done —"),
+              f"A: and it reads as the Done line ({status[:1]})")
+        check(status and " step(s) in " in status[0] and "model `" in status[0],
+              "A: with the step count, the elapsed time and the model on it")
+        check(dom_a and dom_a[-1][0] != "checkin",
+              "A: the answer is still what the eye lands on last, not the Done line")
 
         # -- B. a steering message typed mid-run ----------------------------
         seen = []
@@ -324,6 +338,10 @@ def main():
         dom = run_lines(page.evaluate(DUMP), run_c) or []
         check(sum(1 for _, t in dom if "survives a reload" in t) == 1,
               "C: the operator's message appears once after a reload, not twice")
+        status_c = [t for c, t in dom if c == "checkin"]
+        check(status_c and status_c[0].startswith("✅ Done —"),
+              f"C: the run's Done line survived the reload ({status_c[:1]}) - it "
+              f"belongs to the run, not to the page's header")
 
         # -- D. stop mid-run -------------------------------------------------
         seen = []

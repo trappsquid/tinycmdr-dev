@@ -828,7 +828,8 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
     content, reasoning, finish = [], [], ""
     calls = {}
     suse, timings = {}, {}
-    stats = {"deltas": 0, "chars": 0, "ttft": None, "tps": 0.0, "server_tps": 0.0}
+    stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
+             "tps": 0.0, "server_tps": 0.0, "reasoning_text": ""}
     snap_at = 0.0
     lines = queue.Queue()
     done = {"eof": False, "err": None}
@@ -952,6 +953,11 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
             stats["deltas"] += 1
             if isinstance(d.get("content"), str):
                 stats["chars"] += len(d["content"])
+            if isinstance(d.get("reasoning_content"), str):
+                # Counted separately from the answer's text: a MAX-thinking box
+                # spends the first 3-13 seconds here, and with only `chars` in the
+                # heartbeat the status line read "0 chars" through all of it.
+                stats["reasoning_chars"] += len(d["reasoning_content"])
             elapsed = max(0.001, time.time() - t0)
             stats["tps"] = stats["deltas"] / elapsed
             if on_delta:
@@ -962,6 +968,12 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
                 if (now2 - snap_at) >= 0.5:
                     snap_at = now2
                     stats["content"] = "".join(content)
+                    if reasoning:
+                        # Same 0.5s gate as the answer's text, and only when there
+                        # IS reasoning: joining it on every delta is quadratic.
+                        # This is the half a MAX-thinking model spends its first
+                        # seconds in, and it used to reach no lane at all.
+                        stats["reasoning_text"] = "".join(reasoning)
                 try:
                     on_delta(stats)
                 except Exception:           # noqa: BLE001 - progress must not kill a call
@@ -1003,10 +1015,12 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
     if suse.get("completion_tokens"):
         stats["completion"] = int(suse["completion_tokens"])
     final_text = "".join(content)
-    if on_delta and stats["deltas"] and final_text:
+    if on_delta and stats["deltas"] and (final_text or reasoning):
         # One last callback with the complete text: the narration post must never be
         # left showing a partial line because the stream ended between snapshots.
         stats["content"] = final_text
+        if reasoning:
+            stats["reasoning_text"] = "".join(reasoning)
         stats["final"] = True
         try:
             on_delta(stats)
@@ -6435,6 +6449,7 @@ class Agent:
             confirm_cb=None, depth=0, channel_id=None, cancel_event=None,
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
+            reasoning_cb=None,
             ask_door=None, source="main"):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
@@ -6484,7 +6499,7 @@ class Agent:
                               "note": interim_cb, "narration": narration_cb,
                               "drop": narration_drop_cb,
                               "tool_done": progress_done_cb}}
-            _delta_gate = {"t": 0.0, "streamed": False}
+            _delta_gate = {"t": 0.0, "streamed": False, "reasoned": False}
 
             def _on_delta(st):
                 """Live liveness while the model generates.
@@ -6494,6 +6509,16 @@ class Agent:
                 the operator can read the plan - and stop or steer it - while it is
                 being written rather than after it has run.
                 """
+                if st.get("reasoning_text") and reasoning_cb:
+                    # The model's private reasoning, streamed to the lanes that want
+                    # it (`shows_reasoning`). It is where a MAX-thinking box spends
+                    # the first 3-30 seconds, and no lane used to see any of it.
+                    first_r = not _delta_gate["reasoned"]
+                    _delta_gate["reasoned"] = True
+                    try:
+                        reasoning_cb(st["reasoning_text"], first_r)
+                    except Exception:
+                        log.debug("reasoning_cb failed", exc_info=True)
                 if st.get("content"):
                     first = not _delta_gate["streamed"]
                     _delta_gate["streamed"] = True
@@ -6508,8 +6533,7 @@ class Agent:
                 if now - _delta_gate["t"] < 4.0:
                     return
                 _delta_gate["t"] = now
-                progress_cb("generating",
-                            f"{st.get('tps', 0):.1f} tok/s, {st.get('chars', 0)} chars")
+                progress_cb("generating", stream_heartbeat(st))
 
             max_turns = CONFIG["llm"]["max_turns"]
             max_steps = CONFIG["agent"].get("max_steps", 40)
@@ -7421,6 +7445,13 @@ def _save_overrides():
 # through every destination and asserts the three event streams are identical,
 # text for text; a lane that quietly drops a fact fails a suite.
 
+# How much of the model's reasoning one line keeps. The tail is what tells the
+# operator the run is alive and what it is chewing on; the whole monologue is not
+# something to scroll back through, and a thinking model can write 10k+ chars
+# before it says a word to anybody.
+REASONING_LINE_MAX = 2000
+
+
 class Destination:
     """A place a run can report into.
 
@@ -7444,6 +7475,12 @@ class Destination:
     # a phone gets. A transcript does - "it is running this right now" is the
     # whole point of watching a run in a browser or a terminal.
     shows_calls = False
+    # Does this lane want the model's private REASONING streamed into a line? A
+    # thinking model can spend the first 30 seconds there before it says anything,
+    # so a transcript gains a lot ("it is alive, and here is what it is chewing
+    # on"); chat gains one edit per second on a phone for text the model never
+    # addressed to the operator, so it stays off there.
+    shows_reasoning = False
     # Throttle for a line that grows. Chat throttles because every edit is a
     # request to a server the operator's phone has to be woken for; a buffer and a
     # terminal update as fast as the model writes. None = use the config knob.
@@ -7518,6 +7555,28 @@ def _tool_preview(name, args, limit=None):
     limit = limit or int(CONFIG["agent"].get("checkin_tool_preview_chars", 90) or 90)
     text = scrub(" ".join(str(text).split()))
     return text if len(text) <= limit else text[:limit].rstrip() + "…"
+
+
+def stream_heartbeat(st):
+    """What the model is doing right now, in numbers the harness actually has.
+
+    Two things were wrong with the old line ("0.9 tok/s, 0 chars"). `chars`
+    counts the ANSWER's text only, so it sat at 0 for the whole think - a
+    MAX-thinking box spends the first 3-13 seconds there (measured on the fleet's
+    own logs: `first delta 3.0s ... 12.7s`), and the operator watched a status
+    line that never moved. And the rate was `deltas / elapsed`, a CHUNK rate, not
+    tokens/s: against llama.cpp one chunk is one token so it read correctly there,
+    which is exactly why it shipped, and against any server that batches its
+    deltas it was simply a wrong number. So: count the reasoning too, and say
+    what phase it is in instead of inventing a speed.
+    """
+    answer = int(st.get("chars") or 0)
+    thinking = int(st.get("reasoning_chars") or 0)
+    if answer:
+        return f"writing · {answer:,} chars"
+    if thinking:
+        return f"thinking · {thinking:,} chars"
+    return "waiting for the first token"
 
 
 def checkin_line(session_key, steps, elapsed, name=None, args=None):
@@ -7612,6 +7671,8 @@ class RunReporter:
         self.stream_text = {}      # what the line says now
         self.stream_open = {}      # what the line was OPENED with
         self.last_stream = {}
+        self.reason_ref = {}       # the reasoning line, where the lane wants one
+        self.last_reason = {}
         self.lock = threading.Lock()
         if CONFIG["agent"].get("progress_updates", True):
             self.status_ref = self.dest.line("status", label)
@@ -7721,6 +7782,50 @@ class RunReporter:
     def narration_live(self, src=None):
         with self.lock:
             return self.stream_ref.get(src or self.src) is not None
+
+    def reasoning(self, text, new_turn=False, src=None):
+        """The model's private reasoning, streamed into ONE dim line - page only.
+
+        A thinking model writes this before it says anything to anybody (on this
+        fleet's box: 3-13 seconds, and longer when the task is hard). Every lane
+        showed nothing at all through it - the status line's counter read "0
+        chars" and the transcript was empty - which is what made a working run
+        look like a stalled one. `dest.shows_reasoning` is the lane's preference,
+        like merge_tools: a browser transcript wants it, a phone does not.
+
+        The line shows the TAIL, capped: the newest reasoning is what tells the
+        operator it is alive and what it is chewing on, and the whole monologue is
+        not something to scroll back through.
+
+        `new_turn` opens a fresh line, the way narration does, so a run that
+        thinks between tool calls reads as steps rather than one growing blob.
+        It must stay the SECOND parameter: this is handed to the callback as
+        (text, first), and a flag landing in `src` opened a second line for every
+        run (caught in a real page, 2026-09-20).
+        """
+        if not self.dest.shows_reasoning:
+            return
+        if not CONFIG["agent"].get("progress_updates", True):
+            return
+        src = src or self.src
+        text = scrub(" ".join(str(text).split()))
+        if not text:
+            return
+        if len(text) > REASONING_LINE_MAX:
+            text = "…" + text[-REASONING_LINE_MAX:]
+        body = f"🧠 {text}"
+        with self.lock:
+            if new_turn and self.reason_ref.get(src) is not None:
+                self.reason_ref.pop(src, None)
+            if body == self.last_reason.get(src):
+                return
+            self.last_reason[src] = body
+            ref = self.reason_ref.get(src)
+        if ref is None:
+            with self.lock:
+                self.reason_ref[src] = self._draw("reasoning", body, src)
+        else:
+            self._redraw(ref, "reasoning", body, src)
 
     def narration_drop(self, src=None):
         """The streamed text WAS the final answer: the answer is posted as its
@@ -7960,6 +8065,7 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                      interim_cb=reporter.note,
                      narration_cb=reporter.narration,
                      narration_drop_cb=reporter.narration_drop,
+                     reasoning_cb=reporter.reasoning,
                      progress_done_cb=reporter.tool_done,
                      confirm_cb=reporter.confirm,
                      cancel_event=cancel_event,

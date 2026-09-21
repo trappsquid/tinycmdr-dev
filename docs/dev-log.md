@@ -671,3 +671,49 @@ by its page.
 becomes. Grade the rendered artifact: the served page, the built zip, the string the browser
 gets. And when a suite's own shim lacks something the page touches, that is not a page bug -
 but a suite that calls a dead page healthy is worse than no suite.
+
+## 2026-09-20 (night, second pass) - the page stops looking stalled, and remembers how a run ended
+
+He ran the first end-to-end install on the Windows test box and said the streaming "felt a little different
+than what I would feel in mattermost". Measured instead of argued: one stubbed stream (reasoning
+phase, a tool call, a streamed answer) driven through both lanes - a recording dispatcher for chat,
+a real `WebRun`, then a REAL page in headless Edge with the DOM sampled every 250ms. The plumbing
+is shared and complete; three things were not.
+
+**A run's own line is in the transcript now, and it survives a reload.** In chat the status post is
+created when the run starts and edited into `✅ Done - N step(s) in Ts · model X · usage` when it
+ends. On the page that line was the HEADER only, and the header goes back to `idle` on reload - so
+the transcript held no record of how a run ended, ever (`sessions\web.web.jsonl` on his install:
+every run stored as `[you, final]`). `WebDestination.line("status")` draws the line where the run
+starts and edits it in place. The Done text lands BEFORE the run is marked done: otherwise a client
+that stops polling the moment it sees `done:true` keeps the pre-Done text, and the live view and the
+disk copy disagree (`🔧 Working…` against `✅ Done — ...` - which is exactly what the suite's own
+comparison caught). The header is left reading `done in 12s, 3 tool calls`.
+
+**The model's reasoning streams - on the page only.** `_stream_chat` always accumulated
+`reasoning_content` and only ever forwarded `content`, so there was nothing to show through the
+whole think, and the heartbeat's `chars` counter counts the ANSWER's text: it read `0 chars` for
+3-13 seconds (from this fleet's own log: `first delta 3.0s ... 12.7s`). Reasoning now reaches the
+page as one dim line that grows, tail-capped at `REASONING_LINE_MAX` (2000 chars) - the newest
+reasoning is what says "alive, and here is what it is chewing on", and the whole monologue is not
+something to scroll back through. `Destination.shows_reasoning` is a lane preference like
+`merge_tools`: chat keeps it OFF (an edit per second on a phone for text the model never addressed
+to the operator), and the suite asserts the difference on purpose.
+
+**The heartbeat reports what the model is doing instead of inventing a speed.** It read
+`35.8 tok/s, 220 chars` where the rate was `deltas / elapsed` - a CHUNK rate, not tokens/s. Against
+llama.cpp one chunk is one token, which is why it looked right on the fleet and shipped; against a
+server that batches its deltas it was simply a wrong number. `stream_heartbeat()` now says
+`waiting for the first token` / `thinking · 4,210 chars` / `writing · 3,120 chars`.
+
+Two defects were found by the work itself, both in the path the new line touches: the Done line
+landing after `done` flipped (live view vs disk, above), and the suite's HTTP collector using a
+CURSOR while ignoring the payload's `updates` list - the exact client the page's `since=0` polling
+exists to avoid, and it kept the stale text for ever.
+
+Evidence: 22 suites green (`test_cli` 168 checks), the browser suite driving real Edge and pressing
+Enter, and the page's own JS unchanged by all of this - every change is server-side, so no browser
+can be holding a stale client. CLI regenerated from the tree (`tinycmdr-cli.py`, +111 lines) with its
+five suites re-run against it; every 1.0.0 shape rebuilt (fleet, public win/linux/macos, cli
+win/linux); Z: refreshed with new sha256s; the Windows test box pushed and relaunched (`bot ready in 0s`, the
+page it serves byte-identical to the rendered package at `86061c50a58bbb3f`).

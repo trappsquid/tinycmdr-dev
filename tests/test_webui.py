@@ -141,16 +141,25 @@ def wait_for(fn, timeout=30.0, interval=0.03):
 
 
 def collect(base, run_id, until_done=True, timeout=30.0):
-    """Poll /api/events the way the page does, and return (lines, last state)."""
-    since, lines, state = 0, [], {}
+    """Poll /api/events the way the page does, and return (lines, last state).
+
+    The page asks for the WHOLE buffer every time and reconciles by uid. It does
+    that because a CURSOR cannot see a line that grew in place after the cursor
+    passed it: the client keeps the stale text for ever, and the run's own status
+    line now grows into the Done line late in the run. This collector used a
+    cursor and ignored the payload's `updates`, so it kept "🔧 Working…" where the
+    disk said "✅ Done — ..." - caught by the comparison two checks below.
+    """
+    lines, state = [], {}
     end = time.time() + timeout
     while time.time() < end:
-        code, j = http(f"{base}/api/events?run_id={run_id}&since={since}")
+        code, j = http(f"{base}/api/events?run_id={run_id}&since=0")
         if code != 200:
             return lines, {"error": code}
+        by_uid = {l["uid"]: l for l in lines}
         for l in j.get("lines", []):
-            since = l["i"] + 1
-            lines.append(l)
+            by_uid[l["uid"]] = l          # repaint in place, never duplicate
+        lines = sorted(by_uid.values(), key=lambda l: l["i"])
         state = j
         if j.get("done"):
             break
@@ -187,10 +196,31 @@ def main():
             return b, fb.RunReporter(fb.WebDestination(b), session)
 
         run, rep = web_lane()
+        check(len(run.lines) == 1 and run.lines[0]["kind"] == "checkin",
+              "a run draws its own status line where it starts")
         rep.progress("generating", "13.4 tok/s, 220 chars")
-        check(run.lines == [], "a 'generating' heartbeat adds no line")
+        check(len(run.lines) == 1, "a 'generating' heartbeat adds no line")
+        check(run.lines[0]["text"] == "13.4 tok/s, 220 chars",
+              "the heartbeat updates the run's own line instead")
         check(rep.steps == 0, "a heartbeat does not count as a tool call")
-        check("tok/s" in run.status, "the heartbeat updates the status line instead")
+        # the text itself comes from stream_heartbeat(), fed the stream's own
+        # counters: `chars` counts the ANSWER only, so it sat at 0 for the whole
+        # think and the line read as stalled for the first 3-13s of every run
+        check(fb.stream_heartbeat({"chars": 0, "reasoning_chars": 4210})
+              == "thinking · 4,210 chars",
+              "a thinking phase says so, in the chars it has actually seen")
+        check(fb.stream_heartbeat({"chars": 3120, "reasoning_chars": 4210})
+              == "writing · 3,120 chars",
+              "and once the answer starts arriving it says that instead")
+        check(fb.stream_heartbeat({}) == "waiting for the first token",
+              "before any delta it says what it is waiting for")
+        check("tok/s" not in fb.stream_heartbeat({"chars": 10, "tps": 36.4}),
+              "no invented rate: the old line printed a CHUNK rate as tokens/s")
+        rep.finish(ok=True)
+        check("✅ Done" in run.lines[0]["text"] and " in " in run.lines[0]["text"],
+              "the run's own line is edited into the Done line, in the transcript")
+        check(run.lines[0]["kind"] == "checkin",
+              "...staying metadata, not a bubble next to the answer")
         rep.tool_done("shell", {}, "exit_code=1\nerror: no such file", 0.4)
         check(run.lines and run.lines[-1]["kind"] == "tool_fail",
               "a failed tool output renders as tool_fail")
@@ -204,13 +234,16 @@ def main():
         # The callbacks deliver cumulative snapshots; appending each one painted
         # ~190 near-identical lines for a 5-second run on a live box.
         nar, nar_rep = web_lane("narration")
+        # line 0 of any run is now the run's own status line (working -> Done);
+        # these checks are about the lines the MODEL's text draws, so they start
+        # at 1 and the counts include the status line.
         nar_rep.narration("The sky is blue", False, True)
         nar_rep.narration("The sky is blue", False, False)   # the endpoint re-sends
         nar_rep.narration("The sky is blue because of Rayleigh scattering", False, False)
-        check(len(nar.lines) == 1, "streamed narration grows one line, not many")
-        check(nar.lines[0]["text"].endswith("scattering"),
+        check(len(nar.lines) == 2, "streamed narration grows one line, not many")
+        check(nar.lines[1]["text"].endswith("scattering"),
               "...and that line carries the newest text")
-        check(nar.lines[0]["i"] == 0, "...keeping its index so the page repaints it")
+        check(nar.lines[1]["i"] == 1, "...keeping its index so the page repaints it")
         # One rule for every lane, and it is the chat lane's (v1.9.29): an
         # identical fragment is a no-op, a fragment that does not extend the line
         # replaces it in place, and a NEW TURN opens a new line. Comparing a new
@@ -218,18 +251,18 @@ def main():
         # with is what put nine identical posts on a looping run.
         nar_rep.narration("**", False, False)
         nar_rep.narration("**", False, False)
-        check(len(nar.lines) == 1,
+        check(len(nar.lines) == 2,
               "a fragment that does not extend the growing line replaces it in "
               "place, it does not stack")
-        check(nar.lines[0]["text"] == "💬 **",
-              f"...and the line says the newest thing ({nar.lines[0]['text']!r})")
+        check(nar.lines[1]["text"] == "💬 **",
+              f"...and the line says the newest thing ({nar.lines[1]['text']!r})")
         nar_rep.narration("A brand new thought", False, True)
-        check(len(nar.lines) == 2, "a new turn opens a new line")
+        check(len(nar.lines) == 3, "a new turn opens a new line")
         nar_rep.note("Checking what holds the lock:")
-        check(len(nar.lines) == 3 and nar.lines[-1]["kind"] == "thinking",
+        check(len(nar.lines) == 4 and nar.lines[-1]["kind"] == "thinking",
               "an interim note gets its own line, marked as thinking")
         nar_rep.note("Checking what holds the lock: the db file")
-        check(len(nar.lines) == 3,
+        check(len(nar.lines) == 4,
               "a second note inside the gap does not add another line")
         # The agent flags EVERY turn's narration as final, so a run that goes on
         # to more tool calls emits several of them. Painting those as the answer
@@ -238,11 +271,11 @@ def main():
         mid_rep.narration("Let me check the disk first.", True, True)
         check(mid.lines[-1]["kind"] == "say",
               "a final-flagged narration mid-run is not painted as the answer")
-        check(mid.lines[-1]["uid"] == "midanswer#0",
+        check(mid.lines[-1]["uid"] == "midanswer#1",
               "...and every line carries a stable uid for the page to key on")
         mid_rep.progress("shell", '{"command": "df -h"}')
         mid_rep.tool_done("shell", {}, "exit_code=0", 0.2)
-        check([l["kind"] for l in mid.lines] == ["say", "tool", "tool_done"],
+        check([l["kind"] for l in mid.lines] == ["checkin", "say", "tool", "tool_done"],
               "the run keeps working after it has 'answered' once")
         mid_rep.narration("The disk is fine and nothing is running hot.", True, True)
         check(mid.lines[-1]["kind"] == "say",
@@ -255,19 +288,55 @@ def main():
         mid_rep.narration_drop()
         check(len(mid.lines) == before - 1,
               "the draft is taken back when it becomes the answer")
-        check(mid.lines[0]["kind"] == "say",
+        check(mid.lines[1]["kind"] == "say",
               "...and the narration above the tool lines stays, so the plan does not "
               "vanish with it")
         sfin, sfin_rep = web_lane("saytofinal")
         sfin_rep.note("**")
         sfin_rep.narration("**the manager box** confirmed.", True, False)
-        check([l["kind"] for l in sfin.lines] == ["thinking", "say"],
+        check([l["kind"] for l in sfin.lines] == ["checkin", "thinking", "say"],
               f"the interstitial note and the streamed text are two tones on one "
               f"vocabulary ({[l['kind'] for l in sfin.lines]})")
         sfin.finish()
         check(sfin.done and not any(l["kind"] == "final" for l in sfin.lines),
               "ending the run does not invent an answer line - whoever drove the "
               "run posts the answer, in every lane")
+
+        # -- the reasoning stream: page only, one line, its tail --------------
+        # A thinking model writes this before it says a word to anybody, and no
+        # lane showed it: the status counter read "0 chars" and the transcript sat
+        # empty, so a working run looked stalled.
+        rsn, rsn_rep = web_lane("reasoning")
+        rsn_rep.reasoning("the first thing to check is the disk")
+        check(len(rsn.lines) == 2 and rsn.lines[-1]["kind"] == "thinking",
+              f"the model's reasoning streams into one dim line "
+              f"({[l['kind'] for l in rsn.lines]})")
+        check(rsn.lines[-1]["text"].startswith("🧠 "),
+              "...marked as reasoning, not as an answer or a tool line")
+        rsn_rep.reasoning("the first thing to check is the disk, then the lock")
+        check(len(rsn.lines) == 2 and rsn.lines[-1]["text"].endswith("then the lock"),
+              "and it GROWS in place instead of stacking")
+        rsn_rep.reasoning("the first thing to check is the disk, then the lock")
+        check(len(rsn.lines) == 2, "an identical snapshot is a no-op")
+        long_reason = "x " * fb.REASONING_LINE_MAX
+        rsn_rep.reasoning(long_reason)
+        check(rsn.lines[-1]["text"].startswith("🧠 …")
+              and len(rsn.lines[-1]["text"]) <= fb.REASONING_LINE_MAX + 8,
+              f"a long monologue keeps its TAIL, capped "
+              f"({len(rsn.lines[-1]['text'])} chars of {len(long_reason)})")
+        check(rsn.lines[-1]["text"].rstrip().endswith("x"),
+              "...and that tail is the NEWEST text, not the opening")
+        check(not any(l["kind"] == "final" for l in rsn.lines),
+              "reasoning is never mistaken for the answer")
+        rsn_rep.reasoning("a second turn of thinking", True)
+        check(len(rsn.lines) == 3 and "second turn" in rsn.lines[-1]["text"],
+              f"a new turn of thinking opens its own line, the way narration does "
+              f"({[l['text'][:18] for l in rsn.lines]})")
+        check(fb.WebDestination.shows_reasoning is True
+              and fb.MattermostDestination.shows_reasoning is False
+              and fb.CliDestination.shows_reasoning is False,
+              "reasoning goes to the browser and NOWHERE else: on chat it would be "
+              "an edit per second for text the model did not address to you")
 
         page_src = fb.WEB_PAGE
         check("function reconcile(" in page_src and "l.uid" in page_src,
@@ -372,9 +441,12 @@ def main():
         check(kinds[-1] == "final",
               "the answer is the LAST thing the run produced, under everything "
               "it did to find it")
-        check("Done" in (state.get("status") or ""),
-              f"and the done line lives in the lane's own status surface, the way "
-              f"the chat lane edits its status post ({state.get('status')!r})")
+        check(any("Done" in l["text"] for l in lines),
+              "and the done line is IN the transcript, where a reload still finds "
+              f"it ({[l['text'][:30] for l in lines if l['kind'] == 'checkin']})")
+        check((state.get("status") or "") == "done",
+              f"with the live header left short and read as finished "
+              f"({state.get('status')!r})")
         check("disk is fine" in text, "the answer text is in the buffer")
         check(state.get("done") is True, "the run reports done")
         check(state.get("steps") == 1, f"one tool call counted ({state.get('steps')})")
@@ -477,7 +549,9 @@ def main():
               "it holds exactly the run that was just done")
         check([l["text"] for l in tr["runs"][0]["lines"]] ==
               [l["text"] for l in lines],
-              "and the painted lines match the run, in order")
+              "and the painted lines match the run, in order "
+              f"(stored {[l['text'][:24] for l in tr['runs'][0]['lines']]!r} vs "
+              f"live {[l['text'][:24] for l in lines]!r})")
         check(all(l.get("uid") for l in tr["runs"][0]["lines"]),
               "the lines keep their uids, so the page can key on them")
 
