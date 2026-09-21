@@ -357,6 +357,30 @@ def dim(text):
     return _paint(text, "2")
 
 
+def bold(text):
+    """The answer: the one bright thing on the screen."""
+    return _paint(text, "1;97")
+
+
+def prompt(text):
+    """The operator's own prompt - a colour nothing else on the screen uses."""
+    return _paint(text, "1;36")
+
+
+def answer_block(text):
+    """The answer, announced: a dim rule, a blank line, then the bright text.
+
+    A terminal has no bubbles and no cards, so the answer has to be marked. The
+    complaint this answers (2026-09-21) was that the tool lines, the model's
+    narration and the answer all read as the same white/green soup, so the eye had
+    nowhere to land.
+    """
+    text = str(text)
+    if not text.strip():
+        return text
+    return "\n" + _paint("  " + "─" * 62, "2") + "\n" + bold(text)
+
+
 HELP_TEXT = ("\n"
              "  /help            this list\n"
              "  /new             forget the conversation so far and start clean\n"
@@ -774,13 +798,13 @@ def run_cli(once=None):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        print(drive_run(_cli_key(), once, new_reporter()))
+        print(answer_block(drive_run(_cli_key(), once, new_reporter())))
         _cli_usage_line()
         return
     while True:
         if _CLI["leave"]:
             return
-        print(green("you> "), end="", flush=True)
+        print(prompt("you> "), end="", flush=True)
         try:
             text = _CLI["inbox"].get()
         except KeyboardInterrupt:
@@ -835,7 +859,7 @@ def run_cli(once=None):
             elif shown and shown.startswith(answer.strip()):
                 body = ""                   # already on screen in full
             if body.strip():
-                print("\n" + body)
+                print(answer_block(body))
         _cli_usage_line()
         print()
 

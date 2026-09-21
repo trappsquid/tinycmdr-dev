@@ -7570,11 +7570,11 @@ class Destination:
     # a phone gets. A transcript does - "it is running this right now" is the
     # whole point of watching a run in a browser or a terminal.
     shows_calls = False
-    # Does this lane want the model's private REASONING streamed into a line? A
-    # thinking model can spend the first 30 seconds there before it says anything,
-    # so a transcript gains a lot ("it is alive, and here is what it is chewing
-    # on"); chat gains one edit per second on a phone for text the model never
-    # addressed to the operator, so it stays off there.
+    # Does this lane want the model's private REASONING streamed into a line? Off
+    # everywhere by default: chat would pay an edit per second on a phone for text
+    # the model never addressed to the operator, and the page's transcript turned
+    # out to read better without it too (operator, 2026-09-21). The machinery stays:
+    # a lane that wants it sets this True.
     shows_reasoning = False
     # Throttle for a line that grows. Chat throttles because every edit is a
     # request to a server the operator's phone has to be woken for; a buffer and a
@@ -8187,9 +8187,29 @@ class CliDestination(Destination):
     stream_gap = 0.0         # no notification to protect: stream as it arrives
     STATUS_REF = ("cli-status",)
 
-    TONES = {"note": "2", "narration": "32", "say": "36", "tool": "33",
-             "tool_done": "33", "tool_fail": "31", "checkin": "2",
-             "ask": "35", "system": "2", "error": "31", "final": "32"}
+    # Tones read as IMPORTANCE, not as a colour wheel: the model's narration and
+    # the run's own lines are quiet, a call is cyan and its result green (bold red
+    # when it failed), and nothing here competes with the ANSWER - the console
+    # prints that itself, as the one bright, bold block on the screen. Operator,
+    # 2026-09-21: "only white and green colored text which shows up as different
+    # things including the answer, it is hard to tell where to read".
+    TONES = {"note": "2", "narration": "2;37", "say": "37", "tool": "36",
+             "tool_done": "32", "tool_fail": "1;31", "checkin": "2",
+             "ask": "1;35", "system": "2", "error": "1;31", "final": "2;32"}
+    # The same glyphs the page draws (▸ a call, ✔ its result, ✘ a failure): one
+    # vocabulary across the lanes, and in a terminal - where colour can be piped
+    # away - the glyph is what still says which line is which.
+    GLYPHS = {"tool": "▸ ", "tool_done": "✔ ", "tool_fail": "✘ ", "ask": "? ",
+              "checkin": "· "}
+
+    @staticmethod
+    def _plain(text):
+        """Reporter lines carry chat markup: `name` renders as code in Mattermost and
+        a 🔧 marks a tool line. A terminal shows the backticks themselves and the
+        lane draws its own ✔/✘, so both are dropped here - "✔ 🔧 shell ..." is one
+        mark too many. The ANSWER is never touched: the caller prints it verbatim."""
+        text = re.sub(r"`([^`]+)`", r"\1", str(text))
+        return re.sub(r"^\s*\U0001F527\s*", "", text)
 
     def __init__(self, colour=True, out=None, ask=None, on_drop=None):
         self.colour = bool(colour)
@@ -8223,7 +8243,8 @@ class CliDestination(Destination):
             # only thing worth printing, and it lands through update()
             return self.STATUS_REF
         self._close()
-        self._emit(self._paint("  " + str(text), self.TONES.get(kind, "0")))
+        self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
+                               self.TONES.get(kind, "0")))
         ref = ("cli", len(self._refs))
         self._refs[ref] = str(text)
         return ref
@@ -8237,12 +8258,14 @@ class CliDestination(Destination):
             shown = prev if text.startswith(prev) else ""
             tail = text[len(shown):]
             if tail:
-                self._write(self._paint(("  " if not shown else "") + tail, "32"))
+                self._write(self._paint(("  " if not shown else "") + tail,
+                                        self.TONES["narration"]))
                 self._open = True
                 self._refs[ref] = text
             return ref
         self._close()
-        self._emit(self._paint("  " + text, self.TONES.get(kind, "0")))
+        self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
+                               self.TONES.get(kind, "0")))
         self._refs[ref] = text
         return ref
 
@@ -8313,6 +8336,30 @@ def red(text):
 
 def dim(text):
     return _paint(text, "2")
+
+
+def bold(text):
+    """The answer: the one bright thing on the screen."""
+    return _paint(text, "1;97")
+
+
+def prompt(text):
+    """The operator's own prompt - a colour nothing else on the screen uses."""
+    return _paint(text, "1;36")
+
+
+def answer_block(text):
+    """The answer, announced: a dim rule, a blank line, then the bright text.
+
+    A terminal has no bubbles and no cards, so the answer has to be marked. The
+    complaint this answers (2026-09-21) was that the tool lines, the model's
+    narration and the answer all read as the same white/green soup, so the eye had
+    nowhere to land.
+    """
+    text = str(text)
+    if not text.strip():
+        return text
+    return "\n" + _paint("  " + "─" * 62, "2") + "\n" + bold(text)
 
 
 HELP_TEXT = ("\n"
@@ -8732,13 +8779,13 @@ def run_cli(once=None):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        print(drive_run(_cli_key(), once, new_reporter()))
+        print(answer_block(drive_run(_cli_key(), once, new_reporter())))
         _cli_usage_line()
         return
     while True:
         if _CLI["leave"]:
             return
-        print(green("you> "), end="", flush=True)
+        print(prompt("you> "), end="", flush=True)
         try:
             text = _CLI["inbox"].get()
         except KeyboardInterrupt:
@@ -8793,7 +8840,7 @@ def run_cli(once=None):
             elif shown and shown.startswith(answer.strip()):
                 body = ""                   # already on screen in full
             if body.strip():
-                print("\n" + body)
+                print(answer_block(body))
         _cli_usage_line()
         print()
 

@@ -302,14 +302,25 @@ def main():
               "ending the run does not invent an answer line - whoever drove the "
               "run posts the answer, in every lane")
 
-        # -- the reasoning stream: page only, one line, its tail --------------
-        # A thinking model writes this before it says a word to anybody, and no
-        # lane showed it: the status counter read "0 chars" and the transcript sat
-        # empty, so a working run looked stalled.
+        # -- the reasoning stream: off everywhere, the machinery kept -----------
+        # It began as the answer to "a working run looked stalled" (nothing showed
+        # while the model thought). The operator, 2026-09-21: "This output that
+        # streams needs to be turned off. It is not helpful for the user to see the
+        # reasoning like this." So no lane streams it, and the in-place,
+        # tail-capped behaviour stays for a lane that turns the flag back on.
         rsn, rsn_rep = web_lane("reasoning")
         rsn_rep.reasoning("the first thing to check is the disk")
+        check(len(rsn.lines) == 1,
+              f"the page shows no reasoning at all ({[l['kind'] for l in rsn.lines]})")
+        check(fb.WebDestination.shows_reasoning is False
+              and fb.MattermostDestination.shows_reasoning is False
+              and fb.CliDestination.shows_reasoning is False,
+              "no lane streams it: a transcript is what the model SAYS and what it "
+              "RUNS, not what it thinks to itself")
+        rsn_rep.dest.shows_reasoning = True
+        rsn_rep.reasoning("the first thing to check is the disk")
         check(len(rsn.lines) == 2 and rsn.lines[-1]["kind"] == "thinking",
-              f"the model's reasoning streams into one dim line "
+              f"...and a lane that asks for it still gets one dim line "
               f"({[l['kind'] for l in rsn.lines]})")
         check(rsn.lines[-1]["text"].startswith("🧠 "),
               "...marked as reasoning, not as an answer or a tool line")
@@ -332,11 +343,8 @@ def main():
         check(len(rsn.lines) == 3 and "second turn" in rsn.lines[-1]["text"],
               f"a new turn of thinking opens its own line, the way narration does "
               f"({[l['text'][:18] for l in rsn.lines]})")
-        check(fb.WebDestination.shows_reasoning is True
-              and fb.MattermostDestination.shows_reasoning is False
-              and fb.CliDestination.shows_reasoning is False,
-              "reasoning goes to the browser and NOWHERE else: on chat it would be "
-              "an edit per second for text the model did not address to you")
+        check(not any(l["kind"] == "final" and "🧠" in l["text"] for l in rsn.lines),
+              "even with the flag on, reasoning is never mistaken for the answer")
 
         page_src = fb.WEB_PAGE
         check("function reconcile(" in page_src and "l.uid" in page_src,

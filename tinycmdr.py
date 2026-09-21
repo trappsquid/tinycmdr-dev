@@ -7854,11 +7854,11 @@ class Destination:
     # a phone gets. A transcript does - "it is running this right now" is the
     # whole point of watching a run in a browser or a terminal.
     shows_calls = False
-    # Does this lane want the model's private REASONING streamed into a line? A
-    # thinking model can spend the first 30 seconds there before it says anything,
-    # so a transcript gains a lot ("it is alive, and here is what it is chewing
-    # on"); chat gains one edit per second on a phone for text the model never
-    # addressed to the operator, so it stays off there.
+    # Does this lane want the model's private REASONING streamed into a line? Off
+    # everywhere by default: chat would pay an edit per second on a phone for text
+    # the model never addressed to the operator, and the page's transcript turned
+    # out to read better without it too (operator, 2026-09-21). The machinery stays:
+    # a lane that wants it sets this True.
     shows_reasoning = False
     # Throttle for a line that grows. Chat throttles because every edit is a
     # request to a server the operator's phone has to be woken for; a buffer and a
@@ -8471,9 +8471,29 @@ class CliDestination(Destination):
     stream_gap = 0.0         # no notification to protect: stream as it arrives
     STATUS_REF = ("cli-status",)
 
-    TONES = {"note": "2", "narration": "32", "say": "36", "tool": "33",
-             "tool_done": "33", "tool_fail": "31", "checkin": "2",
-             "ask": "35", "system": "2", "error": "31", "final": "32"}
+    # Tones read as IMPORTANCE, not as a colour wheel: the model's narration and
+    # the run's own lines are quiet, a call is cyan and its result green (bold red
+    # when it failed), and nothing here competes with the ANSWER - the console
+    # prints that itself, as the one bright, bold block on the screen. Operator,
+    # 2026-09-21: "only white and green colored text which shows up as different
+    # things including the answer, it is hard to tell where to read".
+    TONES = {"note": "2", "narration": "2;37", "say": "37", "tool": "36",
+             "tool_done": "32", "tool_fail": "1;31", "checkin": "2",
+             "ask": "1;35", "system": "2", "error": "1;31", "final": "2;32"}
+    # The same glyphs the page draws (▸ a call, ✔ its result, ✘ a failure): one
+    # vocabulary across the lanes, and in a terminal - where colour can be piped
+    # away - the glyph is what still says which line is which.
+    GLYPHS = {"tool": "▸ ", "tool_done": "✔ ", "tool_fail": "✘ ", "ask": "? ",
+              "checkin": "· "}
+
+    @staticmethod
+    def _plain(text):
+        """Reporter lines carry chat markup: `name` renders as code in Mattermost and
+        a 🔧 marks a tool line. A terminal shows the backticks themselves and the
+        lane draws its own ✔/✘, so both are dropped here - "✔ 🔧 shell ..." is one
+        mark too many. The ANSWER is never touched: the caller prints it verbatim."""
+        text = re.sub(r"`([^`]+)`", r"\1", str(text))
+        return re.sub(r"^\s*\U0001F527\s*", "", text)
 
     def __init__(self, colour=True, out=None, ask=None, on_drop=None):
         self.colour = bool(colour)
@@ -8507,7 +8527,8 @@ class CliDestination(Destination):
             # only thing worth printing, and it lands through update()
             return self.STATUS_REF
         self._close()
-        self._emit(self._paint("  " + str(text), self.TONES.get(kind, "0")))
+        self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
+                               self.TONES.get(kind, "0")))
         ref = ("cli", len(self._refs))
         self._refs[ref] = str(text)
         return ref
@@ -8521,12 +8542,14 @@ class CliDestination(Destination):
             shown = prev if text.startswith(prev) else ""
             tail = text[len(shown):]
             if tail:
-                self._write(self._paint(("  " if not shown else "") + tail, "32"))
+                self._write(self._paint(("  " if not shown else "") + tail,
+                                        self.TONES["narration"]))
                 self._open = True
                 self._refs[ref] = text
             return ref
         self._close()
-        self._emit(self._paint("  " + text, self.TONES.get(kind, "0")))
+        self._emit(self._paint("  " + self.GLYPHS.get(kind, "") + self._plain(text),
+                               self.TONES.get(kind, "0")))
         self._refs[ref] = text
         return ref
 
@@ -9696,18 +9719,29 @@ opacity:0;transition:opacity .12s}
 .say{align-self:flex-start;color:var(--say);background:transparent;padding:2px 13px;font-style:italic}
 .thinking{align-self:flex-start;color:#767f8d;background:transparent;padding:2px 13px;
 font-style:italic;font-size:13.5px}
-.final{align-self:flex-start;background:var(--line);cursor:copy}
-.ask{align-self:flex-start;background:#2b2a1f;color:#e2cf8a;border:1px solid #4a442b}
-.tool{align-self:flex-start;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--tool);
-background:transparent;padding:0 13px;white-space:pre-wrap}
-.tool_done{align-self:flex-start;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--ok);
-background:transparent;padding:0 13px}
-.tool_fail{align-self:flex-start;font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--bad);
-background:transparent;padding:0 13px}
+/* The tones are CARDS: a 3px accent bar, a tint, and a glyph, the way the chat
+lane's attachments read. The chrome lives in CSS and ::before, never in the DOM,
+so a line's textContent stays exactly what the model or the tool said. */
+.final{align-self:flex-start;background:#242c37;color:#f2f5f9;cursor:copy;
+border-left:3px solid var(--accent);border-radius:0 10px 10px 0;padding-left:12px;
+box-shadow:0 1px 0 #2f3641}
+.ask{align-self:flex-start;background:#2b2a1f;color:#e2cf8a;border:1px solid #4a442b;
+border-left:3px solid #b99a3f}
+.tool,.tool_done,.tool_fail{align-self:flex-start;max-width:860px;white-space:pre-wrap;
+font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:5px 11px;
+border-left:3px solid var(--tool);background:#171b21;border-radius:0 8px 8px 0}
+.tool{color:#9dbde0}
+.tool::before{content:"▸ ";color:var(--tool)}
+/* done and failed carry the reporter's own mark and a tint; only the CALL
+gets a glyph, or every line wears two */
+.tool_done{color:#a9d8b8;border-left-color:var(--ok);background:#151d18}
+.tool_fail{color:#f0b8b2;border-left-color:var(--bad);background:#1f1616}
 .system{align-self:center;color:var(--dim);font-size:12.5px}
-.checkin{align-self:flex-start;color:var(--dim);background:transparent;padding:0 13px;
-font-size:12.5px;font-family:ui-monospace,Consolas,monospace}
-.error{align-self:flex-start;color:var(--bad)}
+.checkin{align-self:flex-start;color:#98a2ae;background:#161a1f;padding:3px 11px;
+font-size:12.5px;font-family:ui-monospace,Consolas,monospace;
+border-left:3px solid #3a414b;border-radius:0 8px 8px 0}
+.error{align-self:flex-start;color:#f0b8b2;background:#1f1616;padding:5px 11px;
+border-left:3px solid var(--bad);border-radius:0 8px 8px 0}
 .stamp{color:#5c636d;font-size:11px;margin-right:7px}
 #drawer{position:absolute;top:0;right:0;bottom:0;width:370px;max-width:92vw;background:var(--panel);
 border-left:1px solid var(--line);display:none;flex-direction:column}
@@ -11082,7 +11116,11 @@ class WebDestination(Destination):
     has_human = True          # the page can ask: a question row + /api/steer
     merge_tools = False       # a browser line costs nothing: show every call
     shows_calls = True        # ...including the call as it starts
-    shows_reasoning = True    # ...and what the model is thinking while it thinks
+    # The reasoning stream was on here (a transcript seemed the right place for
+    # "it is alive and chewing on this"), and the operator turned it off on
+    # 2026-09-21: in a transcript it is a wall of private thinking between the
+    # lines that matter, and the narration already says what it is DOING.
+    shows_reasoning = False
     stream_gap = 0.0          # a local buffer: update the growing line every delta
     # the status slot, not a line: the page's header already shows elapsed and
     # steps, and a line that rewrites itself every two seconds is noise in a
