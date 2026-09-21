@@ -9591,11 +9591,11 @@ try{token=new URLSearchParams(location.search).get('token')||'';}catch(e){}
 if(!token){token=localStorage.fb_token||'';}
 function askToken(retry){
  const msg=retry
-   ? 'That token was not accepted.\n\nIt is in web-token.txt in the tinycmdr folder on that '
+   ? 'That token was not accepted.\\n\\nIt is in web-token.txt in the tinycmdr folder on that '
      +'machine (the installer prints the full path, and the link it prints contains the token).'
-   : 'This page needs its access token.\n\nIt is in web-token.txt in the tinycmdr folder '
+   : 'This page needs its access token.\\n\\nIt is in web-token.txt in the tinycmdr folder '
      +'on that machine - or use the link the installer printed, which carries the token.';
- const a=prompt(msg+(!retry?'\n\nIf this install has no token, leave this empty.':''))||'';
+ const a=prompt(msg+(!retry?'\\n\\nIf this install has no token, leave this empty.':''))||'';
  if(a){token=a;}
  return a;
 }

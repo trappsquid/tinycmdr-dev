@@ -635,6 +635,13 @@ $webToken = if ($EnableWeb) {
     if ($script:WebTokenChoice) { $script:WebTokenChoice }   # the user's own, or the suggestion
     else { -join (1..48 | ForEach-Object { "{0:x}" -f (Get-Random -Maximum 16) }) }
 } else { "" }
+# The link handed over at the end carries the token, and the page reads it back out of the
+# query string. People type their own token here and it can hold & # + % or a space - all of
+# which mean something else in a URL, so a raw paste hands over the WRONG token and the page
+# answers 401 at somebody who was told there was nothing to type. Escape it once, here.
+$webLink = if ($EnableWeb) {
+    "http://127.0.0.1:$WebPort/?token=" + [uri]::EscapeDataString($webToken)
+} else { "" }
 
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
 $cfg.mattermost.url           = $MattermostUrl
@@ -778,7 +785,7 @@ if ($EnableWeb) {
     Say "web page: http://127.0.0.1:$WebPort"
     Say "          token: $InstallDir\web-token.txt"
     Say "          ready link (already carries the token, nothing to type):"
-    Say "          http://127.0.0.1:$WebPort/?token=$webToken"
+    Say "          $webLink"
 } else {
     Say "web page: off - local checks need no port:  tinycmdr.py --once ""<task>"""
 }
@@ -939,9 +946,9 @@ if ($Ask) {
     if ($WantWeb) {
         Say "the page: http://127.0.0.1:$WebPort"
         Say "  the link below already carries the token, so there is nothing to type:"
-        Say "  http://127.0.0.1:$WebPort/?token=$webToken"
+        Say "  $webLink"
         if (Ask-Yes "Open it now?" $true) {
-            Start-Process "http://127.0.0.1:$WebPort/?token=$webToken" | Out-Null
+            Start-Process $webLink | Out-Null
         }
     }
     if ($WantCli) {
@@ -957,7 +964,7 @@ if ($Ask) {
 }
 if ($EnableWeb) {
     Say "web page : http://127.0.0.1:$WebPort"
-    Say "  the link to use (token included): http://127.0.0.1:$WebPort/?token=$webToken"
+    Say "  the link to use (token included): $webLink"
     Say "  token also in $InstallDir\web-token.txt"
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (or --cli)"

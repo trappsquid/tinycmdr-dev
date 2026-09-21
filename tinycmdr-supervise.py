@@ -313,13 +313,67 @@ def start_bot():
     return proc, fh
 
 
+def web_port():
+    """The page this child was asked to serve, or None when the lane is not --web.
+
+    The port is a per-install value (8787 unless another web UI already has it), so
+    it is read from config.json the same way tinycmdr.py reads it.
+    """
+    if "--web" not in CHILD_ARGS:
+        return None
+    try:
+        conf = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
+        web = conf.get("web") or {}
+        if not web.get("enabled", True):
+            return None
+        return int(web.get("port", 8787))
+    except Exception:
+        return 8787
+
+
+def web_ok(timeout=4):
+    """/api/health needs no token: this is a plain GET on loopback."""
+    port = web_port()
+    if not port:
+        return False
+    try:
+        import urllib.request
+        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port,
+                                    timeout=timeout) as r:
+            return json.loads(r.read().decode() or "{}").get("ok") is True
+    except Exception:
+        return False
+
+
+def waiting_on():
+    """The doors this child was asked to serve, named for the not-ready message."""
+    doors = []
+    if mm_config():
+        doors.append("Mattermost")
+    if web_port():
+        doors.append("the page on 127.0.0.1:%d" % web_port())
+    return doors
+
+
 def wait_ready(proc, timeout=READY_TIMEOUT):
-    """Wait until the lock is held and Mattermost answers. Returns seconds or None."""
+    """Wait until every door this child was asked to serve is open.
+
+    A chat install waits for the lock and Mattermost, exactly as before. A PAGE-ONLY
+    install has no chat account at all, so that test could never pass: it logged "up
+    but not ready after 90s" inside its first two minutes, then counted every later
+    exit as a failed start (growing backoff, and an eventual "tinycmdr keeps failing"
+    announcement) on a bot that was healthy the whole time. Wait for the door the
+    install actually has.
+    """
     t0 = time.time()
+    chat = mm_config()
+    page = web_port()
     while time.time() - t0 < timeout:
         if proc.poll() is not None:
             return None                      # died while starting
-        if not bot_lock_free() and mm_ok() is True:
+        chat_ok = (not chat) or (not bot_lock_free() and mm_ok() is True)
+        page_ok = (not page) or web_ok()
+        if chat_ok and page_ok:
             return int(time.time() - t0)
         time.sleep(3)
     return None
@@ -343,8 +397,9 @@ def supervise_once(first, once=False, intentional=False):
     STATUS["mattermost_ok"] = mm_ok()
     save_status()
     if ready is None and proc.poll() is None:
-        log("bot pid %d is up but not ready after %ds (lock held=%s, "
-            "mattermost=%s)" % (proc.pid, READY_TIMEOUT, not bot_lock_free(),
+        log("bot pid %d is up but not ready after %ds (still waiting for %s; "
+            "mattermost=%s)" % (proc.pid, READY_TIMEOUT,
+                                ", ".join(waiting_on()) or "nothing",
                                 STATUS["mattermost_ok"]), "WARN")
     elif ready is not None:
         log("bot ready in %ds (pid %d)" % (ready, proc.pid))

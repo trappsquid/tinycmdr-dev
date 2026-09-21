@@ -106,9 +106,23 @@ globalThis.document = {
 const store = { fb_token: 'test-token' };
 store.removeItem = (k) => { delete store[k]; };
 globalThis.localStorage = store;
-globalThis.prompt = () => 'test-token';
+let promptCalls = 0;
+let promptMsg = '';
+globalThis.prompt = (msg) => { promptCalls++; promptMsg = String(msg); return 'test-token'; };
 globalThis.window = { addEventListener() {} };
 globalThis.setInterval = () => 0;
+// The page takes its token from the link (?token=...) first and strips it from
+// the address bar again, so it reads location.search at load and calls
+// history.replaceState. A shim missing either one throws at load and the page
+// reads as dead - which is what the real defect looked like in a browser.
+// scenario.no_token starts the browser with nothing remembered, which is the
+// install whose page has to ASK.
+if (scenario.no_token) { delete store.fb_token; }
+globalThis.location = { search: scenario.query || '', pathname: '/',
+                        href: 'http://127.0.0.1:8787/' + (scenario.query || '') };
+const replaced = [];
+globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
+const authSeen = [];
 
 // -------------------------------------------------------- fake web server
 // Mirrors tinycmdr.py's WebRun: growth follows an explicit "streaming line"
@@ -195,6 +209,8 @@ const sessions = [{ key: 'web', title: 'the shared conversation', created: 0,
 
 function fetchShim(url, opts) {
   const body = opts && opts.body ? JSON.parse(opts.body) : {};
+  const hdrs = (opts && opts.headers) || {};
+  if ('X-tinycmdr-Token' in hdrs) { authSeen.push(hdrs['X-tinycmdr-Token']); }
   if (url.indexOf('/api/health') === 0) { return jres({ ok: true, version: 'harness' }); }
   if (url.indexOf('/api/sessions') === 0) {
     if (opts && opts.method === 'POST') {
@@ -383,6 +399,10 @@ async function main() {
     note: noteState(),
     pages,
     copied,
+    prompts: promptCalls,
+    promptMsg: promptMsg,
+    replaced: replaced,
+    auth: authSeen,
     errors,
   };
   process.stdout.write(JSON.stringify(out));

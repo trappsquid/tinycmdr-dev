@@ -594,3 +594,80 @@ pass its own `-TaskName`: one of mine registered `tinycmdr`, and a cleanup that 
 not tasks leaves a task pointing at nothing.
 
 State of the work, open items and the evidence: `docs/handoff-2026-09-20.md`.
+
+## 2026-09-20 (night) - the page every browser refused to run, and the three gates that
+## could not see it
+
+The operator ran the installer on the Windows test box, took the link it printed, and got a page that
+could not send: Send did nothing, Enter just added a newline, and the token stayed in the
+address bar. Every one of those symptoms is the same fact. The page's own `<script>` was a
+SyntaxError, so no line of it ever ran.
+
+**The cause: three string literals in the Python source.** `askToken()` (added earlier the
+same day) prints a two-paragraph message, written as `'...accepted.\n\nIt is in...'` in the
+JS - and the Python literal held a SINGLE backslash, so Python did the escape and the browser
+received a REAL newline inside a JS string literal. An unterminated string literal is a parse
+error for the whole `<script>`: no handlers wired (Enter falls through to a newline), no
+`versionCheck()` (the version chip stays empty), no `history.replaceState()` (the token stays
+in the URL), no poll loop. One character class, three files, every shape of 1.0.0 - the public
+zips, the fleet kit and the Mac package all carried it.
+
+**Why every green light was green.**
+
+* `/api/health` answering `{"ok": true, "version": "1.0.0"}` is the SERVER, and the server was
+  fine. So were the page's 401/200 auth checks, which are HTTP too.
+* `tests/test_webui_page.py` ran the real page script in Node - but it sliced the page out of
+  the RAW TEXT of `tinycmdr.py` between the triple quotes. Raw text still reads as valid JS
+  (`\n` is a legal escape); only the evaluated string has the newline. The suite graded a page
+  that never existed, so it was green on a page no browser could run.
+* `tests/test_webui_browser.py` drives real Edge and presses Enter - the one suite that
+  catches this - and it FAILS on that tree (13 checks). It was not run after the page changed;
+  the "all suites pass" line in the handoff was true of the tree the suites were last run on,
+  which was one commit behind the page work.
+
+**What now stops it.**
+
+* `test_webui_page.py` renders the page the way the server does (`ast.literal_eval` on the
+  WEB_PAGE assignment, then the version substitution) and refuses loudly if WEB_PAGE is not a
+  plain literal.
+* Its DOM shim was missing `location` and `history`, which the page had started to touch; the
+  shim called a healthy page dead. Both exist now, the shim takes `query` / `no_token` from a
+  scenario, and it reports the auth header of every call, the prompts asked and the address
+  the page replaced. Two scenarios grade the handover the installer prints: a link that carries
+  the token (used for every call, no prompt, address bar scrubbed to `/`) and nothing to go on
+  (asks once, in words that still read as paragraphs).
+* Both directions were run: 61 checks green on the fixed page, and on the broken bytes the
+  suite fails at `page script threw at load: Invalid or unexpected token`.
+* The installer's printed link is escaped (`[uri]::EscapeDataString`) because "type your own
+  password" invites `&`, `#`, `+`, `%` and spaces, all of which mean something else in a query
+  string; an unescaped paste handed over the WRONG token and answered 401 at somebody who was
+  told there was nothing to type.
+
+**The evidence, in the order it was collected.** The rendered page script passes
+`node --check`; the built `tinycmdr-1.0.0-win-public.zip` was installed into a throwaway folder
+from the package itself, its page driven in headless Edge - version chip `1.0.0`, the message
+typed, Enter consumed, a run started from the browser, no JS exceptions - and the same bytes
+(`sha256 86061c50a58bbb3f`) are what the Windows test box serves after the file push and the supervisor's
+relaunch. All 22 suites in `tests/` pass, `test_cli` at 168 checks.
+
+**The same lane had a second defect, and the page work is what exposed it: readiness.** The
+supervisor's readiness test was "the lock is held and Mattermost answers". A page-only install
+has no chat account, so that test can never pass, and readiness is not a report - it is the
+input to failure counting. the Windows test box's own `logs/supervisor.log`, from the install the operator
+ran: `WARN bot pid 48864 is up but not ready after 90s (lock held=False, mattermost=None)` at
+17:57, the same WARN at 18:23 on the replacement, and `bot exited: code=4294967295 uptime=1488s
+ready=False (consecutive failures 1)` - a bot that had served for 25 minutes booked as a FAILED
+START, with the growing backoff and the eventual "tinycmdr keeps failing" announcement that
+follows. The gate waits for the doors the child was actually asked to serve now: a chat install
+keeps the old lock+Mattermost test, a `--web` child is ready when the page answers
+(`/api/health`, no token), and an install with both waits for both. `waiting_on()` names what it
+is waiting for in the WARN, so the message stops reading like a mystery. Proof, in his log:
+`18:28:02 INFO bot ready in 0s (pid 46072)`, status `last_ready_s: 0`, `consecutive_failures: 0`.
+Graded by `tests/test_supervise_ready.py` against real children in three lanes: page-only comes
+up ready, a chat lane pointed at a dead server does NOT, and a page+chat install is not excused
+by its page.
+
+**The rule this leaves behind.** A test that reads a file is not a test of what that file
+becomes. Grade the rendered artifact: the served page, the built zip, the string the browser
+gets. And when a suite's own shim lacks something the page touches, that is not a page bug -
+but a suite that calls a dead page healthy is worse than no suite.

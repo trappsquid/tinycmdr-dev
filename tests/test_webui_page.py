@@ -19,6 +19,7 @@ is not installed.
 
     python tests/test_webui_page.py
 """
+import ast
 import json
 import re
 import shutil
@@ -43,11 +44,27 @@ def check(cond, what):
 
 
 def page_script():
-    """The <script> body of WEB_PAGE, straight out of tinycmdr.py."""
+    """The <script> body of WEB_PAGE, as the SERVER renders it.
+
+    This used to slice the raw text of tinycmdr.py between the triple quotes,
+    which is NOT the page: by the time the server sends it, Python has already
+    interpreted the literal. A single backslash-n in there arrives in the
+    browser as a REAL newline inside a JS string literal, which is a syntax
+    error for the whole <script> - and the raw text still reads as valid
+    JavaScript, so this suite stayed green while every browser got a dead page
+    (Send did nothing, Enter inserted a newline, the token stayed in the URL
+    because the early script never ran). Evaluate the literal instead, so what
+    is graded here is the string the browser receives.
+    """
     src = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
-    start = src.index('WEB_PAGE = """') + len('WEB_PAGE = """')
-    end = src.index('"""', start)
-    page = src[start:end]
+    page = None
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Assign) and node.targets
+                and getattr(node.targets[0], "id", "") == "WEB_PAGE"):
+            page = ast.literal_eval(node.value)
+    if not isinstance(page, str):
+        raise SystemExit("WEB_PAGE is not a plain string literal in tinycmdr.py")
+    page = page.replace("{{VERSION}}", "harness")
     m = re.search(r"<script>(.*?)</script>", page, re.S)
     if not m:
         raise SystemExit("no <script> block in WEB_PAGE")
@@ -307,6 +324,49 @@ def main():
           f"({copied[:1]!r})")
     check(len(copied) > 1 and copied[1] == tool_out,
           "...and a tool box copies its own output, line breaks and all")
+
+    # -- the token handover: the link carries it, the page uses it and hides it --
+    # The installer prints http://127.0.0.1:8787/?token=... and the page is meant
+    # to take the token from that link, remember it and leave the address bar
+    # clean. Nothing graded this, and the two strings it prints at the prompt
+    # were written with a single backslash-n in the Python literal: the browser
+    # got a REAL newline inside a JS string, the whole <script> was a syntax
+    # error, and the page was dead (Send did nothing, Enter inserted a newline,
+    # the token stayed in the URL because the early script never ran at all).
+    sc = {
+        "query": "?token=from-the-link",
+        "runs": [[["final", "the link worked"]]],
+        "steps": [{"kind": "message", "text": "hello from the link", "polls": 14}],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the link page runs clean ({res['errors'][:1]})")
+    check(res["prompts"] == 0,
+          f"a link that carries the token does not ask for one ({res['prompts']})")
+    check(res["auth"] and all(t == "from-the-link" for t in res["auth"]),
+          f"every call carries the link's token ({set(res['auth'] or [])})")
+    check(has(res, "the link worked"), "and the task it sent came back answered")
+    check(res["replaced"] == ["/"],
+          f"the token is scrubbed out of the address bar ({res['replaced'][:2]})")
+
+    # ...and with nothing to go on, the page asks - in words that survive the
+    # trip through the Python string (the installer's whole handover is in there)
+    sc = {
+        "no_token": True,
+        "runs": [[["final", "typed token worked"]]],
+        "steps": [{"kind": "message", "text": "hello with a typed token", "polls": 14}],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the token prompt page runs clean ({res['errors'][:1]})")
+    check(res["prompts"] == 1,
+          f"a page with no token anywhere asks once ({res['prompts']})")
+    moved = res.get("promptMsg") or ""
+    check("web-token.txt" in moved,
+          "the prompt names web-token.txt, where the token is")
+    check("\n\n" in moved and len(moved.splitlines()) > 3,
+          f"and it still reads as paragraphs, not one long line ({moved[:40]!r})")
+    check(has(res, "typed token worked"), "the token it was given is used")
+    check(res["auth"] and all(t == "test-token" for t in res["auth"]),
+          f"...on every call that needs it ({set(res['auth'] or [])})")
 
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0
