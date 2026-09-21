@@ -56,6 +56,73 @@ param(
 $ErrorActionPreference = "Stop"
 $Source = Split-Path -Parent $PSScriptRoot       # package root (one level above install\)
 
+# --------------------------------------------------------------- asking the user
+# The .cmd wrapper always passes -NoPause, and that flag is only about keeping the window open at
+# the end. Questions are a separate decision: a real console, and not -NonInteractive. Gating them
+# on -NoPause is exactly how a double-click ended up asking nothing.
+# Whether to ASK. A real console means a person is there; -NonInteractive or a
+# redirected stdin means a script (a fleet push must never hang on a question).
+# Note this is deliberately NOT -NoPause: the .cmd wrapper always passes -NoPause
+# to keep its window open, so gating questions on that is exactly how a
+# double-click ended up asking nothing.
+$Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:tinycmdr_ASK)
+
+function Ask-Text {
+    param([string] $Prompt, [string] $Default = "", [switch] $Secret)
+    # ${Prompt} - a bare "$Prompt:" reads as a scoped variable to PowerShell
+    $shown = if ($Default) { "${Prompt} [$Default]: " } else { "${Prompt}: " }
+    if ($Secret -and -not $Default) { $shown = "${Prompt}: " }
+    while ($true) {
+        if ($Secret) {
+            $sec = Read-Host $shown -AsSecureString
+            $val = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                       [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+        } else {
+            $val = Read-Host $shown
+        }
+        if ($val -and $val.Trim()) { return $val.Trim() }
+        if ($Default) { return $Default }
+        Write-Host "  (this one is needed - please type something)"
+    }
+}
+
+function Ask-Many {
+    # Any number of them: "1,3" or "1 3" or just Enter for the default. The doors are not
+    # exclusive - the chat build serves the page itself, and a session never takes the lock.
+    param([string] $Title, [string[]] $Options, [string] $Default = "1")
+    Write-Host ""
+    Write-Host $Title
+    for ($i = 0; $i -lt $Options.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $Options[$i]) }
+    while ($true) {
+        $a = (Read-Host ("Choose any of 1-{0}, separated by commas (Enter = {1})" -f $Options.Count, $Default)).Trim()
+        if (-not $a) { $a = $Default }
+        $picked = @()
+        $bad = $false
+        foreach ($part in ($a -split "[,\s]+")) {
+            if (-not $part) { continue }
+            $n = 0
+            if ([int]::TryParse($part, [ref] $n) -and $n -ge 1 -and $n -le $Options.Count) { $picked += $n }
+            else { $bad = $true; break }
+        }
+        if (-not $bad -and $picked.Count) { return ($picked | Sort-Object -Unique) }
+        Write-Host "  Please use the numbers from the list, like 1 or 1,3."
+    }
+}
+
+function Ask-Yes {
+    param([string] $Prompt, [bool] $Default = $true)
+    $d = if ($Default) { "Y/n" } else { "y/N" }
+    while ($true) {
+        $a = (Read-Host "$Prompt [$d]").Trim().ToLower()
+        if (-not $a) { return $Default }
+        if ($a -in @("y", "yes")) { return $true }
+        if ($a -in @("n", "no")) { return $false }
+        Write-Host "  Please answer y or n."
+    }
+}
+
+
+
 # Everything below is transcribed. A Windows install often runs in a window that
 # closes the moment the script ends (or on a host you cannot see), so the reason
 # for a failure has to survive on disk: %TEMP%\tinycmdr-install.log, the same file
@@ -356,7 +423,23 @@ foreach ($f in $required) {
 if ((Test-Path $InstallDir) -and -not $Force) {
     $existing = (Get-ChildItem $InstallDir -ErrorAction SilentlyContinue | Measure-Object).Count
     if ($existing -gt 0) {
-        Fail "$InstallDir already exists and is not empty - use -Force to redo it in place, or -Uninstall to remove it, or -InstallDir <other>"
+        if ($Ask) {
+            # "use -Force" is not something a person double-clicking this can act on. Ask, and
+            # mean the same thing -Force means: the app files are replaced, the state stays.
+            Write-Host ""
+            Write-Host "  There is already an install in $InstallDir"
+            Write-Host "  ($existing item(s) - your notes, ledger, sessions and secrets are kept)"
+            if (Ask-Yes "  Replace its app files with this package?" $true) {
+                $Force = $true
+            } else {
+                Say "nothing was changed"
+                try { Stop-Transcript | Out-Null } catch { }
+                if (-not $NoPause) { Read-Host "`nPress Enter to close" }
+                exit 0
+            }
+        } else {
+            Fail "$InstallDir already exists and is not empty - use -Force to redo it in place, or -Uninstall to remove it, or -InstallDir <other>"
+        }
     }
 }
 # Secrets, from one .env-style file. The search keys are the same on every host,
@@ -381,71 +464,25 @@ if ($SecretsFile) {
     Say "secrets : $($secrets.Count) key(s) from $SecretsFile"
 }
 
-# --------------------------------------------------------------- asking the user
-# The .cmd wrapper always passes -NoPause, and that flag is only about keeping the window open at
-# the end. Questions are a separate decision: a real console, and not -NonInteractive. Gating them
-# on -NoPause is exactly how a double-click ended up asking nothing.
-$Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:tinycmdr_ASK)
-$Lane = 0
-
-function Ask-Text {
-    param([string] $Prompt, [string] $Default = "", [switch] $Secret)
-    # ${Prompt} - a bare "$Prompt:" reads as a scoped variable to PowerShell
-    $shown = if ($Default) { "${Prompt} [$Default]: " } else { "${Prompt}: " }
-    if ($Secret -and -not $Default) { $shown = "${Prompt}: " }
-    while ($true) {
-        if ($Secret) {
-            $sec = Read-Host $shown -AsSecureString
-            $val = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                       [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
-        } else {
-            $val = Read-Host $shown
-        }
-        if ($val -and $val.Trim()) { return $val.Trim() }
-        if ($Default) { return $Default }
-        Write-Host "  (this one is needed - please type something)"
-    }
-}
-
-function Ask-Menu {
-    param([string] $Title, [string[]] $Options, [int] $Default = 1)
-    Write-Host ""
-    Write-Host $Title
-    for ($i = 0; $i -lt $Options.Count; $i++) { Write-Host ("  {0}) {1}" -f ($i + 1), $Options[$i]) }
-    while ($true) {
-        $a = (Read-Host ("Choose 1-{0} (Enter = {1})" -f $Options.Count, $Default)).Trim()
-        if (-not $a) { return $Default }
-        $n = 0
-        if ([int]::TryParse($a, [ref] $n) -and $n -ge 1 -and $n -le $Options.Count) { return $n }
-        Write-Host "  Please type one of the numbers."
-    }
-}
-
-function Ask-Yes {
-    param([string] $Prompt, [bool] $Default = $true)
-    $d = if ($Default) { "Y/n" } else { "y/N" }
-    while ($true) {
-        $a = (Read-Host "$Prompt [$d]").Trim().ToLower()
-        if (-not $a) { return $Default }
-        if ($a -in @("y", "yes")) { return $true }
-        if ($a -in @("n", "no")) { return $false }
-        Write-Host "  Please answer y or n."
-    }
-}
-
 if ($Ask) {
     Head "three ways to talk to it"
     Write-Host ""
     Write-Host "tinycmdr answers messages. Pick how it should get them - the first one needs nothing"
     Write-Host "else installed, hosted or reachable."
-    $Lane = Ask-Menu "How should you talk to it?" @(
+    $picked = Ask-Many "How should you talk to it? Pick any that apply - they work together." @(
         "A local page on this machine (http://127.0.0.1:$WebPort) - no chat server needed",
         "A Mattermost bot account (paste a bot token from your server)",
-        "Neither - I will run a session by hand when I want one")
+        "Sessions by hand in a terminal (nothing runs in the background)")
+    $WantWeb = $picked -contains 1
+    $WantChat = $picked -contains 2
+    $WantCli = $picked -contains 3
+    if ($WantWeb) { $EnableWeb = $true }
+    if ($WantChat -and $WantWeb) {
+        Write-Host ""
+        Write-Host "  (Both: the bot serves the page itself, so that is one process, one task.)"
+    }
 
-    if ($Lane -eq 1) { $EnableWeb = $true }
-
-    if ($Lane -eq 2) {
+    if ($WantChat) {
         Write-Host ""
         $known = if ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com") { $MattermostUrl } else { "" }
         if ($known) { Write-Host "  (leave blank to keep ${known})" }
@@ -485,12 +522,13 @@ if ($Ask) {
     Write-Host "  ---- about to install ----"
     Write-Host ("  folder       : {0}" -f $InstallDir)
     # the bot name is resolved later (a switch, fleet-defaults, then this machine's name), so
-    # the summary has to resolve it the same way or it prints a bare "@"
+    # the summary resolves it the same way or it prints a bare "@"
     $nameNow = if ($BotName) { $BotName } else { $env:COMPUTERNAME.ToLower() }
-    Write-Host ("  how you talk : {0}" -f @(
-        "a local page on http://127.0.0.1:$WebPort",
-        "Mattermost bot on $MattermostUrl as @$nameNow",
-        "a session you start yourself")[$Lane - 1])
+    $ways = @()
+    if ($WantChat) { $ways += "a Mattermost bot on $MattermostUrl as @$nameNow" }
+    if ($WantWeb) { $ways += "a local page on http://127.0.0.1:$WebPort" }
+    if ($WantCli) { $ways += "sessions you start by hand" }
+    Write-Host ("  how you talk : {0}" -f ($ways -join " and "))
     Write-Host ("  model        : {0} at {1}" -f $Model, $ModelBaseUrl)
     if ($ModelKey) { Write-Host "  model key    : given (stored in config.json's llm.api_key)" }
     Write-Host ""
@@ -883,18 +921,22 @@ if ($todo.Count -gt 0 -and $RegisterTask) { Say "after editing, restart:  Stop-S
 if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --cli   (or --web)" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
-    if ($Lane -eq 1) {
+    if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
+    if ($WantWeb) {
         Say "the page: http://127.0.0.1:$WebPort   (token in $InstallDir\web-token.txt)"
         if (Ask-Yes "Open that page in your browser now?" $true) {
             Start-Process "http://127.0.0.1:$WebPort" | Out-Null
         }
-    } elseif ($Lane -eq 2) {
-        Say "DM the bot account on $MattermostUrl and it will answer."
-    } else {
-        if (Ask-Yes "Open a session now?" $true) {
+    }
+    if ($WantCli) {
+        Say "a session needs nothing running:  cd $InstallDir ; python tinycmdr.py --cli"
+        if (Ask-Yes "Open a session now?" $false) {
             Say "starting a session - type your task, Ctrl-C to leave"
             try { & $py.Path (Join-Path $InstallDir "tinycmdr.py") --cli } catch { }
         }
+    }
+    if (-not ($WantChat -or $WantWeb -or $WantCli)) {
+        Say "nothing selected - the harness is installed and does not run in the background."
     }
 }
 if ($EnableWeb) { Say "web page: http://127.0.0.1:$WebPort  (token in web-token.txt)" }
