@@ -14,6 +14,7 @@ Custom tools:  drop .py files into ./tools/ (the agent also writes its own
                here via the create_tool tool)
 Run as bot:    python tinycmdr.py
 Run in a terminal instead (no Mattermost):  python tinycmdr.py --cli
+               (or tinycmdr-cli.py, the console build packaged beside this file)
 One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
 
@@ -468,6 +469,7 @@ def load_config():
     # Environment variables override secrets (handy for services).
     env_map = {
         "tinycmdr_MM_TOKEN": ("mattermost", "token"),
+        "tinycmdr_WEB_TOKEN": ("web", "token"),
         "tinycmdr_MODEL": ("llm", "model"),
         "tinycmdr_BASE_URL": ("llm", "base_url"),
         "ANYSEARCH_API_KEY": ("search", "anysearch_api_key"),
@@ -5991,7 +5993,7 @@ def apply_sampling(payload):
 def _tool_pairing_problems(messages):
     """Report strict-provider violations in a payload.
 
-    OpenAI and DeepSeek both require every tool_call_id in an assistant message
+    Strict OpenAI-compatible endpoints require every tool_call_id in an assistant message
     to be answered by a `tool` message BEFORE any other role appears. The local
     llama.cpp servers do not validate this, so a malformed sequence runs fine at
     home and dies the moment a cloud model is selected.
@@ -6375,8 +6377,8 @@ class Agent:
                  "Authorization": f"Bearer {fb.get('api_key', 'none')}"},
                 keys))
         # Route by model name: if the requested model matches a fallback
-        # entry's model, that endpoint goes FIRST (e.g. /model deepseek-...
-        # must actually reach api.deepseek.com, not the local llama.cpp,
+        # entry's model, that endpoint goes FIRST (asking for a fallback's own
+        # model must reach that fallback's host, not the local llama.cpp,
         # which ignores the model field and serves whatever is loaded).
         # Unmatched names still go to the primary (multi-model servers).
         # Resolve the name through the catalog first: it knows each endpoint's
@@ -7351,9 +7353,9 @@ class Agent:
                     # and a strict provider rejects that outright: 400 "an
                     # assistant message with 'tool_calls' must be followed by
                     # tool messages responding to each 'tool_call_id'" (live
-                    # 2026-09-11 on api.deepseek.com, loop guard fired on the
-                    # first of two calls). llama.cpp does not validate, so only
-                    # the cloud model ever reported it.
+                    # 2026-09-11 against a cloud endpoint, loop guard fired on the
+                    # first of two calls). llama.cpp does not validate, so only a
+                    # strict cloud endpoint ever reported it.
                     # Drift check: a plan is only worth carrying if the harness notices when
                     # nothing moves. Counted in tool calls, not turns — a batch of six
                     # reads in one turn is six calls of no progress.
@@ -7562,7 +7564,7 @@ def model_catalog(force=False):
 
     Names come from three places: the local server's own advertised ids, each
     fallback's configured model + optional alias, and the ids the fallback
-    endpoint itself advertises (DeepSeek answers 'deepseek-flash'). Each entry
+    endpoint itself advertises (a cloud endpoint answers with its own ids). Each entry
     carries the exact `send_as` id, so an alias — or a foreign id — is never
     forwarded verbatim to a server that wouldn't accept it.
     """
@@ -9697,9 +9699,9 @@ try{token=new URLSearchParams(location.search).get('token')||'';}catch(e){}
 if(!token){token=localStorage.fb_token||'';}
 function askToken(retry){
  const msg=retry
-   ? 'That token was not accepted.\\n\\nIt is in web-token.txt in the tinycmdr folder on that '
+   ? 'That token was not accepted.\\n\\nIt is the tinycmdr_WEB_TOKEN line in .env on that '
      +'machine (the installer prints the full path, and the link it prints contains the token).'
-   : 'This page needs its access token.\\n\\nIt is in web-token.txt in the tinycmdr folder '
+   : 'This page needs its access token.\\n\\nIt is the tinycmdr_WEB_TOKEN line in .env '
      +'on that machine - or use the link the installer printed, which carries the token.';
  const a=prompt(msg+(!retry?'\\n\\nIf this install has no token, leave this empty.':''))||'';
  if(a){token=a;}
@@ -10085,7 +10087,7 @@ async function start(t){
    // instead of printing "unauthorized" at somebody who was never told what to type.
    delete localStorage.fb_token;token='';
    if(askToken(true)){localStorage.fb_token=token;note('token saved - try that again');}
-   else{note('no token given - this install needs one (web-token.txt)');}
+   else{note('no token given - this install needs one (.env: tinycmdr_WEB_TOKEN)');}
    return;
  }
  if(code!==200||j.error){note('could not send: '+(j.error||code));return;}

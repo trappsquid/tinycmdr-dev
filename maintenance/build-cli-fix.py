@@ -134,7 +134,7 @@ line_sub("    Names come from three places: the local server's own advertised id
 line_sub("    fallback's configured model + optional alias, and the ids the fallback",
          "    what is really there rather than what config.json hopes is there. Each",
          "catalog docstring: line 2")
-line_sub("    endpoint itself advertises (DeepSeek answers 'deepseek-flash'). Each entry",
+line_sub("    endpoint itself advertises (a cloud endpoint answers with its own ids). Each entry",
          "    entry carries the exact send_as id, so a name is never forwarded verbatim",
          "catalog docstring: line 3")
 line_sub("    carries the exact `send_as` id, so an alias — or a foreign id — is never",
@@ -237,23 +237,14 @@ replace_lines('    shell_name = "PowerShell" if IS_WINDOWS else "bash"',
               "prompt names the real shell")
 
 
-# --- refuse to share a folder with the Mattermost bot -------------------------
-# Checked at import, before the log, the sessions directory or any note file is
-# created: both builds keep the same names in the folder they live in, so starting
-# this one from a bot folder would merge two memories.
+# --- the console-holding helpers ----------------------------------------------
+# A fatal start must not vanish with the window when this process owns the console.
+# The folder is deliberately SHARED with tinycmdr.py (the installer puts this file
+# beside it), so every door resolves one config.json, one .env and one set of
+# notes, tasks and sessions; there is nothing to refuse here.
 replace_lines('NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt', 1,
               NL.join([
                   'NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt',
-                  '',
-                  'def _folder_belongs_to_the_bot():',
-                  '    """True when a Mattermost bot keeps its memory in this folder too."""',
-                  '    other = BASE_DIR / "tinycmdr.py"',
-                  '    try:',
-                  '        mine = Path(sys.argv[0]).resolve()',
-                  '    except Exception:',
-                  '        mine = None',
-                  '    return (other.exists() and other.resolve() != mine',
-                  '            and (BASE_DIR / "tinycmdr.lock").exists())',
                   '',
                   '',
                   'def _console_closes_with_us():',
@@ -288,18 +279,8 @@ replace_lines('NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evic
                   '        input("press Enter to close this window")',
                   '    except (EOFError, OSError, KeyboardInterrupt):',
                   '        print()',
-                  '',
-                  '',
-                  'if _folder_belongs_to_the_bot():',
-                  '    print("tinycmdr: this folder belongs to a running Mattermost bot "',
-                  '          "(a tinycmdr.py sits next to this file and tinycmdr.lock is held).")',
-                  '    print("Both builds keep their notes, tasks and sessions in their own "',
-                  '          "folder, so copy this file into a folder of its own and start "',
-                  '          "it there.")',
-                  '    _hold_console()',
-                  '    raise SystemExit(3)',
               ]),
-              "refuse to share the bot folder")
+              "console-holding helpers")
 
 # --- the llama.cpp-only switch stays off a hosted provider --------------------
 # A hosted provider (Gemini's OpenAI-compatible layer included) would ignore or
@@ -338,8 +319,8 @@ replace_lines('    def _ids(url, key):', 6,
               ]),
               "no junk auth header on /models")
 # --- a provider that caps max_tokens lower than we asked ---------------------
-# DeepSeek-class hosted models reject a too-large output cap with a 400. Retrying
-# ONCE with a smaller cap beats dying on a limit the local models do not have.
+# Hosted models often reject a too-large output cap with a 400. Retrying ONCE with
+# a smaller cap beats dying on a limit the local models do not have.
 replace_lines('            escalated = False', 2,
               NL.join([
                   '            escalated = False',

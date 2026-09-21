@@ -210,7 +210,7 @@ if [ -z "$TOKEN" ]; then
     APP_ARGS="--web"
     info "no Mattermost bot token: installing WITHOUT a chat account"
     info "the service will serve the local page: http://127.0.0.1:8787"
-    info "a session needs no service at all:   $INSTALL_DIR/tinycmdr.py --cli"
+    info "a session needs no service at all:   $VENV_PY $INSTALL_DIR/tinycmdr-cli.py"
     info "add a chat account later: re-run this installer with --token-file <file>"
 fi
 
@@ -235,7 +235,7 @@ info "model        : ${MODEL} @ ${MODEL_BASE_URL}"
 if [ -z "$MODEL_BASE_URL" ]; then
     info "WARNING      : llm.base_url is still the template's loopback default -"
     info "               point it at your own OpenAI-compatible endpoint"
-    info "               (llama.cpp, vLLM, Ollama, DeepSeek, ...) in config.json"
+    info "               (llama.cpp, vLLM, Ollama, any OpenAI-compatible server)"
 fi
 if [ -n "$ALLOWED_USER" ]; then
     info "allowed user : ${ALLOWED_USER}"
@@ -245,6 +245,10 @@ fi
 info "bot name     : ${BOT_NAME}"
 if [ "$WEB_ON" = 1 ]; then
     info "web fallback : http://127.0.0.1:${WEB_PORT}"
+    if [ -n "$WEB_TOKEN" ]; then
+        info "ready link   : http://127.0.0.1:${WEB_PORT}/?token=${WEB_TOKEN}"
+        info "               (token in .env: tinycmdr_WEB_TOKEN, nothing to type)"
+    fi
 else
     info "web fallback : disabled"
 fi
@@ -267,7 +271,10 @@ if [ "$FORCE" = 1 ] && [ -d "$INSTALL_DIR" ]; then
     done
 fi
 mkdir -p "$INSTALL_DIR"
-for item in tinycmdr.py requirements.txt README.md \
+# tinycmdr-cli.py goes in FLAT, beside tinycmdr.py, never in a folder of its own:
+# every door then reads ONE config.json and ONE .env (it resolves both from the
+# folder it sits in), and the doors are mediums rather than separate installs.
+for item in tinycmdr.py tinycmdr-cli.py requirements.txt README.md \
             config.example.json .env.example \
             skills install maintenance; do
     if [ -e "$SRC/$item" ]; then
@@ -313,6 +320,12 @@ info "requests : $("$INSTALL_DIR/venv/bin/python" -c 'import importlib.metadata 
 
 # ------------------------------------------------------------------- config ---
 say "config.json"
+# The page token is a secret like the bot token, so it is written to .env (one secrets
+# file per install) instead of into config.json or a loose .txt in the folder.
+WEB_TOKEN=""
+if [ "$WEB_ON" = "1" ]; then
+    WEB_TOKEN="$("$PY" -c 'import secrets;print(secrets.token_hex(24))')"
+fi
 "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$WEB_PORT" "$WEB_ON" "$FORCE" \
         "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" <<'PY'
@@ -340,8 +353,10 @@ else:
         llm["model"] = model
     cfg.setdefault("agent", {})["bot_name"] = bot
     if webon == "1":
+        # The token is a SECRET, so it goes to .env (tinycmdr_WEB_TOKEN) with the bot
+        # token: one file to look in, and nothing loose in the install folder.
         cfg["web"] = {"enabled": True, "port": int(webport or 8788),
-                      "token": secrets.token_hex(24), "host": "127.0.0.1"}
+                      "token": "", "host": "127.0.0.1"}
     else:
         cfg["web"] = {"enabled": False}
     with open(cfg_path, "w", encoding="utf-8", newline="\n") as fh:
@@ -353,9 +368,10 @@ chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/config.json"
 chmod 644 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
-"$PY" - "$INSTALL_DIR/.env" "$TOKEN" "$SRC/install/fleet-secrets.env" <<'PY'
+"$PY" - "$INSTALL_DIR/.env" "$TOKEN" "$SRC/install/fleet-secrets.env" "$WEB_TOKEN" <<'PY'
 import os, pathlib, re, sys
-envp, tok, secrets = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+envp, tok, secrets, webtok = (pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3],
+                              sys.argv[4])
 lines, have, refused, per_bot = [], set(), [], []
 
 
@@ -372,8 +388,8 @@ if envp.exists():
         if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
             continue
         key = line.split("=", 1)[0].strip()
-        if key == "tinycmdr_MM_TOKEN" or key in have:
-            continue
+        if key in ("tinycmdr_MM_TOKEN", "tinycmdr_WEB_TOKEN") or key in have:
+            continue          # installer-managed: written below, never carried over
         if placeholder(line.split("=", 1)[1]):
             refused.append(key)
             continue
@@ -386,7 +402,8 @@ if os.path.exists(secrets):
             continue
         key, _, val = line.partition("=")
         key = key.strip()
-        if key == "DEEPSEEK_API_KEY":
+        if key not in ("tinycmdr_MM_TOKEN", "tinycmdr_WEB_TOKEN",
+                       "TAVILY_API_KEY", "ANYSEARCH_API_KEY"):
             # A model key is per bot: never deploy one from a shared secrets file.
             # Hosts that took theirs from here all shared one key, and the provider's
             # dashboard showed every per-bot key as unused afterwards.
@@ -399,17 +416,19 @@ if os.path.exists(secrets):
             continue
         have.add(key)
         lines.append(line)
-out = ["# tinycmdr secrets - per-host token + fleet-wide search keys.",
-       "# The model key (DEEPSEEK_API_KEY) is per bot and is NOT set from any",
-       "# shared file: put this host's own key in .env by hand.",
+out = ["# tinycmdr secrets - per-host tokens + fleet-wide search keys.",
+       "# The model key is per bot and is NOT set from any shared file: the variable",
+       "# is whatever your llm.fallbacks entry names in api_key_env, and this host's",
+       "# own key belongs here by hand.",
        "# Never in config.json (the agent can read that file into a prompt).", "",
-       f"tinycmdr_MM_TOKEN={tok}"] + lines + [""]
+       f"tinycmdr_MM_TOKEN={tok}"] + ([f"tinycmdr_WEB_TOKEN={webtok}"] if webtok else []) \
+      + lines + [""]
 envp.write_text("\n".join(out), encoding="utf-8")
 os.chmod(envp, 0o600)
 print(f"    wrote .env ({len(have) + 1} keys, mode 600)")
 if per_bot:
-    print("    NOTE: DEEPSEEK_API_KEY in the secrets file was IGNORED - model keys are per bot.")
-    print(f"          Set this host's own key in {envp} by hand.")
+    print("    NOTE: not copied from the secrets file: %s" % ", ".join(sorted(set(per_bot))))
+    print("          a model key is per host - set this host's own in %s by hand." % envp)
 if refused:
     print("    WARNING: refused %d redacted placeholder value(s): %s"
           % (len(refused), ", ".join(sorted(set(refused)))))
@@ -570,7 +589,7 @@ tinycmdr is installed.
   logs     : journalctl -u $SERVICE_NAME -f    and    $INSTALL_DIR/tinycmdr.log
   restart  : sudo bash $INSTALL_DIR/maintenance/restart-tinycmdr.sh
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
-  session  : $VENV_PY $INSTALL_DIR/tinycmdr.py --cli
+  session  : $VENV_PY $INSTALL_DIR/tinycmdr-cli.py
   page     : $VENV_PY $INSTALL_DIR/tinycmdr.py --web   -> http://127.0.0.1:8787
   verify   : bash $HERE/$(basename "${BASH_SOURCE[0]}") --verify-only
   remove   : sudo bash $HERE/$(basename "${BASH_SOURCE[0]}") --uninstall

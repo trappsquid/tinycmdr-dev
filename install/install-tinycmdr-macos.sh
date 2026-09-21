@@ -52,8 +52,10 @@ PLIST="$PLIST_DIR/$LABEL.plist"
 LOG="${tinycmdr_INSTALL_LOG:-${TMPDIR:-/tmp}/tinycmdr-install.log}"
 PY_ARG=""
 DEFAULTS="$SRC/install/fleet-defaults.json"
-DEFAULT_MODEL_BASE="https://api.deepseek.com/v1"
-DEFAULT_MODEL="deepseek-v4-flash"
+# No provider is named here on purpose: this is the usual local llama.cpp shape,
+# and any OpenAI-compatible endpoint works.
+DEFAULT_MODEL_BASE="http://127.0.0.1:8081/v1"
+DEFAULT_MODEL="main"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
 MM_URL_ARG=""; SECRETS_FILE=""
@@ -268,7 +270,10 @@ if [ "$FORCE" = 1 ]; then
     done
 fi
 
-for f in tinycmdr.py requirements.txt config.example.json README.md; do
+# tinycmdr-cli.py is installed FLAT, beside tinycmdr.py: every door then reads ONE
+# config.json and ONE .env, so a session, the page and the bot cannot disagree
+# about which config was last edited.
+for f in tinycmdr.py tinycmdr-cli.py requirements.txt config.example.json README.md; do
     if [ -f "$SRC/$f" ]; then
         cp -f "$SRC/$f" "$INSTALL_DIR/$f"
     elif [ -f "$INSTALL_DIR/$f" ]; then
@@ -330,7 +335,12 @@ if [ -z "$TOKEN" ]; then
     WEB_ON=1
     info "no Mattermost bot token: installing WITHOUT a chat account"
     info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
-    info "a session needs no service:         $INSTALL_DIR/tinycmdr.py --cli"
+    info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr-cli.py"
+    if [ -n "$WEB_TOKEN" ]; then
+        info "the page needs its token:           in .env as tinycmdr_WEB_TOKEN"
+        info "ready link (carries it, nothing to type):"
+        info "  http://127.0.0.1:$WEB_PORT/?token=$WEB_TOKEN"
+    fi
     info "add a chat account later: re-run with --token-file <file>"
 fi
 # ---------------------------------------------------------------- config ---
@@ -349,6 +359,13 @@ if [ -z "$MODEL_BASE_URL" ]; then
 fi
 [ -n "$MODEL" ] || MODEL="$DEFAULT_MODEL"
 [ -n "$BOT_NAME" ] || BOT_NAME="$(hostname -s)"
+
+# The page token is a secret like the bot token, so it is written to .env (one secrets
+# file per install) rather than into config.json or a loose .txt in the folder.
+WEB_TOKEN=""
+if [ "$WEB_ON" = "1" ]; then
+    WEB_TOKEN="$("$VPY" -c 'import secrets;print(secrets.token_hex(24))')"
+fi
 
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \
 MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" WEB_ON="$WEB_ON" WEB_PORT="$WEB_PORT" \
@@ -371,6 +388,7 @@ llm["model"] = os.environ["MODEL"]
 web = cfg.setdefault("web", {})
 web["enabled"] = os.environ["WEB_ON"] == "1"
 web["port"] = int(os.environ["WEB_PORT"])
+web["token"] = ""                       # it lives in .env (tinycmdr_WEB_TOKEN)
 with open(dst, "w", encoding="utf-8", newline="\n") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
@@ -379,34 +397,41 @@ print("    wrote config.json (mattermost=%s, model=%s, allowed_users=%s)"
 PY
 
 umask 077
-# A model key is per bot: keep the one this host already has, and never take one
+# A model key is per bot: keep whatever this host already has, and never take one
 # from a shared secrets file (that is how several hosts ended up sharing one key).
-OWN_KEY=""
+# NO PROVIDER IS NAMED HERE on purpose - the key is whatever the endpoint issued,
+# and its variable name is the fallback entry's "api_key_env".
+SHARED_KEYS='^(tinycmdr_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+MANAGED_KEYS='^(tinycmdr_MM_TOKEN|tinycmdr_WEB_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+KEEP_ENV=""
 if [ -f "$INSTALL_DIR/.env" ]; then
-    OWN_KEY=$(sed -n 's/^DEEPSEEK_API_KEY=//p' "$INSTALL_DIR/.env" | tail -1)
+    KEEP_ENV=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$INSTALL_DIR/.env" \
+        | grep -vE "$MANAGED_KEYS" || true)
 fi
-SKIPPED_MODEL_KEY=0
+SKIPPED_KEYS=""
 {
     printf 'tinycmdr_MM_TOKEN=%s\n' "$TOKEN"
+    if [ -n "$WEB_TOKEN" ]; then
+        printf 'tinycmdr_WEB_TOKEN=%s\n' "$WEB_TOKEN"
+    fi
     if [ -n "$SECRETS_FILE" ]; then
         [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"
-        if grep -qE '^[[:space:]]*DEEPSEEK_API_KEY=' "$SECRETS_FILE"; then
-            SKIPPED_MODEL_KEY=1
-        fi
-        grep -E '^[A-Z_]+=' "$SECRETS_FILE" | grep -vE '^[[:space:]]*DEEPSEEK_API_KEY=' || true
+        grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" | grep -E "$SHARED_KEYS" || true
+        SKIPPED_KEYS=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" \
+            | grep -vE "$SHARED_KEYS" | cut -d= -f1 | tr '\n' ' ' || true)
     fi
-    if [ -n "$OWN_KEY" ]; then
-        printf 'DEEPSEEK_API_KEY=%s\n' "$OWN_KEY"
+    if [ -n "$KEEP_ENV" ]; then
+        printf '%s\n' "$KEEP_ENV"
     fi
 } > "$INSTALL_DIR/.env"
 chmod 600 "$INSTALL_DIR/.env"
 info ".env written (mode 600, token not in config.json)"
-if [ -n "$OWN_KEY" ]; then
-    info "kept this host's own DEEPSEEK_API_KEY (the model key is per bot)"
+if [ -n "$KEEP_ENV" ]; then
+    info "kept this host's own keys (a model key is per bot)"
 fi
-if [ "$SKIPPED_MODEL_KEY" = 1 ]; then
-    warn "DEEPSEEK_API_KEY in the secrets file IGNORED - model keys are per bot"
-    warn "put this host's own key in $INSTALL_DIR/.env by hand"
+if [ -n "$SKIPPED_KEYS" ]; then
+    warn "not copied from the secrets file: $SKIPPED_KEYS"
+    warn "a model key is per host - put this host's own in $INSTALL_DIR/.env by hand"
 fi
 
 if [ "$WEB_ON" != 1 ]; then

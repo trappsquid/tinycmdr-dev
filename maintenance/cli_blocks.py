@@ -1,22 +1,27 @@
 """New code blocks for the chatless CLI build of tinycmdr."""
 
-NEW_HEADER = r'''tinycmdr.py — a small autonomous ops agent that lives in a terminal.
+NEW_HEADER = r'''tinycmdr-cli.py — the same agent as tinycmdr.py, built for a terminal.
 
 One file, no installer, no service, no chat gateway. Keep the folder wherever you
 like, make sure Python is installed, run it (double-click this file, or
-"python tinycmdr.py"), and type what you want done. It runs shell commands, reads
+"python tinycmdr-cli.py"), and type what you want done. It runs shell commands, reads
 and edits files, reads a URL you hand it, writes its own notes and tools, and keeps
 the conversation in ./sessions. There is no web search and no third-party service
 involved: the only network destination is the model endpoint in config.json.
 
+Installed the harness? The installer puts this file beside tinycmdr.py, and this
+build then reads that config.json, that .env and the same sessions and notes as the
+bot and the page: one folder, one set of files, whichever door you use.
+
 Dependencies: none. Standard library only, so there is no pip step and nothing to
 install besides Python itself.
-Config: copy config.example.json to config.json and fill in the llm fields.
-        Nothing is ever written for you, and opening this file creates nothing:
-        the log, notes, sessions and tools appear only when there is work to keep.
+Config: config.json next to this file (config.example.json is the reference, and the
+        installer's own copy is already filled in). Nothing is ever written for you,
+        and opening this file creates nothing: the log, notes, sessions and tools
+        appear only when there is work to keep.
 Custom tools:  drop .py files into ./tools/ (it writes its own there too)
-Run:           python tinycmdr.py
-One-shot task: python tinycmdr.py --once "why is plex crashing"
+Run:           python tinycmdr-cli.py
+One-shot task: python tinycmdr-cli.py --once "why is plex crashing"
 '''
 
 HTTP_SHIM = r'''# --------------------------------------------------------------------------
@@ -852,8 +857,12 @@ NEW_VALIDATOR = r'''def missing_config_text():
     return "\n".join([
         "tinycmdr: there is no config.json in this folder yet.",
         "",
-        "This build never writes one - nothing is created or checked at startup - so",
-        "this is a one-time copy and edit by hand:",
+        "Installed already? Run the copy the installer put beside tinycmdr.py - this",
+        "build reads that config.json, that .env and the same sessions and notes as",
+        "the bot and the page, so every door sees one set of files.",
+        "",
+        "On its own instead? This build never writes a config.json (nothing is created",
+        "or checked at startup), so it is a one-time copy and edit by hand:",
         "",
         "  1. copy the example that sits beside this file, or just rename it:",
         "",

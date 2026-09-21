@@ -432,10 +432,6 @@ def test_a_fatal_start_keeps_its_reason_on_screen():
     calls = src.count("_hold_console()") - 1          # the definition itself
     check("every fatal start path calls it", calls >= 4,
           "%d call sites" % calls)
-    guard = src.replace("\r", "")
-    exit_at = guard.find("raise SystemExit(3)")
-    check("the bot-folder refusal holds too",
-          exit_at > 0 and "_hold_console()" in guard[max(0, exit_at - 200):exit_at])
     check("a shell launch is left alone (no hold without a console of our own)",
           "if not _console_closes_with_us():" in src)
 
@@ -474,25 +470,37 @@ def test_it_can_never_open_a_window():
         skip("those flags ask Windows for a hidden console", "not Windows")
 
 
-def test_it_refuses_to_share_a_folder_with_the_bot():
-    """Two agents must not keep one set of notes."""
+def test_it_shares_a_folder_with_the_bot():
+    """One folder, one config.json, one .env: the console runs beside the bot.
+
+    It used to refuse, exit 3, when tinycmdr.py and tinycmdr.lock sat next to it, because
+    two builds in one folder used to mean two sets of notes. The install now puts them
+    together on purpose - the doors are mediums, not installs - so a refusal here would
+    break the console the installer just handed over. What must be true instead is that
+    it starts AND reads the folder's own config.json.
+    """
     src = SRC.read_text(encoding="utf-8", errors="replace")
-    check("the guard exists", "_folder_belongs_to_the_bot" in src)
+    check("no shared-folder refusal left in the build",
+          "_folder_belongs_to_the_bot" not in src)
     stage = Path(tempfile.mkdtemp(prefix="fbcli-shared-"))
     try:
         shutil.copy2(SRC, stage / "tinycmdr-cli.py")
         (stage / "tinycmdr.py").write_text("# the Mattermost build\n", encoding="utf-8")
         (stage / "tinycmdr.lock").write_text("", encoding="utf-8")
+        # a config.json of the folder's own, aimed at a port that cannot answer: the run
+        # can only fail by having READ this file, which is what sharing means
+        (stage / "config.json").write_text(json.dumps({
+            "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "shared-config-model"},
+        }, indent=2), encoding="utf-8")
         r = subprocess.run([sys.executable, str(stage / "tinycmdr-cli.py"), "--once", "hi"],
-                           cwd=stage, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+                           cwd=stage, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=120)
         combined = r.stdout + r.stderr
-        check("it refuses to start there",
-              "belongs to a running Mattermost bot" in combined, combined[-200:])
-        check("and it exits non-zero", r.returncode == 3, r.returncode)
-        check("and it writes nothing into that folder",
-              not (stage / "notes.md").exists() and not (stage / "sessions").exists()
-              and not (stage / "tinycmdr.log").exists(),
-              sorted(p.name for p in stage.iterdir()))
+        check("it starts in the bot's folder instead of refusing",
+              "belongs to a running Mattermost bot" not in combined, combined[-200:])
+        check("it reads that folder's config.json",
+              "127.0.0.1:9" in combined, combined[-300:])
+        check("so the exit code is the run's, not a refusal", r.returncode != 3, r.returncode)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

@@ -59,39 +59,6 @@ SHIP = [
     "skills",
 ]
 
-# The console-only build of the same agent travels inside this package, so one
-# download covers both ways of using it. It is generated from tinycmdr.py by
-# maintenance/build-cli-source.py, and it is the file with no chat layer at all.
-CLI_FOLDER_README = """tinycmdr console build
-======================
-
-This is the same agent as the tinycmdr.py one folder up, built for a terminal
-only: no Mattermost, no bot account, no web page, and no dependencies beyond
-Python itself (3.10+). It talks to the model over the standard library.
-
-    python tinycmdr-cli.py                   start a console session
-    python tinycmdr-cli.py --once "task"     run one task and exit
-    python tinycmdr-cli.py --help            the rest
-
-It reads config.json from THIS folder, and it never writes one: copy the example
-from one level up and fill in the fields, then start it again.
-
-    cp ../config.example.json config.json
-    {"llm": {"base_url": "http://your-model-host:8081/v1",
-             "model": "your-model", "api_key": "optional"}}
-
-Opening it creates nothing: no log file, no sessions/, no tools/, no config.json.
-Those appear only once it has something to keep.
-
-Give it a folder of its own: sessions, notes and tasks are written next to the
-file, so two copies in one folder share a single history.
-
-Which build do I want?
-  cli/tinycmdr-cli.py    I want to talk to it from a terminal
-  tinycmdr.py            I want it in Mattermost, or the local web page
-                         (python tinycmdr.py --web)
-"""
-
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere
 # (x.py.bak, x.py.bak-pre256-20260914), "pre" immediately followed by a version
 # digit (x.pre-1.9.30, x.bak-pre256-...), and the usual editor leftovers.
@@ -397,15 +364,17 @@ def stage(target):
             shutil.copy2(src, dst)
             lf_only(dst)
 
-    # the console build, bundled whole so nobody has to hunt for a second download
+    # The console build (generated from tinycmdr.py by build-cli-source.py) is staged
+    # at the ROOT, beside tinycmdr.py, and never in a folder of its own. The installers
+    # copy it flat into the install dir, where both builds resolve the SAME config.json
+    # and .env, because each resolves them from the folder it sits in. A second folder
+    # holding a second config.json is how a reader ends up unsure which file they last
+    # edited, and the doors are mediums rather than separate installs.
     cli = ROOT / "tinycmdr-cli.py"
     if cli.exists():
-        out = target / "cli" / "tinycmdr-cli.py"
-        out.parent.mkdir(parents=True, exist_ok=True)
+        out = target / "tinycmdr-cli.py"
         shutil.copy2(cli, out)
         lf_only(out)
-        (target / "cli" / "README.txt").write_text(CLI_FOLDER_README,
-                                                   encoding="utf-8")
     else:
         print("  ! missing tinycmdr-cli.py — the console build is NOT bundled")
     return target
@@ -689,7 +658,7 @@ def main():
                     "install/install-tinycmdr.sh",
                     "install/install-tinycmdr-macos.sh",
                     "install/com.tinycmdr.agent.plist",
-                    "cli/tinycmdr-cli.py"):
+                    "tinycmdr-cli.py"):
             p = stage_dir / rel
             if p.exists():
                 print("    %s  %s" % (hashlib.sha256(p.read_bytes()).hexdigest()[:16], rel))

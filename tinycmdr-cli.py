@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-tinycmdr.py — a small autonomous ops agent that lives in a terminal.
+tinycmdr-cli.py — the same agent as tinycmdr.py, built for a terminal.
 
 One file, no installer, no service, no chat gateway. Keep the folder wherever you
 like, make sure Python is installed, run it (double-click this file, or
-"python tinycmdr.py"), and type what you want done. It runs shell commands, reads
+"python tinycmdr-cli.py"), and type what you want done. It runs shell commands, reads
 and edits files, reads a URL you hand it, writes its own notes and tools, and keeps
 the conversation in ./sessions. There is no web search and no third-party service
 involved: the only network destination is the model endpoint in config.json.
 
+Installed the harness? The installer puts this file beside tinycmdr.py, and this
+build then reads that config.json, that .env and the same sessions and notes as the
+bot and the page: one folder, one set of files, whichever door you use.
+
 Dependencies: none. Standard library only, so there is no pip step and nothing to
 install besides Python itself.
-Config: copy config.example.json to config.json and fill in the llm fields.
-        Nothing is ever written for you, and opening this file creates nothing:
-        the log, notes, sessions and tools appear only when there is work to keep.
+Config: config.json next to this file (config.example.json is the reference, and the
+        installer's own copy is already filled in). Nothing is ever written for you,
+        and opening this file creates nothing: the log, notes, sessions and tools
+        appear only when there is work to keep.
 Custom tools:  drop .py files into ./tools/ (it writes its own there too)
-Run:           python tinycmdr.py
-One-shot task: python tinycmdr.py --once "why is plex crashing"
+Run:           python tinycmdr-cli.py
+One-shot task: python tinycmdr-cli.py --once "why is plex crashing"
 """
 
 import base64
@@ -79,16 +84,6 @@ TASKS_FILE = BASE_DIR / "tasks.json"      # durable task ledger (source of truth
 TASKS_DOC = BASE_DIR / "tasks.md"         # human-readable render of the ledger
 NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt
 
-def _folder_belongs_to_the_bot():
-    """True when a Mattermost bot keeps its memory in this folder too."""
-    other = BASE_DIR / "tinycmdr.py"
-    try:
-        mine = Path(sys.argv[0]).resolve()
-    except Exception:
-        mine = None
-    return (other.exists() and other.resolve() != mine
-            and (BASE_DIR / "tinycmdr.lock").exists())
-
 
 def _console_closes_with_us():
     """True when this process owns its console, so the window dies with it.
@@ -121,17 +116,7 @@ def _hold_console():
     try:
         input("press Enter to close this window")
     except (EOFError, OSError, KeyboardInterrupt):
-        print()
-
-
-if _folder_belongs_to_the_bot():
-    print("tinycmdr: this folder belongs to a running Mattermost bot "
-          "(a tinycmdr.py sits next to this file and tinycmdr.lock is held).")
-    print("Both builds keep their notes, tasks and sessions in their own "
-          "folder, so copy this file into a folder of its own and start "
-          "it there.")
-    _hold_console()
-    raise SystemExit(3)
+        print()
 
 # Console logging must never freeze the bot. On Windows, a stray click in
 # the console window enables "mark" (QuickEdit) mode and the OS blocks the
@@ -389,6 +374,7 @@ def load_config():
                 cfg[section] = values
     # Environment variables override secrets (handy for services).
     env_map = {
+        "tinycmdr_WEB_TOKEN": ("web", "token"),
         "tinycmdr_MODEL": ("llm", "model"),
         "tinycmdr_BASE_URL": ("llm", "base_url"),
     }
@@ -5753,7 +5739,7 @@ def apply_sampling(payload):
 def _tool_pairing_problems(messages):
     """Report strict-provider violations in a payload.
 
-    OpenAI and DeepSeek both require every tool_call_id in an assistant message
+    Strict OpenAI-compatible endpoints require every tool_call_id in an assistant message
     to be answered by a `tool` message BEFORE any other role appears. The local
     llama.cpp servers do not validate this, so a malformed sequence runs fine at
     home and dies the moment a cloud model is selected.
@@ -7099,9 +7085,9 @@ class Agent:
                     # and a strict provider rejects that outright: 400 "an
                     # assistant message with 'tool_calls' must be followed by
                     # tool messages responding to each 'tool_call_id'" (live
-                    # 2026-09-11 on api.deepseek.com, loop guard fired on the
-                    # first of two calls). llama.cpp does not validate, so only
-                    # the cloud model ever reported it.
+                    # 2026-09-11 against a cloud endpoint, loop guard fired on the
+                    # first of two calls). llama.cpp does not validate, so only a
+                    # strict cloud endpoint ever reported it.
                     # Drift check: a plan is only worth carrying if the harness notices when
                     # nothing moves. Counted in tool calls, not turns — a batch of six
                     # reads in one turn is six calls of no progress.
@@ -8718,8 +8704,12 @@ def missing_config_text():
     return "\n".join([
         "tinycmdr: there is no config.json in this folder yet.",
         "",
-        "This build never writes one - nothing is created or checked at startup - so",
-        "this is a one-time copy and edit by hand:",
+        "Installed already? Run the copy the installer put beside tinycmdr.py - this",
+        "build reads that config.json, that .env and the same sessions and notes as",
+        "the bot and the page, so every door sees one set of files.",
+        "",
+        "On its own instead? This build never writes a config.json (nothing is created",
+        "or checked at startup), so it is a one-time copy and edit by hand:",
         "",
         "  1. copy the example that sits beside this file, or just rename it:",
         "",

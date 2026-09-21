@@ -71,7 +71,7 @@
     "max_results": 5
   },
   "web": {
-    "_comment": "Off by default: the chat build is driven from Mattermost and does not open a port unless asked. `python tinycmdr.py --web` turns it on for that process and serves the browser view - the agent's live activity as it works, not just the final answer - plus /api/chat and /api/health. Set enabled true to serve it while the chat bot runs too. An empty token means loopback only; set one to reach it from another machine, and firewall that port.",
+    "_comment": "Off by default: the chat build is driven from Mattermost and does not open a port unless asked. `python tinycmdr.py --web` turns it on for that process and serves the browser view - the agent's live activity as it works, not just the final answer - plus /api/chat and /api/health. Set enabled true to serve it while the chat bot runs too. An empty token means loopback only; set one to reach it from another machine, and firewall that port. The installer generates a token and writes it to .env as tinycmdr_WEB_TOKEN, which takes precedence over this key - one secrets file per install.",
     "enabled": false,
     "port": 8787,
     "token": "",

@@ -14,13 +14,18 @@ Python file plus a skills folder.
 ## Try it without a chat server
 
 Mattermost is how a fleet drives this, but nothing here needs a chat server to run.
-Three local paths, all built into the same file:
+Three local paths, and all of them read the one `config.json` and `.env` in the install
+folder:
 
 ```powershell
-python tinycmdr.py --cli              # interactive console, one session, no port
+python tinycmdr-cli.py                # a session in this window: no port, no extras
 python tinycmdr.py --once "/status"   # one task, prints the answer, exits
 python tinycmdr.py --web              # browser view on http://127.0.0.1:8787
 ```
+
+`tinycmdr-cli.py` needs nothing but Python itself, so it is the one that works before
+anything is installed. The other two want the install's dependencies (`requests`, and
+`mmpy_bot` for the chat lane).
 
 `--web` serves the same agent as a local page, and it shows what the agent is doing
 while it works: each tool call as it starts, its result, and the answer at the end.
@@ -28,9 +33,12 @@ You can type while a run is going and your message is handed to the agent mid-ru
 and Stop ends the run after the current step. The page stays on loopback unless you
 set `web.token`, which opens it to your LAN, or point `web.host` somewhere else.
 
-The `cli/` folder inside this package is the same agent built for the console alone,
-with no dependencies beyond Python itself. If you only ever want to talk to it from a
-terminal, that file is the one to run.
+Two builds travel in this package, and they are the same agent. `tinycmdr.py` is the
+supervised one: Mattermost, the page, or a session in this terminal
+(`python tinycmdr.py --cli`). `tinycmdr-cli.py` is the console-only build, with no chat
+layer and nothing to install beyond Python itself. The installer puts both in the
+install folder, and both read the same `config.json` and `.env` there, so whichever
+you use you are editing one set of files rather than guessing at two.
 
 All three need one thing first: an OpenAI-compatible model endpoint in `config.json`
 (`llm.base_url`, `llm.model`, and an API key if the endpoint wants one).
@@ -54,7 +62,7 @@ questions for scripts and fleet pushes.
 
 **A chat account is optional.** The installer asks for a bot token, and if you do not give one it
 installs anyway: there is no chat lane, nothing tries to connect, and it hands you the two local
-doors instead — `python tinycmdr.py --cli` for a session in that window, or `python tinycmdr.py --web`
+doors instead — `python tinycmdr-cli.py` for a session in that window, or `python tinycmdr.py --web`
 for a page on `http://127.0.0.1:8787`. Add `-EnableWeb` and the scheduled task serves that page in
 the background, under the same watchdog as the chat build. On Linux and macOS the service runs the
 page for you the same way. Nothing has to be licensed, hosted or reachable for the harness to work.
@@ -252,14 +260,14 @@ Logs: `tinycmdr.log` in the install folder. Restart: `maintenance\restart-tinycm
 # one local turn through the agent - proves the app AND the model endpoint work
 python tinycmdr.py --once "reply with the single word: READY"
 python tinycmdr.py --once "/status"
-python tinycmdr.py --cli          # interactive local session
+python tinycmdr-cli.py           # interactive local session
 ```
 
 The local browser page is off by default (`web.enabled: false`) because the chat build is driven
 from Mattermost and should not quietly open a port. `python tinycmdr.py --web` turns it on for that
 process, which is the quickest way to try the whole thing: no server, no bot account, no token.
 Pass `-EnableWeb` to the installer if you want the page served alongside the chat bot, which
-generates a token in `web-token.txt` and binds loopback only.
+writes a token into `.env` (`tinycmdr_WEB_TOKEN`) and binds loopback only.
 
 ## Uninstall
 
@@ -279,6 +287,5 @@ skills/                  markdown runbooks the agent loads on demand (see "Addin
 field-notes.md           known failures, matched against a failed tool result and appended to it
 install/                 installers for Windows, Linux and macOS
 maintenance/             the restart helper
-cli/tinycmdr-cli.py      the same agent, console only, no chat layer at all (see "Try it")
-cli/README.txt           what that file is and which one to run
+tinycmdr-cli.py          the same agent, console only, no chat layer at all (see "Try it")
 ```

@@ -717,3 +717,63 @@ can be holding a stale client. CLI regenerated from the tree (`tinycmdr-cli.py`,
 five suites re-run against it; every 1.0.0 shape rebuilt (fleet, public win/linux/macos, cli
 win/linux); Z: refreshed with new sha256s; the Windows test box pushed and relaunched (`bot ready in 0s`, the
 page it serves byte-identical to the rendered package at `86061c50a58bbb3f`).
+
+## 2026-09-20 (night, third pass) - one install, one config.json, one .env - the doors are mediums
+
+**The console build was a second install.** `INSTALL-WINDOWS.cmd` copied a fixed list into
+`C:\tinycmdr`, and `cli/tinycmdr-cli.py` was not in it (nor on Linux or macOS), so the console build
+lived in the download folder with a README telling the reader to create a `config.json` - a step the
+interactive install had just done for them. Three files described the same settings and none of them
+knew about the others.
+
+It is now one folder and one set of files, because every path in both builds resolves from
+`BASE_DIR` (the folder the file sits in): `tinycmdr-cli.py` is staged at the package ROOT beside
+`tinycmdr.py` (no more `cli/`, no more folder README) and installed FLAT beside it on all three
+platforms, so a session, the page and the bot read the same `config.json`, the same `.env`, the same
+`notes.md`, `tasks.json`, `sessions/` and `tools/`. The wizard and the README hand over ONE console
+command (`python tinycmdr-cli.py`), which is also the only one of the three local doors that needs
+nothing but Python itself.
+
+The refusal that made this impossible is gone. The generated build used to exit 3 when `tinycmdr.py`
+and `tinycmdr.lock` sat next to it ("this folder belongs to a running Mattermost bot ... copy this
+file into a folder of its own"), which is exactly the folder the installer now puts it in. The rule
+it defended - one set of notes per folder - is the rule we now WANT. It is replaced by a test that
+says the opposite: the console starts in the bot's folder and reads that folder's `config.json`
+(suite names it a config the run can only have read, points it at a dead port, and asserts the run
+reports that endpoint).
+
+**The page token is a secret, so it lives in .env.** `web-token.txt` was a human-readable copy of a
+value that also sat in `config.json`, and only the Windows installer wrote it - the page's 401 prompt
+named a file that does not exist on Linux or macOS. Now: `tinycmdr_WEB_TOKEN` is a real env override
+(`env_map`), all three installers write it to `.env` (one secrets file per install, mode 600), the
+installer clears `web.token` in `config.json` and DELETES a stale `web-token.txt` from an older
+install, and the prompt names `.env`. Linux and macOS installs also hand over the ready link now,
+which only Windows did before.
+
+**No provider is named anywhere a reader can see.** `DEEPSEEK_API_KEY` was the placeholder in
+`.env.example`, the Windows and macOS installers' key handling, a `(llama.cpp, vLLM, Ollama,
+DeepSeek, ...)` hint in the Linux installer, and four code comments. The `.env.example` entry is now
+`MY_PROVIDER_API_KEY` with the rule beside it (the variable is whatever your fallback entry's
+`api_key_env` says), the installers preserve EVERY key the host already had instead of one named
+key (and say which keys they refused to copy from a shared secrets file, without naming a provider),
+the macOS installer's default endpoint is the usual local llama.cpp shape rather than a named cloud
+API, and the comments keep their lesson with the vendor's name removed.
+
+**Two generation stages, and the second one is not optional.** `build-cli-source.py` writes
+`tinycmdr-cli.py`; `build-cli-fix.py` then applies ~40 refusals-if-they-do-not-match edits, including
+the console-holding helpers and every provider-name removal. Regenerating with the first stage alone
+produced a build that FAILED 64 checks in `test_cli` (no console hold, no build marker, an atlas
+shim gone) - the file was plausible, imported cleanly, and was missing a whole inserted block. Worth
+knowing before the next regeneration: run both, in order, and let the suite grade the result.
+
+Evidence: 22 suites green (0 failures), the CLI's own suite at 167 checks against the regenerated
+build, the CLI packages rebuilt (their gate re-runs `test_cli` on a clean unpack: 167/0). A real
+install from the rebuilt public zip, non-interactive into a throwaway folder, graded 11 checks:
+`tinycmdr-cli.py` installed flat beside `tinycmdr.py`; `.env` carries `tinycmdr_WEB_TOKEN` while
+`config.json` holds no token and no `web-token.txt` exists; the console build reads THAT
+`config.json` (endpoint `127.0.0.1:9` appeared in its own error) and THAT `.env`
+(`tinycmdr_MODEL=env-model-from-dotenv` reached the run); and the page answers 401 with no token,
+401 with a wrong token, 404 with the `.env` token. the Windows test box's live install migrated in place: its
+existing token moved into `.env` unchanged (so the link he already has still works), `config.json`
+cleared, `web-token.txt` deleted, restarted at 20:25 (`bot ready in 0s`), and
+`python tinycmdr-cli.py --version` in `C:\tinycmdr` returns rc=0 where the old build refused.
