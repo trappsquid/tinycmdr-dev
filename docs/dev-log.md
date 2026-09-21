@@ -533,3 +533,64 @@ Not done in this pass, deliberately:
 * A host's `.env` keys must be renamed AT THE SAME TIME as its code. On the manager box the
   new key was added alongside the old one, so a restart at any moment stays safe;
   the old key is dropped once the new code is confirmed running.
+
+## 2026-09-20 (evening) - 1.0.0: the defaults a reader inherits, a slimmer download, and an
+## installer that asks
+
+What changed after the rename entry, in the order it happened.
+
+**The shipped defaults were the fleet's problem, not the reader's.** A fresh install was getting
+24000 tokens of context against this fleet's 200000, a 40-turn ceiling against 100, and a
+two-pattern seatbelt against the 21 the code had carried for weeks. `tool_carry` was OFF with a
+comment saying its stale-text failure mode was the least tested thing in the build; that failure
+mode now has a guard (`_carry_stale` re-stats the file an entry came from and says so in the
+payload) and a test that asserts both directions, so the carry ships ON. `ask_user` had no shipped
+key at all, so it answered to nothing the reference file said. Everything raised ships together:
+131072 context, 100 turns, 1200s timeout, 20 exchanges, 10000-char tool output, 8000-char notes,
+300s shell timeout, 21 blocked patterns, event log and ask_user on, cloud fallback off.
+
+**Nothing may document a value the code does not ship.** `test_cli`'s reference check named six
+keys, which is how a 2-pattern seatbelt and a 40-turn ceiling sat in `config.example.json`; it now
+compares every shipped key by VALUE, with an explicit allowlist for the per-deployment ones. The
+console packager derives its reference config from the file it just built and refuses to write one
+that disagrees. And because dropping `tests/` from the download left the installer's `$required`
+list demanding it (every install died with "package is missing tests"), the build now refuses when
+a file the installer requires is not in the staged package. Each of those gates was broken on
+purpose to see it fire.
+
+**The download is runtime only.** 49 files and 550 KB became 19 files and 365 KB: `tests/`,
+`CHANGELOG.md`, `MANIFEST.txt` and `launch-tinycmdr.sh` are out (the suites belong where the code
+is edited; the hashes print in the build log instead). `field-notes.md` stays, because the CODE
+reads it: it matches an entry's regex against a failed tool result and appends the fix to output
+the model is already reading.
+
+**A chat account is optional, on all three platforms.** The harness has three doors - a Mattermost
+bot, `--cli`, and the local page at 127.0.0.1:8787, which is dispatched before the token check - so
+requiring a bot token made two of them unreachable. Windows now installs without one and hands over
+the local doors; with `-EnableWeb` the task serves the page under the same supervisor instead.
+That also removed a trap: the old installer registered the CHAT task with no token, which exits at
+once (tinycmdr.py refuses to start without a token, deliberately) while the supervisor respawned it
+every few seconds forever. Linux and macOS stopped dying without a token and run the page instead.
+`tinycmdr-supervise.py` passes its own extra argv to the child, which is what makes `--web` reach
+the agent at all.
+
+**The installer asks.** It could not: the `.cmd` wrapper always passes `-NoPause`, and the single
+prompt was gated on `-not $NoPause`, so the one way most people start this was the one way that
+could not ask anything. A real console decides now (`-NonInteractive` and a redirected stdin mean
+"do not ask", which is what a fleet push needs). It asks which doors to set up (any combination,
+because chat and the page are one process and `--cli` takes no lock), the model endpoint, model id
+and key when the endpoint is not local, and the page token. Then a summary and a yes. An existing
+install is a question ("replace its app files?"), not a `-Force` error.
+
+**The page's token is handed over.** The installer prints a ready link
+(`http://127.0.0.1:8787/?token=...`); the page takes the token from the link, remembers it, and
+re-asks when the server says 401, naming `web-token.txt`. Before this, the prompt read "leave empty
+if loopback" while an install WITH a token looked broken: an empty answer was accepted, and every
+message came back "could not send: unauthorized".
+
+**Probe discipline, learned the hard way.** `-VerifyOnly` never reaches the package-integrity
+check, so only a real install into a temporary `-InstallDir` proves a package. A probe install must
+pass its own `-TaskName`: one of mine registered `tinycmdr`, and a cleanup that deletes folders but
+not tasks leaves a task pointing at nothing.
+
+State of the work, open items and the evidence: `docs/handoff-2026-09-20.md`.
