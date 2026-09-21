@@ -992,3 +992,26 @@ Still open: the bot build's own `--cli` lane (tinycmdr.py's older console) does 
 build a screen yet, and the input line is still the plain one - prompt_toolkit
 owning stdin is what buys history, editing and a status line that updates in place
 instead of on a timer.
+
+### The console's input line, and the bot's own --cli (2026-09-21)
+
+Both follow-ups from the screen:
+
+- **`tinycmdr.py --cli` draws the same screen as the console build now**: a TuiScreen
+  when there is a terminal, the banner through it, each call as a card, the answer as
+  the answer card, and the run's usage line to the status line. Proven in a pty: the
+  banner panel and the `you> ` prompt appear where the old plain header was.
+- **prompt_toolkit owns the prompt while the console is idle**: editing, in-session
+  history (a history FILE would add a file to a folder whose rule is that opening the
+  build creates nothing but the log's first line - up-arrow within the session is the
+  part that matters), Ctrl-C doing what SIGINT does, Ctrl-D quitting, and a bottom
+  toolbar carrying the run's own line and the keys. The screen's `status_line()` is
+  handed to that toolbar (`on_status`) instead of printing, so it keeps itself current
+  instead of ticking on a timer.
+- Mid-run the reads stay PLAIN on purpose: the run's own questions (confirm, ask)
+  answer through stdin too, and two owners of a terminal in raw mode is how a typed
+  answer lands in the wrong place. So during a run the status still prints, throttled.
+
+Verified by driving the real console in a pty: banner, `you> ` and the toolbar
+render; `/help` answers and the prompt returns; Ctrl-D exits clean; `tinycmdr_PLAIN=1`
+still prints the old plain lines; `python tinycmdr.py --cli` draws the banner.
