@@ -51,7 +51,14 @@
     "allow_cloud_fallback": false,
     "stream": true,
     "stream_idle_seconds": 120,
-    "_stream": "Model calls use SSE when true: the first token is visible while it generates, a cancel closes the socket (a local llama.cpp stops generating), and a wedged stream ends on stream_idle_seconds. false = one blocking POST per call, which is what every version before 1.9.28 did."
+    "_stream": "Model calls use SSE when true: the first token is visible while it generates, a cancel closes the socket (a local llama.cpp stops generating), and a wedged stream ends on stream_idle_seconds. false = one blocking POST per call, which is what every version before 1.9.28 did.",
+    "profiles": {
+      "example-cloud-model": {
+        "tool_output_max_chars": 40000,
+        "fetch_max_chars": 60000,
+        "notes_max_note_chars": 4000
+      }
+    }
   },
   "mattermost": {
     "_comment": "Where the bot lives. url is the host only, scheme and port are separate keys. token: leave empty and set tinycmdr_MM_TOKEN in .env instead - .env is the one place the agent cannot read into a prompt. allowed_users are Mattermost USER IDS, not usernames (Profile -> copy the id), and the list is deny-by-default. ssl_verify false is for a self-signed certificate on your own LAN.",
@@ -187,7 +194,7 @@
     "checkin_stream_notes": true,
     "checkin_stream_seconds": 2.0,
     "color_coded": true,
-    "_stream_notes": "When true, the model’s own narration is streamed into ONE message that grows while it writes, so the plan is readable (and stoppable or steerable) before the tools run. False restores posting it once, after the call returns.",
+    "_stream_notes": "When true, the model\u2019s own narration is streamed into ONE message that grows while it writes, so the plan is readable (and stoppable or steerable) before the tools run. False restores posting it once, after the call returns.",
     "auto_continue": true,
     "auto_continue_max": 2,
     "spill_output": true,

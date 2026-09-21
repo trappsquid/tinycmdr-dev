@@ -497,6 +497,44 @@ def load_config():
 
 
 CONFIG = load_config()
+
+
+def apply_model_profile():
+    """Caps follow the MODEL, not one global guess (audit finding 8, item 2d).
+
+    A local endpoint and a 200k cloud model were paying the same tool-output, fetch and
+    note caps, so a capable model was fed clipping it did not need. config.json:
+
+        "llm": {"model": "deepseek-v4-flash",
+                "profiles": {"deepseek": {"tool_output_max_chars": 40000,
+                                          "fetch_max_chars": 60000,
+                                          "notes_max_note_chars": 4000}}}
+
+    The first key that appears in the model name wins; keys it does not set keep the value
+    already in config, so nothing moves until a config says so. The winner is recorded in
+    agent.active_profile so a box can never be running caps silently.
+    """
+    llm = CONFIG.get("llm") or {}
+    prof = llm.get("profiles")
+    if not isinstance(prof, dict) or not prof:
+        return None
+    name = str(llm.get("model") or "").lower()
+    if not name:
+        return None
+    for key, over in prof.items():
+        if str(key).lower() not in name or not isinstance(over, dict):
+            continue
+        applied = {}
+        for k, v in over.items():
+            if k in CONFIG.get("agent", {}):
+                CONFIG["agent"][k] = v
+                applied[k] = v
+        CONFIG.setdefault("agent", {})["active_profile"] = str(key)
+        return {"profile": str(key), "applied": applied}
+    return None
+
+
+PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
 VERSION = "1.0.0"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
