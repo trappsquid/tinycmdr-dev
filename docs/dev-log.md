@@ -1462,3 +1462,47 @@ spurious blank lines before; the fleet kit's copy is byte-identical to the tree 
 All seven 1.0.0 shapes were rebuilt with both changes (auto default + byte-safe scrub), sidecars
 regenerated, the five public shapes staged to Z: with the copies verified against the source, and
 the real-install probe green again (12/12). Hashes in the state doc.
+
+### The six-box push and the restart, at the operator's word (2026-09-22)
+
+Sent 2026-09-22 on "Send to the fleet and restart all". Files per host: `tinycmdr.py`,
+`tinycmdr-cli.py`, `tinycmdr-supervise.py` (the last one had drifted: the other Windows box, the Linux test box and the
+MacBook were a version behind at `c10acb75`, the Windows test box already had the current one), plus
+`llm.max_context_tokens: "auto"` in each host's `config.json`. Every host got its own
+`.bak-push1.0.0-20260922-*` per file and a `config.json.bak-contextauto-*`, and each write was
+read back before the restart.
+
+Order, per the operator's standing rules: survey first (in-flight work, clocks, notice channel),
+then ARM THE BACK-UP NOTICE, then bytes, then the host's own door, then a per-host process proof.
+Nobody was mid-run: the most recent real tool call anywhere was 2.5 hours old (the other Windows box), and the
+two "doing" items in the LAN model box's ledger date from 2026-09-21.
+
+```
+host            build (tinycmdr.py)  restarted              lane proof
+the manager box       .46  265860bc5e81a34d    child 17336 @11:52:06  @the manager boxbot, notice (downtime 4s), health 200
+the other Windows box    .9   265860bc5e81a34d    pid 7828    @11:51:28  @the other Windows box, notice (149s), health 200
+the Windows test box  .20  265860bc5e81a34d    pid 58600   @11:51:44  web lane, health 200 on loopback
+MacBook    .3   265860bc5e81a34d    pid 4206    @11:50:32  @mac, notice (43s), health 200
+the Linux test box  .13  265860bc5e81a34d    MainPID 2632629 @18:50:17  @sotinycmdr, notice (38s)
+the LAN model box      .47  265860bc5e81a34d    MainPID 2657878 @18:50:24  @a bot account, notice (36s)
+```
+
+`fleet-version-report.ps1` then read all six as `1.0.0 / 265860bc5e81a34d / in sync`, each with
+its watchdog (supervisor on the manager box/the other Windows box/the Windows test box, systemd on .13/.47, launchd on the Mac).
+Every channel heard its own bot's `posted startup notice to <id> (downtime Ns)` because the notice
+was armed before the stop. the manager box's own restart went through its web UI `/restart` (this shell is not
+elevated, so it cannot kill the task-owned process) and the supervisor relaunched the child on exit
+75. `tinycmdr doctor` afterwards: endpoint `160.0K per request`, instance running, no problems.
+
+**Two mechanics worth keeping, both cost a round here.** `scp` to the Unix hosts is the reliable
+route but each file must be hash-checked ON the host after the transfer (three transfers reported
+`Connection closed` and still landed; one landed as nothing). And on Windows the applier cannot be
+started as `"C:\...\python.exe" script.py` over ssh: the quoted path with a space is split by the
+remote `cmd`, so put the invocation in a `.cmd` in the install dir and run that by path.
+
+**Three leftovers found, none blocking, all reported to the operator:** the LAN model box keeps the legacy
+`tinycmdr_MM_TOKEN` beside its `tinycmdr_MM_TOKEN` (harmless; the migration's de-duplication step)
+and a whole stale `~/tinycmdr` tree at 2.5.23 with its own config, `.env` and log; the LAN model box's
+`llm.model` is `cloud`, so its default route is DeepSeek rather than the LAN box the fleet standard
+names; and the manager box's `doctor` warns that `llm.api_key` is set in `config.json`, which is not where a
+key belongs.
