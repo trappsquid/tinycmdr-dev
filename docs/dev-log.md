@@ -1506,3 +1506,20 @@ and a whole stale `~/tinycmdr` tree at 2.5.23 with its own config, `.env` and lo
 `llm.model` is `cloud`, so its default route is DeepSeek rather than the LAN box the fleet standard
 names; and the manager box's `doctor` warns that `llm.api_key` is set in `config.json`, which is not where a
 key belongs.
+
+### the Windows test box re-staged for a fresh reader-path evaluation (2026-09-22)
+
+The operator had blown that box away before the push, so what it received that morning was moot.
+Re-staged the way the walk wants it: the previous install snapshotted to the manager box
+(`hermes-tmp/release/tinycmdr-the Windows test box-preclean-20260922-115859`, 43 files including its `.env`),
+the scheduled task `tinycmdr` unregistered, the supervisor and its child stopped, `C:\tinycmdr`
+removed, and the CURRENT public zip plus its sidecar placed in `C:/Users/<user>\Downloads`
+and hash-verified ON the box (`db613f52...`, 23 entries, `INSTALL-WINDOWS.cmd` present) after
+finding the 2026-09-21 build staged there instead.
+
+Nothing was installed on purpose: the wizard is his to walk. Two leftovers on that box, both
+harmless and both noted for whoever looks next: `C:\tinycmdr` (empty, held by a stale handle, so
+it refuses deletion while a session holds it) and `the Windows test box-secrets.env` in Downloads from
+2026-09-20, which the walk can feed to the installer's `-SecretsFile`. The fleet report now reads
+the Windows test box as unreachable: a clean box has no build to compare, and the other five stay in sync at
+`265860bc`.
