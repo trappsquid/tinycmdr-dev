@@ -14158,6 +14158,453 @@ def user_is_allowed(sender, user_id):
                                  [str(a) for a in allowed])
 
 
+# --------------------------------------------------------------------------
+# Management verbs — `tinycmdr <verb>` (audit, 2026-09-22)
+# --------------------------------------------------------------------------
+# The installers left no command behind, so day-two work meant hand-editing
+# config.json and .env, and finding the right restart helper per OS. These are the
+# things an operator actually does between installs. Rules this block holds to:
+#
+#   * A verb NEVER runs the agent loop. `status` and `doctor` ask the endpoint for
+#     METADATA (/v1/models, /props) and nothing else; no verb spends tokens.
+#   * A verb that touches config writes through atomic_write_text - the same writer
+#     the agent uses - so a failed write cannot truncate the file the bot reads at
+#     start.
+#   * No verb prints a secret VALUE. `token` reports whether one is set, never what
+#     it is.
+#   * Nothing here is a second implementation: the model catalog, the config
+#     writer, the log file and the shipped restart helpers are the ones the running
+#     bot already uses. `restart` calls this host's own helper rather than
+#     re-implementing the kill/launch dance, because that dance is where two bots
+#     on one token came from.
+
+VERBS = ("status", "doctor", "model", "logs", "restart", "run", "token", "help")
+
+VERB_HELP = """tinycmdr <verb> — management, never a model call
+
+  status             version, folder, model, endpoint, context, log, instance
+  doctor             check this install and name what is wrong (exit 1 when it is)
+  model              the models this install can route to (asks the endpoints)
+  model use <name>   set the default model in config.json, catalog-checked
+  logs [n]           the last n lines of tinycmdr.log (default 40)
+  restart            restart through this host's own door (task, systemd, launchd)
+  token              where the secrets live and which are set (never their values)
+  token set <NAME>   read one value from stdin and write it to .env (mode 600)
+  run                start the agent in this window, exactly as the file does
+  help               this text
+
+With no verb this file is the agent itself, exactly as it has always been.
+"""
+
+
+def _verb_running():
+    """True / False / None: does another live process hold this folder's lock?
+
+    A probe, not a claim: it takes the same lock and gives it straight back, so a
+    lock file left behind by a crash reads as NOT running.
+    """
+    lock = BASE_DIR / "tinycmdr.lock"
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh = open(lock, "a+b")
+            try:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                fh.close()
+                return True
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            fh.close()
+            return False
+        import fcntl
+        fh = open(lock, "a")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            fh.close()
+            return True
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        fh.close()
+        return False
+    except Exception:
+        return None
+
+
+def _verb_endpoint(url=None):
+    """(url, served_window) for one endpoint. Metadata only: one /props or
+    /v1/models GET, never a completion."""
+    url = url or CONFIG["llm"]["base_url"]
+    try:
+        return url, _detect_window(url, None)
+    except Exception as e:
+        log.debug("verb: endpoint probe failed: %s", e)
+        return url, 0
+
+
+def _verb_log_lines(count):
+    text = ""
+    try:
+        with (BASE_DIR / "tinycmdr.log").open("r", encoding="utf-8",
+                                             errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return [], 0
+    lines = text.splitlines()
+    return lines[-count:], len(lines)
+
+
+def _verb_status():
+    print("tinycmdr %s — %s" % (VERSION, BASE_DIR))
+    print("  python    : %s" % sys.version.split()[0])
+    print("  model     : %s" % CONFIG["llm"]["model"])
+    url, win = _verb_endpoint()
+    if win:
+        budget = AGENT._context_budget()
+        print("  endpoint  : %s — %s per request, %s usable"
+              % (url, fmt_tokens(int(win)), fmt_tokens(budget)))
+    else:
+        print("  endpoint  : %s — no answer (metadata probe only)"
+              % url, file=sys.stderr)
+    running = _verb_running()
+    print("  instance  : %s" % {True: "running (the lock is held)",
+                                False: "not running (the lock is free)",
+                                None: "unknown"}[running])
+    lines, total = _verb_log_lines(1)
+    if total:
+        print("  log       : %s — %d lines" % (BASE_DIR / "tinycmdr.log", total))
+    else:
+        print("  log       : none yet")
+    try:
+        notes = (BASE_DIR / "notes.md").stat().st_size
+        tasks = (BASE_DIR / "tasks.json").stat().st_size
+        print("  memory    : notes.md %d bytes, tasks.json %d bytes" % (notes, tasks))
+    except OSError:
+        pass
+    print("  config    : %s" % (CONFIG_PATH if CONFIG_PATH.exists() else
+                                "MISSING (copy config.example.json)"))
+    if not win:
+        print("status: the endpoint did not answer its metadata probe", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _verb_doctor():
+    problems, notes = [], []
+    print("tinycmdr %s doctor — %s" % (VERSION, BASE_DIR))
+
+    err = validate_startup_config()
+    if err and "no Mattermost bot token" in err:
+        # A page-only install is legitimate: the installer offers exactly that lane.
+        notes.append("no chat lane configured (fine for a local-page install)")
+        err = None
+    print("  config    : %s" % (err.splitlines()[0] if err else "ok"))
+    if err:
+        problems.append(err)
+
+    print("  python    : %s" % sys.version.split()[0])
+    if sys.version_info < (3, 9):
+        problems.append("python %s is older than this build supports"
+                        % sys.version.split()[0])
+
+    try:
+        probe = BASE_DIR / ".tinycmdr-write-probe"
+        probe.write_text("x", encoding="utf-8")
+        probe.unlink()
+        print("  folder    : writable")
+    except OSError as e:
+        print("  folder    : NOT writable (%s)" % e)
+        problems.append("the install folder is not writable, so state cannot be saved")
+
+    env = _env_file_keys()
+    have_env = ENV_FILE.exists()
+    print("  .env      : %s (%d key%s)" % ("present" if have_env else "missing",
+                                           len(env), "" if len(env) == 1 else "s"))
+    # names only, never values
+    wanted = ("tinycmdr_MM_TOKEN", "tinycmdr_TG_TOKEN", "tinycmdr_WEB_TOKEN",
+              "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY")
+    for name in wanted:
+        where = []
+        if os.environ.get(name):
+            where.append(".env" if name in env else "environment")
+        print("    %-20s %s" % (name, ", ".join(where) if where else "not set"))
+    if CONFIG["llm"].get("api_key"):
+        notes.append("llm.api_key is set in config.json — .env is the safer home")
+
+    for mod, why in (("requests", "the HTTP layer"), ("croniter", "scheduling"),
+                     ("mmpy_bot", "the Mattermost layer")):
+        try:
+            __import__(mod)
+        except ImportError:
+            if mod == "requests" or CONFIG["mattermost"].get("token"):
+                problems.append("%s is not installed (%s)" % (mod, why))
+            print("  dep %-6s: MISSING (%s)" % (mod, why))
+        else:
+            print("  dep %-6s: ok" % mod)
+
+    url, win = _verb_endpoint()
+    if win:
+        print("  endpoint  : %s — %s per request" % (url, fmt_tokens(int(win))))
+    else:
+        print("  endpoint  : %s — NO ANSWER" % url)
+        problems.append("the model endpoint at %s did not answer" % url)
+
+    running = _verb_running()
+    print("  instance  : %s" % {True: "running (the lock is held)",
+                                False: "not running (the lock is free)",
+                                None: "unknown"}[running])
+
+    for n in notes:
+        print("  note      : %s" % n)
+    if problems:
+        print("\ndoctor: %d problem(s)" % len(problems), file=sys.stderr)
+        for p in problems:
+            print("  - %s" % p.replace("\n", " "), file=sys.stderr)
+        return 1
+    print("\ndoctor: no problems found")
+    return 0
+
+
+def _verb_model(rest):
+    if rest and rest[0] in ("use", "set"):
+        if len(rest) < 2:
+            print("model use <name> — which model? (tinycmdr model lists them)",
+                  file=sys.stderr)
+            return 2
+        want = " ".join(rest[1:]).strip()
+        try:
+            entries = model_catalog(force=True)
+        except Exception as e:
+            print("could not ask the endpoints for their model list: %s" % e,
+                  file=sys.stderr)
+            return 1
+        names = [str(e.get("name")) for e in entries]
+        match = next((e for e in entries
+                      if str(e.get("name")).lower() == want.lower()
+                      or str(e.get("send_as", "")).lower() == want.lower()), None)
+        if match is None:
+            print("no model named %r here. This install can route to: %s"
+                  % (want, ", ".join(names)), file=sys.stderr)
+            return 2
+        prev, err = set_global_model(str(match.get("name")))
+        if err:
+            print("could not write config.json: %s" % err, file=sys.stderr)
+            return 1
+        print("default model: %s -> %s" % (prev, match.get("name")))
+        if _verb_running() is True:
+            print("a running bot reads config.json at start: use /model in chat, "
+                  "or run `tinycmdr restart`.")
+        return 0
+    entries = model_catalog(force=True)
+    print("models this install can route to (%d):" % len(entries))
+    for e in entries:
+        bits = [str(e.get("name"))]
+        if e.get("send_as") and e.get("send_as") != e.get("name"):
+            bits.append("sends as %s" % e["send_as"])
+        if e.get("where"):
+            bits.append("at %s" % e["where"])
+        if e.get("alias"):
+            bits.append("alias %s" % e["alias"])
+        print("  %s" % "  ".join(bits))
+    return 0
+
+
+def _verb_logs(rest):
+    count = 40
+    if rest:
+        try:
+            count = max(1, min(int(rest[0]), 5000))
+        except ValueError:
+            print("logs [n] — n is a line count", file=sys.stderr)
+            return 2
+    lines, total = _verb_log_lines(count)
+    if not total:
+        print("no %s yet — nothing has been logged" % (BASE_DIR / "tinycmdr.log"),
+              file=sys.stderr)
+        return 1
+    print("%s (last %d of %d lines)" % (BASE_DIR / "tinycmdr.log", len(lines), total))
+    for line in lines:
+        print(scrub(line))
+    return 0
+
+
+def _is_elevated():
+    """True when this process can restart a task-account service on Windows.
+
+    A function, not an inline ctypes call, so the suite can grade the argv the restart
+    verb builds without restarting anything (audit, 2026-09-22).
+    """
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _verb_restart():
+    """Restart through this host's own door, by calling the SHIPPED helper.
+
+    Not a re-implementation: the helpers know this host's supervisor (S4U task,
+    systemd unit, launchd agent) and getting that dance wrong is how two bots end
+    up on one token. They also log what they did.
+    """
+    if os.name == "nt":
+        helper = BASE_DIR / "maintenance" / "restart-tinycmdr.ps1"
+        argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", str(helper)]
+    elif sys.platform == "darwin":
+        helper = BASE_DIR / "maintenance" / "restart-tinycmdr-macos.sh"
+        argv = ["bash", str(helper)]
+    else:
+        helper = BASE_DIR / "maintenance" / "restart-tinycmdr.sh"
+        argv = ["bash", str(helper)]
+    # "there is no helper here" is a more useful sentence than "get an elevated shell",
+    # so it comes first (the packaged installs always have it; a hand-built folder may not).
+    if not helper.exists():
+        print("no restart helper for this host at %s\n"
+              "this install was not built by the installer, so restart it the way you "
+              "started it" % helper, file=sys.stderr)
+        return 1
+    if os.name == "nt" and not _is_elevated():
+        print("restart needs an elevated shell (the bot runs as a task account):\n"
+              "  Start-Process powershell -Verb RunAs -ArgumentList "
+              "'-File \"%s\"'" % helper, file=sys.stderr)
+        return 1
+    if os.name != "nt" and sys.platform != "darwin" and os.geteuid() != 0:
+        print("restart needs root:\n  sudo bash %s" % helper, file=sys.stderr)
+        return 1
+    rc, out, err, timed_out = run_capture(argv, timeout=180)
+    if timed_out:
+        print("the restart helper did not finish in 180s - check the box",
+              file=sys.stderr)
+        return 1
+    for line in (out or "").splitlines():
+        print(scrub(line))
+    if rc != 0:
+        print("restart helper exited %s%s" % (rc, (": " + (err or "").strip()[-300:])
+                                              if err else ""), file=sys.stderr)
+        return 1
+    running = _verb_running()
+    print("restart: %s" % {True: "back up (the lock is held again)",
+                           False: "the helper ran, but nothing holds the lock yet — "
+                                  "check `tinycmdr logs 20`",
+                           None: "helper ran; instance state unknown"}[running])
+    return 0 if running else 1
+
+
+def _env_set(name, value):
+    """Write NAME=value into .env atomically, mode 600, keeping every other line."""
+    lines = []
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    out, done = [], False
+    for line in lines:
+        if line.strip().startswith(name + "="):
+            out.append("%s=%s" % (name, value))
+            done = True
+        else:
+            out.append(line)
+    if not done:
+        out.append("%s=%s" % (name, value))
+    atomic_write_text(ENV_FILE, "\n".join(out) + "\n")
+    try:
+        os.chmod(ENV_FILE, 0o600)
+    except OSError:
+        pass
+
+
+def _verb_token(rest):
+    if rest and rest[0] == "set":
+        if len(rest) < 2:
+            print("token set <NAME> — which key? e.g. tinycmdr_MM_TOKEN",
+                  file=sys.stderr)
+            return 2
+        name = rest[1].strip()
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+            print("a .env key name, please: capitals, digits, underscore",
+                  file=sys.stderr)
+            return 2
+        import getpass
+        try:
+            if sys.stdin.isatty():
+                value = getpass.getpass("value for %s (not echoed): " % name)
+            else:
+                value = (sys.stdin.readline() or "").strip()
+        except Exception as e:
+            print("could not read the value: %s" % e, file=sys.stderr)
+            return 1
+        if not value:
+            print("nothing written: the value was empty", file=sys.stderr)
+            return 1
+        try:
+            _env_set(name, value)
+        except Exception as e:
+            print("could not write %s: %s" % (ENV_FILE, e), file=sys.stderr)
+            return 1
+        print("%s written to %s (mode 600 where the OS honours it)" % (name, ENV_FILE))
+        if _verb_running() is True:
+            print("the running bot read .env at start: `tinycmdr restart` to pick it up.")
+        return 0
+
+    print("secrets live in %s (the one file the agent cannot read into a prompt)"
+          % ENV_FILE)
+    env = _env_file_keys()
+    print("  .env.example lists every key; set one with: tinycmdr token set NAME")
+    print("  %-22s %s" % ("key", "state"))
+    for name in ("tinycmdr_MM_TOKEN", "tinycmdr_TG_TOKEN", "tinycmdr_WEB_TOKEN",
+                 "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY"):
+        state = "set (%s)" % (".env" if name in env else "environment") \
+            if os.environ.get(name) else "not set"
+        print("  %-22s %s" % (name, state))
+    if (CONFIG["llm"].get("api_key") or "").strip():
+        print("  llm.api_key            set in config.json — move it to .env when you "
+              "can: config.json is a file the agent can read")
+    print("  values are never printed by this command.")
+    return 0
+
+
+def _verb_run(rest):
+    """Start the agent in this window: exactly what running the file does."""
+    argv = [sys.executable, str(BASE_DIR / "tinycmdr.py")] + list(rest)
+    try:
+        if os.name == "nt":
+            return subprocess.call(argv, cwd=str(BASE_DIR))
+        os.execv(sys.executable, argv)
+    except Exception as e:
+        print("could not start the agent: %s" % e, file=sys.stderr)
+        return 1
+    return 0
+
+
+def run_verb(argv):
+    """Dispatch one management verb. Returns the process exit code."""
+    verb = (argv[0] or "").strip().lower()
+    rest = list(argv[1:])
+    if verb in ("help", "-h", "--help"):
+        print(VERB_HELP)
+        return 0
+    if verb not in VERBS:
+        print("unknown verb %r\n" % verb, file=sys.stderr)
+        print(VERB_HELP)
+        return 2
+    log.info("verb: %s %s", verb, " ".join(rest))
+    if verb == "status":
+        return _verb_status()
+    if verb == "doctor":
+        return _verb_doctor()
+    if verb == "model":
+        return _verb_model(rest)
+    if verb == "logs":
+        return _verb_logs(rest)
+    if verb == "restart":
+        return _verb_restart()
+    if verb == "token":
+        return _verb_token(rest)
+    if verb == "run":
+        return _verb_run(rest)
+    return 2
+
+
 def validate_startup_config():
     """Catch the classic first-run mistakes before they die as an unreadable
     traceback inside the Mattermost driver. Returns an error string, or None."""
@@ -14281,6 +14728,16 @@ def both_doors_note():
 
 
 def main():
+    # Management verbs, and the two inert flags. Nothing here starts the agent loop:
+    # `tinycmdr status` asks the endpoint for metadata and answers a question.
+    if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:
+        sys.exit(run_verb(sys.argv[1:]))
+    if "--version" in sys.argv:
+        print("tinycmdr %s" % VERSION)
+        sys.exit(0)
+    if "--help" in sys.argv or "-h" in sys.argv:
+        print(VERB_HELP)
+        sys.exit(0)
     if "--web" in sys.argv:
         run_web_mode()
     elif "--once" in sys.argv:

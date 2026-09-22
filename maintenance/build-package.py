@@ -54,6 +54,11 @@ SHIP = [
     "install/install-tinycmdr-macos.sh",
     "install/com.tinycmdr.agent.plist",
     "install/README-macos.md",
+    # The management door: two ~20-line shims that run tinycmdr.py from the folder
+    # they sit in, so `tinycmdr status` works from any prompt without a second copy of
+    # anything (audit F12).
+    "tinycmdr.cmd",
+    "tinycmdr",
     "maintenance/restart-tinycmdr.ps1",
     "maintenance/restart-tinycmdr.sh",
     # The generator that produces cli/tinycmdr-cli.py from tinycmdr.py. Shipping the console

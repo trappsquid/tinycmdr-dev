@@ -1286,3 +1286,55 @@ F4 discussion (a bounded fetch, and a prompt line about untrusted text).
 Suites after the batch: 31 green, 0 red (`test_cli` 170, `test_stall` 244, `test_endpoint_gate`
 with the new C1 checks, `test_scrub` 7 on both builds). Nothing published, no version bump, and
 the fleet still carries the previous bytes on disk.
+
+### `tinycmdr <verb>`: a management door, and what it refuses to do (2026-09-22)
+
+D1 of the review, done before the public release because it is the one finding that changes what
+a READER does on day two. The installers used to leave no command behind: changing the model
+meant editing `config.json`, the token meant editing `.env`, and the restart meant finding the
+right helper for the OS. None of those are hard, and all of them are where a stray quote makes
+the bot deaf with nothing on screen.
+
+```
+tinycmdr status | doctor | model [use NAME] | logs [n] | restart | token [set NAME] | run | help
+```
+
+- **No verb runs the agent or spends a token.** `status` and `doctor` ask the endpoint for
+  METADATA (`/v1/models`, `/props`); `model` lists what the install can route to and `model use`
+  writes the default through the SAME `atomic_write_text` and `set_global_model` the chat verb
+  uses. Both failing verbs exit non-zero with the reason on stderr, so a script can act on it.
+- **`restart` calls this host's own shipped helper** (`maintenance/restart-tinycmdr.{ps1,sh,}`)
+  rather than re-implementing the kill-and-launch dance - that dance is where two bots on one
+  token came from. On Windows it refuses and prints the `-Verb RunAs` line when the shell is not
+  elevated; on Linux it prints the `sudo` line; a missing helper is reported as "this install was
+  not built by the installer" rather than as a permissions problem.
+- **`token` never prints a value.** It reports which keys are set and in which file, and
+  `token set NAME` reads the value from stdin (getpass when a terminal is attached), writes
+  `.env` atomically with mode 600, and replaces an existing line instead of appending a second.
+- **Two ~20-line shims, not a second build.** `tinycmdr.cmd` (Windows, CRLF) and `tinycmdr` (POSIX,
+  LF) run `tinycmdr.py` from the folder they sit in; the POSIX one resolves a symlink chain, so a
+  hand-made `/usr/local/bin/tinycmdr` still finds the install. The installers put them in place:
+  Windows adds the install folder to the **user** PATH (never the machine PATH, and never during a
+  `-SkipTask` probe) with a `-NoPath` escape; Linux and macOS write a two-line wrapper into
+  `/usr/local/bin`, so removing one file is the whole undo. Both POSIX installers gained
+  `--no-path`.
+- The verbs live in the region the console build cuts, so the console build is unchanged: a
+  console session has its own slash commands, and these verbs are about a SERVICE.
+
+Two bugs the gate caught in my own code, both worth the note:
+
+- `run_capture` returns FOUR values `(rc, out, err, timed_out)` and the restart verb unpacked
+  three - and my first stub returned three too, so the suite agreed with a call that would have
+  raised `ValueError` on a real box. A test double that models the wrong interface grades
+  nothing; the stub now returns four and the timeout reads as a failure.
+- `str(workdir) in helper` failed on Windows because `tempfile.mkdtemp` handed back the 8.3 SHORT
+  form of the temp path (`DAVIDT~1`) while the module resolved the long one. Compare paths with
+  `os.path.samefile`, never as strings.
+
+Gate: `tests/test_verbs.py` (32 checks) - help/unknown verbs, status and doctor exit codes against
+a dead and a live-stub endpoint, the catalog refusal, the config write, the log tail with a key
+redacted, and `token` naming keys without printing them. Verified by hand as well: `tinycmdr.cmd
+help` through PowerShell, the POSIX shim's interpreter selection with a fake python on PATH, and
+`bash -n` / the PowerShell parser on the two installers. Not executed on purpose: `restart` (it
+would restart the live bot on this box) - the helper invocation is graded with `run_capture`
+stubbed and the argv asserted to point INSIDE the install.

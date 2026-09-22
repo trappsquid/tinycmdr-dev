@@ -46,6 +46,7 @@ param(
     [switch] $Force,                             # redo: stop what is running, overwrite everything
     [switch] $SkipTask,                          # files only: no admin, no task, no start
     [switch] $NoStart,
+    [switch] $NoPath,                            # leave the user PATH alone
     [switch] $NoPause,                           # for scripted runs (the .cmd uses this)
     [switch] $VerifyOnly,                        # just probe -InstallDir and stop
     [switch] $Uninstall,                         # remove the task and the folder
@@ -609,7 +610,7 @@ if ($Force) {
     Start-Sleep -Seconds 2
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-$copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr-cli.py", "requirements.txt", "config.example.json",
+$copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr-cli.py", "tinycmdr.cmd", "requirements.txt", "config.example.json",
           ".env.example", "README.md", "skills")
 foreach ($item in $copy) {
     $src = Join-Path $Source $item
@@ -622,6 +623,23 @@ if (Test-Path $restart) { Copy-Item $restart (Join-Path $InstallDir "maintenance
 $stateDirs = @("sessions", "snapshots", "tools", "tmp")
 foreach ($d in $stateDirs) { New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir $d) | Out-Null }
 Say "copied  : $(($copy | Where-Object { Test-Path (Join-Path $Source $_) }) -join ', ')"
+
+# ------------------------------------------------------ the verb surface on PATH
+# audit F12: an install left no command behind, so day-two work meant hand-editing
+# .env and config.json. tinycmdr.cmd is the shim; the folder goes on the USER path
+# (never the machine path), and a probe (-SkipTask) touches nothing.
+if ($NoPath -or $SkipTask) {
+    Say "path    : left alone ($(if ($NoPath) { '-NoPath' } else { '-SkipTask' }))"
+} else {
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $parts = @($userPath -split ';' | Where-Object { $_ -and $_.Trim() })
+    if ($parts -notcontains $InstallDir) {
+        [Environment]::SetEnvironmentVariable("Path", (($parts + $InstallDir) -join ';'), "User")
+        Say "path    : added to your user PATH - open a NEW window and run: tinycmdr status"
+    } else {
+        Say "path    : already on your user PATH: tinycmdr status"
+    }
+}
 
 # --------------------------------------------------------------- 4. config.json
 Head "writing config.json"

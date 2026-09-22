@@ -64,6 +64,7 @@ while [ $# -gt 0 ]; do
         --no-web)           WEB_ON=0; shift ;;
         --force)            FORCE=1; shift ;;
         --no-start)         NO_START=1; shift ;;
+        --no-path)          NO_PATH=1; shift ;;
         --no-deps)          NO_DEPS=1; shift ;;
         --no-sudoers)       NO_SUDOERS=1; shift ;;
         --verify-only)      VERIFY_ONLY=1; shift ;;
@@ -274,7 +275,7 @@ mkdir -p "$INSTALL_DIR"
 # tinycmdr-cli.py goes in FLAT, beside tinycmdr.py, never in a folder of its own:
 # every door then reads ONE config.json and ONE .env (it resolves both from the
 # folder it sits in), and the doors are mediums rather than separate installs.
-for item in tinycmdr.py tinycmdr-cli.py requirements.txt README.md \
+for item in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt README.md \
             config.example.json .env.example \
             skills install maintenance; do
     if [ -e "$SRC/$item" ]; then
@@ -289,6 +290,17 @@ if [ -n "$keep" ]; then
 fi
 mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/sessions"
 chmod +x "$INSTALL_DIR/tinycmdr.py" 2>/dev/null || true
+chmod +x "$INSTALL_DIR/tinycmdr" 2>/dev/null || true
+# The verb surface on PATH (audit F12). A two-line wrapper, not a symlink: nothing
+# has to resolve, it names the install dir explicitly, and removing the file IS the
+# uninstall step. --no-path leaves the box untouched.
+if [ "${NO_PATH:-0}" != "1" ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+    printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > /usr/local/bin/tinycmdr
+    chmod 0755 /usr/local/bin/tinycmdr
+    info "verbs      : tinycmdr status | doctor | model | logs | restart | token"
+else
+    info "verbs      : not on PATH - run $INSTALL_DIR/tinycmdr (or re-run without --no-path)"
+fi
 if [ -f "$INSTALL_DIR/install/fleet-secrets.env" ]; then
     rm -f "$INSTALL_DIR/install/fleet-secrets.env"   # its values now live in .env
 fi

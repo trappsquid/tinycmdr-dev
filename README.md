@@ -50,7 +50,9 @@ It asks for administrator rights (needed for the scheduled task), keeps its wind
 read it, and logs everything to `%TEMP%\tinycmdr-install.log`. On a fleet host that is the whole job:
 it reads `install\fleet-defaults.json` from the package (the fleet's Mattermost host, model endpoint
 and allowed user), reuses the bot token from an existing `.env`, asks for one only if there is none,
-registers the task, and verifies the install — nothing to hand-edit.
+registers the task, and verifies the install — nothing to hand-edit. It also puts the
+install folder on your **user** PATH (not the machine PATH), so `tinycmdr status` works from
+any new window; `-NoPath` leaves your PATH alone.
 
 `install\install-tinycmdr.cmd` is the same thing from one level down; both take the same switches.
 
@@ -149,7 +151,9 @@ sudo bash install/install-tinycmdr.sh --uninstall
 ```
 
 Switches: `--install-dir`, `--user`, `--bot-name`, `--model-base-url`, `--model`, `--web-port`,
-`--no-web`, `--no-start`, `--no-deps`. The token comes from `--token` or `--token-file`; on a
+`--no-web`, `--no-start`, `--no-deps`, `--no-path`. It also drops a two-line wrapper at
+`/usr/local/bin/tinycmdr`, so the verbs below work from any directory;
+`sudo rm /usr/local/bin/tinycmdr` is the whole undo. The token comes from `--token` or `--token-file`; on a
 redo it is reused from the existing `.env`. Ubuntu 22.04 ships python3 3.10 without
 `python3-venv`, and the installer apt-installs that itself. Everything is transcribed to
 `/tmp/tinycmdr-install.log`.
@@ -272,6 +276,29 @@ never starts this one on its own. That is deliberate, the log says it at startup
 `--telegram` is how you run either. DMs only: a group message is refused. A run posts
 one message that grows as it works and replaces it with the answer when it is done.
 
+## Management verbs
+
+The installer puts one command on PATH — `tinycmdr` (`tinycmdr.cmd` on Windows). It is a ~20-line
+shim that runs `tinycmdr.py` from the install folder, not a second copy of anything, and day-two
+work is a verb rather than a hand-edited `.env`:
+
+```
+tinycmdr status             version, folder, model, endpoint, context, log, instance
+tinycmdr doctor             check this install and name what is wrong (exit 1 when it is)
+tinycmdr model              the models this install can route to
+tinycmdr model use <name>   set the default model in config.json, catalog-checked
+tinycmdr logs [n]           the last n lines of tinycmdr.log (default 40)
+tinycmdr restart            restart through this host's own door (task, systemd, launchd)
+tinycmdr token              which secrets are set, and in which file (never their values)
+tinycmdr token set <NAME>   type a value and it goes to .env, mode 600
+```
+
+No verb runs the agent or spends a token: `status` and `doctor` ask the endpoint for metadata
+(`/v1/models`, `/props`) and nothing else, and both exit non-zero when it does not answer, so a
+script can act on it. `tinycmdr restart` calls the shipped helper for this host instead of
+re-implementing the kill-and-launch dance, because that dance is where two bots on one token
+came from.
+
 ## Operating it
 
 ```
@@ -323,6 +350,7 @@ field-notes.md           known failures, matched against a failed tool result an
 install/                 installers for Windows, Linux and macOS
 maintenance/             the restart helper, plus the generator for the console build
 tinycmdr-cli.py          the same agent, console only, no chat layer at all (see "Try it").
+tinycmdr / tinycmdr.cmd   the management door: tinycmdr status|doctor|model|logs|restart|token
                         It is GENERATED from tinycmdr.py - never edit it by hand:
                         python maintenance/build-cli-source.py && maintenance/build-cli-fix.py
 ```

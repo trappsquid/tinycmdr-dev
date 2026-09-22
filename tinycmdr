@@ -1,0 +1,38 @@
+#!/bin/sh
+# tinycmdr - the management door on Linux and macOS. Symlink it onto PATH (the
+# installer does) and `tinycmdr status` works from any directory.
+#
+# A shim, not a second build: it runs tinycmdr.py from the folder it RESOLVES to, so a
+# symlink in /usr/local/bin finds the install rather than the bin directory.
+set -eu
+
+SELF="$0"
+while [ -L "$SELF" ]; do
+    LINK="$(readlink "$SELF")"
+    case "$LINK" in
+        /*) SELF="$LINK" ;;
+        *) SELF="$(dirname "$SELF")/$LINK" ;;
+    esac
+done
+HERE="$(cd "$(dirname "$SELF")" && pwd)"
+
+PY="${tinycmdr_PYTHON:-}"
+if [ -z "$PY" ]; then
+    # A candidate is only a python if it can RUN: on a host with the Windows Store
+    # app-alias shim, /usr/bin/python3 exists and prints an advert instead.
+    for c in "$HERE/venv/bin/python" "$HERE/.python/bin/python3" \
+             /usr/bin/python3 /usr/local/bin/python3; do
+        if [ -x "$c" ] && "$c" -c "import sys" >/dev/null 2>&1; then PY="$c"; break; fi
+    done
+fi
+if [ -z "$PY" ]; then
+    for c in python3 python; do
+        if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+    done
+fi
+if [ -z "$PY" ]; then
+    echo "tinycmdr: no python found - set tinycmdr_PYTHON to an interpreter" >&2
+    exit 127
+fi
+
+exec "$PY" "$HERE/tinycmdr.py" "$@"

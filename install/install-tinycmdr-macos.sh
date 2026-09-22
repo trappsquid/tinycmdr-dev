@@ -85,6 +85,7 @@ while [ $# -gt 0 ]; do
         --no-launchd)      NO_LAUNCHD=1; shift ;;
         --force)           FORCE=1; shift ;;
         --no-start)        NO_START=1; shift ;;
+        --no-path)         NO_PATH=1; shift ;;
         --verify-only)     VERIFY_ONLY=1; shift ;;
         --uninstall)       UNINSTALL=1; shift ;;
         --force-python)    FORCE_PYTHON=1; shift ;;
@@ -343,7 +344,7 @@ fi
 # tinycmdr-cli.py is installed FLAT, beside tinycmdr.py: every door then reads ONE
 # config.json and ONE .env, so a session, the page and the bot cannot disagree
 # about which config was last edited.
-for f in tinycmdr.py tinycmdr-cli.py requirements.txt config.example.json README.md; do
+for f in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt config.example.json README.md; do
     if [ -f "$SRC/$f" ]; then
         cp -f "$SRC/$f" "$INSTALL_DIR/$f"
     elif [ -f "$INSTALL_DIR/$f" ]; then
@@ -524,6 +525,15 @@ if [ "$NO_LAUNCHD" = 1 ]; then
 fi
 
 say "launchd agent"
+# The verb surface on PATH (audit F12): a two-line wrapper with the install dir
+# written into it, so nothing has to resolve and uninstalling is one file.
+if [ "${NO_PATH:-0}" != "1" ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+    printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > /usr/local/bin/tinycmdr
+    chmod 0755 /usr/local/bin/tinycmdr
+    info "verbs      : tinycmdr status | doctor | model | logs | restart | token"
+else
+    info "verbs      : not on PATH - run $INSTALL_DIR/tinycmdr (or re-run without --no-path)"
+fi
 mkdir -p "$PLIST_DIR"
 TPL="$SRC/install/com.tinycmdr.agent.plist"
 [ -f "$TPL" ] || die "package is missing install/com.tinycmdr.agent.plist"
