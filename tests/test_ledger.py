@@ -1832,6 +1832,47 @@ def _window_stub(value):
     fb.AGENT.__dict__["_window_cache"] = value
 
 
+def test_a_restarted_endpoint_is_noticed_after_the_ttl():
+    """A window cached for the life of the process cannot notice a server restarted
+    into a smaller slot count, which is exactly the 2026-09-21 failure: the harness
+    trusted a number the box no longer served and lost the turn. The cache has a TTL
+    now, so a long run re-asks (audit, 2026-09-22)."""
+    saved_cfg = fb.CONFIG
+    saved_detect = fb._detect_window
+    calls = {"n": 0}
+
+    def detect(url, headers):
+        calls["n"] += 1
+        return 262144 if calls["n"] == 1 else 131072     # the box was restarted
+
+    try:
+        cfg = isolated_config()
+        cfg["llm"]["max_context_tokens"] = "auto"
+        cfg["llm"]["max_tokens"] = 16384
+        fb._detect_window = detect
+        _budget_clear()
+        fb.AGENT.__dict__.pop("_window_cache", None)
+        fb.AGENT.__dict__.pop("_window_at", None)
+        room = fb.REPLY_HEADROOM + 16384
+        first = fb.AGENT._context_budget()
+        check("ttl: the first budget is what the server reported",
+              first == 262144 - room, first)
+        check("ttl: and it is not re-asked on every payload",
+              fb.AGENT._context_budget() == first and calls["n"] == 1, calls)
+        fb.AGENT.__dict__["_window_at"] = time.time() - (fb.WINDOW_TTL + 60)
+        _budget_clear()
+        second = fb.AGENT._context_budget()
+        check("ttl: past the TTL the endpoint is asked again, so a restarted box "
+              "is noticed",
+              second == 131072 - room and calls["n"] == 2, (second, calls))
+    finally:
+        fb._detect_window = saved_detect
+        fb.AGENT.__dict__.pop("_window_cache", None)
+        fb.AGENT.__dict__.pop("_window_at", None)
+        _budget_clear()
+        fb.CONFIG = saved_cfg
+
+
 def test_the_budget_is_clamped_by_what_the_endpoint_serves():
     """A host that says 200000 while the box actually serves 131072 sent a 126,261
     token prompt with 4,808 tokens of room to answer in and lost the turn

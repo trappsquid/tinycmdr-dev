@@ -11,6 +11,7 @@ typed line), both landing in the same slot the reporter reads.
 import importlib.util
 import os
 import sys
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -194,6 +195,79 @@ check("a task is handed to the chat's worker",
       and submitted == [(1, "check the backups", 4)], str(submitted))
 check("each chat gets its own conversation name",
       fb.tg_session_key(42) == "telegram-42")
+
+# ---- the token has ONE home, and both doors never fight silently -----------
+# (audit, 2026-09-22: telegram.token was read from config.json, which contradicts
+# the package's own rule that secrets live only in .env; and with both tokens set
+# the Telegram lane simply never started, with nothing said.)
+
+
+def staged_token(config_token, env_token):
+    """Import the app from a throwaway folder and report what it made of the token."""
+    import json
+    import subprocess
+    import tempfile
+    wd = Path(tempfile.mkdtemp(prefix="fbtg-"))
+    try:
+        shutil.copy2(SRC, wd / "tinycmdr.py")
+        (wd / "config.json").write_text(json.dumps({
+            "telegram": {"token": config_token, "allowed_users": ["123"]},
+            "mattermost": {"url": "", "token": ""},
+            "llm": {"base_url": "http://127.0.0.1:1/v1", "model": "none"},
+        }), encoding="utf-8")
+        # Strip EVERY tinycmdr_* var: importing tinycmdr.py at the top of this
+        # file loads the repo's own .env into os.environ, so the suite's
+        # environment is not a clean one to measure a token rule in.
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("tinycmdr_")}
+        if env_token:
+            env["tinycmdr_TG_TOKEN"] = env_token
+        code = (
+            "import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location('staged', r'%s')\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            "sys.modules['staged'] = m\n"
+            "spec.loader.exec_module(m)\n"
+            "print('TOKEN', repr(m.CONFIG['telegram'].get('token') or ''))\n"
+            "print('TG_ONLY', m.tg_token_only())\n" % (wd / "tinycmdr.py"))
+        r = subprocess.run([sys.executable, "-c", code], cwd=str(wd), env=env,
+                           capture_output=True, text=True, timeout=180)
+        said = r.stdout + r.stderr
+        logf = wd / "tinycmdr.log"
+        if logf.exists():
+            said += logf.read_text(encoding="utf-8", errors="replace")
+        return said
+    finally:
+        shutil.rmtree(wd, ignore_errors=True)
+
+
+said = staged_token("123456:SECRET-FROM-CONFIG", "")
+check("a token in config.json is IGNORED", "TOKEN ''" in said, said[-300:])
+check("and the log says why", "IGNORED" in said, said[-300:])
+check("a config token alone does not open the lane", "TG_ONLY False" in said,
+      said[-300:])
+
+said = staged_token("", "123456:SECRET-FROM-ENV")
+check("the .env token IS honoured", "TOKEN '123456:SECRET-FROM-ENV'" in said,
+      said[-300:])
+check("and it opens the lane on its own", "TG_ONLY True" in said, said[-300:])
+
+_saved = (dict(fb.CONFIG.get("telegram") or {}), dict(fb.CONFIG["mattermost"]))
+try:
+    fb.CONFIG["telegram"]["token"] = "tg-token-here"
+    fb.CONFIG["mattermost"]["token"] = "mm-token-here"
+    note = fb.both_doors_note()
+    check("both doors set is a STARTUP warning, not silence",
+          "Mattermost wins" in note, note[:120])
+    fb.CONFIG["mattermost"]["token"] = ""
+    check("one door is not a warning", fb.both_doors_note() == "")
+    fb.CONFIG["mattermost"]["token"] = "mm-token-here"
+    fb.CONFIG["telegram"]["token"] = ""
+    check("and neither is none", fb.both_doors_note() == "")
+finally:
+    fb.CONFIG["telegram"].update(_saved[0])
+    fb.CONFIG["mattermost"].update(_saved[1])
+
 
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

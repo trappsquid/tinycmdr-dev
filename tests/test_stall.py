@@ -593,6 +593,63 @@ def _scripted_run(scripted):
     return out, used["n"], payloads
 
 
+def test_both_repeat_guards_share_one_signature():
+    """One canonical call signature, so whitespace cannot defeat the refusal while
+    still feeding the loop counter (audit, 2026-09-22)."""
+    a = fb._call_sig("shell", '{"command": "ls"}')
+    b = fb._call_sig("shell", '{"command":"ls"}')
+    check("sig: a whitespace difference is the same call", a == b, (a, b))
+    check("sig: a parsed dict agrees with its JSON", fb._call_sig("shell", {"command": "ls"}) == a)
+    check("sig: a different argument set is a different call",
+          fb._call_sig("shell", '{"command": "df"}') != a)
+    check("sig: a different tool is a different call",
+          fb._call_sig("read_file", '{"command": "ls"}') != a)
+    check("sig: junk arguments do not raise",
+          fb._call_sig("x", "{not json")[0] == "x")
+    check("sig: sorting makes key order irrelevant",
+          fb._call_sig("shell", '{"a": 1, "b": 2}') == fb._call_sig("shell", '{"b": 2, "a": 1}'))
+
+
+def test_a_write_clears_BOTH_repeat_guards():
+    """The promise in the system prompt - "any write or edit clears it" - has to hold
+    for the loop guard too, not just the dedupe map.
+
+    Script: read, read, WRITE, read, read, answer. With the loop guard's map cleared
+    by the write, the last two reads count 1 and 2 (a nudge at most). Without it they
+    count 3 and 4, which trips loop_stop_repeats=4 and forces a report mid-task - the
+    legitimate verify-after-fix that prints the same line as before the fix.
+    """
+    probe = TMP / "recheck_probe.txt"
+    probe.write_text("constant output\n", encoding="utf-8")
+
+    def call(tool, args, cid):
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"id": cid, "function": {
+                    "name": tool, "arguments": json.dumps(args)}}]}
+
+    read = lambda cid: call("read_file", {"path": str(probe)}, cid)
+    write = call("write_file", {"path": str(probe),
+                               "content": "constant output\n",
+                               "no_backup": True}, "w1")
+    fb.CONFIG["agent"]["loop_stop_repeats"] = 4
+    fb.CONFIG["agent"]["loop_dedupe_after"] = 2
+    fb.CONFIG["agent"]["max_steps"] = 60
+    fb.CONFIG["agent"]["max_minutes"] = 20
+    out, calls, payloads = _scripted_run([
+        read("1"), read("2"), write, read("3"), read("4"),
+        {"role": "assistant",
+         "content": "Re-checked after the write: the probe is still constant."}])
+    last = json.dumps(payloads[-1]) if payloads else ""
+    check("guards: the re-check after a write actually RUNS",
+          "NOT RE-EXECUTED" not in last, last[-200:])
+    check("guards: two more identical results do not stop the run",
+          "Stopped a loop" not in out, out[:200])
+    check("guards: the run ends with its own answer",
+          "still constant" in out, out[:200])
+    check("guards: every scripted turn was used (nothing was cut short)",
+          calls == 6, f"model calls: {calls}")
+
+
 def test_identical_tool_calls_stop_the_run_instead_of_burning_the_budget():
     """Live on 2026-09-10 a local model re-ran the same 6 commands for 8 cycles
     (the nudge at 3 repeats was ignored) and never reported. Identical args +
@@ -1307,7 +1364,7 @@ def test_startup_validation_catches_an_unconfigured_host():
 
         # placeholder allowlist
         fb.CONFIG["mattermost"]["token"] = "abc123"
-        fb.CONFIG["mattermost"]["allowed_users"] = ["your-mattermost-username"]
+        fb.CONFIG["mattermost"]["allowed_users"] = ["your-mattermost-user-id"]
         check("startup: the placeholder allowlist is rejected",
               "allowed_users" in (fb.validate_startup_config() or ""),
               fb.validate_startup_config())

@@ -194,7 +194,13 @@ def test_the_reference_config_parses_and_matches_the_defaults():
 
     missing = []
     for section, keys in code_defaults.items():
-        if section.startswith("_") or section not in ex:
+        if section.startswith("_"):
+            continue
+        if section not in ex:
+            # A whole missing SECTION used to be skipped, which is exactly how a
+            # whole undocumented lane (telegram) shipped past this check while one
+            # missing key inside an existing section was loud (audit, 2026-09-22).
+            missing.append("%s (the whole section)" % section)
             continue
         for key in keys:
             if key.startswith("_") or key in SKIP_PATHS:

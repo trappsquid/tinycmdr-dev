@@ -392,6 +392,14 @@ def load_config():
     for env, (section, key) in env_map.items():
         if os.environ.get(env):
             cfg[section][key] = os.environ[env]
+    # The Telegram token is .env-ONLY (audit, 2026-09-22). Every other secret here
+    # has one home; a token sitting in config.json is a second copy the agent can
+    # read into a prompt and quote, which is the rule this package states about
+    # secrets and was quietly breaking for this one lane.
+    if not os.environ.get("tinycmdr_TG_TOKEN") and (cfg.get("telegram") or {}).get("token"):
+        log.warning("telegram.token in config.json is IGNORED - the Telegram token "
+                    "lives in .env as tinycmdr_TG_TOKEN. Delete the config.json copy.")
+        cfg["telegram"]["token"] = ""
     return cfg
 
 
@@ -447,7 +455,47 @@ START_TIME = time.time()
 # --------------------------------------------------------------------------
 
 def est_tokens(text):
-    return max(1, len(text) // 4)
+    """Rough token count, deliberately cheap: this runs on every payload assembly.
+
+    len//4 is right for English prose and wrong for what an ops agent carries.
+    Code and JSON run ~3.0 chars/token (braces, punctuation and short identifiers
+    split into more pieces), CJK and other wide scripts ~1.3, and a long tool
+    result / file body ~3.4. With one flat divisor the harness believed a
+    code-heavy session was 2-3x further from the budget than it was, so the cut
+    that protects the request fired late - and on a cloud endpoint the bill follows
+    the real count (audit, 2026-09-22). _force_shrink catches the eventual 400, so
+    the old cost was a failure moved to the moment the context was fullest.
+
+    A content-aware divisor, not a per-endpoint calibration: one pass over a
+    bounded sample, no network call, and it cannot go stale when a box is restarted
+    with a different tokenizer. The opt-in live comparison against a real
+    tokenizer lives in tests/test_tokens.py.
+    """
+    n = len(text)
+    if n <= 0:
+        return 1
+    sample = text if n <= 4000 else text[:2000] + text[-2000:]
+    m = len(sample)
+    wide = other = dense = 0
+    for c in sample:
+        o = ord(c)
+        if o > 0x2E7F:                       # CJK, kana, hangul
+            wide += 1
+        elif o > 0x7F:                       # accents, cyrillic, arabic, emoji
+            other += 1
+        elif c in "{}[]()<>=;:,./|-_$#@&*+%!^~":
+            dense += 1
+    if wide > m * 0.10:
+        per = 1.3
+    elif other > m * 0.10:
+        per = 2.6
+    elif dense > m * 0.14:
+        per = 3.0
+    elif n > m:
+        per = 3.4                           # a long body is output or source
+    else:
+        per = 4.0
+    return max(1, int(n / per))
 
 
 def fmt_tokens(n):
@@ -547,6 +595,14 @@ _CONTEXT_OVERFLOW_RE = re.compile(
 # this, so a budget written for a bigger window cannot send a prompt that leaves
 # no room to answer (2026-09-21).
 REPLY_HEADROOM = 7000
+
+# How long a detected endpoint window / context budget is trusted (seconds). It is
+# metadata, not a model call, but it MOVES: .47 serves 131,072 per request with -np 2
+# and 262,144 with -np 3, and a box restarted into a smaller window while a running
+# agent believed the old number is the 2026-09-21 incident. A process-lifetime cache
+# made "only a bot restart fixes it" true one level down, so the same TTL pattern
+# server_defaults() uses applies here (audit, 2026-09-22).
+WINDOW_TTL = 300.0
 
 # How many times a run may re-ask after the model returned NO answer at all (empty
 # content, no tool call). Deliberately separate from agent.auto_continue_max: a
@@ -1349,6 +1405,28 @@ def is_blocked(command):
         if re.search(pat, command, re.IGNORECASE):
             return pat
     return None
+
+
+def _call_sig(name, args):
+    """One canonical signature for the two repeat guards.
+
+    The dedupe map keyed on the RAW argument string while the loop guard keyed on
+    json.dumps(args, sort_keys=True), so {"a": 1} and {"a":1} were the same call to
+    one guard and different calls to the other: whitespace defeated the refusal
+    while still feeding the loop counter (audit, 2026-09-22). Both read this now.
+    Takes the raw JSON string or the parsed dict, and never raises.
+    """
+    parsed = args
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed or "{}")
+        except Exception:
+            return (name, str(args)[:400])
+    try:
+        norm = json.dumps(parsed, sort_keys=True, ensure_ascii=False, default=str)
+    except Exception:
+        norm = str(parsed)
+    return (name, norm[:400])
 
 
 # --------------------------------------------------------------------------
@@ -3189,7 +3267,10 @@ def tool_edit_file(args, ctx):
     out = new_lf.replace("\n", nl) if nl != "\n" else new_lf
     backup = path.with_suffix(path.suffix + ".bak")
     try:
-        backup.write_text(text, encoding="utf-8")
+        # Byte-exact, never a text round-trip through the platform's newline
+        # default: the .bak of a CRLF file came back "\r\r\n" per line, so the
+        # one copy that exists to undo a bad edit was not restorable as-was.
+        backup.write_bytes(raw_bytes)
         atomic_write_text(path, out)
     except Exception as e:
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
@@ -3294,17 +3375,27 @@ def tool_write_file(args, ctx):
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if args.get("append"):
-            with path.open("a", encoding="utf-8") as f:
+            with path.open("a", encoding="utf-8", newline="") as f:
                 f.write(args["content"])
         else:
             if path.exists() and not args.get("no_backup"):
                 backup = path.with_suffix(path.suffix + ".bak")
-                backup.write_text(path.read_text(encoding="utf-8",
-                                                   errors="replace"),
-                                  encoding="utf-8")
-            path.write_text(args["content"], encoding="utf-8")
-        return (f"OK: wrote {len(args['content'])} chars to {path}"
-                + verify_note(path))
+                backup.write_bytes(path.read_bytes())
+            # newline="", from the other direction: an LF-only payload (a bash
+            # script, a .gitattributes) used to be rewritten CRLF by the platform,
+            # and bash then refused the script with "$'\r': command not found" -
+            # which reads as the model's fault, not the writer's.
+            with path.open("w", encoding="utf-8", newline="") as f:
+                f.write(args["content"])
+        note = verify_note(path)
+        # bytes as given is right for code, but a Windows script with LF only is a
+        # file that silently will not run, so say so where the model reads it.
+        if (path.suffix.lower() in (".cmd", ".bat", ".ps1", ".vbs")
+                and b"\r\n" not in path.read_bytes()):
+            note += ("  WARNING: %s files must use CRLF line endings on Windows "
+                     "and this one has LF only - it will not run. Rewrite it with "
+                     "CRLF." % path.suffix.lower())
+        return (f"OK: wrote {len(args['content'])} chars to {path}" + note)
     except Exception as e:
         return f"ERROR writing {path}: {e}"
 
@@ -3515,7 +3606,8 @@ def curate_notes(reason="curator"):
         _archive_notes(evicted_entries, reason)
     doc = {"preamble": doc["preamble"], "entries": entries}
     new_text = _render_notes(doc, elided=len(evicted_entries))
-    NOTES_FILE.write_text(new_text, encoding="utf-8")
+    with NOTES_FILE.open("w", encoding="utf-8", newline="") as f:
+        f.write(new_text)
     bits = []
     if dupes:
         bits.append(f"{dupes} duplicate(s) merged")
@@ -3603,7 +3695,13 @@ def atomic_write_text(path, text, encoding="utf-8"):
     p = Path(path)
     tmp = p.with_name(p.name + ".tmp-%d" % os.getpid())
     try:
-        with tmp.open("w", encoding=encoding) as f:
+        # newline="" is load-bearing, not style. The default translates every "\n"
+        # to os.linesep on Windows, so text that already carried "\r\n" landed as
+        # "\r\r\n": measured 2026-09-22, edit_file doubled every CR on this box and
+        # wrote its own .bak doubled too. Every caller here has already chosen a
+        # convention (tool_edit_file expands to the file's own), so the platform must
+        # not translate a second time.
+        with tmp.open("w", encoding=encoding, newline="") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
@@ -3616,7 +3714,8 @@ def atomic_write_text(path, text, encoding="utf-8"):
             pass
         log.warning("atomic write of %s failed (%s) - falling back to a plain "
                     "write", p.name, e)
-        p.write_text(text, encoding=encoding)
+        with p.open("w", encoding=encoding, newline="") as f:
+            f.write(text)
 
 
 def salvage_ledger(err):
@@ -6343,6 +6442,11 @@ def dump_payload(payload, label="chat", note=""):
     Off by default. This exists because 'the model answered nonsense' is not
     diagnosable from the outside — the payload is the only ground truth about
     what it was actually shown (system prompt, injected state, tool results).
+
+    Tool output is scrubbed on the way in; the OPERATOR's own messages are not, so a
+    dump folder is a place secrets can land - a pasted key or token sits in these
+    files in clear text. Point debug_dump_dir at a folder you treat as sensitive, and
+    clean it up (audit, 2026-09-22).
     """
     d = (CONFIG["agent"].get("debug_dump_dir") or "").strip()
     if not d:
@@ -6354,8 +6458,10 @@ def dump_payload(payload, label="chat", note=""):
         stamp = f"{time.strftime('%Y%m%d-%H%M%S')}-{n:03d}"
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(label))
         name = f"{stamp}-{safe}{note}.json"
-        (target / name).write_text(
-            json.dumps(payload, indent=1, ensure_ascii=False), encoding="utf-8")
+        # newline="": a dump is diffed against the next run's, and the platform's
+        # newline translation would rewrite every line on Windows
+        with (target / name).open("w", encoding="utf-8", newline="") as f:
+            f.write(json.dumps(payload, indent=1, ensure_ascii=False))
     except Exception as exc:
         # warn, not debug: a dump that silently does nothing is worse than no
         # dump at all, because you trust it and draw the wrong conclusion
@@ -6594,12 +6700,21 @@ class Agent:
     def _endpoint_window(self):
         """What this endpoint serves per request, or 0 when it does not say.
 
-        Cached for the process: it is metadata (one /v1/models or /props GET), not
-        a model call. A generation that stopped at this number stopped because the
-        WINDOW filled, not because the output cap was small."""
-        if not hasattr(self, "_window_cache"):
+        Cached with a TTL: it is metadata (one /v1/models or /props GET), not a
+        model call. A generation that stopped at this number stopped because the
+        WINDOW filled, not because the output cap was small - and the number moves
+        when the box is restarted with a different slot count, which is why this is
+        re-asked rather than remembered for the life of the process."""
+        now = time.time()
+        at = getattr(self, "_window_at", 0.0)
+        if not hasattr(self, "_window_cache") or (at and now - at > WINDOW_TTL):
             self._window_cache = _detect_window(CONFIG["llm"]["base_url"],
                                                 self.headers)
+            self._window_at = now
+        elif not at:
+            # Set from outside this method (a scenario stub, a future per-endpoint
+            # probe): adopt it as fresh, so it is trusted now and still expires.
+            self._window_at = now
         return self._window_cache
 
     def _context_budget(self):
@@ -6616,7 +6731,12 @@ class Agent:
         not answer keeps the configured value; with nothing configured and nothing
         detected, fall back to a conservative 8000.
         """
-        if hasattr(self, "_budget_cache"):
+        now = time.time()
+        at = getattr(self, "_budget_at", 0.0)
+        if hasattr(self, "_budget_cache") and not at:
+            self._budget_at = now          # adopted from outside: fresh, then TTL
+            return self._budget_cache
+        if hasattr(self, "_budget_cache") and now - at <= WINDOW_TTL:
             return self._budget_cache
         val = CONFIG["llm"].get("max_context_tokens")
         detected = self._endpoint_window()
@@ -6642,6 +6762,7 @@ class Agent:
                             fits)
                 budget = fits
         self._budget_cache = budget
+        self._budget_at = time.time()
         return budget
 
     def _drop_oldest_block(self, messages, marker):
@@ -6783,18 +6904,18 @@ class Agent:
         last_err = None
         fatal_notes = []
         stream_on = bool(CONFIG["llm"].get("stream", True))
-        for url, model, headers in endpoints:
+        for url, ep_model, headers in endpoints:
             if url != self.llm_url:
                 # Visible in the log so "did that model switch take effect?"
                 # is answerable without guessing.
-                log.info("routing model %s to %s", model, url)
+                log.info("routing model %s to %s", ep_model, url)
             cap = int(max_tokens or CONFIG["llm"].get("max_tokens") or 0)
             payload = {
-                "model": model,
+                "model": ep_model,
                 "messages": messages,
             }
             apply_sampling(payload)
-            dump_payload(payload, model)
+            dump_payload(payload, ep_model)
             if use_tools:
                 # Disclosure decides what is SENT, not what exists: the registry still
                 # holds every tool, so a call for a hidden one is executed and revealed.
@@ -6945,8 +7066,7 @@ class Agent:
                 rc = msg.get("reasoning_content")
                 if usage is not None:
                     usage["calls"] = usage.get("calls", 0) + 1
-                    usage["llm_secs"] = usage.get("llm_secs", 0.0) + (
-                        time.time() - t0)
+                    usage["llm_secs"] = usage.get("llm_secs", 0.0) + secs
                     usage["finish_reason"] = finish
                     usage["last_reasoning_chars"] = (
                         len(rc) if isinstance(rc, str) else 0)
@@ -7689,8 +7809,8 @@ class Agent:
                         # the backstop; the goal is that the model never re-issues
                         # the call, and the cheapest way to get that is to tell it
                         # — in the tool output it reads — that it already has this.
-                        key = (name,
-                               (tc.get("function") or {}).get("arguments", ""))
+                        key = _call_sig(
+                            name, (tc.get("function") or {}).get("arguments", ""))
                         refused = output.startswith("NOT RE-EXECUTED")
                         repeat_no = 1
                         with dedupe_lock:
@@ -7734,6 +7854,13 @@ class Agent:
                             # pre-edit output back, and explained it away.)
                             with dedupe_lock:
                                 executed.clear()
+                            # The loop guard's map is cleared with it. The system
+                            # prompt promises "any write or edit clears it" and that
+                            # was only true of the dedupe map: a legitimate
+                            # verify-after-fix whose check prints the same line as
+                            # before the fix kept climbing toward loop_stop_repeats
+                            # and could force a report mid-task (audit, 2026-09-22).
+                            repeated.clear()
                         log.info("[%s] %s(%s) -> %d chars",
                                  session_key, name,
                                  json.dumps(args)[:120], len(output))
@@ -7752,8 +7879,7 @@ class Agent:
                         # here we nudge. Fire on the FIRST repeat — waiting until
                         # the third wasted two executions of a command that may
                         # mutate the box.
-                        sig = (name, json.dumps(args, sort_keys=True)[:400],
-                               output[:200])
+                        sig = _call_sig(name, args) + (output[:200],)
                         seen = repeated.get(sig, 0) + 1
                         repeated[sig] = seen
                         if seen in (2, 3) or (seen > 3 and seen % 2 == 0):
@@ -9184,12 +9310,23 @@ def cli_banner():
     name = "tinycmdr %s" % VERSION
     if "BUILD" in globals():          # the console build sets BUILD; the bot does not
         name += " (%s build)" % BUILD
-    static = est_tokens(build_system_prompt() + json.dumps(REGISTRY.openai_schemas()))
+    # What the WIRE carries, not what the registry holds: select_tool_schemas(None)
+    # is the disclosed set a request actually sends. Counting every schema made this
+    # line read "34 tool schemas" on an install whose requests carried 14, which
+    # overstates the per-request cost by exactly what disclosure hides - and this is
+    # the line a skeptical reader checks the ~4k-token claim against (audit,
+    # 2026-09-22).
+    visible_schemas = select_tool_schemas(None)
+    _hidden_tools = len(REGISTRY.openai_schemas()) - len(visible_schemas)
+    static = est_tokens(build_system_prompt() + json.dumps(visible_schemas))
     live = est_tokens(volatile_context())
-    overhead = ("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas, "
+    overhead = ("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas%s, "
                 "cache-stable; live %s: notes + task ledger, sent trailing)"
                 % (fmt_tokens(static + live), fmt_tokens(static),
-                   len(REGISTRY.openai_schemas()), fmt_tokens(live)))
+                   len(visible_schemas),
+                   (", +%d hidden, revealed on demand" % _hidden_tools)
+                   if _hidden_tools > 0 else "",
+                   fmt_tokens(live)))
     screen = tui_screen()
     if screen is not None:
         screen.banner(name, [

@@ -217,6 +217,31 @@ def main():
         fb.AGENT.run("disc-e2e", "and again")
         sent2 = names(seen[0].get("tools") or [])
         check(EX in sent2, "the revealed tool rides in the next request")
+
+        # ---- the banner reports what the REQUEST carries --------------------
+        # (audit, 2026-09-22: it counted REGISTRY.openai_schemas(), so a real
+        # install read "34 tool schemas" while its requests carried 14 - the
+        # number a reader checks the ~4k-token claim against was the wrong one.)
+        import contextlib
+        import io
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            fb.cli_banner()
+        lines = [l for l in buf.getvalue().splitlines() if "prompt overhead" in l]
+        check(bool(lines), "the banner prints an overhead line")
+        if lines:
+            text = lines[0]
+            visible = fb.select_tool_schemas(None)
+            registry_n = len(fb.REGISTRY.openai_schemas())
+            hidden_n = registry_n - len(visible)
+            static = fb.est_tokens(fb.build_system_prompt() + json.dumps(visible))
+            check("%d tool schemas" % len(visible) in text,
+                  f"the banner counts the VISIBLE schemas ({len(visible)}), not the "
+                  f"registry's {registry_n}")
+            check(fb.fmt_tokens(static) in text,
+                  f"the static number is what the wire carries ({fb.fmt_tokens(static)})")
+            check(not hidden_n or ("%d hidden" % hidden_n) in text,
+                  "hidden tools are named separately instead of being added in")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

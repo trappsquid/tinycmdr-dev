@@ -1154,3 +1154,77 @@ build, `test_ledger` 233/0; new `tests/test_endpoint_gate.py` (25 checks) and
 `tests/test_experiment.py` (27), `tests/test_spill.py` extended to 22 with the index and the
 by-id read-back. Then one six-box push (bytes to all six; restart where the box was idle), with a
 process check per host rather than a file hash alone.
+
+### Batch A + the Telegram door: an outside code review, triaged and half landed (2026-09-22)
+
+An independent review of the published 1.0.0 package arrived with 13 findings. Re-measured
+against the tree the package was cut from (the zip's `tinycmdr.py` is byte-identical to the
+tree's, sha `61a358e3...`, so the review is reading current code; its "14,562 lines" is wrong,
+it is 14,104). Verdicts, and what was done about each:
+
+- **F2, newline corruption - CONFIRMED and FIXED.** Windows text mode turned every `\n` into
+  `os.linesep`, so `edit_file` on a CRLF file wrote `\r\r\n` per line (measured on this box,
+  not reasoned) and its own `.bak` was doubled the same way; `write_file` rewrote LF-only
+  payloads as CRLF, which bash then refuses. `newline=""` at every site whose caller has
+  already chosen a convention (`atomic_write_text`'s temp write and its plain-write fallback,
+  `tool_write_file`'s write and append branches), `write_bytes(raw_bytes)` for the edit
+  backup, and a WARNING when an LF-only `.cmd`/`.bat`/`.ps1`/`.vbs` is written - the fix would
+  otherwise have traded one silent fault for another. Gate: `tests/test_newlines.py`
+  (19 checks, byte-level, both builds, falsified on the pre-fix build: 14 FAIL).
+- **F5, the token estimate - CONFIRMED and FIXED.** `est_tokens` was `len//4` for everything.
+  Content-aware now: wide scripts 1.3, non-ASCII 2.6, punctuation-dense code/JSON 3.0, a long
+  body 3.4, prose 4.0. Measured on this build's own source (the file the model re-reads most):
+  3.40 chars/token where the old estimate said 4.00 - a 15% undercount on the commonest
+  sample, more on JSON. Gate: `tests/test_tokens.py`, offline properties plus an opt-in
+  `tinycmdr_TEST_TOKENIZE_URL` comparison that sends nothing by default.
+- **F6, the window cache - CONFIRMED and FIXED.** `_endpoint_window`/`_context_budget` were
+  cached for the life of the process, so a box restarted into a smaller `n_ctx` could never be
+  noticed by a running agent - the 2026-09-21 incident made permanent. Both now carry
+  `WINDOW_TTL = 300.0`. A cache set from outside the getter (a scenario stub, a future
+  per-endpoint probe) is adopted with a fresh stamp instead of being discarded: the first
+  version broke `tests/test_ledger.py`'s `_window_stub`, which is how the adoption case was
+  found. Gate: `test_a_restarted_endpoint_is_noticed_after_the_ttl`.
+- **F7, the repeat guards - CONFIRMED and FIXED.** The dedupe map keyed on the raw argument
+  STRING while the loop guard keyed on `json.dumps(args, sort_keys=True)`, so whitespace
+  defeated the refusal and still fed the loop counter; and a mutation cleared `executed` but
+  never `repeated`, while the prompt promises "any write or edit clears it". One `_call_sig()`
+  for both, and a mutation clears both maps. Gate:
+  `test_a_write_clears_BOTH_repeat_guards` (read, read, write, read, read - without the clear
+  the last two trip `loop_stop_repeats` and force a report mid-task).
+- **F11, the banner - CONFIRMED and FIXED.** It counted `REGISTRY.openai_schemas()`, so a real
+  install read "34 tool schemas" while its requests carried 14. It now counts
+  `select_tool_schemas(None)` and names the hidden set separately: 14 visible, 7 hidden, 21 in
+  the registry. Gates added in `tests/test_disclosure.py`.
+- **F3, the Telegram door - CONFIRMED (documentation), KEPT per the operator.** The lane
+  shipped with no mention in README.md or config.example.json, and its token could live in
+  config.json, contradicting the package's own "secrets never in config.json" rule. Now:
+  `.env`-only (`tinycmdr_TG_TOKEN`; a config token is ignored and the log says so), a function
+  `both_doors_note()` so "Mattermost wins" is a startup WARNING instead of silence, a
+  documented `telegram` section in the reference config, and a README section ("Which door to
+  use") that says what each of the four doors is for. Gate: `tests/test_telegram.py` (+8 checks).
+- **A7, the check that hid it.** `tests/test_cli.py`'s reference-config check skipped a
+  section missing from `config.example.json` entirely, so a whole undocumented lane was silent
+  while one missing key inside an existing section was loud. A missing section is now named.
+- **F9, small items:** stale "carried in the system prompt" comment (notes moved to the
+  trailing block), the `"your-mattermost-username"` placeholder and its validator text (the
+  check compares user IDS), `dump_payload` now says operator messages are NOT scrubbed and
+  writes byte-stable dumps, `llm_secs` no longer calls `time.time()` twice, and `_chat`'s
+  endpoint loop no longer shadows its own `model` parameter (renamed `ep_model`, by AST node
+  position - a regex also rewrote the string "routing model %s to %s", which is exactly why the
+  rename asserts the loop's string constants are unchanged).
+
+Not fixed, deliberately: the review's F1 ("two builds have drifted") is wrong as a fork -
+`tinycmdr-cli.py` is GENERATED, and re-running `maintenance/build-cli-source.py` +
+`build-cli-fix.py` against the current `tinycmdr.py` reproduces it byte-for-byte. Its security
+claim is aimed at the wrong key: the CLI's `_secret_values` cut is deliberate and documented,
+while NEITHER build scrubs `llm.api_key`, the key a hosted primary keeps in config.json. That
+real hole is queued. F8 (guard pile-up) and F10 (an approval path for blocked commands) are
+policy changes waiting on the operator's word; F4 (fetch_url streaming + an address guard),
+F12 (an `tinycmdr <verb>` surface) and the lane-parity test are queued behind them. The
+fallback endpoints' windows are still not probed on failover - one `_detect_window` per switch
+is the obvious shape, deferred because the fleet runs `allow_cloud_fallback=false` and this
+touches the failover path.
+
+Also found while in here: the CLI bundled INSIDE `dist/tinycmdr-1.0.0-win-public.zip` is one
+commit stale (one comment line plus ~84 stray-CR blank lines), so the shapes need rebuilding
+before anything is published.

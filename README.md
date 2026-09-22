@@ -183,7 +183,8 @@ The web UI binds `127.0.0.1` by default, so no firewall rule is needed. Set
 `config.json` is merged over the code's defaults, so it only needs the values you
 actually change. Secrets do **not** go in it — environment variables (from `.env`)
 override it: `tinycmdr_MM_TOKEN`, `TAVILY_API_KEY`, `ANYSEARCH_API_KEY`,
-`tinycmdr_MODEL`, `tinycmdr_BASE_URL`.
+`tinycmdr_MODEL`, `tinycmdr_BASE_URL`, plus the two door tokens, `tinycmdr_TG_TOKEN`
+(the Telegram DM door) and `tinycmdr_WEB_TOKEN` (the local page).
 
 Notable knobs:
 
@@ -197,6 +198,8 @@ agent.checkin_minutes         progress check-in cadence on long runs
 agent.debug_dump_dir          write every request body to disk (blank = off); use it
                               when the bot answers nonsense
 mattermost.allowed_users      who may command the bot — leave empty and it ignores everyone
+telegram.allowed_users        numeric Telegram ids allowed to DM the bot; the token
+                              itself is .env-only (tinycmdr_TG_TOKEN)
 ```
 
 `config.example.json` is the whole thing: every key, what it does, what it defaults to,
@@ -236,6 +239,38 @@ are reading it on, and a capability you need is a file in `tools/` (or one the a
 `create_tool`), not something to hand-run from the runbook.
 
 The `skills/README.md` in the download has the full contract.
+
+## Which door to use
+
+One agent, four ways in. Every door shares the same sessions, notes, tasks, skills
+and tools; the door only decides where the output goes.
+
+```
+Mattermost bot   the team door: a bot account, DMs and channels, the full progress
+                 stream. What the installer sets up by default.
+local page       the trial and the LAN fallback: `python tinycmdr.py --web` serves it
+                 on http://127.0.0.1:8787 (empty web.token means loopback only; set
+                 one to open it to your LAN, and firewall that port).
+console          the broken-box door: `python tinycmdr-cli.py` (or `--cli` on the app
+                 build) over SSH on a host with nothing installed and nothing to open.
+Telegram DM      the personal door: one conversation per DM, off until you set
+                 tinycmdr_TG_TOKEN.
+```
+
+**The Telegram door.** The token goes in `.env` as `tinycmdr_TG_TOKEN` and nowhere
+else: a token in `config.json` is ignored, and the log says so. Your own id goes in
+`telegram.allowed_users` (numeric, not a username) — the door is deny-by-default, so
+an empty list starts the process, refuses, and tells you the id is missing rather
+than answering strangers. Then:
+
+```
+python tinycmdr.py --telegram      # a Telegram-only process
+```
+
+Mattermost wins when both doors have a token, so an install with a Mattermost bot
+never starts this one on its own. That is deliberate, the log says it at startup, and
+`--telegram` is how you run either. DMs only: a group message is refused. A run posts
+one message that grows as it works and replaces it with the answer when it is done.
 
 ## Operating it
 

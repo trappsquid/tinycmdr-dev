@@ -60,6 +60,11 @@
       }
     }
   },
+  "telegram": {
+    "_comment": "The third door: a Telegram DM. OFF unless you set tinycmdr_TG_TOKEN in .env - the token is ENV-ONLY, so one pasted at 'token' below is ignored (and logged as ignored), because .env is the one place the agent cannot read into a prompt. allowed_users takes NUMERIC Telegram ids (message @userinfobot for yours) and is deny-by-default: an empty list starts the process, refuses, and says the id is missing. Mattermost WINS when both doors have a token, so this lane never starts on a Mattermost bot - run `python tinycmdr.py --telegram` for a Telegram-only process. DM only: a group message is refused. It shares the same sessions, notes, tasks and skills as every other door.",
+    "token": "",
+    "allowed_users": []
+  },
   "mattermost": {
     "_comment": "Where the bot lives. url is the host only, scheme and port are separate keys. token: leave empty and set tinycmdr_MM_TOKEN in .env instead - .env is the one place the agent cannot read into a prompt. allowed_users are Mattermost USER IDS, not usernames (Profile -> copy the id), and the list is deny-by-default. ssl_verify false is for a self-signed certificate on your own LAN.",
     "url": "chat.example.com",
@@ -128,7 +133,7 @@
     "plan_from_request": true,
     "plan_drift_after": 8,
     "plan_max_steps": 24,
-    "_comment_notes": "Durable memory. Every 'remember' lands in notes.md, the newest of which rides in the system prompt; older entries age into notes-archive.md. notes_max_note_chars caps a single entry at write time, because one huge note poisons every later call in the session.",
+    "_comment_notes": "Durable memory. Every 'remember' lands in notes.md, the newest of which rides in the trailing state block, never the system prompt - the system prompt has to stay byte-stable for the endpoint's prefix cache; older entries age into notes-archive.md. notes_max_note_chars caps a single entry at write time, because one huge note poisons every later call in the session.",
     "notes_max_chars": 8000,
     "notes_max_note_chars": 1200,
     "notes_keep_entries": 60,
