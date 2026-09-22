@@ -14368,7 +14368,8 @@ def user_is_allowed(sender, user_id):
 #     re-implementing the kill/launch dance, because that dance is where two bots
 #     on one token came from.
 
-VERBS = ("status", "doctor", "model", "logs", "restart", "run", "token", "help")
+VERBS = ("status", "doctor", "health", "model", "config", "logs", "proc", "ports",
+         "restart", "update", "clean", "token", "version", "run", "help")
 
 VERB_HELP = """tinycmdr <verb> — management, never a model call
 
@@ -14380,6 +14381,14 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      --primary makes it the one that answers, --model NAME,
                      --alias A, --key-env VAR, --force to add it unverified)
   model remove <x>   drop a fallback entry (by model name, alias or url)
+  config get|set|unset <dotted.key> [value]
+                     read or edit config.json (a read-back is printed; secrets refused)
+  health             one line + exit code: up, lane, model (no network, for scripts)
+  version            the version alone
+  proc               the processes running from THIS folder, and the web port's holder
+  ports              what this install listens on + the LAN firewall rule it needs
+  update <src>       put a newer build in place (file, zip or folder) with a backup
+  clean [--yes]      list the junk in this folder; --yes removes it (state is kept)
   logs [n]           the last n lines of tinycmdr.log (default 40)
   restart            restart through this host's own door (task, systemd, launchd)
   token              where the secrets live and which are set (never their values)
@@ -14644,6 +14653,404 @@ def _config_take_effect():
     CONFIG["llm"] = back.get("llm") or CONFIG["llm"]
     _MODEL_CACHE["at"] = 0.0
     return None
+
+
+# --- the verbs that wrap a host command --------------------------------------
+# Each of these replaces something that was typed by hand on cmd, PowerShell or bash, and
+# got typed wrong at least once: the process query filtered by the install folder, the
+# listener/port check, the Windows firewall rule that lets the LAN reach the local page,
+# a dotted-key edit of config.json, swapping in a newer build, and tidying the folder.
+# Nothing here runs the agent or spends a token, and no verb prints a secret value.
+
+
+def _verb_version():
+    print("tinycmdr %s" % VERSION)
+    print("  folder : %s" % BASE_DIR)
+    print("  python : %s" % sys.version.split()[0])
+    return 0
+
+
+def _verb_health():
+    """One line a script can read, with an exit code that means something.
+
+    `status` is for a human (it asks the endpoint for its window and prints a page of
+    facts); this answers "is it up, on which lane, on which model" without touching the
+    network, so a supervisor or a cron job can call it every minute."""
+    running = _verb_running()
+    lanes = []
+    if str(CONFIG["mattermost"].get("token") or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip():
+        lanes.append("mattermost")
+    if str((CONFIG.get("telegram") or {}).get("token") or
+           os.environ.get("TINYCMDR_TG_TOKEN") or "").strip():
+        lanes.append("telegram")
+    if (CONFIG.get("web") or {}).get("enabled"):
+        lanes.append("web:%s" % ((CONFIG.get("web") or {}).get("port") or 8787))
+    state = {True: "up", False: "not running", None: "unknown"}[running]
+    print("%s v%s %s · lane %s · model %s at %s"
+          % (os.path.basename(sys.argv[0] or "tinycmdr"), VERSION, state,
+             ",".join(lanes) or "none", CONFIG["llm"].get("model"),
+             CONFIG["llm"].get("base_url")))
+    if running is not True:
+        print("the single-instance lock is not held: nothing is listening for messages",
+              file=sys.stderr)
+        return 1
+    return 0
+
+
+def _install_processes():
+    """Lines of (pid, started, command) for processes running from THIS folder.
+
+    The query everyone types by hand: `Get-CimInstance Win32_Process | Where-Object
+    CommandLine -like '*tinycmdr*'` on Windows, `ps -eo pid,lstart,args | grep` elsewhere.
+    Matching on the install dir rather than the word keeps a second install out of it."""
+    here = str(BASE_DIR).lower()
+    if os.name == "nt":
+        rc, out, err, _ = run_capture(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and "
+             "($_.CommandLine.ToLower().Contains('" + here.replace("'", "''") + "')) } | "
+             "ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.CreationDate, $_.CommandLine }"],
+            60)
+    else:
+        rc, out, err, _ = run_capture(
+            ["sh", "-c", "ps -eo pid,lstart,args | grep -i -- '%s' | grep -v grep" % BASE_DIR],
+            60)
+    if rc != 0 and not out.strip():
+        return [], (err or "").strip()
+    rows = [ln.strip() for ln in out.splitlines() if ln.strip()]
+    rows = [r for r in rows if "powershell" not in r.lower()]
+    return rows, None
+
+
+def _web_port(web):
+    """(port, complaint) for the configured web port. Never raises.
+
+    A hand-edited config.json can hold anything here (`int('nope')` was a traceback out
+    of two verbs before this), and a verb that reports on a box must name the problem."""
+    raw = (web or {}).get("port")
+    try:
+        return int(raw), None
+    except (TypeError, ValueError):
+        return 8787, ("web.port in config.json is %r, which is not a port: reading 8787"
+                      % (raw,))
+
+
+def _verb_proc():
+    """This install's own processes, and who holds the lock. Read-only."""
+    rows, err = _install_processes()
+    print("install : %s   instance: %s"
+          % (BASE_DIR, {True: "running (the lock is held)",
+                        False: "not running (the lock is free)",
+                        None: "unknown"}[_verb_running()]))
+    if err:
+        print("  the process query failed: %s" % err, file=sys.stderr)
+    if not rows:
+        print("  no process running from this folder")
+    for r in rows[:12]:
+        print("  %s" % r[:160])
+    if len(rows) > 12:
+        print("  ... %d more" % (len(rows) - 12))
+    web = CONFIG.get("web") or {}
+    if web.get("enabled"):
+        port, complaint = _web_port(web)
+        if complaint:
+            print("  %s" % complaint)
+        holder = _port_holder(port)
+        print("  web port %d: %s" % (port, holder or "nothing is listening"))
+    return 0
+
+
+def _port_holder(port):
+    """Who is listening on a TCP port, as a printable line (or None). Read-only."""
+    if os.name == "nt":
+        rc, out, _err, _ = run_capture(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-NetTCPConnection -State Listen -LocalPort %d -ErrorAction SilentlyContinue | "
+             "ForEach-Object { 'pid ' + $_.OwningProcess + ' on ' + $_.LocalAddress }" % port],
+            60)
+    else:
+        rc, out, _err, _ = run_capture(
+            ["sh", "-c", "(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) "
+                         "| grep -E '[:.]%d[[:space:]]' | head -3" % port], 60)
+    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
+    return "; ".join(lines[:3]) if lines else None
+
+
+def _verb_ports():
+    """What this install listens on, and whether the LAN can reach it.
+
+    The Windows lesson this exists for: the python.exe firewall rules cover the PUBLIC
+    profile and the bot runs as pythonw.exe, so a first bind on 8787 from the LAN is
+    dropped with a timeout (it looks like the page is broken, not blocked). Read-only:
+    the fix is printed, never applied."""
+    web = CONFIG.get("web") or {}
+    port, complaint = _web_port(web)
+    host = web.get("host") or "127.0.0.1"
+    if complaint:
+        print("warning: %s" % complaint)
+    token = bool(str(web.get("token") or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip())
+    print("web page : %s:%d  enabled=%s  token=%s"
+          % (host, port, bool(web.get("enabled")), "set" if token else "NOT set"))
+    print("           (no token = loopback only, whatever host says)")
+    print("listening: %s" % (_port_holder(port) or "nothing on that port"))
+    if not web.get("enabled"):
+        print("enable it: tinycmdr config set web.enabled true   (then restart)")
+    if os.name == "nt":
+        rule = "tinycmdr web UI %d (LAN only)" % port
+        rc, out, _err, _ = run_capture(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue | "
+             "Select-Object -First 1 -ExpandProperty DisplayName)" % rule], 60)
+        if (out or "").strip():
+            print("firewall : rule %r is present" % rule)
+        else:
+            print("firewall : NO rule for this port, so a LAN client cannot reach it")
+            print("           python.exe's rules are Public-profile only and the bot runs")
+            print("           as pythonw.exe, so the LAN is dropped with a timeout.")
+            print("           add it with (as administrator):")
+            print("             New-NetFirewallRule -DisplayName '%s' -Direction Inbound "
+                  "-Action Allow -Protocol TCP -LocalPort %d -Profile Domain,Private "
+                  "-RemoteAddress LocalSubnet" % (rule, port))
+    else:
+        print("firewall : ufw/firewalld are not this verb's business; check the port "
+              "from another host: curl -s http://<this-host>:%d/api/health" % port)
+    return 0
+
+
+def _verb_config(rest):
+    """`config get|set|unset <dotted.key> [value]` — a config.json edit with a read-back.
+
+    Hand-editing is how config.json gets a trailing comma, a number that is a string, or a
+    token in a file the agent can read. Values are parsed as JSON when they can be (so
+    `true`, `250`, `["a"]` land typed), as a string otherwise; --str forces a string."""
+    if not rest or rest[0] not in ("get", "set", "unset"):
+        print("config get <dotted.key> | set <dotted.key> <value> [--str] | unset <dotted.key>",
+              file=sys.stderr)
+        return 2
+    what = rest[0]
+    args = list(rest[1:])
+    as_str = "--str" in args
+    args = [a for a in args if a != "--str"]
+    if not args:
+        print("config %s needs a dotted key, e.g. agent.max_steps" % what, file=sys.stderr)
+        return 2
+    path = args[0].strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*([.][A-Za-z_][A-Za-z0-9_]*)*", path):
+        print("%r is not a dotted key path (llm.base_url, agent.max_steps)" % path,
+              file=sys.stderr)
+        return 2
+    section, _, key = path.rpartition(".")
+    if key in ("token", "api_key") and not section.startswith("llm"):
+        # Secrets have exactly one home (.env), and config.json is a file the agent reads
+        # into a prompt and can quote into chat.
+        print("%s is a secret: put it in %s instead (tinycmdr token set <NAME>)"
+              % (path, ENV_FILE.name), file=sys.stderr)
+        return 2
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    node = raw
+    for part in ([section] if section else []):
+        if not isinstance(node.get(part), dict):
+            if what == "get":
+                print("(not set)" if part not in node else "(%s is not a section)" % part)
+                return 0
+            if part not in node:
+                node[part] = {}
+            elif not isinstance(node[part], dict):
+                print("%s is not a section in config.json" % part, file=sys.stderr)
+                return 1
+        node = node[part]
+    if what == "get":
+        if key not in node:
+            print("(not set)")
+            return 0
+        print(json.dumps(node[key]) if not isinstance(node[key], str) else node[key])
+        return 0
+    if what == "unset":
+        if key not in node:
+            print("%s is not set" % path, file=sys.stderr)
+            return 2
+        del node[key]
+    else:
+        if len(args) < 2:
+            print("config set %s needs a value" % path, file=sys.stderr)
+            return 2
+        value = " ".join(args[1:])
+        if not as_str:
+            try:
+                value = json.loads(value)
+            except Exception:
+                pass                      # a bare word is a string, and that is fine
+        node[key] = value
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    back, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    node = back
+    for part in ([section] if section else []):
+        node = (node.get(part) or {})
+    print("config %s: %s = %s" % (path, "unset" if what == "unset" else "set",
+                                  json.dumps(node.get(key)) if key in node else "(gone)"))
+    if key in ("base_url", "model", "fallbacks", "token") and section == "llm":
+        _MODEL_CACHE["at"] = 0.0
+    CONFIG.update(back)
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
+
+
+def _verb_update(rest):
+    """`update <file.py|zip|folder>` — put a newer build in place, with a backup.
+
+    The pushed-by-hand dance, in one command: take the source, check it really is a build
+    (a VERSION line, and `--version` runs), back the current files up beside themselves,
+    write the new bytes, and say what changed. It never restarts anything: the operator
+    decides when a running bot is replaced."""
+    import shutil
+    import tempfile
+    import zipfile
+    if not rest:
+        print("update <tinycmdr.py|package.zip|folder> — where is the newer build?",
+              file=sys.stderr)
+        return 2
+    src = Path(rest[0]).expanduser()
+    if not src.exists():
+        print("no such file or folder: %s" % src, file=sys.stderr)
+        return 2
+    work = None
+    try:
+        if src.is_dir():
+            root = src
+        elif src.suffix.lower() == ".zip":
+            work = Path(tempfile.mkdtemp(prefix="tinycmdr-update-"))
+            with zipfile.ZipFile(src) as z:
+                z.extractall(work)
+            root = work
+        else:
+            root = src.parent
+        # A named .py IS the candidate (the folder is only searched for a zip or a folder):
+        # "update ./somewhere/tinycmdr.py" must not silently pick up a neighbour instead.
+        named = src if src.is_file() and src.suffix.lower() == ".py" else None
+
+        def find(name):
+            # A named file means exactly that file: falling back to its folder is how
+            # `update bad.py` quietly installed the build sitting next to it.
+            if named is not None:
+                return named if named.name == name else None
+            direct = (root / name) if root.is_dir() else None
+            if direct and direct.is_file():
+                return direct
+            for hit in sorted(root.rglob(name)):
+                if hit.is_file():
+                    return hit
+            return None
+        new_app = find("tinycmdr.py")
+        if new_app is None:
+            print("no tinycmdr.py in %s — is that a build?" % src, file=sys.stderr)
+            return 1
+        text = new_app.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.M)
+        if not m:
+            print("%s has no VERSION line - refusing to install it over this one" % new_app,
+                  file=sys.stderr)
+            return 1
+        new_version = m.group(1)
+        rc, out, err, _ = run_capture([sys.executable, str(new_app), "--version"], 120)
+        if rc != 0 or "tinycmdr" not in (out or ""):
+            print("the candidate does not run: %s %s" % (rc, (err or out or "").strip()[:200]),
+                  file=sys.stderr)
+            return 1
+        print("candidate: %s (VERSION %s, runs ok)" % (new_app, new_version))
+        print("this one : %s (VERSION %s)" % (CONFIG_PATH.parent, VERSION))
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        changed = []
+        for name in ("tinycmdr.py", "tinycmdr-cli.py"):
+            candidate = find(name)
+            if candidate is None:
+                continue
+            target = BASE_DIR / name
+            old = target.read_bytes() if target.exists() else b""
+            new = candidate.read_bytes()
+            if old == new:
+                continue
+            if old:
+                shutil.copy2(target, str(target) + ".bak-update-" + stamp)
+            target.write_bytes(new)
+            changed.append("%s (%d -> %d bytes)" % (name, len(old), len(new)))
+        if not changed:
+            print("already the same bytes: nothing to do")
+            return 0
+        for c in changed:
+            print("  updated %s" % c)
+        print("backups: *.bak-update-%s beside them" % stamp)
+        if _verb_running() is True:
+            print("a running bot still runs the OLD bytes: `tinycmdr restart` to switch.")
+        return 0
+    finally:
+        if work is not None:
+            shutil.rmtree(work, ignore_errors=True)
+
+
+CLEAN_JUNK = ("*.bak", "*.bak-*", "*.pre-*", "*.orig", "*.rej", "*~", "*.py.new",
+              "*.arm-tmp", "*.corrupt-*", "*.tmp-*")
+CLEAN_DIRS = ("__pycache__", "snapshots", "tests", "docs", "inbox")
+CLEAN_KEEP = ("sessions", "skills", "tools", "uploads", "spill", "logs", "venv", "dist",
+              "assets", "maintenance", "tmp")
+
+
+def _verb_clean(rest):
+    """`clean [--yes]` — say what is junk in this folder, then remove it on request.
+
+    An install folder is runtime, not an archive: the backups and staging copies pile up
+    (a push leaves a .bak per file), and `tests/`, `docs/`, `snapshots/` and `inbox/` are
+    build-time things a reader's folder does not need. DRY RUN unless --yes: this deletes
+    files, and a wrong glob here is somebody's session history."""
+    apply = "--yes" in rest or "--force" in rest
+    junk, dirs = [], []
+    for pattern in CLEAN_JUNK:
+        for hit in sorted(BASE_DIR.glob(pattern)):
+            if hit.is_file():
+                junk.append(hit)
+    seen = set()
+    for name in CLEAN_DIRS:
+        d = BASE_DIR / name
+        if d.is_dir() and name not in CLEAN_KEEP and str(d) not in seen:
+            seen.add(str(d))
+            dirs.append(d)
+    print("install: %s" % BASE_DIR)
+    print("%s: %d file(s), %d folder(s)" % ("removing" if apply else "would remove",
+                                            len(junk), len(dirs)))
+    for f in junk[:40]:
+        print("  %-52s %8d bytes" % (f.name, f.stat().st_size))
+    if len(junk) > 40:
+        print("  ... %d more" % (len(junk) - 40))
+    for d in dirs:
+        n = sum(1 for _ in d.rglob("*") if _.is_file())
+        print("  %-52s %8d file(s)" % (d.name + "/", n))
+    kept = [n for n in CLEAN_KEEP if (BASE_DIR / n).exists()]
+    print("kept   : %s" % ", ".join(kept))
+    if not apply:
+        print("\nnothing was deleted. Run it again with --yes to remove the list above.")
+        return 0
+    for f in junk:
+        try:
+            f.unlink()
+        except OSError as e:
+            print("  could not remove %s: %s" % (f.name, e), file=sys.stderr)
+    import shutil
+    for d in dirs:
+        try:
+            shutil.rmtree(d)
+        except OSError as e:
+            print("  could not remove %s/: %s" % (d.name, e), file=sys.stderr)
+    print("\nremoved %d file(s) and %d folder(s)." % (len(junk), len(dirs)))
+    return 0
 
 
 def _verb_model_endpoints(rest):
@@ -15049,6 +15456,20 @@ def run_verb(argv):
         return _verb_status()
     if verb == "doctor":
         return _verb_doctor()
+    if verb == "health":
+        return _verb_health()
+    if verb == "version":
+        return _verb_version()
+    if verb == "proc":
+        return _verb_proc()
+    if verb == "ports":
+        return _verb_ports()
+    if verb == "config":
+        return _verb_config(rest)
+    if verb == "update":
+        return _verb_update(rest)
+    if verb == "clean":
+        return _verb_clean(rest)
     if verb == "model":
         return _verb_model(rest)
     if verb == "logs":

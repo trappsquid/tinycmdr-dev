@@ -207,6 +207,111 @@ def main():
               "model add" in fb.VERB_HELP and "key-env" in fb.VERB_HELP,
               fb.VERB_HELP[:200])
 
+        # ---- the batch that wraps a host command ------------------------------
+        # (operator, 2026-09-22: "add a bunch of terminal/cmd/powershell learned
+        # invocations". Each of these replaces something typed by hand.)
+        rc, out, err = call(fb, ["version"])
+        check("version prints the version alone",
+              rc == 0 and fb.VERSION in out and "folder" in out, out[:200])
+
+        rc, out, err = call(fb, ["health"])
+        check("health exits 1 while nothing is running",
+              rc == 1 and "not running" in out, (rc, out[:200]))
+        saved_running = fb._verb_running
+        fb._verb_running = lambda: True
+        try:
+            rc, out, err = call(fb, ["health"])
+            check("health exits 0 when the instance is up, and names the lane",
+                  rc == 0 and "lane" in out and "up" in out, (rc, out[:200]))
+        finally:
+            fb._verb_running = saved_running
+
+        rc, out, err = call(fb, ["config", "get", "agent.max_steps"])
+        check("config get reads a dotted key", rc == 0 and out.strip().isdigit(), out[:80])
+        rc, out, err = call(fb, ["config", "set", "agent.max_steps", "77"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("config set writes a TYPED value (a number stays a number)",
+              rc == 0 and written["agent"]["max_steps"] == 77,
+              (rc, written["agent"].get("max_steps")))
+        check("...and reads it back", "77" in out, out[:120])
+        rc, out, err = call(fb, ["config", "set", "agent.bot_name", "12"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("a numeric-looking value is JSON-parsed without --str",
+              rc == 0 and written["agent"]["bot_name"] == 12,
+              written["agent"].get("bot_name"))
+        rc, out, err = call(fb, ["config", "set", "agent.bot_name", "12", "--str"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("--str keeps it a string", rc == 0 and written["agent"]["bot_name"] == "12",
+              written["agent"].get("bot_name"))
+        rc, out, err = call(fb, ["config", "set", "web.port", "nope"])
+        check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
+        rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])
+        check("config refuses to put a secret in config.json",
+              rc == 2 and ".env" in err, (rc, err[:160]))
+        rc, out, err = call(fb, ["config", "set", "not a key", "x"])
+        check("config refuses a key that is not a dotted path", rc == 2, rc)
+        rc, out, err = call(fb, ["config", "get", "nope.nothing"])
+        check("config get on a missing key is not an error",
+              rc == 0 and "not set" in out, (rc, out[:80]))
+        call(fb, ["config", "set", "agent.tmpprobe", "1"])
+        rc, out, err = call(fb, ["config", "unset", "agent.tmpprobe"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("config unset removes the key",
+              rc == 0 and "tmpprobe" not in written["agent"], list(written["agent"]))
+        rc, out, err = call(fb, ["config", "unset", "agent.tmpprobe"])
+        check("...and says so when it was not set", rc == 2, rc)
+
+        rc, out, err = call(fb, ["proc"])
+        check("proc names this install's folder and the instance",
+              rc == 0 and "install :" in out and "instance:" in out, out[:200])
+        # web.port holds 'nope' at this point (the check above wrote it): a verb that
+        # reports on a box must name that, not traceback
+        rc, out, err = call(fb, ["ports"])
+        check("ports names the page, its token state, and a junk port",
+              rc == 0 and "web page" in out and "token=" in out
+              and "not a port" in out, out[:300])
+
+        (workdir / "tinycmdr.py.bak-900").write_text("old bytes", encoding="utf-8")
+        (workdir / ".env").write_text("TINYCMDR_TEST_KEY=keep-me" + chr(10), encoding="utf-8")
+        rc, out, err = call(fb, ["clean"])
+        check("clean is a DRY RUN by default",
+              rc == 0 and "tinycmdr.py.bak-900" in out
+              and (workdir / "tinycmdr.py.bak-900").exists(), out[:200])
+        rc, out, err = call(fb, ["clean", "--yes"])
+        check("clean --yes removes the junk",
+              rc == 0 and not (workdir / "tinycmdr.py.bak-900").exists(), out[-200:])
+        check("...and keeps the state",
+              (workdir / "config.json").exists() and (workdir / ".env").exists()
+              and (workdir / "tinycmdr.py").exists())
+
+        cand = workdir / "cand" / "tinycmdr.py"
+        cand.parent.mkdir()
+        cand.write_text((workdir / "tinycmdr.py").read_text(encoding="utf-8")
+                        .replace('VERSION = "', 'VERSION = "9.9.9-', 1), encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(cand)])
+        check("update takes a candidate build and prints both versions",
+              rc == 0 and "9.9.9" in out, (rc, out[:200], err[:200]))
+        check("...leaving a .bak-update beside the file it replaced",
+              any(p.name.startswith("tinycmdr.py.bak-update") for p in workdir.iterdir()),
+              [p.name for p in workdir.iterdir()])
+        rc, out, err = call(fb, ["update", str(cand)])
+        check("updating with the same bytes is a no-op",
+              rc == 0 and "nothing to do" in out, out[:120])
+        bad = workdir / "bad.py"
+        bad.write_text("print('not a build')\n", encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(bad)])
+        check("update refuses a file that is not a build",
+              rc == 1 and "is that a build" in err, (rc, err[:160]))
+        fake = workdir / "fakebuild" / "tinycmdr.py"
+        fake.parent.mkdir()
+        fake.write_text("print('hello')\n", encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(fake)])
+        check("...and a tinycmdr.py with no VERSION line",
+              rc == 1 and "VERSION" in err, (rc, err[:160]))
+        check("the new verbs are in the verb list",
+              all(v in fb.VERBS for v in ("health", "config", "proc", "ports",
+                                          "update", "clean", "version")), fb.VERBS)
+
         # ---- logs: bounded, and scrubbed -------------------------------------
         secret = "sk-live-ABCdef0123456789"
         fb.CONFIG["llm"]["api_key"] = secret
