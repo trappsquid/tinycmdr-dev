@@ -76,9 +76,10 @@ cannot simply be upgraded. Revisit only if a real message is lost.
   tag already carries it. Harmless, and the files are deleted by the cleanup below.
 - the ledger's `lost items between reads: 1 -> 0` WARNING appears in one suite's output on
   purpose: that test shrinks a ledger to prove `ledger_check()` shouts.
-- `C:\tinycmdr` on the Windows test box (empty, stale handle) refuses deletion while a session holds it; a
-  logoff or reboot on that box releases it. `MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)` returned
-  false there, so it is a manual step, not something to script again.
+- `C:leetbot` on the Windows test box AND the other Windows box, and `~/tinycmdr` on the manager box, are empty and refuse
+  deletion while a session holds a handle on them; a logoff or reboot releases them.
+  `MoveFileEx(..., MOVEFILE_DELAY_UNTIL_REBOOT)` returned false, so it is a manual step, not
+  something to script again.
 
 ## 7. Host-level, waiting on the operator (not code)
 
@@ -87,6 +88,30 @@ cannot simply be upgraded. Revisit only if a real message is lost.
 - the manager box: `tinycmdr doctor` warns that `llm.api_key` is set in `config.json`; `.env` is the home.
 - the Windows test box: the evaluation box. It rejoins the fleet build only on his word.
 
+## 8. Left over from the 2026-09-22 rename, waiting on a decision
+
+The tree is renamed and clean; these are the pieces a rename cannot finish on its own.
+
+- **the manager box's scheduled task still names the launcher the rename deleted** (`tinycmdr-service.vbs`), so
+  that bot cannot respawn until one ELEVATED command re-points it at `tinycmdr-service.vbs`, or
+  until the manager box itself is migrated. Unelevated, `Set-ScheduledTask` and `schtasks /Change` both answer
+  `Access is denied`. the manager box's bot runs the pre-rename build from memory until then and holds
+  `tinycmdr.log`, `logs/` and two locks, which cannot be deleted while it runs.
+- **Five hosts are not migrated** (.13, .47, .9, the MacBook, the manager box): folders, units, tasks and plists
+  still carry the pre-rename name, and their bots are RUNNING that build. Their dead leftovers are
+  gone; the live installs were left up deliberately. the Windows test box is the one box on the new names.
+- **`dist/` keeps 46 pre-1.0.0 shapes** whose payload is the old-named build. Archive bytes can only
+  be deleted, not scrubbed, and deleting them needs the operator's word.
+- **The Z: share (VPS Admin) still holds the pre-rename 1.0.0 artifact set, its sidecars and the
+  pre-rename state docs.** Restaging that share is his call; nothing there was touched.
+- **The published blog slug is `/posts/tinycmdr/`** (and `/posts/tinycmdr-cli/`). A live URL is a
+  link-break, not a remnant, so it stays until he says otherwise.
+- **GitHub**: the repo rename is his. The docs now read `github.com/tinycmdr/tinycmdr` - confirm the
+  org/repo slug and the URLs are corrected in one pass.
+- **the Windows test box carries the fresh install** (task `Tinycmdr`, `C:	inycmdr`, token + search keys + its
+  own model key in `.env`, model `main` at the LAN box). Two things he may want changed: its
+  `agent.bot_name` is the machine name (`bot-atower`) against the account `@the Windows test box`, and the README
+  could say the public zip asks every install question (it ships no `fleet-defaults.json`).
 ## Where the fleet cleanup rules live
 
 `~/hermes-tmp/fleet-push/clean-install.sh` (Unix) and `clean-install.ps1` (Windows) are the tidiers
