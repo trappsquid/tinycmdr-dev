@@ -74,6 +74,7 @@ JOBS_FILE = BASE_DIR / "jobs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
 TASKS_FILE = BASE_DIR / "tasks.json"      # durable task ledger (source of truth)
 TASKS_DOC = BASE_DIR / "tasks.md"         # human-readable render of the ledger
+TASKS_JOURNAL = BASE_DIR / "tasks.journal.jsonl"   # append-only ledger history, one JSON line per save
 NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt
 
 # Console logging must never freeze the bot. On Windows, a stray click in
@@ -3523,10 +3524,55 @@ def load_tasks():
     t["next_id"] = int(t.get("next_id")
                        or 1 + max([int(i.get("id") or 0) for i in items]
                                   or [0]))
+    return ledger_check(t)
+
+
+_LEDGER_SEEN = {"rev": 0, "items": 0}
+
+
+def journal_tasks(t):
+    """Append-only history beside the ledger (audit finding, 2026-09-21).
+
+    tasks.json is REPLACED atomically at every save, so a bad save, or a ledger rebuilt
+    from salvage, leaves no trace of what was there before. This is that trace: one line
+    per save, never rewritten, and it is what makes "the ledger shrank between runs" a
+    question with an answer instead of a mystery.
+    """
+    try:
+        with open(TASKS_JOURNAL, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(
+                {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                 "rev": int(t.get("revision") or 0),
+                 "items": len(t.get("items") or []),
+                 "next_id": int(t.get("next_id") or 0)},
+                ensure_ascii=False) + chr(10))
+    except Exception as e:
+        log.debug("could not append to the ledger journal: %s", e)
+
+
+def ledger_check(t):
+    """A ledger that shrank between reads is a bug, not a tidy-up.
+
+    The campaign's ledger was rebuilt from scratch 43 times and nobody could tell, because
+    nothing ever compared the ledger it had with the ledger it has (audit, 2026-09-21).
+    """
+    rev, n = int(t.get("revision") or 0), len(t.get("items") or [])
+    prev = dict(_LEDGER_SEEN)
+    if prev["rev"] and rev and rev < prev["rev"]:
+        log.error("ledger went BACKWARDS: revision %d -> %d, %d items -> %d. That is the "
+                  "shape of a fresh ledger taking over from a real one; find out why before "
+                  "trusting the plan.", prev["rev"], rev, prev["items"], n)
+    elif prev["items"] and n < prev["items"]:
+        log.warning("ledger lost items between reads: %d -> %d (revision %d). If that was "
+                    "not deliberate, the write path is suspect.", prev["items"], n, rev)
+    _LEDGER_SEEN["rev"] = max(rev, prev["rev"])
+    _LEDGER_SEEN["items"] = n
     return t
 
 
 def save_tasks(t):
+    t["revision"] = int(t.get("revision") or 0) + 1
+    journal_tasks(t)
     atomic_write_text(TASKS_FILE,
                       json.dumps(t, indent=2, ensure_ascii=False))
     # Human-readable mirror: "what is this box in the middle of?" should be
