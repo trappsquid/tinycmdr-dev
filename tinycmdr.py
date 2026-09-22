@@ -2972,7 +2972,7 @@ def _endpoint_touching_tool(name, description=""):
 # ---- a fresh reconnect gap makes asking pointless (audit finding, 2026-09-21) ----
 #
 # The catch-up sweep exists because the websocket does not replay what it missed;
-# the LAN model boxbot recovered 7 posts on 2026-09-12, which is what "this lane really does lose
+# the research box recovered 7 posts on 2026-09-12, which is what "this lane really does lose
 # messages" looks like. A confirmation asked while that is fresh may never be READ, and
 # a run that carries on has then made an unapproved change on the strength of silence -
 # the exact failure the endpoint guard was built for. So the gate REFUSES instead of
@@ -3869,7 +3869,7 @@ def tool_task(args, ctx):
 # retracted silently because nothing recorded that the earlier line had been superseded
 # (audit, 2026-09-21). So the record is a FILE, one JSON object per line, appended and
 # never rewritten, and it carries the fields the box that does this work for a living
-# already keeps (the LAN model boxbot, 2026-09-21):
+# already keeps (a research box's field set, 2026-09-21):
 #
 #   id, date, agent, status, question, keys, preregistration, engine, binary+commit,
 #   model+quant+file, exact_config, host, gpus, slots, per_slot_ctx, fill_depth,
@@ -10118,7 +10118,7 @@ class MattermostDispatcher:
                             when, pid)
                 # Evidence, not assumption: a recovery means this lane IS losing
                 # posts. While that is fresh the endpoint gate refuses rather than
-                # asking (the LAN model boxbot: 7 recoveries on 2026-09-12).
+                # asking (7 recoveries on 2026-09-12, on the box that runs this work).
                 note_steering_gap("recovered a message from %s (%s)" % (when, pid))
                 self.enqueue(_CatchUpMessage(p, self._is_dm(channel_id)),
                              p["message"])
