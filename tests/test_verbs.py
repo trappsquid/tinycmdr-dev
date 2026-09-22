@@ -130,6 +130,83 @@ def main():
               written["llm"]["model"])
         check("...and prints no secret", "fixture-token" not in out, out[:200])
 
+        # ---- model add / remove: an endpoint has a route of its own -----------
+        # (operator, 2026-09-22: "your solution to wire in another endpoint is to rerun
+        # the installer?" - it never was one. Hand-editing config.json was the only way
+        # in, and `model use` can only pick among endpoints already written.)
+        ids = ["deepseek-chat", "deepseek-reasoner"]
+        fb._probe_model_ids = lambda url, key=None: (ids if "api.deepseek" in url else None)
+
+        rc, out, err = call(fb, ["model", "add", "https://api.deepseek.com/v1",
+                                 "--model", "deepseek-chat", "--alias", "cloud",
+                                 "--key-env", "DEEPSEEK_API_KEY"])
+        check("model add writes a fallback entry", rc == 0, (rc, err[:200]))
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        added = [f for f in written["llm"]["fallbacks"]
+                 if f.get("base_url") == "https://api.deepseek.com/v1"]
+        check("...with the alias and the KEY NAME, never a value",
+              added and added[0].get("alias") == "cloud"
+              and added[0].get("api_key_env") == "DEEPSEEK_API_KEY"
+              and "api_key" not in added[0], added)
+        check("...live straight away, not only after a restart",
+              any((f or {}).get("alias") == "cloud" for f in fb.CONFIG["llm"]["fallbacks"]),
+              fb.CONFIG["llm"]["fallbacks"])
+        check("...naming the .env variable it still needs",
+              "DEEPSEEK_API_KEY" in out and "token set" in out, out[:300])
+        check("...saying what the flag means for failover",
+              "allow_cloud_fallback" in out, out[:400])
+        check("...and printing no secret", "fixture-token" not in out, out[:200])
+
+        rc, out, err = call(fb, ["model", "add", "https://api.deepseek.com/v1"])
+        check("the same endpoint twice is refused", rc == 2 and "already there" in err,
+              (rc, err[:160]))
+        rc, out, err = call(fb, ["model", "add", "http://a LAN address:8081/v1",
+                                 "--model", "aux", "--alias", "cloud"])
+        check("an alias already in use is refused", rc == 2 and "taken" in err, (rc, err[:160]))
+        rc, out, err = call(fb, ["model", "add", "http://a LAN address:8081/v1", "--model", "aux"])
+        check("an endpoint that does not answer is refused with the reason",
+              rc == 1 and "did not answer" in err and "--force" in err, (rc, err[:200]))
+        rc, out, err = call(fb, ["model", "add", "http://a LAN address:8081/v1", "--model", "aux",
+                                 "--force"])
+        check("--force adds it unverified, and says so",
+              rc == 0 and "unverified" in out, (rc, out[:200], err[:160]))
+        rc, out, err = call(fb, ["model", "add", "https://api.deepseek.com/v1/other",
+                                 "--model", "gpt-nope"])
+        check("a model the endpoint does not advertise is refused",
+              rc == 2 and "advertises" in err, (rc, err[:200]))
+        rc, out, err = call(fb, ["model", "add", "not-a-url"])
+        check("a url that is not http(s) is refused", rc == 2 and "http://" in err,
+              (rc, err[:160]))
+        rc, out, err = call(fb, ["model", "add", "https://api.deepseek.com/v1/reasoner",
+                                 "--primary", "--model", "deepseek-reasoner"])
+        check("a hosted PRIMARY without a key is refused (it has no api_key_env)",
+              rc == 1 and "api_key" in err, (rc, err[:200]))
+        rc, out, err = call(fb, ["model", "add", "http://a LAN address:8081/v1", "--primary",
+                                 "--model", "main", "--force"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("--primary rewrites llm.base_url and its model", rc == 0
+              and written["llm"]["base_url"] == "http://a LAN address:8081/v1"
+              and written["llm"]["model"] == "main",
+              (rc, err[:200], written["llm"]["base_url"]))
+        check("...including in the running config",
+              fb.CONFIG["llm"]["base_url"] == "http://a LAN address:8081/v1",
+              fb.CONFIG["llm"]["base_url"])
+
+        rc, out, err = call(fb, ["model", "remove", "cloud"])
+        check("model remove drops the entry it names", rc == 0 and "removed" in out,
+              (rc, err[:160]))
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("...from config.json too, leaving the others",
+              not any((f or {}).get("alias") == "cloud" for f in written["llm"]["fallbacks"])
+              and any((f or {}).get("base_url") == "http://a LAN address:8081/v1"
+                      for f in written["llm"]["fallbacks"]), written["llm"]["fallbacks"])
+        rc, out, err = call(fb, ["model", "remove", "cloud"])
+        check("removing something that is not there is refused",
+              rc == 2 and "no fallback" in err, (rc, err[:160]))
+        check("add/remove is documented in the verb help",
+              "model add" in fb.VERB_HELP and "key-env" in fb.VERB_HELP,
+              fb.VERB_HELP[:200])
+
         # ---- logs: bounded, and scrubbed -------------------------------------
         secret = "sk-live-ABCdef0123456789"
         fb.CONFIG["llm"]["api_key"] = secret

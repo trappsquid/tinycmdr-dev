@@ -14376,6 +14376,10 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   doctor             check this install and name what is wrong (exit 1 when it is)
   model              the models this install can route to (asks the endpoints)
   model use <name>   set the default model in config.json, catalog-checked
+  model add <url>    add an endpoint this install can route to (a fallback entry;
+                     --primary makes it the one that answers, --model NAME,
+                     --alias A, --key-env VAR, --force to add it unverified)
+  model remove <x>   drop a fallback entry (by model name, alias or url)
   logs [n]           the last n lines of tinycmdr.log (default 40)
   restart            restart through this host's own door (task, systemd, launchd)
   token              where the secrets live and which are set (never their values)
@@ -14560,7 +14564,264 @@ def _verb_doctor():
     return 0
 
 
+# ------------------------------------------------------------- the endpoints
+# `model add` / `model remove` exist because an endpoint had no route of its own:
+# `model use` can only pick among the endpoints already written, so the only ways
+# in were hand-editing config.json or re-running the installer - and an installer
+# is a fresh-install path, not an endpoint manager (operator, 2026-09-22: "your
+# solution to wire in another endpoint is to rerun the installer? Are you fucking
+# serious?"). Nothing here runs the agent or spends a token: the one request is a
+# /v1/models GET, for the id check.
+
+MODEL_ADD_HELP = """tinycmdr model add <url> [--model NAME] [--alias A] [--key-env VAR]
+                   [--primary] [--force]
+
+  The endpoint goes into llm.fallbacks, or becomes the one that answers with
+  --primary (the LAN-box case). A hosted PRIMARY needs llm.api_key in config.json -
+  a file the agent can read - so prefer a fallback with --key-env.
+  The model id is checked against what the endpoint advertises (one /v1/models GET,
+  metadata only). --force writes it when the endpoint is not reachable yet.
+
+  The KEY stays out of here: --key-env records the NAME of a .env variable, and
+  `tinycmdr token set <NAME>` reads the value from stdin.
+
+  A running bot reads config.json at start, so `tinycmdr restart` afterwards.
+
+tinycmdr model remove <name|alias|url>    drop a fallback entry
+"""
+
+
+def _probe_model_ids(url, key=None):
+    """The model ids one endpoint advertises, or None when it did not answer.
+
+    Metadata only: one /v1/models GET, never a completion - the same rule `status`
+    and `doctor` follow, so a management verb cannot spend a token."""
+    headers = {"Accept": "application/json", "User-Agent": "tinycmdr"}
+    if key:
+        headers["Authorization"] = "Bearer " + str(key)
+    try:
+        r = requests.get(url.rstrip("/") + "/models", headers=headers, timeout=20)
+        if r.status_code >= 400:
+            log.debug("model add: /models on %s answered %s", url, r.status_code)
+            return None
+        data = r.json()
+    except Exception as e:
+        log.debug("model add: /models on %s failed: %s", url, e)
+        return None
+    out = []
+    for item in (data.get("data") or data.get("models") or []):
+        if isinstance(item, str):
+            out.append(item)
+        elif isinstance(item, dict):
+            mid = item.get("id") or item.get("name") or item.get("model")
+            if mid:
+                out.append(str(mid))
+    return out
+
+
+def _config_raw():
+    """config.json exactly as it is on disk: (raw, error)."""
+    try:
+        return json.loads(CONFIG_PATH.read_text(encoding="utf-8")), None
+    except Exception as e:
+        return None, "could not read config.json: %s" % e
+
+
+def _config_write_raw(raw):
+    """Write through the agent's own atomic writer. Error string, or None."""
+    try:
+        atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+    except Exception as e:
+        return "could not write config.json: %s" % e
+    return None
+
+
+def _config_take_effect():
+    """Re-read config.json and make the change live. The read-back is the proof."""
+    back, err = _config_raw()
+    if err:
+        return err
+    CONFIG["llm"] = back.get("llm") or CONFIG["llm"]
+    _MODEL_CACHE["at"] = 0.0
+    return None
+
+
+def _verb_model_endpoints(rest):
+    """`model add` / `model remove`: the endpoints this install can route to."""
+    what, args = rest[0], list(rest[1:])
+    opts, positional, i = {}, [], 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--model", "--alias", "--key-env"):
+            if i + 1 >= len(args):
+                print("%s needs a value" % a, file=sys.stderr)
+                return 2
+            opts[a[2:]] = args[i + 1]
+            i += 2
+            continue
+        if a in ("--primary", "--force"):
+            opts[a[2:]] = True
+            i += 1
+            continue
+        positional.append(a)
+        i += 1
+    if what in ("remove", "rm"):
+        return _verb_model_remove(positional)
+    return _verb_model_add(opts, positional)
+
+
+def _verb_model_add(opts, positional):
+    if not positional:
+        print(MODEL_ADD_HELP, file=sys.stderr)
+        return 2
+    url = positional[0].strip().rstrip("/")
+    if not url.lower().startswith(("http://", "https://")):
+        print("a base_url starts with http:// or https:// "
+              "(e.g. http://a LAN address:8081/v1)", file=sys.stderr)
+        return 2
+    key_env = str(opts.get("key-env") or "").strip()
+    if key_env and not re.fullmatch(r"[A-Z][A-Z0-9_]*", key_env):
+        print("--key-env takes a .env KEY NAME: capitals, digits, underscore",
+              file=sys.stderr)
+        return 2
+    alias = str(opts.get("alias") or "").strip()
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    llm = raw.setdefault("llm", {})
+    fbs = llm.setdefault("fallbacks", [])
+    if not isinstance(fbs, list):
+        print("llm.fallbacks in config.json is not a list - fix that first",
+              file=sys.stderr)
+        return 1
+    if url.lower() == str(llm.get("base_url") or "").rstrip("/").lower():
+        print("%s IS the primary already" % url, file=sys.stderr)
+        return 2
+    for fb in fbs:
+        if not isinstance(fb, dict):
+            continue
+        if str(fb.get("base_url") or "").rstrip("/").lower() == url.lower():
+            print("%s is already there (alias %r) - `tinycmdr model` lists them"
+                  % (url, fb.get("alias") or ""), file=sys.stderr)
+            return 2
+        if alias and str(fb.get("alias") or "").lower() == alias.lower():
+            print("alias %r is taken by %s" % (alias, fb.get("base_url")),
+                  file=sys.stderr)
+            return 2
+    want = str(opts.get("model") or "").strip()
+    ids = _probe_model_ids(url, os.environ.get(key_env) if key_env else None)
+    if ids is None:
+        if not opts.get("force"):
+            print("the endpoint at %s did not answer its model list, so the model id "
+                  "cannot be checked.\nFix the url, or add it unverified: --force"
+                  % url, file=sys.stderr)
+            return 1
+        print("note: %s did not answer - writing it unverified" % url)
+    else:
+        if want and want.lower() not in [x.lower() for x in ids]:
+            print("%s advertises %s - not %r"
+                  % (url, ", ".join(ids[:12]) or "nothing", want), file=sys.stderr)
+            return 2
+        if not want:
+            if len(ids) == 1:
+                want = ids[0]
+            else:
+                print("which model? %s advertises:\n  %s\npass --model <name>"
+                      % (url, "\n  ".join(ids[:12])), file=sys.stderr)
+                return 2
+    if not want:
+        print("a fallback entry needs a model id: pass --model <name>", file=sys.stderr)
+        return 2
+    if opts.get("primary"):
+        if not _is_local_url(url) and not key_env and not opts.get("force"):
+            print("a hosted endpoint as the PRIMARY needs llm.api_key in config.json "
+                  "(the primary has no api_key_env), and config.json is a file the "
+                  "agent can read into a prompt.\nKeep it a fallback with --key-env, "
+                  "or override with --force.", file=sys.stderr)
+            return 1
+        llm["base_url"], llm["model"] = url, want
+        line = "primary: %s -> %s" % (url, want)
+    else:
+        entry = {"base_url": url, "model": want}
+        if alias:
+            entry["alias"] = alias
+        if key_env:
+            entry["api_key_env"] = key_env
+        fbs.append(entry)
+        line = "fallback: %s -> %s%s%s" % (
+            url, want, " (alias %s)" % alias if alias else "",
+            " (key from %s)" % key_env if key_env else "")
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    print(line)
+    if key_env and key_env not in _env_file_keys():
+        print("note: %s is not in %s yet. Put the value there with:\n"
+              "  tinycmdr token set %s      (reads it from stdin, never from a "
+              "command line)" % (key_env, ENV_FILE.name, key_env))
+    if not _is_local_url(url):
+        print("note: %s is off-LAN, so automatic failover only reaches it while "
+              "llm.allow_cloud_fallback is true; `/model %s` routes there explicitly."
+              % (url, alias or want))
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
+
+
+def _verb_model_remove(positional):
+    if not positional:
+        print("model remove <name|alias|url> - which entry?", file=sys.stderr)
+        return 2
+    want = positional[0].strip().rstrip("/").lower()
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    llm = raw.setdefault("llm", {})
+    fbs = llm.get("fallbacks") or []
+    if not isinstance(fbs, list):
+        print("llm.fallbacks in config.json is not a list - fix that first",
+              file=sys.stderr)
+        return 1
+    keep, gone = [], None
+    for fb in fbs:
+        if not isinstance(fb, dict):
+            keep.append(fb)
+            continue
+        keys = [str(fb.get(k) or "").rstrip("/").lower()
+                for k in ("base_url", "model", "alias")]
+        if gone is None and want in keys:
+            gone = fb
+            continue
+        keep.append(fb)
+    if gone is None:
+        print("no fallback entry matches %r (`tinycmdr model` lists them)" % want,
+              file=sys.stderr)
+        return 2
+    llm["fallbacks"] = keep
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    print("removed: %s -> %s" % (gone.get("base_url"), gone.get("model")))
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
+
+
 def _verb_model(rest):
+    if rest and rest[0] in ("add", "remove", "rm"):
+        return _verb_model_endpoints(rest)
     if rest and rest[0] in ("use", "set"):
         if len(rest) < 2:
             print("model use <name> — which model? (tinycmdr model lists them)",
@@ -14598,8 +14859,9 @@ def _verb_model(rest):
             bits.append("sends as %s" % e["send_as"])
         if e.get("where"):
             bits.append("at %s" % e["where"])
-        if e.get("alias"):
-            bits.append("alias %s" % e["alias"])
+        # `alias` on a catalog entry is a BOOLEAN ("this name is an alias"), not the
+        # name - printing it read as "localtest ... alias True". The entry's own name
+        # IS the alias, and "sends as" above already gives the route.
         print("  %s" % "  ".join(bits))
     return 0
 
