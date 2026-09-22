@@ -31,6 +31,9 @@ param(
     [int]    $MattermostPort  = 443,
     [string] $MattermostToken = "",              # default: token file, existing .env, then prompt
     [string] $MattermostTokenFile = "",          # read the token from a file instead
+    [string] $TelegramToken   = "",              # the third door: a Telegram DM
+    [string] $TelegramIds     = "",              # NUMERIC ids, comma or space separated
+                                                 # (message @userinfobot for yours)
     [string] $SecretsFile     = "",              # .env-style file: TINYCMDR_MM_TOKEN,
                                                  # TAVILY_API_KEY, ANYSEARCH_API_KEY
                                                  # (a model key is per bot and is
@@ -473,10 +476,12 @@ if ($Ask) {
     $picked = Ask-Many "How should you talk to it? Pick any that apply - they work together." @(
         "A local page on this machine (http://127.0.0.1:$WebPort) - no chat server needed",
         "A Mattermost bot account (paste a bot token from your server)",
+        "A Telegram bot account (a token from @BotFather; DMs only, nothing to host)",
         "Sessions by hand in a terminal (nothing runs in the background)")
     $WantWeb = $picked -contains 1
     $WantChat = $picked -contains 2
-    $WantCli = $picked -contains 3
+    $WantTg = $picked -contains 3
+    $WantCli = $picked -contains 4
     if ($WantWeb) { $EnableWeb = $true }
     if ($WantChat -and $WantWeb) {
         Write-Host ""
@@ -502,6 +507,24 @@ if ($Ask) {
         }
         $u = Ask-Text "Your Mattermost user id (optional, but without it the bot ignores your DMs)"
         if ($u) { $AllowedUser = $u }
+    }
+
+    if ($WantTg) {
+        Write-Host ""
+        if ($TelegramToken) {
+            Write-Host "  (a Telegram token is already known from a switch or .env - kept)"
+        } else {
+            $in = Ask-Text "Telegram bot token from @BotFather (input hidden; paste and press Enter)" -Secret
+            if ($in) { $TelegramToken = $in }
+        }
+        $tg = Ask-Text "Your numeric Telegram id (message @userinfobot for it; without it the bot ignores every DM)"
+        if ($tg) { $TelegramIds = $tg }
+        if ($WantChat) {
+            Write-Host ""
+            Write-Host "  NOTE: with BOTH tokens set, Mattermost wins and the Telegram lane does NOT"
+            Write-Host "        start in the background process. Run this for a Telegram-only side:"
+            Write-Host "        python tinycmdr.py --telegram"
+        }
     }
 
     Write-Host ""
@@ -537,6 +560,9 @@ if ($Ask) {
     $nameNow = if ($BotName) { $BotName } else { $env:COMPUTERNAME.ToLower() }
     $ways = @()
     if ($WantChat) { $ways += "a Mattermost bot on $MattermostUrl as @$nameNow" }
+    if ($WantTg) {
+        $ways += if ($WantChat) { "a Telegram DM (only with --telegram)" } else { "a Telegram DM" }
+    }
     if ($WantWeb) { $ways += "a local page on http://127.0.0.1:$WebPort" }
     if ($WantCli) { $ways += "sessions you start by hand" }
     Write-Host ("  how you talk : {0}" -f ($ways -join " and "))
@@ -596,8 +622,13 @@ if ($MattermostToken) {
 # respawned it every few seconds. So a token-less install registers the local page instead,
 # or nothing at all.
 $ChatLane = [bool]($MattermostToken) -and ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com")
-$LocalWeb = (-not $ChatLane) -and $EnableWeb
-$RegisterTask = (-not $SkipTask) -and ($ChatLane -or $LocalWeb)
+# Telegram is a chat lane too, and its token alone is enough: with no Mattermost token the
+# build runs the Telegram lane by itself, so a Telegram-only install NEEDS the background
+# task - otherwise it only answers while a window is open.
+$TgLane = [bool]($TelegramToken)
+$AnyLane = $ChatLane -or $TgLane
+$LocalWeb = (-not $AnyLane) -and $EnableWeb
+$RegisterTask = (-not $SkipTask) -and ($AnyLane -or $LocalWeb)
 
 # ---------------------------------------------------------------- 3. copy files
 Head "copying the app"
@@ -690,6 +721,25 @@ if ($EnableWeb) {
     $cfg.web.port    = $WebPort
     $cfg.web.host    = "127.0.0.1"
 }
+# The third door. The TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a copy
+# in config.json is ignored with a warning), so only the numeric allowlist goes in here.
+# The lane is deny-by-default: a token with no id refuses to start, which is why the
+# installer refuses to finish that way rather than leaving a bot that ignores every DM.
+$tgIds = @()
+if ($TelegramIds) {
+    $tgIds = @($TelegramIds -split '[,\s]+' | Where-Object { $_ -match '^\d+$' })
+}
+if ($TelegramToken -and $tgIds.Count -eq 0) {
+    Fail "a Telegram token with no numeric id: that lane would ignore every DM. Message @userinfobot for your id and pass -TelegramIds 123456789"
+}
+if ($TelegramIds -and $tgIds.Count -eq 0) {
+    Fail "-TelegramIds needs numeric ids (message @userinfobot for yours): got '$TelegramIds'"
+}
+if (-not $cfg.PSObject.Properties['telegram']) {
+    $cfg | Add-Member -NotePropertyName telegram -NotePropertyValue ([pscustomobject]@{})
+}
+$cfg.telegram.token         = ""
+$cfg.telegram.allowed_users = @($tgIds)
 $cfg.agent.bot_name           = $BotName
 $cfg.agent.debug_dump_dir     = ""
 
@@ -698,16 +748,14 @@ $cfg.agent.debug_dump_dir     = ""
 # by one invisible character). One-element arrays also collapse to a scalar in
 # ConvertTo-Json, so allowed_users is forced back to a list.
 $json = $cfg | ConvertTo-Json -Depth 20
-if ($AllowedUser) {
-    $json = $json -replace '"allowed_users":\s*"(.*?)"', '"allowed_users": [ "$1" ]'
-} else {
-    # ConvertTo-Json renders an empty array as null, and the bot's allowlist check
-    # then raises on `uid not in None`. Write a real empty list.
-    $json = $json -replace '"allowed_users":\s*null', '"allowed_users": []'
-}
+# One-element arrays collapse to a scalar in ConvertTo-Json, and an empty one becomes
+# null; both break an allowlist check (a string is compared character by character, and
+# `uid not in None` raises). Unconditional, so it covers the Telegram list too.
+$json = $json -replace '"allowed_users":\s*"(.*?)"', '"allowed_users": [ "$1" ]'
+$json = $json -replace '"allowed_users":\s*null', '"allowed_users": []'
 Write-Utf8NoBom $cfgPath $json
 $verify = Get-Content $cfgPath -Raw | ConvertFrom-Json
-if ($verify.mattermost.allowed_users -is [string]) {
+if ($verify.mattermost.allowed_users -is [string] -or $verify.telegram.allowed_users -is [string]) {
     Fail "config.json allowed_users came out as a string, not a list - refusing to install a broken allowlist"
 }
 Say "bot name: $BotName"
@@ -725,6 +773,10 @@ if ($LoopbackModel) {
 if ($ChatLane) {
     if ($MattermostUrl -eq "CHANGE-ME.example.com") { Say "NOTE    : edit $cfgPath (mattermost.url) before the bot will connect" }
     if (-not $AllowedUser) { Say "NOTE    : add your Mattermost user id to mattermost.allowed_users, or the bot ignores your DMs" }
+    if ($TgLane) { Say "tg lane : a Telegram token is set too - Mattermost wins in this process,"
+                   Say "          so Telegram needs:  python tinycmdr.py --telegram" }
+} elseif ($TgLane) {
+    Say "tg lane : Telegram only - allowlist $($tgIds -join ', '), starts by itself"
 } else {
     Say "NOTE    : no chat account - mattermost.url and allowed_users are unused for now,"
     Say "          and two local doors already work (see the summary below)"
@@ -744,8 +796,8 @@ if (Test-Path $envPath) {
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.+)$') {
             $k = $matches[1]
             $v = $matches[2].Trim()
-            if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_WEB_TOKEN", "TAVILY_API_KEY",
-                          "ANYSEARCH_API_KEY") -notcontains $k) {
+            if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
+                          "TAVILY_API_KEY", "ANYSEARCH_API_KEY") -notcontains $k) {
                 $ownKeys[$k] = $v
             }
         }
@@ -755,9 +807,11 @@ Copy-Item (Join-Path $InstallDir ".env.example") $envPath -Force
 $envText = Get-Content $envPath -Raw
 $written = @()
 $refused = @()
-foreach ($key in @("TINYCMDR_MM_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
+foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
     $val = ""
-    if ($key -eq "TINYCMDR_MM_TOKEN") { $val = $MattermostToken } else { $val = $secrets[$key] }
+    if ($key -eq "TINYCMDR_MM_TOKEN") { $val = $MattermostToken }
+    elseif ($key -eq "TINYCMDR_TG_TOKEN") { $val = $TelegramToken }
+    else { $val = $secrets[$key] }
     if (-not $val) { continue }
     if ($val -match '^\s*<.*>\s*$' -or $val -match '(?i)redacted') {
         # A redacted package or secrets file carries no real key. Writing the
@@ -787,7 +841,8 @@ foreach ($k in @($ownKeys.Keys)) {
 # And say what was NOT copied, without naming any provider: a model key belongs to
 # one host, and silently sharing it is how one box's usage appeared on another.
 $notCopied = @($secrets.Keys | Where-Object {
-        @("TINYCMDR_MM_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY") -notcontains $_ })
+        @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TAVILY_API_KEY",
+          "ANYSEARCH_API_KEY") -notcontains $_ })
 if ($notCopied.Count) {
     Say "NOTE    : not copied from the secrets file: $($notCopied -join ', ')"
     Say "          a model key is per host - put this host's own in $envPath by hand"
@@ -799,7 +854,7 @@ if ($written.Count) {
 } else {
     if ($ChatLane) {
         Say "NOTE    : no keys to write - put the bot token in $envPath (TINYCMDR_MM_TOKEN=...)"
-    } else {
+    } elseif (-not $TgLane) {
         Say "env     : no chat token - none needed for the two local doors"
     }
 }
@@ -958,7 +1013,13 @@ if ($RegisterTask -and -not $NoStart) {
 
 Head "done - still to do"
 $todo = @()
-if (-not $ChatLane) {
+if ($TgLane -and -not $ChatLane) {
+    Say "This install answers Telegram DMs. The lane starts by itself (no Mattermost token"
+    Say "on this box), and the allowlist is $($tgIds -join ', ')."
+    Say ""
+    Say "  DM your bot and it answers; a group message is refused on purpose."
+    if (-not $RegisterTask) { Say "  NOTE   : no background task was registered (-SkipTask), so nothing is listening yet." }
+} elseif (-not $AnyLane) {
     Say "This install has NO chat account, which is a supported way to run it. Two doors are"
     Say "open right now, and neither needs a chat server:"
     Say ""
@@ -972,6 +1033,8 @@ if (-not $ChatLane) {
     Say ""
     Say "Add a Mattermost account whenever you want one:"
     Say "  install-tinycmdr.cmd -Force -MattermostTokenFile <file with the token>"
+    Say "Add a Telegram DM whenever you want one:"
+    Say "  install-tinycmdr.cmd -Force -TelegramToken <token> -TelegramIds <your numeric id>"
     Say ""
 }
 if (-not $MattermostToken) { $todo += "optional: Mattermost bot token -> $envPath  (TINYCMDR_MM_TOKEN=...)" }
@@ -1002,7 +1065,12 @@ if ($Ask) {
             try { & $py.Path (Join-Path $InstallDir "tinycmdr-cli.py") } catch { }
         }
     }
-    if (-not ($WantChat -or $WantWeb -or $WantCli)) {
+    if ($WantTg) {
+        Say "DM your Telegram bot and it will answer."
+        if ($WantChat) { Say "  (Mattermost wins in the background process, so run the Telegram"
+                         Say "   side as:  cd $InstallDir ; python tinycmdr.py --telegram)" }
+    }
+    if (-not ($WantChat -or $WantTg -or $WantWeb -or $WantCli)) {
         Say "nothing selected - the harness is installed and does not run in the background."
     }
 }

@@ -16,6 +16,9 @@
 #
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first non-empty line)
+#   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
+#                         only; with no Mattermost token the agent runs THIS lane
+#   --telegram-ids <i>    numeric Telegram id(s), comma or space separated
 #   --allowed-user <id>   Mattermost user id allowed to command the bot
 #   --mattermost-url <h>  Mattermost host, no scheme (default: fleet-defaults.json)
 #   --install-dir <d>     default ~/tinycmdr
@@ -60,16 +63,22 @@ DEFAULT_MODEL_BASE="http://127.0.0.1:8081/v1"
 DEFAULT_MODEL="main"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
+TG_TOKEN=""; TG_IDS=""
 MM_URL_ARG=""; SECRETS_FILE=""
 WEB_PORT="8788"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
+# Generated later (in the config section), but READ earlier by the no-token branch: under
+# `set -u` an unset name there is a crash.
+WEB_TOKEN=""
 NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0; INSTALL_PYTHON=0
 
-usage() { sed -n '3,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --token)           TOKEN="$2"; shift 2 ;;
         --token-file)      TOKEN_FILE="$2"; shift 2 ;;
+        --telegram-token)  TG_TOKEN="$2"; shift 2 ;;
+        --telegram-ids)    TG_IDS="$2"; shift 2 ;;
         --allowed-user)    ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)  MM_URL_ARG="$2"; shift 2 ;;
         --install-dir)     INSTALL_DIR="$2"; LOGDIR="$INSTALL_DIR/logs"; shift 2 ;;
@@ -391,6 +400,21 @@ if [ -z "$TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
     TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
     [ -n "$TOKEN" ] && info "reusing the token already in .env"
 fi
+if [ -z "$TG_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    TG_TOKEN="$(grep -m1 '^TINYCMDR_TG_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
+    [ -n "$TG_TOKEN" ] && info "reusing the Telegram token already in .env"
+fi
+# The lane is deny-by-default, so a token with no id is a bot that ignores every DM.
+# Refuse here, with the reason, rather than at 03:00 in a log nobody is reading.
+TG_IDS_CLEAN="$(printf '%s' "$TG_IDS" | tr ',;' '  ' | tr -s ' ' '\n' \
+    | grep -E '^[0-9]+$' | tr '\n' ' ' | sed 's/ *$//')"
+if [ -n "$TG_TOKEN" ] && [ -z "$TG_IDS_CLEAN" ]; then
+    die "a Telegram token with no numeric id: that lane would ignore every DM.
+Message @userinfobot for your id and pass --telegram-ids 123456789"
+fi
+if [ -n "$TG_IDS" ] && [ -z "$TG_IDS_CLEAN" ]; then
+    die "--telegram-ids needs numeric ids (message @userinfobot for yours): got '$TG_IDS'"
+fi
 if [ -z "$TOKEN" ]; then
     printf '    Mattermost bot token (input hidden): '
     read -rs TOKEN
@@ -401,7 +425,13 @@ fi
 # running the chat lane would exit at once (tinycmdr.py refuses to start without a token, on
 # purpose) and KeepAlive would loop it forever.
 APP_ARGS=""
-if [ -z "$TOKEN" ]; then
+if [ -z "$TOKEN" ] && [ -n "$TG_TOKEN" ]; then
+    # The Telegram lane starts by itself with no Mattermost token, so the agent runs
+    # the BOT here (no --web): this is a chat lane, and calling it "without a chat
+    # account" put a local page where a DM should have been answered.
+    info "no Mattermost token, but a Telegram one: the agent runs the TELEGRAM lane"
+    info "allowlist  : $TG_IDS_CLEAN"
+elif [ -z "$TOKEN" ]; then
     APP_ARGS="--web"
     WEB_ON=1
     info "no Mattermost bot token: installing WITHOUT a chat account"
@@ -439,6 +469,7 @@ if [ "$WEB_ON" = "1" ]; then
 fi
 
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \
+TG_IDS_CLEAN="$TG_IDS_CLEAN" \
 MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" WEB_ON="$WEB_ON" WEB_PORT="$WEB_PORT" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
 import json, os, sys
@@ -452,6 +483,11 @@ if os.environ.get("MM_URL_ARG"):
 au = os.environ.get("ALLOWED_ARG", "").strip()
 if au:
     mm["allowed_users"] = [u.strip() for u in au.split(",") if u.strip()]
+# The third door: the TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a
+# copy in here is ignored with a warning), so only the numeric allowlist lands here.
+tg = cfg.setdefault("telegram", {})
+tg["token"] = ""
+tg["allowed_users"] = os.environ.get("TG_IDS_CLEAN", "").split()
 cfg.setdefault("agent", {})["bot_name"] = os.environ["BOT_NAME"]
 llm = cfg.setdefault("llm", {})
 llm["base_url"] = os.environ["MODEL_BASE_URL"]
@@ -473,7 +509,7 @@ umask 077
 # NO PROVIDER IS NAMED HERE on purpose - the key is whatever the endpoint issued,
 # and its variable name is the fallback entry's "api_key_env".
 SHARED_KEYS='^(TINYCMDR_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
-MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_WEB_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
 KEEP_ENV=""
 if [ -f "$INSTALL_DIR/.env" ]; then
     KEEP_ENV=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$INSTALL_DIR/.env" \
@@ -482,6 +518,9 @@ fi
 SKIPPED_KEYS=""
 {
     printf 'TINYCMDR_MM_TOKEN=%s\n' "$TOKEN"
+    if [ -n "$TG_TOKEN" ]; then
+        printf 'TINYCMDR_TG_TOKEN=%s\n' "$TG_TOKEN"
+    fi
     if [ -n "$WEB_TOKEN" ]; then
         printf 'TINYCMDR_WEB_TOKEN=%s\n' "$WEB_TOKEN"
     fi
