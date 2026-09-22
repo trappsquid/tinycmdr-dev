@@ -106,9 +106,19 @@ SECRETS_FILE = "install/fleet-secrets.env"
 FLEET_WIDE_KEYS = ("TAVILY_API_KEY", "ANYSEARCH_API_KEY")
 FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
 
-# only the restart helpers are generic; the rest of maintenance/ is the manager box-specific
+# What in maintenance/ is generic enough to ship: the restart helpers an install needs,
+# plus the generator SHIP carries so the console build can be regenerated and
+# byte-identity-checked. Everything else in this folder is the manager box-specific - fleet pushes,
+# migrations, probes, backups - and stays out.
+#
+# This is the SAME list as SHIP's maintenance/ entries, written twice, and the two drifting
+# apart refuses the whole build: 2026-09-22 a batch added the three generator files to SHIP
+# and not here, and every build refused with "host-specific maintenance script" until the
+# rebuild that publishing owed. When you ship a new file from this folder, add it to BOTH,
+# and cut the package in the same batch.
 ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
-                       "restart-tinycmdr-macos.sh"}
+                       "restart-tinycmdr-macos.sh",
+                       "build-cli-source.py", "build-cli-fix.py", "cli_blocks.py"}
 
 # Values that must not appear ANYWHERE (they are secrets, or this box's identity)
 SECRET_LABELS = ("web ui token", "mattermost token", "allowed user id")

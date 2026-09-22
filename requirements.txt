@@ -7,8 +7,16 @@
 # rich,          : optional; the console's screen - the boxed banner, one card
 # prompt_toolkit   per tone, the run's own line. Without them, and whenever the
 #                  output is a pipe or tinycmdr_PLAIN=1, every line prints plainly.
+# The two chat-client bounds are deliberate, not tidiness. mmpy_bot's only
+# release is 2.2.1 and it needs httpx<0.28 - which is the ONLY thing keeping
+# mattermostautodriver 11.x off a fresh install today, a constraint living in
+# someone else's metadata and one loosening away from putting a client three
+# lines ahead of this build's on a reader's box. Name the driver, so the stack
+# a reader installs is the stack the fleet runs (measured 2026-09-22:
+# mmpy_bot 2.2.1 + mattermostautodriver 2.3.0).
 requests>=2.31
-mmpy_bot>=2.2.1
+mmpy_bot>=2.2.1,<3
+mattermostautodriver>=2.3,<3
 croniter
 rich>=13
 prompt_toolkit>=3.0

@@ -168,7 +168,7 @@ fetch_python() {
     # (reusable, unlike the interpreter); nothing else touches $HOME, no
     # password, no Homebrew, no system change. Measured on an M-series Mac:
     # about a second for the uv bootstrap, 943 ms for the interpreter, 71 MB
-    # on disk, and a venv built on it pip-installs mmpy_bot 2.34.2 and runs the
+    # on disk, and a venv built on it pip-installs mmpy_bot 2.2.1 and runs the
     # shipped console build (rc=0).
     # STDOUT IS THE RESULT: every progress line goes to stderr, or the caller's
     # PY="$(fetch_python)" captures chatter and then cannot run it.

@@ -920,7 +920,10 @@ Both came out of the walk. The installer first, because a stock Mac has only
   takes both away; `--no-bin` keeps shims out of `~/.local/bin`; only uv's own
   download cache touches `$HOME`.
 - Measured on the Mac: 943 ms for CPython 3.12.14, 71 MB, and a venv built on it
-  pip-installs mmpy_bot 2.34.2 and runs the shipped console build (rc=0). Proven in
+  pip-installs mmpy_bot 2.2.1 and runs the shipped console build (rc=0) [corrected 2026-09-22:
+  this entry said 2.34.2, a version mmpy_bot has never released. The number is almost
+  certainly a misread of the same pip line, which does install requests 2.34.2; re-measured
+  2026-09-22 as mmpy_bot 2.2.1 + mattermostautodriver 2.3.0]. Proven in
   four lanes: piped (refusal, nothing downloaded), `--install-python` with uv
   present, a bare machine with faked HOME (uv bootstrap into the install dir), and
   the offer answered `y` on a pty.
@@ -1338,3 +1341,74 @@ help` through PowerShell, the POSIX shim's interpreter selection with a fake pyt
 `bash -n` / the PowerShell parser on the two installers. Not executed on purpose: `restart` (it
 would restart the live bot on this box) - the helper invocation is graded with `run_capture`
 stubbed and the argv asserted to point INSIDE the install.
+
+### The audit's remaining findings, closed by measurement, and the pin a fresh install needed (2026-09-22)
+
+Batch A, B2, B3, B4 and D1 landed the review's findings; F8, F13 and section 4 were left
+"optional / not started", and F6's fallback probe deferred. Before building any of them each was
+counted in this fleet's own logs (`tinycmdr.log`, 2026-09-09 to 09-20, plus `tinycmdr.log` since;
+test-session tags excluded, or every count is a suite's own traffic). Five of the six are dead on
+contact:
+
+```
+F8 nudge batching            22 real loop-guard nudges ever; 3 turns of thousands had a pile-up
+                             (2-3 nudges). ~120 tokens on 3 turns. DEAD.
+F8 delivery guard            2 "completion announced" lines ever, both at count 1 of the
+                             threshold 3 - it has never wrapped a run early. DEAD.
+F8 config-gate a heuristic   no misfire in the log; the guard's one stop (2026-09-10, `shell`
+                             identical 6x) was correct. OPTIONAL.
+section 4 wall clock         auto-continue has never fired (0 occurrences of "continuing the
+                             same task"). ~225 min is an unreached upper bound. LATENT.
+section 4 "steer at recall"  already there: the prompt says "Use search_sessions to recall how
+                             past issues were solved". DONE.
+F13 lane parity              no defect; the missing piece is the enforcement test (nothing in
+                             tests/ mentions drive_run). A guard, not a fix. OPTIONAL.
+```
+
+Same rule as 2026-09-17 - measure the failure class on the fleet's own log before building its
+fix, and expect most plan items to die. It held again.
+
+**What the measurement found instead: a reader's install is a third party's resolution.**
+`mmpy_bot` has exactly one release (2.2.1), and its `httpx<0.28.0` is the ONLY thing keeping
+`mattermostautodriver` 11.x off a fresh box - 11.11.0 wants `httpx~=0.28.1`, so pip backtracks to
+2.3.0 and a reader happens to get the stack the fleet runs. That is a constraint living in someone
+else's metadata, one loosening away from handing a reader a client three release lines ahead of
+this build's, on the very package the the LAN model boxbot answers blame for the 277 + 171 `WSMessageTypeError`
+reconnects in our logs. `requirements.txt` now names both bounds
+(`mmpy_bot>=2.2.1,<3`, `mattermostautodriver>=2.3,<3`); measured on a clean venv, all five declared
+deps resolve and import (mmpy_bot 2.2.1 + mattermostautodriver 2.3.0).
+
+**Two corrections, to claims rather than behaviour:**
+
+- `install/install-tinycmdr-macos.sh` and this log both said a venv built on the fetched interpreter
+  "pip-installs mmpy_bot 2.34.2". No such mmpy_bot release has ever existed; the number is almost
+  certainly a misread of the pip line that installs `requests 2.34.2`. Both say 2.2.1 now, and this
+  log's entry keeps its correction visible instead of being quietly rewritten. A shipped comment
+  that names a version has to be re-measurable.
+- The staged 1.0.0 shapes in `dist/` predated the last three commits, the console build bundled in
+  them with them. Rebuilt from this tree; hashes in the state doc.
+
+**The rebuild is what publishing owes, and the first run of it refused - on a real blocker.** The
+batch that shipped the console-build generator added `maintenance/build-cli-{source,fix}.py` and
+`cli_blocks.py` to `SHIP`, and never to `ALLOWED_MAINTENANCE`, the audit's allowlist for that same
+folder. Two lists, one file, and every build since refused with "host-specific maintenance script"
+- which nobody saw, because the batches were landed and verified without ever cutting a package.
+`ALLOWED_MAINTENANCE` now carries all three, with the pair named in a comment above it. Anything
+that ships a NEW file out of `maintenance/` has to touch both lists and cut the package in the same
+batch.
+
+**One artifact to know about, measured not guessed.** The public packager's scrub rewrites a file
+it touches in TEXT mode, so universal newlines read the generator's `\r\r\n` insertions as two
+line breaks and write them back as an extra blank line each. In the shipped public console build
+that is 84 extra blank lines - all at line ends, 83 of them in comments and blank lines, one inside
+the `_console_closes_with_us` docstring - and 2,130 of 2,131 string constants byte-identical to the
+repo's, so the build behaves identically. What it does cost: the SHIPPED console build is not
+byte-identical to the one the repo tests, so a "regenerate it and compare" check against the
+archive fails on whitespace. Fix if it is worth a rebuild: have `sanitize`/`redact_public` read
+bytes, decode, replace and `write_bytes`, so a scrub preserves the file's own newlines - the same
+rule batch A applied to the app's write path.
+
+Suites after the batch: 32/32 green on the bot build, the console-build legs that honour
+`tinycmdr_SRC` green, the CLI packages' clean-unpack gate 170/0 (`test_cli`), and a real install
+from the new public zip passes all 12 unified-install checks. Nothing published, no version bump,
+and the fleet still carries the previous bytes.
