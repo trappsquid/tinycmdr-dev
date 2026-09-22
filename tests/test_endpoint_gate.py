@@ -133,6 +133,71 @@ def main():
                                                "vllm"]
         fb.REGISTRY.reload_tool("inferctl")
 
+        # ---- C1: the three tiers -------------------------------------------------
+        # A reversible recursive delete asks; it is not an absolute block any more.
+        for shape in ["rd /s /q C:\\build\\out",
+                      "RD /S C:\\build",
+                      "rmdir /s C:\\build",
+                      "del /s /q C:\\build\\*.obj",
+                      "Remove-Item -Recurse -Force C:\\build\\out",
+                      "remove-item C:\\build -recurse"]:
+            check(f"{shape!r} is no longer an absolute block",
+                  fb.is_blocked(shape) is None, str(fb.is_blocked(shape)))
+            check(f"{shape!r} asks instead", bool(fb._confirm_hit(shape)), shape)
+
+        check("the shipped confirm list is NON-empty by default",
+              bool(fb.DEFAULT_CONFIG["agent"]["confirm_patterns"]),
+              str(fb.DEFAULT_CONFIG["agent"]["confirm_patterns"]))
+        check("an unrecoverable shape is STILL an unappealable block",
+              fb.is_blocked("mkfs.ext4 /dev/nvme0n1")
+              and fb._confirm_hit("mkfs.ext4 /dev/nvme0n1") is None)
+
+        # a lane with nobody to ask declines, and the config is what decides
+        check("the shipped confirm_without_door default is decline",
+              fb.DEFAULT_CONFIG["agent"].get("confirm_without_door") == "decline",
+              str(fb.DEFAULT_CONFIG["agent"].get("confirm_without_door")))
+        check("a job or sub-agent lane DECLINES a confirm pattern",
+              fb.RunReporter(fb.NowhereDestination(), "gate-sess")
+              .confirm("rd /s /q C:\\build") is False)
+        fb.CONFIG["agent"]["confirm_without_door"] = "allow"
+        check("confirm_without_door=allow is what flips it (so the default matters)",
+              fb.RunReporter(fb.NowhereDestination(), "gate-sess")
+              .confirm("rd /s /q C:\\build") is True)
+        fb.CONFIG["agent"]["confirm_without_door"] = "decline"
+
+        # the shell tool asks, quoting the exact command
+        harmless = "Remove-Item -Recurse -Force " + str(workdir / "not-there")
+        out = fb.tool_shell({"command": harmless}, {})
+        check("a recursive delete with no door is DECLINED, not run",
+              out.startswith("DECLINED"), out[:140])
+        calls.clear()
+        out = fb.tool_shell({"command": harmless}, {"confirm_cb": yes})
+        check("and a yes runs it", not out.startswith("DECLINED"), out[:140])
+        check("the question quoted the exact command",
+              bool(calls) and harmless in calls[0], str(calls)[:200])
+
+        # execute_code's SOURCE text walks the same gate
+        code_body = 'import os\nos.system("rd /s /q %s")\n' % (workdir / "not-there")
+        calls.clear()
+        out = fb.tool_execute_code({"code": code_body}, {})
+        check("execute_code source is asked about, not only shell",
+              out.startswith("DECLINED"), out[:140])
+        calls.clear()
+        out = fb.tool_execute_code({"code": code_body}, {"confirm_cb": yes})
+        check("a yes runs the code", not out.startswith("DECLINED"), out[:120])
+        check("and the question quoted the code it was about",
+              bool(calls) and "rd /s /q" in calls[0] and "execute_code" in calls[0],
+              str(calls)[:200])
+
+        # the block tier is unchanged in reach, and honest about the way out
+        out = fb.tool_shell({"command": "mkfs.ext4 /dev/nvme0n1"}, {"confirm_cb": yes})
+        check("a blocked shape is refused even WITH a yes", out.startswith("BLOCKED"),
+              out[:140])
+        check("the refusal names the out-of-band path",
+              "by hand" in out and "config.json" in out and "mkfs" in out, out[:320])
+        check("and it no longer teaches guard-dodging",
+              "safer, more targeted" not in out, out[:320])
+
         # ---- a fresh steering gap makes the gate REFUSE, not ask -----------------
         fb.note_steering_gap("recovered a message from 12:00:00 (post-abc)")
         note = fb.steering_gap_note()

@@ -82,9 +82,15 @@ sub("One channel is served by ONE worker thread, so that channel"
     "for 21 minutes on 2026-09-10,",
     "docstring: worker design")
 
-# 4. the model catalog: no failover list to enumerate
+# 4. the model catalog: no failover list to enumerate.
+# Scoped to the catalog, never a bare index(): the same line also appears in
+# _secret_values(), which now survives the cut into this build, and a first-match search
+# deleted the SECRET SWEEP there instead while leaving the catalog alone - silently
+# (measured 2026-09-22, when the cut was removed).
 lines = s.split(NL)
-i = lines.index('    for fb in CONFIG["llm"].get("fallbacks", []):')
+_cat = next(k for k, l in enumerate(lines) if l.startswith("def model_catalog("))
+i = next(k for k in range(_cat, len(lines))
+         if lines[k] == '    for fb in CONFIG["llm"].get("fallbacks", []):')
 j = i + 1
 while j < len(lines) and (lines[j].startswith("        ") or not lines[j].strip()):
     j += 1

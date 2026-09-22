@@ -1984,10 +1984,21 @@ def test_fetch_url_cannot_blow_up_the_context():
     saved_get = getattr(fb.requests, "get", None) if had else None
 
     class R:
-        text = "x" * 40000
+        """A streaming response: encoding + iter_content + close, the interface
+        tool_fetch_url reads since the cap landed (2026-09-22)."""
+
         status_code = 200
+        encoding = "utf-8"
 
         def raise_for_status(self):
+            return None
+
+        def iter_content(self, size=65536):
+            body = b"x" * 40000
+            for i in range(0, len(body), size):
+                yield body[i:i + size]
+
+        def close(self):
             return None
 
     saved_ceil = fb.CONFIG["agent"].get("fetch_max_chars")
@@ -1998,6 +2009,38 @@ def test_fetch_url_cannot_blow_up_the_context():
         check("a 30k request is clamped to the ceiling", len(out) < 14000, len(out))
         check("and the spill pointer is there for the rest", "spill" in out.lower() or
               "read_file" in out, out[-200:])
+
+        # the CAP: a response far larger than the tool can use must not be read into
+        # memory. 2,000 chunks of 64 KB is 128 MB if it is drained; the budget for an 8k
+        # result is 64 KB, so this fails loudly on the old materialise-then-trim path.
+        class Big:
+            status_code = 200
+            encoding = "utf-8"
+
+            def __init__(self):
+                self.pulled = 0
+                self.closed = False
+
+            def raise_for_status(self):
+                return None
+
+            def iter_content(self, size=65536):
+                for _ in range(2000):
+                    self.pulled += 65536
+                    yield b"x" * 65536
+
+            def close(self):
+                self.closed = True
+
+        big = Big()
+        fb.requests.get = lambda *a, **kw: big
+        out = fb.tool_fetch_url({"url": "https://example.com/huge", "max_chars": 8000}, {})
+        # one chunk of slack: the budget is checked after each chunk lands
+        check("a huge response is read only as far as the cap allows",
+              big.pulled <= 8000 * 8 + 65536, big.pulled)
+        check("and it is NOT drained (the whole body was 128 MB)",
+              big.pulled < 200000, big.pulled)
+        check("and the response is closed, not left hanging", big.closed)
     finally:
         if had and saved_get is not None:
             fb.requests.get = saved_get
@@ -2017,7 +2060,17 @@ def test_the_safety_seatbelt_covers_execute_code_too():
         check(f"execute_code: blocked -> {bad[:32]}...", out.startswith("BLOCKED:"), out[:160])
     out = fb.tool_shell({"command": "Remove-Item -Recurse -Force C:\\Windows"},
                         {"session_key": "belt-s"})
-    check("shell: the same seatbelt is unchanged", out.startswith("BLOCKED:"), out[:160])
+    # The tier moved on 2026-09-22 (operator-approved): a reversible recursive
+    # delete now ASKS instead of being refused outright. What must never happen
+    # is a pass-through, so this asserts the shape is still caught - by whichever
+    # tier owns it - and that disk-level shapes are still unappealable blocks.
+    check("shell: the same shape is still caught, never passed through",
+          out.startswith(("DECLINED", "BLOCKED")), out[:160])
+    check("shell: Remove-Item -Recurse is the CONFIRM tier now",
+          out.startswith("DECLINED") and "confirmation" in out, out[:200])
+    check("shell: a filesystem-level wipe is STILL an unappealable block",
+          fb.tool_shell({"command": "mkfs.ext4 /dev/sda1"},
+                        {"session_key": "belt-s"}).startswith("BLOCKED:"))
 
 
 def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():

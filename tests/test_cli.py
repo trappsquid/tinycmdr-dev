@@ -1155,6 +1155,38 @@ class _MockEndpoint:
             self.httpd.server_close()
 
 
+def test_the_console_build_is_a_fresh_generation():
+    """tinycmdr-cli.py is a BUILD ARTIFACT: two generator steps cut this build out of
+    tinycmdr.py and reword it, and both refuse rather than write when an anchor is
+    ambiguous. Regenerate them in a scratch copy of the tree and require the committed
+    console build byte-for-byte - an outside review read the committed copy as a second
+    hand-maintained agent, and this is the check that answers that (audit, 2026-09-22).
+    """
+    work = Path(tempfile.mkdtemp(prefix="fb-cli-regen-"))
+    try:
+        for name in ("tinycmdr.py", "tinycmdr-cli.py"):
+            shutil.copy2(BASE / name, work / name)
+        (work / "maintenance").mkdir()
+        for name in ("build-cli-source.py", "build-cli-fix.py", "cli_blocks.py"):
+            shutil.copy2(BASE / "maintenance" / name, work / "maintenance" / name)
+        for script in ("build-cli-source.py", "build-cli-fix.py"):
+            r = subprocess.run([sys.executable, "maintenance/" + script],
+                               cwd=str(work), capture_output=True, text=True,
+                               timeout=300)
+            check(f"generator step {script} ran",
+                  r.returncode == 0, (r.stdout + r.stderr)[-400:])
+            if r.returncode != 0:
+                return
+        committed = (BASE / "tinycmdr-cli.py").read_bytes()
+        regen = (work / "tinycmdr-cli.py").read_bytes()
+        check("the committed console build is byte-for-byte a fresh generation",
+              committed == regen,
+              "regenerate it: python maintenance/build-cli-source.py && "
+              "maintenance/build-cli-fix.py")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

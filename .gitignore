@@ -28,6 +28,8 @@ field-notes.md
 notes-archive.md
 notes-authored.json
 tasks.md
+# the ledger's append-only journal (per-host state, like tasks.json)
+tasks.journal.jsonl
 tests/eval-runs/
 snapshots/
 tmp/

@@ -321,6 +321,8 @@ config.example.json      every config key with fake values; installer copies it 
 skills/                  markdown runbooks the agent loads on demand (see "Adding skills")
 field-notes.md           known failures, matched against a failed tool result and appended to it
 install/                 installers for Windows, Linux and macOS
-maintenance/             the restart helper
-tinycmdr-cli.py          the same agent, console only, no chat layer at all (see "Try it")
+maintenance/             the restart helper, plus the generator for the console build
+tinycmdr-cli.py          the same agent, console only, no chat layer at all (see "Try it").
+                        It is GENERATED from tinycmdr.py - never edit it by hand:
+                        python maintenance/build-cli-source.py && maintenance/build-cli-fix.py
 ```

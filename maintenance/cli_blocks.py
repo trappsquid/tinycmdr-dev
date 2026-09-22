@@ -282,7 +282,14 @@ NEW_CONFIG = r'''{
         "color_coded": True,    # green narration, amber tools, red failures
         "subagent_model": "",   # model for delegate_task sub-agents; empty = inherit
         "show_usage": True,     # token/time footer after each run
-        "confirm_patterns": [],  # commands matching these need a 'yes' reply
+        "confirm_patterns": [
+            "\\brd\\s+/s\\b",
+            "\\brmdir\\s+/s\\b",
+            "\\bdel\\s+/[a-z]*[sq]",
+            "\\bremove-item\\b[^|;]*-recurse"
+        ],
+        "confirm_without_door": "decline",   # a job or a sub-agent has nobody
+                                        # to ask, so it declines
         "blocked_patterns": [
             "rm\\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\\s+/(?![A-Za-z0-9_./~-])",
             "rm\\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\\s+/(?![A-Za-z0-9_./~-])",
@@ -294,17 +301,13 @@ NEW_CONFIG = r'''{
             "\\breboot\\b",
             ">\\s*/dev/sd",
             "\\bformat\\s+[a-zA-Z]:",
-            "remove-item\\b[^|;]*-recurse[^|;]*-force",
             "\\b(stop|restart)-computer\\b",
             "\\bformat-volume\\b",
             "\\bclear-disk\\b",
             "\\binitialize-disk\\b",
             "\\bcipher\\s+/w\\b",
             "\\bvssadmin\\s+delete\\s+shadows\\b",
-            "\\brd\\s+/s\\b",
-            "\\brmdir\\s+/s\\b",
-            "\\bdel\\s+/[a-z]*[sq]",
-            "-encodedcommand\\b",
+            "-encodedcommand\\b"
         ],
     },
 }'''

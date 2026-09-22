@@ -228,12 +228,14 @@ if '"fetch_url"' not in lines[sp[0] - 1]:
 cut(sp[0] - 1, sp[1], "fetch_url tool schema")
 
 # ------------------------------------------------------------ 4. secrets
-# With no chat and no search there are no config sections left holding secrets, so
-# the whole config-derived sweep goes; the environment sweep below it stays.
-sv = one("def _secret_values():")
-sa = one('    for section in ("mattermost", "search", "web"):', region=(sv, sv + 40))
-sb = one('            vals.add(fb["api_key"])', region=(sv, sv + 40))
-cut(sa, sb + 1, "config-derived secrets")
+# _secret_values() is NOT cut here, and that is a change (2026-09-22). It used to be cut
+# on the grounds that this build has no chat and no search, so no config section can hold
+# a secret - true of this build's own DEFAULT_CONFIG, and false about the FILE it reads:
+# every installer puts the console build FLAT beside tinycmdr.py, so it reads the same
+# config.json. A token or api_key a user pasted there was redacted by the bot build and
+# written straight through here. The sweep is defensive by construction anyway (it walks
+# whatever sections config.json actually has, with a fallback for the ones this build does
+# not ship), so keeping it costs nothing and removes a whole class of divergence.
 
 # -------------------------------------------------- 5. scheduler + tool cut
 sa = one("# Scheduler (cron gateway equivalent)")

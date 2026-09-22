@@ -56,6 +56,14 @@ SHIP = [
     "install/README-macos.md",
     "maintenance/restart-tinycmdr.ps1",
     "maintenance/restart-tinycmdr.sh",
+    # The generator that produces cli/tinycmdr-cli.py from tinycmdr.py. Shipping the console
+    # build without it leaves a 9,900-line near-twin in the package with no explanation and
+    # no way to reproduce or verify it (audit, 2026-09-22). Two steps and a cut list, ~55 KB;
+    # tests/test_cli.py regenerates from them and requires byte-identity with the shipped
+    # file, so a stale copy cannot be packed either.
+    "maintenance/build-cli-source.py",
+    "maintenance/build-cli-fix.py",
+    "maintenance/cli_blocks.py",
     "skills",
 ]
 
