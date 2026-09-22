@@ -6,7 +6,7 @@
 # croniter       : optional; enables the `schedule` tool
 # rich,          : optional; the console's screen - the boxed banner, one card
 # prompt_toolkit   per tone, the run's own line. Without them, and whenever the
-#                  output is a pipe or tinycmdr_PLAIN=1, every line prints plainly.
+#                  output is a pipe or TINYCMDR_PLAIN=1, every line prints plainly.
 # The two chat-client bounds are deliberate, not tidiness. mmpy_bot's only
 # release is 2.2.1 and it needs httpx<0.28 - which is the ONLY thing keeping
 # mattermostautodriver 11.x off a fresh install today, a constraint living in

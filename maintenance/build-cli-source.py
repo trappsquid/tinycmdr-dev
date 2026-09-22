@@ -6,7 +6,7 @@ Every anchor must match exactly once (or within a stated region) or the script
 exits without writing anything. Nothing here guesses at a line number: the cut
 spans come from the AST of the file as it stands at that moment. Regenerate after
 any change to tinycmdr.py, then re-run:  python tests/test_cli.py
-and  tinycmdr_SRC=tinycmdr-cli.py python tests/test_ledger.py
+and  TINYCMDR_SRC=tinycmdr-cli.py python tests/test_ledger.py
 """
 import ast
 import hashlib
@@ -202,7 +202,7 @@ def sync_agent_keys():
     print("config keys left out  : %s" % (", ".join(skipped) or "none"))
 
 
-drop_line('"tinycmdr_MM_TOKEN": ("mattermost", "token"),', "mattermost env override")
+drop_line('"TINYCMDR_MM_TOKEN": ("mattermost", "token"),', "mattermost env override")
 fa = one("    # fallback endpoints can name their own env var (api_key_env) so provider")
 fb = one('            fb["api_key"] = os.environ[env_name]')
 cut(fa, fb + 1, "fallback env loop in load_config")

@@ -9,9 +9,9 @@ Why CLI mode: the live bots are the thing we are trying to protect. Anything ris
 gets measured here first, and only then goes near the the manager box tinycmdr.
 
 Endpoints come from the environment so this file stays publishable (no LAN addresses):
-    tinycmdr_TEST_BASE_URL   default http://127.0.0.1:8081/v1
-    tinycmdr_TEST_MODEL      default main
-    tinycmdr_TEST_BUDGET     llm.max_context_tokens for the staged config, default 24000
+    TINYCMDR_TEST_BASE_URL   default http://127.0.0.1:8081/v1
+    TINYCMDR_TEST_MODEL      default main
+    TINYCMDR_TEST_BUDGET     llm.max_context_tokens for the staged config, default 24000
 
 Usage:
     python tests/run_scenario.py short
@@ -102,19 +102,19 @@ SESSION_TURNS = [
 
 def stage_install(workdir, budget):
     """Copy the app and write a config beside it, the way the suites do."""
-    # tinycmdr_TEST_APP lets the same scenario run against an OLD build (a rollback copy
+    # TINYCMDR_TEST_APP lets the same scenario run against an OLD build (a rollback copy
     # in .archive/) so a change can be measured before/after without editing the tree.
-    app = Path(os.environ.get("tinycmdr_TEST_APP") or (BASE / "tinycmdr.py"))
+    app = Path(os.environ.get("TINYCMDR_TEST_APP") or (BASE / "tinycmdr.py"))
     if not app.is_absolute():
         app = BASE / app
     shutil.copy2(app, workdir / "tinycmdr.py")
     fixture = json.loads((BASE / "tests" / "fixture-config.json").read_text(encoding="utf-8-sig"))
     cfg = {k: v for k, v in fixture.items() if not k.startswith("_")}
-    cfg["llm"]["base_url"] = os.environ.get("tinycmdr_TEST_BASE_URL",
+    cfg["llm"]["base_url"] = os.environ.get("TINYCMDR_TEST_BASE_URL",
                                            "http://127.0.0.1:8081/v1")
-    cfg["llm"]["model"] = os.environ.get("tinycmdr_TEST_MODEL", "main")
+    cfg["llm"]["model"] = os.environ.get("TINYCMDR_TEST_MODEL", "main")
     # Cloud endpoints need a key. Kept out of this file on purpose: pass it in.
-    cfg["llm"]["api_key"] = os.environ.get("tinycmdr_TEST_API_KEY",
+    cfg["llm"]["api_key"] = os.environ.get("TINYCMDR_TEST_API_KEY",
                                           cfg["llm"].get("api_key") or "none")
     cfg["llm"]["max_context_tokens"] = int(budget)
     cfg["web"] = {"enabled": False}
@@ -336,7 +336,7 @@ def run_session(budget, label, scenario="session"):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("scenario", choices=sorted(SCENARIOS))
-    ap.add_argument("--budget", default=os.environ.get("tinycmdr_TEST_BUDGET", "24000"))
+    ap.add_argument("--budget", default=os.environ.get("TINYCMDR_TEST_BUDGET", "24000"))
     ap.add_argument("--label", default="")
     ap.add_argument("--repeat", type=int, default=1)
     args = ap.parse_args()

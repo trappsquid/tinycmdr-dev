@@ -32,7 +32,7 @@ def post(ip, port, token, path, obj, timeout=30):
     req = urllib.request.Request(
         "http://%s:%d%s" % (ip, port, path),
         data=json.dumps(obj).encode(),
-        headers={"Content-Type": "application/json", "X-tinycmdr-Token": token})
+        headers={"Content-Type": "application/json", "X-Tinycmdr-Token": token})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode() or "{}")
 

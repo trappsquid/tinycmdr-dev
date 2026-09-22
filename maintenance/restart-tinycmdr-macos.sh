@@ -15,8 +15,8 @@
 #
 set -euo pipefail
 
-INSTALL_DIR="${tinycmdr_DIR:-$HOME/tinycmdr}"
-LABEL="${tinycmdr_LABEL:-com.trapp.tinycmdr}"
+INSTALL_DIR="${TINYCMDR_DIR:-$HOME/tinycmdr}"
+LABEL="${TINYCMDR_LABEL:-com.trapp.tinycmdr}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 UID_NUM="$(id -u)"
 TARGET="gui/$UID_NUM/$LABEL"

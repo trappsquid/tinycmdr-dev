@@ -181,7 +181,7 @@ DEFAULT_CONFIG = {
     "telegram": {
         # The third messaging door: a Telegram DM. Deny by default, like
         # Mattermost, so an empty allowed_users refuses to start rather than
-        # answering strangers. The token lives in .env as tinycmdr_TG_TOKEN.
+        # answering strangers. The token lives in .env as TINYCMDR_TG_TOKEN.
         "token": "",
         "allowed_users": [],
     },
@@ -515,11 +515,11 @@ def load_config():
                 cfg[section] = values
     # Environment variables override secrets (handy for services).
     env_map = {
-        "tinycmdr_MM_TOKEN": ("mattermost", "token"),
-        "tinycmdr_TG_TOKEN": ("telegram", "token"),
-        "tinycmdr_WEB_TOKEN": ("web", "token"),
-        "tinycmdr_MODEL": ("llm", "model"),
-        "tinycmdr_BASE_URL": ("llm", "base_url"),
+        "TINYCMDR_MM_TOKEN": ("mattermost", "token"),
+        "TINYCMDR_TG_TOKEN": ("telegram", "token"),
+        "TINYCMDR_WEB_TOKEN": ("web", "token"),
+        "TINYCMDR_MODEL": ("llm", "model"),
+        "TINYCMDR_BASE_URL": ("llm", "base_url"),
         "ANYSEARCH_API_KEY": ("search", "anysearch_api_key"),
         "TAVILY_API_KEY": ("search", "tavily_api_key"),
     }
@@ -530,9 +530,9 @@ def load_config():
     # has one home; a token sitting in config.json is a second copy the agent can
     # read into a prompt and quote, which is the rule this package states about
     # secrets and was quietly breaking for this one lane.
-    if not os.environ.get("tinycmdr_TG_TOKEN") and (cfg.get("telegram") or {}).get("token"):
+    if not os.environ.get("TINYCMDR_TG_TOKEN") and (cfg.get("telegram") or {}).get("token"):
         log.warning("telegram.token in config.json is IGNORED - the Telegram token "
-                    "lives in .env as tinycmdr_TG_TOKEN. Delete the config.json copy.")
+                    "lives in .env as TINYCMDR_TG_TOKEN. Delete the config.json copy.")
         cfg["telegram"]["token"] = ""
     # fallback endpoints can name their own env var (api_key_env) so provider
     # keys live in .env instead of config.json
@@ -9305,10 +9305,10 @@ TUI_STATUS_EVERY = 5.0        # seconds between the run's own lines
 def tui_wanted():
     """Draw the screen? A real console both ways, the two libraries, and no opt-out.
 
-    tinycmdr_PLAIN=1 (or a pipe, a redirect, a cron job) means plain lines - the same
+    TINYCMDR_PLAIN=1 (or a pipe, a redirect, a cron job) means plain lines - the same
     lines the TUI draws, which is why nothing is only visible in the screen.
     """
-    if os.environ.get("tinycmdr_PLAIN"):
+    if os.environ.get("TINYCMDR_PLAIN"):
         return False
     try:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -10840,7 +10840,7 @@ button:hover{background:#5585b8}
 // uid, and the DOM is reconciled to match it: repeats are no-ops, growth repaints
 // in place, order comes from the server. That contract is unchanged - what is new
 // is that a conversation is a thing the server keeps. The page names itself once
-// (X-tinycmdr-Client), owns the conversations it makes, and paints a reload or a
+// (X-Tinycmdr-Client), owns the conversations it makes, and paints a reload or a
 // second device from /api/session instead of from this browser's localStorage.
 const log=document.getElementById('log'),inp=document.getElementById('in'),
       sendBtn=document.getElementById('send'),stopBtn=document.getElementById('stop'),
@@ -10863,9 +10863,9 @@ try{token=new URLSearchParams(location.search).get('token')||'';}catch(e){}
 if(!token){token=localStorage.fb_token||'';}
 function askToken(retry){
  const msg=retry
-   ? 'That token was not accepted.\\n\\nIt is the tinycmdr_WEB_TOKEN line in .env on that '
+   ? 'That token was not accepted.\\n\\nIt is the TINYCMDR_WEB_TOKEN line in .env on that '
      +'machine (the installer prints the full path, and the link it prints contains the token).'
-   : 'This page needs its access token.\\n\\nIt is the tinycmdr_WEB_TOKEN line in .env '
+   : 'This page needs its access token.\\n\\nIt is the TINYCMDR_WEB_TOKEN line in .env '
      +'on that machine - or use the link the installer printed, which carries the token.';
  const a=prompt(msg+(!retry?'\\n\\nIf this install has no token, leave this empty.':''))||'';
  if(a){token=a;}
@@ -10881,8 +10881,8 @@ let clientId=localStorage.fb_client||'';
 if(!clientId){clientId='c'+Math.random().toString(36).slice(2,10)+Date.now().toString(36);
  localStorage.fb_client=clientId;}
 function H(extra){
- const h={'Content-Type':'application/json','X-tinycmdr-Token':token,
-          'X-tinycmdr-Client':clientId};
+ const h={'Content-Type':'application/json','X-Tinycmdr-Token':token,
+          'X-Tinycmdr-Client':clientId};
  if(extra)for(const k in extra)h[k]=extra[k];
  return h;
 }
@@ -11251,7 +11251,7 @@ async function start(t){
    // instead of printing "unauthorized" at somebody who was never told what to type.
    delete localStorage.fb_token;token='';
    if(askToken(true)){localStorage.fb_token=token;note('token saved - try that again');}
-   else{note('no token given - this install needs one (.env: tinycmdr_WEB_TOKEN)');}
+   else{note('no token given - this install needs one (.env: TINYCMDR_WEB_TOKEN)');}
    return;
  }
  if(code!==200||j.error){note('could not send: '+(j.error||code));return;}
@@ -11502,7 +11502,7 @@ def _web_command(text, key="web"):
 # tomorrow repaint the conversation instead of starting from a blank page.
 #
 # Ownership, because this build ships to other people: a conversation belongs to
-# the browser that created it (X-tinycmdr-Client, an id the page makes once and
+# the browser that created it (X-Tinycmdr-Client, an id the page makes once and
 # keeps in localStorage), so two people pointed at one host never see each other's
 # chats. An empty owner means the shared conversation - what /api/chat and any
 # script without a client header drive, and what a pre-existing sessions/web.json
@@ -11523,7 +11523,7 @@ def _web_key_ok(key):
 
 def _web_client(headers):
     """The browser's own id. Scripts send none and get the shared conversation."""
-    raw = (headers.get("X-tinycmdr-Client") or "").strip()
+    raw = (headers.get("X-Tinycmdr-Client") or "").strip()
     return re.sub(r"[^A-Za-z0-9]", "", raw)[:32]
 
 
@@ -12407,7 +12407,7 @@ def run_webui():
 
         def _auth_ok(self):
             return (not token
-                    or self.headers.get("X-tinycmdr-Token") == token)
+                    or self.headers.get("X-Tinycmdr-Token") == token)
 
         # -- routing ------------------------------------------------------
 
@@ -12777,15 +12777,15 @@ def run_bot():
     dispatcher = MattermostDispatcher()
     mm = CONFIG["mattermost"]
     if not mm.get("token") or mm["token"] == "PASTE_BOT_TOKEN_HERE":
-        # .env holds tinycmdr_MM_TOKEN now; a missing one used to fail silently
+        # .env holds TINYCMDR_MM_TOKEN now; a missing one used to fail silently
         # as "never connects"
-        log.critical("no Mattermost token: put tinycmdr_MM_TOKEN=<bot token> "
+        log.critical("no Mattermost token: put TINYCMDR_MM_TOKEN=<bot token> "
                      "in %s (or mattermost.token in config.json) and restart.",
                      BASE_DIR / ".env")
         sys.exit(2)
 
     # mmpy_bot 2.2.x only registers listeners defined as Plugin methods.
-    class tinycmdrPlugin(Plugin):
+    class TinycmdrPlugin(Plugin):
         @listen_to("(.*)", re.DOTALL, direct_only=True)   # DMs: respond to all
         def on_dm(self, message, query):
             dispatcher.enqueue(message, query if query else message.text)
@@ -12806,7 +12806,7 @@ def run_bot():
             BOT_TOKEN=mm["token"],
             SSL_VERIFY=mm.get("ssl_verify", True),
         ),
-        plugins=[tinycmdrPlugin()],
+        plugins=[TinycmdrPlugin()],
     )
     # Every Mattermost call goes through this driver's httpx client, and the
     # driver's default request_timeout is None, which in httpx turns OFF the
@@ -13217,7 +13217,7 @@ def run_telegram():
     tg = CONFIG.get("telegram") or {}
     token = (tg.get("token") or "").strip()
     if not token:
-        log.critical("no Telegram token: put tinycmdr_TG_TOKEN=<bot token> in %s "
+        log.critical("no Telegram token: put TINYCMDR_TG_TOKEN=<bot token> in %s "
                      "(or telegram.token in config.json) and restart.", BASE_DIR / ".env")
         sys.exit(2)
     allowed = {str(u).strip() for u in (tg.get("allowed_users") or []) if str(u).strip()}
@@ -14085,14 +14085,14 @@ def restart_owner():
 
       systemd     INVOCATION_ID is set by systemd on every unit start, and the
                   unit ships with Restart=always, so exiting is enough
-      supervisor  the Windows keep-alive sets tinycmdr_SUPERVISED=1 in the
+      supervisor  the Windows keep-alive sets TINYCMDR_SUPERVISED=1 in the
                   child's environment and relaunches on RESTART_EXIT_CODE
       self        started by hand, or by a logon task with no supervisor:
                   nothing would start it again, so spawn a detached replacement
     """
     if os.environ.get("INVOCATION_ID"):
         return "systemd"
-    if os.environ.get("tinycmdr_SUPERVISED") == "1":
+    if os.environ.get("TINYCMDR_SUPERVISED") == "1":
         return "supervisor"
     return "self"
 
@@ -14339,7 +14339,7 @@ def _verb_doctor():
     print("  .env      : %s (%d key%s)" % ("present" if have_env else "missing",
                                            len(env), "" if len(env) == 1 else "s"))
     # names only, never values
-    wanted = ("tinycmdr_MM_TOKEN", "tinycmdr_TG_TOKEN", "tinycmdr_WEB_TOKEN",
+    wanted = ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
               "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY")
     for name in wanted:
         where = []
@@ -14534,7 +14534,7 @@ def _env_set(name, value):
 def _verb_token(rest):
     if rest and rest[0] == "set":
         if len(rest) < 2:
-            print("token set <NAME> — which key? e.g. tinycmdr_MM_TOKEN",
+            print("token set <NAME> — which key? e.g. TINYCMDR_MM_TOKEN",
                   file=sys.stderr)
             return 2
         name = rest[1].strip()
@@ -14569,7 +14569,7 @@ def _verb_token(rest):
     env = _env_file_keys()
     print("  .env.example lists every key; set one with: tinycmdr token set NAME")
     print("  %-22s %s" % ("key", "state"))
-    for name in ("tinycmdr_MM_TOKEN", "tinycmdr_TG_TOKEN", "tinycmdr_WEB_TOKEN",
+    for name in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
                  "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY"):
         state = "set (%s)" % (".env" if name in env else "environment") \
             if os.environ.get(name) else "not set"
@@ -14677,7 +14677,7 @@ def validate_startup_config():
     tok = str(CONFIG["mattermost"].get("token", ""))
     if not tok or tok == "PASTE_BOT_TOKEN_HERE":
         return ("no Mattermost bot token.\n"
-                "Put it in .env as tinycmdr_MM_TOKEN=... (preferred, keeps it "
+                "Put it in .env as TINYCMDR_MM_TOKEN=... (preferred, keeps it "
                 "out of config.json), or paste it into mattermost.token. "
                 "Get it from System Console -> Integrations -> Bot Accounts.")
     if CONFIG["mattermost"].get("allowed_users") == ["your-mattermost-user-id"]:

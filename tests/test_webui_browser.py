@@ -83,7 +83,7 @@ def http(url, payload=None, token=TOKEN, timeout=20):
     req = urllib.request.Request(url, data=data)
     req.add_header("Content-Type", "application/json")
     if token is not None:
-        req.add_header("X-tinycmdr-Token", token)
+        req.add_header("X-Tinycmdr-Token", token)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode() or "{}")

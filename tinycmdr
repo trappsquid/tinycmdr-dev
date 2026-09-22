@@ -16,7 +16,7 @@ while [ -L "$SELF" ]; do
 done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"
 
-PY="${tinycmdr_PYTHON:-}"
+PY="${TINYCMDR_PYTHON:-}"
 if [ -z "$PY" ]; then
     # A candidate is only a python if it can RUN: on a host with the Windows Store
     # app-alias shim, /usr/bin/python3 exists and prints an advert instead.
@@ -31,7 +31,7 @@ if [ -z "$PY" ]; then
     done
 fi
 if [ -z "$PY" ]; then
-    echo "tinycmdr: no python found - set tinycmdr_PYTHON to an interpreter" >&2
+    echo "tinycmdr: no python found - set TINYCMDR_PYTHON to an interpreter" >&2
     exit 127
 fi
 

@@ -15,7 +15,7 @@ foreach ($p in $procs) {
 }
 Start-Sleep -Seconds 3
 Write-Output "=== restarting through the task ==="
-schtasks /Run /TN tinycmdr
+schtasks /Run /TN Tinycmdr
 Start-Sleep -Seconds 25
 
 Write-Output "=== live tinycmdr instances (after) ==="

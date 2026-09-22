@@ -61,8 +61,8 @@ missing = sorted(p for p in page_paths if p not in routed)
 check(not missing, f"every path the page calls is routed by the server ({missing})")
 
 # -- the handshake: one header name, written once ---------------------------
-sent = set(re.findall(r"'(X-tinycmdr-[A-Za-z-]+)'", page))
-read = set(re.findall(r'headers\.get\("(X-tinycmdr-[A-Za-z-]+)"\)', src))
+sent = set(re.findall(r"'(X-Tinycmdr-[A-Za-z-]+)'", page))
+read = set(re.findall(r'headers\.get\("(X-Tinycmdr-[A-Za-z-]+)"\)', src))
 check(bool(sent) and sent == read,
       f"the token header name matches on both sides ({sorted(sent)} vs {sorted(read)})")
 

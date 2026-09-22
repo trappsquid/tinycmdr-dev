@@ -1,6 +1,6 @@
 """Tests for the chatless CLI build (tinycmdr-cli.py).
 
-Run:  tinycmdr_SRC=tinycmdr-cli.py python tests/test_cli.py
+Run:  TINYCMDR_SRC=tinycmdr-cli.py python tests/test_cli.py
       (the suite stages its own copy, so it never touches the live tree)
 
 What it covers that the other suites cannot: the standard-library HTTP shim, the inert
@@ -33,7 +33,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 CR = chr(13)
 LF = chr(10)
-SRC_NAME = os.environ.get("tinycmdr_SRC", "tinycmdr-cli.py")
+SRC_NAME = os.environ.get("TINYCMDR_SRC", "tinycmdr-cli.py")
 # In the working repo the console build sits at the root. In the shipped archive
 # it is under cli/, next to its own README. Look in both, and if it is nowhere,
 # say so and stop: someone who just unpacked a download should get a sentence,

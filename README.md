@@ -105,19 +105,19 @@ It will:
 4. write `config.json` (fresh web-UI token) and `.env` from the templates
 5. write the hidden launcher (`tinycmdr-service.vbs`) and a manual one
    (`launch_tinycmdr.bat`)
-6. register the scheduled task `tinycmdr` — logon +30s and boot +4min, S4U so it
+6. register the scheduled task `Tinycmdr` — logon +30s and boot +4min, S4U so it
    runs headless
 7. start it and smoke-test `/status` over the local web UI
 
 Then, to finish:
 
 ```
-1. put the Mattermost bot token in  C:\tinycmdr\.env    (tinycmdr_MM_TOKEN=...)
+1. put the Mattermost bot token in  C:\tinycmdr\.env    (TINYCMDR_MM_TOKEN=...)
 2. put your Mattermost user id in  config.json          (mattermost.allowed_users)
 3. point it at a model             config.json          (llm.base_url / llm.model)
    - the default is http://127.0.0.1:8081/v1, which only works if the model runs
      on this machine; pass -ModelBaseUrl for one on the network
-4. restart:  Start-ScheduledTask tinycmdr
+4. restart:  Start-ScheduledTask Tinycmdr
 ```
 
 Useful switches: `-InstallDir`, `-TaskName`, `-BotName`, `-ModelBaseUrl`, `-Model`, `-Python <path>`,
@@ -186,9 +186,9 @@ The web UI binds `127.0.0.1` by default, so no firewall rule is needed. Set
 
 `config.json` is merged over the code's defaults, so it only needs the values you
 actually change. Secrets do **not** go in it — environment variables (from `.env`)
-override it: `tinycmdr_MM_TOKEN`, `TAVILY_API_KEY`, `ANYSEARCH_API_KEY`,
-`tinycmdr_MODEL`, `tinycmdr_BASE_URL`, plus the two door tokens, `tinycmdr_TG_TOKEN`
-(the Telegram DM door) and `tinycmdr_WEB_TOKEN` (the local page).
+override it: `TINYCMDR_MM_TOKEN`, `TAVILY_API_KEY`, `ANYSEARCH_API_KEY`,
+`TINYCMDR_MODEL`, `TINYCMDR_BASE_URL`, plus the two door tokens, `TINYCMDR_TG_TOKEN`
+(the Telegram DM door) and `TINYCMDR_WEB_TOKEN` (the local page).
 
 Notable knobs:
 
@@ -203,7 +203,7 @@ agent.debug_dump_dir          write every request body to disk (blank = off); us
                               when the bot answers nonsense
 mattermost.allowed_users      who may command the bot — leave empty and it ignores everyone
 telegram.allowed_users        numeric Telegram ids allowed to DM the bot; the token
-                              itself is .env-only (tinycmdr_TG_TOKEN)
+                              itself is .env-only (TINYCMDR_TG_TOKEN)
 ```
 
 `config.example.json` is the whole thing: every key, what it does, what it defaults to,
@@ -258,10 +258,10 @@ local page       the trial and the LAN fallback: `python tinycmdr.py --web` serv
 console          the broken-box door: `python tinycmdr-cli.py` (or `--cli` on the app
                  build) over SSH on a host with nothing installed and nothing to open.
 Telegram DM      the personal door: one conversation per DM, off until you set
-                 tinycmdr_TG_TOKEN.
+                 TINYCMDR_TG_TOKEN.
 ```
 
-**The Telegram door.** The token goes in `.env` as `tinycmdr_TG_TOKEN` and nowhere
+**The Telegram door.** The token goes in `.env` as `TINYCMDR_TG_TOKEN` and nowhere
 else: a token in `config.json` is ignored, and the log says so. Your own id goes in
 `telegram.allowed_users` (numeric, not a username) — the door is deny-by-default, so
 an empty list starts the process, refuses, and tells you the id is missing rather
@@ -314,7 +314,7 @@ Durable memory lives in `notes.md` (capped, older entries spill to
 own working state — back them up, don't hand-edit them while a run is active.
 
 Logs: `tinycmdr.log` in the install folder. Restart: `maintenance\restart-tinycmdr.ps1`
-(elevated) or `Stop-ScheduledTask tinycmdr; Start-ScheduledTask tinycmdr`.
+(elevated) or `Stop-ScheduledTask Tinycmdr; Start-ScheduledTask Tinycmdr`.
 
 ## Verifying an install
 
@@ -329,12 +329,12 @@ The local browser page is off by default (`web.enabled: false`) because the chat
 from Mattermost and should not quietly open a port. `python tinycmdr.py --web` turns it on for that
 process, which is the quickest way to try the whole thing: no server, no bot account, no token.
 Pass `-EnableWeb` to the installer if you want the page served alongside the chat bot, which
-writes a token into `.env` (`tinycmdr_WEB_TOKEN`) and binds loopback only.
+writes a token into `.env` (`TINYCMDR_WEB_TOKEN`) and binds loopback only.
 
 ## Uninstall
 
 ```powershell
-Stop-ScheduledTask tinycmdr ; Unregister-ScheduledTask tinycmdr -Confirm:$false
+Stop-ScheduledTask Tinycmdr ; Unregister-ScheduledTask Tinycmdr -Confirm:$false
 Remove-Item C:\tinycmdr -Recurse -Force      # take .env and notes.md with it if that is fine
 ```
 

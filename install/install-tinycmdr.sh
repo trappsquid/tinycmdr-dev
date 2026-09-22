@@ -10,7 +10,7 @@
 # user), keeps the bot token out of config.json (it goes to .env), and registers
 # a systemd unit that is enabled at boot.
 #
-#   --token <t>           Mattermost bot token (tinycmdr_MM_TOKEN)
+#   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first token-looking line)
 #   --allowed-user <id>   Mattermost user id allowed to command the bot
 #   --mattermost-url <h>  Mattermost host, no scheme (default: fleet-defaults.json)
@@ -36,12 +36,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
-SERVICE_NAME="${tinycmdr_SERVICE:-tinycmdr}"
-RUN_USER="${tinycmdr_USER:-${SUDO_USER:-$(id -un)}}"
-INSTALL_DIR="${tinycmdr_DIR:-/home/$RUN_USER/tinycmdr}"
+SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
+RUN_USER="${TINYCMDR_USER:-${SUDO_USER:-$(id -un)}}"
+INSTALL_DIR="${TINYCMDR_DIR:-/home/$RUN_USER/tinycmdr}"
 UNIT="/etc/systemd/system/$SERVICE_NAME.service"
-LOG="${tinycmdr_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
-PY="${tinycmdr_PYTHON:-python3}"
+LOG="${TINYCMDR_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
+PY="${TINYCMDR_PYTHON:-python3}"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""; MM_URL_ARG=""
 WEB_PORT="8788"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
@@ -145,7 +145,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     printf '  model        : %s @ %s\n' "$(cfgval llm.model)" "$(cfgval llm.base_url)"
     printf '  bot name     : %s\n' "$(cfgval agent.bot_name)"
     printf '  allowed user : %s\n' "$(cfgval mattermost.allowed_users)"
-    if [ -f "$INSTALL_DIR/.env" ] && grep -q '^tinycmdr_MM_TOKEN=.\+' "$INSTALL_DIR/.env"; then
+    if [ -f "$INSTALL_DIR/.env" ] && grep -q '^TINYCMDR_MM_TOKEN=.\+' "$INSTALL_DIR/.env"; then
         printf '  token in .env: yes\n'
     else
         printf '  token in .env: NO\n'
@@ -195,7 +195,7 @@ if [ -z "$TOKEN" ] && [ -n "$TOKEN_FILE" ]; then
     [ -n "$TOKEN" ] || die "no token-looking string in $TOKEN_FILE"
 fi
 if [ -z "$TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-    TOKEN="$(grep -m1 '^tinycmdr_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
+    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
     if [ -n "$TOKEN" ]; then
         info "reusing the token already in $INSTALL_DIR/.env"
     fi
@@ -248,7 +248,7 @@ if [ "$WEB_ON" = 1 ]; then
     info "web fallback : http://127.0.0.1:${WEB_PORT}"
     if [ -n "$WEB_TOKEN" ]; then
         info "ready link   : http://127.0.0.1:${WEB_PORT}/?token=${WEB_TOKEN}"
-        info "               (token in .env: tinycmdr_WEB_TOKEN, nothing to type)"
+        info "               (token in .env: TINYCMDR_WEB_TOKEN, nothing to type)"
     fi
 else
     info "web fallback : disabled"
@@ -355,7 +355,7 @@ else:
     mm["port"] = int(mm_port or 443)
     mm["allowed_users"] = [allowed] if allowed else []
     # Secrets live in .env. A token left in the template or a hand-edited
-    # config.json would shadow tinycmdr_MM_TOKEN, and the bot would try to
+    # config.json would shadow TINYCMDR_MM_TOKEN, and the bot would try to
     # authenticate with a placeholder and fail.
     mm["token"] = ""
     llm = cfg.setdefault("llm", {})
@@ -365,7 +365,7 @@ else:
         llm["model"] = model
     cfg.setdefault("agent", {})["bot_name"] = bot
     if webon == "1":
-        # The token is a SECRET, so it goes to .env (tinycmdr_WEB_TOKEN) with the bot
+        # The token is a SECRET, so it goes to .env (TINYCMDR_WEB_TOKEN) with the bot
         # token: one file to look in, and nothing loose in the install folder.
         cfg["web"] = {"enabled": True, "port": int(webport or 8788),
                       "token": "", "host": "127.0.0.1"}
@@ -400,7 +400,7 @@ if envp.exists():
         if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
             continue
         key = line.split("=", 1)[0].strip()
-        if key in ("tinycmdr_MM_TOKEN", "tinycmdr_WEB_TOKEN") or key in have:
+        if key in ("TINYCMDR_MM_TOKEN", "TINYCMDR_WEB_TOKEN") or key in have:
             continue          # installer-managed: written below, never carried over
         if placeholder(line.split("=", 1)[1]):
             refused.append(key)
@@ -414,7 +414,7 @@ if os.path.exists(secrets):
             continue
         key, _, val = line.partition("=")
         key = key.strip()
-        if key not in ("tinycmdr_MM_TOKEN", "tinycmdr_WEB_TOKEN",
+        if key not in ("TINYCMDR_MM_TOKEN", "TINYCMDR_WEB_TOKEN",
                        "TAVILY_API_KEY", "ANYSEARCH_API_KEY"):
             # A model key is per bot: never deploy one from a shared secrets file.
             # Hosts that took theirs from here all shared one key, and the provider's
@@ -433,7 +433,7 @@ out = ["# tinycmdr secrets - per-host tokens + fleet-wide search keys.",
        "# is whatever your llm.fallbacks entry names in api_key_env, and this host's",
        "# own key belongs here by hand.",
        "# Never in config.json (the agent can read that file into a prompt).", "",
-       f"tinycmdr_MM_TOKEN={tok}"] + ([f"tinycmdr_WEB_TOKEN={webtok}"] if webtok else []) \
+       f"TINYCMDR_MM_TOKEN={tok}"] + ([f"TINYCMDR_WEB_TOKEN={webtok}"] if webtok else []) \
       + lines + [""]
 envp.write_text("\n".join(out), encoding="utf-8")
 os.chmod(envp, 0o600)
@@ -518,7 +518,7 @@ Environment="HOME=/home/$RUN_USER"
 Environment="USER=$RUN_USER"
 Environment="LOGNAME=$RUN_USER"
 Environment="PATH=$INSTALL_DIR/venv/bin:/home/$RUN_USER/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-Environment="tinycmdr_DIR=$INSTALL_DIR"
+Environment="TINYCMDR_DIR=$INSTALL_DIR"
 Restart=always
 RestartSec=10
 KillMode=mixed

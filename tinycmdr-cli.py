@@ -19,7 +19,7 @@ Dependencies: none required. This build runs on the standard library alone, so t
 is no pip step and nothing to install besides Python. Two optional libraries turn the
 console into the card UI (rich + prompt_toolkit): the installer brings them in, and
 without them every line prints plainly, exactly as it does when the output is a pipe
-or you set tinycmdr_PLAIN=1.
+or you set TINYCMDR_PLAIN=1.
 Config: config.json next to this file (config.example.json is the reference, and the
         installer's own copy is already filled in). Nothing is ever written for you,
         and opening this file creates nothing: the log, notes, sessions and tools
@@ -388,10 +388,10 @@ def load_config():
                 cfg[section] = values
     # Environment variables override secrets (handy for services).
     env_map = {
-        "tinycmdr_TG_TOKEN": ("telegram", "token"),
-        "tinycmdr_WEB_TOKEN": ("web", "token"),
-        "tinycmdr_MODEL": ("llm", "model"),
-        "tinycmdr_BASE_URL": ("llm", "base_url"),
+        "TINYCMDR_TG_TOKEN": ("telegram", "token"),
+        "TINYCMDR_WEB_TOKEN": ("web", "token"),
+        "TINYCMDR_MODEL": ("llm", "model"),
+        "TINYCMDR_BASE_URL": ("llm", "base_url"),
     }
     for env, (section, key) in env_map.items():
         if os.environ.get(env):
@@ -400,9 +400,9 @@ def load_config():
     # has one home; a token sitting in config.json is a second copy the agent can
     # read into a prompt and quote, which is the rule this package states about
     # secrets and was quietly breaking for this one lane.
-    if not os.environ.get("tinycmdr_TG_TOKEN") and (cfg.get("telegram") or {}).get("token"):
+    if not os.environ.get("TINYCMDR_TG_TOKEN") and (cfg.get("telegram") or {}).get("token"):
         log.warning("telegram.token in config.json is IGNORED - the Telegram token "
-                    "lives in .env as tinycmdr_TG_TOKEN. Delete the config.json copy.")
+                    "lives in .env as TINYCMDR_TG_TOKEN. Delete the config.json copy.")
         cfg["telegram"]["token"] = ""
     return cfg
 
@@ -8981,10 +8981,10 @@ TUI_STATUS_EVERY = 5.0        # seconds between the run's own lines
 def tui_wanted():
     """Draw the screen? A real console both ways, the two libraries, and no opt-out.
 
-    tinycmdr_PLAIN=1 (or a pipe, a redirect, a cron job) means plain lines - the same
+    TINYCMDR_PLAIN=1 (or a pipe, a redirect, a cron job) means plain lines - the same
     lines the TUI draws, which is why nothing is only visible in the screen.
     """
-    if os.environ.get("tinycmdr_PLAIN"):
+    if os.environ.get("TINYCMDR_PLAIN"):
         return False
     try:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):

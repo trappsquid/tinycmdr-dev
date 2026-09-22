@@ -10,7 +10,7 @@ import time
 import urllib.request
 
 base, token, msg = sys.argv[1], sys.argv[2], sys.argv[3]
-H = {"Content-Type": "application/json", "X-tinycmdr-Token": token}
+H = {"Content-Type": "application/json", "X-Tinycmdr-Token": token}
 
 
 def call(path, obj=None):

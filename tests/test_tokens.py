@@ -8,13 +8,13 @@ chars/token, source/JSON denser, CJK much denser - measured on the two samples t
 actually recur in an ops run: this build's own source (the model re-reads it more
 than any other file) and a JSON tool payload.
 
-A live comparison against a real tokenizer runs ONLY when tinycmdr_TEST_TOKENIZE_URL
+A live comparison against a real tokenizer runs ONLY when TINYCMDR_TEST_TOKENIZE_URL
 is set (a llama.cpp box answers POST /tokenize). Do not point it at a box that is
 busy: it is a model server. Left unset, it prints a skip line and the offline
 checks are the gate.
 
     python tests/test_tokens.py
-    tinycmdr_TEST_TOKENIZE_URL=http://<lan-box>:8081/tokenize python tests/test_tokens.py
+    TINYCMDR_TEST_TOKENIZE_URL=http://<lan-box>:8081/tokenize python tests/test_tokens.py
 """
 import json
 import os
@@ -114,9 +114,9 @@ def main():
               "the payload estimate counts tool-call arguments too")
 
         # ---- live, opt-in -------------------------------------------------
-        url = (os.environ.get("tinycmdr_TEST_TOKENIZE_URL") or "").strip()
+        url = (os.environ.get("TINYCMDR_TEST_TOKENIZE_URL") or "").strip()
         if not url:
-            print("skip live tokenizer comparison (set tinycmdr_TEST_TOKENIZE_URL "
+            print("skip live tokenizer comparison (set TINYCMDR_TEST_TOKENIZE_URL "
                   "to a llama.cpp /tokenize to run it)")
         else:
             for label, text in (("prose", PROSE), ("code", CODE),

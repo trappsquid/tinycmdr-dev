@@ -2,7 +2,7 @@
 
 Why this exists
 ---------------
-The "tinycmdr" scheduled task starts `tinycmdr-service.vbs`, which spawns the
+The "Tinycmdr" scheduled task starts `tinycmdr-service.vbs`, which spawns the
 bot detached and exits immediately. Task Scheduler therefore believes the task
 finished successfully and its RestartOnFailure policy can never fire — and,
 launched through pythonw, an exception in the bot leaves no trace anywhere. The
@@ -58,7 +58,7 @@ def find_python():
 
     A different one (a venv without mmpy_bot or croniter) starts a degraded bot: schedule
     tool disabled, Mattermost driver missing - so the choice still matters. Order: an
-    explicit tinycmdr_PYTHON, then the interpreter running THIS process (the launcher
+    explicit TINYCMDR_PYTHON, then the interpreter running THIS process (the launcher
     starts the supervisor with the very python the bot should use), then PATH, then the
     usual Windows install locations.
 
@@ -67,7 +67,7 @@ def find_python():
     C:/Users/<someone>/.../python.exe is simply a supervisor that cannot start anything.
     """
     cands = []
-    override = (os.environ.get("tinycmdr_PYTHON") or "").strip()
+    override = (os.environ.get("TINYCMDR_PYTHON") or "").strip()
     if override:
         cands.append(override)
     if sys.executable:
@@ -92,7 +92,7 @@ def find_python():
                 return Path(c)
         except OSError:
             continue
-    raise SystemExit("no python interpreter found for the bot: set tinycmdr_PYTHON to the "
+    raise SystemExit("no python interpreter found for the bot: set TINYCMDR_PYTHON to the "
                      "one it should run under (it needs requests, mmpy_bot and croniter)")
 
 
@@ -296,7 +296,7 @@ def start_bot():
     # Tell the bot it is supervised, so a /restart exits for us to relaunch
     # instead of spawning a detached copy that races our next child for the
     # lock (which is what used to fill this log with "exited 3" and 300 s waits).
-    env["tinycmdr_SUPERVISED"] = "1"
+    env["TINYCMDR_SUPERVISED"] = "1"
     fh = open(BOT_STDOUT, "a", encoding="utf-8", errors="replace")
     fh.write("\n===== supervised start %s =====\n"
              % time.strftime("%Y-%m-%d %H:%M:%S"))

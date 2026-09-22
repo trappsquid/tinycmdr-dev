@@ -15,7 +15,7 @@
 
     -Report  version + sha256 + web config of each host (read-only)
     -Push    copy the source file over the host's tinycmdr.py (keeps a .bak once)
-    -Restart re-run the scheduled task "tinycmdr" on each host
+    -Restart re-run the scheduled task "Tinycmdr" on each host
 #>
 param(
     [switch]$Report,
@@ -31,8 +31,8 @@ if (-not (Test-Path $credFile)) { Write-Output "no $credFile - cannot authentica
 $pw = (Get-Content $credFile -Raw).Trim()
 
 $hosts = @(
-    @{ name = "the other Windows box   a LAN address";  ip = "a LAN address";  user = "David Trapp"; task = "tinycmdr" },
-    @{ name = "the Windows test box a LAN address"; ip = "a LAN address"; user = "David Trapp"; task = "tinycmdr" }
+    @{ name = "the other Windows box   a LAN address";  ip = "a LAN address";  user = "David Trapp"; task = "Tinycmdr" },
+    @{ name = "the Windows test box a LAN address"; ip = "a LAN address"; user = "David Trapp"; task = "Tinycmdr" }
 )
 
 foreach ($h in $hosts) {

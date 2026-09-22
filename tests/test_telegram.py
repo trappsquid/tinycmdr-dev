@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 spec = importlib.util.spec_from_file_location("tinycmdr_tg_under_test", SRC)
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_tg_under_test"] = fb
@@ -215,13 +215,13 @@ def staged_token(config_token, env_token):
             "mattermost": {"url": "", "token": ""},
             "llm": {"base_url": "http://127.0.0.1:1/v1", "model": "none"},
         }), encoding="utf-8")
-        # Strip EVERY tinycmdr_* var: importing tinycmdr.py at the top of this
+        # Strip EVERY TINYCMDR_* var: importing tinycmdr.py at the top of this
         # file loads the repo's own .env into os.environ, so the suite's
         # environment is not a clean one to measure a token rule in.
         env = {k: v for k, v in os.environ.items()
-               if not k.startswith("tinycmdr_")}
+               if not k.startswith("TINYCMDR_")}
         if env_token:
-            env["tinycmdr_TG_TOKEN"] = env_token
+            env["TINYCMDR_TG_TOKEN"] = env_token
         code = (
             "import importlib.util, sys\n"
             "spec = importlib.util.spec_from_file_location('staged', r'%s')\n"

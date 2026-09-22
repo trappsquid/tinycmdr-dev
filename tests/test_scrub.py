@@ -6,7 +6,7 @@ hosted endpoint keeps in config.json and the one in use on every call. This suit
 the sweep itself, on the code's own terms, and runs against either build:
 
     python tests/test_scrub.py
-    tinycmdr_SRC=tinycmdr-cli.py python tests/test_scrub.py
+    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_scrub.py
 """
 import importlib.util
 import os
@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 spec = importlib.util.spec_from_file_location("tinycmdr_scrub_under_test", SRC)
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_scrub_under_test"] = fb
@@ -41,7 +41,7 @@ try:
                                       "model": "x", "api_key": FBKEY}]
     fb.CONFIG["mattermost"] = dict(fb.CONFIG["mattermost"])
     fb.CONFIG["mattermost"]["token"] = MM
-    os.environ["tinycmdr_ENV_TOKEN"] = "env-token-abcdefghijkl"
+    os.environ["TINYCMDR_ENV_TOKEN"] = "env-token-abcdefghijkl"
     fb._SECRETS = fb._secret_values()
 
     out = fb.scrub("the endpoint answered with key " + KEY)
@@ -71,7 +71,7 @@ try:
 finally:
     fb._SECRETS = SAVED_SECRETS
     fb.CONFIG = SAVED_CFG
-    os.environ.pop("tinycmdr_ENV_TOKEN", None)
+    os.environ.pop("TINYCMDR_ENV_TOKEN", None)
 
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))

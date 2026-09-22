@@ -6,7 +6,7 @@ package.
 
 - tinycmdr lives at C:\tinycmdr and runs detached (pythonw.exe), with NO supervisor: the
   scheduled task shows Ready while the bot runs
-- restart it with `schtasks /Run /TN tinycmdr`, but STOP the old process first (it holds
+- restart it with `schtasks /Run /TN Tinycmdr`, but STOP the old process first (it holds
   tinycmdr.lock and will make the replacement abort)
 - its maintenance\restart-tinycmdr.ps1 is broken (its $log points at a path that does not
   exist); do not use it

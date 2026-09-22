@@ -7,9 +7,9 @@
 #   sudo bash restart-tinycmdr.sh
 set -euo pipefail
 
-SERVICE_NAME="${tinycmdr_SERVICE:-tinycmdr}"
-INSTALL_DIR="${tinycmdr_DIR:-/home/${SUDO_USER:-$(id -un)}/tinycmdr}"
-LOG="${tinycmdr_RESTART_LOG:-/tmp/tinycmdr-restart.log}"
+SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
+INSTALL_DIR="${TINYCMDR_DIR:-/home/${SUDO_USER:-$(id -un)}/tinycmdr}"
+LOG="${TINYCMDR_RESTART_LOG:-/tmp/tinycmdr-restart.log}"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 

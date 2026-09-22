@@ -362,7 +362,7 @@ def main():
     r2 = subprocess.run([sys.executable, str(BASE / "tests" / "test_cli.py")],
                         capture_output=True, text=True, timeout=900,
                         env=dict(os.environ,
-                                 tinycmdr_SRC=str(check_dir / "win" / folder_name
+                                 TINYCMDR_SRC=str(check_dir / "win" / folder_name
                                                  / "tinycmdr.py")))
     tail = [l for l in r2.stdout.strip().splitlines() if "passed" in l]
     print("\nclean unpack: tests -> %s" % (tail[-1] if tail else "no summary"))

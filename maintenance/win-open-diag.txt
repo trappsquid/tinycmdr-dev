@@ -33,7 +33,7 @@ Task: \FileBrowserStart
    trigger: CimInstance
    states: started=Ready hidden=False restartOnNet=
 
-Task: \tinycmdr
+Task: \Tinycmdr
    exec: wscript.exe  args: //B //Nologo "C:/Users/<user>\tinycmdr\tinycmdr-service.vbs"
    trigger: CimInstance
    trigger: CimInstance

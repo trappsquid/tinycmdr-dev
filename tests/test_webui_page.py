@@ -363,8 +363,8 @@ def main():
     # The token is a secret and lives in .env with the others, on all three platforms
     # (it used to be web-token.txt, which only the Windows installer wrote). The prompt
     # has to name the file the reader actually has.
-    check("tinycmdr_WEB_TOKEN" in moved and ".env" in moved,
-          "the prompt names .env / tinycmdr_WEB_TOKEN, where the token is")
+    check("TINYCMDR_WEB_TOKEN" in moved and ".env" in moved,
+          "the prompt names .env / TINYCMDR_WEB_TOKEN, where the token is")
     check("\n\n" in moved and len(moved.splitlines()) > 3,
           f"and it still reads as paragraphs, not one long line ({moved[:40]!r})")
     check(has(res, "typed token worked"), "the token it was given is used")

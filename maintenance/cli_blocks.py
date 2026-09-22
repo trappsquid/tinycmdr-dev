@@ -19,7 +19,7 @@ Dependencies: none required. This build runs on the standard library alone, so t
 is no pip step and nothing to install besides Python. Two optional libraries turn the
 console into the card UI (rich + prompt_toolkit): the installer brings them in, and
 without them every line prints plainly, exactly as it does when the output is a pipe
-or you set tinycmdr_PLAIN=1.
+or you set TINYCMDR_PLAIN=1.
 Config: config.json next to this file (config.example.json is the reference, and the
         installer's own copy is already filled in). Nothing is ever written for you,
         and opening this file creates nothing: the log, notes, sessions and tools

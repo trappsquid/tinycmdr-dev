@@ -113,7 +113,7 @@ def main():
             "mattermost": {"url": "127.0.0.1", "port": 9, "token": "not-a-real-token",
                            "allowed_users": []},
         })
-        (d / ".env").write_text("tinycmdr_MM_TOKEN=not-a-real-token\n", encoding="utf-8")
+        (d / ".env").write_text("TINYCMDR_MM_TOKEN=not-a-real-token\n", encoding="utf-8")
         res = run_lane(d, [], timeout=8)
         check(res["chat"] is True, "a configured chat account is waited on")
         check(res["doors"] == ["Mattermost"],
@@ -129,7 +129,7 @@ def main():
             "mattermost": {"url": "127.0.0.1", "port": 9, "token": "not-a-real-token",
                            "allowed_users": []},
         })
-        (d / ".env").write_text("tinycmdr_MM_TOKEN=not-a-real-token\n", encoding="utf-8")
+        (d / ".env").write_text("TINYCMDR_MM_TOKEN=not-a-real-token\n", encoding="utf-8")
         res = run_lane(d, ["--web"], timeout=8)
         check(sorted(res["doors"]) == ["Mattermost",
                                        "the page on 127.0.0.1:%d" % res["port"]],

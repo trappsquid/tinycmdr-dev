@@ -23,7 +23,7 @@ cfg = json.loads(Path("//%s/C$/tinycmdr/config.json" % ip).read_text(encoding="u
 port = int(cfg["web"]["port"])
 tok = cfg["web"]["token"]
 base = "http://%s:%d" % (ip, port)
-H = {"Content-Type": "application/json", "X-tinycmdr-Token": tok}
+H = {"Content-Type": "application/json", "X-Tinycmdr-Token": tok}
 
 
 def call(path, obj=None):

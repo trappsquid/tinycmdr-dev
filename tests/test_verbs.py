@@ -148,35 +148,35 @@ def main():
         fb._SECRETS = fb._secret_values()
 
         # ---- token: names, never values; and the one editing path ------------
-        os.environ["tinycmdr_MM_TOKEN"] = "mm-secret-value-1234567890"
+        os.environ["TINYCMDR_MM_TOKEN"] = "mm-secret-value-1234567890"
         try:
             rc, out, err = call(fb, ["token"])
-            check("token reports the key name", rc == 0 and "tinycmdr_MM_TOKEN" in out,
+            check("token reports the key name", rc == 0 and "TINYCMDR_MM_TOKEN" in out,
                   out[:300])
             check("token never prints the value",
                   "mm-secret-value-1234567890" not in out + err, out[:300])
             check("token says where the secrets live", ".env" in out, out[:200])
             rc, out, err = call(fb, ["token", "set", "not-a-key"])
             check("token set refuses a name that is not a .env key", rc == 2, rc)
-            rc, out, err = call(fb, ["token", "set", "tinycmdr_TEST_KEY"],
+            rc, out, err = call(fb, ["token", "set", "TINYCMDR_TEST_KEY"],
                                 stdin="written-from-stdin-1234\n")
             check("token set writes it", rc == 0, (rc, err[:200]))
             env_text = (workdir / ".env").read_text(encoding="utf-8")
             check("...as NAME=value in .env",
-                  "tinycmdr_TEST_KEY=written-from-stdin-1234" in env_text, env_text[:120])
+                  "TINYCMDR_TEST_KEY=written-from-stdin-1234" in env_text, env_text[:120])
             check("...without echoing the value",
                   "written-from-stdin-1234" not in out, out[:200])
-            rc, out, err = call(fb, ["token", "set", "tinycmdr_EMPTY"], stdin="\n")
+            rc, out, err = call(fb, ["token", "set", "TINYCMDR_EMPTY"], stdin="\n")
             check("token set refuses an empty value", rc == 1
                   and "nothing written" in err, (rc, err[:120]))
             # a second set replaces rather than appends
-            call(fb, ["token", "set", "tinycmdr_TEST_KEY"], stdin="second-value-9876\n")
+            call(fb, ["token", "set", "TINYCMDR_TEST_KEY"], stdin="second-value-9876\n")
             env_text = (workdir / ".env").read_text(encoding="utf-8")
             check("a repeated set replaces the line",
-                  env_text.count("tinycmdr_TEST_KEY=") == 1
+                  env_text.count("TINYCMDR_TEST_KEY=") == 1
                   and "second-value-9876" in env_text, env_text[:160])
         finally:
-            os.environ.pop("tinycmdr_MM_TOKEN", None)
+            os.environ.pop("TINYCMDR_MM_TOKEN", None)
 
         check("restart and run are verbs too",
               "restart" in fb.VERBS and "run" in fb.VERBS)

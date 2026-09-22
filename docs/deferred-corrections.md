@@ -51,7 +51,7 @@ which is why it was deferred. Cost: one window probe per switch, cached like the
 
 ## 3. F5: run the live tokenizer comparison once  (from the audit, never run)
 
-`tests/test_tokens.py` has an opt-in leg (`tinycmdr_TEST_TOKENIZE_URL`) that compares `est_tokens`
+`tests/test_tokens.py` has an opt-in leg (`TINYCMDR_TEST_TOKENIZE_URL`) that compares `est_tokens`
 against a real tokenizer. It has never been pointed at a box, so the content-aware divisors are
 verified only against each other. Cost: one env var and a metadata `POST /tokenize` to a LAN box -
 do it when nothing is benchmarking there.

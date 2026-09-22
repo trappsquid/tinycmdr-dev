@@ -20,8 +20,8 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 
 # Which build to import: the Mattermost bot by default, the chatless CLI build
-# with tinycmdr_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+# with TINYCMDR_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 spec = importlib.util.spec_from_file_location("tinycmdr_checkin_under_test",
                                               SRC)
 fb = importlib.util.module_from_spec(spec)

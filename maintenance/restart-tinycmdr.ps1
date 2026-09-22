@@ -27,7 +27,7 @@ $left = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
           Where-Object { $_.CommandLine -like '*tinycmdr.py*' })
 Log "after kill: $($left.Count) tinycmdr process(es) left"
 
-# start through the service vbs = exactly what the tinycmdr logon/startup task does
+# start through the service vbs = exactly what the Tinycmdr logon/startup task does
 & wscript.exe //B //Nologo (Join-Path $install 'tinycmdr-service.vbs')
 Log "launched tinycmdr-service.vbs"
 Start-Sleep -Seconds 15

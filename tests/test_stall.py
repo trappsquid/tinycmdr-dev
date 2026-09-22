@@ -33,8 +33,8 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 
 # Which build to import: the Mattermost bot by default, the chatless CLI build
-# with tinycmdr_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+# with TINYCMDR_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 # --- hermetic staging -------------------------------------------------------
 # config.json is written by the installer, so it is NOT in the shipped package,
@@ -1359,7 +1359,7 @@ def test_startup_validation_catches_an_unconfigured_host():
         fb.CONFIG["mattermost"]["url"] = "chat.example.org"
         fb.CONFIG["mattermost"]["token"] = ""
         msg = fb.validate_startup_config() or ""
-        check("startup: a missing token names .env", "tinycmdr_MM_TOKEN" in msg
+        check("startup: a missing token names .env", "TINYCMDR_MM_TOKEN" in msg
               and ".env" in msg, msg)
 
         # placeholder allowlist
@@ -2132,7 +2132,7 @@ def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
 
 
 def main():
-    # One suite serves both builds. The chatless CLI build (tinycmdr_SRC=tinycmdr-cli.py)
+    # One suite serves both builds. The chatless CLI build (TINYCMDR_SRC=tinycmdr-cli.py)
     # carries no failover list and no restart handover, so the tests that describe those
     # features are skipped there rather than deleted: they still guard the Mattermost build.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

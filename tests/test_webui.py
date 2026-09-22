@@ -92,9 +92,9 @@ def _http_once(url, payload=None, token=TOKEN, timeout=15, client=None):
     req = urllib.request.Request(url, data=data)
     req.add_header("Content-Type", "application/json")
     if token is not None:
-        req.add_header("X-tinycmdr-Token", token)
+        req.add_header("X-Tinycmdr-Token", token)
     if client is not None:
-        req.add_header("X-tinycmdr-Client", client)
+        req.add_header("X-Tinycmdr-Client", client)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, json.loads(r.read().decode() or "{}")
@@ -125,7 +125,7 @@ def http(url, payload=None, token=TOKEN, timeout=15, attempts=3, client=None):
 def get_text(url, token=TOKEN):
     req = urllib.request.Request(url)
     if token:
-        req.add_header("X-tinycmdr-Token", token)
+        req.add_header("X-Tinycmdr-Token", token)
     with urllib.request.urlopen(req, timeout=15) as r:
         return r.read().decode()
 

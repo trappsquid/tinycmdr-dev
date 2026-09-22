@@ -11,9 +11,9 @@ generated config.json) and drives AGENT.run() in-process, the way the suites do.
 
 Endpoints and model come from the environment, so this file stays publishable:
 
-    tinycmdr_TEST_BASE_URL   default http://127.0.0.1:8081/v1
-    tinycmdr_TEST_MODEL      default main
-    tinycmdr_TEST_BUDGET     llm.max_context_tokens for the staged config, default 24000
+    TINYCMDR_TEST_BASE_URL   default http://127.0.0.1:8081/v1
+    TINYCMDR_TEST_MODEL      default main
+    TINYCMDR_TEST_BUDGET     llm.max_context_tokens for the staged config, default 24000
 
 Per-task overrides live on the task (`config`); the defaults below match what the
 shipped build does on a real box, so the baseline is production-shaped rather than
@@ -408,7 +408,7 @@ def main():
     ap.add_argument("tasks", nargs="*", help="task ids (default: --all)")
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--list", action="store_true")
-    ap.add_argument("--budget", default=os.environ.get("tinycmdr_TEST_BUDGET", "24000"))
+    ap.add_argument("--budget", default=os.environ.get("TINYCMDR_TEST_BUDGET", "24000"))
     ap.add_argument("--label", default="baseline")
     ap.add_argument("--out", default="")
     # Feature flags for measurement: --config digest_enabled=false runs the SAME

@@ -1,5 +1,5 @@
 ' Launches the tinycmdr supervisor hidden (no console window) and WAITS for it.
-' Registered as the scheduled task "tinycmdr".
+' Registered as the scheduled task "Tinycmdr".
 '
 ' The wait is deliberate and load-bearing:
 '   * while the supervisor runs, Task Scheduler shows the task as Running (before

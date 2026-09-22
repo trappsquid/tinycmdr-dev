@@ -11,9 +11,9 @@ Both halves are pinned here against the file on disk, not against the return
 string: what a reader (or bash) sees is the bytes.
 
     python tests/test_newlines.py                      (the app build)
-    tinycmdr_TEST_APP=tinycmdr-cli.py python tests/test_newlines.py
+    TINYCMDR_TEST_APP=tinycmdr-cli.py python tests/test_newlines.py
 
-Falsify it before trusting it: point tinycmdr_TEST_APP at a pre-fix build
+Falsify it before trusting it: point TINYCMDR_TEST_APP at a pre-fix build
 (tinycmdr.py.bak-f2newline-*) and the CRLF checks must FAIL.
 """
 import shutil

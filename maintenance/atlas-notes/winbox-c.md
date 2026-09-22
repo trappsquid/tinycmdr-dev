@@ -4,7 +4,7 @@ Appended to that host's atlas.md `## notes` section. Generated host/layout facts
 from the host itself; these are the things a probe cannot know. Never shipped in a
 package.
 
-- tinycmdr lives at C:\tinycmdr and is supervised by the scheduled task "tinycmdr"
+- tinycmdr lives at C:\tinycmdr and is supervised by the scheduled task "Tinycmdr"
 - it carries custom tools in tools/ (media download helpers); prefer them over raw shell for
   those domains
 - restart it with maintenance\tinycmdr-24x7.ps1, and do NOT trust that script's readiness

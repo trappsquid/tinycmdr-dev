@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-ask"
 STAGE.mkdir(parents=True, exist_ok=True)

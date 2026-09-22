@@ -28,7 +28,7 @@ import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-stop"
 STAGE.mkdir(parents=True, exist_ok=True)
@@ -222,7 +222,7 @@ def test_tool_execute_code_stops_mid_run():
 def test_tools_runs_are_bound_to_a_fresh_event_per_message():
     """run_capture must only ever see a per-run event: a leaking global would make
     one channel's stop kill another channel's work."""
-    src = (BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")).read_text(
+    src = (BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")).read_text(
         encoding="utf-8", errors="replace")
     check("the run hands its cancel event to the tools",
           '"cancel_event": cancel_event,' in src

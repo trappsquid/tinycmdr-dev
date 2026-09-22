@@ -210,7 +210,7 @@ const sessions = [{ key: 'web', title: 'the shared conversation', created: 0,
 function fetchShim(url, opts) {
   const body = opts && opts.body ? JSON.parse(opts.body) : {};
   const hdrs = (opts && opts.headers) || {};
-  if ('X-tinycmdr-Token' in hdrs) { authSeen.push(hdrs['X-tinycmdr-Token']); }
+  if ('X-Tinycmdr-Token' in hdrs) { authSeen.push(hdrs['X-Tinycmdr-Token']); }
   if (url.indexOf('/api/health') === 0) { return jres({ ok: true, version: 'harness' }); }
   if (url.indexOf('/api/sessions') === 0) {
     if (opts && opts.method === 'POST') {

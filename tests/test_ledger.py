@@ -21,8 +21,8 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 
 # Which build to import: the Mattermost bot by default, the chatless CLI build
-# with tinycmdr_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+# with TINYCMDR_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 # --- hermetic staging -------------------------------------------------------
 # config.json is written by the installer, so it is NOT in the shipped package,
@@ -1241,14 +1241,14 @@ def test_restart_owner_reads_the_environment():
     def run():
         out = []
         os.environ.pop("INVOCATION_ID", None)
-        os.environ.pop("tinycmdr_SUPERVISED", None)
+        os.environ.pop("TINYCMDR_SUPERVISED", None)
         out.append(("self", fb.restart_owner()))
-        os.environ["tinycmdr_SUPERVISED"] = "1"
+        os.environ["TINYCMDR_SUPERVISED"] = "1"
         out.append(("supervisor", fb.restart_owner()))
         os.environ["INVOCATION_ID"] = "test-unit-start"
         out.append(("systemd", fb.restart_owner()))
         return out
-    got = _with_restart_env({"INVOCATION_ID": None, "tinycmdr_SUPERVISED": None}, run)
+    got = _with_restart_env({"INVOCATION_ID": None, "TINYCMDR_SUPERVISED": None}, run)
     for want, actual in got:
         check(f"restart owner with that environment is '{want}'",
               actual == want, actual)
@@ -1290,7 +1290,7 @@ def _restart_with(env):
 
 
 def test_restart_hands_over_instead_of_spawning_when_supervised():
-    c = _restart_with({"tinycmdr_SUPERVISED": "1", "INVOCATION_ID": None})
+    c = _restart_with({"TINYCMDR_SUPERVISED": "1", "INVOCATION_ID": None})
     check("a supervised restart does not spawn a second process",
           c["spawn"] == 0, c)
     check("it exits with the hand-over code", c["code"] == fb.RESTART_EXIT_CODE, c)
@@ -1299,13 +1299,13 @@ def test_restart_hands_over_instead_of_spawning_when_supervised():
 
 
 def test_restart_hands_over_under_systemd():
-    c = _restart_with({"INVOCATION_ID": "test-unit-start", "tinycmdr_SUPERVISED": None})
+    c = _restart_with({"INVOCATION_ID": "test-unit-start", "TINYCMDR_SUPERVISED": None})
     check("under systemd it does not spawn either", c["spawn"] == 0, c)
     check("and it exits with the hand-over code", c["code"] == fb.RESTART_EXIT_CODE, c)
 
 
 def test_restart_spawns_a_replacement_when_nobody_owns_it():
-    c = _restart_with({"tinycmdr_SUPERVISED": None, "INVOCATION_ID": None})
+    c = _restart_with({"TINYCMDR_SUPERVISED": None, "INVOCATION_ID": None})
     check("with no owner it spawns exactly one replacement", c["spawn"] == 1, c)
     check("and exits 0, because the replacement is already up", c["code"] == 0, c)
 
@@ -1319,7 +1319,7 @@ def test_a_spawned_replacement_re_reads_dot_env():
     """
     envf = fb.ENV_FILE
     saved = envf.read_text(encoding="utf-8") if envf.exists() else None
-    stale = os.environ.get("tinycmdr_MM_TOKEN")
+    stale = os.environ.get("TINYCMDR_MM_TOKEN")
     captured = {}
     real_popen = fb.subprocess.Popen
 
@@ -1329,9 +1329,9 @@ def test_a_spawned_replacement_re_reads_dot_env():
 
     fb.subprocess.Popen = _Fake
     try:
-        envf.write_text("tinycmdr_MM_TOKEN=file-value\nOTHER=kept\n", encoding="utf-8")
-        os.environ["tinycmdr_MM_TOKEN"] = "stale-inherited-value"
-        check("the file's keys are found", "tinycmdr_MM_TOKEN" in fb._env_file_keys(),
+        envf.write_text("TINYCMDR_MM_TOKEN=file-value\nOTHER=kept\n", encoding="utf-8")
+        os.environ["TINYCMDR_MM_TOKEN"] = "stale-inherited-value"
+        check("the file's keys are found", "TINYCMDR_MM_TOKEN" in fb._env_file_keys(),
               fb._env_file_keys())
         fb._spawn_replacement()
     finally:
@@ -1341,12 +1341,12 @@ def test_a_spawned_replacement_re_reads_dot_env():
         else:
             envf.write_text(saved, encoding="utf-8")
         if stale is None:
-            os.environ.pop("tinycmdr_MM_TOKEN", None)
+            os.environ.pop("TINYCMDR_MM_TOKEN", None)
         else:
-            os.environ["tinycmdr_MM_TOKEN"] = stale
+            os.environ["TINYCMDR_MM_TOKEN"] = stale
     env = captured.get("env") or {}
     check("the child does not inherit the stale .env value",
-          "tinycmdr_MM_TOKEN" not in env, env.get("tinycmdr_MM_TOKEN"))
+          "TINYCMDR_MM_TOKEN" not in env, env.get("TINYCMDR_MM_TOKEN"))
     check("keys that .env does not own are still inherited",
           "PATH" in env or "PYTHONPATH" in env, list(env)[:4])
 
@@ -1971,7 +1971,7 @@ def test_a_length_cut_that_fills_the_window_is_an_overflow_not_a_cap():
         _budget_clear()
         fb.CONFIG = saved_cfg
 def main():
-    # One suite serves both builds. The chatless CLI build (tinycmdr_SRC=tinycmdr-cli.py)
+    # One suite serves both builds. The chatless CLI build (TINYCMDR_SRC=tinycmdr-cli.py)
     # carries no failover list and no restart handover, so the tests that describe those
     # features are skipped there rather than deleted: they still guard the Mattermost build.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

@@ -3,9 +3,9 @@ $log = 'C:/Users/<user>\tinycmdr\maintenance\task-audit.log'
 function Log([string]$m) { "$m" | Add-Content -Path $log }
 Set-Content -Path $log -Value "=== task audit (elevated) $(Get-Date -Format s) ==="
 
-Log "--- Get-ScheduledTask the manager box*/tinycmdr ---"
+Log "--- Get-ScheduledTask the manager box*/Tinycmdr ---"
 try {
-    Get-ScheduledTask | Where-Object { $_.TaskName -match 'the manager box|tinycmdr|Hermes' } |
+    Get-ScheduledTask | Where-Object { $_.TaskName -match 'the manager box|Tinycmdr|Hermes' } |
         ForEach-Object {
             $t = $_
             Log ("{0,-24} state={1} user={2} runlevel={3}" -f $t.TaskName, $t.State, $t.Principal.UserId, $t.Principal.RunLevel)
@@ -19,7 +19,7 @@ $q = & schtasks /query /tn 'the manager box-StartContainers' /v /fo list 2>&1 | 
 Log ($q.Trim() -replace "`r`n", "`n")
 
 Log "--- task files on disk (System32\Tasks) ---"
-foreach ($f in (Get-ChildItem 'C:\Windows\System32\Tasks' | Where-Object { $_.Name -match 'the manager box|tinycmdr|Hermes' })) {
+foreach ($f in (Get-ChildItem 'C:\Windows\System32\Tasks' | Where-Object { $_.Name -match 'the manager box|Tinycmdr|Hermes' })) {
     Log ("{0}  mtime={1}" -f $f.Name, $f.LastWriteTime)
 }
 Log "--- last 5 TaskScheduler operational events for the manager box-StartContainers ---"

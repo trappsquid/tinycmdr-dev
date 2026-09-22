@@ -14,7 +14,7 @@
 # Nothing here needs root: the agent lives in ~/Library/LaunchAgents and the bot
 # runs as you.
 #
-#   --token <t>           Mattermost bot token (tinycmdr_MM_TOKEN)
+#   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first non-empty line)
 #   --allowed-user <id>   Mattermost user id allowed to command the bot
 #   --mattermost-url <h>  Mattermost host, no scheme (default: fleet-defaults.json)
@@ -46,12 +46,12 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
-INSTALL_DIR="${tinycmdr_DIR:-$HOME/tinycmdr}"
-LABEL="${tinycmdr_LABEL:-com.tinycmdr.agent}"
+INSTALL_DIR="${TINYCMDR_DIR:-$HOME/tinycmdr}"
+LABEL="${TINYCMDR_LABEL:-com.tinycmdr.agent}"
 LOGDIR="$INSTALL_DIR/logs"
 PLIST_DIR="$HOME/Library/LaunchAgents"
 PLIST="$PLIST_DIR/$LABEL.plist"
-LOG="${tinycmdr_INSTALL_LOG:-${TMPDIR:-/tmp}/tinycmdr-install.log}"
+LOG="${TINYCMDR_INSTALL_LOG:-${TMPDIR:-/tmp}/tinycmdr-install.log}"
 PY_ARG=""
 DEFAULTS="$SRC/install/fleet-defaults.json"
 # No provider is named here on purpose: this is the usual local llama.cpp shape,
@@ -288,8 +288,8 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     [ -f "$INSTALL_DIR/config.json" ] && info "config.json: present" || warn "no config.json"
     if [ -f "$INSTALL_DIR/.env" ]; then
         info ".env: present ($(file_mode "$INSTALL_DIR/.env") permissions)"
-        grep -q '^tinycmdr_MM_TOKEN=..' "$INSTALL_DIR/.env" && info ".env: bot token is set" \
-            || warn ".env: tinycmdr_MM_TOKEN is missing or empty"
+        grep -q '^TINYCMDR_MM_TOKEN=..' "$INSTALL_DIR/.env" && info ".env: bot token is set" \
+            || warn ".env: TINYCMDR_MM_TOKEN is missing or empty"
     else
         warn "no .env (the bot cannot authenticate without it)"
     fi
@@ -388,7 +388,7 @@ if [ -z "$TOKEN" ] && [ -n "$TOKEN_FILE" ]; then
     TOKEN="$(grep -m1 -E '[A-Za-z0-9]{20,}' "$TOKEN_FILE" | tr -d ' \r\n' || true)"
 fi
 if [ -z "$TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-    TOKEN="$(grep -m1 '^tinycmdr_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
+    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
     [ -n "$TOKEN" ] && info "reusing the token already in .env"
 fi
 if [ -z "$TOKEN" ]; then
@@ -408,7 +408,7 @@ if [ -z "$TOKEN" ]; then
     info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
     info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr-cli.py"
     if [ -n "$WEB_TOKEN" ]; then
-        info "the page needs its token:           in .env as tinycmdr_WEB_TOKEN"
+        info "the page needs its token:           in .env as TINYCMDR_WEB_TOKEN"
         info "ready link (carries it, nothing to type):"
         info "  http://127.0.0.1:$WEB_PORT/?token=$WEB_TOKEN"
     fi
@@ -459,7 +459,7 @@ llm["model"] = os.environ["MODEL"]
 web = cfg.setdefault("web", {})
 web["enabled"] = os.environ["WEB_ON"] == "1"
 web["port"] = int(os.environ["WEB_PORT"])
-web["token"] = ""                       # it lives in .env (tinycmdr_WEB_TOKEN)
+web["token"] = ""                       # it lives in .env (TINYCMDR_WEB_TOKEN)
 with open(dst, "w", encoding="utf-8", newline="\n") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
@@ -472,8 +472,8 @@ umask 077
 # from a shared secrets file (that is how several hosts ended up sharing one key).
 # NO PROVIDER IS NAMED HERE on purpose - the key is whatever the endpoint issued,
 # and its variable name is the fallback entry's "api_key_env".
-SHARED_KEYS='^(tinycmdr_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
-MANAGED_KEYS='^(tinycmdr_MM_TOKEN|tinycmdr_WEB_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+SHARED_KEYS='^(TINYCMDR_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_WEB_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
 KEEP_ENV=""
 if [ -f "$INSTALL_DIR/.env" ]; then
     KEEP_ENV=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$INSTALL_DIR/.env" \
@@ -481,9 +481,9 @@ if [ -f "$INSTALL_DIR/.env" ]; then
 fi
 SKIPPED_KEYS=""
 {
-    printf 'tinycmdr_MM_TOKEN=%s\n' "$TOKEN"
+    printf 'TINYCMDR_MM_TOKEN=%s\n' "$TOKEN"
     if [ -n "$WEB_TOKEN" ]; then
-        printf 'tinycmdr_WEB_TOKEN=%s\n' "$WEB_TOKEN"
+        printf 'TINYCMDR_WEB_TOKEN=%s\n' "$WEB_TOKEN"
     fi
     if [ -n "$SECRETS_FILE" ]; then
         [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"

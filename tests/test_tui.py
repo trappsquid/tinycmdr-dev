@@ -3,7 +3,7 @@
     python tests/test_tui.py
 
 The screen is decoration on text the plain path already prints, so the properties
-that matter are: a pipe or tinycmdr_PLAIN still gets plain lines, every tone lands on
+that matter are: a pipe or TINYCMDR_PLAIN still gets plain lines, every tone lands on
 the card it should, the run's done line is not mistaken for the answer, and what
 reaches the terminal is ANSI that prompt_toolkit can render (raw ESC bytes get
 sanitized into visible "[1;33m" garbage).
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 spec = importlib.util.spec_from_file_location("tinycmdr_tui_under_test", SRC)
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_tui_under_test"] = fb
@@ -38,9 +38,9 @@ except Exception:
     HAVE = False
 
 check("a pipe is not a console, so nothing to draw on", fb.tui_wanted() is False)
-os.environ["tinycmdr_PLAIN"] = "1"
-check("tinycmdr_PLAIN=1 refuses the screen even with a terminal", fb.tui_wanted() is False)
-del os.environ["tinycmdr_PLAIN"]
+os.environ["TINYCMDR_PLAIN"] = "1"
+check("TINYCMDR_PLAIN=1 refuses the screen even with a terminal", fb.tui_wanted() is False)
+del os.environ["TINYCMDR_PLAIN"]
 
 if not HAVE:
     print("\nrich/prompt_toolkit are absent: the screen itself cannot be graded here")

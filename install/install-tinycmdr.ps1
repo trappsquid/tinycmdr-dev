@@ -26,12 +26,12 @@
 [CmdletBinding()]
 param(
     [string] $InstallDir      = "C:\tinycmdr",
-    [string] $TaskName        = "tinycmdr",
+    [string] $TaskName        = "Tinycmdr",
     [string] $MattermostUrl   = "",              # default: fleet-defaults.json
     [int]    $MattermostPort  = 443,
     [string] $MattermostToken = "",              # default: token file, existing .env, then prompt
     [string] $MattermostTokenFile = "",          # read the token from a file instead
-    [string] $SecretsFile     = "",              # .env-style file: tinycmdr_MM_TOKEN,
+    [string] $SecretsFile     = "",              # .env-style file: TINYCMDR_MM_TOKEN,
                                                  # TAVILY_API_KEY, ANYSEARCH_API_KEY
                                                  # (a model key is per bot and is
                                                  #  ignored here - set it per host)
@@ -66,7 +66,7 @@ $Source = Split-Path -Parent $PSScriptRoot       # package root (one level above
 # Note this is deliberately NOT -NoPause: the .cmd wrapper always passes -NoPause
 # to keep its window open, so gating questions on that is exactly how a
 # double-click ended up asking nothing.
-$Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:tinycmdr_ASK)
+$Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:TINYCMDR_ASK)
 
 function Ask-Text {
     param([string] $Prompt, [string] $Default = "", [switch] $Secret)
@@ -229,7 +229,7 @@ function Invoke-Probe {
     }
 }
 
-function Stop-tinycmdrProcesses {
+function Stop-TinycmdrProcesses {
     <#
         Kill python processes started from $Dir. Needed before a -Force copy and
         before an uninstall: the running bot holds tinycmdr.log and tinycmdr.lock,
@@ -316,7 +316,7 @@ if ($Uninstall) {
             Say "task    : $AppName removed"
         } catch { Say "task    : could not remove $AppName ($($_.Exception.Message))" }
     }
-    $n = Stop-tinycmdrProcesses -Dir $InstallDir
+    $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n process(es)" }
     if (Test-Path $InstallDir) {
         if (-not $Force) {
@@ -490,8 +490,8 @@ if ($Ask) {
         $MattermostUrl = Ask-Text "Mattermost server, no https:// (e.g. chat.example.com)" $known
         # The secrets file is read before this, so a token handed over with -SecretsFile or a
         # package default is never asked for twice.
-        if (-not $MattermostToken -and $secrets["tinycmdr_MM_TOKEN"]) {
-            $MattermostToken = $secrets["tinycmdr_MM_TOKEN"]
+        if (-not $MattermostToken -and $secrets["TINYCMDR_MM_TOKEN"]) {
+            $MattermostToken = $secrets["TINYCMDR_MM_TOKEN"]
             $tokenSource = "the secrets file"
         }
         if (-not $MattermostToken) {
@@ -553,12 +553,12 @@ if ($Ask) {
 # resolve the bot token before touching anything: -MattermostToken, the secrets
 # file, a token file, an existing .env (so a -Force redo keeps it), then ask
 $tokenSource = ""
-if (-not $MattermostToken -and $secrets["tinycmdr_MM_TOKEN"]) {
+if (-not $MattermostToken -and $secrets["TINYCMDR_MM_TOKEN"]) {
     if ($MattermostTokenFile) {
         $MattermostToken = (Get-Content $MattermostTokenFile -Raw).Trim()
         $tokenSource = "the token file"
     } else {
-        $MattermostToken = $secrets["tinycmdr_MM_TOKEN"]
+        $MattermostToken = $secrets["TINYCMDR_MM_TOKEN"]
         $tokenSource = "the secrets file"
     }
 }
@@ -572,7 +572,7 @@ if ($MattermostToken) {
     } elseif (Test-Path (Join-Path $InstallDir ".env")) {
         foreach ($line in Get-Content (Join-Path $InstallDir ".env")) {
             $s = $line.Trim()
-            if ($s -match '^tinycmdr_MM_TOKEN=(.+)$' -and $matches[1].Trim()) {
+            if ($s -match '^TINYCMDR_MM_TOKEN=(.+)$' -and $matches[1].Trim()) {
                 $MattermostToken = $matches[1].Trim()
                 $tokenSource = "the existing .env (redo kept it)"
                 break
@@ -605,7 +605,7 @@ if ($Force) {
     # stop what is running from here first: the live process holds tinycmdr.log
     # and tinycmdr.lock, so overwriting in place is what makes a redo messy
     if (-not $SkipTask) { try { Stop-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue } catch { } }
-    $n = Stop-tinycmdrProcesses -Dir $InstallDir
+    $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n running process(es) for a clean copy" }
     Start-Sleep -Seconds 2
 }
@@ -744,7 +744,7 @@ if (Test-Path $envPath) {
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.+)$') {
             $k = $matches[1]
             $v = $matches[2].Trim()
-            if ($v -and @("tinycmdr_MM_TOKEN", "tinycmdr_WEB_TOKEN", "TAVILY_API_KEY",
+            if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_WEB_TOKEN", "TAVILY_API_KEY",
                           "ANYSEARCH_API_KEY") -notcontains $k) {
                 $ownKeys[$k] = $v
             }
@@ -755,9 +755,9 @@ Copy-Item (Join-Path $InstallDir ".env.example") $envPath -Force
 $envText = Get-Content $envPath -Raw
 $written = @()
 $refused = @()
-foreach ($key in @("tinycmdr_MM_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
+foreach ($key in @("TINYCMDR_MM_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
     $val = ""
-    if ($key -eq "tinycmdr_MM_TOKEN") { $val = $MattermostToken } else { $val = $secrets[$key] }
+    if ($key -eq "TINYCMDR_MM_TOKEN") { $val = $MattermostToken } else { $val = $secrets[$key] }
     if (-not $val) { continue }
     if ($val -match '^\s*<.*>\s*$' -or $val -match '(?i)redacted') {
         # A redacted package or secrets file carries no real key. Writing the
@@ -787,7 +787,7 @@ foreach ($k in @($ownKeys.Keys)) {
 # And say what was NOT copied, without naming any provider: a model key belongs to
 # one host, and silently sharing it is how one box's usage appeared on another.
 $notCopied = @($secrets.Keys | Where-Object {
-        @("tinycmdr_MM_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY") -notcontains $_ })
+        @("TINYCMDR_MM_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY") -notcontains $_ })
 if ($notCopied.Count) {
     Say "NOTE    : not copied from the secrets file: $($notCopied -join ', ')"
     Say "          a model key is per host - put this host's own in $envPath by hand"
@@ -798,7 +798,7 @@ if ($written.Count) {
     if ($MattermostToken) { Say "          (bot token from $tokenSource)" }
 } else {
     if ($ChatLane) {
-        Say "NOTE    : no keys to write - put the bot token in $envPath (tinycmdr_MM_TOKEN=...)"
+        Say "NOTE    : no keys to write - put the bot token in $envPath (TINYCMDR_MM_TOKEN=...)"
     } else {
         Say "env     : no chat token - none needed for the two local doors"
     }
@@ -819,15 +819,15 @@ if ($EnableWeb) {
     # No BOM: this file is parsed line by line, and a stray byte at the head of it has
     # burned this project before. Rewritten whole rather than appended for the same reason.
     $envText = (Get-Content -Raw -LiteralPath $envPath).TrimEnd()
-    Write-Utf8NoBom $envPath ($envText + "`n" + "tinycmdr_WEB_TOKEN=$webToken" + "`n")
-    $written += "tinycmdr_WEB_TOKEN (this install's web page)"
+    Write-Utf8NoBom $envPath ($envText + "`n" + "TINYCMDR_WEB_TOKEN=$webToken" + "`n")
+    $written += "TINYCMDR_WEB_TOKEN (this install's web page)"
     $stale = Join-Path $InstallDir "web-token.txt"
     if (Test-Path $stale) {
         Remove-Item $stale -Force
         Say "note    : removed web-token.txt - the page token lives in .env now"
     }
     Say "web page: http://127.0.0.1:$WebPort"
-    Say "          token: tinycmdr_WEB_TOKEN in $envPath"
+    Say "          token: TINYCMDR_WEB_TOKEN in $envPath"
     Say "          ready link (already carries the token, nothing to type):"
     Say "          $webLink"
 } else {
@@ -967,14 +967,14 @@ if (-not $ChatLane) {
     Say "                 then open http://127.0.0.1:$WebPort"
     if ($LocalWeb) {
         Say "                 (this install already serves that page; its token is in"
-        Say "                  .env: tinycmdr_WEB_TOKEN)"
+        Say "                  .env: TINYCMDR_WEB_TOKEN)"
     }
     Say ""
     Say "Add a Mattermost account whenever you want one:"
     Say "  install-tinycmdr.cmd -Force -MattermostTokenFile <file with the token>"
     Say ""
 }
-if (-not $MattermostToken) { $todo += "optional: Mattermost bot token -> $envPath  (tinycmdr_MM_TOKEN=...)" }
+if (-not $MattermostToken) { $todo += "optional: Mattermost bot token -> $envPath  (TINYCMDR_MM_TOKEN=...)" }
 if (-not $AllowedUser)     { $todo += "optional: allowed_users -> $cfgPath  (your Mattermost user id)" }
 if ($MattermostUrl -eq "CHANGE-ME.example.com") { $todo += "optional: Mattermost server url -> $cfgPath  (mattermost.url)" }
 if ($LoopbackModel) { $todo += "model endpoint        -> $cfgPath  (llm.base_url - loopback right now)" }
@@ -1009,7 +1009,7 @@ if ($Ask) {
 if ($EnableWeb) {
     Say "web page : http://127.0.0.1:$WebPort"
     Say "  the link to use (token included): $webLink"
-    Say "  token also in .env (tinycmdr_WEB_TOKEN)"
+    Say "  token also in .env (TINYCMDR_WEB_TOKEN)"
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr-cli.py)"
 Say "redo   : install-tinycmdr.cmd -Force"

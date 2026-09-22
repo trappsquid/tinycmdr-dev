@@ -11,7 +11,7 @@
     "FOUR values are mandatory or the bot will not start:",
     "  mattermost.url            your Mattermost host, no scheme (chat.example.com)",
     "  mattermost.token          a bot account token. Leave it empty here and put",
-    "                            tinycmdr_MM_TOKEN in .env instead: .env is the one",
+    "                            TINYCMDR_MM_TOKEN in .env instead: .env is the one",
     "                            place the agent cannot read into a prompt.",
     "  mattermost.allowed_users  your Mattermost user id, or the bot is deaf",
     "                            (it is deny-by-default, on purpose)",
@@ -62,12 +62,12 @@
     }
   },
   "telegram": {
-    "_comment": "The third door: a Telegram DM. OFF unless you set tinycmdr_TG_TOKEN in .env - the token is ENV-ONLY, so one pasted at 'token' below is ignored (and logged as ignored), because .env is the one place the agent cannot read into a prompt. allowed_users takes NUMERIC Telegram ids (message @userinfobot for yours) and is deny-by-default: an empty list starts the process, refuses, and says the id is missing. Mattermost WINS when both doors have a token, so this lane never starts on a Mattermost bot - run `python tinycmdr.py --telegram` for a Telegram-only process. DM only: a group message is refused. It shares the same sessions, notes, tasks and skills as every other door.",
+    "_comment": "The third door: a Telegram DM. OFF unless you set TINYCMDR_TG_TOKEN in .env - the token is ENV-ONLY, so one pasted at 'token' below is ignored (and logged as ignored), because .env is the one place the agent cannot read into a prompt. allowed_users takes NUMERIC Telegram ids (message @userinfobot for yours) and is deny-by-default: an empty list starts the process, refuses, and says the id is missing. Mattermost WINS when both doors have a token, so this lane never starts on a Mattermost bot - run `python tinycmdr.py --telegram` for a Telegram-only process. DM only: a group message is refused. It shares the same sessions, notes, tasks and skills as every other door.",
     "token": "",
     "allowed_users": []
   },
   "mattermost": {
-    "_comment": "Where the bot lives. url is the host only, scheme and port are separate keys. token: leave empty and set tinycmdr_MM_TOKEN in .env instead - .env is the one place the agent cannot read into a prompt. allowed_users are Mattermost USER IDS, not usernames (Profile -> copy the id), and the list is deny-by-default. ssl_verify false is for a self-signed certificate on your own LAN.",
+    "_comment": "Where the bot lives. url is the host only, scheme and port are separate keys. token: leave empty and set TINYCMDR_MM_TOKEN in .env instead - .env is the one place the agent cannot read into a prompt. allowed_users are Mattermost USER IDS, not usernames (Profile -> copy the id), and the list is deny-by-default. ssl_verify false is for a self-signed certificate on your own LAN.",
     "url": "chat.example.com",
     "scheme": "https",
     "port": 443,
@@ -84,7 +84,7 @@
     "max_results": 5
   },
   "web": {
-    "_comment": "Off by default: the chat build is driven from Mattermost and does not open a port unless asked. `python tinycmdr.py --web` turns it on for that process and serves the browser view - the agent's live activity as it works, not just the final answer - plus /api/chat and /api/health. Set enabled true to serve it while the chat bot runs too. An empty token means loopback only; set one to reach it from another machine, and firewall that port. The installer generates a token and writes it to .env as tinycmdr_WEB_TOKEN, which takes precedence over this key - one secrets file per install.",
+    "_comment": "Off by default: the chat build is driven from Mattermost and does not open a port unless asked. `python tinycmdr.py --web` turns it on for that process and serves the browser view - the agent's live activity as it works, not just the final answer - plus /api/chat and /api/health. Set enabled true to serve it while the chat bot runs too. An empty token means loopback only; set one to reach it from another machine, and firewall that port. The installer generates a token and writes it to .env as TINYCMDR_WEB_TOKEN, which takes precedence over this key - one secrets file per install.",
     "enabled": false,
     "port": 8787,
     "token": "",

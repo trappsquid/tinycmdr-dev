@@ -487,7 +487,7 @@ failure modes, and a shadow-first rollout. Waiting on five operator decisions.
 
 ---
 
-## 2026-09-20 - renamed the project from tinycmdr to tinycmdr
+## 2026-09-20 - renamed the project from tinycmdr to Tinycmdr
 
 Scope was decided with the operator: publication surface and runtime identifiers
 both change, and the fleet's own boxes migrate afterwards in one deliberate pass
@@ -500,7 +500,7 @@ Method, chosen so the change is auditable rather than plausible:
   98 tracked files plus a sha256 manifest), so every byte the rename changes can be
   accounted for afterwards.
 * The rename itself is a pure BYTE substitution of exactly three case variants
-  (`tinycmdr`, `tinycmdr`, `tinycmdr` -> `tinycmdr`, `tinycmdr`, `tinycmdr`), 1,081
+  (`tinycmdr`, `tinycmdr`, `tinycmdr` -> `tinycmdr`, `Tinycmdr`, `TINYCMDR`), 1,081
   occurrences in 86 files. No regex, no decoding, no line-ending handling: a CRLF
   file stays CRLF, which is why git still shows a readable diff.
 * 19 tracked files renamed (`tinycmdr.py`, `tinycmdr-cli.py`, `tinycmdr-supervise.py`,
@@ -590,7 +590,7 @@ message came back "could not send: unauthorized".
 
 **Probe discipline, learned the hard way.** `-VerifyOnly` never reaches the package-integrity
 check, so only a real install into a temporary `-InstallDir` proves a package. A probe install must
-pass its own `-TaskName`: one of mine registered `tinycmdr`, and a cleanup that deletes folders but
+pass its own `-TaskName`: one of mine registered `Tinycmdr`, and a cleanup that deletes folders but
 not tasks leaves a task pointing at nothing.
 
 State of the work, open items and the evidence: `docs/handoff-2026-09-20.md`.
@@ -744,7 +744,7 @@ reports that endpoint).
 
 **The page token is a secret, so it lives in .env.** `web-token.txt` was a human-readable copy of a
 value that also sat in `config.json`, and only the Windows installer wrote it - the page's 401 prompt
-named a file that does not exist on Linux or macOS. Now: `tinycmdr_WEB_TOKEN` is a real env override
+named a file that does not exist on Linux or macOS. Now: `TINYCMDR_WEB_TOKEN` is a real env override
 (`env_map`), all three installers write it to `.env` (one secrets file per install, mode 600), the
 installer clears `web.token` in `config.json` and DELETES a stale `web-token.txt` from an older
 install, and the prompt names `.env`. Linux and macOS installs also hand over the ready link now,
@@ -769,10 +769,10 @@ knowing before the next regeneration: run both, in order, and let the suite grad
 Evidence: 22 suites green (0 failures), the CLI's own suite at 167 checks against the regenerated
 build, the CLI packages rebuilt (their gate re-runs `test_cli` on a clean unpack: 167/0). A real
 install from the rebuilt public zip, non-interactive into a throwaway folder, graded 11 checks:
-`tinycmdr-cli.py` installed flat beside `tinycmdr.py`; `.env` carries `tinycmdr_WEB_TOKEN` while
+`tinycmdr-cli.py` installed flat beside `tinycmdr.py`; `.env` carries `TINYCMDR_WEB_TOKEN` while
 `config.json` holds no token and no `web-token.txt` exists; the console build reads THAT
 `config.json` (endpoint `127.0.0.1:9` appeared in its own error) and THAT `.env`
-(`tinycmdr_MODEL=env-model-from-dotenv` reached the run); and the page answers 401 with no token,
+(`TINYCMDR_MODEL=env-model-from-dotenv` reached the run); and the page answers 401 with no token,
 401 with a wrong token, 404 with the `.env` token. the Windows test box's live install migrated in place: its
 existing token moved into `.env` unchanged (so the link he already has still works), `config.json`
 cleared, `web-token.txt` deleted, restarted at 20:25 (`bot ready in 0s`), and
@@ -815,7 +815,7 @@ the detail lives in the log.
 
 Evidence: `tests/test_ledger.py` gained the budget-clamp and the window-full-cut checks (231 checks),
 `tests/test_checkin.py` the cut-turn re-ask and its bound (117), and all 22 suites are green plus the
-CLI legs (`tinycmdr_TEST_APP`/`tinycmdr_SRC=tinycmdr-cli.py`). Both new gates were seen red before green:
+CLI legs (`TINYCMDR_TEST_APP`/`TINYCMDR_SRC=tinycmdr-cli.py`). Both new gates were seen red before green:
 with the window stub cleared the cut test took the clamp path, and the budget test returned 200000.
 
 ### Fleet push: 1.0.0 + 135222206675e8cb (2026-09-21, after the window fix)
@@ -874,7 +874,7 @@ The other two arms, from the SHIPPED archives rather than the tree:
   3.11 or 3.12)`, rc=1, creating nothing. The message does not say how to get one (that is the first
   wall a macOS reader meets, since a stock Mac ships only 3.9) - raised as an open item.
 
-the Windows test box was put back to a clean machine state for his walk: task `tinycmdr` unregistered, the
+the Windows test box was put back to a clean machine state for his walk: task `Tinycmdr` unregistered, the
 pythonw pair killed, `C:\tinycmdr` removed (state copied to
 `hermes-tmp/release/tinycmdr-the Windows test box-preclean-20260921-0707`, 32 files incl. .env), and its
 Downloads refreshed with the rebuilt zip + sidecar (hashes equal to the share's). `C:\tinycmdr`
@@ -895,7 +895,7 @@ still cannot be removed: a process holds the directory, zero items inside.
    `-EnableWeb` and no typed choice, `$webToken` is a fresh random value every run
    (install-tinycmdr.ps1:634-637).
 3. **`-Uninstall` removes the task by NAME, not by install.** Uninstalling the throwaway probe
-   install on the manager box removed the manager box's OWN `tinycmdr` task (the probe had used `-SkipTask`, so it never
+   install on the manager box removed the manager box's OWN `Tinycmdr` task (the probe had used `-SkipTask`, so it never
    registered one). The bot kept running, untracked by the scheduler. Recovered: the running pair's
    tokens were read first to learn the run level it must be put back with (both `High`/elevated), the
    task was re-registered with the installer's own recipe plus `-RunLevel Highest`, the untracked
@@ -972,7 +972,7 @@ naming Hermes' own CLI as the reference. So the console build draws now:
   and Markdown for an answer, prompt_toolkit for putting it on the terminal. Both
   are imported lazily and only when `tui_wanted()` says a real console is there, and
   both are OPTIONAL in `requirements.txt` - the console build's "dependencies: none"
-  promise survives: without them, with a pipe, or with `tinycmdr_PLAIN=1`, every line
+  promise survives: without them, with a pipe, or with `TINYCMDR_PLAIN=1`, every line
   prints plainly, exactly as before.
 - **The lane stays one lane**: `CliDestination(screen=...)` hands the same text to a
   screen instead of painting an ANSI line. A call is a cyan "call" card, a result is
@@ -983,7 +983,7 @@ naming Hermes' own CLI as the reference. So the console build draws now:
   ESC bytes through a proxy (prompt_toolkit sanitizes those into visible `[1;33m`
   garbage - the trap Hermes' own comment warns about).
 
-Evidence: `tests/test_tui.py` (22 checks: the pipe/tinycmdr_PLAIN refusals, each
+Evidence: `tests/test_tui.py` (22 checks: the pipe/TINYCMDR_PLAIN refusals, each
 tone's card and colour, the Markdown answer, the done-line/vs-answer split, the
 plain path untouched with no screen, real SGR in the output with no markup leak, the
 status throttle, the narration passthrough, the SVG record), 23 suites green, the
@@ -1016,7 +1016,7 @@ Both follow-ups from the screen:
   answer lands in the wrong place. So during a run the status still prints, throttled.
 
 Verified by driving the real console in a pty: banner, `you> ` and the toolbar
-render; `/help` answers and the prompt returns; Ctrl-D exits clean; `tinycmdr_PLAIN=1`
+render; `/help` answers and the prompt returns; Ctrl-D exits clean; `TINYCMDR_PLAIN=1`
 still prints the old plain lines; `python tinycmdr.py --cli` draws the banner.
 
 ### Debloat pass one (2026-09-21): what left the tree, and where it went
@@ -1080,7 +1080,7 @@ Asked for the cost, then told to build it. Landed as one batch:
 - **The unified backend is the point**: same Agent, same notes/tasks/atlas/skills,
   same sessions corpus as the chat and page lanes. Each chat gets its own conversation
   named telegram-<chat id>, resumable from any other door.
-- Config: telegram.{token,allowed_users} plus tinycmdr_TG_TOKEN in .env beside the
+- Config: telegram.{token,allowed_users} plus TINYCMDR_TG_TOKEN in .env beside the
   Mattermost key. The validator refuses to start when a token is set with an empty
   allowed_users, and Mattermost's own complaints now apply only when Mattermost is the
   door. `tinycmdr.py --telegram` runs the lane by hand; a Telegram-only install takes it
@@ -1179,7 +1179,7 @@ it is 14,104). Verdicts, and what was done about each:
   body 3.4, prose 4.0. Measured on this build's own source (the file the model re-reads most):
   3.40 chars/token where the old estimate said 4.00 - a 15% undercount on the commonest
   sample, more on JSON. Gate: `tests/test_tokens.py`, offline properties plus an opt-in
-  `tinycmdr_TEST_TOKENIZE_URL` comparison that sends nothing by default.
+  `TINYCMDR_TEST_TOKENIZE_URL` comparison that sends nothing by default.
 - **F6, the window cache - CONFIRMED and FIXED.** `_endpoint_window`/`_context_budget` were
   cached for the life of the process, so a box restarted into a smaller `n_ctx` could never be
   noticed by a running agent - the 2026-09-21 incident made permanent. Both now carry
@@ -1201,7 +1201,7 @@ it is 14,104). Verdicts, and what was done about each:
 - **F3, the Telegram door - CONFIRMED (documentation), KEPT per the operator.** The lane
   shipped with no mention in README.md or config.example.json, and its token could live in
   config.json, contradicting the package's own "secrets never in config.json" rule. Now:
-  `.env`-only (`tinycmdr_TG_TOKEN`; a config token is ignored and the log says so), a function
+  `.env`-only (`TINYCMDR_TG_TOKEN`; a config token is ignored and the log says so), a function
   `both_doors_note()` so "Mattermost wins" is a startup WARNING instead of silence, a
   documented `telegram` section in the reference config, and a README section ("Which door to
   use") that says what each of the four doors is for. Gate: `tests/test_telegram.py` (+8 checks).
@@ -1409,7 +1409,7 @@ bytes, decode, replace and `write_bytes`, so a scrub preserves the file's own ne
 rule batch A applied to the app's write path.
 
 Suites after the batch: 32/32 green on the bot build, the console-build legs that honour
-`tinycmdr_SRC` green, the CLI packages' clean-unpack gate 170/0 (`test_cli`), and a real install
+`TINYCMDR_SRC` green, the CLI packages' clean-unpack gate 170/0 (`test_cli`), and a real install
 from the new public zip passes all 12 unified-install checks. Nothing published, no version bump,
 and the fleet still carries the previous bytes.
 
@@ -1434,7 +1434,7 @@ claim about a box, never a question to it.
 - A hand-edited value can no longer kill a run. `int("AUTO")` and `int("12k")` raised ValueError out
   of the budget path; casing and spacing are not syntax, 0 is documented as auto, and anything else
   that is not a number is NAMED in the log and read as auto. Falsified against the pre-change build
-  (`tinycmdr_SRC=tinycmdr.py.bak-preauto-20260922 python tests/test_ledger.py`): `ValueError: invalid
+  (`TINYCMDR_SRC=tinycmdr.py.bak-preauto-20260922 python tests/test_ledger.py`): `ValueError: invalid
   literal for int() with base 10: 'AUTO'`, one check red. Three checks now pin it (casing, 0, a
   non-number); `test_ledger` is 238 checks, 0 failed.
 - **The gate caught the default change, which is what it is for.** `test_tuning_defaults_are_the_
@@ -1501,7 +1501,7 @@ started as `"C:\...\python.exe" script.py` over ssh: the quoted path with a spac
 remote `cmd`, so put the invocation in a `.cmd` in the install dir and run that by path.
 
 **Three leftovers found, none blocking, all reported to the operator:** the LAN model box keeps the legacy
-`tinycmdr_MM_TOKEN` beside its `tinycmdr_MM_TOKEN` (harmless; the migration's de-duplication step)
+`tinycmdr_MM_TOKEN` beside its `TINYCMDR_MM_TOKEN` (harmless; the migration's de-duplication step)
 and a whole stale `~/tinycmdr` tree at 2.5.23 with its own config, `.env` and log; the LAN model box's
 `llm.model` is `cloud`, so its default route is DeepSeek rather than the LAN box the fleet standard
 names; and the manager box's `doctor` warns that `llm.api_key` is set in `config.json`, which is not where a
@@ -1512,7 +1512,7 @@ key belongs.
 The operator had blown that box away before the push, so what it received that morning was moot.
 Re-staged the way the walk wants it: the previous install snapshotted to the manager box
 (`hermes-tmp/release/tinycmdr-the Windows test box-preclean-20260922-115859`, 43 files including its `.env`),
-the scheduled task `tinycmdr` unregistered, the supervisor and its child stopped, `C:\tinycmdr`
+the scheduled task `Tinycmdr` unregistered, the supervisor and its child stopped, `C:\tinycmdr`
 removed, and the CURRENT public zip plus its sidecar placed in `C:/Users/<user>\Downloads`
 and hash-verified ON the box (`db613f52...`, 23 entries, `INSTALL-WINDOWS.cmd` present) after
 finding the 2026-09-21 build staged there instead.

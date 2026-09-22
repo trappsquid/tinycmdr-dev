@@ -1,7 +1,7 @@
 """Tests for the event log (stage 4 of the MiniDSH plan), shadow only.
 
     python tests/test_events.py
-    tinycmdr_SRC=tinycmdr-cli.py python tests/test_events.py
+    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_events.py
 
 The artifact is a file nothing reads yet, so nothing downstream will ever notice when it is
 wrong. Every property it has to have - one line per event, valid JSON, no secrets on disk, a
@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / os.environ.get("tinycmdr_SRC", "tinycmdr.py")
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 spec = importlib.util.spec_from_file_location("tinycmdr_events_under_test", SRC)
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_events_under_test"] = fb
