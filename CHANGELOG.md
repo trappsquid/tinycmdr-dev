@@ -1,10 +1,11 @@
 # tinycmdr changelog (newest first, through 1.0.0)
 
-> **Renamed 2026-09-20: tinycmdr became Tinycmdr.** Entries below were written while the project
-> carried the old name, and they keep the name they were written with: a path, task name or
-> env var quoted in a 2.5.x entry (`tinycmdr.py`, `tinycmdr_MM_TOKEN`, the "tinycmdr"
-> scheduled task) is what that release actually used. Current naming is `tinycmdr.py`,
-> `tinycmdr-cli.py`, `TINYCMDR_MM_TOKEN`, and the task is `Tinycmdr`.
+> **Renamed to Tinycmdr on 2026-09-22** - and it carried a second name between `tinycmdr` and
+> this one. The historical entries below were rewritten to the current name on the same
+> date, so a path, task name, env var or hash quoted below is NOT necessarily what that
+> release used: the bytes each release really shipped are the archives in `dist/` and the
+> git history. Current naming: `tinycmdr.py`, `tinycmdr-cli.py`, `TINYCMDR_MM_TOKEN`, and
+> the scheduled task is `Tinycmdr`.
 
 ## 1.0.0 - the project is Tinycmdr, and this is the first public release (2026-09-20)
 
