@@ -506,7 +506,7 @@ Method, chosen so the change is auditable rather than plausible:
   98 tracked files plus a sha256 manifest), so every byte the rename changes can be
   accounted for afterwards.
 * The rename itself is a pure BYTE substitution of exactly three case variants
-  (`tinycmdr`, `tinycmdr`, `tinycmdr` -> `tinycmdr`, `Tinycmdr`, `TINYCMDR`), 1,081
+  (`tinycmdr`, `Tinycmdr`, `TINYCMDR` -> `tinycmdr`, `Tinycmdr`, `TINYCMDR`), 1,081
   occurrences in 86 files. No regex, no decoding, no line-ending handling: a CRLF
   file stays CRLF, which is why git still shows a readable diff.
 * 19 tracked files renamed (`tinycmdr.py`, `tinycmdr-cli.py`, `tinycmdr-supervise.py`,
@@ -844,7 +844,7 @@ and (chat lanes) `posted startup notice to <id>`. The Mac printed the new clamp 
 (`llm.max_context_tokens is 110000 but ... serves 131072 ... using 107688`), which is the fix running.
 
 the LAN model box is NOT in this push and is the one host still on the old name and 2.5.23 (`~/tinycmdr`,
-`tinycmdr.service`, `tinycmdr_MM_TOKEN`). Bytes alone do nothing there: its unit runs `tinycmdr.py`
+`tinycmdr.service`, `TINYCMDR_MM_TOKEN`). Bytes alone do nothing there: its unit runs `tinycmdr.py`
 and the new build is `tinycmdr.py`, so it needs the rename migration (a stop/start, which the operator
 has claimed). The report says `no build at /home/<user>/tinycmdr/tinycmdr.py` for it, which is the
 honest answer, not drift.
@@ -1507,7 +1507,7 @@ started as `"C:\...\python.exe" script.py` over ssh: the quoted path with a spac
 remote `cmd`, so put the invocation in a `.cmd` in the install dir and run that by path.
 
 **Three leftovers found, none blocking, all reported to the operator:** the LAN model box keeps the legacy
-`tinycmdr_MM_TOKEN` beside its `TINYCMDR_MM_TOKEN` (harmless; the migration's de-duplication step)
+`TINYCMDR_MM_TOKEN` beside its `TINYCMDR_MM_TOKEN` (harmless; the migration's de-duplication step)
 and a whole stale `~/tinycmdr` tree at 2.5.23 with its own config, `.env` and log; the LAN model box's
 `llm.model` is `cloud`, so its default route is DeepSeek rather than the LAN box the fleet standard
 names; and the manager box's `doctor` warns that `llm.api_key` is set in `config.json`, which is not where a

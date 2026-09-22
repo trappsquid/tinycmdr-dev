@@ -1,11 +1,10 @@
 # tinycmdr changelog (newest first, through 1.0.0)
 
-> **Renamed to Tinycmdr on 2026-09-22** - and it carried a second name between `tinycmdr` and
-> this one. The historical entries below were rewritten to the current name on the same
-> date, so a path, task name, env var or hash quoted below is NOT necessarily what that
-> release used: the bytes each release really shipped are the archives in `dist/` and the
-> git history. Current naming: `tinycmdr.py`, `tinycmdr-cli.py`, `TINYCMDR_MM_TOKEN`, and
-> the scheduled task is `Tinycmdr`.
+> **Renamed to Tinycmdr on 2026-09-22.** The historical entries below were rewritten to the
+> current name on the same date, so a path, task name, env var or hash quoted in an older
+> entry is NOT necessarily what that release shipped: the bytes each release really produced
+> are the archives in `dist/` and the git history. Current naming: `tinycmdr.py`,
+> `tinycmdr-cli.py`, `TINYCMDR_MM_TOKEN`, scheduled task `Tinycmdr`.
 
 ## 1.0.0 - the project is Tinycmdr, and this is the first public release (2026-09-20)
 
@@ -20,7 +19,7 @@ launchd label and the environment keys. A box that answered to the old name answ
 to this one, and nothing about how it works changed.
 
 - entry point `tinycmdr.py`, console build `tinycmdr-cli.py`
-- `tinycmdr_MM_TOKEN` became `TINYCMDR_MM_TOKEN`. A host's `.env` and its code move
+- `TINYCMDR_MM_TOKEN` became `TINYCMDR_MM_TOKEN`. A host's `.env` and its code move
   together, never separately: a restart in between would leave the agent without its
   Mattermost token.
 - one agent per folder, unchanged: a second start refuses rather than double-answering
