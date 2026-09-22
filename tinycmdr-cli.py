@@ -9268,6 +9268,31 @@ class CliDestination(Destination):
             return self._ask(question, options, wait)
         except Exception:
             return None
+CMDR = "/cmdr"
+
+
+def cmdr_strip(text):
+    """`/cmdr model list` -> `/model list`: the namespaced form of every command.
+
+    A chat client never sends a message that starts with "/" unless it matches a
+    REGISTERED command, and the chat server refuses to register its own trigger
+    words (`help`, `status`), so a bare `/model` depends on the relay having a row
+    for it and `/help` cannot arrive at all. `/cmdr` is ONE registered trigger that
+    carries anything, and what it carries arrives as ordinary text. The bare form
+    still works - the relay's per-verb rows post it that way - and `/cmdr` alone is
+    `/help`. Not a prefix: `/cmdrmodel`, `/cmdrfoo`.
+    """
+    s = (text or "").strip()
+    if not s or not s.lower().startswith(CMDR):
+        return s
+    tail = s[len(CMDR):]
+    if not tail.strip():
+        return "/help"                # the prefix on its own: show the list
+    if tail[:1] not in (" ", "\t"):
+        return s                      # `/cmdrmodel` is a word, not a command
+    rest = tail.strip()
+    return rest if rest.startswith("/") else "/" + rest
+
 
 # ------------------------------------------------------------------ the console
 # Shared by both builds: the bot's `--cli` and tinycmdr-cli.py run THIS code.
@@ -9345,7 +9370,7 @@ def answer_block(text):
 
 
 HELP_TEXT = ("\n"
-             "  /help            this list\n"
+             "  /help            this list\n"             "  /cmdr <CMD>      the same commands, namespaced: /cmdr model, /cmdr status\n"
              "  /new             forget the conversation so far and start clean\n"
              "  /model [NAME]    show the model in use, or switch to NAME\n"
              "  /sessions        the conversations saved in this folder\n"
@@ -9577,6 +9602,7 @@ def _cli_tasks():
 
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
+    text = cmdr_strip(text)          # `/cmdr model` is `/model`
     verb, _, rest = text.partition(" ")
     verb = verb.lower()
     rest = rest.strip()
@@ -9674,6 +9700,7 @@ def _cli_while_running(line):
     This runs on the reader thread, so it only prints, sets the stop event, or
     reads state. The run owns the history, the log and the tools.
     """
+    line = cmdr_strip(line)          # `/cmdr stop` has to work mid-run too
     verb = line.split()[0].lower()
     if verb == "/stop":
         ev = _CLI.get("stop")

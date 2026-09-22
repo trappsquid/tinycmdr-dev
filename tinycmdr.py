@@ -9592,6 +9592,31 @@ class CliDestination(Destination):
             return self._ask(question, options, wait)
         except Exception:
             return None
+CMDR = "/cmdr"
+
+
+def cmdr_strip(text):
+    """`/cmdr model list` -> `/model list`: the namespaced form of every command.
+
+    A chat client never sends a message that starts with "/" unless it matches a
+    REGISTERED command, and the chat server refuses to register its own trigger
+    words (`help`, `status`), so a bare `/model` depends on the relay having a row
+    for it and `/help` cannot arrive at all. `/cmdr` is ONE registered trigger that
+    carries anything, and what it carries arrives as ordinary text. The bare form
+    still works - the relay's per-verb rows post it that way - and `/cmdr` alone is
+    `/help`. Not a prefix: `/cmdrmodel`, `/cmdrfoo`.
+    """
+    s = (text or "").strip()
+    if not s or not s.lower().startswith(CMDR):
+        return s
+    tail = s[len(CMDR):]
+    if not tail.strip():
+        return "/help"                # the prefix on its own: show the list
+    if tail[:1] not in (" ", "\t"):
+        return s                      # `/cmdrmodel` is a word, not a command
+    rest = tail.strip()
+    return rest if rest.startswith("/") else "/" + rest
+
 def model_command(session_key, arg):
     """`/model` for every surface.
 
@@ -10115,6 +10140,12 @@ class MattermostDispatcher:
         # run reached its next boundary, which took 90s because the run was inside a
         # `sleep 280` tool call.
         low = text.strip().lower()
+        # `/cmdr stop` has to be understood HERE too: this listener thread is the only
+        # reader that works while a run owns the channel, so a prefixed command that
+        # fell through to the queue would wait behind the very run it kills.
+        _cmdr = cmdr_strip(text)
+        if _cmdr != text.strip():
+            text, low = _cmdr, _cmdr.lower()
         # A run parked on an ask_user question takes the next message in its channel as
         # the ANSWER, on the listener thread, while that run stays blocked. Ahead of
         # /stop so an answer that reads like a command is still the answer; `/stop`
@@ -10446,6 +10477,13 @@ class MattermostDispatcher:
         retried = False
 
         # -- slash commands (handled locally, never sent to the model) -------
+        # `/cmdr <verb>` is the namespaced form of everything below: one registered
+        # trigger in the client that carries any command (a bare `help` and `status`
+        # are the client's own words and can never reach a bot). The bare verbs stay
+        # reachable - the relay posts them that way.
+        _cmdr = cmdr_strip(stripped)
+        if _cmdr != stripped:
+            stripped, low = _cmdr, _cmdr.lower()
         if low in ("/new", "/reset", "!reset", "new session"):
             AGENT.reset(session_key)
             self._post(channel_id, post_root, "🔄 Session cleared. Fresh context.")
@@ -10594,6 +10632,8 @@ class MattermostDispatcher:
         if low == "/help":
             self._post(channel_id, post_root,
                        "**Commands:**\n"
+                       "`/cmdr <command>` — any command below, the one form a "
+                       "chat client always sends through (`/cmdr model list`)\n"
                        "`/new` fresh session · `/stop` cancel the running "
                        "task · `/status` health & context usage\n"
                        "`/undo [N]` drop the last N exchanges · `/retry` "
@@ -11438,6 +11478,7 @@ def status_text(key, paused=None):
 def _web_command(text, key="web"):
     """Slash commands for the web UI / gateway. Returns ('reply', msg) when
     handled locally, or ('task', text) to hand to the agent."""
+    text = cmdr_strip(text)          # `/cmdr <cmd>`: the same commands, namespaced
     low = text.strip().lower()
     if low in ("/new", "/reset"):
         AGENT.reset(key)
@@ -12257,6 +12298,7 @@ WEB_COMMANDS = (
     ("/restart", "restart the bot"),
     ("/version", "the version this page is talking to"),
     ("/help", "this list"),
+    ("/cmdr <cmd>", "any command above, namespaced: /cmdr model list"),
 )
 
 
@@ -13195,6 +13237,11 @@ class TelegramPoller:
         dest = self.live.get(chat_id)
         if dest is not None and dest.reply_ask(text):
             return True
+        # `/cmdr <cmd>` works here too: a Telegram client hands an unknown command
+        # over as ordinary text, so the prefix only has to be understood.
+        _cmdr = cmdr_strip(text)
+        if _cmdr != text:
+            text = _cmdr
         if text.startswith("/") and self._verb(chat_id, text):
             return True
         if self.submit is not None:
@@ -13371,7 +13418,7 @@ def answer_block(text):
 
 
 HELP_TEXT = ("\n"
-             "  /help            this list\n"
+             "  /help            this list\n"             "  /cmdr <CMD>      the same commands, namespaced: /cmdr model, /cmdr status\n"
              "  /new             forget the conversation so far and start clean\n"
              "  /model [NAME]    show the model in use, or switch to NAME\n"
              "  /sessions        the conversations saved in this folder\n"
@@ -13603,6 +13650,7 @@ def _cli_tasks():
 
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
+    text = cmdr_strip(text)          # `/cmdr model` is `/model`
     verb, _, rest = text.partition(" ")
     verb = verb.lower()
     rest = rest.strip()
@@ -13700,6 +13748,7 @@ def _cli_while_running(line):
     This runs on the reader thread, so it only prints, sets the stop event, or
     reads state. The run owns the history, the log and the tools.
     """
+    line = cmdr_strip(line)          # `/cmdr stop` has to work mid-run too
     verb = line.split()[0].lower()
     if verb == "/stop":
         ev = _CLI.get("stop")
@@ -14210,6 +14259,11 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   token set <NAME>   read one value from stdin and write it to .env (mode 600)
   run                start the agent in this window, exactly as the file does
   help               this text
+
+
+In a chat window the same names are slash commands, and `/cmdr` is the prefix that
+always gets through: `/cmdr model` lists them, `/cmdr status` is this host,
+`/cmdr help` lists every command.
 
 With no verb this file is the agent itself, exactly as it has always been.
 """
