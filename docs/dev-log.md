@@ -1523,3 +1523,50 @@ it refuses deletion while a session holds it) and `the Windows test box-secrets.
 2026-09-20, which the walk can feed to the installer's `-SecretsFile`. The fleet report now reads
 the Windows test box as unreachable: a clean box has no build to compare, and the other five stay in sync at
 `265860bc`.
+
+### Every install folder tidied, and the corrections staged for later (2026-09-22)
+
+The operator's ask, in one message: hold code changes until he has evaluated 1.0.0 on the Windows test box,
+stage the corrections for later, clean the stale files out of each bot's install folder ("I was
+seeing dozens of .bak files and other unnecessary things"), and blow away the old tinycmdr installs.
+
+What was removed, per host (state and host tooling untouched):
+
+```
+the Linux test box   100 paths  (76 backups incl. the whole tinycmdr.py.pre-1.9.x archaeology, tinycmdr.log,
+                        tests/ docs/ inbox/ snapshots/ __pycache__/, atlas tooling, the stray
+                        "Z:\nope\<bad>|path" directory a bad-path test created)
+the LAN model box         7 paths  + the whole stale ~/tinycmdr tree (189 MB, tarred to the manager box first)
+MacBook      87 paths  (59 backups, repo tooling copied loose at the top level, tests/ docs/
+                        __pycache__/, 22 pre-rename artifacts)
+the other Windows box     114 paths  (on Windows, same rules; its maintenance/ host scripts - tinycmdr-24x7.ps1,
+                        the codebase-memory tool generators - were KEPT, and the operator's own
+                        reports/ platform-tools/ tmp/ benchmark logs were left alone)
+the manager box        108 paths  (95 top-level backups, 82 tinycmdr* files, 3 __pycache__ dirs; the
+                        pre-rename tinycmdr.log copied to hermes-tmp/release/ first as the only
+                        copy of that era's evidence) plus ~/tinycmdr/hermes-tmp (1.36 GB of agent
+                        scratch and Mattermost dumps) moved out of the tree, and two dead
+                        web-token.txt files (0 code hits) deleted
+the Windows test box     n/a      clean box for the fresh-install evaluation
+```
+
+**The reveal worth keeping:** every migrated host still had only `restart-tinycmdr.*` in
+`maintenance/`, the pre-rename helpers the `tinycmdr restart` verb does NOT call (it looks for
+`restart-tinycmdr.ps1`, `-macos.sh`, `.sh`). The pre-rename copies were dead weight, so they went and
+the correct helper was pushed to each host instead - so the verb works there now rather than
+reporting "this install was not built by the installer".
+
+**The trap that cost a round:** a `.sh` written on Windows carries CRLF whatever writes it
+(`write_file`, python's `write_text` in text mode), and Linux bash refuses it with
+`set: -: invalid option` / `syntax error near unexpected token '$'do''`. Normalise the script to
+LF and re-check before piping it to a host; the local dry run had "worked" only because the write
+that made it CRLF had not happened yet.
+
+**Staged for later, at his instruction:** `docs/deferred-corrections.md` now holds the endpoint
+editor he asked for (an `tinycmdr model add/remove/edit` verb group, prompted and validated so
+nobody hand-edits JSON - his own 27-failed-start incident is why), plus F6's failover window probe,
+F5's live tokenizer comparison, F13's lane-parity test, the vendored-driver question, the cosmetic
+items, and the three host-level decisions waiting on him.
+
+Left deliberate, reported, not deleted: `C:\tinycmdr` on the Windows test box (empty, a stale handle refuses
+deletion until that box logs off or reboots) and the operator's own artifacts on the other Windows box.
