@@ -9498,11 +9498,11 @@ class CliDestination(Destination):
         text = re.sub(r"`([^`]+)`", r"\1", str(text))
         return re.sub(r"^\s*\U0001F527\s*", "", text)
 
-    def __init__(self, colour=True, out=None, ask=None, on_drop=None, screen=None):
+    def __init__(self, colour=True, out=None, on_drop=None, screen=None):
         self.colour = bool(colour)
         self.screen = screen      # a TuiScreen, or None for plain painted lines
         self.out = out or sys.stdout
-        self._ask = ask          # callable(question, options, wait) -> answer text
+        self._row = None         # ask_user's row while a question is open here
         self.on_drop = on_drop   # told what the streamed draft said, when it goes
         self._refs = {}          # ref -> the text already printed for it
         self._open = False       # a line printed without its newline yet
@@ -9585,13 +9585,43 @@ class CliDestination(Destination):
                 pass
 
     def ask(self, question, options=None, wait=300.0, label=None):
-        if self._ask is None:
-            return None
+        """A question at the terminal, answered through the reader (never by a
+        second read of the terminal: see cli_ask_line). None = no answer."""
+        del label
         self._close()
-        try:
-            return self._ask(question, options, wait)
-        except Exception:
-            return None
+        return cli_ask_line(question, options, wait, out=self.out,
+                            colour=self.colour)
+
+    # --- ask_user's door: the console is a lane with a human at it ---------------
+    # Without these three the tool answered "nothing in this run can reach a human"
+    # in the console, while the chat and web lanes could both ask.
+
+    def opener(self, question, options, wait, label=None):
+        """The row the run parks on. ask_operator owns the bookkeeping; this lane
+        only has to release the event when the operator answers."""
+        del options, wait, label
+        self._row = {"ev": threading.Event(), "answer": None, "question": question}
+        return self._row
+
+    def post(self, question, options, wait, label=None):
+        """Draw the question, then hand the waiting to ask_operator, which owns the
+        timeout and the /stop check. Waiting here instead would spend the whole
+        window inside this call, so a /stop would only be noticed when it expired."""
+        del wait, label
+        self._close()
+        cli_ask_print(question, options, out=self.out, colour=self.colour)
+        cli_question_open(row=self._row)
+
+    def post_done(self, text):
+        """What happened to the question: answered, stopped, or timed out."""
+        self.line("system", text)
+
+    def close_question(self, answered=False):
+        """The question is over: nothing else typed at this prompt is its answer."""
+        del answered
+        if (_CLI.get("ask") or {}).get("row") is self._row:
+            _CLI["ask"] = None
+        self._row = None
 CMDR = "/cmdr"
 
 
@@ -13347,7 +13377,10 @@ def run_telegram():
 # build-cli-source.py cuts the Mattermost layer up to the line above, so nothing
 # in here is replaced - one console, one place to change (audit, 2026-09-21).
 _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
-        "leave": False, "stream": "", "streamed": "", "streamed_answer": ""}
+        "leave": False, "stream": "", "streamed": "", "streamed_answer": "",
+        # "ask": the question a run is parked on (None when none is open), and
+        # "reader": is a reader thread the one owner of stdin (see _cli_reader)?
+        "ask": None, "reader": False}
 
 
 def _console_utf8():
@@ -13777,6 +13810,90 @@ def _cli_while_running(line):
     return False
 
 
+# ------------------------------------------------------- questions at a prompt
+# One owner of stdin, for questions too (operator, 2026-09-22: "the cli version ...
+# asks the user for an answer ask_user and the cmd window freezes and doesnt accept
+# any input at all"). `_cli_reader` owns the terminal for the whole interactive
+# session, so a question must NOT read it: the reader was already blocked in
+# readline(), took the typed line, filed it as steering, and the run waited for an
+# answer that had already been swallowed. The line comes back through `_CLI["ask"]`.
+
+CLI_ASK_WAIT = 120.0        # a terminal question nobody answers gives up here
+
+
+def cli_question_open(row=None):
+    """Publish an open question: the reader's next plain line is the ANSWER.
+
+    `row` is ask_user's row (the parked run waits on its event); a yes/no at the
+    prompt has none and is collected from the box's own queue.
+    """
+    box = {"q": queue.Queue(), "row": row}
+    _CLI["ask"] = box
+    return box
+
+
+def cli_question_answer(line):
+    """Hand a typed line to whoever is waiting on the open question. True = taken."""
+    box = _CLI.get("ask")
+    if not box:
+        return False
+    row = box.get("row")
+    if row is not None:
+        # The row releases the parked run; the queue is filled too, so one wait
+        # shape serves both a question with a row and a bare yes/no.
+        row["answer"] = line
+        row["ev"].set()
+    box["q"].put(line)
+    return True
+
+
+def cli_question_wait(box, wait=None):
+    """Block for the answer the reader will hand over. None = nobody answered."""
+    try:
+        return box["q"].get(timeout=float(wait)) if wait else box["q"].get()
+    except queue.Empty:
+        return None
+    finally:
+        if _CLI.get("ask") is box:
+            _CLI["ask"] = None
+
+
+def cli_ask_print(question, options=None, out=None, colour=True):
+    """The question and its prompt, printed. Drawing only: who WAITS for the line
+    depends on the shape - cli_ask_line for a yes/no at the prompt, ask_user's row
+    for a question whose answer releases a parked run."""
+    out = out or sys.stdout
+    text = " ".join(str(question or "").split())
+    say = (lambda s: print(amber(s), file=out)) if colour else (lambda s: print(s, file=out))
+    say("  " + text)
+    if options:
+        say("  reply " + " / ".join(str(o) for o in options))
+    print(green("  > ") if colour else "  > ", end="", flush=True)
+
+
+def cli_ask_line(question, options=None, wait=None, out=None, colour=True):
+    """Ask at the prompt and return the line the operator typed.
+
+    With a reader thread running (the interactive console) the answer comes back
+    through it, never from a second read of the terminal. With no reader thread (a
+    one-shot `--once`, a closed pipe) this thread is the only reader, so it reads the
+    line itself - and an unanswerable question returns None instead of hanging.
+    """
+    cli_ask_print(question, options, out=out, colour=colour)
+    if not _CLI.get("reader"):
+        try:
+            raw = sys.stdin.readline()
+        except (EOFError, KeyboardInterrupt):
+            print(file=(out or sys.stdout))
+            return None
+        return None if raw == "" else raw.rstrip("\r\n")
+    try:
+        return cli_question_wait(cli_question_open(), wait if wait else CLI_ASK_WAIT)
+    except (EOFError, KeyboardInterrupt):
+        print(file=(out or sys.stdout))
+        return None
+
+
 def _cli_reader():
     """The one reader for stdin. Every line lands in the inbox.
 
@@ -13811,6 +13928,23 @@ def _cli_reader():
         if not line:
             continue
         if _CLI.get("stop") is not None:
+            if _CLI.get("ask") is not None:
+                # A question is open: the next plain line is the ANSWER. A command
+                # still acts (/stop, /exit, /help), and /stop releases the wait with
+                # nothing, which every door reads as "declined, do not guess".
+                if line.startswith("/"):
+                    if _cli_while_running(line):
+                        # The command was answered, not the question. A yes/no at
+                        # the prompt has no run to cancel, so release it (nothing
+                        # reads as "declined"); a question with a row is released
+                        # by ask_operator's own /stop check.
+                        if (_CLI.get("ask") or {}).get("row") is None:
+                            cli_question_answer(None)
+                    else:
+                        _CLI["inbox"].put(line)
+                    continue
+                cli_question_answer(line)
+                continue
             if _cli_while_running(line):
                 continue
             if line.startswith("/"):
@@ -13882,42 +14016,29 @@ def run_cli(once=None):
         except Exception:
             pass
 
-    def confirm(command):
-        try:
-            ans = input(amber("  confirm: %s\n  (yes/no) " % str(command)[:200]))
-            return ans.strip().lower() in ("yes", "y")
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return False
-
-    def ask_at_the_prompt(question, options, wait):
-        """The console's door: the question, then a line to answer on.
-
-        The same door shape as a chat post and a web question - the reporter asks,
-        the lane decides how a human answers it - so a confirmation is the same
-        code as the confirm prompt in chat, and `yes` means the same thing.
-        """
-        print(amber("  " + str(question)))
-        if options:
-            print(dim("  reply " + " / ".join(str(o) for o in options)))
-        try:
-            return input(green("  > "))
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return None
-
     def new_reporter():
-        """One per run: the check-in cadence and the done line are per run."""
+        """One per run: the check-in cadence and the done line are per run.
+
+        Its destination is also the run's ask door, so a question reaches the
+        terminal the way a chat question reaches its channel. The confirm prompt
+        used to be a second implementation here that read stdin directly and was
+        never called (`confirm_cb` is `reporter.confirm`, which goes through
+        dest.ask) - one door, one reader.
+        """
         return RunReporter(
             CliDestination(colour=bool(_CLI["colour"]), out=sys.stdout,
-                           ask=ask_at_the_prompt, screen=tui_screen(),
+                           screen=tui_screen(),
                            on_drop=lambda t: _CLI.__setitem__("streamed_answer", t)),
             _cli_key())
 
     _CLI["inbox"] = queue.Queue()
     _CLI["steer"] = queue.Queue()
     _CLI["leave"] = False
-    threading.Thread(target=_cli_reader, daemon=True).start()
+    # `--once` starts no reader: there is nobody to steer, and a question then reads
+    # stdin itself, which is the only safe shape while the run IS the reader.
+    _CLI["reader"] = not once
+    if not once:
+        threading.Thread(target=_cli_reader, daemon=True).start()
 
     def steer():
         """Requests typed while the agent is working, handed in at the boundary.
@@ -13942,7 +14063,9 @@ def run_cli(once=None):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        print(answer_block(drive_run(_cli_key(), once, new_reporter())))
+        reporter = new_reporter()
+        print(answer_block(drive_run(_cli_key(), once, reporter,
+                                     ask_door=reporter.dest)))
         _cli_usage_line()
         return
     while True:
@@ -13979,7 +14102,7 @@ def run_cli(once=None):
         reporter = new_reporter()
         try:
             answer = drive_run(_cli_key(), text, reporter, cancel_event=cancel,
-                               steer_cb=steer)
+                               steer_cb=steer, ask_door=reporter.dest)
         except KeyboardInterrupt:
             cancel.set()
             print(red("\n  (stopped)"))
