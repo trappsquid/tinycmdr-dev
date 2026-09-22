@@ -103,8 +103,15 @@ def main():
         # this harness: 7,133 chars over 13 always-visible tools, fattest single
         # schema ask_user at 1,078. It is a ceiling, not a target: when it fires, cut
         # prose or drop a tool - raising the number is a decision, not a fix.
-        SCHEMA_BUDGET = 7600          # chars, measured 7,133 + ~6% headroom
-        TOOL_SCHEMA_CAP = 1200        # chars for one tool, fattest measured 1,078
+        #
+        # RAISED 2026-09-21, on the record rather than quietly: the experiment ledger
+        # tool is always-on BY DESIGN (a run has to know what this box already tested
+        # BEFORE it runs an arm), and adding it moved the block from 7,133 over 13 tools
+        # to 8,392 over 14 - experiment itself 1,170 chars, ask_user 1,165 after its
+        # description was corrected to say an unanswered question STOPS the run. The new
+        # ceiling is that measurement plus ~6% headroom, not room to grow.
+        SCHEMA_BUDGET = 8900          # chars, measured 8,392 + ~6% headroom
+        TOOL_SCHEMA_CAP = 1200        # chars for one tool, fattest measured 1,170
         always_on = fb.select_tool_schemas(None)
         block = json.dumps(always_on)
         check(len(block) <= SCHEMA_BUDGET,

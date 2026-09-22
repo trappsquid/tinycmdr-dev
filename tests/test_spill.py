@@ -108,6 +108,34 @@ def main():
               f"and that file holds all 4000 lines, readable by the model "
               f"({spilled2.count('token-')} found)")
 
+        # ---- the spill INDEX: what is on disk, without carrying any of it --------------
+        # (audit, 2026-09-21: the pointer worked and was then the only trace, so a run
+        # that lost it had no way to know a spill existed. One line per spill, with an id
+        # that reads it back.)
+        block = fb.spill_index_block()
+        check(bool(block) and "spill#" in block and "starts:" in block,
+              "the index names each spill with an id, its path and its first line")
+        ids = re.findall(r"spill#(\d+)", block)
+        check(bool(ids), f"the index carries ids ({ids[-3:] if ids else []})")
+        got = fb.tool_read_file({"path": "spill#" + ids[-1]},
+                                {"session_key": "spill-session"})
+        check(not got.startswith("ERROR"), f"an id reads its spill back ({got[:60]!r})")
+        check(got.startswith(str(fb.BASE_DIR / "spill")),
+              "  and it resolved to the real file, not to a path named 'spill#N'")
+        bad = fb.tool_read_file({"path": "spill#99999"}, {"session_key": "spill-session"})
+        check(bad.startswith("ERROR") and "no spill#99999" in bad,
+              "an id this process never wrote is refused, by name")
+        check("spill#" in fb.volatile_context(session_key=None),
+              "the index rides in the prompt block")
+        for i in range(fb._SPILLS_MAX + 3):
+            fb.cap_output("shell", "z" * (cap + 200) + f" tail-{i}", "command output")
+        after = fb.spill_index_block()
+        ids2 = re.findall(r"spill#(\d+)", after)
+        check(len(ids2) == fb._SPILLS_MAX,
+              f"the index is bounded ({len(ids2)} of at most {fb._SPILLS_MAX})")
+        check(ids2 and ids2[-1] == str(fb._SPILL_SEQ["n"]),
+              "  and it is the OLDEST lines that drop, never the newest")
+
         print()
         if FAILS:
             print(f"{len(FAILS)} check(s) FAILED")

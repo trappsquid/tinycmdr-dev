@@ -100,15 +100,28 @@ def fresh_notes(text=""):
 # notes: bounded at write time, evict to archive, mark every elision
 # --------------------------------------------------------------------------
 
-def test_remember_caps_at_write_time():
+def test_remember_refuses_rather_than_clipping():
+    """Finding 2 (audit, 2026-09-21) replaced "clip at the cap" with "refuse and say
+    where the long version belongs", so this check is the NEW contract, not the old
+    one: a mutilated fact rides in every future prompt and the model re-derives the
+    rest, which is the redo pattern the finding came from."""
     redirect_files()
     fb.CONFIG["agent"]["notes_max_note_chars"] = 200
     fb.CONFIG["agent"]["notes_max_chars"] = 100000   # isolate this test
     out = fb.tool_remember({"note": "x" * 5000}, {})
+    check("an extreme note is REFUSED, not clipped", out.startswith("ERROR"),
+          out[:120])
+    check("and the refusal names the per-note limit", "200" in out, out[:200])
+    check("and says where long content belongs", "file" in out, out[:240])
+    check("and no half-true fact was stored",
+          fb.NOTES_FILE.read_text(encoding="utf-8").strip() == "",
+          fb.NOTES_FILE.read_text(encoding="utf-8")[:80])
+    sane = " ".join(f"fact-{i}" for i in range(30))     # inside the limit
+    out = fb.tool_remember({"note": sane}, {})
     body = fb.NOTES_FILE.read_text(encoding="utf-8")
-    check("remember reports the clip", "clipped" in out, out[:120])
-    check("remember caps the note", len(body) < 600, f"{len(body)} chars")
-    check("remember says where long content belongs", "file" in body, body[:200])
+    check("a note inside the limit is stored whole, and nothing is clipped",
+          out.startswith("OK") and sane in body and "clipped" not in out,
+          out[:120])
 
 
 def test_remember_rejects_empty():

@@ -182,6 +182,8 @@
       "-encodedcommand\\b"
     ],
     "confirm_patterns": [],
+    "_comment_endpoint_tools": "The endpoint gate covers TOOLS as well as shell: a custom tool whose name or description carries one of these markers stops or restarts the model endpoint this bot talks to, so it needs your confirmation - and it is REFUSED outright while the catch-up sweep says posts were lost. Name your own launchers here; nothing is hard-coded per box.",
+    "endpoint_tools": ["inferctl", "llamasrv", "serve_", "llama", "vllm"],
     "_comment_ask_user": "ask_user lets a run STOP and ask you a question, then carry on with your answer. Off by default: with it on the model can spend budget parked on a question, so switch it on where a human watches the channel. ask_user_wait_seconds bounds that wait (5..900; the model cannot extend it, and a /stop releases a parked run immediately).",
     "ask_user": true,
     "ask_user_wait_seconds": 120,

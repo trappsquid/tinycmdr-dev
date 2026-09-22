@@ -1092,3 +1092,65 @@ strangers and groups, the verbs, the per-chat conversation name), plus the full 
 Still open before this is a shipped door: the installers' lane wizard wants a fourth
 choice, README and .env.example want the door named, and a live end-to-end test needs a
 bot token that only the operator can create in BotFather.
+
+## The endpoint gate covers tools, a reconnect gap makes it refuse, spills get an index, and the experiment ledger (2026-09-21)
+
+The four items left staged on 2026-09-21 (handoff: `Z:\VPS Admin\ATTAGOS-1.0.0-STAGED-2026-09-21.md`),
+all inside 1.0.0: no version bump, nothing published, the fleet gets the bytes.
+
+- **The endpoint gate now covers TOOLS.** `agent.endpoint_tools` (default
+  `["inferctl", "llamasrv", "serve_", "llama", "vllm"]`) marks a custom tool whose NAME or
+  DESCRIPTION carries one of those markers as `endpoint_touching`, and `_exec_tool` routes it
+  through `endpoint_gate()` - the same confirmation a matching shell command gets. It is a
+  config LIST so no box is hard-coded. Why: `_endpoint_self_harm()` only ever read shell text,
+  so a tool that moved the model endpoint walked straight past it.
+- **A fresh reconnect gap makes that gate REFUSE instead of asking.** `_catch_up_once()` calls
+  `note_steering_gap()` for every recovered post - a recovery is what "this lane really does
+  lose messages" looks like (the LAN model boxbot: 7 recoveries on 2026-09-12) - and for the next 10
+  minutes an endpoint-touching shell command or tool is refused outright, naming the gap. An
+  unanswered confirmation the run never sees is worse than a refusal: the run reads the silence
+  as consent, which is the failure the guard exists for.
+- **The spill index.** `cap_output()` records each spill as ONE bounded prompt line
+  (`- spill#7 shell  spill/<file>  (24000 chars, 3m ago, starts: ...)`; the oldest lines drop
+  off, their files stay in `spill/`) in the trailing block, and `read_file {"path": "spill#7"}`
+  resolves the id to the absolute file. Before this, the pointer in the capped result was the
+  only trace a spill had ever existed.
+- **The experiment ledger, always-on.** A core tool `experiment` plus `experiments.jsonl`:
+  append-only, one JSON object per line, on the the LAN model boxbot field set (id, date, agent, status,
+  question, keys, preregistration, engine, binary+commit, model+quant+file, exact_config, host,
+  gpus, slots, per_slot_ctx, fill_depth, control_config, control_mean, reps, interleave, result,
+  drift_check, contamination_check, verdict, artifacts, body, supersedes, superseded_by,
+  next_trigger). The prompt carries the INDEX only (id, date, status, question, keys, verdict
+  and a bounded body); an arm whose keys AND exact_config match a line already in the ledger is
+  REFUSED with that line's verdict cited, and re-running is allowed only by passing
+  `supersedes=<id>` - the old line is never edited, a marker line is appended, so the supersede
+  chain is visible on disk. That is the "MTP = wash" shape: a retraction cannot silently
+  contradict the line it retracts.
+
+**The always-on schema budget moved, on the record:** `tests/test_disclosure.py`'s
+`SCHEMA_BUDGET` went 7,600 -> 8,900 (measured 8,392 chars over 14 always-visible tools, the
+experiment schema at 1,170 of the 1,200 per-tool cap). The new ceiling is that measurement plus
+~6% headroom, not room to grow.
+
+### Two defects the batch exposed, both fixed before the push
+
+- **`tool_write_file` wore `@serialized_by_path` TWICE** (as committed in `457f71d` with finding
+  4), so one thread took the same non-reentrant `Lock` twice: every `write_file` call deadlocked
+  the run, silently and for ever. Found with `faulthandler.dump_traceback_later` after three
+  suites (test_ledger, test_stall, test_verify) hung with 0 CPU - the stack named the wrapper
+  frame. `tool_edit_file` had no decorator at all, so the lock finding 4 promised was half
+  missing and half fatal. Now one decorator each, and `_path_lock()` hands out an `RLock` so a
+  repeated decoration can never wedge a run again.
+- **`tool_remember` still carried the clipping branch** that finding 2 removed, and
+  `tests/test_ledger.py` still asserted the OLD contract (a 5,000-char note clipped at a
+  200-char cap). The dead branch is gone and the check is rewritten to the new contract
+  (`test_remember_refuses_rather_than_clipping`: refused, the limit named, nothing stored, and a
+  note inside the limit stored whole).
+- Two texts that still promised `ask_user` would hand a TIMEOUT back to the model (the tool's
+  own schema and the system prompt) now say an unanswered question stops the run.
+
+Evidence: the full suite green - 28 suites, 0 red, `test_cli` 167/0 against the regenerated CLI
+build, `test_ledger` 233/0; new `tests/test_endpoint_gate.py` (25 checks) and
+`tests/test_experiment.py` (27), `tests/test_spill.py` extended to 22 with the index and the
+by-id read-back. Then one six-box push (bytes to all six; restart where the box was idle), with a
+process check per host rather than a file hash alone.

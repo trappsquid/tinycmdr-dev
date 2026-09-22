@@ -89,6 +89,7 @@ CONFIG_PATH = BASE_DIR / "config.json"
 TASKS_FILE = BASE_DIR / "tasks.json"      # durable task ledger (source of truth)
 TASKS_DOC = BASE_DIR / "tasks.md"         # human-readable render of the ledger
 TASKS_JOURNAL = BASE_DIR / "tasks.journal.jsonl"   # append-only ledger history, one JSON line per save
+EXPERIMENTS_FILE = BASE_DIR / "experiments.jsonl"  # append-only experiment ledger, one JSON line per record
 NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt
 
 
@@ -313,6 +314,7 @@ DEFAULT_CONFIG = {
         "checkin_tool_preview_chars": 90,
         "checkin_tool_min_seconds": 0.0,
         "vision": False,
+        "endpoint_tools": ["inferctl", "llamasrv", "serve_", "llama", "vllm"],
     },
 }
 
@@ -1241,6 +1243,68 @@ def _spill_rotate(keep):
         log.debug("spill rotation skipped: %s", e)
 
 
+# ... and the other half of the deal: an over-cap result is POINTERED, not lost, so the
+# model needs to be able to see what it has on disk without carrying any of it. One
+# line per spill (id, tool, path, first line, when, size), oldest whole entries drop
+# off the end - their files stay in spill/, only the line goes - and one call reads a
+# spill back by id. Bounded on both axes because this rides in every prompt.
+_SPILLS = []
+_SPILLS_LOCK = threading.Lock()
+_SPILLS_MAX = 12
+_SPILL_SEQ = {"n": 0}
+
+
+def _spill_record(name, rel, text):
+    """Remember one spill for the prompt index. Never raises."""
+    try:
+        first = next((ln.strip() for ln in str(text).splitlines()
+                      if ln.strip()), "")
+        with _SPILLS_LOCK:
+            _SPILL_SEQ["n"] += 1
+            _SPILLS.append({"id": _SPILL_SEQ["n"], "tool": str(name)[:24],
+                            "path": rel, "first": first[:110],
+                            "chars": len(str(text)), "at": int(time.time())})
+            del _SPILLS[:-_SPILLS_MAX]
+    except Exception as e:
+        log.debug("spill index: %s", e)
+
+
+def _spill_path(want):
+    """The spill path behind `spill#<id>`, or "" when this process has no such id."""
+    try:
+        n = int(str(want).split("#", 1)[1])
+    except (IndexError, ValueError):
+        return ""
+    with _SPILLS_LOCK:
+        for e in _SPILLS:
+            if e["id"] == n:
+                # Absolute on purpose: an index line shows a relative path and the
+                # model may well be in another folder by the time it reads it back.
+                return str(BASE_DIR / e["path"])
+    return ""
+
+
+def spill_index_block():
+    """The index of this session's spills (newest last), or "" when there are none."""
+    with _SPILLS_LOCK:
+        rows = list(_SPILLS)
+    if not rows:
+        return ""
+    lines = []
+    for e in rows:
+        age = int((time.time() - e["at"]) / 60)
+        when = ("just now" if age < 2 else
+                ("%dm ago" % age if age < 90 else "%dh ago" % (age // 60)))
+        lines.append("- spill#%d %s  %s  (%d chars, %s, starts: %s)"
+                     % (e["id"], e["tool"], e["path"], e["chars"], when,
+                        e["first"] or "(no first line)"))
+    return ("[HARNESS: results from this session that were too big for a tool result. "
+            "The FULL text is on disk - nothing was dropped - and this is only an "
+            "index of it. Read one back by id with "
+            "`read_file {\"path\": \"spill#<id>\"}`; older lines drop off this list "
+            "but their files stay in spill/.]\n" + "\n".join(lines))
+
+
 def cap_output(name, text, label="output", limit=None):
     """Cap a tool result, spilling the whole text to disk first when it is over the limit.
 
@@ -1265,6 +1329,7 @@ def cap_output(name, text, label="output", limit=None):
         log.warning("spill write failed (%s) - falling back to truncation", e)
         return truncate_middle(text, cap, label)
     rel = f"spill/{path.name}"
+    _spill_record(name, rel, text)
     head = int(cap * 0.35)
     tail = int(cap * 0.35)
     log.info("[cap] %s: %d chars over the %d cap -> spilled to %s", name, len(text), cap, rel)
@@ -2783,11 +2848,12 @@ def tool_shell(args, ctx):
     if not confirm_hit:
         confirm_hit = _endpoint_self_harm(command)
     if confirm_hit:
-        cb = ctx.get("confirm_cb")
-        approved = cb(command) if cb else False
-        if not approved:
-            return (f"DECLINED: command needs operator confirmation "
-                    f"(pattern '{confirm_hit}') and none was given.")
+        # One gate for shell and tools: it can REFUSE outright (a fresh steering gap),
+        # not only decline. See endpoint_gate().
+        refusal = endpoint_gate("shell: " + command, confirm_hit,
+                                (ctx or {}).get("confirm_cb"))
+        if refusal:
+            return refusal
     blocked = is_blocked(command)
     if blocked:
         return (f"BLOCKED: this command matches safety pattern '{blocked}'. "
@@ -2960,6 +3026,109 @@ def _endpoint_self_harm(command):
     return None
 
 
+def _endpoint_touching_tool(name, description=""):
+    """The marker this custom tool matches, or None.
+
+    Same question as _endpoint_self_harm, asked of a tool instead of a command line:
+    a tool that stops/restarts the endpoint in llm.base_url is doing the one thing the
+    campaign taught us not to do unattended. The markers live in config so no box is
+    hard-coded, and the answer is a WARNING, not a refusal on its own - the gate below
+    decides what to do with it.
+    """
+    markers = [str(m).strip().lower()
+               for m in (CONFIG["agent"].get("endpoint_tools") or []) if str(m).strip()]
+    if not markers:
+        return None
+    blob = ("%s %s" % (name or "", description or "")).lower()
+    for m in markers:
+        if m in blob:
+            return m
+    return None
+
+
+# ---- a fresh reconnect gap makes asking pointless (audit finding, 2026-09-21) ----
+#
+# The catch-up sweep exists because the websocket does not replay what it missed;
+# the LAN model boxbot recovered 7 posts on 2026-09-12, which is what "this lane really does lose
+# messages" looks like. A confirmation asked while that is fresh may never be READ, and
+# a run that carries on has then made an unapproved change on the strength of silence -
+# the exact failure the endpoint guard was built for. So the gate REFUSES instead of
+# asking for a while after a recovery. Bounded on purpose: this is a suspicion about
+# the lane, not a permanent state.
+_ENDPOINT_GAP = {"at": 0.0, "note": ""}
+_ENDPOINT_GAP_FRESH = 600     # seconds: 10 sweeps at the default 60s cadence
+
+
+def note_steering_gap(note):
+    """The catch-up sweep recovered a post: messages WERE lost. Record it."""
+    _ENDPOINT_GAP["at"] = time.time()
+    _ENDPOINT_GAP["note"] = " ".join(str(note or "").split())[:200]
+    log.warning("steering gap: %s - the endpoint gate refuses (not confirms) for the "
+                "next %d min", _ENDPOINT_GAP["note"], _ENDPOINT_GAP_FRESH // 60)
+
+
+def steering_gap_note():
+    """The live note while a recovered gap is fresh, else ""."""
+    age = time.time() - float(_ENDPOINT_GAP.get("at") or 0)
+    if not _ENDPOINT_GAP.get("note") or age > _ENDPOINT_GAP_FRESH:
+        return ""
+    return "%s (%.0f min ago)" % (_ENDPOINT_GAP["note"], age / 60)
+
+
+def endpoint_gate(subject, why, confirm_cb):
+    """The ONE decision a shell command and a TOOL both walk through.
+
+    Returns None to proceed, or the refusal text. Three ways to be stopped, and they
+    are different things: a fresh steering gap (above) makes asking pointless, no
+    confirm callback means this lane has no door to ask through at all (and the shell
+    tool has always read that as no consent), and a "no" is a no.
+    """
+    gap = steering_gap_note()
+    if gap:
+        return ("REFUSED: %s touches the model endpoint this bot talks to (%s), and "
+                "this lane just LOST messages to a reconnect gap - %s. A confirmation "
+                "asked now may never be read, so this is refused rather than "
+                "confirmed. Ask the operator for it in your report instead of acting "
+                "on the silence." % (subject, why, gap))
+    approved = (confirm_cb(subject) if confirm_cb else False)
+    if not approved:
+        return ("DECLINED: %s needs operator confirmation (pattern '%s') and none was "
+                "given." % (subject, why))
+    return None
+
+
+_PATH_LOCKS = {}
+_PATH_LOCKS_GUARD = threading.Lock()
+
+
+def _path_lock(path):
+    """One lock per PATH, not per tool: a batch that edits two files in parallel is
+    fine, two calls to the same file are not.
+
+    RLock, not Lock, and that is not style: the decorator was stacked TWICE on
+    tool_write_file, so the same thread took the same non-reentrant lock twice and
+    the call never returned - three suites hung on it for 20 minutes each before a
+    faulthandler stack named it (2026-09-21). A guard that protects a file must not
+    be able to freeze the run that writes it.
+    """
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(str(path or ""), threading.RLock())
+
+
+def serialized_by_path(fn):
+    """Mutating tools wear this, so parallel calls cannot read-modify-write the same
+    file and silently lose an edit (audit of the campaign harness, 2026-09-21: four
+    parallel edits to one launcher lost two, and left production on a binary with no
+    draft model)."""
+    @functools.wraps(fn)
+    def wrapper(args, ctx):
+        args = args or {}
+        with _path_lock(args.get("path") or args.get("file") or ""):
+            return fn(args, ctx)
+    return wrapper
+
+
+@serialized_by_path
 def tool_edit_file(args, ctx):
     """Surgical string replacement in a file (Hermes patch equivalent).
 
@@ -3076,7 +3245,16 @@ def tool_search_files(args, ctx):
 
 
 def tool_read_file(args, ctx):
-    path = Path(args["path"]).expanduser()
+    # `spill#3` is how the spill index is read back: the id is stable for this process
+    # while the file name is not something the model should have to retype.
+    want = str(args.get("path") or "")
+    if want.lower().startswith("spill#"):
+        resolved = _spill_path(want)
+        if not resolved:
+            return (f"ERROR: no {want} in this process. The spill index in the prompt "
+                    f"lists the ones that exist, and the files are under spill/.")
+        want = resolved
+    path = Path(want).expanduser()
     if not path.exists():
         return f"ERROR: {path} does not exist"
     if path.is_dir():
@@ -3110,31 +3288,6 @@ def tool_read_file(args, ctx):
     return f"{path} {header}\n" + cap_output("read_file", body, "file content")
 
 
-_PATH_LOCKS = {}
-_PATH_LOCKS_GUARD = threading.Lock()
-
-
-def _path_lock(path):
-    """One lock per PATH, not per tool: a batch that edits two files in parallel is
-    fine, two calls to the same file are not."""
-    with _PATH_LOCKS_GUARD:
-        return _PATH_LOCKS.setdefault(str(path or ""), threading.Lock())
-
-
-def serialized_by_path(fn):
-    """Mutating tools wear this, so parallel calls cannot read-modify-write the same
-    file and silently lose an edit (audit of the campaign harness, 2026-09-21: four
-    parallel edits to one launcher lost two, and left production on a binary with no
-    draft model)."""
-    @functools.wraps(fn)
-    def wrapper(args, ctx):
-        args = args or {}
-        with _path_lock(args.get("path") or args.get("file") or ""):
-            return fn(args, ctx)
-    return wrapper
-
-
-@serialized_by_path
 @serialized_by_path
 def tool_write_file(args, ctx):
     path = Path(args["path"]).expanduser()
@@ -3392,14 +3545,11 @@ def tool_remember(args, ctx):
                 "it would leave a half-true fact in every future prompt. Put the long "
                 "version in a file (notes/<topic>.md or a project doc), then remember "
                 "ONE line: the path and the conclusion." % (len(note), cap))
-    clipped = 0
     timestamp = time.strftime("%Y-%m-%d %H:%M")
     with NOTES_FILE.open("a", encoding="utf-8") as f:
         f.write(f"- [{timestamp}] {note}\n")
     record_authored_note(note)         # the guard knows this entry is the bot's own
     msg = "OK: noted."
-    if clipped:
-        msg += f" (clipped {clipped} chars at the {cap}-char per-note cap)"
     report = curate_notes("auto")     # acts only when the file is over budget
     if report:
         msg += " " + report
@@ -3695,6 +3845,252 @@ def tool_task(args, ctx):
 
     return ("ERROR: action must be add, status, done, blocked, drop, list or "
             "clear.")
+
+
+# --------------------------------------------------------------------------
+# The experiment ledger: what this box has already TESTED
+# --------------------------------------------------------------------------
+# The campaign harness re-ran arms it had already measured and could not say which
+# number came from which shape of the server, and one verdict ("MTP = wash") was
+# retracted silently because nothing recorded that the earlier line had been superseded
+# (audit, 2026-09-21). So the record is a FILE, one JSON object per line, appended and
+# never rewritten, and it carries the fields the box that does this work for a living
+# already keeps (the LAN model boxbot, 2026-09-21):
+#
+#   id, date, agent, status, question, keys, preregistration, engine, binary+commit,
+#   model+quant+file, exact_config, host, gpus, slots, per_slot_ctx, fill_depth,
+#   control_config, control_mean, reps, interleave, result, drift_check,
+#   contamination_check, verdict, artifacts, body, supersedes, superseded_by,
+#   next_trigger
+#
+# fill_depth is not decoration: on that box 8K-fill arms run ~11% above 38.5K, so an arm
+# without it is not comparable with one that has it. Two rules make the file worth its
+# tokens: what rides in the prompt is the INDEX (never the file, never a full record),
+# and an arm whose keys AND exact_config match a line already in the ledger is REFUSED
+# with that line's verdict cited - re-running is allowed only when the caller names the
+# line it supersedes.
+EXPERIMENT_FIELDS = ("id", "date", "agent", "status", "question", "keys",
+                     "preregistration", "engine", "binary+commit",
+                     "model+quant+file", "exact_config", "host", "gpus", "slots",
+                     "per_slot_ctx", "fill_depth", "control_config", "control_mean",
+                     "reps", "interleave", "result", "drift_check",
+                     "contamination_check", "verdict", "artifacts", "body",
+                     "supersedes", "superseded_by", "next_trigger")
+EXPERIMENT_INDEX_MAX = 8        # records the prompt shows, newest last
+EXPERIMENT_BODY_MAX = 4000      # chars kept of one body
+
+
+def _experiment_read():
+    """Every record in file order. An UPDATE is a later line for the same id, so it
+    replaces the earlier one in place: the file is append-only, the view is not."""
+    try:
+        raw = EXPERIMENTS_FILE.read_text(encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        log.warning("experiments.jsonl unreadable: %s", e)
+        return []
+    recs, at = [], {}
+    for ln in raw.splitlines():
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            rec = json.loads(ln)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict) or rec.get("id") in (None, ""):
+            continue
+        key = str(rec.get("id"))
+        if key in at:
+            recs[at[key]] = rec
+        else:
+            at[key] = len(recs)
+            recs.append(rec)
+    return recs
+
+
+def _experiment_append(rec):
+    """One JSON line. Never rewritten: the appended file IS the evidence."""
+    with open(EXPERIMENTS_FILE, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec, ensure_ascii=False) + chr(10))
+
+
+def _experiment_find(recs, eid):
+    for rec in recs:
+        if str(rec.get("id")) == str(eid):
+            return rec
+    return None
+
+
+def _experiment_keys(keys):
+    return tuple(sorted(str(k).strip().lower() for k in (keys or []) if str(k).strip()))
+
+
+def _experiment_config(cfg):
+    return " ".join(str(cfg or "").split()).lower()
+
+
+def _experiment_match(recs, keys, exact_config):
+    """The line this arm would repeat, or None.
+
+    BOTH halves must match: the keys say the question is the same, the exact config says
+    the measurement is the same - and a number from a different shape of the server is
+    not the same number.
+    """
+    want_keys = _experiment_keys(keys)
+    want_cfg = _experiment_config(exact_config)
+    if not want_keys or not want_cfg:
+        return None
+    for rec in reversed(recs):
+        if str(rec.get("status") or "").lower() == "superseded":
+            continue
+        if (_experiment_keys(rec.get("keys")) == want_keys
+                and _experiment_config(rec.get("exact_config")) == want_cfg):
+            return rec
+    return None
+
+
+def _experiment_line(rec, with_body=True):
+    """One record as ONE line: what the prompt shows, and what action=index prints."""
+    keys = ",".join(str(k) for k in (rec.get("keys") or []) if str(k).strip())
+    line = "#%s [%s] %s (%s)" % (rec.get("id"), rec.get("status") or "?",
+                                 " ".join(str(rec.get("question") or "").split())[:140],
+                                 rec.get("date") or "no date")
+    if keys:
+        line += " keys:" + keys[:80]
+    verdict = " ".join(str(rec.get("verdict") or "").split())
+    if verdict:
+        line += " -> verdict: " + verdict[:200]
+    body = " ".join(str(rec.get("body") or "").split())
+    if with_body and body:
+        line += " | " + body[:180] + ("..." if len(body) > 180 else "")
+    return line
+
+
+def render_experiment_prompt():
+    """The ledger INDEX for the prompt - id, date, status, question, keys, verdict and a
+    bounded body per line. The records themselves stay on disk; `experiment`
+    action=show reads one back by id, and that is the only route to the full text."""
+    recs = _experiment_read()
+    if not recs:
+        return ""
+    shown = recs[-EXPERIMENT_INDEX_MAX:]
+    rows = [_experiment_line(r) for r in shown]
+    if len(recs) > len(shown):
+        rows.insert(0, "(%d older experiment(s) not listed here; `experiment` "
+                       "action=index lists them all)" % (len(recs) - len(shown)))
+    return ("experiment ledger - what this box has already TESTED. Check it BEFORE "
+            "running an arm: a matching keys+exact_config is refused with the earlier "
+            "verdict, and re-running one is allowed only by naming the line it "
+            "supersedes. Full records: `experiment` action=show id=N.\n"
+            + "\n".join(rows))
+
+
+def tool_experiment(args, ctx):
+    """The experiment ledger: the hypothesis, the arm, the exact config, the verdict."""
+    action = str(args.get("action") or "index").strip().lower()
+    recs = _experiment_read()
+    fields = args.get("fields") if isinstance(args.get("fields"), dict) else {}
+    bad = sorted(k for k in fields if k not in EXPERIMENT_FIELDS)
+    if bad:
+        return ("ERROR: unknown field(s) %s. The record's fields are: %s"
+                % (", ".join(bad), ", ".join(EXPERIMENT_FIELDS)))
+
+    if action in ("index", "list", ""):
+        if not recs:
+            return ("The experiment ledger is empty (no experiments.jsonl on this box "
+                    "yet). Open one with `experiment` action=add BEFORE running an arm, "
+                    "and put the literal command line in exact_config.")
+        return ("%d experiment(s), newest last:\n" % len(recs)
+                + "\n".join(_experiment_line(r) for r in recs))
+
+    if action in ("show", "read"):
+        rec = _experiment_find(recs, args.get("id"))
+        if not rec:
+            return ("ERROR: no experiment #%s in the ledger. action=index lists the "
+                    "ids." % args.get("id"))
+        return json.dumps(rec, indent=2, ensure_ascii=False)
+
+    if action == "add":
+        question = " ".join(str(args.get("question")
+                                or fields.get("question") or "").split())
+        keys = args.get("keys") or fields.get("keys") or []
+        exact = fields.get("exact_config") or args.get("exact_config") or ""
+        missing = [n for n, v in (("question", question), ("keys", keys),
+                                  ("exact_config", exact)) if not v]
+        if missing:
+            return ("ERROR: action=add needs %s. An arm without its exact config is not "
+                    "a measurement, and not worth a ledger line." % ", ".join(missing))
+        prior = _experiment_match(recs, keys, exact)
+        sup = args.get("supersedes")
+        if prior and str(sup or "") != str(prior.get("id")):
+            return ("REFUSED: experiment #%s already ran this arm - keys %s with that "
+                    "exact_config, dated %s, status %s. Its verdict: %s. Do not re-buy a "
+                    "settled question: use that result, or re-run deliberately by "
+                    "passing supersedes=%s with a preregistration saying what is "
+                    "different this time."
+                    % (prior.get("id"),
+                       ",".join(_experiment_keys(prior.get("keys"))) or "none recorded",
+                       prior.get("date") or "no date", prior.get("status") or "?",
+                       " ".join(str(prior.get("verdict")
+                                     or "none recorded yet").split()),
+                       prior.get("id")))
+        eid = 1 + max([int(r.get("id") or 0) for r in recs] or [0])
+        rec = {k: fields[k] for k in EXPERIMENT_FIELDS if k in fields}
+        rec.update({"id": eid,
+                    "date": fields.get("date") or time.strftime("%Y-%m-%d"),
+                    "agent": fields.get("agent") or CONFIG["agent"].get("bot_name") or "",
+                    "status": fields.get("status") or "open",
+                    "question": question,
+                    "keys": [str(k) for k in keys],
+                    "exact_config": exact})
+        if prior:
+            rec["supersedes"] = int(prior.get("id"))
+        body = str(rec.get("body") or "")
+        if len(body) > EXPERIMENT_BODY_MAX:
+            rec["body"] = body[:EXPERIMENT_BODY_MAX]
+        try:
+            _experiment_append(rec)
+            if prior:
+                # The old line is not edited: a marker line is appended, so the file
+                # keeps BOTH verdicts and the supersede chain is visible on disk.
+                marked = dict(prior)
+                marked.update({"status": "superseded", "superseded_by": eid})
+                _experiment_append(marked)
+        except Exception as e:
+            return "ERROR writing experiments.jsonl: %s" % e
+        note = ""
+        if prior:
+            note = (" It supersedes #%s (verdict: %s)."
+                    % (prior.get("id"),
+                       " ".join(str(prior.get("verdict") or "none").split())[:120]))
+        return ("OK: experiment #%d opened (%s, keys %s).%s Record the arm's result and "
+                "verdict with action=update, and keep exact_config literal."
+                % (eid, rec["status"], ",".join(rec["keys"]), note))
+
+    if action in ("update", "record", "set"):
+        rec = _experiment_find(recs, args.get("id"))
+        if not rec:
+            return ("ERROR: no experiment #%s in the ledger. action=index lists the "
+                    "ids." % args.get("id"))
+        if not fields:
+            return ("ERROR: action=update needs fields to change (status, result, "
+                    "verdict, body, ...).")
+        merged = dict(rec)
+        merged.update(fields)
+        body = str(merged.get("body") or "")
+        if len(body) > EXPERIMENT_BODY_MAX:
+            merged["body"] = body[:EXPERIMENT_BODY_MAX]
+        try:
+            _experiment_append(merged)
+        except Exception as e:
+            return "ERROR writing experiments.jsonl: %s" % e
+        return ("OK: experiment #%s updated (status %s). The new line was APPENDED - "
+                "the earlier one stays on disk, so a retraction cannot silently "
+                "contradict it." % (merged.get("id"), merged.get("status") or "?"))
+
+    return "ERROR: action must be index, show, add or update."
 
 
 # --------------------------------------------------------------------------
@@ -4657,6 +5053,33 @@ CORE_TOOLS = {
                       "description": "one-line evidence or blocker reason"}},
             ["action"]),
     },
+    "experiment": {
+        "fn": tool_experiment,
+        "schema": _schema(
+            "The experiment ledger: what this box has already TESTED. Check it "
+            "BEFORE running an arm - a matching keys+exact_config is refused with "
+            "the earlier verdict. action: index, show, add, update.",
+            {"action": {"type": "string",
+                        "enum": ["index", "show", "add", "update"]},
+             "id": {"type": "integer", "description": "id (show/update)"},
+             "question": {"type": "string", "description": "add: what is tested"},
+             "keys": {"type": "array", "items": {"type": "string"},
+                      "description": "add: topic keys, e.g. ['mtp','ctx38k']"},
+             "exact_config": {"type": "string",
+                              "description": "add: the literal cmdline "
+                                             "(or launcher + env)"},
+             "supersedes": {"type": "integer",
+                            "description": "add: the id this arm re-tests, to "
+                                           "re-run a verdict you have"},
+             "fields": {"type": "object",
+                        "description": "add/update: fields - preregistration, engine, "
+                                       "binary+commit, model+quant+file, host, gpus, "
+                                       "slots, per_slot_ctx, fill_depth, control_config, "
+                                       "control_mean, reps, interleave, result, "
+                                       "drift_check, contamination_check, verdict, "
+                                       "artifacts, body, next_trigger"}},
+            ["action"]),
+    },
     "notes": {
         "fn": tool_notes,
         "schema": _schema(
@@ -4676,9 +5099,10 @@ CORE_TOOLS = {
             "blocking tool). Use it when the decision is theirs to make wrong: an "
             "irreversible change, two paths their preference decides, a target or "
             "credential you cannot choose between. NOT for what a tool can find "
-            "out, and not for permission for the job you were given. Off, timeout "
-            "or nobody-there comes back in the result: apply the best option, "
-            "state the assumption, carry on.",
+            "out, and not for permission for the job you were given. Off, or no "
+            "door to reach a human, comes back in the result: apply the best "
+            "option, state the assumption, carry on. A question nobody ANSWERS "
+            "stops the run - the harness does not invent the answer.",
             {"question": {"type": "string",
                           "description": "One question, plain language, with the "
                                          "context needed to answer it"},
@@ -4766,6 +5190,10 @@ class ToolRegistry:
             # check treats them as state-changing (see _is_mutation). Read-only
             # tools should leave it unset.
             "mutates": bool(getattr(module, "MUTATES", False)),
+            # ... and the endpoint marker, so a tool that restarts the model box is
+            # gated exactly like a shell command that does (agent.endpoint_tools).
+            "endpoint_touching": _endpoint_touching_tool(
+                tname, getattr(module, "DESCRIPTION", "")),
             "schema": {"type": "function", "function": {
                 "name": tname,
                 "description": module.DESCRIPTION,
@@ -5680,10 +6108,16 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     if task_block:
         parts.append("Task ledger for this machine (durable across restarts — "
                      "keep it curated with the `task` tool):\n" + task_block)
+    exp_block = render_experiment_prompt()
+    if exp_block:
+        parts.append(exp_block)
     if session_key:
         run = run_block(session_key)
         if run:
             parts.append(run)
+    spill = spill_index_block()
+    if spill:
+        parts.append(spill)
     if not parts:
         return ""
     body = "\n".join(parts)
@@ -5727,7 +6161,7 @@ How you work:
 - Don't gold-plate. Working and done beats perfect and pending: do not chase version numbers, and do not start an update to close a version gap. Report the gap instead.
 - This build is closed: there is NO web search and NO URL fetching, and the only network destination is the model endpoint in config.json. Work from the machine's own evidence — logs, configs, package metadata, vendor documents already on disk, the source of whatever is failing — and when a question genuinely needs information from outside, say so, say exactly what you would need, and stop rather than guessing at an answer.
 - Time-box the digging: if reading the local evidence twice has not cracked it, act on what you have, or report the options and what you would need to go further.
-- You are autonomous, but not omniscient: when a decision is genuinely the operator's — an irreversible change, two paths their preference settles, a target or credential you cannot choose between — use `ask_user` and wait for the answer. Everything else: pick the most reasonable option, state the assumption in one line, and proceed. Never use `ask_user` to ask permission to do the job you were given, and never for something you can find out with a tool. If it is off, times out, or nobody is there, you get that in the result: apply your judgment, say what you assumed, and carry on.
+- You are autonomous, but not omniscient: when a decision is genuinely the operator's — an irreversible change, two paths their preference settles, a target or credential you cannot choose between — use `ask_user` and wait for the answer. Everything else: pick the most reasonable option, state the assumption in one line, and proceed. Never use `ask_user` to ask permission to do the job you were given, and never for something you can find out with a tool. If it is off, or there is nobody reachable, you get that in the result: apply your judgment, say what you assumed, and carry on. A question nobody ANSWERS in time stops the run instead - the harness never invents the operator's intent.
 - Keep going until solved, or until you can state precisely what is broken and what is needed.
 - Reusable procedures (managing a service, publishing a post, mail admin, recurring checks) should become custom tools via create_tool so future tasks are one call. Check list_tools first.
 - Your tool list is deliberately short: the ones you use constantly. Anything else is one call away — find_tools with what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it by name and the harness keeps it for the session. Never claim a capability is missing without checking. If a task needs something you would expect an agent to have, call find_tools FIRST: do not work around a hidden tool by re-implementing it, reading its source, or hand-rolling the equivalent command (measured: a run spent 40s replicating a tool that one call would have done).
@@ -6636,6 +7070,16 @@ class Agent:
                     " different build - say so instead of hand-running its steps, and"
                     " create_tool writes a tool this box is missing.")
             return name, args, f"ERROR: unknown tool '{name}'.{hint}"
+        # A TOOL that moves the endpoint this bot talks to takes the same gate as a
+        # shell command that does. Without this, an inferctl-style tool walked straight
+        # past a guard that only ever read shell text (audit, 2026-09-21).
+        if tool.get("endpoint_touching"):
+            refusal = endpoint_gate(
+                "tool %s" % name,
+                "it matches agent.endpoint_tools ('%s')" % tool["endpoint_touching"],
+                (ctx or {}).get("confirm_cb"))
+            if refusal:
+                return name, args, refusal
         try:
             out = str(tool["fn"](args, ctx))
         except Exception as e:
