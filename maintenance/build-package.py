@@ -430,7 +430,12 @@ def sanitize(target, host_vals):
             # the LAN model box and the Linux test box: search dead, HTTP 401 from the provider).
             # audit() and the zip verifier already exempt it the same way.
             continue
-        text = f.read_text(encoding="utf-8", errors="replace")
+        # Bytes in, bytes out. A text-mode read applies universal newlines, so a CRLF file
+        # comes back LF and the generator's stray `\r\r\n` insertions come back as an extra
+        # blank line each (measured 2026-09-22: the shipped public console build carried 84
+        # extra blank lines and no longer matched the file the suites grade). A scrub must
+        # change the strings it names and nothing else, newlines included.
+        text = f.read_bytes().decode("utf-8", "surrogateescape")
         new = text
         for label, val in host_vals.items():
             if not val or val not in new:
@@ -444,7 +449,7 @@ def sanitize(target, host_vals):
             elif label.startswith(ENV_PREFIX):
                 new = new.replace(val, f"<redacted: {label[4:]}>")
         if new != text:
-            f.write_text(new, encoding="utf-8")
+            f.write_bytes(new.encode("utf-8", "surrogateescape"))
             changed.append(rel)
     return changed
 
@@ -524,13 +529,13 @@ def redact_public(stage_dir):
             # the app itself must be byte-identical to the live file, so a hit
             # here is a bug in tinycmdr.py, not something to silently rewrite
             continue
-        text = f.read_text(encoding="utf-8", errors="replace")
+        text = f.read_bytes().decode("utf-8", "surrogateescape")   # bytes in, bytes out
         new, n = text, 0
         for pat, repl in PUBLIC_RULES:
             new, k = re.subn(pat, repl, new)
             n += k
         if n:
-            f.write_text(new, encoding="utf-8", newline="")
+            f.write_bytes(new.encode("utf-8", "surrogateescape"))
             changed[rel] = n
     return changed
 

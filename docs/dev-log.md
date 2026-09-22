@@ -1412,3 +1412,53 @@ Suites after the batch: 32/32 green on the bot build, the console-build legs tha
 `tinycmdr_SRC` green, the CLI packages' clean-unpack gate 170/0 (`test_cli`), and a real install
 from the new public zip passes all 12 unified-install checks. Nothing published, no version bump,
 and the fleet still carries the previous bytes.
+
+### Auto-detect was built, tested, and unused - now it is the default (2026-09-22)
+
+The operator's ask: "I want auto detect enabled, I thought we built that." We had, and no host was
+using it. `_context_budget()` has accepted `"auto"` (also 0, blank, null) since 2.5.19 - it asks the
+endpoint what it serves per request (`/v1/models`, then `/props`) and uses that - and
+`tests/test_ledger.py` already proved the window MOVES under it (262,144 to 131,072 across one
+restart). What no host did was ask: every box carried a hand-set NUMBER, and a number is used as a
+claim about a box, never a question to it.
+
+- The shipped default is `"auto"` now, in all three places that ship one: `DEFAULT_CONFIG` in
+  `tinycmdr.py`, `config.example.json`, and the console build's curated block in `cli_blocks.py`
+  (which said 500000, a ceiling that happened to behave like auto). Each carries the reasoning: a
+  number written for one box becomes the wrong number the moment that box is restarted with a
+  different slot count, and the run then dies mid-think with no answer (2026-09-21). An endpoint
+  that reports nothing leaves auto at a conservative 8000 and the log says so.
+- This host's own `config.json` said 200000 against a box now serving 160000 per request, so every
+  run clamped and warned. Set to `"auto"` (backup `config.json.bak-contextauto-<stamp>` beside it,
+  values read back). It lands on the next start - config is read at import.
+- A hand-edited value can no longer kill a run. `int("AUTO")` and `int("12k")` raised ValueError out
+  of the budget path; casing and spacing are not syntax, 0 is documented as auto, and anything else
+  that is not a number is NAMED in the log and read as auto. Falsified against the pre-change build
+  (`tinycmdr_SRC=tinycmdr.py.bak-preauto-20260922 python tests/test_ledger.py`): `ValueError: invalid
+  literal for int() with base 10: 'AUTO'`, one check red. Three checks now pin it (casing, 0, a
+  non-number); `test_ledger` is 238 checks, 0 failed.
+- **The gate caught the default change, which is what it is for.** `test_tuning_defaults_are_the_
+  agreed_ones` adds `llm["max_context_tokens"] + llm["max_tokens"] + 4000` for the HOST config;
+  with "auto" there is nothing to add up, and it raised TypeError. It now asserts the auto case by
+  itself - "the budget follows the endpoint, not a number a restart can invalidate" - and keeps the
+  arithmetic for a configured number.
+- **What the fleet holds today, read off each host:** the manager box auto; the other Windows box .9 200000; the Windows test box .20
+  131072; the Linux test box .13 200000; the LAN model box 200000 (its build is 2.5.23, which understands "auto" but uses
+  a NUMBER as-is, with no clamp); MacBook 110000. .47 serves 160000 per request, so the three
+  200000 hosts are running a budget over their own box's window - the 2026-09-21 failure class,
+  live, until their configs say auto. That is one config edit per host plus a restart, and it is
+  the operator's call, not ours.
+
+### The packager no longer rewrites a file it only meant to scrub (2026-09-22)
+
+`sanitize()` and `redact_public()` read a file, replaced strings, and wrote it back through text
+mode: universal newlines expanded the generator's `\r\r\n` insertions into an extra blank line
+each, and a CRLF file came out LF. `read_bytes()` / `decode("utf-8", "surrogateescape")` /
+`write_bytes()` fixes the class - a scrub changes the strings it names and nothing else, newlines
+included. Proof, measured on the rebuilt shapes: the public zip's console build now differs from
+the tree by exactly ONE line (the scrub that renames the bot) with CRLF intact, where it carried 84
+spurious blank lines before; the fleet kit's copy is byte-identical to the tree again.
+
+All seven 1.0.0 shapes were rebuilt with both changes (auto default + byte-safe scrub), sidecars
+regenerated, the five public shapes staged to Z: with the copies verified against the source, and
+the real-install probe green again (12/12). Hashes in the state doc.

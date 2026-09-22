@@ -1107,11 +1107,21 @@ def test_tuning_defaults_are_the_agreed_ones():
     host_cfg = BASE / "config.json"
     if host_cfg.exists():
         h = json.loads(host_cfg.read_text(encoding="utf-8-sig"))["llm"]
-        hworst = h["max_context_tokens"] + h["max_tokens"] + 4000
-        check("host config: budget + generation + schemas fits the window",
-              hworst <= SERVER_WINDOW, f"{hworst} > {SERVER_WINDOW}")
-        check("host config: budget is not shrunk to nothing",
-              h["max_context_tokens"] >= 60000, h["max_context_tokens"])
+        hval = h["max_context_tokens"]
+        if ((isinstance(hval, str) and hval.strip().lower() == "auto")
+                or hval in (None, "", 0)):
+            # "auto" is the shipped default now: this host asks the endpoint what it serves
+            # instead of asserting a number that cannot stay true across a restart (the
+            # 2026-09-21 incident). There is nothing to add up - the budget IS the served
+            # window less the reply and schema room - so the fit is true by construction.
+            check("host config: the budget follows the endpoint (auto), not a number a "
+                  "restart can invalidate", True)
+        else:
+            hworst = hval + h["max_tokens"] + 4000
+            check("host config: budget + generation + schemas fits the window",
+                  hworst <= SERVER_WINDOW, f"{hworst} > {SERVER_WINDOW}")
+            check("host config: budget is not shrunk to nothing",
+                  hval >= 60000, hval)
 
 # --- tool pairing -----------------------------------------------------------
 # Live failure 2026-09-11 on api.deepseek.com: the loop guard nudged the model
@@ -1896,6 +1906,26 @@ def test_the_budget_is_clamped_by_what_the_endpoint_serves():
         cfg["llm"]["max_context_tokens"] = "auto"
         _window_stub(131072)
         check("auto still means what the server says",
+              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
+              fb.AGENT._context_budget())
+        # "auto" is the shipped default, so a hand-edit around it must not be able to kill
+        # a run: the value arrives from a text file. Casing and spacing are not syntax, 0 is
+        # documented as auto, and anything else that is not a number asks the endpoint
+        # rather than raising ValueError out of int() (audit, 2026-09-22).
+        cfg["llm"]["max_context_tokens"] = "AUTO"
+        _window_stub(131072)
+        check("auto in any casing means the same thing",
+              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
+              fb.AGENT._context_budget())
+        cfg["llm"]["max_context_tokens"] = 0
+        _window_stub(131072)
+        check("zero means auto, not an empty budget",
+              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
+              fb.AGENT._context_budget())
+        cfg["llm"]["max_context_tokens"] = "12k"
+        _window_stub(131072)
+        check("a value that is neither a number nor auto asks the endpoint instead of "
+              "killing the run",
               fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
               fb.AGENT._context_budget())
     finally:

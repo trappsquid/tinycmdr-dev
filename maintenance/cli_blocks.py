@@ -228,9 +228,10 @@ NEW_CONFIG = r'''{
         # high and compaction almost never fires. It is a budget rather than the window
         # itself: a runaway session is capped here instead of being sent, and if the
         # server's own limit is hit anyway the build shrinks the context and retries.
-        # Point this at the window the endpoint in use actually has (a 128K provider
-        # wants ~100000; a local model keeps the small original value).
-        "max_context_tokens": 500000,
+        # "auto" asks the endpoint what it serves per request and keeps the tighter of that
+        # and this value (see _context_budget in tinycmdr.py). A number is a ceiling, not a
+        # promise: leave auto unless the endpoint reports nothing about its window.
+        "max_context_tokens": "auto",
         # Cap on generated tokens per call. Local servers default to unlimited,
         # so one call can generate for many minutes on a slow model. Thinking
         # models spend this budget on reasoning BEFORE the answer, so it has to

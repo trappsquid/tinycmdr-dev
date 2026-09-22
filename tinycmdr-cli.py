@@ -190,9 +190,10 @@ DEFAULT_CONFIG = {
         # high and compaction almost never fires. It is a budget rather than the window
         # itself: a runaway session is capped here instead of being sent, and if the
         # server's own limit is hit anyway the build shrinks the context and retries.
-        # Point this at the window the endpoint in use actually has (a 128K provider
-        # wants ~100000; a local model keeps the small original value).
-        "max_context_tokens": 500000,
+        # "auto" asks the endpoint what it serves per request and keeps the tighter of that
+        # and this value (see _context_budget in tinycmdr.py). A number is a ceiling, not a
+        # promise: leave auto unless the endpoint reports nothing about its window.
+        "max_context_tokens": "auto",
         # Cap on generated tokens per call. Local servers default to unlimited,
         # so one call can generate for many minutes on a slow model. Thinking
         # models spend this budget on reasoning BEFORE the answer, so it has to
@@ -6791,7 +6792,17 @@ class Agent:
         detected = self._endpoint_window()
         room = REPLY_HEADROOM + int(CONFIG["llm"].get("max_tokens") or 0)
         fits = max(4000, int(detected) - room) if detected else 0
-        if val in (None, "", 0, "auto"):
+        # "auto" in any casing or spacing, and anything that is not a number, means "believe
+        # the endpoint". A bad value used to reach int() below and kill the run with a
+        # ValueError out of a hand-edited config; now it is named in the log and read as auto.
+        if isinstance(val, str) and val.strip().lower() == "auto":
+            val = None
+        elif isinstance(val, bool) or (val not in (None, "", 0)
+                                       and not isinstance(val, (int, float))):
+            log.warning("llm.max_context_tokens is %r, which is neither a number nor "
+                        "\"auto\" - asking the endpoint instead", val)
+            val = None
+        if val in (None, 0):
             if fits:
                 budget = fits
                 log.info("context: server reports %s per request, using messages "
