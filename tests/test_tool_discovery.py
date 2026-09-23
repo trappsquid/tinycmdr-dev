@@ -211,6 +211,67 @@ check("prompt: the clause rides the ledger/check bullet",
       and "Checking the work is the last ledger item" in
       [l for l in sp.splitlines() if "make the check test the claim itself" in l][0])
 
+# ---- a miss must name the RIGHT door (drive round 3, 2026-09-23) ---------------------
+# The model went looking for a hidden tool's shape and used the skill tool for it, then typed
+# the tool name into the shell. Both are misses the harness can answer precisely.
+out = fb.tool_skill({"action": "read", "name": "search_files"}, {})
+check("the skill tool says a TOOL name is a tool, not a skill",
+      "is a TOOL on this box" in out and "not a skill" in out, out[:160])
+check("and points at the call and at find_tools",
+      "call it by name" in out and "find_tools" in out, out[:200])
+out = fb.tool_skill({"action": "read", "name": "no-such-runbook-xyz"}, {})
+check("an ordinary skill miss stays an ordinary miss",
+      "No skill named" in out and "is a TOOL" not in out, out[:120])
+check("and its name list is bounded on a box with many skills",
+      len(out) < 1200 or "more (skill action=list" in out, len(out))
+
+out = fb.tool_shell({"command": "list_tools"}, {"session_key": "s-bare"})
+check("a bare tool name typed into the shell is answered as a tool",
+      "is a TOOL on this box" in out and "shell cannot" in out, out[:160])
+out = fb.tool_shell({"command": "echo hi"}, {"session_key": "s-bare2"})
+check("a real command still runs", "exit_code=0" in out, out[:80])
+
+# ---- round 3: the same miss, piped; a gated write; a claim that is not a measurement ----
+out = fb.tool_shell({"command": "list_tools 2>&1 | Select-String \"delegate\""},
+                    {"session_key": "s-bare3"})
+check("a tool name as the first token of a pipeline is answered as a tool too",
+      "is a TOOL on this box" in out, out[:160])
+
+_keep_confirm = fb.CONFIG["agent"].get("confirm_patterns")
+try:
+    fb.CONFIG["agent"]["confirm_patterns"] = ["\\bdel\\s+/[a-z]*[sq]"]
+    said = []
+    res = fb.tool_write_file({"path": str(BASE / "tests" / "sessions" / "gated-probe.cmd"),
+                              "content": "del /q /s C:\\nowhere\\x\n", "no_backup": True},
+                             {"session_key": "s-gate", "confirm_cb": lambda s: said.append(s) or True})
+    check("a gated write asks the operator first", bool(said), said)
+    check("and the result says the operator approved it",
+          "confirm_patterns" in res and "approved" in res, res[:200])
+    res2 = fb.tool_write_file({"path": str(BASE / "tests" / "sessions" / "ungated-probe.txt"),
+                               "content": "just text\n", "no_backup": True},
+                              {"session_key": "s-gate2", "confirm_cb": lambda s: said.append(s) or True})
+    check("an ordinary write carries no such line", "approved" not in res2, res2[:160])
+finally:
+    if _keep_confirm is None:
+        fb.CONFIG["agent"].pop("confirm_patterns", None)
+    else:
+        fb.CONFIG["agent"]["confirm_patterns"] = _keep_confirm
+
+typed_probe = {"status": "ok", "summary": "everything was fine",
+               "evidence": ["a diff"], "blockers": [], "followups": []}
+rendered = fb.render_subagent_result(typed_probe, "", "the sub-agent's prose")
+check("a typed sub-agent result is labeled a CLAIM, not a measurement",
+      "CLAIM, not a tool result" in rendered, rendered[:200])
+check("and it says to re-check a specific fact", "Re-check" in rendered)
+check("the unparsed path keeps its own wording",
+      "UNPARSED" in fb.render_subagent_result(None, "no block", "prose"))
+
+sp2 = fb.build_system_prompt()
+check("prompt: only a tool result proves a tool ran",
+      "Only a TOOL RESULT proves a tool ran" in sp2)
+check("prompt: a sub-agent report is a claim, not a measurement",
+      "A sub-agent's report is a CLAIM, not a measurement" in sp2)
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

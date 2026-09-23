@@ -51,10 +51,15 @@ check("and says it returns line numbers", "line number" in got.lower(), got[:200
 check("and is bounded", 0 < len(got) < 400, len(got))
 check("and rides as a HARNESS note, like the other harness verdicts", "[HARNESS:" in got, got[:60])
 
-# ---- once per run, again in the next one -----------------------------------------
-check("a second call in the SAME run is not lectured again",
+# ---- twice per run, then quiet; again in the next run ----------------------------
+# The drive repeated the same Select-String four minutes after the first hint and heard
+# nothing (measured 2026-09-23), so the second miss is taught too - and the third is the
+# loop guard's business, not this line's.
+check("a second miss in the SAME run is taught as well",
+      bool(hint(DRIVE_CMD, {"session_key": "r-fire"})))
+check("a third one is not (twice is the cap)",
       hint(DRIVE_CMD, {"session_key": "r-fire"}) == "")
-check("the next run hears it again (the flag is per run)",
+check("the next run hears it again (the count is per run)",
       bool(hint(DRIVE_CMD, {"session_key": "r-fresh"})))
 
 # ---- the other shapes that mean "content search" ---------------------------------
@@ -108,7 +113,10 @@ out = fb.tool_shell({"command": "%s %s" % (verb, target)}, ctx)
 check("the shell tool's result carries the hint", "[HARNESS:" in out and "search_files" in out,
       out[-160:])
 out2 = fb.tool_shell({"command": "%s %s" % (verb, target)}, ctx)
-check("and the tool does not repeat it in the same run", "[HARNESS:" not in out2, out2[-160:])
+check("the second miss through the tool carries it too", "[HARNESS:" in out2, out2[-160:])
+out2b = fb.tool_shell({"command": "%s %s" % (verb, target)}, ctx)
+check("and the third does not (the cap holds through the tool)",
+      "[HARNESS:" not in out2b, out2b[-160:])
 out3 = fb.tool_shell({"command": "echo hi"}, {"session_key": "r-shell-echo", "config": fb.CONFIG})
 check("a plain command's result carries nothing", "[HARNESS:" not in out3, out3[-120:])
 
