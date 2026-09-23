@@ -218,7 +218,7 @@ def build_folder(root: Path, platform: str):
     # the same loader and create_tool, and tools/README.md is the shapes doc
     # (it replaces the HOW-TOOLS-WORK note, which described a shape the
     # loader never had).
-    for _starter in ("patch.py", "process.py", "README.md"):
+    for _starter in ("patch.py", "process.py", "toolsmith.py", "README.md"):
         shutil.copy2(BASE / "tools" / _starter, root / "tools" / _starter)
 
 

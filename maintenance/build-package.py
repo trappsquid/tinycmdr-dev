@@ -77,11 +77,12 @@ SHIP = [
     "maintenance/build-cli-fix.py",
     "maintenance/cli_blocks.py",
     "skills",
-    # The starter drop-in tools and the shapes doc. tools/ is otherwise
-    # per-host payload and stays banned from directory walks below
-    # (FORBIDDEN_DIRS); these three files are shipped source, like soul.md.
+    # The starter drop-in tools, the shapes doc and the toolsmith. tools/ is
+    # otherwise per-host payload and stays banned from directory walks below
+    # (FORBIDDEN_DIRS); these four files are shipped source, like soul.md.
     "tools/patch.py",
     "tools/process.py",
+    "tools/toolsmith.py",
     "tools/README.md",
 ]
 
@@ -149,7 +150,8 @@ APP_FILES = ("INSTALL-WINDOWS.cmd", "tinycmdr.py", "tinycmdr-supervise.py", "con
              "maintenance/restart-tinycmdr.sh", "launch-tinycmdr.sh",
              "install/install-tinycmdr-macos.sh", "install/com.tinycmdr.agent.plist",
              "maintenance/restart-tinycmdr-macos.sh",
-             "tools/patch.py", "tools/process.py", "tools/README.md")
+             "tools/patch.py", "tools/process.py", "tools/toolsmith.py",
+             "tools/README.md")
 
 # --------------------------------------------------------------- public build ---
 # Skills that belong to ONE box and must not ride along in a fleet build. They document a

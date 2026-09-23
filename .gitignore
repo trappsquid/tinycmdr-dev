@@ -19,6 +19,7 @@ dist/
 tools/*
 !tools/patch.py
 !tools/process.py
+!tools/toolsmith.py
 !tools/README.md
 notes.md
 tasks.json
