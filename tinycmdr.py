@@ -22,6 +22,7 @@ One-shot task: python tinycmdr.py --once "why is plex crashing"
 import base64
 import datetime as _dt
 import hashlib
+import hmac
 import html
 import importlib.util
 import json
@@ -400,7 +401,9 @@ DEFAULT_CONFIG = {
         "confirm_patterns": [
             # Commands that need a 'yes' first. Matched case-insensitively (like
             # blocked_patterns, because PowerShell cmdlets are capitalised) against
-            # shell command text AND execute_code's source text.
+            # shell command text, execute_code's source text, and every write
+            # path's payload (write_file/edit_file content, create_tool code and
+            # manifest commands) through confirm_gate.
             #
             # The recursive deletes live HERE rather than in blocked_patterns: a
             # targeted build-directory cleanup is routine ops, and refusing it outright
@@ -1379,8 +1382,9 @@ def is_blocked(command):
 def _confirm_hit(text):
     """The first confirm_pattern `text` matches, or None.
 
-    One place for the confirm tier, read by tool_shell AND tool_execute_code, so the
-    two cannot drift apart on what needs a 'yes' (audit, 2026-09-22). Case-insensitive
+    One place for the confirm tier, read by tool_shell, tool_execute_code and
+    confirm_gate (every write path), so none of them can drift apart on what
+    needs a 'yes' (audit, 2026-09-22; write coverage 2026-09-23). Case-insensitive
     for the same reason is_blocked is: PowerShell cmdlets are capitalised.
     """
     for pat in CONFIG["agent"].get("confirm_patterns") or []:
@@ -3184,6 +3188,27 @@ def endpoint_gate(subject, why, confirm_cb):
     return None
 
 
+def confirm_gate(text, subject, ctx):
+    """The CONFIRM tier over text on its way to DISK or into a shell wrapper.
+
+    tool_write_file content, tool_edit_file's new_string, create_tool code and a
+    manifest tool's command walk through here (security review, 2026-09-23:
+    _confirm_hit and endpoint_gate had exactly two call sites, shell and
+    execute_code, and every write path carried a matching payload straight past
+    both - the fastest route for a steered model is a file, not a command).
+    Quotes the matching line for the ask, like tool_execute_code does. Returns
+    None to proceed, or the refusal text.
+    """
+    hit = _confirm_hit(text)
+    if not hit:
+        return None
+    lines = [l.strip() for l in str(text or "").splitlines() if l.strip()]
+    quoted = next((l for l in lines if re.search(hit, l, re.IGNORECASE)),
+                  lines[0] if lines else "(empty)")
+    return endpoint_gate("%s: %s" % (subject, quoted[:120]), hit,
+                         (ctx or {}).get("confirm_cb"))
+
+
 _PATH_LOCKS = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
@@ -3227,6 +3252,10 @@ def tool_edit_file(args, ctx):
     path = Path(args["path"]).expanduser()
     if not path.exists():
         return f"ERROR: {path} does not exist"
+    refusal = confirm_gate(args.get("new_string") or "",
+                           "edit_file %s" % path, ctx)
+    if refusal:
+        return refusal
     try:
         size = path.stat().st_size
         if size > 8 * 1024 * 1024:
@@ -3381,6 +3410,10 @@ def tool_read_file(args, ctx):
 @serialized_by_path
 def tool_write_file(args, ctx):
     path = Path(args["path"]).expanduser()
+    refusal = confirm_gate(args.get("content") or "",
+                           "write_file %s" % path, ctx)
+    if refusal:
+        return refusal
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if args.get("append"):
@@ -4394,6 +4427,10 @@ def tool_create_tool(args, ctx):
     if path.exists():
         return (f"ERROR: tools/{name}.py already exists. Read it with "
                 "read_file and rewrite it only if you're improving it.")
+    refusal = confirm_gate(args.get("code") or "",
+                           "create_tool %s" % name, ctx)
+    if refusal:
+        return refusal
     path.write_text(args["code"], encoding="utf-8")
     # Validate: can we import it and does it satisfy the contract?
     ok, err = REGISTRY.reload_tool(name)
@@ -5792,14 +5829,20 @@ def _load_manifest_tool(path):
              "cwd": str(spec.get("cwd") or path.parent)}
     return [(name, str(spec.get("description") or ""), params,
              (lambda args, ctx, _e=entry, _n=name: _run_manifest_tool(
-                 _n, _e, args, (ctx or {}).get("cancel_event"))),
+                 _n, _e, args, (ctx or {}).get("cancel_event"), ctx)),
              bool(spec.get("mutates")))]
 
 
-def _run_manifest_tool(name, entry, args, cancel=None):
+def _run_manifest_tool(name, entry, args, cancel=None, ctx=None):
     """One manifest call: args in on stdin (fed from a FILE, not a pipe - a
     grandchild holding a pipe is what froze a channel for 21 minutes, see
     run_capture), stdout out, exit_code= shaped like the shell tool's results."""
+    # a manifest command IS a shell string (sh -c / cmd /c), so it walks the
+    # same confirm tier as one (security review, 2026-09-23)
+    refusal = confirm_gate(" ".join(entry["command"]),
+                           "manifest tool %s" % name, ctx)
+    if refusal:
+        return refusal
     rc, out, err, timed_out = run_capture(
         entry["command"], entry["timeout"], cwd=entry["cwd"], cancel=cancel,
         stdin_text=json.dumps(args or {}))
@@ -5847,6 +5890,48 @@ class ToolRegistry:
             ok, err = self._load_path(path)
             if not ok:
                 log.warning("custom tool %s failed to load: %s", path.name, err)
+
+    def note_provenance(self):
+        """Announce any tools/ file that was not there at the last start.
+
+        Every tools/*.py and *.tool.json is exec'd at load as the bot user, so a
+        planted file runs at the next start (security review, 2026-09-23). The
+        record is written on the first RUN of a process - opening the build or a
+        refused start writes nothing (test_cli's rule) - and a file that appears
+        between starts announces itself at the moment it runs. First sight of a
+        record-less install bootstraps silently (the notes-authored.json
+        pattern), so existing tools are never mistaken for planted ones.
+        Deliberately no per-write bookkeeping: a create_tool call is flagged at
+        the next start too, which is honest noise rather than a second source of
+        truth. ponytail: names only, no hashes - hash the files if a plant ever
+        needs attribution.
+        """
+        global _PROVENANCE_DONE
+        if _PROVENANCE_DONE:
+            return
+        _PROVENANCE_DONE = True
+        files = sorted(p.name for p in self._tool_files())
+        record = self.tools_dir.parent / "tools-provenance.json"
+        known = None
+        if record.exists():
+            try:
+                known = {str(n) for n in
+                         (json.loads(record.read_text(encoding="utf-8"))
+                          .get("files") or [])}
+            except Exception:
+                known = set()
+        if known is not None:
+            for name in files:
+                if name not in known:
+                    log.warning("custom tool %s was NOT in tools/ at the last "
+                                "start - it runs now, as the bot user: review "
+                                "it (tools-provenance.json is the record)", name)
+        if files:
+            try:
+                record.write_text(json.dumps({"files": files}, indent=1),
+                                  encoding="utf-8")
+            except Exception:
+                pass
 
     def reload_tool(self, name):
         for cand in (self.tools_dir / f"{name}.py",
@@ -5915,6 +6000,9 @@ class ToolRegistry:
     def openai_schemas(self):
         """Every tool on this machine. The disclosure layer decides what is SENT."""
         return self.schemas_for(set(CORE_TOOLS) | set(self.custom))
+
+
+_PROVENANCE_DONE = False   # ToolRegistry.note_provenance() runs once per process
 
 
 REGISTRY = ToolRegistry(TOOLS_DIR)
@@ -6900,7 +6988,7 @@ How you work:
 - Answer the message you were actually given, using what you gathered. Never reply that a message is "noise", "nothing actionable", or a "truncated paste" — the operator knows what they sent, so that reads as a broken bot. If a message is genuinely ambiguous, quote it back and say what you tried. If you ran tools for a question, the answer must contain what they returned (names, values, pass/fail), not a summary of your own status.
 - Save durable machine facts (paths, container names, quirks) with remember — short, and replace stale facts instead of piling up contradictions.
 - Anything recurring ("check X every morning", "hourly") becomes a schedule job — it runs autonomously and reports back to the channel. Use search_sessions to recall how past issues were solved, and delegate_task to farm out self-contained subtasks in parallel.
-- Shell: each call is a fresh {shell_name}; use absolute paths. A coarse pattern filter blocks the obvious destructive commands (rm -rf /, mkfs, dd to a device, disk/partition wipes, shutdown, Windows Remove-Item -Recurse -Force and friends) but it is a SEATBELT, not a boundary — execute_code's source text is checked against the same patterns too, though code that assembles a command at runtime is invisible to it, so staying targeted and reversible is on you. Overwrite via write_file so backups happen automatically.
+- Shell: each call is a fresh {shell_name}; use absolute paths. A coarse pattern filter blocks the obvious destructive commands (rm -rf /, mkfs, dd to a device, disk/partition wipes, shutdown, Windows Remove-Item -Recurse -Force and friends) but it is a SEATBELT, not a boundary — execute_code's source text is checked against the same patterns too, though code that assembles a command at runtime is invisible to it, so staying targeted and reversible is on you. File content, tool code and manifest commands take the CONFIRM tier too - a match asks the operator before it lands. Overwrite via write_file so backups happen automatically.
 - Final report: terse and factual — root cause, what you changed, current state, follow-ups if any. No filler. Before you report something as fixed, verify it (read the change back, re-run the check, watch the restart happen) and say what you checked — a claim with no check is a guess.
 
 Machine: {facts}
@@ -7893,6 +7981,7 @@ class Agent:
         say_cb(text): a line posted to the operator from the harness itself (not the
         model), e.g. the notice that a run continued past its budget."""
         with self._lock(session_key), _RunSpan(session_key):
+            REGISTRY.note_provenance()  # once per process: tools/ provenance
             reset_scan_spend(session_key)   # a run starts with a fresh scan budget
             hist = self._history(session_key)
             hist.append({"role": "user", "content": user_text})
@@ -12744,6 +12833,12 @@ def web_inventory():
             "host": socket.gethostname(), "version": VERSION,
             "notes_kb": round((NOTES_FILE.stat().st_size / 1024)
                               if NOTES_FILE.exists() else 0, 1)}
+# One ceiling for the web lane's request bodies (security review, 2026-09-23):
+# the largest legitimate post is a long paste into /api/chat, and 1 MiB is
+# already several times the model's whole context window.
+WEB_BODY_MAX = 1048576
+
+
 def run_webui():
     """Start the local web UI (chat + live run view + /api/health) on a
     daemon thread.  No-op if disabled.  Returns the server so a caller that
@@ -12770,6 +12865,36 @@ def run_webui():
         # still covers the second or two after a restart while the old handler drains.
         allow_reuse_address = False
 
+        # One thread per connection with no ceiling means a LAN peer can stack
+        # threads up to the box's limit (security review, 2026-09-23). Count the
+        # live handlers and refuse past a modest cap; a refused connection never
+        # spawns a thread, and the counter drops when a handler thread ends.
+        MAX_CONN = 32
+        _conn_lock = threading.Lock()
+        _conn_live = 0
+
+        def process_request(self, request, client_address):
+            with self._conn_lock:
+                if self._conn_live >= self.MAX_CONN:
+                    log.info("web: refused a connection, %d already open",
+                             self._conn_live)
+                    request.close()
+                    return
+                self._conn_live += 1
+            try:
+                super().process_request(request, client_address)
+            except Exception:
+                with self._conn_lock:
+                    self._conn_live -= 1
+                raise
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                with self._conn_lock:
+                    self._conn_live -= 1
+
         def handle_error(self, request, client_address):
             err = sys.exc_info()[1]
             if isinstance(err, (ConnectionError, BrokenPipeError,
@@ -12786,6 +12911,11 @@ def run_webui():
     token = web.get("token", "")
 
     class Handler(BaseHTTPRequestHandler):
+        # a peer that sends a request line and never finishes the headers or the
+        # body is cut off by the socket timeout, so one silent client cannot
+        # hold a handler thread (security review, 2026-09-23)
+        timeout = 60
+
         def log_message(self, *a):
             pass
 
@@ -12805,8 +12935,15 @@ def run_webui():
             self._send(json.dumps(obj), code, "application/json")
 
         def _auth_ok(self):
-            return (not token
-                    or self.headers.get("X-Tinycmdr-Token") == token)
+            if not token:
+                return True
+            # compare_digest, not ==: this token is shell and code execution on
+            # this box, and a plain compare leaks its prefix through response
+            # timing (security review, 2026-09-23). Bytes on both sides so a
+            # header carrying non-ASCII can never raise here.
+            return hmac.compare_digest(
+                (self.headers.get("X-Tinycmdr-Token") or "").encode("utf-8", "replace"),
+                token.encode("utf-8"))
 
         # -- routing ------------------------------------------------------
 
@@ -12931,6 +13068,12 @@ def run_webui():
         def _body(self):
             try:
                 length = int(self.headers.get("Content-Length", 0))
+                if not 0 <= length <= WEB_BODY_MAX:
+                    # the claimed length is attacker-controlled and both paths
+                    # ran before the 401 (security review, 2026-09-23): a huge
+                    # claim allocates or blocks, and read(-n) runs to EOF.
+                    self.close_connection = True
+                    return None
                 return json.loads(self.rfile.read(length) or b"{}")
             except Exception:
                 return None
@@ -12944,6 +13087,9 @@ def run_webui():
             crashed rather than refused. Same for a 404 on a POST."""
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
+                if not 0 <= length <= WEB_BODY_MAX:
+                    self.close_connection = True
+                    return
                 if length > 0:
                     self.rfile.read(length)
             except Exception:

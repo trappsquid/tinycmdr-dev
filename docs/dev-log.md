@@ -1654,3 +1654,47 @@ the operator's call.
   created nothing" true, starter tools present in both package families. No version bump and no
   fleet push (1.0.0 stays unpublished per the operator's standing call); the package cut rides
   the release batch.
+
+## 2026-09-23: the security review's fixes, applied in the tree
+
+Source review of the whole build (report: hermes-tmp/tinycmdr-security-review-2026-09-23.md).
+Applied in this batch:
+
+- web body ceiling (WEB_BODY_MAX, 1 MiB) in _body/_drain with negative Content-Length refused;
+  both ran before the 401, so no token was needed to make the handler allocate or block.
+- hmac.compare_digest for the web token (a plain compare leaks the prefix through response
+  timing), bytes on both sides so a non-ASCII header cannot raise.
+- the CONFIRM tier now covers every write path through one call, confirm_gate(): write_file and
+  edit_file content, create_tool code and manifest tool commands (sh -c / cmd /c strings). The
+  blunt half of the write-side gap: the steered-model route is a tools/ file, not a command.
+  Behaviour change on hosts whose config carries confirm_patterns: those writes ASK now.
+- tools/ provenance: tools-provenance.json (names) is written on the first run of a process and
+  any tool file that appears between starts announces itself with a WARNING at load. Bootstrap
+  is silent (the notes-authored.json pattern) so existing tools are never flagged as planted.
+- web server: a 60s socket timeout and a 32-connection ceiling (ThreadingHTTPServer had neither).
+- installer links no longer carry ?token= (request line, browser history and proxy logs are leak
+  surfaces); the token is printed for paste and the page prompt already asks for it.
+- PROBE RUNS FOUND THREE MORE in install-tinycmdr.sh (all pre-existing, all fixed here): every
+  token-less AND both-tokens Linux install died at `VENV_PY: unbound variable` (the hint lines
+  print the venv path long before the venv step sets it - initialise where first READ); a web-only
+  install then died at `no Mattermost host` (the earlier fix covered the Telegram lane only - same
+  bug, sibling path, now gated on CHAT_LANE instead of the token kind); and the ready-link/token
+  lines sat in a summary that runs BEFORE the token is minted, so they printed empty at best and
+  never at all in practice (both sh installers - the print now lives where the token is made).
+  Probes: Windows happy path + FAIL path (tg token, no ids -> exit 1) on the manager box; Linux on the Linux test box
+  (tg lane, web-only, both-tokens, fail path) from the packed tarball, hash-checked, all removed
+  after (units uninstalled, /tmp trees deleted).
+- install-tinycmdr.ps1 locks the install dir and .env to the user, Administrators and SYSTEM
+  (icacls, SIDs not names). install-tinycmdr.sh's sudoers file drops the -hermes rename leftover
+  and an upgrade removes the old-name file when it holds the same line.
+- README: the web lane is plain HTTP and the token on the wire is the box - loopback, an SSH
+  tunnel or a TLS proxy.
+
+Policy calls made (say the word to flip): Linux keeps NOPASSWD ALL for the bot user (the agent
+administers the host; targeted sudoers would break its actual job) and --no-sudoers stays the
+opt-out. No TLS on the web lane: the tunnel rule and the runbook line cover it until the page
+is exposed beyond a trusted segment.
+
+Deferred: the safety-tier standardization pass over the five pre-split host configs (F6), which
+touches running fleet boxes and rides your word like any fleet change; the ReDoS guard on the
+operator's own patterns (F7, self-harm only, and the stdlib has no match timeout).

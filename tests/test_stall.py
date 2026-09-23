@@ -2072,6 +2072,33 @@ def test_the_safety_seatbelt_covers_execute_code_too():
           fb.tool_shell({"command": "mkfs.ext4 /dev/sda1"},
                         {"session_key": "belt-s"}).startswith("BLOCKED:"))
 
+    # The write paths take the CONFIRM tier too (security review 2026-09-23):
+    # the fastest route for a steered model is a file or a tool, not a command.
+    wp = TMP / "belt-write.txt"
+    out = fb.tool_write_file(
+        {"path": str(wp), "content": "step one\nRemove-Item -Recurse -Force C:\\Temp\n"},
+        {"session_key": "belt-s"})
+    check("write_file: a confirm-tier payload is declined before it lands",
+          out.startswith("DECLINED") and not wp.exists(), out[:160])
+    out = fb.tool_write_file({"path": str(wp), "content": "plain line\n"},
+                             {"session_key": "belt-s"})
+    check("write_file: ordinary content still writes",
+          wp.exists() and out.startswith("OK:"), out[:160])
+    out = fb.tool_edit_file(
+        {"path": str(wp), "old_string": "plain line",
+         "new_string": "rd /s /q C:\\Temp"},
+        {"session_key": "belt-s"})
+    check("edit_file: a confirm-tier new_string is declined",
+          out.startswith("DECLINED") and "plain line" in wp.read_text(
+              encoding="utf-8"), out[:160])
+    out = fb.tool_create_tool(
+        {"name": "belt_probe",
+         "code": "NAME = 'belt_probe'\n# Remove-Item -Recurse -Force boom\n"},
+        {"session_key": "belt-s"})
+    check("create_tool: confirm-tier code is declined before it is written",
+          out.startswith("DECLINED")
+          and not (fb.TOOLS_DIR / "belt_probe.py").exists(), out[:160])
+
 
 def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
     """Measured live on the Windows test box 2026-09-18: the model announced "fresh pass complete" five

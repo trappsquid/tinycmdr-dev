@@ -397,6 +397,39 @@ def main():
         check(fb.VERSION in html and "{{VERSION}}" not in html,
               "the served page carries the version that is actually running")
 
+        # -- the body cap (security review 2026-09-23): a claimed Content-Length
+        # is attacker-controlled and used to be read blindly before the 401.
+        import socket as _sock
+
+        def raw_post(content_length, body=b""):
+            s = _sock.create_connection(("127.0.0.1", port), timeout=10)
+            try:
+                s.sendall((f"POST /api/run HTTP/1.0\r\nHost: 127.0.0.1\r\n"
+                           f"X-Tinycmdr-Token: {TOKEN}\r\n"
+                           f"Content-Length: {content_length}\r\n\r\n").encode()
+                          + body)
+                chunks = []
+                try:
+                    while True:
+                        c = s.recv(4096)
+                        if not c:
+                            break
+                        chunks.append(c)
+                except OSError:
+                    pass
+                return b"".join(chunks)
+            finally:
+                s.close()
+
+        out = raw_post(50 * 1024 * 1024)
+        head = out.split(b"\r\n", 1)[0]
+        check(b" 400 " in head,
+              f"an oversized claimed body is refused, not read ({head!r})")
+        out = raw_post(-5)
+        head = out.split(b"\r\n", 1)[0]
+        check(b" 400 " in head,
+              f"a negative Content-Length is refused, not read to EOF ({head!r})")
+
         # -- a real run, followed the way the browser follows it --------------
         seen = []
         ev = {"first": threading.Event(), "go1": threading.Event(),

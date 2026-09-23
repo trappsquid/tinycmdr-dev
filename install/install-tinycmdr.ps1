@@ -685,12 +685,12 @@ $webToken = if ($EnableWeb) {
     if ($script:WebTokenChoice) { $script:WebTokenChoice }   # the user's own, or the suggestion
     else { -join (1..48 | ForEach-Object { "{0:x}" -f (Get-Random -Maximum 16) }) }
 } else { "" }
-# The link handed over at the end carries the token, and the page reads it back out of the
-# query string. People type their own token here and it can hold & # + % or a space - all of
-# which mean something else in a URL, so a raw paste hands over the WRONG token and the page
-# answers 401 at somebody who was told there was nothing to type. Escape it once, here.
+# The link no longer carries the token (security review 2026-09-23): a token in
+# the query string lands in the request line, browser history and any proxy log,
+# and this token is shell and code execution on this box. The page prompts for
+# it, and the summary prints the token for paste.
 $webLink = if ($EnableWeb) {
-    "http://127.0.0.1:$WebPort/?token=" + [uri]::EscapeDataString($webToken)
+    "http://127.0.0.1:$WebPort"
 } else { "" }
 
 $cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
@@ -883,9 +883,8 @@ if ($EnableWeb) {
         Say "note    : removed web-token.txt - the page token lives in .env now"
     }
     Say "web page: http://127.0.0.1:$WebPort"
-    Say "          token: TINYCMDR_WEB_TOKEN in $envPath"
-    Say "          ready link (already carries the token, nothing to type):"
-    Say "          $webLink"
+    Say "          page token: $webToken   (paste it when the page asks)"
+    Say "          also in .env: TINYCMDR_WEB_TOKEN"
 } else {
     Say "web page: off - local checks need no port:  tinycmdr.py --once ""<task>"""
 }
@@ -923,6 +922,21 @@ cd /d "$InstallDir"
 "@
 Set-Content (Join-Path $InstallDir "launch_tinycmdr.bat") $bat -Encoding ASCII
 Say "wrote   : tinycmdr-service.vbs, launch_tinycmdr.bat"
+
+# Secrets lockdown (security review 2026-09-23): .env holds the bot token, the
+# web token and provider keys, and the folder holds sessions and notes. Without
+# this they sit at the inherited folder ACL - readable by anything running as
+# this user or as an admin. Keep the install to this user, Administrators and
+# SYSTEM (the scheduled task runs as this same user). SIDs, not names:
+# BUILTIN\Administrators is localized on non-English Windows.
+try {
+    icacls $InstallDir /inheritance:r /grant:r `
+        "$($env:USERNAME):(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" `
+        | Out-Null
+    Say "acl     : $InstallDir locked to $env:USERNAME, Administrators, SYSTEM"
+} catch {
+    Say "NOTE    : could not tighten the ACL on $InstallDir ($($_.Exception.Message))"
+}
 
 # ------------------------------------------------------------ 7. scheduled task
 if (-not $SkipTask -and -not $RegisterTask) {
@@ -1052,9 +1066,8 @@ Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
     if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
     if ($WantWeb) {
-        Say "the page: http://127.0.0.1:$WebPort"
-        Say "  the link below already carries the token, so there is nothing to type:"
-        Say "  $webLink"
+        Say "the page: $webLink"
+        Say "  it asks for its token on first open - paste the 'page token' line above"
         if (Ask-Yes "Open it now?" $true) {
             Start-Process $webLink | Out-Null
         }
@@ -1076,9 +1089,8 @@ if ($Ask) {
     }
 }
 if ($EnableWeb) {
-    Say "web page : http://127.0.0.1:$WebPort"
-    Say "  the link to use (token included): $webLink"
-    Say "  token also in .env (TINYCMDR_WEB_TOKEN)"
+    Say "web page : $webLink   (it asks for its token on first open)"
+    Say "  token: the 'page token' line printed above, and TINYCMDR_WEB_TOKEN in .env"
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr-cli.py)"
 Say "redo   : install-tinycmdr.cmd -Force"

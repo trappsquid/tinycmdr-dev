@@ -345,6 +345,55 @@ def test_fetch_url_takes_one_or_five():
         fb.requests = real
 
 
+def test_manifest_commands_walk_the_confirm_tier():
+    # security review 2026-09-23: a manifest command IS a sh -c / cmd /c string
+    d = tool_files_dir("beltcmd")
+    man = d / "belt_cmd.tool.json"
+    man.write_text(json.dumps({
+        "name": "belt_cmd",
+        "description": "probe for the confirm tier",
+        "schema": {"type": "object", "properties": {}},
+        "command": "Remove-Item -Recurse -Force C:\\Temp"}), encoding="utf-8")
+    defs = fb.load_tool_defs(man)
+    out = defs[0][3]({}, {"session_key": "dropin"})
+    check("manifest: a confirm-tier command is declined before it runs",
+          out.startswith("DECLINED"), out[:160])
+
+
+def test_a_tools_file_not_seen_at_the_last_start_announces_itself():
+    import logging as _logging
+    d = tool_files_dir("prov")
+
+    def _tool(who):
+        return ("NAME = '%s'\nDESCRIPTION = 'probe'\n"
+                "SCHEMA = {'type': 'object', 'properties': {}}\n"
+                "def run(args, ctx=None):\n    return 'ok'\n" % who)
+
+    (d / "old_hand.py").write_text(_tool("old_hand"), encoding="utf-8")
+    reg = fb.ToolRegistry(d)
+    rec = d.parent / "tools-provenance.json"
+    seen = []
+    handler = _logging.Handler()
+    handler.emit = lambda r: seen.append(r.getMessage())
+    fb.log.addHandler(handler)
+    try:
+        fb._PROVENANCE_DONE = False
+        reg.note_provenance()
+        check("provenance: a record-less install bootstraps silently",
+              rec.exists() and not seen, seen)
+        (d / "later.py").write_text(_tool("later"), encoding="utf-8")
+        seen.clear()
+        fb._PROVENANCE_DONE = False
+        reg.note_provenance()
+        check("provenance: a file that appeared between starts announces itself",
+              any("later.py" in m for m in seen), seen)
+        check("provenance: ...and both names are in the record",
+              sorted(json.loads(rec.read_text(encoding="utf-8"))["files"])
+              == ["later.py", "old_hand.py"], rec.read_text(encoding="utf-8"))
+    finally:
+        fb.log.removeHandler(handler)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

@@ -443,11 +443,7 @@ elif [ -z "$TOKEN" ]; then
     info "no Mattermost bot token: installing WITHOUT a chat account"
     info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
     info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr-cli.py"
-    if [ -n "$WEB_TOKEN" ]; then
-        info "the page needs its token:           in .env as TINYCMDR_WEB_TOKEN"
-        info "ready link (carries it, nothing to type):"
-        info "  http://127.0.0.1:$WEB_PORT/?token=$WEB_TOKEN"
-    fi
+    info "the page will ask for its token (printed below, and in .env)"
     info "add a chat account later: re-run with --token-file <file>"
 fi
 # ---------------------------------------------------------------- config ---
@@ -472,6 +468,13 @@ fi
 WEB_TOKEN=""
 if [ "$WEB_ON" = "1" ]; then
     WEB_TOKEN="$("$VPY" -c 'import secrets;print(secrets.token_hex(24))')"
+    # no ?token= link (security review 2026-09-23): the token in a URL lands in
+    # the request line, browser history and any proxy log, and it is shell and
+    # code execution on this box. The page prompts for it; print it for paste.
+    # Here and not in the earlier summary: that block runs before this mints the
+    # token, so its old ready-link line never printed at all (probe, 2026-09-23).
+    info "page token   : $WEB_TOKEN   (paste it when the page asks)"
+    info "               (also in .env: TINYCMDR_WEB_TOKEN)"
 fi
 
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \

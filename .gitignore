@@ -54,5 +54,7 @@ skills/
 !.env.example
 web-token.txt.*
 web-sessions.json
+# the tools/ provenance record written at run start (ToolRegistry.note_provenance)
+tools-provenance.json
 a.txt
 lines.txt*

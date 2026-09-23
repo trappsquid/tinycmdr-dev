@@ -336,6 +336,12 @@ process, which is the quickest way to try the whole thing: no server, no bot acc
 Pass `-EnableWeb` to the installer if you want the page served alongside the chat bot, which
 writes a token into `.env` (`TINYCMDR_WEB_TOKEN`) and binds loopback only.
 
+**The web lane is plain HTTP.** The `X-Tinycmdr-Token` header is shell and code execution on
+that box, so anything that can see the traffic can take it. The installer prints the token for
+paste and it never rides in a link (a URL lands in browser history and proxy logs). Keep the
+page on loopback, or reach it over an SSH tunnel or a TLS reverse proxy - never across a
+segment you do not trust.
+
 ## Uninstall
 
 ```powershell

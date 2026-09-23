@@ -224,6 +224,11 @@ fi
 if [ -n "$TG_IDS" ] && [ -z "$TG_IDS_CLEAN" ]; then
     die "--telegram-ids needs numeric ids (message @userinfobot for yours): got '$TG_IDS'"
 fi
+# The venv python path, known before the venv exists: the hint lines below print it
+# and set -u kills an unset expansion (measured 2026-09-23: every token-less and
+# both-tokens install died here). Set once here, reused where the venv is made.
+VENV_PY="$INSTALL_DIR/venv/bin/python"
+
 # A chat account is OPTIONAL. The harness also runs as a session (--cli) and as a local page
 # (--web, 127.0.0.1:8787). With no token there is no chat lane, so the service runs the PAGE:
 # running the chat lane here would exit at once (tinycmdr.py refuses to start without a token,
@@ -263,11 +268,12 @@ if [ -z "$MM_PORT" ]; then MM_PORT=443; fi
 if [ -z "$MM_HOST" ]; then MM_HOST="$MM_URL_ARG"; fi
 if [ -z "$MM_HOST" ]; then MM_HOST="$(cfgval mattermost.url)"; fi
 if [ -z "$MM_HOST" ]; then
-    if [ -n "$TG_TOKEN" ]; then
-        # Telegram-only: that lane never reads mattermost.url, so demanding a host here
-        # would block a good install. Set it later if a chat account is ever added.
+    if [ "$CHAT_LANE" = 0 ]; then
+        # No lane here reads mattermost.url (Telegram-only or the local page), so
+        # demanding a host would block a good install. The first fix covered the
+        # Telegram lane only and the token-less path still died (probe, 2026-09-23).
         MM_HOST="CHANGE-ME.example.com"
-        info "no Mattermost host: not needed for a Telegram-only install"
+        info "no Mattermost host: not needed without a Mattermost account"
     else
         die "no Mattermost host.
 Pass --mattermost-url <host> (no scheme), or put mattermost_url in
@@ -291,10 +297,6 @@ fi
 info "bot name     : ${BOT_NAME}"
 if [ "$WEB_ON" = 1 ]; then
     info "web fallback : http://127.0.0.1:${WEB_PORT}"
-    if [ -n "$WEB_TOKEN" ]; then
-        info "ready link   : http://127.0.0.1:${WEB_PORT}/?token=${WEB_TOKEN}"
-        info "               (token in .env: TINYCMDR_WEB_TOKEN, nothing to type)"
-    fi
 else
     info "web fallback : disabled"
 fi
@@ -384,6 +386,13 @@ say "config.json"
 WEB_TOKEN=""
 if [ "$WEB_ON" = "1" ]; then
     WEB_TOKEN="$("$PY" -c 'import secrets;print(secrets.token_hex(24))')"
+    # no ?token= link (security review 2026-09-23): the token in a URL lands in
+    # the request line, browser history and any proxy log, and it is shell and
+    # code execution on this box. The page prompts for it; print it for paste.
+    # Here and not in the earlier summary: that block runs before this mints the
+    # token, so its old ready-link line never printed at all (probe, 2026-09-23).
+    info "page token   : ${WEB_TOKEN}   (paste it when the page asks)"
+    info "               (also in .env: TINYCMDR_WEB_TOKEN)"
 fi
 "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$WEB_PORT" "$WEB_ON" "$FORCE" \
@@ -516,8 +525,14 @@ if [ "$VERIFY_ONLY" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "$NO_SUDOERS" = 0 ]; then
     if [ "$(id -u)" != 0 ]; then
         info "not root: leaving sudo alone (re-run under sudo to grant passwordless sudo)"
     else
-        SUDOERS_FILE="/etc/sudoers.d/${RUN_USER}-hermes"
         SUDOERS_LINE="${RUN_USER} ALL=(ALL) NOPASSWD: ALL"
+        SUDOERS_FILE="/etc/sudoers.d/${RUN_USER}-tinycmdr"
+        # rename leftover: an upgrade left the same grant under the pre-tinycmdr
+        # file name - remove it rather than keep two files for one policy
+        OLD_SUDOERS_FILE="/etc/sudoers.d/${RUN_USER}-hermes"
+        if [ -f "$OLD_SUDOERS_FILE" ] && grep -qxF "$SUDOERS_LINE" "$OLD_SUDOERS_FILE" 2>/dev/null; then
+            rm -f "$OLD_SUDOERS_FILE"
+        fi
         if [ -f "$SUDOERS_FILE" ] && grep -qxF "$SUDOERS_LINE" "$SUDOERS_FILE" 2>/dev/null; then
             info "passwordless sudo already configured: $SUDOERS_FILE"
         else
