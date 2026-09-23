@@ -1745,3 +1745,42 @@ The incident (owned, measured):
 Status: 36 suites + test_cli 170 + console grade + both packagers green. No version bump and no
 fleet push: four hosts keep the fleet build; .13 and the manager box run the tree. The Mac sleeps - its
 config read-back is the one verification still open.
+
+## 2026-09-23 - prompt batch N1-N3, from the Opus 5.5 leak audit
+
+Audited the leaked Claude Opus 5.5 system prompt (elder-plinius/CL4R1T4S,
+`ANTHROPIC/CLAUDE-OPUS-5.5.md`; extract at `~/hermes-tmp/opus55/`, and the part worth reading is
+its `<agentic_behavior>` block, lines 215-396 of the main prompt) against our own. Full report,
+including the reject list: `~/hermes-tmp/tinycmdr-opus55-prompt-audit.md`. Three lines landed; the
+rest is cloud-product surface (artifacts, connectors, browsers, device bridge, memory-file
+taxonomy) or contradicts a deliberate choice here - its "keep narration to a minimum, the widget
+already shows progress" cannot apply, because this chat lane has no widget and the one-line
+narration IS the progress surface.
+
+- Measured basis, the Windows test box's own `tinycmdr.log` (225 logged tool calls, 2026-09-22/23): 102
+  shell calls, 67 of them file-grep/list/read work (Select-String, Get-ChildItem -Recurse,
+  Get-Content) returning 81,827 chars, while `search_files` was called ZERO times; 62 `read_file`
+  calls returned 270,703 chars and 27 of them (43%) re-read the bot's OWN source.
+- Landed in `build_system_prompt()`: "File work goes through the harness tools, not the shell:
+  read_file (it lists directories too), search_files (call it by name), edit_file. Shell is for
+  what they cannot do - services, processes, OS state, one-off commands." and "Checking the work
+  is the last ledger item: re-run the command, re-read the change, open the page. For anything
+  high-stakes, hand the check to delegate_task so the work is not grading itself."
+- Landed in `soul.md` (and `DEFAULT_SOUL`, still byte-identical modulo the line ending): the
+  cutoff bullet now ends "Being sure from memory is not evidence: look it up however familiar it
+  feels." The model's own confidence was the one gap left in that rule.
+- Cost, measured after the edit: static prompt 17,584 -> 18,081 chars (+497, +2.8%); the console
+  build's own prompt 18,380. Both ride the cached prefix (the volatile block trails the payload),
+  so this is one prefill per session, not a per-call cost. The skills index is 8,449 chars of
+  that 18,081 (108 skills) and 20x this batch: headroom, if it is ever wanted, comes from there.
+  The always-on schema gate sits at 8,518/8,900, so nothing in this batch may become an always-on
+  tool - promoting `search_files` (516 chars) was rejected in favour of naming it in the prompt.
+- Audited, NOT integrated (available on the operator's word): delegation economics ("keep the
+  conclusion, not the dumps"; do not re-run a search you delegated), a sources line for
+  web-derived claims, "a work order that contradicts what the box shows is not clear yet", and an
+  explicit order of authority. ~592 chars together.
+
+Status: 36 suites + 8 console-build specs green after the change (test_cli 170, test_ledger 238
+bot / 201 console, test_stall 252, test_newlines both builds). CLI regenerated from the source
+build and committed; no version bump and no fleet push - a prompt batch rides the release, and
+the operator takes fleet updates on his word, not per change.
