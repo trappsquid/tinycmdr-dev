@@ -51,10 +51,6 @@ SKILLS_NOTE = (
     "The agent lists them with /skills and reads the relevant one before it starts\n"
     "working in that area. This folder is empty on purpose: your own runbooks are\n"
     "the useful ones.\n")
-TOOLS_NOTE = (
-    "The agent writes its own tools here (one .py per tool, see the create_tool\n"
-    "tool). You can also drop your own in: any .py that defines a TOOL dict and a\n"
-    "run(args, ctx) function is loaded at startup.\n")
 
 # --- the atlas: shipped, never generated ---------------------------------------
 # The fleet builds generate atlas.md ON each host, because one folder gets copied to six
@@ -218,7 +214,12 @@ def build_folder(root: Path, platform: str):
     (root / "skills").mkdir(exist_ok=True)
     (root / "skills" / "PUT-YOUR-RUNBOOKS-HERE.txt").write_text(SKILLS_NOTE, encoding="utf-8")
     (root / "tools").mkdir(exist_ok=True)
-    (root / "tools" / "HOW-TOOLS-WORK.txt").write_text(TOOLS_NOTE, encoding="utf-8")
+    # The starter drop-in tools ride the console package too: this build has
+    # the same loader and create_tool, and tools/README.md is the shapes doc
+    # (it replaces the HOW-TOOLS-WORK note, which described a shape the
+    # loader never had).
+    for _starter in ("patch.py", "process.py", "README.md"):
+        shutil.copy2(BASE / "tools" / _starter, root / "tools" / _starter)
 
 
 def gate(root: Path, host_vals):

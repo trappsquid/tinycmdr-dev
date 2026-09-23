@@ -368,6 +368,12 @@ if [ -d "$SRC/skills" ]; then
     n=$(find "$INSTALL_DIR/skills" -name SKILL.md | wc -l | tr -d ' ')
     info "skills: $n"
 fi
+# the starter drop-in tools (package bytes win; the operator's own tool
+# files in this folder are not named by the package and are left alone)
+if [ -d "$SRC/tools" ]; then
+    mkdir -p "$INSTALL_DIR/tools"
+    cp -f "$SRC/tools/"* "$INSTALL_DIR/tools/" 2>/dev/null || true
+fi
 mkdir -p "$INSTALL_DIR/maintenance"
 for f in restart-tinycmdr-macos.sh restart-tinycmdr.sh; do
     [ -f "$SRC/maintenance/$f" ] && cp -f "$SRC/maintenance/$f" "$INSTALL_DIR/maintenance/$f"

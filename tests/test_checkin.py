@@ -32,6 +32,13 @@ TMP = Path(tempfile.mkdtemp(prefix="fbcheckin-"))
 # Clean the scratch dir on exit: running the suites on a fresh host
 # should not leave a directory behind for every run.
 atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
+if not hasattr(fb, "ProgressReporter"):
+    # The chat lane's reporter factory is cut from the console build on
+    # purpose (one reporter, lane destinations); there is nothing here for
+    # that build to grade. Declared skip, not a green lie.
+    print("skip: this suite grades the chat lane (ProgressReporter); "
+          "this build has none - run it against tinycmdr.py")
+    sys.exit(0)
 PRISTINE = copy.deepcopy(fb.CONFIG)
 FAILURES = []
 PASSES = []
@@ -217,8 +224,10 @@ def test_tool_line_single_call():
     check("one tool call -> one new message", len(d.posts) == 1 and not d.edits,
           (d.posts, d.edits))
     body = d.posts[0][2]
-    check("line names the tool and the command", "`shell`" in body
-          and "Get-PSDrive C" in body, body)
+    check("line names the tool and the result's first line",
+          "`shell`" in body and "free" in body, body)
+    check("the result card previews the output, not the command",
+          "Get-PSDrive C" not in body, body)
     check("line shows the duration", "0.4s" in body, body)
     check("exit 0 is not shouted about", "exit" not in body, body)
 
@@ -238,15 +247,26 @@ def test_tool_line_shows_why_a_call_failed():
                   "exit_code=1\ncat: /etc/shadow: Permission denied", 1.2)
     body = d.posts[0][2]
     check("a failure shows its reason", "Permission denied" in body, body)
+    check("the reason is shown once (preview == reason, not both)",
+          body.count("Permission denied") == 1, body)
     check("the exit code stays", "[exit 1]" in body, body)
 
 
-def test_tool_line_stays_quiet_on_success():
+def test_tool_result_previews_the_output():
+    """The operator's call (2026-09-22): the result card shows the first
+    line of the OUTPUT - the call card and the check-in already show the
+    command, so echoing it here repeated it and hid the one line that says
+    how the call went."""
     d, rep = reporter()
     rep.tool_done("shell", {"command": "ls"}, "exit_code=0\nlots of good output", 0.3)
     body = d.posts[0][2]
-    check("a successful call shows no output", "good output" not in body, body)
+    check("a successful call previews its first output line",
+          "good output" in body, body)
     check("a successful call gets no reason", " — " not in body, body)
+    d, rep = reporter()
+    rep.tool_done("shell", {"command": "ls"}, "exit_code=0", 0.3)
+    check("a result with no line falls back to the command",
+          "ls" in d.posts[0][2], d.posts[0][2])
 
 
 def test_the_failure_reason_is_one_clean_line():

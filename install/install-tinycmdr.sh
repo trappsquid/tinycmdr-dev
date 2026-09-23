@@ -322,14 +322,16 @@ mkdir -p "$INSTALL_DIR"
 # folder it sits in), and the doors are mediums rather than separate installs.
 for item in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt README.md \
             config.example.json .env.example field-notes.md soul.md \
-            skills install maintenance; do
+            skills tools install maintenance; do
     if [ -e "$SRC/$item" ]; then
         cp -a "$SRC/$item" "$INSTALL_DIR/"
     fi
 done
 if [ -n "$keep" ]; then
     for f in "$keep"/*; do
-        if [ -e "$f" ]; then cp -a "$f" "$INSTALL_DIR/"; fi
+        # -n: a kept file must not clobber what the copy just installed -
+        # that is how an old starter tool would survive an upgrade.
+        if [ -e "$f" ]; then cp -an "$f" "$INSTALL_DIR/"; fi
     done
     rm -rf "$keep"
 fi

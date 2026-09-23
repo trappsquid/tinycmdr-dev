@@ -1615,3 +1615,42 @@ by config) and its 17 blocked_patterns against the fleet's 21; the other Windows
 beyond the fleet-wide pair. Leftovers needing a reboot: the handle-held empty tinycmdr dirs on
 the manager box, the other Windows box and the Windows test box. Z:\VPS Admin still holds the pre-rename 1.0.0 set: restaging it is
 the operator's call.
+
+- [2026-09-23 00:15] DROP-IN TOOL LOADER (THREE SHAPES), STARTER TOOLS, RESULT CARDS. tools/ now
+  loads three file shapes, detected per file, and load_tool_defs() is the ONLY reader: ToolRegistry
+  loads through it, create_tool verifies through it, and the write verifier's probe subprocess now
+  calls the app's probe_tool() instead of re-implementing the contract (the old probe hard-coded the
+  four native attrs and would have rejected every ported file). Shapes: native
+  (NAME/DESCRIPTION/SCHEMA/run), register()-shape (registry.register(...) at import - the shape
+  agent tool libraries use, several tools per file), manifest (<name>.tool.json wrapping any script
+  in any language: the call's args as one JSON object on stdin, stdout is the result, exit_code=
+  shaped like the shell tool's results). The naming contract is a TEST PIN (test_verify) and lives
+  at loader level now: in the native shape NAME is the file name, a manifest's name is its file
+  name, and register()-shape files keep their own names (that is the port case). Starter tools
+  ship as source (a .gitignore carve-out tracks exactly three files out of tools/):
+  tools/patch.py (fuzzy anchors - exact/case/whitespace/blank-line modes, unified diff back, a
+  byte-identical .bak, newline-preserving atomic write) and tools/process.py (background
+  start/status/wait/output/kill with a job table at logs/process-jobs.json that survives a
+  restart); fetch_url took multi-URL (up to five per call, per-page cap, same bounded streamed
+  read) and its helpers deliberately sit inside the console build's cut region. tools/README.md
+  documents all three shapes and the create_tool format (it replaces the console package's
+  HOW-TOOLS-WORK note, which described a shape the loader never had). Packaging lockstep: SHIP,
+  APP_FILES, all three installer copy lists, build-cli-package's folder; the Linux installer's
+  keep-restore is cp -an now (an old starter tool would otherwise clobber the upgraded one); the
+  leak gate's tools/ ban carries a carve-out for exactly the SHIP-listed files. Result cards
+  (operator's call): the preview is the first line of the OUTPUT with fallback to args, and the
+  reason is not repeated when it IS the preview. Also: one host name out of a shipped comment (the
+  public gate refused on it - pre-existing from the last batch), tool imports write no
+  __pycache__ and the load line is debug, so "opening the build creates nothing" holds with
+  shipped starters. Traps paid for: cmd /c quoting mangles a quoted exe path with spaces (process
+  strings run via shell=True, argv lists verbatim); a child's stdout to a file is block-buffered
+  (process's start note says python needs -u); and my own splice fragments mixed 
+ with \n once
+  and broke a test literal. Gates: tests/test_dropin_tools.py 45 checks bot / 40 console
+  (fetch_url is cut there by design), test_checkin 120, test_verify + disclosure + newlines +
+  test_cli 170 on the generated build, and the full sweep twice: 36 suites rc=0 both times. All
+  seven package shapes PROBED from a throwaway tree copy (repo dist/ untouched, so 1.0.0's
+  canonical bytes stay put): public/macos/fleet gates clean, console clean-unpack "opening it
+  created nothing" true, starter tools present in both package families. No version bump and no
+  fleet push (1.0.0 stays unpublished per the operator's standing call); the package cut rides
+  the release batch.

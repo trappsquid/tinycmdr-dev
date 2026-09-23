@@ -14,7 +14,12 @@ web-token.txt
 .env
 __pycache__/
 dist/
-tools/
+# tools/ is per-host tool payload - with ONE exception: the starter tools
+# are shipped source (they ride every package), so they are tracked.
+tools/*
+!tools/patch.py
+!tools/process.py
+!tools/README.md
 notes.md
 tasks.json
 atlas.md

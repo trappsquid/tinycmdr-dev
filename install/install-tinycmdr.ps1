@@ -642,7 +642,8 @@ if ($Force) {
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr-cli.py", "tinycmdr.cmd", "requirements.txt", "config.example.json",
-          ".env.example", "README.md", "field-notes.md", "soul.md", "skills")
+          ".env.example", "README.md", "field-notes.md", "soul.md", "skills",
+          "tools")   # the starter drop-in tools; tools/README.md has the shapes
 foreach ($item in $copy) {
     $src = Join-Path $Source $item
     if (Test-Path $src) { Copy-Item $src -Destination $InstallDir -Recurse -Force }

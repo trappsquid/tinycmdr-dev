@@ -2141,19 +2141,15 @@ def _verify_shell(path, text):
 
 _TOOL_PROBE = (
     "import importlib.util, json, sys\n"
-    "path = sys.argv[1]\n"
+    "app, path = sys.argv[1], sys.argv[2]\n"
     "try:\n"
-    "    spec = importlib.util.spec_from_file_location('tinycmdr_custom_probe', path)\n"
+    "    spec = importlib.util.spec_from_file_location('tinycmdr_probe', app)\n"
     "    mod = importlib.util.module_from_spec(spec)\n"
     "    spec.loader.exec_module(mod)\n"
-    "    missing = [a for a in ('NAME', 'DESCRIPTION', 'SCHEMA', 'run') if not hasattr(mod, a)]\n"
-    "    if missing:\n"
-    "        v = {'ok': False, 'why': 'the loader rejects it: missing required attribute ' + repr(missing[0])}\n"
-    "    else:\n"
-    "        v = {'ok': True, 'name': mod.NAME, 'desc': bool(mod.DESCRIPTION),\n"
-    "             'schema': isinstance(mod.SCHEMA, dict)}\n"
-    "except Exception as e:\n"
-    "    v = {'ok': False, 'why': 'the loader rejects it: ' + type(e).__name__ + ': ' + str(e)[:200]}\n"
+    "except BaseException as e:\n"
+    "    v = {'skip': type(e).__name__ + ': ' + str(e)[:120]}\n"
+    "else:\n"
+    "    v = mod.probe_tool(path)\n"
     "sys.stdout.write('__VERDICT__' + json.dumps(v))\n"
 )
 
@@ -2169,7 +2165,8 @@ def _exercise_tool_load(path):
     """
     try:
         _rc, out, err, timed_out = run_capture(
-            [sys.executable, "-c", _TOOL_PROBE, str(path)], _TOOL_PROBE_TIMEOUT)
+            [sys.executable, "-c", _TOOL_PROBE, str(Path(__file__).resolve()),
+             str(path)], _TOOL_PROBE_TIMEOUT)
     except Exception as e:
         return None, f"could not run the loader probe: {e}"
     if timed_out:
@@ -2183,17 +2180,22 @@ def _exercise_tool_load(path):
         v = json.loads(blob.split(_TOOL_PROBE_MARKER, 1)[1].strip())
     except Exception:
         return None, "the loader probe produced an unreadable verdict"
+    if v.get("skip"):
+        return None, f"the loader probe could not judge it ({v['skip']})"
     if not v.get("ok"):
         return False, str(v.get("why") or "the loader rejects it")
-    name = v.get("name")
-    if name != path.stem:
-        return False, (f"the loader registers it as {name!r}, so a call to "
-                       f"{path.stem!r} (the file name) finds nothing")
+    names = v.get("names") or []
     if not v.get("desc"):
         return False, "DESCRIPTION is empty, so the model has nothing to go on"
     if not v.get("schema"):
-        return False, 'SCHEMA is not a JSON object'
-    return True, f"tool loads as {name!r} with a usable schema"
+        return False, "the tool has no JSON-schema object of its arguments"
+    note = ""
+    if len(names) == 1 and names[0] != path.stem:
+        # Not an error: a ported file legitimately names its tool whatever its
+        # harness called it. Say so, because calls go to the NAME, not the file.
+        note = f" (the file is {path.name}; calls go to {names[0]!r})"
+    return True, ("tool loads as %s with a usable schema%s"
+                  % (", ".join(repr(n) for n in names), note))
 
 
 def _config_startup_problems(data):
@@ -2601,8 +2603,11 @@ def _launch_warning(command, cap_mb=None):
             f"joins my cgroup — capped at {cap / 1024:.0f} GiB — and a model load there "
             f"kills me, not just the server. Start it in its own unit instead: "
             f"`sudo systemd-run --unit=<name> --collect <cmd>`.]")
-def run_capture(argv, timeout, cwd=None, cancel=None):
+def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     """Run argv, capture output, and never block past the timeout.
+    stdin_text (when given) arrives on the child's stdin from a TEMP FILE, not
+    a pipe: a grandchild that outlives the kill holds a pipe open for ever,
+    which is the reason this function is not plain subprocess.run.
 
     Returns (returncode, stdout, stderr, timed_out). Raises OperatorStop (the BaseException
     above, so a `except Exception` on the way out cannot swallow a stop) when `cancel` — the
@@ -2634,15 +2639,22 @@ def run_capture(argv, timeout, cwd=None, cancel=None):
     timeout_hit = False
     rc = None
     keep_out = keep_err = False
+    in_path = None
+    fin = None
     try:
         if cancel is not None and cancel.is_set():
             # A stopped run must not START new work either: the tool batch may still be
             # handing out calls, and each one would otherwise run to completion before
             # the run notices the stop at its next boundary.
             raise OperatorStop(" ".join(str(a) for a in argv[:3]))
+        if stdin_text is not None:
+            in_path = run_dir / f"{stem}.in"
+            in_path.write_bytes(str(stdin_text).encode("utf-8", "replace"))
+            fin = open(in_path, "rb")
         with open(out_path, "wb") as fout, open(err_path, "wb") as ferr:
             proc = subprocess.Popen(argv, stdout=fout, stderr=ferr,
-                                    stdin=subprocess.DEVNULL,
+                                    stdin=fin if fin is not None
+                                    else subprocess.DEVNULL,
                                     cwd=str(cwd or BASE_DIR), **kwargs)
             deadline = time.time() + timeout
             stopped = False
@@ -2677,6 +2689,12 @@ def run_capture(argv, timeout, cwd=None, cancel=None):
                      out_path if keep_out else err_path)
         return (rc, stdout, stderr, timeout_hit)
     finally:
+        if fin is not None:
+            try:
+                fin.close()
+                in_path.unlink()
+            except OSError:
+                pass
         for p, keep in ((out_path, keep_out), (err_path, keep_err)):
             if keep:
                 continue         # the model was told where it is; pruned after a day
@@ -3444,7 +3462,14 @@ def tool_web_search(args, ctx):
 
 
 def tool_fetch_url(args, ctx):
-    url = args["url"]
+    """One or more pages, each bounded. url takes a single address or a JSON
+    array of up to FIVE: reading three sources is one call and one result, not
+    three of each (2026-09-22)."""
+    raw = args["url"]
+    urls = raw if isinstance(raw, list) else [raw]
+    urls = [str(u).strip() for u in urls if str(u).strip()][:5]
+    if not urls:
+        return "ERROR: url is empty"
     try:
         ceil = int(CONFIG["agent"].get("fetch_max_chars") or 12000)
     except (TypeError, ValueError):
@@ -3452,6 +3477,13 @@ def tool_fetch_url(args, ctx):
     # The model may ask for more than the 8k default, but not for 30 KB: the largest page
     # in one host's ten-day log was 30,048 chars, 17.6% of that host's result chars.
     max_chars = max(1000, min(int(args.get("max_chars") or 8000), ceil))
+    pages = [(url, _fetch_page(url, max_chars)) for url in urls]
+    if len(pages) == 1:
+        return pages[0][1]
+    return "\n\n".join(f"--- {url} ---\n{page}" for url, page in pages)
+
+
+def _fetch_page(url, max_chars):
     try:
         # stream=True and a BOUNDED read. resp.text materialised the whole body before
         # cap_output trimmed it, so one multi-GB response (or a page that never ends)
@@ -4370,19 +4402,25 @@ def tool_create_tool(args, ctx):
         return (f"ERROR: tool failed to load and was not kept: {err}\n"
                 "Fix the code and call create_tool again.")
     if name not in REGISTRY.custom:
-        # The module's NAME disagrees with the file name. Registering it under
-        # the other name means the model calls `name` and gets "unknown tool",
-        # so reject it and let the model fix the mismatch.
+        # The file loaded, but not under the name it was created as: the model
+        # will call `name` and find nothing, so reject it and let the model fix
+        # the mismatch. (Several tools in one file are fine - what matters is
+        # that ONE of them answers to `name`.)
         loaded_as = [t for t, v in REGISTRY.custom.items()
                      if v.get("source") == path]
         for t in loaded_as:
             REGISTRY.custom.pop(t, None)
         path.unlink()
-        return (f"ERROR: this tool's NAME is {loaded_as!r} but the file is "
-                f"{name}.py. NAME must be exactly the name you pass to "
-                f"create_tool, or the tool is unreachable. Fix and retry.")
+        return (f"ERROR: this tool registered as {loaded_as!r} and not as "
+                f"{name!r}. The name you pass to create_tool must be one of "
+                f"the tool names in the file, or the tool is unreachable. "
+                f"Fix and retry.")
+    extras = [t for t, v in REGISTRY.custom.items()
+              if v.get("source") == path and t != name]
     return (f"OK: tool '{name}' created and loaded. It is now callable. "
-            "Remember durable usage details with the remember tool."
+            + (f"Also registered from the same file: {', '.join(extras)}. "
+               if extras else "")
+            + "Remember durable usage details with the remember tool."
             + verify_note(path))
 
 
@@ -5369,9 +5407,12 @@ CORE_TOOLS = {
     "fetch_url": {
         "fn": tool_fetch_url,
         "schema": _schema(
-                                                    "Fetch a web page as plain text. Use after web_search to read the "
-            "best result.",
-            {"url": {"type": "string"},
+            "Fetch one or more web pages as plain text: url takes one "
+            "address or a JSON array of up to five. Use after a web "
+            "search to read the best results.",
+            {"url": {"type": "string",
+                     "description": "The URL, or a JSON array of up "
+                                    "to 5 URLs"},
              "max_chars": {"type": "integer"}},
             ["url"]),
     },
@@ -5384,7 +5425,9 @@ CORE_TOOLS = {
             "run(args, ctx) -> str; inside run, ctx['shell'](cmd) runs a "
             "command and ctx['config'] is the bot config. Set module-level "
             "MUTATES = True if it changes local state. Handle errors; return "
-            "clear text.",
+            "clear text. tools/ also loads register()-style tool files and "
+            "<name>.tool.json manifests (write those with write_file; the "
+            "shapes are in tools/README.md).",
             {"name": {"type": "string", "description": "snake_case tool name"},
              "code": {"type": "string",
                       "description": "Complete Python source of the tool file"}},
@@ -5587,8 +5630,206 @@ CORE_TOOLS = {
 CORE_TOOL_NAMES = set(CORE_TOOLS)
 
 
+# ----------------------------------------------------------- drop-in tools ---
+# tools/ takes THREE file shapes, detected per file (2026-09-22). The point is
+# that a tool written for another harness drops in without a rewrite:
+#
+#   native    <name>.py with NAME, DESCRIPTION, SCHEMA and run(args, ctx)
+#   register  <anything>.py calling registry.register(name=..., schema=...,
+#             handler=...) at import - the shape agent tool libraries use, and
+#             one file may register several tools
+#   manifest  <name>.tool.json: name, description, schema and command - ANY
+#             script in any language. The call's args arrive as one JSON object
+#             on stdin and the script's stdout is the result.
+#
+# load_tool_defs() is the only reader of tool files: the registry loads through
+# it, create_tool verifies through it, and the write verifier probes through it
+# (its subprocess calls probe_tool below, so the contract exists exactly once).
+
+
+class _RegistryShim:
+    """What `from tools.registry import registry` finds in this process.
+
+    A ported tool file registers at IMPORT time against a registry that is not
+    here; the shim captures those calls instead, and the loader turns them into
+    tools. tool_error() matches the surface the ports call.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def register(self, name=None, schema=None, handler=None, **kw):
+        self.calls.append({"name": name, "schema": schema or {},
+                           "handler": handler, "opts": kw})
+
+    def tool_error(self, msg):
+        return json.dumps({"error": str(msg)})
+
+
+_SHIM = None
+
+
+def _registry_shim():
+    """Install (once) a stub tools.registry for ported files to import.
+
+    The drop-in folder is called tools/, so the import must resolve to THIS and
+    not fail. The stub package keeps __path__ on the drop-in folder, so a ported
+    file importing its own sibling modules still finds them.
+    """
+    global _SHIM
+    if _SHIM is None:
+        import types
+        shim = _RegistryShim()
+        reg_mod = types.ModuleType("tools.registry")
+        reg_mod.registry = shim
+        reg_mod.tool_error = shim.tool_error
+        pkg = types.ModuleType("tools")
+        pkg.__path__ = [str(TOOLS_DIR)]
+        pkg.registry = reg_mod
+        sys.modules["tools"] = pkg
+        sys.modules["tools.registry"] = reg_mod
+        _SHIM = shim
+    return _SHIM
+
+
+def load_tool_defs(path):
+    """[(name, description, parameters, fn, mutates)] for one drop-in file.
+
+    Raises ValueError (with the reason) when the file is none of the three
+    shapes. fn is this build's (args, ctx) call whatever the source shape.
+    """
+    path = Path(path)
+    if path.name.endswith(".tool.json"):
+        return _load_manifest_tool(path)
+    return _load_python_tools(path)
+
+
+def _load_python_tools(path):
+    shim = _registry_shim()
+    shim.calls = []
+    spec = importlib.util.spec_from_file_location(
+        f"tinycmdr_custom_{path.stem}", path)
+    module = importlib.util.module_from_spec(spec)
+    # No __pycache__ beside a dropped-in tool: opening the build must leave
+    # the folder exactly as it is, pyc files included.
+    _prev_dwb = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = _prev_dwb
+    if all(hasattr(module, a) for a in ("NAME", "DESCRIPTION", "SCHEMA", "run")):
+        if str(module.NAME) != path.stem:
+            # Pinned convention (test_verify): in the native shape the file
+            # name IS the tool name. A mismatch is the typo class - the
+            # model calls one and finds the other - and a ported multi-tool
+            # file does not come through this branch at all.
+            raise ValueError(
+                f"the loader registers it as {str(module.NAME)!r}, so a "
+                f"call to {path.stem!r} (the file name) finds nothing - "
+                f"in the native shape NAME is the file name")
+        return [(str(module.NAME), str(module.DESCRIPTION), module.SCHEMA,
+                 module.run, bool(getattr(module, "MUTATES", False)))]
+    defs = []
+    for call in shim.calls:
+        schema = call["schema"]
+        name = str(call["name"] or schema.get("name") or "").strip()
+        handler = call["handler"]
+        if not name or not callable(handler):
+            raise ValueError("a registry.register() call is missing name= or "
+                             "handler=")
+        opts = call["opts"] or {}
+        for env_name in (opts.get("requires_env") or []):
+            if not os.environ.get(env_name):
+                raise ValueError(f"{name}: needs the {env_name} env var set")
+        check_fn = opts.get("check_fn")
+        if check_fn is not None:
+            try:
+                ok_here = check_fn()
+            except Exception as e:
+                raise ValueError(f"{name}: check_fn raised {e}")
+            if not ok_here:
+                raise ValueError(f"{name}: check_fn says it cannot run here")
+        defs.append((name, str(schema.get("description") or ""),
+                     schema.get("parameters") or {},
+                     (lambda args, ctx, _h=handler: _h(args)),
+                     bool(opts.get("mutates", False))))
+    if not defs:
+        missing = [a for a in ("NAME", "DESCRIPTION", "SCHEMA", "run")
+                   if not hasattr(module, a)]
+        if len(missing) < 4:
+            raise ValueError(f"half a native tool: missing {missing[0]!r} "
+                             "(the native shape wants NAME, DESCRIPTION, "
+                             "SCHEMA and run)")
+        raise ValueError("no tool here: neither the native attributes nor a "
+                         "registry.register() call")
+    return defs
+
+
+def _load_manifest_tool(path):
+    try:
+        spec = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        raise ValueError(f"manifest does not parse as JSON: {e}")
+    name = str(spec.get("name") or "").strip()
+    params = spec.get("schema") or spec.get("parameters")
+    command = spec.get("command")
+    if not name or not isinstance(params, dict) or not command:
+        raise ValueError("manifest needs name, schema (or parameters) and "
+                         "command")
+    if name != path.name[:-len(".tool.json")]:
+        raise ValueError(
+            f"the manifest registers it as {name!r} but the file is "
+            f"{path.name}: the name is the file name here too")
+    if isinstance(command, str):
+        command = (["cmd", "/c", command] if os.name == "nt"
+                   else ["sh", "-c", command])
+    elif not (isinstance(command, list)
+              and all(isinstance(a, str) for a in command)):
+        raise ValueError("command must be a string or a list of strings")
+    entry = {"command": list(command),
+             "timeout": float(spec.get("timeout") or 120),
+             "cwd": str(spec.get("cwd") or path.parent)}
+    return [(name, str(spec.get("description") or ""), params,
+             (lambda args, ctx, _e=entry, _n=name: _run_manifest_tool(
+                 _n, _e, args, (ctx or {}).get("cancel_event"))),
+             bool(spec.get("mutates")))]
+
+
+def _run_manifest_tool(name, entry, args, cancel=None):
+    """One manifest call: args in on stdin (fed from a FILE, not a pipe - a
+    grandchild holding a pipe is what froze a channel for 21 minutes, see
+    run_capture), stdout out, exit_code= shaped like the shell tool's results."""
+    rc, out, err, timed_out = run_capture(
+        entry["command"], entry["timeout"], cwd=entry["cwd"], cancel=cancel,
+        stdin_text=json.dumps(args or {}))
+    if timed_out:
+        return (f"ERROR: {name} timed out after {int(entry['timeout'])}s "
+                "and was killed")
+    text = f"exit_code={rc}\n{out}"
+    if err and (rc or not out.strip()):
+        text += f"\n--- stderr ---\n{err}"
+    return cap_output(name, text, "output")
+
+
+def probe_tool(path):
+    """What the write verifier asks about a tool file - computed by the loader
+    itself. The verdict SHAPE lives in the probe subprocess; the RULES are
+    load_tool_defs()'s: one contract, one place to change."""
+    try:
+        defs = load_tool_defs(Path(path))
+    except Exception as e:
+        return {"ok": False, "why": ("the loader rejects it: "
+                                    + type(e).__name__ + ": " + str(e)[:200])}
+    if not all(isinstance(d[2], dict) for d in defs):
+        return {"ok": False, "why": "SCHEMA is not a JSON object"}
+    return {"ok": True, "names": [d[0] for d in defs],
+            "desc": all(str(d[1]).strip() for d in defs),
+            "schema": True}
+
+
 class ToolRegistry:
-    """Core tools + whatever .py files live in ./tools/."""
+    """Core tools + whatever drops into ./tools/ (three shapes)."""
 
     def __init__(self, tools_dir):
         self.tools_dir = tools_dir
@@ -5596,25 +5837,25 @@ class ToolRegistry:
         self.custom = {}
         self.load_all()
 
-    def _load_module(self, path):
-        spec = importlib.util.spec_from_file_location(
-            f"tinycmdr_custom_{path.stem}", path)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        for attr in ("NAME", "DESCRIPTION", "SCHEMA", "run"):
-            if not hasattr(module, attr):
-                raise ValueError(f"missing required attribute {attr!r}")
-        return module
+    def _tool_files(self):
+        return (sorted(self.tools_dir.glob("*.py"))
+                + sorted(self.tools_dir.glob("*.tool.json")))
 
     def load_all(self):
         self.custom = {}
-        for path in sorted(self.tools_dir.glob("*.py")):
-            ok, err = self.reload_tool(path.stem)
+        for path in self._tool_files():
+            ok, err = self._load_path(path)
             if not ok:
-                log.warning("custom tool %s failed to load: %s", path.stem, err)
+                log.warning("custom tool %s failed to load: %s", path.name, err)
 
     def reload_tool(self, name):
-        path = self.tools_dir / f"{name}.py"
+        for cand in (self.tools_dir / f"{name}.py",
+                     self.tools_dir / f"{name}.tool.json"):
+            if cand.exists():
+                return self._load_path(cand)
+        return False, f"no tools/{name}.py or tools/{name}.tool.json to load"
+
+    def _load_path(self, path):
         # Drop anything this same file registered before: a tool's NAME can be
         # edited between reloads, and the old registration would otherwise stay
         # in the tool list (callable, but pointing at stale code).
@@ -5622,28 +5863,29 @@ class ToolRegistry:
             if tool.get("source") == path:
                 self.custom.pop(tname, None)
         try:
-            module = self._load_module(path)
+            defs = load_tool_defs(path)
         except Exception as e:
-            self.custom.pop(name, None)
             return False, str(e)
-        tname = getattr(module, "NAME", name)
-        self.custom[tname] = {
-            "fn": module.run,
-            "source": path,
-            # Custom tools can declare MUTATES = True so the run's evidence
-            # check treats them as state-changing (see _is_mutation). Read-only
-            # tools should leave it unset.
-            "mutates": bool(getattr(module, "MUTATES", False)),
-            # ... and the endpoint marker, so a tool that restarts the model box is
-            # gated exactly like a shell command that does (agent.endpoint_tools).
-            "endpoint_touching": _endpoint_touching_tool(
-                tname, getattr(module, "DESCRIPTION", "")),
-            "schema": {"type": "function", "function": {
-                "name": tname,
-                "description": module.DESCRIPTION,
-                "parameters": module.SCHEMA}},
-        }
-        log.info("loaded custom tool: %s", tname)
+        for tname, desc, params, fn, mutates in defs:
+            self.custom[tname] = {
+                "fn": fn,
+                "source": path,
+                # Custom tools declare state change themselves: MUTATES = True
+                # in a native file, mutates: true in a manifest (see
+                # _is_mutation for what the flag buys).
+                "mutates": bool(mutates),
+                # ... and the endpoint marker, so a tool that restarts the model box is
+                # gated exactly like a shell command that does (agent.endpoint_tools).
+                "endpoint_touching": _endpoint_touching_tool(tname, desc),
+                "schema": {"type": "function", "function": {
+                    "name": tname,
+                    "description": desc,
+                    "parameters": params}},
+            }
+        # debug, not info: a log line at import creates tinycmdr.log the
+        # moment the build is opened, and opening it must create nothing.
+        log.debug("loaded %d tool(s) from %s: %s", len(defs), path.name,
+                  ", ".join(d[0] for d in defs))
         return True, None
 
     def custom_summary(self):
@@ -8759,7 +9001,8 @@ def _exit_code(output):
 
 
 def _failure_snippet(text, limit=160):
-    """The first meaningful line of a failed result, for the progress line.
+    """The first meaningful line of a result: the result card's preview, and
+    for a failed call the reason it shows.
 
     Bounded on purpose: one line, scrubbed, no newlines and no backticks - the
     batch text is not a code fence, so a stray backtick mangles the whole post.
@@ -9104,14 +9347,18 @@ class RunReporter:
             return
         src = src or self.src
         line = f"`{name}`"
-        preview = _tool_preview(name, args)
+        # The result card previews the RESULT, not the call: the call card and
+        # the check-in already show the command, and echoing it here hid the one
+        # line that says how it went (operator's call, 2026-09-22). Falls back
+        # to the args when the result has no line worth showing.
+        preview = _failure_snippet(output) or _tool_preview(name, args)
         if preview:
             line += f" {preview}"
         line += f" · {elapsed:.1f}s"
         rc, why = _failed_call(output)
         if rc:                      # 0 and "no exit code" stay quiet
             line += f" [exit {rc}]"
-        if why:
+        if why and why != preview:  # never repeat the preview as its own reason
             line += f" — {why}"
         merge = float(CONFIG["agent"].get("checkin_tool_merge_seconds", 2.0) or 0)
         cap = int(CONFIG["agent"].get("checkin_tool_max_lines", 4) or 4)
@@ -13661,7 +13908,7 @@ def _cli_key():
 
     Always a STRING: this becomes a filename (sessions/<key>.json). The prompt
     tool's editing surface lives in _CLI["prompt"] and must never land here - it
-    did, and sessions stopped saving (bot-aTOWER measured 2026-09-22: "could not
+    did, and sessions stopped saving (a Windows host measured 2026-09-22: "could not
     save session ... got 'PromptSession'", event log unwritten). The isinstance
     belt is the same guard that box shipped.
     """

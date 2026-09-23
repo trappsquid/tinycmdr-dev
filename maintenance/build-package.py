@@ -74,6 +74,12 @@ SHIP = [
     "maintenance/build-cli-fix.py",
     "maintenance/cli_blocks.py",
     "skills",
+    # The starter drop-in tools and the shapes doc. tools/ is otherwise
+    # per-host payload and stays banned from directory walks below
+    # (FORBIDDEN_DIRS); these three files are shipped source, like soul.md.
+    "tools/patch.py",
+    "tools/process.py",
+    "tools/README.md",
 ]
 
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere
@@ -136,7 +142,8 @@ APP_FILES = ("INSTALL-WINDOWS.cmd", "tinycmdr.py", "tinycmdr-supervise.py", "con
              "install/install-tinycmdr.sh", "maintenance/restart-tinycmdr.ps1",
              "maintenance/restart-tinycmdr.sh", "launch-tinycmdr.sh",
              "install/install-tinycmdr-macos.sh", "install/com.tinycmdr.agent.plist",
-             "maintenance/restart-tinycmdr-macos.sh")
+             "maintenance/restart-tinycmdr-macos.sh",
+             "tools/patch.py", "tools/process.py", "tools/README.md")
 
 # --------------------------------------------------------------- public build ---
 # Skills that belong to ONE box and must not ride along in a fleet build. They document a
@@ -471,7 +478,10 @@ def audit(target, host_vals, allow_secrets=False):
         rel = f.relative_to(target).as_posix()
         parts = f.relative_to(target).parts
         if f.name in FORBIDDEN_NAMES or any(p in FORBIDDEN_DIRS for p in parts):
-            problems.append(f"forbidden file: {rel}")
+            # tools/ is per-host payload - except the starter files SHIP
+            # names explicitly, which are shipped source like soul.md.
+            if rel not in {r for r in SHIP if r.startswith("tools/")}:
+                problems.append(f"forbidden file: {rel}")
         if parts[0] == "maintenance" and f.name not in ALLOWED_MAINTENANCE:
             problems.append(f"host-specific maintenance script: {rel}")
         # Windows PowerShell 5.1 decodes a BOM-less file as ANSI, so a UTF-8 em
