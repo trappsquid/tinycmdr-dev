@@ -128,6 +128,79 @@ _, _, out = fb.Agent._exec_tool(fb.AGENT, {"function": {"name": "computer_use",
 check("a tool this box never had still reads as absent",
       "exists on this box" in out and "find_tools" not in out, out[:140])
 
+# ---- F2: the hidden tools are NAMED in the static prompt (first operator drive, ---------
+# 2026-09-23). The model would not spend the discovery call: asked which tool edits by a
+# fuzzy anchor it answered edit_file and named 3 of the 7 hidden ones, and across three
+# runs it called find_tools ONCE. The names now ride the static prompt, generated from the
+# build so a new hidden tool cannot fall out of it.
+INV_MARK = "not in your tool list \u2014 call one by name and it stays for the session: "
+
+
+def inv_names(prompt):
+    """The names the inventory line carries, parsed the way a reader would."""
+    rows = [l for l in prompt.splitlines() if INV_MARK in l]
+    if len(rows) != 1:
+        return None
+    after = rows[0].split(INV_MARK, 1)[1].split(" The custom tools")[0]
+    return [w.strip() for w in after.replace(".", "").split(",") if w.strip()]
+
+
+sp = fb.build_system_prompt()
+# A pre-fix build has no such helper: the gate must FAIL, not crash with an AttributeError.
+inv_line = getattr(fb, "hidden_inventory_line", lambda: "")()
+named = inv_names(sp)
+want_inv = [n for n in fb.hidden_tools(None) if n in fb.CORE_TOOL_NAMES]
+check("the static prompt carries ONE hidden-tool inventory line", named is not None, sp[-600:])
+check("it names every hidden core tool this build has", named == want_inv, (named, want_inv))
+named = named or []
+check("and invents none", bool(named) and all(n in fb.CORE_TOOL_NAMES for n in named), named)
+check("it is generated, not typed: the set is what hidden_tools() reports",
+      named == sorted(set(named)) and inv_line.count(", ".join(named)) == 1, inv_line[:160])
+check("the bullet follows the find_tools one directly (no blank field left behind)",
+      "filesystem up.\n- Also on this box" in sp)
+check("the line is bounded", len(inv_line) < 320, len(inv_line))
+check("the prompt is still byte-identical across two builds",
+      fb.build_system_prompt() == sp)
+check("the placeholder is a live field, not literal braces", "{inventory}" not in sp)
+
+# A tool made hidden by CONFIG must appear: that is the drift the hand-written list had.
+_keep_core = fb.CONFIG["agent"].get("core_tools")
+_keep_disc = fb.CONFIG["agent"].get("tool_disclosure")
+try:
+    fb.CONFIG["agent"]["core_tools"] = [n for n in fb.core_tool_names() if n != "shell"]
+    narrow = getattr(fb, "hidden_inventory_line", lambda: "")()
+    check("a tool hidden by config shows up in the inventory", "shell" in narrow, narrow)
+    check("...and the line is regenerated, not padded",
+          inv_names(fb.build_system_prompt()) ==
+          [n for n in fb.hidden_tools(None) if n in fb.CORE_TOOL_NAMES])
+    fb.CONFIG["agent"]["core_tools"] = sorted(fb.CORE_TOOL_NAMES)
+    none_line = getattr(fb, "hidden_inventory_line", lambda: "x")()
+    check("nothing hidden, no dangling line", none_line == "", none_line)
+    fb.CONFIG["agent"]["tool_disclosure"] = False
+    off_line = getattr(fb, "hidden_inventory_line", lambda: "x")()
+    check("disclosure off means no line (every tool is in the payload)",
+          off_line == "" and inv_names(fb.build_system_prompt()) is None)
+finally:
+    fb.CONFIG["agent"]["tool_disclosure"] = _keep_disc
+    if _keep_core is None:
+        fb.CONFIG["agent"].pop("core_tools", None)
+    else:
+        fb.CONFIG["agent"]["core_tools"] = _keep_core
+check("the suite left the config as it found it",
+      inv_names(fb.build_system_prompt()) == want_inv)
+
+# ---- F3: a "verification" that does not test the claim -------------------------------
+# Found in the same drive: it "proved" write_file wrote a file by reading that the file
+# exists. The clause is on the check bullet, where the mistake is made.
+check("prompt: the check must test the claim itself",
+      "make the check test the claim itself" in sp)
+check("prompt: the exists-is-not-evidence case is named",
+      "a file existing proves nothing about what is in it or who wrote it" in sp)
+check("prompt: the clause rides the ledger/check bullet",
+      [l for l in sp.splitlines() if "make the check test the claim itself" in l][:1]
+      and "Checking the work is the last ledger item" in
+      [l for l in sp.splitlines() if "make the check test the claim itself" in l][0])
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

@@ -1,8 +1,9 @@
 # Drop-in tools
 
-Anything in this folder is a tool for the agent: a new folder is live on the
-next message, no restart and no config. Two starter tools ship with tinycmdr
-and are also the examples for each shape:
+Anything in this folder is a tool for the agent: a file dropped in here is
+read when the bot next starts, and a tool written with `create_tool` is live
+at once. No config edit is needed either way. Two starter tools ship with
+tinycmdr and are also the examples for each shape:
 
     patch.py        one targeted edit per call with fuzzy anchors (the tool to
                     reach for when edit_file's exact match fails)
@@ -79,7 +80,8 @@ is nonzero). `timeout` is seconds (default 120). `mutates` marks a state change.
 ## How a tool is found and called
 
 The model sees one line per tool in its prompt and calls it by NAME (not by
-file name). If it does not know a tool exists, `list_tools` and `find_tools`
-name everything on the box. `create_tool` writes native files for the model and
+file name). Tools outside its always-on list are still named there (disclosure
+holds back their argument schemas, not their existence), and `list_tools` /
+`find_tools` name everything on the box with what each one does. `create_tool` writes native files for the model and
 verifies through the same loader these shapes use, so what it reports as loaded
 really loaded.

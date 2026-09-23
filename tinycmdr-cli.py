@@ -6619,6 +6619,32 @@ def hidden_tools(session_key=None):
     return sorted((set(CORE_TOOLS) | set(REGISTRY.custom))
                   - visible_tool_names(session_key))
 
+def hidden_inventory_line():
+    """One STATIC prompt line naming the tools this box has that its tool list does not.
+
+    Measured on the first operator drive (2026-09-23): asked which tool edits by a fuzzy
+    anchor, the model answered `edit_file` (exact match), named 3 of the hidden tools, and
+    after being told to get it from a tool call still only called `list_tools` - three
+    prompts, one `find_tools`. The hidden names appear NOWHERE in its prompt, and
+    `list_tools` answers in one line by design (test_stall pins that under 220 chars), so
+    the inventory is either in the prompt or is not known at all.
+
+    Generated from the build, never written out here: it names exactly what
+    `hidden_tools(None)` reports, and it disappears when disclosure is off (every tool is
+    in the payload then, so the line would be a lie). Static => cached prefix => one
+    prefill per session, nothing per turn.
+    """
+    if not disclosure_on():
+        return ""
+    names = [n for n in hidden_tools(None) if n in CORE_TOOL_NAMES]
+    if not names:
+        return ""
+    line = ("- Also on this box, not in your tool list \u2014 call one by name and it stays "
+            "for the session: " + ", ".join(names) + ".")
+    if REGISTRY.custom:
+        line += " The custom tools further down work the same way."
+    return line + "\n"
+
 
 def _tool_blurb(name):
     if name in CORE_TOOLS:
@@ -6839,6 +6865,8 @@ def build_system_prompt():
              f"{platform.release()} ({platform.machine()}), "
              f"Python {platform.python_version()}, shell: {shell_name}")
     custom = REGISTRY.custom_summary()
+    # F2: the hidden-tool inventory rides the static prompt (generated, see below).
+    inventory = hidden_inventory_line()
     custom_block = ("\nCustom tools already installed on this machine "
                     "(prefer these over raw shell for their domains):\n"
                     + custom + "\n") if custom else ""
@@ -6864,10 +6892,10 @@ How you work:
 - Reusable procedures (managing a service, publishing a post, mail admin, recurring checks) should become custom tools via create_tool so future tasks are one call. Check list_tools first.
 - Your tool list is deliberately short: the ones you use constantly. Anything else is one call away — find_tools with what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it by name and the harness keeps it for the session. Never claim a capability is missing without checking. If a task needs something you would expect an agent to have, call find_tools FIRST: do not work around a hidden tool by re-implementing it, reading its source, or hand-rolling the equivalent command (measured: a run spent 40s replicating a tool that one call would have done).
 - If the tool for a job is not in your list, ONE find_tools call is the check — a call with no query lists everything this box has. If it is not there, say what is missing and ask. Never rebuild a route by hand from the filesystem up.
-- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files (call it by name), edit_file. Shell is for what they cannot do — services, processes, OS state, one-off commands.
+{inventory}- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files (call it by name), edit_file. Shell is for what they cannot do — services, processes, OS state, one-off commands.
 - Any fix or next step you recommend must name the tool result from THIS run that shows it is possible. If nothing here tested it, say it is untested. Never prescribe a step your own output has already contradicted.
 - Keep the task ledger current: `task action=add` when you take on anything multi-step, `action=doing`/`done` as it moves (done needs one line of evidence), and curate the list rather than letting it grow. It survives restarts and tells the operator — and your next session — what this box is in the middle of.
-- Checking the work is the last ledger item: re-run the command, re-read the change, open the page. For anything high-stakes, hand the check to delegate_task so the work is not grading itself.
+- Checking the work is the last ledger item: re-run the command, re-read the change, open the page, and make the check test the claim itself — a file existing proves nothing about what is in it or who wrote it. For anything high-stakes, hand the check to delegate_task so the work is not grading itself.
 
 - If an approach fails twice, change approach. Don't refine the same failing idea or repeat an identical call; the loop guard will spend steps nudging you, which is budget you don't get back.
 - The harness refuses a repeat only while nothing has changed: after two identical runs of the same call it hands back the cached result, labelled `[HARNESS: ... execution #N]`. This is not a ban on re-checking your work — **any write or edit clears it immediately**, so after you fix something, re-run the SAME command that showed the problem, and it will really execute. Do not switch to a different command to dodge the guard: a changed world plus the original command is the only combination that proves anything. If a repeat is refused, nothing has changed yet — change something, or use the result you have.
