@@ -406,6 +406,65 @@ def main():
                   rc == 1 and ("elevated" in err or "root" in err), (rc, err[:200]))
         finally:
             fb.run_capture, fb._is_elevated, fb._verb_running = saved_run, saved_elev, saved_running
+
+        # --- `tinycmdr web`: the page lane in one word (2026-09-22) -----------------
+        # The operator: "so what if I want to startup the tinycmdr web-ui? type tinycmdr web
+        # in a cmd window?" The page was a flag (`--web`) and nothing said so; now the word
+        # is translated in main(), and a port that is already served says so usefully.
+        check("`web` is not a management verb", "web" not in fb.VERBS, sorted(fb.VERBS)[:6])
+        script = os.path.join(os.path.dirname(fb.__file__), "tinycmdr.py")
+        check("VERB_HELP names the page lane", "tinycmdr web" in fb.VERB_HELP,
+              fb.VERB_HELP[-220:])
+        check("VERB_HELP stopped teaching the retired prefix", "/cmdr " not in fb.VERB_HELP,
+              fb.VERB_HELP[-220:])
+
+        reached = []
+        saved_mode, saved_argv = fb.run_web_mode, sys.argv
+        try:
+            fb.run_web_mode = lambda: reached.append("web")
+            for argv in (["tinycmdr.py", "web"], ["tinycmdr.py", "webui"],
+                         ["tinycmdr.py", "--web"]):
+                sys.argv = list(argv)
+                fb.main()
+                check("`%s` starts the page lane" % " ".join(argv[1:]), reached == ["web"],
+                      (reached, []))
+                reached.clear()
+            sys.argv = list(saved_argv)
+            sys.argv = ["tinycmdr.py", "status"]
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    fb.main()
+            except SystemExit:
+                pass
+            check("...and a management verb still does NOT start the page",
+                  reached == [], reached)
+        finally:
+            fb.run_web_mode, sys.argv = saved_mode, list(saved_argv)
+
+        import socket
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        held = srv.getsockname()[1]
+        try:
+            note = fb.web_busy_note("127.0.0.1", held)
+            text = "\n".join(note)
+            check("a held port is reported with its URL", ("127.0.0.1:%d" % held) in text, text)
+            if fb._port_holder(held):
+                check("...and names who holds it", "listening there" in text, text)
+            else:
+                print("skip a held port names the holder: this host cannot see the holder")
+
+            free = socket.socket()
+            free.bind(("127.0.0.1", 0))
+            port = free.getsockname()[1]
+            free.close()
+            text = "\n".join(fb.web_busy_note("127.0.0.1", port))
+            check("a free port says nothing is listening", "Nothing is listening" in text, text)
+            text = "\n".join(fb.web_busy_note("127.0.0.1", "nope"))
+            check("a junk web.port does not crash the note", "Could not start" in text, text)
+        finally:
+            srv.close()
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

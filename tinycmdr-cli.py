@@ -9653,7 +9653,7 @@ def _cli_tasks():
 
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
-    text = cmdr_strip(text)          # `/cmdr model` is `/tinycmdr model`
+    text = cmdr_strip(text)          # `/tinycmdr model` is `/model`, handled below
     verb, _, rest = text.partition(" ")
     verb = verb.lower()
     rest = rest.strip()
@@ -9751,7 +9751,7 @@ def _cli_while_running(line):
     This runs on the reader thread, so it only prints, sets the stop event, or
     reads state. The run owns the history, the log and the tools.
     """
-    line = cmdr_strip(line)          # `/cmdr stop` has to work mid-run too
+    line = cmdr_strip(line)          # `/tinycmdr stop` has to work mid-run too
     verb = line.split()[0].lower()
     if verb == "/stop":
         ev = _CLI.get("stop")

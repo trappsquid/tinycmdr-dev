@@ -10187,7 +10187,7 @@ class MattermostDispatcher:
         # run reached its next boundary, which took 90s because the run was inside a
         # `sleep 280` tool call.
         low = text.strip().lower()
-        # `/cmdr stop` has to be understood HERE too: this listener thread is the only
+        # `/tinycmdr stop` has to be understood HERE too: this listener thread is the only
         # reader that works while a run owns the channel, so a prefixed command that
         # fell through to the queue would wait behind the very run it kills.
         _cmdr = cmdr_strip(text)
@@ -10524,7 +10524,7 @@ class MattermostDispatcher:
         retried = False
 
         # -- slash commands (handled locally, never sent to the model) -------
-        # `/cmdr <verb>` is the namespaced form of everything below: one registered
+        # `/tinycmdr <verb>` is the namespaced form of everything below: one registered
         # trigger in the client that carries any command (a bare `help` and `status`
         # are the client's own words and can never reach a bot). The bare verbs stay
         # reachable - the relay posts them that way.
@@ -11529,7 +11529,7 @@ def status_text(key, paused=None):
 def _web_command(text, key="web"):
     """Slash commands for the web UI / gateway. Returns ('reply', msg) when
     handled locally, or ('task', text) to hand to the agent."""
-    text = cmdr_strip(text)          # `/cmdr <cmd>`: the same commands, namespaced
+    text = cmdr_strip(text)          # `/tinycmdr <cmd>`: the commands, namespaced
     low = text.strip().lower()
     if low in ("/new", "/reset"):
         AGENT.reset(key)
@@ -12464,6 +12464,14 @@ def run_webui():
         is normal; log it as one line and keep serving."""
 
         daemon_threads = True
+        # Two tinycmdr processes must not both answer on one port. HTTPServer sets
+        # allow_reuse_address, and on Windows SO_REUSEADDR lets a SECOND process bind a
+        # port that is already being served: measured 2026-09-22, `tinycmdr web` bound
+        # 8787 beside the running bot's page and served it (so the operator saw the banner
+        # of a page that was already up, and two servers shared one port). Off, so a taken
+        # port raises and web_busy_note() names the holder instead. The 6x retry below
+        # still covers the second or two after a restart while the old handler drains.
+        allow_reuse_address = False
 
         def handle_error(self, request, client_address):
             err = sys.exc_info()[1]
@@ -12816,8 +12824,9 @@ def run_webui():
         host = web.get("host") or "0.0.0.0"
     else:
         host = "127.0.0.1"
-        log.warning("web.token not set — web UI is loopback-only. Set a "
-                    "token in config.json to reach it from other machines.")
+        log.warning("no web token set — the page is loopback-only. Set TINYCMDR_WEB_TOKEN "
+                    "in .env (or web.token in config.json) to require a token and reach it "
+                    "from other machines.")
     port = int(web.get("port", 8787))
     srv = None
     for attempt in range(6):
@@ -13289,7 +13298,7 @@ class TelegramPoller:
         dest = self.live.get(chat_id)
         if dest is not None and dest.reply_ask(text):
             return True
-        # `/cmdr <cmd>` works here too: a Telegram client hands an unknown command
+        # `/tinycmdr <cmd>` works here too: a Telegram client hands an unknown command
         # over as ordinary text, so the prefix only has to be understood.
         _cmdr = cmdr_strip(text)
         if _cmdr != text:
@@ -13707,7 +13716,7 @@ def _cli_tasks():
 
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
-    text = cmdr_strip(text)          # `/cmdr model` is `/tinycmdr model`
+    text = cmdr_strip(text)          # `/tinycmdr model` is `/model`, handled below
     verb, _, rest = text.partition(" ")
     verb = verb.lower()
     rest = rest.strip()
@@ -13805,7 +13814,7 @@ def _cli_while_running(line):
     This runs on the reader thread, so it only prints, sets the stop event, or
     reads state. The run owns the history, the log and the tools.
     """
-    line = cmdr_strip(line)          # `/cmdr stop` has to work mid-run too
+    line = cmdr_strip(line)          # `/tinycmdr stop` has to work mid-run too
     verb = line.split()[0].lower()
     if verb == "/stop":
         ev = _CLI.get("stop")
@@ -14424,9 +14433,12 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   help               this text
 
 
-In a chat window the same names are slash commands, and `/cmdr` is the prefix that
-always gets through: `/cmdr model` lists them, `/cmdr status` is this host,
-`/cmdr help` lists every command.
+In a chat window the same names are slash commands, and `/tinycmdr` is the prefix that
+always gets through: `/tinycmdr model` lists them, `/tinycmdr status` is this host,
+`/tinycmdr help` lists every command.
+
+`tinycmdr web` (the same as --web) serves the local page instead of the chat lanes, and a
+bare `tinycmdr` from a shell is a session in this folder (the same as --cli).
 
 With no verb this file is the agent itself, exactly as it has always been.
 """
@@ -15576,6 +15588,31 @@ def validate_startup_config():
     return None
 
 
+def web_busy_note(host, port):
+    """What to say when the page did not start: which URL, who holds it, what to do.
+
+    `--web` failing used to print one vague line ("the port may be taken"), which on a box
+    where the BOT already serves the page (web.enabled true in config.json) reads as a
+    mystery rather than as "it is already up". Read-only: it names the holder, it never
+    kills anything. `port` may be junk (a hand-edited config), which is not an error here.
+    """
+    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+    url = "http://%s:%s" % (shown, port)
+    try:
+        holder = _port_holder(int(port))
+    except (TypeError, ValueError):
+        holder = None
+    if holder:
+        return ["Could not start the web UI on %s." % url,
+                "  %s is listening there - another tinycmdr (this install's bot serving its "
+                "own page, or a second web lane) or an unrelated program." % holder,
+                "  If a page answers at %s it is already usable: open that instead. Otherwise "
+                "set web.port in config.json." % url]
+    return ["Could not start the web UI on %s." % url,
+            "  Nothing is listening on that port right now - see tinycmdr.log, or set "
+            "web.port in config.json."]
+
+
 def run_web_mode():
     """Server-free use: serve the local web UI and nothing else.  No
     Mattermost account, no bot token, no chat server to stand up, and the
@@ -15590,8 +15627,8 @@ def run_web_mode():
         log.info("web UI enabled for this process (--web)")
     srv = run_webui()
     if srv is None:
-        print("Could not start the web UI - the port may be taken. See "
-              "tinycmdr.log, or set web.port in config.json.")
+        for line in web_busy_note(web.get("host") or "127.0.0.1", web.get("port")):
+            print(line)
         return
     host, port = srv.server_address[0], srv.server_address[1]
     shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
@@ -15599,7 +15636,9 @@ def run_web_mode():
     print(f"tinycmdr web UI: http://{shown}:{port}")
     print(f"  model: {CONFIG['llm'].get('model') or '(default)'} at "
           f"{CONFIG['llm'].get('base_url') or '(no base_url set!)'}")
-    print(f"  token: {'required - it is in config.json (web.token)' if web.get('token') else 'none, loopback only'}")
+    print("  token: " + ("required - the TINYCMDR_WEB_TOKEN line in .env (config.json "
+                    "web.token works too)" if web.get("token")
+                    else "none, loopback only"))
     print("  same agent and session as the chat build ('web'). ctrl-c stops it.")
     print("")
     try:
@@ -15633,6 +15672,11 @@ def both_doors_note():
 
 
 def main():
+    # `tinycmdr web` - the page lane in the same one-word shape as everything else. `web`
+    # is not a management verb (it serves the agent), so it is translated here instead of
+    # being listed in VERBS, and `--web` keeps working for scripts.
+    if len(sys.argv) > 1 and sys.argv[1].lower() in ("web", "webui", "page"):
+        sys.argv[1] = "--web"
     # Management verbs, and the two inert flags. Nothing here starts the agent loop:
     # `tinycmdr status` asks the endpoint for metadata and answers a question.
     if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:
