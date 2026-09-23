@@ -2906,6 +2906,8 @@ def route_hint(command, ctx):
     if state.get("route_hint_used"):
         return ""
     state["route_hint_used"] = True
+    log.info("[%s] route hint: shell content search -> search_files (once per run)",
+             key or "-")
     return ("\n[HARNESS: that was a content search through the shell, which this box scores "
             "as a miss. `search_files` does it in ONE call and returns the line numbers: "
             "search_files {\"pattern\": \"<regex>\", \"path\": \"<file or directory>\"} "
