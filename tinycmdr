@@ -1,6 +1,10 @@
 #!/bin/sh
-# tinycmdr - the management door on Linux and macOS. Symlink it onto PATH (the
-# installer does) and `tinycmdr status` works from any directory.
+# tinycmdr - the door on Linux and macOS. On PATH (the installer puts it there):
+#     tinycmdr                     a session in this folder (no arguments)
+#     tinycmdr status | doctor | model | logs | restart | token | help
+#     tinycmdr --cli               the same session, spelled out
+# No arguments is the human case, so it opens a session; the bot keeps starting the
+# way it always has (systemd/launchd run tinycmdr.py itself, never this shim).
 #
 # A shim, not a second build: it runs tinycmdr.py from the folder it RESOLVES to, so a
 # symlink in /usr/local/bin finds the install rather than the bin directory.
@@ -35,4 +39,7 @@ if [ -z "$PY" ]; then
     exit 127
 fi
 
+if [ "$#" -eq 0 ]; then
+    exec "$PY" "$HERE/tinycmdr.py" --cli
+fi
 exec "$PY" "$HERE/tinycmdr.py" "$@"

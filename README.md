@@ -35,7 +35,7 @@ set `web.token`, which opens it to your LAN, or point `web.host` somewhere else.
 
 Two builds travel in this package, and they are the same agent. `tinycmdr.py` is the
 supervised one: Mattermost, the page, or a session in this terminal
-(`python tinycmdr.py --cli`). `tinycmdr-cli.py` is the console-only build, with no chat
+(`tinycmdr`, which is `--cli` under the shim). `tinycmdr-cli.py` is the console-only build, with no chat
 layer and nothing to install beyond Python itself. The installer puts both in the
 install folder, and both read the same `config.json` and `.env` there, so whichever
 you use you are editing one set of files rather than guessing at two.
@@ -302,7 +302,8 @@ came from.
 ## Operating it
 
 One word everywhere: `tinycmdr status` in a shell, `/tinycmdr status` in a
-console session or in chat.
+console session or in chat. Bare `tinycmdr` opens a session in the install folder
+(`python tinycmdr.py --cli` is the same thing; a bare `python tinycmdr.py` is the bot).
 
 ```
 /tinycmdr status   version, model, inherited sampling, session size, limits, uptime

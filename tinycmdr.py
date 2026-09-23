@@ -13,7 +13,8 @@ Config:        config.json next to this file (see config.example.json)
 Custom tools:  drop .py files into ./tools/ (the agent also writes its own
                here via the create_tool tool)
 Run as bot:    python tinycmdr.py
-Run in a terminal instead (no Mattermost):  python tinycmdr.py --cli
+Run in a terminal:  tinycmdr            (the shim: no verb means a session)
+               python tinycmdr.py --cli  the same thing in the open
                (or tinycmdr-cli.py, the console build packaged beside this file)
 One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
@@ -14397,6 +14398,8 @@ VERBS = ("status", "doctor", "health", "model", "config", "logs", "proc", "ports
 
 VERB_HELP = """tinycmdr <verb> — management, never a model call
 
+  (nothing)          a session in this folder: what the `tinycmdr` shim does when you
+                     type it with no verb, and the same as --cli below
   status             version, folder, model, endpoint, context, log, instance
   doctor             check this install and name what is wrong (exit 1 when it is)
   model              the models this install can route to (asks the endpoints)
