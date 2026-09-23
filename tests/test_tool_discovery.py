@@ -219,6 +219,9 @@ check("the skill tool says a TOOL name is a tool, not a skill",
       "is a TOOL on this box" in out and "not a skill" in out, out[:160])
 check("and points at the call and at find_tools",
       "call it by name" in out and "find_tools" in out, out[:200])
+check("and carries the tool's arguments, so the miss costs no second hop",
+      "Its arguments:" in out and "pattern" in out, out[:300])
+check("and stays bounded", 0 < len(out) < 900, len(out))
 out = fb.tool_skill({"action": "read", "name": "no-such-runbook-xyz"}, {})
 check("an ordinary skill miss stays an ordinary miss",
       "No skill named" in out and "is a TOOL" not in out, out[:120])
@@ -271,6 +274,10 @@ check("prompt: only a tool result proves a tool ran",
       "Only a TOOL RESULT proves a tool ran" in sp2)
 check("prompt: a sub-agent report is a claim, not a measurement",
       "A sub-agent's report is a CLAIM, not a measurement" in sp2)
+check("prompt: a result that is not in context means the call did not happen",
+      "If a result is NOT in your context, that call did not happen in this run" in sp2)
+check("prompt: and mining files for it is named as the slow way",
+      "the slowest way to answer" in sp2)
 
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
