@@ -1784,3 +1784,49 @@ Status: 36 suites + 8 console-build specs green after the change (test_cli 170, 
 bot / 201 console, test_stall 252, test_newlines both builds). CLI regenerated from the source
 build and committed; no version bump and no fleet push - a prompt batch rides the release, and
 the operator takes fleet updates on his word, not per change.
+
+## 2026-09-23 - tool visibility: discovery must not answer with a wrong tool
+
+Source: the Windows test box's own log, run 4 of session mm-<id> (2026-09-23),
+35 minutes spent rebuilding by hand a capability the box does not have. The operator asked
+for an AGNOSTIC fix - "so the harness and model can actually see and use the tools
+available" - not a Mattermost-specific one, so nothing here names a chat vendor.
+
+- The defect was the word-overlap score in `_match_tools`. Replayed against this build,
+  the model's three queries each REVEALED a wrong tool, headed "now callable":
+  "send Mattermost message to channel" -> `schedule` (the word "channel"), "send
+  Mattermost post message channel thread" -> `blog` ("post"), "send mattermost message to
+  agent channel via API" -> `delegate_task` ("agent"). The honest "No tool matched" line
+  existed, but only for a zero score. An answer that names a WRONG tool costs a run more
+  than one that names none.
+- `_TOOL_STOPWORDS` + `discriminating_words()`: the score now runs only on words that tell
+  one tool from another, `_squash()` makes "subagent" match "sub-agent" and "scheduler"
+  match "schedule", and a query with no discriminating word ("send a message") is told that
+  instead of being guessed at. Misses still name this box's whole remaining surface
+  (`_surface_tail`, bounded to 6 with a count), because a model cannot ask again about a
+  tool it does not know exists. The empty-query form is the deliberate "show me everything"
+  call, and it still reveals nothing.
+- `list_tools` keeps its one line (`tests/test_stall.py` pins <220 chars, measured: 615
+  calls / 0.46 MB of context over ten days repeating what the prompt already carried) and
+  now forwards to `find_tools`.
+- `delegate_task` yields a TYPED result: the harness appends `_SUBAGENT_RESULT_CONTRACT` to
+  the sub-agent's task, `parse_subagent_result()` validates the one fenced ```result block
+  (status ok|blocked|failed, summary, evidence, blockers, followups) and the parent gets
+  fields plus the sub-agent's own words. FAIL-SOFT: no block, bad JSON, an invented status
+  or an empty summary all come back UNPARSED with the prose attached - losing the work to a
+  parse error would be worse than losing the shape. The tool is not always-on, so its longer
+  description costs nothing on a call that does not use it.
+- Prompt cost: ONE line (~250 chars) telling the model that a single find_tools call is the
+  check and that a missing tool is a thing to SAY, not to rebuild by hand. The credential
+  half of the earlier proposal is dropped: the operator is unconcerned about bot tokens and
+  bot admin rights on the chat server.
+- Gates: `tests/test_tool_discovery.py` (40 checks) and `tests/test_subagent_result.py`
+  (34, both builds). Falsified before trusting them: with HEAD's `_match_tools` swapped back
+  in, test_tool_discovery fails 11 checks, starting with the three measured queries revealing
+  a tool - the gate sees the old behaviour.
+- The always-on schema block is untouched (8,518 chars of its 8,900 gate): this batch buys
+  visibility with OUTCOMES the model already pays for, not with a fatter prompt.
+
+Status: suites green (both new ones, test_disclosure, test_stall and the full run), CLI
+regenerated, no version bump and no fleet push - the box that hit this still runs the old
+bytes, so the operator takes that on his word.
