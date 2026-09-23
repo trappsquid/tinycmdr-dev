@@ -1698,3 +1698,50 @@ is exposed beyond a trusted segment.
 Deferred: the safety-tier standardization pass over the five pre-split host configs (F6), which
 touches running fleet boxes and rides your word like any fleet change; the ReDoS guard on the
 operator's own patterns (F7, self-harm only, and the stdlib has no match timeout).
+
+## 2026-09-23 (later): batch 2, and the day a probe cleanup deleted a live install
+
+Batch 2 of the security work (TLS + guards + uninstallers):
+
+- optional TLS on the web lane: web.tls_cert/web.tls_key (PEM paths, BOTH or neither); a half pair
+  or an unloadable cert REFUSES to start (raised - never a plaintext fallback on a lane the
+  operator believes is https). The handshake runs per connection thread with its own 60s bound.
+  tests/test_webui.py falsifies both refusal paths (a full handshake test needs cert fixtures and
+  was skipped on purpose).
+- the pattern guard (the cheap half of F7): blocked/confirm patterns compile once per distinct
+  list, and a catastrophic shape (a quantified group that itself repeats) is flagged at compile
+  time. No match timeout: the stdlib has none and an abandon-the-thread scheme is a wedge factory.
+- installer transcripts scrub every secret value before the log goes cold (every Stop-Transcript
+  site routes through Stop-TranscriptRedacted; the summary still prints the web token for paste).
+- uninstallers ship: install/uninstall-tinycmdr.{sh,ps1,-macos.sh} in EVERY package beside the
+  installer and copied into the install with it. One home for removal - they call the installer's
+  own --uninstall/-Uninstall. The box-level removals (PATH wrapper, sudo grant) are SCOPED.
+- F6 measured complete: every readable host already carries the 17+4 split (the 2026-09-22 evening
+  tier pass reached all of them; the Linux test box's own log shows 21 -> 17 at 05:39 UTC). The review's
+  "five hosts pre-split" snapshot was stale.
+
+The incident (owned, measured):
+
+- A probe cleanup on the Linux test box ran install-tinycmdr.sh --uninstall WITHOUT --install-dir, so the
+  uninstall block rm -rf'd the DEFAULT install: the box's real ~/tinycmdr, while its bot was
+  running (the process survived on deleted inodes). ~20h of sessions/notes/ledger lost. The log
+  was salvaged off the dead process's open fd - which is how the home channel id and the token
+  lineage were recovered - and fleet-mig's staging/the Linux test box held the migration's carried secrets,
+  which made the restore kit complete.
+- Restored with the current tree: fresh install + carried secrets + config tier-fixed (17+4,
+  bot the Linux box). The sudoers rename ran FOR REAL in that install (<user>-tinycmdr
+  written, the stale -hermes file migrated away, visudo clean) = the "verify at the next real
+  Linux install" item, and .47 got the same rename by the same recipe. The shipped uninstaller was
+  then proved against a probe install and the real install stayed untouched (wrapper, grant,
+  service, files).
+- The bot account was RENAMED from @sotinycmdr to @the Linux box the same morning (same account
+  lineage, same channel, the old name no longer resolves), so the restored bot answers under the
+  new name - right token, right channel.
+- Rules that came out of it (also written into the skill): probe flags travel together in BOTH
+  directions (TINYCMDR_SERVICE + --install-dir + --no-path on the install AND the uninstall);
+  box-level removals are scoped against the install being removed; the leak gate refuses host
+  NAMES in comments, not just addresses (a "measured on <box>" note refused a whole build).
+
+Status: 36 suites + test_cli 170 + console grade + both packagers green. No version bump and no
+fleet push: four hosts keep the fleet build; .13 and the manager box run the tree. The Mac sleeps - its
+config read-back is the one verification still open.

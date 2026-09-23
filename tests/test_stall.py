@@ -2075,6 +2075,10 @@ def test_the_safety_seatbelt_covers_execute_code_too():
     # The write paths take the CONFIRM tier too (security review 2026-09-23):
     # the fastest route for a steered model is a file or a tool, not a command.
     wp = TMP / "belt-write.txt"
+    # TMP persists between runs: a leftover here made "declined before it lands"
+    # fail on the second sweep (2026-09-23). Start from no file.
+    if wp.exists():
+        wp.unlink()
     out = fb.tool_write_file(
         {"path": str(wp), "content": "step one\nRemove-Item -Recurse -Force C:\\Temp\n"},
         {"session_key": "belt-s"})
@@ -2098,6 +2102,25 @@ def test_the_safety_seatbelt_covers_execute_code_too():
     check("create_tool: confirm-tier code is declined before it is written",
           out.startswith("DECLINED")
           and not (fb.TOOLS_DIR / "belt_probe.py").exists(), out[:160])
+
+    # The pattern guard (security review 2026-09-23): a catastrophic operator
+    # regex is flagged when the tier compiles, before it can stall a run.
+    import logging as _logging
+    seen = []
+    h = _logging.Handler()
+    h.emit = lambda r: seen.append(r.getMessage())
+    fb.log.addHandler(h)
+    saved_pats = fb.CONFIG["agent"]["blocked_patterns"]
+    try:
+        fb.CONFIG["agent"]["blocked_patterns"] = saved_pats + [r"(a+)+$"]
+        fb._PATTERN_CACHE.clear()
+        fb.is_blocked("b")     # compiles the tier; "b" fails every pattern fast
+        check("guard: a catastrophic pattern is flagged at compile time",
+              any("catastrophic" in m for m in seen), seen)
+    finally:
+        fb.CONFIG["agent"]["blocked_patterns"] = saved_pats
+        fb._PATTERN_CACHE.clear()
+        fb.log.removeHandler(h)
 
 
 def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():

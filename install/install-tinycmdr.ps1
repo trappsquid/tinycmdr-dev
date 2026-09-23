@@ -133,10 +133,27 @@ function Ask-Yes {
 # the .cmd wrapper points at.
 $LogFile = Join-Path $env:TEMP "tinycmdr-install.log"
 try { Start-Transcript -Path $LogFile -Force | Out-Null } catch { }
+# Every Stop-Transcript below routes through here: the summary prints the web
+# token for paste and the transcript sits in %TEMP% (security review residual,
+# 2026-09-23 - the old ?token= link leaked the same value). Scrub the secrets
+# this run handled before the log goes cold.
+function Stop-TranscriptRedacted {
+    try { Microsoft.PowerShell.Core\Stop-Transcript | Out-Null } catch { }
+    foreach ($s in @($MattermostToken, $TelegramToken, $ModelKey, $webToken)) {
+        if ($s -and $s.Length -ge 8 -and (Test-Path $LogFile)) {
+            try {
+                $t = Get-Content -Raw -LiteralPath $LogFile
+                if ($t -and $t.Contains($s)) {
+                    [System.IO.File]::WriteAllText($LogFile, $t.Replace($s, "<redacted>"))
+                }
+            } catch { }
+        }
+    }
+}
 trap {
     Write-Host "`nINSTALL FAILED: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "Full log: $LogFile"
-    try { Stop-Transcript | Out-Null } catch { }
+    try { Stop-TranscriptRedacted } catch { }
     if (-not $NoPause) { Read-Host "Press Enter to close" }
     exit 2
 }
@@ -255,7 +272,7 @@ function Head ($m) { Write-Host "`n== $m" -ForegroundColor Cyan }
 function Fail ($m) {
     Write-Host "`nFAILED: $m" -ForegroundColor Red
     Write-Host "Full log: $LogFile"
-    try { Stop-Transcript | Out-Null } catch { }
+    try { Stop-TranscriptRedacted } catch { }
     if (-not $NoPause) { Read-Host "Press Enter to close" }
     exit 1
 }
@@ -309,7 +326,7 @@ if ($Uninstall) {
     $taskExists = $null -ne (Get-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue)
     if (-not $taskExists -and -not (Test-Path $InstallDir)) {
         Say "nothing to remove (no task '$AppName', no $InstallDir)"
-        try { Stop-Transcript | Out-Null } catch { }
+        try { Stop-TranscriptRedacted } catch { }
         exit 0
     }
     if ($taskExists -and -not $SkipTask) {
@@ -321,13 +338,21 @@ if ($Uninstall) {
     }
     $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n process(es)" }
+    # undo the user-Path entry the install added (the verb surface, audit F12)
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $keep = @(($userPath -split ';') | Where-Object {
+        $_ -and $_.TrimEnd('\') -ne $InstallDir.TrimEnd('\') })
+    if ($keep.Count -ne @(($userPath -split ';') | Where-Object { $_ }).Count) {
+        [Environment]::SetEnvironmentVariable("Path", ($keep -join ';'), "User")
+        Say "path    : $InstallDir removed from the user Path"
+    }
     if (Test-Path $InstallDir) {
         if (-not $Force) {
             if ($NoPause) { Fail "refusing to delete $InstallDir without -Force (or run interactively to confirm)" }
             $ans = Read-Host "Delete $InstallDir and everything in it? (y/N)"
             if ($ans -notmatch '^(y|yes)$') {
                 Say "kept $InstallDir"
-                try { Stop-Transcript | Out-Null } catch { }
+                try { Stop-TranscriptRedacted } catch { }
                 exit 0
             }
         }
@@ -335,7 +360,7 @@ if ($Uninstall) {
         Say "removed : $InstallDir"
     }
     Say "done"
-    try { Stop-Transcript | Out-Null } catch { }
+    try { Stop-TranscriptRedacted } catch { }
     if (-not $NoPause) { Read-Host "`nPress Enter to close" }
     exit 0
 }
@@ -397,13 +422,13 @@ if ($missReq -or $missMm -or $missCron) {
 if ($VerifyOnly) {
     if (-not (Test-Path (Join-Path $InstallDir "tinycmdr.py"))) {
         Write-Host "no tinycmdr.py in $InstallDir" -ForegroundColor Red
-        try { Stop-Transcript | Out-Null } catch { }
+        try { Stop-TranscriptRedacted } catch { }
         exit 1
     }
     Head "verifying $InstallDir"
     $p = Invoke-Probe -Dir $InstallDir -Python $py.Path
     Write-Host (($p.Trim() -split "`n" | Select-Object -Last 6) -join "`n")
-    try { Stop-Transcript | Out-Null } catch { }
+    try { Stop-TranscriptRedacted } catch { }
     if ($p -match "READY") {
         Write-Host "OK: the agent answered" -ForegroundColor Green
         if (-not $NoPause) { Read-Host "Press Enter to close" }
@@ -437,7 +462,7 @@ if ((Test-Path $InstallDir) -and -not $Force) {
                 $Force = $true
             } else {
                 Say "nothing was changed"
-                try { Stop-Transcript | Out-Null } catch { }
+                try { Stop-TranscriptRedacted } catch { }
                 if (-not $NoPause) { Read-Host "`nPress Enter to close" }
                 exit 0
             }
@@ -571,7 +596,7 @@ if ($Ask) {
     Write-Host ""
     if (-not (Ask-Yes "Install now?" $true)) {
         Say "nothing was changed"
-        try { Stop-Transcript | Out-Null } catch { }
+        try { Stop-TranscriptRedacted } catch { }
         exit 0
     }
 }
@@ -643,7 +668,8 @@ if ($Force) {
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 $copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr-cli.py", "tinycmdr.cmd", "requirements.txt", "config.example.json",
           ".env.example", "README.md", "field-notes.md", "soul.md", "skills",
-          "tools")   # the starter drop-in tools; tools/README.md has the shapes
+          "tools",    # the starter drop-in tools; tools/README.md has the shapes
+          "install")  # the installer family incl. uninstall-tinycmdr.ps1
 foreach ($item in $copy) {
     $src = Join-Path $Source $item
     if (Test-Path $src) { Copy-Item $src -Destination $InstallDir -Recurse -Force }
@@ -1094,7 +1120,7 @@ if ($EnableWeb) {
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr-cli.py)"
 Say "redo   : install-tinycmdr.cmd -Force"
-try { Stop-Transcript | Out-Null } catch { }
+try { Stop-TranscriptRedacted } catch { }
 if (-not $NoPause) { Read-Host "`nPress Enter to close" }
 # 0 = installed and verified - 3 = installed, model endpoint not answering yet
 if ($Unverified) { exit 3 } else { exit 0 }

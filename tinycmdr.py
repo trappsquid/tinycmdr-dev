@@ -209,6 +209,11 @@ DEFAULT_CONFIG = {
         "port": 8787,
         "token": "",          # set to reach it from other machines; empty = loopback only
         "host": "",           # optional explicit bind address
+        # Optional TLS for the page (security review 2026-09-23): PEM paths, both
+        # or neither. A half-configured pair REFUSES to serve - never fall back to
+        # plaintext on a lane the operator believes is https.
+        "tls_cert": "",
+        "tls_key": "",
     },
     "agent": {
         "bot_name": socket.gethostname(),
@@ -1370,12 +1375,43 @@ def cap_output(name, text, label="output", limit=None):
             + text[-tail:])
 
 
+_PATTERN_CACHE = {}
+_CATASTROPHIC = re.compile(r"\([^)]*[+*?][^)]*\)\s*[+*{]")
+
+
+def _patterns(kind):
+    """The compiled regexes of one safety tier, compiled once per distinct list.
+
+    This runs on every tool call (security review, 2026-09-23). The guard:
+    blocked_patterns/confirm_patterns are OPERATOR regexes, and a catastrophic one
+    (a quantified group that itself repeats) stalls the run it is meant to protect
+    - flag its shape when the tier compiles instead of at 03:00 in a stuck thread.
+    No match timeout: the stdlib has none and an abandon-the-thread scheme is a
+    wedge factory. ponytail: shape heuristic only - a real timeout the day Python
+    grows one.
+    """
+    raw = tuple(CONFIG["agent"].get(kind) or [])
+    key = (kind, raw)
+    got = _PATTERN_CACHE.get(key)
+    if got is None:
+        made = []
+        for pat in raw:
+            if _CATASTROPHIC.search(pat):
+                log.warning("%s: catastrophic regex shape (a quantified group "
+                            "that itself repeats) - a match can stall the run; "
+                            "rewrite it: %s", kind, pat[:100])
+            made.append(re.compile(pat, re.IGNORECASE))
+        _PATTERN_CACHE[key] = got = made
+    return got
+
+
 def is_blocked(command):
     # case-insensitive on purpose: PowerShell cmdlets are capitalised
-    # (Remove-Item, Stop-Computer) and 'Format C:' must match too
-    for pat in CONFIG["agent"]["blocked_patterns"]:
-        if re.search(pat, command, re.IGNORECASE):
-            return pat
+    # (Remove-Item, Stop-Computer) and 'Format C:' must match too (the patterns
+    # compile with IGNORECASE in _patterns)
+    for pat in _patterns("blocked_patterns"):
+        if pat.search(command):
+            return pat.pattern
     return None
 
 
@@ -1387,9 +1423,9 @@ def _confirm_hit(text):
     needs a 'yes' (audit, 2026-09-22; write coverage 2026-09-23). Case-insensitive
     for the same reason is_blocked is: PowerShell cmdlets are capitalised.
     """
-    for pat in CONFIG["agent"].get("confirm_patterns") or []:
-        if re.search(pat, text, re.IGNORECASE):
-            return pat
+    for pat in _patterns("confirm_patterns"):
+        if pat.search(text):
+            return pat.pattern
     return None
 
 
@@ -12872,6 +12908,7 @@ def run_webui():
         MAX_CONN = 32
         _conn_lock = threading.Lock()
         _conn_live = 0
+        _tls_ctx = None     # set by run_webui when web.tls_cert/tls_key load
 
         def process_request(self, request, client_address):
             with self._conn_lock:
@@ -12889,6 +12926,22 @@ def run_webui():
                 raise
 
         def process_request_thread(self, request, client_address):
+            # The TLS handshake runs HERE, in the connection's own thread: in the
+            # accept loop one stalled handshake would block every other client.
+            if QuietServer._tls_ctx is not None:
+                try:
+                    request.settimeout(60)     # bound the handshake
+                    request = QuietServer._tls_ctx.wrap_socket(
+                        request, server_side=True)
+                except Exception as e:
+                    log.info("web TLS handshake failed (%s)", type(e).__name__)
+                    try:
+                        request.close()
+                    except Exception:
+                        pass
+                    with self._conn_lock:
+                        self._conn_live -= 1
+                    return
             try:
                 super().process_request_thread(request, client_address)
             finally:
@@ -13271,6 +13324,23 @@ def run_webui():
                     "in .env (or web.token in config.json) to require a token and reach it "
                     "from other machines.")
     port = int(web.get("port", 8787))
+    tls_cert = str(web.get("tls_cert") or "").strip()
+    tls_key = str(web.get("tls_key") or "").strip()
+    if tls_cert or tls_key:
+        # A half-configured TLS pair REFUSES loudly and never serves the page as
+        # plaintext on a lane the operator believes is https (security review,
+        # 2026-09-23). Raised, not logged: a silent fallback is the real bug.
+        if not (tls_cert and tls_key):
+            raise RuntimeError("web.tls_cert and web.tls_key must BOTH be set "
+                               "(got one of them) - refusing to serve plaintext")
+        import ssl as _ssl
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
+        try:
+            ctx.load_cert_chain(tls_cert, tls_key)
+        except Exception as e:
+            raise RuntimeError("web TLS configured but the cert/key did not "
+                               "load: %s (%s / %s)" % (e, tls_cert, tls_key))
+        QuietServer._tls_ctx = ctx
     srv = None
     for attempt in range(6):
         try:
@@ -13290,7 +13360,8 @@ def run_webui():
                      port, attempt + 1)
             time.sleep(1)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
-    log.info("web UI listening on http://%s:%d%s", host, port,
+    log.info("web UI listening on %s://%s:%d%s",
+             "https" if QuietServer._tls_ctx is not None else "http", host, port,
              "" if token else " (loopback only)")
     return srv
 

@@ -93,7 +93,10 @@
     "enabled": false,
     "port": 8787,
     "token": "",
-    "host": ""
+    "host": "",
+    "_comment_tls": "Optional TLS for the page (security review 2026-09-23): PEM paths, BOTH or neither - a half-configured pair refuses to start rather than serve plaintext. The token on plain http is readable by anything that can see the wire, so https (or an SSH tunnel) is the rule whenever the page crosses a segment you do not trust.",
+    "tls_cert": "",
+    "tls_key": ""
   },
   "agent": {
     "_comment": "Behaviour: names, budgets, progress reporting, guard rails. The defaults are conservative for a small local model; the numbers below are what the code ships unless a _comment says otherwise.",

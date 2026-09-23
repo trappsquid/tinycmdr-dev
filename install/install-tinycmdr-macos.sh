@@ -144,6 +144,12 @@ if [ "$UNINSTALL" = 1 ]; then
         rm -f "$PLIST"
         info "removed $PLIST"
     fi
+    # the PATH wrapper the install wrote outside its folder - only when it points
+    # at THIS install (a probe uninstall must not take the real one's wrapper)
+    if [ -f /usr/local/bin/tinycmdr ] \
+            && grep -qF "$INSTALL_DIR" /usr/local/bin/tinycmdr 2>/dev/null; then
+        rm -f /usr/local/bin/tinycmdr
+    fi
     if [ -d "$INSTALL_DIR" ]; then
         info "removing $INSTALL_DIR"
         rm -rf "$INSTALL_DIR"
@@ -373,6 +379,12 @@ fi
 if [ -d "$SRC/tools" ]; then
     mkdir -p "$INSTALL_DIR/tools"
     cp -f "$SRC/tools/"* "$INSTALL_DIR/tools/" 2>/dev/null || true
+fi
+# the installer family lands with the install - day-two removal must not need
+# the original package (the uninstaller is uninstall-tinycmdr-macos.sh)
+if [ -d "$SRC/install" ]; then
+    mkdir -p "$INSTALL_DIR/install"
+    cp -f "$SRC/install/"* "$INSTALL_DIR/install/" 2>/dev/null || true
 fi
 mkdir -p "$INSTALL_DIR/maintenance"
 for f in restart-tinycmdr-macos.sh restart-tinycmdr.sh; do

@@ -1418,12 +1418,43 @@ def cap_output(name, text, label="output", limit=None):
             + text[-tail:])
 
 
+_PATTERN_CACHE = {}
+_CATASTROPHIC = re.compile(r"\([^)]*[+*?][^)]*\)\s*[+*{]")
+
+
+def _patterns(kind):
+    """The compiled regexes of one safety tier, compiled once per distinct list.
+
+    This runs on every tool call (security review, 2026-09-23). The guard:
+    blocked_patterns/confirm_patterns are OPERATOR regexes, and a catastrophic one
+    (a quantified group that itself repeats) stalls the run it is meant to protect
+    - flag its shape when the tier compiles instead of at 03:00 in a stuck thread.
+    No match timeout: the stdlib has none and an abandon-the-thread scheme is a
+    wedge factory. ponytail: shape heuristic only - a real timeout the day Python
+    grows one.
+    """
+    raw = tuple(CONFIG["agent"].get(kind) or [])
+    key = (kind, raw)
+    got = _PATTERN_CACHE.get(key)
+    if got is None:
+        made = []
+        for pat in raw:
+            if _CATASTROPHIC.search(pat):
+                log.warning("%s: catastrophic regex shape (a quantified group "
+                            "that itself repeats) - a match can stall the run; "
+                            "rewrite it: %s", kind, pat[:100])
+            made.append(re.compile(pat, re.IGNORECASE))
+        _PATTERN_CACHE[key] = got = made
+    return got
+
+
 def is_blocked(command):
     # case-insensitive on purpose: PowerShell cmdlets are capitalised
-    # (Remove-Item, Stop-Computer) and 'Format C:' must match too
-    for pat in CONFIG["agent"]["blocked_patterns"]:
-        if re.search(pat, command, re.IGNORECASE):
-            return pat
+    # (Remove-Item, Stop-Computer) and 'Format C:' must match too (the patterns
+    # compile with IGNORECASE in _patterns)
+    for pat in _patterns("blocked_patterns"):
+        if pat.search(command):
+            return pat.pattern
     return None
 
 
@@ -1435,9 +1466,9 @@ def _confirm_hit(text):
     needs a 'yes' (audit, 2026-09-22; write coverage 2026-09-23). Case-insensitive
     for the same reason is_blocked is: PowerShell cmdlets are capitalised.
     """
-    for pat in CONFIG["agent"].get("confirm_patterns") or []:
-        if re.search(pat, text, re.IGNORECASE):
-            return pat
+    for pat in _patterns("confirm_patterns"):
+        if pat.search(text):
+            return pat.pattern
     return None
 
 

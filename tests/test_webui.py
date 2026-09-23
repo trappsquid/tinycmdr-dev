@@ -430,6 +430,28 @@ def main():
         check(b" 400 " in head,
               f"a negative Content-Length is refused, not read to EOF ({head!r})")
 
+        # -- TLS misconfiguration refuses loudly, never serves plaintext
+        saved_web = dict(fb.CONFIG["web"])
+        fb.CONFIG["web"] = {"enabled": True, "port": 0, "host": "127.0.0.1",
+                            "token": TOKEN, "tls_cert": "only-cert.pem",
+                            "tls_key": ""}
+        try:
+            fb.run_webui()
+            check(False, "web TLS with half a cert/key pair refuses to start")
+        except RuntimeError as e:
+            check("BOTH" in str(e),
+                  f"web TLS with half a cert/key pair refuses to start ({e})")
+        fb.CONFIG["web"] = {"enabled": True, "port": 0, "host": "127.0.0.1",
+                            "token": TOKEN, "tls_cert": "no-such.pem",
+                            "tls_key": "no-such.key"}
+        try:
+            fb.run_webui()
+            check(False, "web TLS with an unloadable cert refuses to start")
+        except RuntimeError as e:
+            check("did not" in str(e),
+                  f"web TLS with an unloadable cert refuses to start ({e})")
+        fb.CONFIG["web"] = saved_web
+
         # -- a real run, followed the way the browser follows it --------------
         seen = []
         ev = {"first": threading.Event(), "go1": threading.Event(),

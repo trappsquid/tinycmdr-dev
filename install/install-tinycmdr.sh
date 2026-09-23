@@ -42,6 +42,10 @@ SRC="$(cd "$HERE/.." && pwd)"
 SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
 RUN_USER="${TINYCMDR_USER:-${SUDO_USER:-$(id -un)}}"
 INSTALL_DIR="${TINYCMDR_DIR:-/home/$RUN_USER/tinycmdr}"
+# the default, remembered BEFORE flags parse: the box-level removals in
+# --uninstall are scoped against it (2026-09-23: an un-scoped probe cleanup
+# removed a running box's whole install - twice over in one day)
+DEFAULT_INSTALL_DIR="$INSTALL_DIR"
 UNIT="/etc/systemd/system/$SERVICE_NAME.service"
 LOG="${TINYCMDR_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
 PY="${TINYCMDR_PYTHON:-python3}"
@@ -189,6 +193,21 @@ if [ "$UNINSTALL" = 1 ]; then
     systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
     rm -f "$UNIT"
     systemctl daemon-reload || true
+    # The two things the install writes OUTSIDE its folder, both SCOPED: a probe
+    # uninstall (--install-dir /tmp/...) must never take a real install's verb
+    # wrapper or sudo grant with it (measured 2026-09-23: it ate a live install's wrapper and grant).
+    if [ -f /usr/local/bin/tinycmdr ] \
+            && grep -qF "$INSTALL_DIR" /usr/local/bin/tinycmdr 2>/dev/null; then
+        rm -f /usr/local/bin/tinycmdr
+        info "PATH wrapper removed"
+    fi
+    # the passwordless-sudo grant is per-USER, not per-install: only the default
+    # install's removal takes it. Both file names - a pre-tinycmdr one can remain.
+    if [ "$(id -u)" = 0 ] && [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
+        rm -f "/etc/sudoers.d/${RUN_USER}-tinycmdr" \
+              "/etc/sudoers.d/${RUN_USER}-hermes"
+        info "sudo grant removed (both file names)"
+    fi
     if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] && [ -d "$INSTALL_DIR" ]; then
         rm -rf "$INSTALL_DIR"
         info "removed $INSTALL_DIR (token, notes and history went with it)"

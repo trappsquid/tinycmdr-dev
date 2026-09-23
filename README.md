@@ -336,18 +336,26 @@ process, which is the quickest way to try the whole thing: no server, no bot acc
 Pass `-EnableWeb` to the installer if you want the page served alongside the chat bot, which
 writes a token into `.env` (`TINYCMDR_WEB_TOKEN`) and binds loopback only.
 
-**The web lane is plain HTTP.** The `X-Tinycmdr-Token` header is shell and code execution on
-that box, so anything that can see the traffic can take it. The installer prints the token for
-paste and it never rides in a link (a URL lands in browser history and proxy logs). Keep the
-page on loopback, or reach it over an SSH tunnel or a TLS reverse proxy - never across a
-segment you do not trust.
+**The web lane is plain HTTP unless you say otherwise.** The `X-Tinycmdr-Token` header is shell
+and code execution on that box, so anything that can see the traffic can take it. The installer
+prints the token for paste and it never rides in a link (a URL lands in browser history and proxy
+logs). Set `web.tls_cert` + `web.tls_key` (PEM paths, both or neither) to serve the page as
+https, keep it on loopback, or reach it over an SSH tunnel - never across a segment you do not
+trust.
 
 ## Uninstall
 
+One script per platform, shipped in every package and copied into the install with it:
+
 ```powershell
-Stop-ScheduledTask Tinycmdr ; Unregister-ScheduledTask Tinycmdr -Confirm:$false
-Remove-Item C:\tinycmdr -Recurse -Force      # take .env and notes.md with it if that is fine
+install\uninstall-tinycmdr.ps1            # Windows: task, processes, user-Path entry, folder
+sudo sh install/uninstall-tinycmdr.sh     # Linux: unit, PATH wrapper, sudo grant, folder
+sudo sh install/uninstall-tinycmdr-macos.sh   # macOS: launchd job, PATH wrapper, folder
 ```
+
+Each calls the installer's own `--uninstall`/`-Uninstall` path, so the removal logic has one
+home. By hand on Windows: stop and unregister the scheduled task `Tinycmdr`, then delete the
+install folder.
 
 ## Files
 
