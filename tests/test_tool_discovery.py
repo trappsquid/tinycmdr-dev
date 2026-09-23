@@ -141,7 +141,7 @@ def inv_names(prompt):
     rows = [l for l in prompt.splitlines() if INV_MARK in l]
     if len(rows) != 1:
         return None
-    after = rows[0].split(INV_MARK, 1)[1].split(" The custom tools")[0]
+    after = rows[0].split(INV_MARK, 1)[1].split(" Those are core tools")[0]
     return [w.strip() for w in after.replace(".", "").split(",") if w.strip()]
 
 
@@ -162,6 +162,16 @@ check("the line is bounded", len(inv_line) < 320, len(inv_line))
 check("the prompt is still byte-identical across two builds",
       fb.build_system_prompt() == sp)
 check("the placeholder is a live field, not literal braces", "{inventory}" not in sp)
+check("the line says these are CORE tools (the drive mislabeled them custom)",
+      "Those are core tools" in fb.hidden_inventory_line(), fb.hidden_inventory_line()[:200])
+check("and points at the custom block for the rest",
+      "custom tools listed at the end" in fb.hidden_inventory_line())
+check("prompt: a skill is a runbook, not a tool, so a tools inventory names tools",
+      "a skill is a runbook, not a tool" in sp)
+check("prompt: the routing bullet names the shell verbs it replaces",
+      "Select-String" in sp and "findstr" in sp and "search_files {pattern, path}" in sp)
+check("prompt: the routing bullet carries search_files' own call shape",
+      "{pattern, path}" in sp)
 
 # A tool made hidden by CONFIG must appear: that is the drift the hand-written list had.
 _keep_core = fb.CONFIG["agent"].get("core_tools")

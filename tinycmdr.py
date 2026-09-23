@@ -1964,7 +1964,7 @@ _ATLAS_KNOWN_FILES = (
     ("tasks.json", "the task ledger"),
     ("atlas.md", "this file"),
     ("skills/", "runbooks, read on demand with the skill tool"),
-    ("tools/", "custom tools, hot-loaded"),
+    ("tools/", "custom tools; a file dropped here is read at the next start"),
     ("tests/", "the test suites; run_eval.py is the graded scoreboard"),
     ("uploads/", "files the operator sent"),
     ("maintenance/", "host maintenance scripts"),
@@ -2867,6 +2867,52 @@ def command_cost_risk(command):
     return None
 
 
+# ---- the route hint: a content search through the SHELL -------------------------------
+# The prompt line against it is not enough on its own. Measured 2026-09-23 (the Windows test box, the
+# operator drive's first work order): "find every line that calls atomic_write_text" became
+# Select-String + a second Select-String for the def lines + a python regex in execute_code +
+# a 13,482-char spill + a repeat-read map - 6 calls and 4.5 minutes for what one search_files
+# call answers, and search_files was never called. The model reaches for the shell verb it
+# knows cold over a tool whose argument shape it has not seen: the hidden names are in its
+# prompt now, but the SHAPE is not, and the payload budget (8,518 of 8,900) will not carry
+# search_files' 528-char schema. So the hint rides the result the miss already cost, names the
+# exact call, and fires ONCE per run.
+_SHELL_CONTENT_SEARCH = re.compile(r"(?i)\b(select-string|findstr|grep|rg)\b")
+_PATHISH = re.compile(r"(?i)(-path\s+\S+|(?:[\w.*-]+[\\/][\w./*\\-]+|[\w.*-]+\.(?:py|md|txt|"
+                      r"json|log|ya?ml|ini|csv|ps1|sh|toml|cfg|conf|xml|htm|html|sql|env))\b)")
+# A grep over COMMAND output is not a file search ("docker ps | grep x"): only a -Path form or
+# a path-looking token counts, and a pipeline into a process tool is left alone.
+_SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docker|kubectl|"
+                                 r"netstat|tasklist|get-process|get-childitem|ps\b)\b")
+
+
+def route_hint(command, ctx):
+    """A one-line pointer to search_files after a shell content search. Bounded, once a run."""
+    cmd = command or ""
+    if not cmd or not _SHELL_CONTENT_SEARCH.search(cmd):
+        return ""
+    if not disclosure_on():
+        return ""                       # every schema is in the payload then: nothing to teach
+    if not _PATHISH.search(cmd):
+        return ""                       # nothing file-like in it: not this miss
+    if _SHELL_NOT_A_SEARCH.search(cmd) and not re.search(r"(?i)-path\s", cmd):
+        return ""
+    if "search_files" not in CORE_TOOL_NAMES:
+        return ""
+    key = (ctx or {}).get("session_key")
+    if key and "search_files" in revealed_tools(key):
+        return ""                       # it already has the schema: no hint owed
+    state = run_state(key, create=True) if key else {}
+    if state.get("route_hint_used"):
+        return ""
+    state["route_hint_used"] = True
+    return ("\n[HARNESS: that was a content search through the shell, which this box scores "
+            "as a miss. `search_files` does it in ONE call and returns the line numbers: "
+            "search_files {\"pattern\": \"<regex>\", \"path\": \"<file or directory>\"} "
+            "(pattern is a regex, so \"^def \" works). Use it instead of Select-String, "
+            "findstr, grep or rg.]")
+
+
 # --- the run's scan budget: the half that bounds a STRATEGY ------------------
 # A per-call ceiling was measured on 2026-09-17 and did not move the wall clock:
 # with a 60s cap in place the model repeated the sweep call by call and then moved
@@ -3008,7 +3054,8 @@ def tool_shell(args, ctx):
                     f"started were killed (a survivor holding the output pipe "
                     f"would freeze this channel). Partial output:\n{out}")
         return (f"exit_code={rc}\n{out}"
-                + _launch_warning(args.get("command")))
+                + _launch_warning(args.get("command"))
+                + route_hint(args.get("command"), ctx))
     except OperatorStop:
         return ("STOPPED by the operator (`/tinycmdr stop`): this command and everything it started "
                 "were killed. Do not retry it and do not write a final answer — the run "
@@ -6963,7 +7010,8 @@ def hidden_inventory_line():
     line = ("- Also on this box, not in your tool list \u2014 call one by name and it stays "
             "for the session: " + ", ".join(names) + ".")
     if REGISTRY.custom:
-        line += " The custom tools further down work the same way."
+        line += (" Those are core tools; the custom tools listed at the end of this "
+                 "prompt are callable the same way.")
     return line + "\n"
 
 
@@ -7192,7 +7240,9 @@ def build_system_prompt():
     skills = skill_index()
     skills_block = ("\nProse skills installed (runbooks of local procedures "
                     "and hard-won warnings — read the relevant one with the "
-                    "`skill` tool BEFORE working in its domain):\n"
+                    "`skill` tool BEFORE working in its domain; a skill is a "
+                    "runbook, not a tool, so an inventory asked for TOOLS names "
+                    "tools only, never skill names):\n"
                     + "\n".join(f"- {s['name']}: {s['desc']}" for s in skills)
                     + "\n") if skills else ""
     return scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. {soul_text()} The operator messages you via Mattermost; you do the work and report back.
@@ -7211,7 +7261,7 @@ How you work:
 - Reusable procedures (managing a service, publishing a post, mail admin, recurring checks) should become custom tools via create_tool so future tasks are one call. Check list_tools first.
 - Your tool list is deliberately short: the ones you use constantly. Anything else is one call away — find_tools with what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it by name and the harness keeps it for the session. Never claim a capability is missing without checking. If a task needs something you would expect an agent to have, call find_tools FIRST: do not work around a hidden tool by re-implementing it, reading its source, or hand-rolling the equivalent command (measured: a run spent 40s replicating a tool that one call would have done).
 - If the tool for a job is not in your list, ONE find_tools call is the check — a call with no query lists everything this box has. If it is not there, say what is missing and ask. Never rebuild a route by hand from the filesystem up.
-{inventory}- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files (call it by name), edit_file. Shell is for what they cannot do — services, processes, OS state, one-off commands.
+{inventory}- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files {{pattern, path}} (a regex, line numbers, ONE call - this is what replaces Select-String, findstr, grep and rg), edit_file. Searching file CONTENT through the shell is the miss this box pays most for (measured: one "find every line that calls X" cost 6 shell calls, a spill and a repeat read, and search_files was never called). Shell is for what the file tools cannot do — services, processes, OS state, one-off commands.
 - Any fix or next step you recommend must name the tool result from THIS run that shows it is possible. If nothing here tested it, say it is untested. Never prescribe a step your own output has already contradicted.
 - Keep the task ledger current: `task action=add` when you take on anything multi-step, `action=doing`/`done` as it moves (done needs one line of evidence), and curate the list rather than letting it grow. It survives restarts and tells the operator — and your next session — what this box is in the middle of.
 - Checking the work is the last ledger item: re-run the command, re-read the change, open the page, and make the check test the claim itself — a file existing proves nothing about what is in it or who wrote it. For anything high-stakes, hand the check to delegate_task so the work is not grading itself.
@@ -8325,6 +8375,7 @@ class Agent:
             _run["deliver_nudge"] = False
             _run["compactions"] = 0
             _run["atlas_reask"] = False
+            _run["route_hint_used"] = False
             # Generated on the host, never shipped in a package. One stat per run once the
             # file exists; a fresh install gets a draft it can correct. It must never be able
             # to stop a run.
