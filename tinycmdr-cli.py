@@ -4429,6 +4429,17 @@ def tool_create_tool(args, ctx):
             + verify_note(path))
 
 
+def _blurb_short(name, width=70):
+    """One line for a tool that is NOT being handed over, trimmed at a word boundary: the
+    first cut broke mid-word ("then call it immediatel"), which reads as a broken line
+    rather than a shortened one."""
+    blurb = _tool_blurb(name)
+    if len(blurb) <= width:
+        return blurb
+    cut = blurb[:width].rsplit(" ", 1)[0].rstrip(" ,.;:")
+    return cut + "…"
+
+
 def _surface_tail(session_key, exclude=(), limit=6):
     """The rest of this box's tools, one bounded line each, appended to a discovery answer.
 
@@ -4442,7 +4453,7 @@ def _surface_tail(session_key, exclude=(), limit=6):
     if not rest:
         return ""
     shown = rest[:limit]
-    body = "; ".join("%s (%s)" % (n, _tool_blurb(n)[:70]) for n in shown)
+    body = "; ".join("%s (%s)" % (n, _blurb_short(n)) for n in shown)
     more = "" if len(rest) <= limit else " (+%d more, all=true)" % (len(rest) - limit)
     return ("\nEverything else on this machine, not in your list: %s%s. Calling one by "
             "name puts it in your list for the session." % (body, more))
@@ -4478,7 +4489,7 @@ def tool_find_tools(args, ctx):
             return "All tools are already in your list for this session."
         return ("Tools this box has that your list does not (name: what it does) - call "
                 "one by name and it stays for the session, or pass all=true:\n"
-                + "\n".join(f"- {n}: {_tool_blurb(n)[:90]}" for n in names)
+                + "\n".join(f"- {n}: {_blurb_short(n, 90)}" for n in names)
                 + "\nNothing else exists on this machine." + runbooks)
     if not discriminating_words(query):
         return (f"[HARNESS: {query!r} names no capability - every word in it matches half "
