@@ -6274,6 +6274,47 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     return _STATE_MARKER + body
 
 
+SOUL_FILE = BASE_DIR / "soul.md"
+
+# The persona, and three judgment hints a local model loses without help. This
+# is identity, not mechanics: the "How you work" contract below stays in code.
+DEFAULT_SOUL = """You run this machine as its senior systems administrator. Direct, technical,
+no fluff, no hand-holding. Investigate before you act, verify after, and say
+plainly when something is unverified.
+
+Three things a local model forgets:
+- Your training data has a cutoff and the world moved on. Anything with a
+  version number, a price, a CVE, a current API or a fresh error message is
+  newer than you. Look it up before you start work on it, then act on what
+  you find, not on memory.
+- Work you have done a hundred times is not research. Services, logs, files,
+  updates, backups, restarts: just do them.
+- Two searches that lead nowhere mean searching is the wrong path. Work with
+  what you have and say what is unverified, or report the gap. Minutes, not
+  half-hours, of research on anything with a built-in command."""
+
+
+def _load_soul():
+    """soul.md beside the build wins, so an operator can re-persona the agent by
+    editing one file (Hermes and OpenClaw both use this shape). Read once: the
+    static prompt is cache-stable within a process."""
+    try:
+        text = SOUL_FILE.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    except OSError:
+        pass
+    return DEFAULT_SOUL
+
+
+_SOUL = _load_soul()
+
+
+def soul_text():
+    """Who this agent is, for the head of the system prompt."""
+    return _SOUL
+
+
 def build_system_prompt():
     """The STATIC half of the prompt: identical for every call in a session.
 
@@ -6299,7 +6340,7 @@ def build_system_prompt():
                     "`skill` tool BEFORE working in its domain):\n"
                     + "\n".join(f"- {s['name']}: {s['desc']}" for s in skills)
                     + "\n") if skills else ""
-    return scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. Personality: terse senior systems engineer — direct, technical, no fluff, no hand-holding. The operator is sitting at the terminal with you; you do the work and report back.
+    return scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. {soul_text()} The operator is sitting at the terminal with you; you do the work and report back.
 
 How you work:
 - Investigate first: check status, logs, and configs before concluding. Then act. Then verify the fix actually worked.
@@ -8971,7 +9012,7 @@ TUI_KINDS = {
     "error":     ("error",    "red"),
     "checkin":   (None,       "dim"),
     "note":      (None,       "white"),
-    "narration": (None,       "white"),
+    "narration": (None,       "dim"),
     "say":       (None,       "white"),
     "system":    (None,       "dim"),
 }
@@ -9017,6 +9058,7 @@ class TuiScreen:
         self.on_status = None         # set by a console that shows it under the input
         self._status_at = 0.0
         self._plain_fallback = False
+        self._last_was_panel = False   # cards stack; a new group gets a blank
 
     @staticmethod
     def _width():
@@ -9080,14 +9122,22 @@ class TuiScreen:
         title, colour = TUI_KINDS.get(kind, (None, "white"))
         text = str(text)
         if title is None:
-            style = "dim" if kind in ("checkin", "system") else "white"
-            self._put(self._ansi(Text("  " + text, style=style)))
+            style = "dim" if kind in ("checkin", "system", "narration") else "white"
+            label = "\u2026  " if kind == "narration" else ""
+            self._put(self._ansi(Text("  " + label + text, style=style)))
+            self._last_was_panel = False
             return
         if title == "answer":
             from rich.markdown import Markdown
             body = Markdown(text)
         else:
             body = Text(text, style="white")
+        # the approved render's rhythm (tui-preview): call/result cards stack
+        # with no gap, a new group opens with a blank line, and the answer
+        # always gets air around it
+        if not self._last_was_panel or title == "answer":
+            self._put("")
+        self._last_was_panel = True
         self._panel(title, colour, body, foot)
 
     def status_line(self, text):
@@ -9172,7 +9222,7 @@ class CliDestination(Destination):
         lane draws its own ✔/✘, so both are dropped here - "✔ 🔧 shell ..." is one
         mark too many. The ANSWER is never touched: the caller prints it verbatim."""
         text = re.sub(r"`([^`]+)`", r"\1", str(text))
-        return re.sub(r"^\s*\U0001F527\s*", "", text)
+        return re.sub(r"^\s*[\U0001F527\U0001F4AC]\s*", "", text)
 
     def __init__(self, colour=True, out=None, on_drop=None, screen=None):
         self.colour = bool(colour)
@@ -9227,8 +9277,8 @@ class CliDestination(Destination):
             shown = prev if text.startswith(prev) else ""
             tail = text[len(shown):]
             if tail:
-                self._write(self._paint(("  " if not shown else "") + tail,
-                                        self.TONES["narration"]))
+                self._write(self._paint(("  \u2026  " if not shown else "")
+                                        + tail, self.TONES["narration"]))
                 self._open = True
                 self._refs[ref] = text
             return ref
@@ -9486,15 +9536,15 @@ def _tui_session():
     folder whose rule is that opening the build creates nothing but the log's first
     line, and up-arrow within the session is the part that matters.
     """
-    if "session" in _CLI:
-        return _CLI["session"]
-    _CLI["session"] = None
+    if "prompt" in _CLI:
+        return _CLI["prompt"]
+    _CLI["prompt"] = None
     if tui_screen() is not None:
         try:
             from prompt_toolkit import PromptSession
             from prompt_toolkit.history import InMemoryHistory
             from prompt_toolkit.styles import Style
-            _CLI["session"] = PromptSession(
+            _CLI["prompt"] = PromptSession(
                 history=InMemoryHistory(),
                 bottom_toolbar=_tui_toolbar,
                 enable_history_search=True,
@@ -9504,8 +9554,8 @@ def _tui_session():
                 }))
             _CLI["screen"].on_status = _tui_on_status
         except Exception:
-            _CLI["session"] = None
-    return _CLI["session"]
+            _CLI["prompt"] = None
+    return _CLI["prompt"]
 
 
 def _tui_toolbar():
@@ -9521,7 +9571,7 @@ def _tui_on_status(text):
     """The run reported something: show it under the input, where it cannot be
     mistaken for part of the transcript, and leave it there for the next prompt."""
     _CLI["status"] = str(text)
-    sess = _CLI.get("session")
+    sess = _CLI.get("prompt")
     if sess is not None:
         try:
             sess.app.invalidate()
@@ -9544,8 +9594,16 @@ def tui_screen():
 
 
 def _cli_key():
-    """Which conversation this console is in. 'cli' until /resume says otherwise."""
-    return _CLI.get("session") or "cli"
+    """Which conversation this console is in. 'cli' until /resume says otherwise.
+
+    Always a STRING: this becomes a filename (sessions/<key>.json). The prompt
+    tool's editing surface lives in _CLI["prompt"] and must never land here - it
+    did, and sessions stopped saving (bot-aTOWER measured 2026-09-22: "could not
+    save session ... got 'PromptSession'", event log unwritten). The isinstance
+    belt is the same guard that box shipped.
+    """
+    key = _CLI.get("session") or "cli"
+    return key if isinstance(key, str) else "cli"
 
 
 def _cli_session_rows():

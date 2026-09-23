@@ -353,7 +353,7 @@ fi
 # tinycmdr-cli.py is installed FLAT, beside tinycmdr.py: every door then reads ONE
 # config.json and ONE .env, so a session, the page and the bot cannot disagree
 # about which config was last edited.
-for f in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt config.example.json README.md; do
+for f in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt config.example.json README.md field-notes.md soul.md; do
     if [ -f "$SRC/$f" ]; then
         cp -f "$SRC/$f" "$INSTALL_DIR/$f"
     elif [ -f "$INSTALL_DIR/$f" ]; then

@@ -144,5 +144,45 @@ check("export_svg writes the whole screen", "<svg" in body[:400])
 check("...with the answer's text in it", "Heading" in body)
 svg.unlink()
 
+# --- the approved render's rhythm and its thought line (tui-preview) -------
+scr6 = fb.TuiScreen(out=io.StringIO(), width=100)
+scr6.card("tool", "shell  Get-CimInstance Win32_PhysicalMemory")
+scr6.card("tool_done", "capacity 8GB x4", "0.6s")
+scr6.card("final", "Four DIMMs of DDR4-3200.")
+rows6 = scr6.out.getvalue().splitlines()
+idx = lambda word: next((i for i, r in enumerate(rows6) if word in r), -1)
+check("call and result cards stack with no gap",
+      idx("call") >= 0 and idx("result") == idx("call") + 3
+      and rows6[idx("result") - 1].strip() != "")
+check("the answer card is opened by a blank line",
+      idx("answer") > 0 and rows6[idx("answer") - 1].strip() == "")
+
+dest6 = fb.CliDestination(colour=False, out=io.StringIO())
+ref6 = dest6.line("narration", "")
+dest6.update(ref6, "narration", "Checking the lock:")
+check("a streamed thought line carries the render's label",
+      "  \u2026  Checking the lock:" in dest6.out.getvalue())
+scr6.card("narration", "thinking aloud, quietly")
+check("...and so does the drawn one, dim as the render has it",
+      "  \u2026  thinking aloud, quietly" in scr6.out.getvalue())
+
+# --- the run's key is a filename; the editing surface is not one (bot-aTOWER
+# measured 2026-09-22: a PromptSession in the key slot crashed _save() with
+# "expected string or bytes-like object", so sessions/ stayed empty and the
+# event log was never written) ---------------------------------------------
+fb._CLI["prompt"] = _sentinel = object()
+check("a live editing surface never becomes the run's key",
+      fb._cli_key() == "cli" and isinstance(fb._cli_key(), str))
+fb._CLI["session"] = object()
+check("a non-string in the key slot cannot become a filename",
+      fb._cli_key() == "cli"
+      and fb.AGENT._session_path(fb._cli_key()).name == "cli.json"
+      and fb._event_path(fb._cli_key()).name.startswith("cli"))
+fb._CLI["session"] = "foo"
+check("/resume switches the key without destroying the editing surface",
+      fb._tui_session() is _sentinel and fb._cli_key() == "foo")
+fb._CLI.pop("prompt", None)
+fb._CLI.pop("session", None)
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

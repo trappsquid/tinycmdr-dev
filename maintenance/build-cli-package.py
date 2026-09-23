@@ -14,6 +14,8 @@ The folder itself is the deliverable:
     tinycmdr-cli-<version>/tinycmdr.py            the agent (stdlib only)
     tinycmdr-cli-<version>/README.txt             how to run it
     tinycmdr-cli-<version>/config.example.json    the template to copy to config.json
+    tinycmdr-cli-<version>/soul.md                the persona, editable; the build's
+                                                  fallback is the same text
     tinycmdr-cli-<version>/atlas.md               the map of the machine, SHIPPED and
                                                   never generated; one per platform
     tinycmdr-cli-<version>/skills/                put runbooks here
@@ -147,6 +149,7 @@ def build_folder(root: Path, platform: str):
     root.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SRC, root / "tinycmdr.py")
     shutil.copy2(README, root / "README.txt")
+    shutil.copy2(BASE / "soul.md", root / "soul.md")
     write_atlas(root, platform)
     # No .bat, no .ps1, no installer: environments that whitelist executables block
     # those outright, so the folder is the Python file, a README and a config example.

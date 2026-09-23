@@ -321,7 +321,7 @@ mkdir -p "$INSTALL_DIR"
 # every door then reads ONE config.json and ONE .env (it resolves both from the
 # folder it sits in), and the doors are mediums rather than separate installs.
 for item in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt README.md \
-            config.example.json .env.example \
+            config.example.json .env.example field-notes.md soul.md \
             skills install maintenance; do
     if [ -e "$SRC/$item" ]; then
         cp -a "$SRC/$item" "$INSTALL_DIR/"

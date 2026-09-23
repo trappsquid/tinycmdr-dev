@@ -39,6 +39,10 @@ SHIP = [
     # at a file that is not there, which is how boxes ended up with no respawn at all.
     "tinycmdr-supervise.py",
     "field-notes.md",
+    # The persona: who the agent is plus three judgment hints a local model
+    # loses without help. Shipped so an operator re-personas by editing one file
+    # instead of patching the build (the fallback in the code is the same text).
+    "soul.md",
     "requirements.txt",
     "config.example.json",
     ".env.example",
@@ -126,6 +130,7 @@ ENV_PREFIX = "env "
 # Ships-as-code files must be neutral too: a host value here would be baked into
 # every install, which is exactly how this box's endpoint ended up in the code.
 APP_FILES = ("INSTALL-WINDOWS.cmd", "tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
+             "soul.md",
              ".env.example", "README.md",
              "CHANGELOG.md", "install/install-tinycmdr.ps1",
              "install/install-tinycmdr.sh", "maintenance/restart-tinycmdr.ps1",

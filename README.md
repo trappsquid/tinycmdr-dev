@@ -352,6 +352,7 @@ config.example.json      every config key with fake values; installer copies it 
 .env.example             secrets template; installer copies it to .env
 skills/                  markdown runbooks the agent loads on demand (see "Adding skills")
 field-notes.md           known failures, matched against a failed tool result and appended to it
+soul.md                   who the agent is: persona + judgment hints at the head of every prompt (edit it)
 install/                 installers for Windows, Linux and macOS
 maintenance/             the restart helper, plus the generator for the console build
 tinycmdr-cli.py          the same agent, console only, no chat layer at all (see "Try it").
