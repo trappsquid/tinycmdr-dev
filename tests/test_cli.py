@@ -855,7 +855,8 @@ def test_verbs_answer_and_do_not_crash():
         sys.stdout = real
         fb.CONFIG["llm"]["model"] = saved_model
     text = out.getvalue()
-    check("verbs: /help lists the commands", "/status" in text and "/exit" in text)
+    check("verbs: /help lists the commands",
+          "/tinycmdr status" in text and "/tinycmdr exit" in text)
     check("verbs: /status shows the endpoint", FIXTURE["llm"]["base_url"] in text)
     check("verbs: an unknown verb says so", "not a command" in text)
     check("verbs: /exit ends the loop", keep is False)
@@ -924,7 +925,8 @@ def test_the_console_lists_and_resumes_conversations():
         out.truncate(0), out.seek(0)
         fb._cli_command("/help")
         verdict("current: /help documents them",
-              "/sessions" in out.getvalue() and "/resume" in out.getvalue())
+              "/tinycmdr sessions" in out.getvalue()
+              and "/tinycmdr resume" in out.getvalue())
         out.truncate(0), out.seek(0)
         fb._cli_command("/new")
         verdict("current: /new clears the conversation that is in use",

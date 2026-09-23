@@ -63,14 +63,18 @@ helpers).
 This is where the project actually spent its 5,800 lines and its 474 assertions. All of it is
 config-driven, and each item below exists because something went wrong in the field first.
 
-### 3.1 Chat commands (31, all handled locally, never sent to the model)
+### 3.1 Commands: `/tinycmdr <verb>` in chat, `tinycmdr <verb>` in a shell
+
+One word for both, because the operator got tired of being asked which one to type:
+same verbs, same behaviour, whichever door you are at. Chat needs the prefix (a client
+only sends `/`-lines that match a registered command); a shell does not.
 
 ```
 new / reset      fresh session for this conversation
 stop             stop the run, with truthful states (stopping / already flagged / nothing running)
 restart          hand the process over to whoever supervises it, then come back
 retry / undo     re-run, or back up N turns and re-prompt
-model            per-conversation model or endpoint, /model <name> --global for every conversation
+model            per-conversation model or endpoint, /tinycmdr model <name> --global everywhere
 pause / resume   hold new tasks until told otherwise
 steer            inject a correction into a run that is already going
 queue            inspect or clear what is waiting
@@ -118,7 +122,7 @@ failover            primary plus ordered fallbacks; a local failure does not fal
                     internet unless allow_cloud_fallback says so (a privacy gate, not a preference)
 streaming           streamed model calls, with an idle bound so a trickling endpoint is bounded
 catch-up            after a restart, sweep the last 30 minutes of its own channel
-restart             /restart hands the process to the supervisor and announces when it is back
+restart             /tinycmdr restart hands the process to the supervisor and announces when it is back
 stop                idempotent; reads on the listener thread even while a wedged worker owns the
                     channel; "nothing running" is only said when that is true
 ```
@@ -347,7 +351,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~4,150 tokens measured, against 16K+ on the framework it replaced
 readability               5,847 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
-                          /stop that reports the truth about three different states
+                          /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
 prose skills              the runbooks are plain markdown an operator can read and edit mid-incident
 deployment surface        three dependencies, no daemon, no database, works offline on a LAN with a

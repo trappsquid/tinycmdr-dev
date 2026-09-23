@@ -721,7 +721,7 @@ def main():
 
         code, j = http(f"{base}/api/commands")
         cmds = j.get("commands") or []
-        check(code == 200 and any(c.get("cmd") == "/status" for c in cmds),
+        check(code == 200 and any(c.get("cmd") == "/tinycmdr status" for c in cmds),
               "the command list is served, so the composer can complete it")
         check(all(c.get("help") for c in cmds),
               "every command carries its one-line explanation")

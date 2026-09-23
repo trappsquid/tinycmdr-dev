@@ -2951,7 +2951,7 @@ def tool_shell(args, ctx):
         return (f"exit_code={rc}\n{out}"
                 + _launch_warning(args.get("command")))
     except OperatorStop:
-        return ("STOPPED by the operator (`/stop`): this command and everything it started "
+        return ("STOPPED by the operator (`/tinycmdr stop`): this command and everything it started "
                 "were killed. Do not retry it and do not write a final answer — the run "
                 "ends here.")
     except Exception as e:
@@ -3018,7 +3018,7 @@ def tool_execute_code(args, ctx):
                     f"would freeze this channel). Partial output:\n{out}")
         return f"exit_code={rc}\n{out}"
     except OperatorStop:
-        return ("STOPPED by the operator (`/stop`): this code and everything it started "
+        return ("STOPPED by the operator (`/tinycmdr stop`): this code and everything it started "
                 "were killed. Do not retry it and do not write a final answer — the run "
                 "ends here.")
     except Exception as e:
@@ -7234,7 +7234,7 @@ class Agent:
         # Route by model name OR alias: a name an endpoint advertises sends the
         # call THERE first. The local llama.cpp boxes ignore the model field
         # and serve whatever is loaded, so an unrecognized name silently stays
-        # local — `/model list` shows the names that actually resolve, and the
+        # local — `/tinycmdr model list` shows the names that actually resolve, and the
         # /model command refuses ones that don't.
         want = str(model).strip().lower()
         fallbacks = []
@@ -7753,7 +7753,7 @@ class Agent:
                         status = "cancelled"
                         hist.append({"role": "assistant",
                                      "content": "🛑 Stopped by operator."})
-                        return "🛑 Stopped. Send `/new` for a fresh session or just continue."
+                        return "🛑 Stopped. Send `/tinycmdr new` for a fresh session or just continue."
                     if steer_cb:
                         # Corrections that arrived while this run was working. They go in as
                         # operator messages on the same boundary the compaction cut uses, so
@@ -9622,19 +9622,25 @@ class CliDestination(Destination):
         if (_CLI.get("ask") or {}).get("row") is self._row:
             _CLI["ask"] = None
         self._row = None
-CMDR = "/cmdr"
+CMDR = "/tinycmdr"
+# The prefix was `/cmdr` for part of one day before the operator named the real problem:
+# two words for one thing. The shell verb is `tinycmdr`, so the chat prefix is `/tinycmdr`,
+# and a line typed with the retired one is answered with a pointer, not "unknown command".
+LEGACY_CMDR = "/cmdr"
 
 
 def cmdr_strip(text):
-    """`/cmdr model list` -> `/model list`: the namespaced form of every command.
+    """`/tinycmdr model list` -> `/tinycmdr model list`: the namespaced form of every command.
 
     A chat client never sends a message that starts with "/" unless it matches a
     REGISTERED command, and the chat server refuses to register its own trigger
-    words (`help`, `status`), so a bare `/model` depends on the relay having a row
-    for it and `/help` cannot arrive at all. `/cmdr` is ONE registered trigger that
-    carries anything, and what it carries arrives as ordinary text. The bare form
-    still works - the relay's per-verb rows post it that way - and `/cmdr` alone is
-    `/help`. Not a prefix: `/cmdrmodel`, `/cmdrfoo`.
+    words (`help`, `status`), so a bare `/tinycmdr model` depends on the relay having a row
+    for it and `/tinycmdr help` cannot arrive at all. `/tinycmdr` is ONE registered trigger
+    that carries anything, and what it carries arrives as ordinary text: the shell
+    says `tinycmdr status`, chat says `/tinycmdr status`, a console session says
+    `/tinycmdr status`. One word, three places. The bare verbs still work - the
+    relay's per-verb rows post it that way - and `/tinycmdr` alone is `/tinycmdr help`.
+    Not a prefix: `/tinycmdrmodel`, `/tinycmdrfoo`.
     """
     s = (text or "").strip()
     if not s or not s.lower().startswith(CMDR):
@@ -9647,8 +9653,18 @@ def cmdr_strip(text):
     rest = tail.strip()
     return rest if rest.startswith("/") else "/" + rest
 
+
+def cmdr_legacy_prefix(text):
+    """True for the retired prefix (`/cmdr ...`), so the answer can point at the new one."""
+    s = (text or "").strip().lower()
+    return s == LEGACY_CMDR or s.startswith(LEGACY_CMDR + " ")
+
+
+CMDR_MOVED = ("the command prefix is `%s` now, not `%s` - the same commands: `%s status`"
+              % (CMDR, LEGACY_CMDR, CMDR))
+
 def model_command(session_key, arg):
-    """`/model` for every surface.
+    """`/tinycmdr model` for every surface.
 
     Flags: `--global` applies to every conversation and persists in
     config.json. Never accepts a name no reachable endpoint advertises: a name
@@ -9667,8 +9683,8 @@ def model_command(session_key, arg):
     known = ", ".join(f"`{e['name']}`" for e in cat)
     if not name:
         return (f"Model for {scope}: `{current}` → {model_route_for(current)}\n"
-                f"`/model list` for the options · `/model <name>` to switch · "
-                f"`/model <name> --global` for every conversation · "
+                f"`/tinycmdr model list` for the options · `/tinycmdr model <name>` to switch · "
+                f"`/tinycmdr model <name> --global` for every conversation · "
                 f"`/model default [--global]` to revert")
     if name.lower() in ("list", "ls", "models"):
         return ("Models this bot can run:\n"
@@ -9696,7 +9712,7 @@ def model_command(session_key, arg):
                 f"`{name}`. Sending it to the local box would silently run "
                 f"whatever is loaded instead — that is what used to happen.\n"
                 f"Known names: {known}\n"
-                f"(`/model <name> --global` applies it to every conversation)")
+                f"(`/tinycmdr model <name> --global` applies it to every conversation)")
     if is_global:
         prev, err = set_global_model(e["name"])
         if err:
@@ -9706,12 +9722,12 @@ def model_command(session_key, arg):
         return (f"Global model for ALL conversations: `{e['name']}` → "
                 f"`{e['url']}`" + (" (alias)" if e["alias"] else "")
                 + f"\nSaved to config.json (was `{prev}`) — survives restarts. "
-                  f"`/model default --global` to revert.")
+                  f"`/tinycmdr model default --global` to revert.")
     AGENT.model_overrides[session_key] = e["name"]
     _save_overrides()
     return (f"Model for this conversation: `{e['name']}` → `{e['url']}`"
             + (" (alias)" if e["alias"] else "")
-            + " · `/model default` to revert · add `--global` for all "
+            + " · `/tinycmdr model default` to revert · add `--global` for all "
               "conversations\n"
               "(sub-agents, `/bg` tasks and scheduled jobs made from this "
               "conversation now inherit it)")
@@ -9923,7 +9939,7 @@ class MattermostDispatcher:
         opts = ""
         self._post(ch, None,
                    _ask_format(question, row["options"])
-                   + "\n_(" + self._ask_label(ch) + " — or `/stop` to "
+                   + "\n_(" + self._ask_label(ch) + " — or `/tinycmdr stop` to "
                    "cancel this run. Waiting up to "
                    f"{max(1, int((timeout or 300) / 60))} min; if nothing "
                    f"arrives I carry on with my own judgment.)_")
@@ -10161,11 +10177,11 @@ class MattermostDispatcher:
             log.warning("ignored message from unauthorized user: %s (%s)",
                         sender, user_id)
             return
-        # `/stop` — and a forced restart — must NOT queue behind the run they are meant
+        # `/tinycmdr stop` — and a forced restart — must NOT queue behind the run they are meant
         # to kill: one worker serves a channel, so a queued command is only read AFTER
         # that very run. Handle them here, on the listener thread, where they always
         # land. On 2026-09-10 the user's /restart sat in the queue behind a frozen run
-        # and was never read at all; on 2026-09-18 `/restart force` was answered with
+        # and was never read at all; on 2026-09-18 `/tinycmdr restart force` was answered with
         # "Queued behind the task already running here" and only took effect when the
         # run reached its next boundary, which took 90s because the run was inside a
         # `sleep 280` tool call.
@@ -10178,7 +10194,7 @@ class MattermostDispatcher:
             text, low = _cmdr, _cmdr.lower()
         # A run parked on an ask_user question takes the next message in its channel as
         # the ANSWER, on the listener thread, while that run stays blocked. Ahead of
-        # /stop so an answer that reads like a command is still the answer; `/stop`
+        # /stop so an answer that reads like a command is still the answer; `/tinycmdr stop`
         # itself cancels instead, so a parked run is never unreleasable.
         if low != "/stop" and not low.startswith("/"):
             for _sk in [s for s, r in list(self.pending_asks.items())
@@ -10197,8 +10213,8 @@ class MattermostDispatcher:
             busy = self._channel_busy(channel_id)
             if busy and not force:
                 self._post(channel_id, None,
-                           "⚠️ A task is still running. `/stop` it first, or use "
-                           "`/restart force` to kill it and restart now.")
+                           "⚠️ A task is still running. `/tinycmdr stop` it first, or use "
+                           "`/tinycmdr restart force` to kill it and restart now.")
                 return
             if force:
                 # "force" has to MEAN force: flag the live run so its in-flight tool
@@ -10330,7 +10346,7 @@ class MattermostDispatcher:
                            f"⚠️ No output for {int(quiet / 60)} min — "
                            f"that run is wedged, so I'm abandoning it "
                            f"and picking up whatever you queued "
-                           f"behind it. (`/status` for state.)")
+                           f"behind it. (`/tinycmdr status` for state.)")
                 with self.workers_lock:
                     self.active.pop(channel_id, None)
                     # The run is written off, so it must stop counting as "busy": while
@@ -10351,7 +10367,7 @@ class MattermostDispatcher:
                            f"⏳ Still on it — nothing posted here for "
                            f"{int(quiet / 60)} min (run started "
                            f"{int((now - a['started']) / 60)} min ago). "
-                           f"`/stop` cancels it.")
+                           f"`/tinycmdr stop` cancels it.")
 
     # -- catch-up: reconnect gaps and restarts lose messages ----------------
     def _is_dm(self, channel_id):
@@ -10470,7 +10486,7 @@ class MattermostDispatcher:
             note = "🛑 Stopping now — nothing further will be executed."
         elif busy:
             note = ("🛑 That run is already flagged to stop and will execute nothing "
-                    "further, but it has not unwound yet (`/status` for state). The "
+                    "further, but it has not unwound yet (`/tinycmdr status` for state). The "
                     "stall watchdog abandons it if it stays quiet.")
         else:
             note = "Nothing is running right now."
@@ -10529,8 +10545,8 @@ class MattermostDispatcher:
                        or self._channel_busy(channel_id))
             if running and not force:
                 self._post(channel_id, post_root,
-                           "⚠️ A task is still running. `/stop` it first, or "
-                           "use `/restart force` to kill it and restart now.")
+                           "⚠️ A task is still running. `/tinycmdr stop` it first, or "
+                           "use `/tinycmdr restart force` to kill it and restart now.")
                 return
             self._post(channel_id, post_root,
                        "♻️ Restarting — back in a few seconds, and I'll confirm "
@@ -10661,24 +10677,28 @@ class MattermostDispatcher:
             return
         if low == "/help":
             self._post(channel_id, post_root,
-                       "**Commands:**\n"
-                       "`/cmdr <command>` — any command below, the one form a "
-                       "chat client always sends through (`/cmdr model list`)\n"
-                       "`/new` fresh session · `/stop` cancel the running "
-                       "task · `/status` health & context usage\n"
-                       "`/undo [N]` drop the last N exchanges · `/retry` "
-                       "re-run your last request · `/save` export session\n"
-                       "`/bg <task>` run in background · `/pause [reason|off]` "
+                       "**Commands** — type `%s` then one of these "
+                       "(`%s help` is this list):\n"
+                       "`new` fresh session · `stop` cancel the running "
+                       "task · `status` health & context usage\n"
+                       "`undo [N]` drop the last N exchanges · `retry` "
+                       "re-run your last request · `save` export session\n"
+                       "`bg <task>` run in background · `pause [reason|off]` "
                        "hold new tasks\n"
-                       "`/model [name|list]` show/list/switch model · "
-                       "`/restart [force]` "
-                       "restart the bot · `/version` · `/help`\n"
+                       "`model [name|list]` show/list/switch model · "
+                       "`restart [force]` restart the bot · `version` · `help`\n"
+                       "The same word everywhere: `%s status` in a shell or a "
+                       "session, `%s status` here.\n"
                        "Everything else is a task — just tell me what you "
-                       "need.")
+                       "need." % (CMDR, CMDR, CMDR, CMDR))
+            return
+        if cmdr_legacy_prefix(stripped):
+            # `/cmdr` existed for one day; a near-miss deserves a pointer, not a shrug.
+            self._post(channel_id, post_root, CMDR_MOVED)
             return
         if stripped.startswith("/") and not retried:
             self._post(channel_id, post_root,
-                       f"Unknown command `{stripped.split()[0]}` — try /help. "
+                       f"Unknown command `{stripped.split()[0]}` — try {CMDR} help. "
                        "(Slash commands are handled locally; nothing was sent "
                        "to the model.)")
             return
@@ -11558,8 +11578,10 @@ def _web_command(text, key="web"):
                 "Commands:\n"
                 + "\n".join(f"{c} — {h}" for c, h in WEB_COMMANDS)
                 + "\nEverything else is a task for the agent.")
+    if cmdr_legacy_prefix(text):
+        return ("reply", CMDR_MOVED)
     if low.startswith("/"):
-        return ("reply", "Unknown command — try /help.")
+        return ("reply", "Unknown command — try %s help." % CMDR)
     return ("task", text)
 
 
@@ -12319,16 +12341,15 @@ def _web_drive(run, text):
 # the model owns these files, and a page that writes them is a second writer with
 # no lock discipline.
 WEB_COMMANDS = (
-    ("/new", "start a fresh conversation"),
-    ("/status", "this host: model, context, limits, uptime"),
-    ("/stop", "cancel the run that is going"),
-    ("/undo [N]", "drop the last N exchanges"),
-    ("/retry", "run my last request again"),
-    ("/model [name|list] [--global]", "show, list or switch the model"),
-    ("/restart", "restart the bot"),
-    ("/version", "the version this page is talking to"),
-    ("/help", "this list"),
-    ("/cmdr <cmd>", "any command above, namespaced: /cmdr model list"),
+    ("/tinycmdr new", "start a fresh conversation"),
+    ("/tinycmdr status", "this host: model, context, limits, uptime"),
+    ("/tinycmdr stop", "cancel the run that is going"),
+    ("/tinycmdr undo [N]", "drop the last N exchanges"),
+    ("/tinycmdr retry", "run my last request again"),
+    ("/tinycmdr model [name|list] [--global]", "show, list or switch the model"),
+    ("/tinycmdr restart", "restart the bot"),
+    ("/tinycmdr version", "the version this page is talking to"),
+    ("/tinycmdr help", "this list"),
 )
 
 
@@ -13451,24 +13472,26 @@ def answer_block(text):
 
 
 HELP_TEXT = ("\n"
-             "  /help            this list\n"             "  /cmdr <CMD>      the same commands, namespaced: /cmdr model, /cmdr status\n"
-             "  /new             forget the conversation so far and start clean\n"
-             "  /model [NAME]    show the model in use, or switch to NAME\n"
-             "  /sessions        the conversations saved in this folder\n"
-             "  /resume N        continue one of them in this window\n"
-             "  /status          version, endpoint, context use, notes, tasks, skills\n"
-             "  /tasks           the task ledger for this machine\n"
-             "  /notes           what it has written down about this machine\n"
-             "  /skills          the runbooks it can load\n"
-             "  /tools           every tool it has right now\n"
-             "  /usage           tokens and time for the last run\n"
-             "  /stop            cancel the run in flight (Ctrl-C does the same)\n"
-             "  /exit            quit (Ctrl-D does the same)\n"
+             "  /tinycmdr help            this list\n"
+             "  /tinycmdr new             forget the conversation so far and start clean\n"
+             "  /tinycmdr model [NAME]    show the model in use, or switch to NAME\n"
+             "  /tinycmdr sessions        the conversations saved in this folder\n"
+             "  /tinycmdr resume N        continue one of them in this window\n"
+             "  /tinycmdr status          version, endpoint, context use, notes, tasks, skills\n"
+             "  /tinycmdr tasks           the task ledger for this machine\n"
+             "  /tinycmdr notes           what it has written down about this machine\n"
+             "  /tinycmdr skills          the runbooks it can load\n"
+             "  /tinycmdr tools           every tool it has right now\n"
+             "  /tinycmdr usage           tokens and time for the last run\n"
+             "  /tinycmdr stop            cancel the run in flight (Ctrl-C does the same)\n"
+             "  /tinycmdr exit            quit (Ctrl-D does the same)\n"
              "\n"
              "  Anything else is a request:  check why the backup job failed\n"
              "  Type at any time, including while it is working: a request is sent in\n"
-             "  at the next step, /stop and the read-only verbs act immediately, and the\n"
-             "  verbs that change state (/new, /model) run when the current run ends.\n"
+             "  at the next step, /tinycmdr stop and the read-only verbs act immediately,\n"
+             "  and the verbs that change state (/tinycmdr new, /tinycmdr model) run when\n"
+             "  the current run ends. One word everywhere: `tinycmdr status` in a shell,\n"
+             "  `/tinycmdr status` in a session or in chat.\n"
              "  Ctrl-C stops the run in flight; a second Ctrl-C quits.\n")
 
 
@@ -13506,7 +13529,7 @@ def cli_banner():
                                       CONFIG["llm"]["base_url"]))
     print(dim("folder %s" % BASE_DIR))
     print(dim(overhead))
-    print(dim("type /help for the commands, /exit to quit\n"))
+    print(dim("type /tinycmdr help for the commands, /tinycmdr exit to quit\n"))
 
 
 def _tui_session():
@@ -13632,14 +13655,14 @@ def _cli_resume(rest):
     except (IndexError, ValueError):
         n = 0
     if not 1 <= n <= len(rows):
-        print(dim("  /resume N - pick N from /sessions"))
+        print(dim("  /tinycmdr resume N - pick N from /tinycmdr sessions"))
         return
     key = rows[n - 1]["key"]
     _CLI["session"] = key
     s = AGENT.stats(key)
     print(green("  now in '%s' - %d exchange(s), %s"
                 % (key, s["exchanges"], fmt_tokens(s["est_tokens"]))))
-    print(dim("  /new clears it; /sessions lists the others"))
+    print(dim("  /tinycmdr new clears it; /tinycmdr sessions lists the others"))
 
 
 def _cli_usage_line():
@@ -13683,7 +13706,7 @@ def _cli_tasks():
 
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
-    text = cmdr_strip(text)          # `/cmdr model` is `/model`
+    text = cmdr_strip(text)          # `/cmdr model` is `/tinycmdr model`
     verb, _, rest = text.partition(" ")
     verb = verb.lower()
     rest = rest.strip()
@@ -13702,7 +13725,7 @@ def _cli_command(text):
     if verb == "/model":
         if not rest:
             print("  model %s at %s" % (green(CONFIG["llm"]["model"]), CONFIG["llm"]["base_url"]))
-            print(dim("  /model <name> switches it for this session"))
+            print(dim("  /tinycmdr model <name> switches it for this session"))
             return True
         CONFIG["llm"]["model"] = rest
         print("  model is now %s (this session)" % green(rest))
@@ -13762,7 +13785,7 @@ def _cli_command(text):
     if verb == "/usage":
         _cli_usage_line()
         return True
-    print(dim("  %s is not a command - /help lists them" % verb))
+    print(dim("  %s is not a command - %s help lists them" % (verb, CMDR)))
     return True
 
 
@@ -13952,7 +13975,8 @@ def _cli_reader():
                 print(dim("\n  (that verb runs when this turn ends)"))
                 continue
             _CLI["steer"].put(line)         # a request, handed in at the boundary
-            print(dim("\n  (sending that in when this turn ends - /stop cancels the run)"))
+            print(dim("\n  (sending that in when this turn ends - %s stop cancels "
+                       "the run)" % CMDR))
             continue
         _CLI["inbox"].put(line)
 
@@ -14055,9 +14079,9 @@ def run_cli(once=None):
 
     if not once:
         cli_banner()
-        print(dim("  type at any time: a line is sent in at the next step, /stop "
-                  "cancels the run,\n  Ctrl-C does the same. Nothing you type is "
-                  "lost while it works.\n"))
+        print(dim("  type at any time: a line is sent in at the next step, "
+                  "%s stop cancels the run,\n  Ctrl-C does the same. Nothing you "
+                  "type is lost while it works.\n" % CMDR))
     print(dim(capability_line("cli")))
     # reported for BOTH entry points. It used to live in cli_banner(), which a
     # one-shot run never reaches, so `--once` - the CLI's most common entry -

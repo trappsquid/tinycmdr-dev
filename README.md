@@ -107,7 +107,7 @@ It will:
    (`launch_tinycmdr.bat`)
 6. register the scheduled task `Tinycmdr` — logon +30s and boot +4min, S4U so it
    runs headless
-7. start it and smoke-test `/status` over the local web UI
+7. start it and smoke-test `/tinycmdr status` over the local web UI
 
 Then, to finish:
 
@@ -164,7 +164,7 @@ Operate it through systemd, not by hand:
 systemctl status tinycmdr
 journalctl -u tinycmdr -f
 sudo systemctl restart tinycmdr        # or: sudo bash maintenance/restart-tinycmdr.sh
-venv/bin/python tinycmdr.py --once "/status"
+venv/bin/python tinycmdr.py status
 ```
 
 Two hosts must never share one bot token, and one host must never run two agents on one bot
@@ -301,13 +301,16 @@ came from.
 
 ## Operating it
 
+One word everywhere: `tinycmdr status` in a shell, `/tinycmdr status` in a
+console session or in chat.
+
 ```
-/status      version, model, inherited sampling, session size, limits, uptime
-/new         start a fresh conversation (clears this channel's history)
-/undo        drop the last exchange
-/stop        stop the run in progress
-/model       show or change the model for this channel
-/help        the rest
+/tinycmdr status   version, model, inherited sampling, session size, limits, uptime
+/tinycmdr new      start a fresh conversation (clears this channel's history)
+/tinycmdr undo     drop the last exchange
+/tinycmdr stop     stop the run in progress
+/tinycmdr model    show or change the model for this channel
+/tinycmdr help     the rest
 ```
 Durable memory lives in `notes.md` (capped, older entries spill to
 `notes-archive.md`) and `tasks.json`/`tasks.md` (the ledger). Both are the bot's
@@ -321,7 +324,8 @@ Logs: `tinycmdr.log` in the install folder. Restart: `maintenance\restart-tinycm
 ```powershell
 # one local turn through the agent - proves the app AND the model endpoint work
 python tinycmdr.py --once "reply with the single word: READY"
-python tinycmdr.py --once "/status"
+# the host itself, no model call: version, folder, model, endpoint, context, instance
+python tinycmdr.py status
 python tinycmdr-cli.py           # interactive local session
 ```
 
