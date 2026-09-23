@@ -62,7 +62,7 @@ foreach ($t in $targets) {
 # and deliberately dumb: one value out, judged here, so no quoting lives inside the remote command.
 $unix = @(
     @{ name = "MacBook      a LAN address"; alias = "mac-host-a"; path = "/Users/[redacted]/tinycmdr/tinycmdr.py"
-       dogcmd = "plutil -p ~/Library/LaunchAgents/com.trapp.tinycmdr.plist 2>/dev/null | grep -c KeepAlive"; kind = "keepalive" },
+       dogcmd = "plutil -p ~/Library/LaunchAgents/com.tinycmdr.agent.plist 2>/dev/null | grep -c KeepAlive"; kind = "keepalive" },
     @{ name = "the Linux test box    a LAN address"; alias = "the Linux test box"; path = "/home/<user>/tinycmdr/tinycmdr.py"
        dogcmd = "systemctl show tinycmdr -p Restart --value 2>/dev/null"; kind = "restart" },
     @{ name = "the LAN model box        a LAN address"; alias = "the LAN model box"; path = "/home/<user>/tinycmdr/tinycmdr.py"

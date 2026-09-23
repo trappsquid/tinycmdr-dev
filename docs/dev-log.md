@@ -1576,3 +1576,42 @@ items, and the three host-level decisions waiting on him.
 
 Left deliberate, reported, not deleted: `C:\tinycmdr` on the Windows test box (empty, a stale handle refuses
 deletion until that box logs off or reboots) and the operator's own artifacts on the other Windows box.
+
+## 2026-09-22 (late): the fleet moved to tinycmdr: six fresh installs, the remnants gone
+
+All six hosts now run fresh 1.0.0 installs at the migrated paths (Windows C:\tinycmdr, Unix and
+macOS ~/tinycmdr, the manager box's tree moved to C:/Users/<user>\tinycmdr with its task re-registered
+as Tinycmdr). fleet-version-report: 1.0.0 / d66c1522ac2a55a7 / in sync on all six, each with its
+watchdog (supervisor, systemd, launchd). Bot accounts, read off each host's own log: @the manager boxbot,
+@a bot account, @sotinycmdr, @mac, @the other Windows box, @wintest. Carried over by hand, per host: its own Mattermost
+token and model keys, the web token where it lived (.env or config.json), and the fleet-wide
+search keys. Per the operator's earlier call the bots start with empty memory; every host's full
+prior state (notes, ledger, tools, uploads, logs, maintenance tooling) is captured under
+hermes-tmp\fleet-mig on the manager box.
+
+Four things the migration found:
+
+- install-tinycmdr.sh and install-tinycmdr-macos.sh died SILENTLY (exit 1, nothing printed) on
+  any install without --telegram-ids: TG_IDS_CLEAN="$(... | grep ...)" returns grep's 1 on empty
+  input and `set -euo pipefail` kills the script at the assignment, before the die() it was meant
+  to reach. Introduced by the Telegram-lane commit this morning; the probe's "fail path exits 1"
+  passed for the wrong reason (this crash exits 1 too). Fixed with `|| true`; the PowerShell
+  installer was unaffected. Proven on three real hosts tonight (sh twice, macos.sh once) with no
+  telegram args.
+- The model-verb help text carried the literal LAN endpoint into tinycmdr.py, and the package
+  gate refused public and fleet shapes on it. Written as http://<lan-box>:8081/v1 now. The gate
+  earned its keep: without it the leak would have shipped in every archive.
+- maintenance/start-containers.ps1 was missing from the working tree while the SYSTEM boot task
+  still pointed at the deleted tinycmdr path: the container safety net from 2026-09-10 was dead.
+  Restored from git, task re-registered against the new tree (register-boot-recovery.ps1, which
+  also confirmed the AtStartup trigger on Tinycmdr).
+- fleet-version-report.ps1 checked com.trapp.tinycmdr.plist (a half-renamed path) for the Mac's
+  KeepAlive, so the Mac read NO WATCHDOG under a working launchd agent. Now checks
+  com.tinycmdr.agent.plist.
+
+Carried as-captured (the operator's call to normalize any): the LAN model box keeps llm.model "cloud" and its
+kimi fallbacks; the Windows test box keeps web.host 127.0.0.1 (page loopback-only, so a LAN probe times out
+by config) and its 17 blocked_patterns against the fleet's 21; the other Windows box carries no web-search keys
+beyond the fleet-wide pair. Leftovers needing a reboot: the handle-held empty tinycmdr dirs on
+the manager box, the other Windows box and the Windows test box. Z:\VPS Admin still holds the pre-rename 1.0.0 set: restaging it is
+the operator's call.

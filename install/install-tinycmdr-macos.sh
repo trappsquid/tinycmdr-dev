@@ -407,7 +407,7 @@ fi
 # The lane is deny-by-default, so a token with no id is a bot that ignores every DM.
 # Refuse here, with the reason, rather than at 03:00 in a log nobody is reading.
 TG_IDS_CLEAN="$(printf '%s' "$TG_IDS" | tr ',;' '  ' | tr -s ' ' '\n' \
-    | grep -E '^[0-9]+$' | tr '\n' ' ' | sed 's/ *$//')"
+    | grep -E '^[0-9]+$' | tr '\n' ' ' | sed 's/ *$//' || true)"
 if [ -n "$TG_TOKEN" ] && [ -z "$TG_IDS_CLEAN" ]; then
     die "a Telegram token with no numeric id: that lane would ignore every DM.
 Message @userinfobot for your id and pass --telegram-ids 123456789"

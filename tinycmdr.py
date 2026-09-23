@@ -15123,7 +15123,7 @@ def _verb_model_add(opts, positional):
     url = positional[0].strip().rstrip("/")
     if not url.lower().startswith(("http://", "https://")):
         print("a base_url starts with http:// or https:// "
-              "(e.g. http://a LAN address:8081/v1)", file=sys.stderr)
+              "(e.g. http://<lan-box>:8081/v1)", file=sys.stderr)
         return 2
     key_env = str(opts.get("key-env") or "").strip()
     if key_env and not re.fullmatch(r"[A-Z][A-Z0-9_]*", key_env):
