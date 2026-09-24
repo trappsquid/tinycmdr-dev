@@ -259,6 +259,17 @@ for _cmd in ("python -m toolsmith action=list",
     out = fb.tool_shell({"command": _cmd}, {"session_key": "s-script-" + _cmd[:8]})
     check("the same miss is answered for %r" % _cmd[:34],
           "is a TOOL on this box" in out, out[:120])
+# ---- round 6: the same miss at the read_file door ----------------------------------
+# `read_file tools/delegate_task.py` then `read_file tools/create_tool.py`, both misses:
+# the model goes looking for a CORE tool's code on disk, because for the tools that ARE
+# files that is how you learn their shape.
+out = fb.tool_read_file({"path": "C:\\tinycmdr\\tools\\create_tool.py"}, {})
+check("reading a core tool as a file is answered as a tool",
+      "is a TOOL on this box" in out and "call it by name" in out, out[:180])
+check("...and carries its arguments", "Its arguments:" in out, out[:280])
+out = fb.tool_read_file({"path": "C:\\tinycmdr\\tools\\no-such-thing-at-all.py"}, {})
+check("an ordinary missing file stays ordinary",
+      "does not exist" in out and "is a TOOL" not in out, out[:140])
 out = fb.tool_shell({"command": 'python -c "print(123)"'}, {"session_key": "s-script-c"})
 check("a plain interpreter one-liner still runs", "123" in out, out[:120])
 check("...and is not mistaken for a tool",

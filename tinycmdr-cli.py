@@ -3609,6 +3609,18 @@ def tool_read_file(args, ctx):
         want = resolved
     path = Path(want).expanduser()
     if not path.exists():
+        # The THIRD door of one miss (drive, 2026-09-23): the model looks for a core tool's
+        # code on disk - `read_file tools/delegate_task.py`, then `read_file
+        # tools/create_tool.py`, both 56-char misses - because for the tools that ARE files
+        # this is how you learn their shape. The core tools live in this file, so answer
+        # with the door and the arguments instead of a bare "does not exist".
+        stem = path.name[:-3] if path.name.lower().endswith(".py") else path.name
+        if _registered_tool(stem):
+            shape = _tool_args_shape(stem)
+            return (f"ERROR: no file {path} - `{stem}` is a TOOL on this box, not a script: "
+                    f"call it by name and the harness runs it"
+                    + (f". Its arguments: {shape}" if shape else "")
+                    + ". (Tools that ARE files live in ./tools/; list_tools names them.)")
         return f"ERROR: {path} does not exist"
     if path.is_dir():
         try:
@@ -4182,7 +4194,15 @@ def tool_task(args, ctx):
         rows = [f"#{i['id']} [{i.get('status')}] {i.get('desc', '')}"
                 + (f" — {i['note']}" if i.get("note") else "")
                 + f"  ({i.get('updated', '')})" for i in items]
-        return "\n".join(rows)
+        # The tally rides the output. Asked how many items the ledger holds, a run read this
+        # list and reported "13 items (8 done, 1 dropped, 5 open)" - its own breakdown summed
+        # to 14, and the real split was 7 done (drive, 2026-09-23). Counting rows is
+        # arithmetic the harness does once, in one place, instead of asking the model to do
+        # it from the rendering; the item count was the one number it got right.
+        counts = {s: sum(1 for i in items if i.get("status") == s)
+                  for s in TASK_STATUSES}
+        parts = ", ".join(f"{counts[s]} {s}" for s in TASK_STATUSES if counts[s])
+        return "\n".join(rows) + f"\n({len(items)} item(s): {parts})"
 
     if action == "add":
         if not desc:

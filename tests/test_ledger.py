@@ -258,6 +258,33 @@ def test_task_ledger_lifecycle():
     check("bad status refused", out.startswith("ERROR"), out)
 
 
+def test_the_list_carries_its_own_tally():
+    """The rows AND the count, because the model miscounted the rows it was given.
+
+    Measured on the drive 2026-09-23: asked how many items the ledger held, the run read
+    this list and answered "13 items (8 done, 1 dropped, 5 open)" - its own breakdown summed
+    to 14 and the real split was 7 done. Counting rows is arithmetic the harness can do once,
+    in one place, instead of asking the model to do it from the rendering.
+    """
+    redirect_files()
+    fb.tool_task({"action": "add", "task": "still open one"}, {})
+    fb.tool_task({"action": "add", "task": "still open two"}, {})
+    tid = json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))["items"][0]["id"]
+    fb.tool_task({"action": "done", "id": tid, "note": "re-ran the check"}, {})
+    out = fb.tool_task({"action": "list"}, {})
+    check("the list still lists every row", out.count("\n") >= 2, out)
+    check("the list ends with the tally", "(2 item(s):" in out, out)
+    check("...counting each status", "1 done" in out and "1 open" in out, out)
+    _tally = re.search(r"\((\d+) item\(s\): ([^)]+)\)$", out)
+    _rows = [l for l in out.splitlines() if l.startswith("#")]
+    check("...and the tally's total is the row count",
+          bool(_tally) and int(_tally.group(1)) == len(_rows),
+          f"{_tally.group(0) if _tally else 'no tally'} vs {len(_rows)} rows")
+    check("...and its parts sum to that total",
+          bool(_tally) and sum(int(n) for n in re.findall(r"(\d+) \w+", _tally.group(2)))
+          == int(_tally.group(1)), _tally.group(0) if _tally else "no tally")
+
+
 def test_task_prompt_render():
     redirect_files()
     fb.tool_task({"action": "add", "task": "fix the poster pipeline"}, {})
