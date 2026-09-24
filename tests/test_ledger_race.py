@@ -361,6 +361,69 @@ def test_curate_notes_runs_under_the_notes_lock():
     check("...and completes once it is released", done.wait(10.0))
 
 
+
+# --------------------------------------------------------------------------
+# one file, two spellings: the key was unnormalised, so the lock was not shared
+# --------------------------------------------------------------------------
+
+def test_two_spellings_of_one_path_share_one_lock():
+    """The same lost-update as above, one level down: the per-path lock keyed on the
+    STRING the model passed, so `C:\\x\\big.txt` and `C:/x/big.txt` were two different
+    locks and two edits of one file ran in parallel. `lockprobe` measured both edits
+    reporting "OK: replaced 1 occurrence(s)" with one of them gone."""
+    import os
+    tmp = TMP / "lockkey"
+    tmp.mkdir(parents=True, exist_ok=True)
+    target = tmp / "big.txt"
+    target.write_text("x\n")
+    pairs = [(str(target), str(target).replace(os.sep, "/")),
+             (str(target), "./" + os.path.relpath(target, os.getcwd())),
+             (str(target), str(target).upper() if os.name == "nt" else str(target)),
+             (str(target), str(target) + os.sep + ".")]
+    for a, b in pairs:
+        key_a, key_b = fb._lock_key(a), fb._lock_key(b)
+        same_file = os.path.samefile(a, b) if os.path.exists(a) and os.path.exists(b) else True
+        if same_file:
+            check("lock key: %r and %r agree" % (a[-24:], b[-24:]), key_a == key_b,
+                  "%r != %r" % (key_a, key_b))
+    check("lock key: the same key is the same lock object",
+          fb._path_lock(str(target)) is fb._path_lock(str(target).replace(os.sep, "/")))
+    check("lock key: a path-less caller keeps the empty key",
+          fb._lock_key("") == "" and fb._lock_key(None) == "")
+
+
+def test_a_batch_of_two_spellings_keeps_both_edits():
+    """Behaviour, not just the key: two edits of one file, in two threads, under the two
+    spellings, with the write slowed so the two read-modify-write passes really overlap.
+    Fails on the pre-fix build (one edit is overwritten)."""
+    import time
+    tmp = TMP / "lockrace"
+    tmp.mkdir(parents=True, exist_ok=True)
+    target = tmp / "race.txt"
+    target.write_bytes(b"MARKER-AAA\n" + b"filler\n" * 2000 + b"MARKER-BBB\n")
+    real = fb.atomic_write_text
+
+    def slow(path, text, encoding="utf-8"):
+        time.sleep(0.4)
+        return real(path, text, encoding=encoding)
+    saved = fb.atomic_write_text
+    fb.atomic_write_text = slow
+    spellings = [str(target), str(target).replace(os.sep, "/")]
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            f1 = pool.submit(fb.tool_edit_file, {"path": spellings[0],
+                                                 "old_string": "MARKER-AAA",
+                                                 "new_string": "MARKER-A1"}, {})
+            f2 = pool.submit(fb.tool_edit_file, {"path": spellings[1],
+                                                 "old_string": "MARKER-BBB",
+                                                 "new_string": "MARKER-B1"}, {})
+            f1.result(); f2.result()
+    finally:
+        fb.atomic_write_text = saved
+    body = target.read_bytes()
+    check("two spellings: the first edit survives", b"MARKER-A1" in body, body[:60])
+    check("two spellings: the second edit survives", b"MARKER-B1" in body, body[-60:])
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

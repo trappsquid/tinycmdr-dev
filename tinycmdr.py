@@ -3375,6 +3375,25 @@ _PATH_LOCKS = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
+def _lock_key(path):
+    """One key per FILE, whatever the string looked like.
+
+    Measured 2026-09-24 (falsify-lockkey.py): `C:\\x\\big.txt` and `C:/x/big.txt` produced
+    different locks, so two edits in one batch both reported success and one was silently
+    overwritten - the same lost-update the per-path lock was added to prevent, one level
+    down: there the key was missing, here it was unnormalised. normcase folds case on
+    Windows (where those ARE the same file); realpath resolves ~, "..", separators and
+    symlinks. A path-less caller keeps the empty key it always had.
+    """
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    try:
+        return os.path.normcase(os.path.realpath(os.path.expanduser(text)))
+    except Exception:                                            # noqa: BLE001
+        return text
+
+
 def _path_lock(path):
     """One lock per PATH, not per tool: a batch that edits two files in parallel is
     fine, two calls to the same file are not.
@@ -3386,7 +3405,7 @@ def _path_lock(path):
     be able to freeze the run that writes it.
     """
     with _PATH_LOCKS_GUARD:
-        return _PATH_LOCKS.setdefault(str(path or ""), threading.RLock())
+        return _PATH_LOCKS.setdefault(_lock_key(path), threading.RLock())
 
 
 def serialized_by_path(fn):
