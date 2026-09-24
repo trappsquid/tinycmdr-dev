@@ -8508,6 +8508,7 @@ class Agent:
                               "drop": narration_drop_cb,
                               "tool_done": progress_done_cb}}
             _delta_gate = {"t": 0.0, "streamed": False, "reasoned": False}
+            _dropped_answers = []   # composed answers saved for lanes with no say_cb
 
             def _on_delta(st):
                 """Live liveness while the model generates.
@@ -8747,14 +8748,44 @@ class Agent:
                                 ("operator (answer to your question)",
                                  str(_ask_ans["answer"]))]
                         if late:
+                            # The composed answer is DELIVERED before the steering
+                            # turn, never dropped. Measured 2026-09-23: steering
+                            # that arrived in the same second as the answer took
+                            # "another turn", the answer text vanished (its streamed
+                            # draft was blanked and the final post carried only the
+                            # steering response) and the operator's task result was
+                            # simply gone. An answer the model already wrote is
+                            # data; losing it to a scheduling coincidence is loss.
+                            _composed = (reply.get("content") or "").strip()
+                            if _composed:
+                                if say_cb:
+                                    try:
+                                        say_cb(_composed)
+                                    except Exception:
+                                        log.debug("say_cb failed", exc_info=True)
+                                else:
+                                    _dropped_answers.append(_composed)
+                                # The streamed draft WAS this answer and the
+                                # answer is now posted properly - drop the
+                                # draft rather than showing the words twice
+                                # (measured 2026-09-23: without this the draft
+                                # outlived the delivery as a duplicate).
+                                try:
+                                    if narration_drop_cb:
+                                        narration_drop_cb()
+                                except Exception:
+                                    log.debug("narration_drop_cb failed",
+                                              exc_info=True)
                             for who, msg in late:
                                 log.info("[%s] steering from %s arrived with the answer — "
                                          "taking another turn", session_key, who)
                                 messages.append({
                                     "role": "user",
                                     "content": (f"[operator, mid-run — this arrived while you "
-                                                f"were answering and it overrides the earlier "
-                                                f"instruction] {msg}")})
+                                                f"were composing your answer. That answer "
+                                                f"has been delivered to the operator already - "
+                                                f"handle this steering now, and fold in "
+                                                f"whatever it changes] {msg}")})
                             continue
                         answer = (reply.get("content") or "").strip()
                         if not answer:
@@ -8867,6 +8898,11 @@ class Agent:
                             except Exception:
                                 log.debug("narration_drop_cb failed", exc_info=True)
                         answer = _annotate_evidence(answer, muts, calls)
+                        if _dropped_answers:
+                            # No say_cb lane (the bare console/web runs): earlier
+                            # composed answers ride WITH the final one rather than
+                            # being dropped on the floor.
+                            answer = "\n\n".join(_dropped_answers + [answer])
                         hist.append({"role": "assistant", "content": scrub(answer)})
                         return scrub(answer)
 

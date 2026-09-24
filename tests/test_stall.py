@@ -1712,12 +1712,52 @@ def test_a_correction_that_arrives_with_the_answer_gets_another_turn():
     check("steering: the correction reached the model",
           len(payloads) > 1 and any("Leave it alone" in str(m.get("content", ""))
                                     for m in payloads[1]), payloads[1] if len(payloads) > 1 else None)
-    check("steering: it is marked as overriding the earlier instruction",
-          len(payloads) > 1 and any("overrides the earlier instruction" in str(m.get("content", ""))
+    check("steering: the correction is marked as delivered-already steering",
+          len(payloads) > 1 and any("delivered to the operator already" in str(m.get("content", ""))
                                     for m in payloads[1]), "")
-    check("steering: the answer that comes back is the one composed after the correction",
-          out == "Understood, leaving it alone.", str(out)[:140])
+    check("steering: with no say_cb the composed answer RIDES with the final one",
+          out == "Starting the cleanup now.\n\nUnderstood, leaving it alone.",
+          str(out)[:200])
 
+
+
+def test_an_answer_that_arrives_with_the_correction_is_delivered():
+    """The measured loss this pins (drive 2026-09-23, the Windows test box): the model composed
+    the full task answer, steering landed in the same second, the run took another
+    turn - and the run's DELIVERED response carried only the steering reply. The
+    composed answer survived only as the leftover streamed draft (its text lives in
+    the post's attachment props, easy to misread as an erased post): no lane treats
+    draft residue as a delivery, and lanes without draft posts lose it outright.
+    The composed answer must be DELIVERED (say_cb) and must not duplicate in the
+    run's return."""
+    _redirect_state()
+    fb.AGENT.histories.clear()
+    saved_chat = fb.AGENT._chat
+    seq = [{"role": "assistant", "content": "The full task answer."},
+           {"role": "assistant", "content": "Steering handled."}]
+    said = []
+    drains = {"n": 0}
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None,
+                  max_tokens=None, cancel_event=None, on_delta=None, session_key=None, **kwargs):
+        return seq.pop(0)
+
+    def steer():
+        drains["n"] += 1
+        return [("david", "one more thing")] if drains["n"] == 2 else []
+
+    fb.AGENT._chat = fake_chat
+    try:
+        out = fb.AGENT.run("steer-deliver", "do the task", steer_cb=steer,
+                           say_cb=said.append)
+    finally:
+        fb.AGENT._chat = saved_chat
+    check("steering: the composed answer was delivered through say_cb",
+          "The full task answer." in said, said)
+    check("steering: the steering turn's answer is the run's return",
+          out == "Steering handled.", str(out)[:140])
+    check("steering: with say_cb the return carries no duplicate of the answer",
+          "The full task answer." not in (out or ""), str(out)[:140])
 
 
 def test_a_mutation_lets_the_same_call_run_again():
