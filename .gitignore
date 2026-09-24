@@ -1,71 +1,75 @@
-# tinycmdr repo — what is source and what is per-host state.
-#
-# Rule: anything a host writes for itself (logs, sessions, memory files, secrets,
-# backups) never enters git. One folder goes to six boxes, so a committed per-host
-# file would read as canonical and be wrong.
-
-# --- the plan's list (docs/minidsh-hardening-plan.md, stage 1) ---
-logs/
-sessions/
-spill/
-state.json
-*.bak*
-web-token.txt
-.env
-__pycache__/
-dist/
-# tools/ is per-host tool payload - with ONE exception: the starter tools
-# are shipped source (they ride every package), so they are tracked.
-tools/*
-!tools/patch.py
-!tools/process.py
-!tools/toolsmith.py
-!tools/README.md
-notes.md
-tasks.json
-atlas.md
-knowledge/
-skills/.imported-unused/
-
-# --- per-host state and junk the first staging pass found (2026-09-19) ---
-# Every name here is a file a host writes for itself, or a scratch artifact.
-# Deviations from the plan's list are listed in the stage-1 report.
-field-notes.md
-notes-archive.md
-notes-authored.json
-tasks.md
-# the ledger's append-only journal (per-host state, like tasks.json)
-tasks.journal.jsonl
-tests/eval-runs/
-snapshots/
-tmp/
-uploads/
-hermes-tmp/
-.archive/
-.pre-*
-*.pre-*
-config.json
-jobs.json
-inbox/
-*.log
-*.lock
-*.tmp
-skills/
-.env.*
-!.env.example
-web-token.txt.*
-web-sessions.json
-# the tools/ provenance record written at run start (ToolRegistry.note_provenance)
-tools-provenance.json
-a.txt
-lines.txt*
-
-# Internal fleet operational tooling & notes
-maintenance/atlas-notes/
-maintenance/fleet-version-report.ps1
-maintenance/fleet-metrics.py
-maintenance/register-boot-recovery.ps1
-maintenance/start-containers.ps1
-maintenance/task-audit.ps1
-maintenance/restart-tinycmdr-the manager box.ps1
-docs/handoff-*.md
+# tinycmdr repo — what is source and what is per-host state.
+#
+# Rule: anything a host writes for itself (logs, sessions, memory files, secrets,
+# backups) never enters git. One folder goes to six boxes, so a committed per-host
+# file would read as canonical and be wrong.
+
+# --- the plan's list (docs/minidsh-hardening-plan.md, stage 1) ---
+logs/
+sessions/
+spill/
+state.json
+*.bak*
+web-token.txt
+.env
+__pycache__/
+dist/
+# tools/ is per-host tool payload - with ONE exception: the starter tools
+# are shipped source (they ride every package), so they are tracked.
+tools/*
+!tools/patch.py
+!tools/process.py
+!tools/toolsmith.py
+!tools/README.md
+notes.md
+tasks.json
+atlas.md
+knowledge/
+skills/.imported-unused/
+
+# --- per-host state and junk the first staging pass found (2026-09-19) ---
+# Every name here is a file a host writes for itself, or a scratch artifact.
+# Deviations from the plan's list are listed in the stage-1 report.
+field-notes.md
+notes-archive.md
+notes-authored.json
+tasks.md
+# the ledger's append-only journal (per-host state, like tasks.json)
+tasks.journal.jsonl
+tests/eval-runs/
+snapshots/
+tmp/
+uploads/
+hermes-tmp/
+.archive/
+.pre-*
+*.pre-*
+config.json
+jobs.json
+inbox/
+*.log
+*.lock
+*.tmp
+skills/
+.env.*
+!.env.example
+web-token.txt.*
+web-sessions.json
+# the tools/ provenance record written at run start (ToolRegistry.note_provenance)
+tools-provenance.json
+a.txt
+lines.txt*
+
+# Internal fleet operational tooling & notes
+maintenance/atlas-notes/
+# Our own engineering notes: they name hosts, addresses and the operator's
+# decisions, so they are never shipped and never committed.
+docs/dev-log.md
+docs/deferred-corrections.md
+maintenance/fleet-version-report.ps1
+maintenance/fleet-metrics.py
+maintenance/register-boot-recovery.ps1
+maintenance/start-containers.ps1
+maintenance/task-audit.ps1
+maintenance/restart-tinycmdr-the manager box.ps1
+docs/handoff-*.md

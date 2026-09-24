@@ -8,8 +8,19 @@
 #
 # It reads install/fleet-defaults.json (Mattermost host, model endpoint, allowed
 # user), keeps the bot token out of config.json (it goes to .env), and registers
-# a systemd unit that is enabled at boot.
+# a systemd unit.
 #
+# TWO WAYS TO RUN IT. Say which, or take the default for who you are:
+#
+#   sudo bash install-tinycmdr.sh   -> SYSTEM: a unit in /etc/systemd/system that
+#                                      boots with the machine, passwordless sudo
+#                                      for the agent, verb in /usr/local/bin
+#   bash install-tinycmdr.sh        -> USER: a unit in ~/.config/systemd/user that
+#                                      starts at login, NO root anywhere, the agent
+#                                      gets no sudo, verb in ~/.local/bin
+#
+#   --mode system|user    which one (aliases: --system, --no-root); --yes takes
+#                         the default without asking
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first token-looking line)
 #   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
@@ -48,7 +59,11 @@ INSTALL_DIR="${TINYCMDR_DIR:-$USER_HOME/tinycmdr}"
 # --uninstall are scoped against it (2026-09-23: an un-scoped probe cleanup
 # removed a running box's whole install - twice over in one day)
 DEFAULT_INSTALL_DIR="$INSTALL_DIR"
-UNIT="/etc/systemd/system/$SERVICE_NAME.service"
+# UNIT and the PATH wrapper depend on the MODE (system vs user); both are set in
+# "how should it run here?" below, once the flags have been read. A system unit
+# lives in /etc and needs root to write; a user unit lives in your own home.
+UNIT=""
+WRAPPER=""
 LOG="${TINYCMDR_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
 PY="${TINYCMDR_PYTHON:-python3}"
 
@@ -58,12 +73,15 @@ TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG="
 MODEL_BASE_GIVEN=""; MODEL_GIVEN=""; WEB_CLI_GIVEN=0
 TG_TOKEN=""; TG_IDS=""
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
+# system | user | "" (decide from who you are). TINYCMDR_MODE is the env door, the
+# --mode flag the CLI door: a fleet push sets the env one and never prompts.
+INSTALL_MODE="${TINYCMDR_MODE:-}"; ASK_MODE=1; DIR_GIVEN=0; RUN_UID=""
 # Generated later (in the config section), but READ earlier by the summary: under `set -u`
 # an unset name there is a crash, and the token-less + Telegram-only paths both fell into it.
 WEB_TOKEN=""
 PORT_BUSY_BEFORE=""
 
-usage() { sed -n '3,33p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -71,8 +89,12 @@ while [ $# -gt 0 ]; do
         --token-file)       TOKEN_FILE="$2"; shift 2 ;;
         --telegram-token)   TG_TOKEN="$2"; shift 2 ;;
         --telegram-ids)     TG_IDS="$2"; shift 2 ;;
-        --install-dir)      INSTALL_DIR="$2"; shift 2 ;;
+        --install-dir)      INSTALL_DIR="$2"; DIR_GIVEN=1; shift 2 ;;
         --user)             RUN_USER="$2"; shift 2 ;;
+        --mode)             INSTALL_MODE="$2"; shift 2 ;;
+        --system)           INSTALL_MODE=system; shift ;;
+        --no-root)          INSTALL_MODE=user; shift ;;
+        -y|--yes)           ASK_MODE=0; shift ;;
         --bot-name)         BOT_NAME="$2"; shift 2 ;;
         --allowed-user)     ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)   MM_URL_ARG="$2"; shift 2 ;;
@@ -150,6 +172,119 @@ PY
 
 version_of() { grep -m1 -oE 'VERSION = "[^"]+"' "$1" 2>/dev/null | cut -d'"' -f2; }
 
+# ------------------------------------------------- how should it run here? ---
+# Two supported shapes, same agent:
+#
+#   system  a unit in /etc/systemd/system, enabled at boot, run as $RUN_USER, and
+#           (unless --no-sudoers) that user gets passwordless sudo so the agent can
+#           actually administer the box. Needs root to install.
+#   user    a unit in ~/.config/systemd/user, started at login through your own
+#           systemd instance, verb in ~/.local/bin, no root anywhere, and NO sudo
+#           for the agent - an unattended `sudo` will just sit at a password prompt.
+#
+# The default follows who you are: root installs system (today's behaviour, and what
+# a fleet push gets), everyone else gets user. --mode overrides either way, and
+# `sudo bash install-tinycmdr.sh --mode user` means "install it for me as me".
+if [ -z "$INSTALL_MODE" ] && [ "$ASK_MODE" = 1 ] && [ -t 0 ] && [ -t 1 ]; then
+    if [ "$(id -u)" = 0 ]; then _dflt=1; else _dflt=2; fi
+    printf '\n  How should tinycmdr run on this machine?\n\n'
+    printf '    1) system   boots with the machine, needs sudo now, the agent gets\n'
+    printf '                passwordless sudo, and the verb lands in /usr/local/bin\n'
+    printf '    2) user     starts when you log in, needs no sudo at all, the agent\n'
+    printf '                gets no sudo, and the verb lands in ~/.local/bin\n\n'
+    printf '  [1/2] (Enter = %s): ' "$_dflt"
+    _answer=""
+    read -r _answer || _answer=""          # EOF must not kill the run (see 1.0.4)
+    case "$_answer" in
+        1|system|s|S) INSTALL_MODE=system ;;
+        2|user|u|U)   INSTALL_MODE=user ;;
+        *)            : ;;                 # Enter / anything else: default below
+    esac
+fi
+if [ -z "$INSTALL_MODE" ]; then
+    if [ "$(id -u)" = 0 ]; then INSTALL_MODE=system; else INSTALL_MODE=user; fi
+fi
+case "$INSTALL_MODE" in
+    system|user) ;;
+    *) die "--mode must be system or user (got: $INSTALL_MODE)" ;;
+esac
+if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" = 0 ]; then
+    # sudo, but for the human who typed it: their home, their unit, no root kept.
+    _target="${SUDO_USER:-}"
+    if [ -n "$_target" ] && [ "$_target" != root ] && id -u "$_target" >/dev/null 2>&1; then
+        RUN_USER="$_target"
+        USER_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
+        USER_HOME="${USER_HOME:-/home/$RUN_USER}"
+        # only when --install-dir was not given: an explicit folder always wins
+        if [ "$DIR_GIVEN" = 0 ]; then INSTALL_DIR="$USER_HOME/tinycmdr"; fi
+    fi
+fi
+RUN_UID="$(id -u "$RUN_USER" 2>/dev/null || echo "")"
+if [ "$INSTALL_MODE" = user ]; then
+    UNIT="$USER_HOME/.config/systemd/user/$SERVICE_NAME.service"
+    WRAPPER="$USER_HOME/.local/bin/tinycmdr"
+else
+    UNIT="/etc/systemd/system/$SERVICE_NAME.service"
+    WRAPPER="/usr/local/bin/tinycmdr"
+fi
+# strings the unit file and the closing summary are built from
+if [ "$INSTALL_MODE" = user ]; then
+    SCTL_HINT="systemctl --user"
+    JCTL_SCOPE="--user "
+    SUDO_IF_ROOT=""
+    BOOT_TARGET="default.target"
+    BOOT_DEPS=""
+    # a user unit runs as you already; User=/Group= there makes systemd try to switch
+    # to a group it has no permission to, and the service dies with status=216/GROUP
+    UNIT_USER_LINES=""
+else
+    SCTL_HINT="systemctl"
+    JCTL_SCOPE=""
+    SUDO_IF_ROOT="sudo "
+    BOOT_TARGET="multi-user.target"
+    BOOT_DEPS="After=network-online.target
+Wants=network-online.target"
+    UNIT_USER_LINES="User=$RUN_USER
+Group=$RUN_USER"
+fi
+
+# systemctl/journalctl in the right scope. A user unit is driven through that user's
+# own systemd instance: as root we have to go through runuser to reach it, because
+# `systemctl --user` as root would talk to root's bus and find nothing.
+sctl() {
+    if [ "$INSTALL_MODE" != user ]; then
+        systemctl "$@"
+        return
+    fi
+    if [ "$(id -u)" = 0 ]; then
+        if command -v runuser >/dev/null 2>&1; then
+            runuser -u "$RUN_USER" -- env XDG_RUNTIME_DIR="/run/user/$RUN_UID" systemctl --user "$@"
+        else
+            sudo -u "$RUN_USER" env XDG_RUNTIME_DIR="/run/user/$RUN_UID" systemctl --user "$@"
+        fi
+    else
+        systemctl --user "$@"
+    fi
+}
+jctl() {
+    if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" != 0 ]; then
+        journalctl --user -u "$SERVICE_NAME" "$@"
+    else
+        journalctl -u "$SERVICE_NAME" "$@"
+    fi
+}
+if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" != 0 ]; then
+    if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -d "/run/user/$RUN_UID" ]; then
+        export XDG_RUNTIME_DIR="/run/user/$RUN_UID"
+    fi
+    if [ -z "${XDG_RUNTIME_DIR:-}" ] || [ ! -S "$XDG_RUNTIME_DIR/bus" ]; then
+        die "a user install needs your own systemd session (no bus at \
+     ${XDG_RUNTIME_DIR:-unset}/bus). Log in on the box and try again, or enable
+     lingering from root:  sudo loginctl enable-linger $RUN_USER
+     For the system install instead:  sudo bash $0 --mode system"
+    fi
+fi
+
 # ------------------------------------------------------------- verify mode ---
 if [ "$VERIFY_ONLY" = 1 ]; then
     echo "tinycmdr on $(hostname) - $INSTALL_DIR"
@@ -163,9 +298,10 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     else
         printf '  venv python  : MISSING\n'
     fi
+    printf '  mode         : %s (%s)\n' "$INSTALL_MODE" "$UNIT"
     printf '  unit file    : %s\n' "$([ -f "$UNIT" ] && echo present || echo MISSING)"
-    printf '  enabled      : %s\n' "$(systemctl is-enabled "$SERVICE_NAME" 2>&1 || true)"
-    printf '  active       : %s\n' "$(systemctl is-active "$SERVICE_NAME" 2>&1 || true)"
+    printf '  enabled      : %s\n' "$(sctl is-enabled "$SERVICE_NAME" 2>&1 || true)"
+    printf '  active       : %s\n' "$(sctl is-active "$SERVICE_NAME" 2>&1 || true)"
     printf '  mattermost   : %s://%s:%s\n' "$(cfgval mattermost.scheme)" \
         "$(cfgval mattermost.url)" "$(cfgval mattermost.port)"
     printf '  model        : %s @ %s\n' "$(cfgval llm.model)" "$(cfgval llm.base_url)"
@@ -177,7 +313,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
         printf '  token in .env: NO\n'
     fi
     port="$(cfgval web.port)"; port="${port:-8787}"
-    if [ "$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)" = active ]; then
+    if [ "$(sctl is-active "$SERVICE_NAME" 2>/dev/null || true)" = active ]; then
         printf '  web health   : %s\n' "$(curl -sf --max-time 5 "http://127.0.0.1:$port/api/health" || echo "no answer on port $port")"
     fi
     echo
@@ -187,7 +323,13 @@ if [ "$VERIFY_ONLY" = 1 ]; then
 fi
 
 # -------------------------------------------------------------- pre-flight ---
-[ "$(id -u)" = 0 ] || die "run this with sudo (it writes $UNIT)"
+if [ "$INSTALL_MODE" = system ] && [ "$(id -u)" != 0 ]; then
+    die "a system install writes $UNIT and needs root:
+     sudo bash $0 --mode system
+     ...or install it for yourself with no root at all:  bash $0 --mode user"
+fi
+[ "$INSTALL_MODE" = user ] || [ "$(id -u)" = 0 ] \
+    || die "internal: system mode without root reached pre-flight (report this)"
 [ -f "$SRC/tinycmdr.py" ] || die "tinycmdr.py not found next to install/ (looked in $SRC)"
 command -v systemctl >/dev/null || die "systemd not found - this installer is for Debian/Ubuntu hosts"
 id -u "$RUN_USER" >/dev/null 2>&1 || die "no such user: $RUN_USER"
@@ -196,6 +338,7 @@ say "pre-flight"
 info "package      : $SRC"
 info "version      : $(version_of "$SRC/tinycmdr.py")"
 info "install dir  : $INSTALL_DIR"
+info "mode         : $INSTALL_MODE$( [ "$INSTALL_MODE" = user ] && echo "   (your own systemd instance, starts at login, no sudo for the agent)" || echo "   (system service, boots with the machine)" )"
 info "service user : $RUN_USER"
 "$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
     || die "$PY is $(python3 -V 2>&1); tinycmdr needs Python 3.10 or newer"
@@ -203,20 +346,26 @@ info "python       : $($PY -V 2>&1)  ($(command -v "$PY"))"
 
 if [ "$UNINSTALL" = 1 ]; then
     say "uninstall"
-    systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
+    sctl disable --now "$SERVICE_NAME" 2>/dev/null || true
     rm -f "$UNIT"
-    systemctl daemon-reload || true
+    sctl daemon-reload 2>/dev/null || true
     # The two things the install writes OUTSIDE its folder, both SCOPED: a probe
     # uninstall (--install-dir /tmp/...) must never take a real install's verb
     # wrapper or sudo grant with it (measured 2026-09-23: it ate a live install's wrapper and grant).
-    if [ -f /usr/local/bin/tinycmdr ] \
-            && grep -qF "$INSTALL_DIR" /usr/local/bin/tinycmdr 2>/dev/null; then
-        rm -f /usr/local/bin/tinycmdr
-        info "PATH wrapper removed"
+    if [ -f "$WRAPPER" ] && grep -qF "$INSTALL_DIR" "$WRAPPER" 2>/dev/null; then
+        rm -f "$WRAPPER"
+        info "PATH wrapper removed ($WRAPPER)"
+    fi
+    # A user install can be removed for the user by root too; ~/.local/bin is left
+    # alone when empty.
+    if [ "$INSTALL_MODE" = user ] && [ -d "$USER_HOME/.local/bin" ] \
+            && [ -z "$(ls -A "$USER_HOME/.local/bin" 2>/dev/null)" ]; then
+        rmdir "$USER_HOME/.local/bin" 2>/dev/null || true
     fi
     # the passwordless-sudo grant is per-USER, not per-install: only the default
     # install's removal takes it. Both file names - a pre-tinycmdr one can remain.
-    if [ "$(id -u)" = 0 ] && [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
+    if [ "$(id -u)" = 0 ] && [ "$INSTALL_MODE" = system ] \
+            && [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
         rm -f "/etc/sudoers.d/${RUN_USER}-tinycmdr" \
               "/etc/sudoers.d/${RUN_USER}-hermes"
         info "sudo grant removed (both file names)"
@@ -348,9 +497,9 @@ else
     info "web fallback : disabled"
 fi
 
-if [ "$FORCE" = 1 ] && systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+if [ "$FORCE" = 1 ] && sctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
     say "force: stopping the running service"
-    systemctl stop "$SERVICE_NAME" || true
+    sctl stop "$SERVICE_NAME" || true
 fi
 
 # ------------------------------------------------------------------- files ---
@@ -390,9 +539,20 @@ chmod +x "$INSTALL_DIR/tinycmdr" 2>/dev/null || true
 # The verb surface on PATH (audit F12). A two-line wrapper, not a symlink: nothing
 # has to resolve, it names the install dir explicitly, and removing the file IS the
 # uninstall step. --no-path leaves the box untouched.
-if [ "${NO_PATH:-0}" != "1" ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-    printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > /usr/local/bin/tinycmdr
-    chmod 0755 /usr/local/bin/tinycmdr
+if [ "${NO_PATH:-0}" != "1" ] && [ "$INSTALL_MODE" = user ]; then
+    mkdir -p "$USER_HOME/.local/bin"
+    chown "$RUN_USER:$RUN_USER" "$USER_HOME/.local" "$USER_HOME/.local/bin" 2>/dev/null || true
+fi
+if [ "${NO_PATH:-0}" != "1" ] && [ -f "$WRAPPER" ] \
+        && ! grep -qF "$INSTALL_DIR" "$WRAPPER" 2>/dev/null; then
+    # Same scoping rule as the macOS plist and the sudoers file: a folder OUTSIDE the
+    # install dir is only touched when it is already ours. A probe install must not
+    # take a working install's verb.
+    info "kept the existing $WRAPPER (it belongs to another install)"
+elif [ "${NO_PATH:-0}" != "1" ] && [ -d "$(dirname "$WRAPPER")" ] && { [ -w "$(dirname "$WRAPPER")" ] || [ "$(id -u)" = 0 ]; }; then
+    printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > "$WRAPPER"
+    chmod 0755 "$WRAPPER"
+    chown "$RUN_USER:$RUN_USER" "$WRAPPER" 2>/dev/null || true
     info "verbs      : tinycmdr status | doctor | model | logs | restart | token"
 else
     info "verbs      : not on PATH - run $INSTALL_DIR/tinycmdr (or re-run without --no-path)"
@@ -584,7 +744,19 @@ chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/.env"
 # and repeats for days. --no-sudoers skips this.
 if [ "$VERIFY_ONLY" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "$NO_SUDOERS" = 0 ]; then
     say "privileges"
-    if [ "$(id -u)" != 0 ]; then
+    if [ "$INSTALL_MODE" = user ]; then
+        # No grant, and none is possible without root. Say so here AND in notes.md:
+        # notes.md is re-sent in every prompt, and a host that quietly lacks sudo is
+        # how the bot spends a week reporting "I have no root on this box".
+        info "user install: no passwordless sudo is granted (that needs root)"
+        info "the agent runs as $RUN_USER and cannot sudo unattended"
+        NOTES="$INSTALL_DIR/notes.md"
+        if ! grep -qi 'user install' "$NOTES" 2>/dev/null; then
+            printf -- '- [%s] Privileges on this host: NO passwordless sudo (user install, no root). `sudo` will prompt for a password and the shell tool has no tty. Do NOT probe with `sudo -n` or keep retrying it: a password prompt is a prompt, not proof. Root work here needs the operator, or a system install (sudo bash install-tinycmdr.sh --mode system).\n' \
+                "$(date +%F)" >> "$NOTES"
+            chown "$RUN_USER:$RUN_USER" "$NOTES" 2>/dev/null || true
+        fi
+    elif [ "$(id -u)" != 0 ]; then
         info "not root: leaving sudo alone (re-run under sudo to grant passwordless sudo)"
     else
         SUDOERS_LINE="${RUN_USER} ALL=(ALL) NOPASSWD: ALL"
@@ -636,14 +808,12 @@ cat > "$UNIT" <<EOF
 [Unit]
 Description=tinycmdr - Mattermost ops agent (${BOT_NAME})
 Documentation=file://$INSTALL_DIR/README.md
-After=network-online.target
-Wants=network-online.target
 StartLimitIntervalSec=0
+$BOOT_DEPS
 
 [Service]
 Type=simple
-User=$RUN_USER
-Group=$RUN_USER
+$UNIT_USER_LINES
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$VENV_PY $INSTALL_DIR/tinycmdr.py $APP_ARGS
 Environment="HOME=$USER_HOME"
@@ -661,12 +831,27 @@ StandardError=journal
 SyslogIdentifier=$SERVICE_NAME
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=$BOOT_TARGET
 EOF
 info "wrote $UNIT"
-systemctl daemon-reload
-systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || die "systemctl enable failed"
-info "enabled at boot: $(systemctl is-enabled "$SERVICE_NAME" 2>&1)"
+sctl daemon-reload 2>/dev/null || true
+sctl enable "$SERVICE_NAME" >/dev/null 2>&1 || die "systemctl enable failed"
+if [ "$INSTALL_MODE" = user ]; then
+    info "enabled at login: $(sctl is-enabled "$SERVICE_NAME" 2>&1)"
+    # Lingering is what turns "starts when I log in" into "starts with the machine".
+    # It needs root, so a no-root install may not be allowed to set it.
+    if loginctl show-user "$RUN_USER" 2>/dev/null | grep -q 'Linger=yes'; then
+        info "lingering      : already on, so it also starts at boot, no login needed"
+    elif loginctl enable-linger "$RUN_USER" 2>/dev/null; then
+        info "lingering      : enabled (starts at boot, no login needed)"
+    else
+        info "lingering      : not enabled (needs root) - the agent starts at your"
+        info "                 next login. To start it at boot, ask for:"
+        info "                 sudo loginctl enable-linger $RUN_USER"
+    fi
+else
+    info "enabled at boot: $(sctl is-enabled "$SERVICE_NAME" 2>&1)"
+fi
 
 if [ "$NO_START" = 1 ]; then
     info "--no-start: not starting it now"
@@ -681,18 +866,18 @@ else
             PORT_BUSY_BEFORE="$pnow"
         fi
     fi
-    systemctl restart "$SERVICE_NAME"
+    sctl restart "$SERVICE_NAME"
     active=""
     for _ in $(seq 1 25); do
         sleep 2
-        if systemctl is-active --quiet "$SERVICE_NAME"; then active=1; break; fi
+        if sctl is-active --quiet "$SERVICE_NAME"; then active=1; break; fi
     done
     if [ -z "$active" ]; then
         echo "--- journal ---"
-        journalctl -u "$SERVICE_NAME" -n 40 --no-pager || true
+        jctl -n 40 --no-pager || true
         die "the service did not stay up - see above and $INSTALL_DIR/tinycmdr.log"
     fi
-    info "active: yes (pid $(systemctl show -p MainPID --value "$SERVICE_NAME"))"
+    info "active: yes (pid $(sctl show -p MainPID --value "$SERVICE_NAME"))"
 fi
 
 # -------------------------------------------------------------------- check ---
@@ -718,30 +903,43 @@ if [ "$CHAT_LANE" = 1 ]; then
     if grep -qE 'authenticated as|Starting bot' "$INSTALL_DIR/tinycmdr.log" 2>/dev/null; then
         info "mattermost      : connected (the log shows the bot login)"
     else
-        info "mattermost      : no login line yet - journalctl -u $SERVICE_NAME -n 50"
+        info "mattermost      : no login line yet - journalctl ${JCTL_SCOPE}-u $SERVICE_NAME -n 50"
     fi
 elif [ -n "$TG_TOKEN" ]; then
     if grep -qE 'connected as @' "$INSTALL_DIR/tinycmdr.log" 2>/dev/null; then
         info "telegram        : connected (the log shows the tg login)"
     else
-        info "telegram        : no login line yet - journalctl -u $SERVICE_NAME -n 50"
+        info "telegram        : no login line yet - journalctl ${JCTL_SCOPE}-u $SERVICE_NAME -n 50"
     fi
     info "                  allowlist: $TG_IDS_CLEAN"
 else
     info "chat            : none (no token given) - the page is the door"
 fi
 
+# spelling it out here: nesting $( ) inside a quoted echo confused bash badly enough
+# that the whole summary was skipped (found by running it, not by reading it)
+if [ "$INSTALL_MODE" = user ]; then
+    if loginctl show-user "$RUN_USER" 2>/dev/null | grep -q 'Linger=yes'; then
+        MODE_LINE="user - starts at boot (lingering is on), no sudo for the agent"
+    else
+        MODE_LINE="user - starts at your next login, no sudo for the agent"
+    fi
+else
+    MODE_LINE="system - boots with the machine"
+fi
+
 cat <<EOF
 
 tinycmdr is installed.
 
-  active   : systemctl status $SERVICE_NAME
-  enabled  : $(systemctl is-enabled "$SERVICE_NAME" 2>&1)   (comes up at boot)
-  logs     : journalctl -u $SERVICE_NAME -f    and    $INSTALL_DIR/tinycmdr.log
-  restart  : sudo bash $INSTALL_DIR/maintenance/restart-tinycmdr.sh
+  mode     : $MODE_LINE
+  active   : ${SCTL_HINT} status $SERVICE_NAME
+  enabled  : $(sctl is-enabled "$SERVICE_NAME" 2>&1)
+  logs     : journalctl ${JCTL_SCOPE}-u $SERVICE_NAME -f    and    $INSTALL_DIR/tinycmdr.log
+  restart  : ${SCTL_HINT} restart $SERVICE_NAME
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
   session  : $VENV_PY $INSTALL_DIR/tinycmdr-cli.py
   page     : $VENV_PY $INSTALL_DIR/tinycmdr.py --web   -> http://127.0.0.1:$WEB_PORT
-  verify   : bash $HERE/$(basename "${BASH_SOURCE[0]}") --verify-only
-  remove   : sudo bash $HERE/$(basename "${BASH_SOURCE[0]}") --uninstall
+  verify   : bash $HERE/$(basename "${BASH_SOURCE[0]}") --verify-only --mode $INSTALL_MODE
+  remove   : ${SUDO_IF_ROOT}bash $HERE/$(basename "${BASH_SOURCE[0]}") --uninstall --mode $INSTALL_MODE
 EOF

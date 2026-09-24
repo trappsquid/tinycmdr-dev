@@ -5,6 +5,20 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.7] - 2026-09-24
+
+### Added
+- **The Linux installer can install without root.** It now has two shapes, and asks which one you want when you run it at a terminal (`--mode system|user` decides without a prompt, `--yes` takes the default for who you are):
+  - **system** (root): a unit in `/etc/systemd/system`, enabled at boot, passwordless sudo for the agent, verb in `/usr/local/bin`. This is what a fleet push gets, unchanged.
+  - **user** (no root at all): a unit in `~/.config/systemd/user`, started at login through your own systemd instance, the verb in `~/.local/bin`, no sudo grant anywhere, and a note in `notes.md` stating that the agent has no sudo so it does not repeat a wrong "no root here" for days.
+  Lingering (`systemctl --user` surviving logout) is enabled when allowed and the exact `sudo loginctl enable-linger <user>` command is printed when it is not. `sudo bash install-tinycmdr.sh --mode user` installs it for the invoking user without leaving anything root-owned.
+
+### Fixed
+- **A scoped install no longer overwrites a working install's PATH verb.** The wrapper is only written when the existing file already points at this install dir, the same rule the macOS plist and the sudoers file follow.
+- **`.gitignore` had a doubled carriage return on every line, so no pattern matched.** `.env` and `config.json` showed up as untracked in a public repo; one `git add -A` would have published the bot token.
+- **The shipped CLI README claimed a version that does not exist** ("From 1.0.7 a window this build owns stays open"), in the package readers actually download.
+- **The GitHub repo description still said "Fast TTFT"** after the same claim was removed from the README.
+
 ## [1.0.6] - 2026-09-24
 
 ### Fixed

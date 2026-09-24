@@ -281,8 +281,8 @@ A window flashes and disappears
     Something stopped it at startup: no config.json beside the file, or a
     config.json it refuses (a base_url that lost its "://" while being edited is
     the usual one, and the message quotes what it actually read). Double-clicked,
-    that window used to close the instant it printed. From 1.0.7 a window this
-    build owns stays open with the reason on screen until you press Enter. On an
+    that window used to close the instant it printed. A window this build owns
+    stays open with the reason on screen until you press Enter. On an
     older archive, open a prompt, change to this folder and run
     `python tinycmdr.py`, and the message stays put.
 

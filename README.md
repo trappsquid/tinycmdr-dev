@@ -171,12 +171,12 @@ Download the archive for your platform from the [latest release](https://github.
 
 ### Windows
 
-Download [`tinycmdr-1.0.6-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.6-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
+Download [`tinycmdr-1.0.7-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
 
 ```powershell
-curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.6-win.zip
-Expand-Archive tinycmdr-1.0.6-win.zip
-cd tinycmdr-1.0.6
+curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-win.zip
+Expand-Archive tinycmdr-1.0.7-win.zip
+cd tinycmdr-1.0.7
 .\INSTALL-WINDOWS.cmd
 ```
 
@@ -184,19 +184,33 @@ It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment ins
 
 ### Linux (Ubuntu / Debian / systemd)
 
+**System install** (boots with the machine, needs root, the agent gets
+passwordless sudo):
+
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.6-linux.tar.gz
-tar -xzf tinycmdr-1.0.6-linux.tar.gz
-cd tinycmdr-1.0.6
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-linux.tar.gz
+tar -xzf tinycmdr-1.0.7-linux.tar.gz
+cd tinycmdr-1.0.7
 sudo bash install/install-tinycmdr.sh
 ```
+
+**User install** (starts when you log in, no root anywhere, the agent cannot
+use sudo):
+
+```bash
+bash install/install-tinycmdr.sh                # asks which one, at a terminal
+bash install/install-tinycmdr.sh --mode user    # no prompt, no root
+```
+
+Run it at a terminal with no switch and it asks; `--mode system|user` decides
+without a prompt, and `--yes` takes the default for who you are.
 
 ### macOS (launchd)
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.6-macos.zip
-unzip tinycmdr-1.0.6-macos.zip
-cd tinycmdr-1.0.6
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-macos.zip
+unzip tinycmdr-1.0.7-macos.zip
+cd tinycmdr-1.0.7
 bash install/install-tinycmdr-macos.sh
 ```
 
