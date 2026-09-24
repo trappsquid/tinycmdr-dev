@@ -75,3 +75,7 @@ maintenance/restart-tinycmdr-the manager box.ps1
 docs/handoff-*.md
 launch_tinycmdr.bat
 tinycmdr-service.vbs
+
+# The fleet's private inventory (host names, ids, addresses, secret labels).
+# build-package.py refuses to build a public package without it.
+maintenance/private_rules.py

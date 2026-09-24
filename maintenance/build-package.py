@@ -135,7 +135,7 @@ ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
                        "build-cli-source.py", "build-cli-fix.py", "cli_blocks.py"}
 
 # Values that must not appear ANYWHERE (they are secrets, or this box's identity)
-SECRET_LABELS = ("web ui token", "mattermost token", "allowed user id")
+
 ENV_PREFIX = "env "
 # Ships-as-code files must be neutral too: a host value here would be baked into
 # every install, which is exactly how this box's endpoint ended up in the code.
@@ -221,42 +221,22 @@ PUBLIC_REDACT_DOCS = ("README.md", "CHANGELOG.md")
 
 # Redaction for everything else. ORDER MATTERS: the specific phrases first, then
 # the generic shapes, or a broad rule eats the context a narrow one needed.
-PUBLIC_RULES = (
-    (r"\bthe manager box-style\b", "host-style"),
-    (r"\bchat\.example\.com\b", "chat.example.com"),
-    (r"[\w.-]*example\.com", "example.com"),
-    (r"(?i:\bthe manager box\b|\bbot-aTOWER\b|\bthe Windows test box\b)", "a Windows host"),
-    (r"(?i:\bthe LAN model box\b|\bthe Linux test box\b)", "a Linux host"),
-    # the box's ROLE, not its name: "the security onion bot" names a host that the
-    # site's content policy does not mention, and the name alone leaked into shipped
-    # docs (found 2026-09-12 by grepping the built package, not by the build failing)
-    (r"(?i:\bsecurity onion\b|\bthe Linux box\b)", "a Linux host"),
-    (r"(?i:\bthe manager boxbot\b|\bthe macOS boxbot\b|\bthe other Windows boxbot\b|\bthe LAN model boxbot\b|\ba bot account\b"
-     r"|\bthe Linux box\b|\ba bot account\b|\bsystem-bot\b)", "a bot account"),
-    (r"\bDavid Trapp\b|\bDavid\b|\b<user>\b", "the operator"),
-    (r"C:\\Users\\<user>", r"C:\\tinycmdr"),
-    (r"/home/<user>", "/home/<user>"),
-    (r"\b<id>gp8g3k6qod9t5nwyro\b", "<mattermost-user-id>"),
-    (r"\b10\.10\.\d+\.\d+(?::\d+)?\b", "a LAN address"),
-    (r"\bthe file share\b", "the file share"),
-    (r"\bMattermost-(?:BOT-TOKENS|ACCOUNTS|AGENT-TOKENS)\.txt\b", "the credentials file"),
-    (r"\b[a-z0-9]{26}\b", "<id>"),
-)
+
+try:
+    from private_rules import PUBLIC_RULES, PUBLIC_FORBIDDEN, SECRET_LABELS
+except ImportError as _e:
+    raise SystemExit(
+        "maintenance/private_rules.py is missing or unreadable (%s).\n" % _e +
+        "It holds the fleet's private inventory (host names, ids, addresses, secret\n"
+        "labels) that must never ship in a public package. Copy private_rules.example.py\n"
+        "to private_rules.py and fill it in. Refusing to build without it.")
+
+
 
 # Anything matching one of these in a --public package is a build failure, not a
 # warning. The 26-char rule catches Mattermost ids; the key shapes catch leaked
 # credentials in any doc that quotes one.
-PUBLIC_FORBIDDEN = (
-    r"example", r"10\.10\.0\.", r"(?i:\bthe manager box\b)", r"the LAN model box", r"the Linux test box",
-    r"the other Windows box", r"the macOS box", r"bot-aTOWER|the Windows test box", r"a bot account",
-    r"the Linux box", r"(?i)security onion", r"\ba bot account\b", r"\bDavid\b",
-    r"<user>",
-    r"<id>", r"\b[a-z0-9]{26}\b", r"the file share",
-    r"com\.trapp", r"(?i:\btrapp\b)",
-    r"com\.trapp", r"(?i:\btrapp\b)",
-    r"tvly-[A-Za-z0-9]{8,}", r"sk-[A-Za-z0-9]{20,}",
-    r"C:\\Users\\David", r"/home/<user>",
-)
+
 
 
 def version():
