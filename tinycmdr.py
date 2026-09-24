@@ -15375,6 +15375,8 @@ def restart_owner():
                   unit ships with Restart=always, so exiting is enough
       supervisor  the Windows keep-alive sets TINYCMDR_SUPERVISED=1 in the
                   child's environment and relaunches on RESTART_EXIT_CODE
+      launchd     macOS launchd sets XPC_SERVICE_NAME (com.tinycmdr.agent), and
+                  its KeepAlive.SuccessfulExit=false relaunches on exit 75
       self        started by hand, or by a logon task with no supervisor:
                   nothing would start it again, so spawn a detached replacement
     """
@@ -15382,6 +15384,8 @@ def restart_owner():
         return "systemd"
     if os.environ.get("TINYCMDR_SUPERVISED") == "1":
         return "supervisor"
+    if "com.tinycmdr" in os.environ.get("XPC_SERVICE_NAME", "") or sys.platform == "darwin":
+        return "launchd"
     return "self"
 
 
