@@ -1588,7 +1588,7 @@ def test_local_and_cloud_are_classified_correctly():
                 "http://172.31.255.1/v1", "http://nas-bot.local:8081/v1"):
         check(f"local: {url}", fb._is_local_url(url) is True, url)
     for url in ("https://api.deepseek.com/v1", "https://api.moonshot.ai/v1",
-                "https://example.com/api", "http://8.8.8.8:8081/v1",
+                "https://chat.example.com/api", "http://8.8.8.8:8081/v1",
                 "http://172.32.0.1/v1", "http://192.169.0.1/v1"):
         check(f"cloud: {url}", fb._is_local_url(url) is False, url)
 
