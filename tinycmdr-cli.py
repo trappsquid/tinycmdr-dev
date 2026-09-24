@@ -2911,7 +2911,7 @@ def command_cost_risk(command):
 
 
 # ---- the route hint: a content search through the SHELL -------------------------------
-# The prompt line against it is not enough on its own. Measured 2026-09-23 (the Windows test box, the
+# The prompt line against it is not enough on its own. Measured 2026-09-23 (a test host, the
 # operator drive's first work order): "find every line that calls atomic_write_text" became
 # Select-String + a second Select-String for the def lines + a python regex in execute_code +
 # a 13,482-char spill + a repeat-read map - 6 calls and 4.5 minutes for what one search_files

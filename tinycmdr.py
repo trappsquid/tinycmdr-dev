@@ -2868,7 +2868,7 @@ def command_cost_risk(command):
 
 
 # ---- the route hint: a content search through the SHELL -------------------------------
-# The prompt line against it is not enough on its own. Measured 2026-09-23 (the Windows test box, the
+# The prompt line against it is not enough on its own. Measured 2026-09-23 (a test host, the
 # operator drive's first work order): "find every line that calls atomic_write_text" became
 # Select-String + a second Select-String for the def lines + a python regex in execute_code +
 # a 13,482-char spill + a repeat-read map - 6 calls and 4.5 minutes for what one search_files
@@ -13996,7 +13996,7 @@ def run_bot():
     # client holds the SAME dict, so this reaches the httpx calls.)
     bot.driver.options["request_timeout"] = 60
     # Heartbeat and receive timeout detect dead sockets within 30-60s
-    # instead of blocking indefinitely (measured: the other Windows box deaf for 4h).
+    # instead of blocking indefinitely (measured: a host deaf for 4h).
     bot.driver.options["websocket_kw_args"] = {"heartbeat": 30.0, "receive_timeout": 60.0}
     dispatcher.attach(bot.driver, bot.driver.users.get_user("me")["username"])
     SCHEDULER.dispatcher = dispatcher    # so long jobs can report progress too
