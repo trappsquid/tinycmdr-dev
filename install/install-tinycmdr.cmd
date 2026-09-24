@@ -43,10 +43,9 @@ if errorlevel 1 (
         rem -File <ps1> only, so -Force / -MattermostTokenFile went nowhere and the elevated
         rem window did the default install instead. An empty %* must not become an empty
         rem argument, so it is only appended when there is something to append.
-        set "FB_ARGS="
-        if not "%*"=="" set "FB_ARGS=,'%*'"
+        set "FB_ARGS=%*"
         echo Asking for administrator rights ^(needed for the scheduled task^)...
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%PS1%'%FB_ARGS%"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$arg = '-NoProfile -ExecutionPolicy Bypass -File ' + [char]34 + $env:PS1 + [char]34 + ' ' + $env:FB_ARGS; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $arg.Trim()"
         echo.
         echo The installer is running in the elevated window that just opened.
         echo This window can be closed.
