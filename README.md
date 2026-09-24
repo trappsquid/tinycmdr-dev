@@ -7,6 +7,7 @@
   ### High-Efficiency Agent Harness for Local and Self-Hosted LLMs
   *~4.1K token overhead · Stable prefix caching · Built-in ops guards · Zero infrastructure.*
 
+  [![GitHub Release](https://img.shields.io/github/v/release/trappsquid/tinycmdr?style=flat-square)](https://github.com/trappsquid/tinycmdr/releases/latest)
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#quick-install)
   [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
   [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
@@ -166,18 +167,33 @@ tinycmdr addresses these bottlenecks with an auditable single-process runtime bu
 
 ## Quick Install
 
+Download the pre-packaged archive from [**GitHub Releases**](https://github.com/trappsquid/tinycmdr/releases/latest) or use the command-line shortcuts below.
+
 ### Windows
-1. Extract the release archive.
-2. Double-click **`INSTALL-WINDOWS.cmd`**.
+
+**Option A: Direct Download (GUI)**
+1. Download [**`tinycmdr-1.0.1-win.zip`**](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.1-win.zip).
+2. Extract the ZIP folder.
+3. Double-click **`INSTALL-WINDOWS.cmd`**.
    *(Registers a light background service and puts `tinycmdr` on your PATH).*
+
+**Option B: PowerShell**
+```powershell
+curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.1-win.zip
+tar -xf tinycmdr-1.0.1-win.zip
+.\INSTALL-WINDOWS.cmd
+```
 
 ### Linux (Ubuntu / Debian / systemd)
 ```bash
+curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.1-linux.tar.gz | tar -xz
 sudo bash install/install-tinycmdr.sh
 ```
 
 ### macOS (launchd)
 ```bash
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.1-macos.zip
+unzip tinycmdr-1.0.1-macos.zip
 bash install/install-tinycmdr-macos.sh
 ```
 
