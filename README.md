@@ -19,17 +19,15 @@
 
 ---
 
-### The Problem with Running Agent Frameworks on Your Own Hardware
+### The Problem with Heavy Agent Harnesses on Self-Hosted LLMs
 
-Most agent frameworks (LangChain, CrewAI, AutoGen, OpenHands) were architected around hyperscale cloud APIs where prompt ingestion latency and token rent are someone else's problem. 
+Most agent harnesses and multi-channel gateways (like OpenClaw or heavy multi-process stacks) are architected around massive cloud APIs or heavy Node.js/Docker runtimes. When you run them against self-hosted models (llama.cpp, vLLM, Ollama) on your own hardware, you hit immediate friction:
 
-When you point those frameworks at local inference engines (llama.cpp, vLLM, Ollama), the experience falls apart:
-
-- **Prompt Ingestion Latency (TTFT):** Cloud providers hide prompt processing across massive GPU clusters. On local silicon, digesting 15,000–30,000 tokens of boilerplate schemas on an uncached turn stalls your GPU for 10–30 seconds before generating a single character.
-- **Prefix Cache Thrashing:** Mainstream frameworks scatter timestamps, dynamic status lines, or fluctuating conversation counters early in the prompt. This breaks KV prefix caching on every turn, forcing your engine to recompute the entire prompt over and over.
-- **Bloated KV Cache VRAM Rent:** In modern local setups running 100K–256K contexts, KV cache memory is precious VRAM. Burning 20,000+ tokens on framework plumbing reduces room for actual reasoning, history depth, or concurrent slots.
-- **Inference Slot Wedges:** When an agent loops or hangs, it locks an active GPU slot on your server. Mainstream harnesses lack truthful cancellation, requiring manual process kills.
-- **Infrastructure Sprawl:** They mandate multi-container Docker topologies, external vector stores, Redis queues, and hundreds of pip dependencies just to run basic tools.
+- **Prompt Ingestion Latency (TTFT):** Injecting 15,000–30,000 tokens of boilerplate system prompts, entire workspaces, and large tool schemas on an uncached turn stalls your GPU for 10–30 seconds before generating a single token.
+- **Prefix Cache Thrashing:** Many harnesses scatter timestamps, dynamic status lines, or fluctuating conversation counters early in the prompt. This breaks KV prefix caching on every turn, forcing your engine to recompute the entire prompt over and over.
+- **Bloated KV Cache VRAM Rent:** In modern local setups running 100K–256K contexts, KV cache memory is precious VRAM. Burning 20,000+ tokens on harness plumbing reduces room for actual reasoning, history depth, or concurrent slots.
+- **Inference Slot Wedges:** When an agent loops or hangs, it locks an active GPU slot on your model server. Generic harnesses lack truthful cancellation, leaving orphan generations spinning.
+- **Infrastructure Sprawl:** Multi-container topologies, external databases, Node.js gateways, and hundreds of dependencies just to run basic tools on your machine.
 
 ---
 
@@ -37,14 +35,15 @@ When you point those frameworks at local inference engines (llama.cpp, vLLM, Oll
 
 **tinycmdr is engineered from the ground up for self-hosted hardware:**
 
-| Feature | Cloud-First Frameworks | **tinycmdr** |
+| Feature | Heavy Gateways & Harnesses (e.g. OpenClaw) | **tinycmdr** |
 | :--- | :--- | :--- |
 | **Fixed Prompt Overhead** | 15,000 – 30,000 tokens | **~4,150 tokens** (measured, static + visible schemas) |
-| **Time to First Token (TTFT)** | 10 – 30s latency spikes on prompt eval | **Significantly faster** (skips prompt re-eval via warm prefix cache) |
+| **Time to First Token (TTFT)** | Latency spikes on prompt re-eval | **Significantly faster** (skips prompt re-eval via warm prefix cache) |
 | **KV Prefix Cache Behavior** | Invalidation on every turn | **Cache-Stable Prefix** (static prompt + schemas; volatile context at tail) |
-| **KV Cache VRAM Footprint** | Heavy VRAM consumed by framework boilerplate | **Minimal KV Footprint** (dynamic disclosure keeps schemas lean) |
+| **KV Cache VRAM Footprint** | Heavy VRAM consumed by workspace injection | **Minimal KV Footprint** (dynamic disclosure keeps schemas lean) |
+| **Extensibility** | Complex plugin architectures | **Hermes-Compatible Skills** (plain `SKILL.md` runbooks loaded on demand) |
 | **Inference Slot Protection** | Wedged agent runs lock server slots | **Truthful Stop & Steer** frees slots immediately |
-| **Host Footprint** | Multi-container Docker, Vector DBs, Redis | **Single Python file**, zero database, no daemons |
+| **Host Footprint** | Multi-container Docker / Node.js runtime | **Single Python file**, zero database, no daemons |
 
 ---
 
