@@ -9460,9 +9460,11 @@ def model_catalog(force=False):
             log.debug("model catalog: /models on %s failed: %s", url, e)
             return []
 
+    primary_ids = _ids(primary, primary_key)
     entries = [{"name": i, "url": primary, "local": True, "alias": False,
                 "send_as": i, "key": primary_key}
-               for i in _ids(primary, primary_key)]
+               for i in primary_ids]
+    _MODEL_CACHE["live"] = bool(primary_ids)
     for fb in CONFIG["llm"].get("fallbacks", []):
         url = fb["base_url"].rstrip("/")
         key = fb.get("api_key", "none")
@@ -14558,7 +14560,8 @@ def answer_block(text):
 HELP_TEXT = ("\n"
              "  /tinycmdr help            this list\n"
              "  /tinycmdr new             forget the conversation so far and start clean\n"
-             "  /tinycmdr model [NAME]    show the model in use, or switch to NAME\n"
+             "  /tinycmdr model [name|list] show model status, list models, or switch\n"
+             "  /tinycmdr setup           guided setup for model endpoints and chat gateways\n"
              "  /tinycmdr sessions        the conversations saved in this folder\n"
              "  /tinycmdr resume N        continue one of them in this window\n"
              "  /tinycmdr status          version, endpoint, context use, notes, tasks, skills\n"
@@ -14609,11 +14612,15 @@ def cli_banner():
             ("prompt", overhead),
         ], hint="type /help for the commands, /exit to quit")
         return
-    print("%s - %s at %s" % (name, green(CONFIG["llm"]["model"]),
-                                      CONFIG["llm"]["base_url"]))
-    print(dim("folder %s" % BASE_DIR))
-    print(dim(overhead))
-    print(dim("type /tinycmdr help for the commands, /tinycmdr exit to quit\n"))
+    box = _cli_render_box(name, [
+        "Model:    %s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"]),
+        "Folder:   %s" % BASE_DIR,
+        "Context:  ~%s usable per turn" % fmt_tokens(AGENT._context_budget()),
+        "Prompt:   %s" % overhead,
+        "---",
+        "Type /tinycmdr help for commands, /tinycmdr exit to quit",
+    ])
+    print(box + "\n")
 
 
 def _tui_session():
@@ -14796,6 +14803,357 @@ def _cli_tasks():
         print(line)
 
 
+def _cli_render_box(title, lines, width=74):
+    top = "┌─ %s " % title + "─" * max(0, width - len(title) - 5) + "┐"
+    bottom = "└" + "─" * (width - 2) + "┘"
+    mid = []
+    for line in lines:
+        if line == "---":
+            mid.append("├" + "─" * (width - 2) + "┤")
+        else:
+            padding = max(0, width - 4 - len(line))
+            mid.append("│ %s" % line + " " * padding + " │")
+    return "\n".join([top] + mid + [bottom])
+
+
+def run_setup(rest=None):
+    """Guided interactive setup wizard for model endpoints and chat gateways."""
+    if not sys.stdin.isatty():
+        print("tinycmdr setup requires an interactive terminal.\n"
+              "For non-interactive: tinycmdr config set <key> <val> and tinycmdr token set <NAME>",
+              file=sys.stderr)
+        return 1
+
+    print(_cli_render_box("tinycmdr Setup Wizard", [
+        "Configure model endpoints, Mattermost, and Telegram settings.",
+        "Press Enter to keep current values shown in [brackets].",
+    ]))
+    print()
+
+    try:
+        raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+    except Exception as e:
+        print(red("could not read config.json: %s" % e), file=sys.stderr)
+        return 1
+
+    llm = raw.setdefault("llm", {})
+    mm = raw.setdefault("mattermost", {})
+    tg = raw.setdefault("telegram", {})
+
+    cur_url = llm.get("base_url") or "http://127.0.0.1:8081/v1"
+    cur_model = llm.get("model") or "main"
+
+    print(bold("1. LLM Endpoint & Model"))
+    ans_url = input("   Endpoint URL [%s]: " % cur_url).strip()
+    new_url = ans_url if ans_url else cur_url
+    if not new_url.lower().startswith(("http://", "https://")):
+        print(red("   URL must start with http:// or https://"))
+        return 1
+    llm["base_url"] = new_url
+
+    ids = _probe_model_ids(new_url)
+    if ids:
+        print(green("   Endpoint online. Found models: %s" % ", ".join(ids[:8])))
+        default_choice = cur_model if cur_model in ids else ids[0]
+    else:
+        print(dim("   Note: endpoint did not return model list (offline or custom path)"))
+        default_choice = cur_model
+
+    ans_model = input("   Model name [%s]: " % default_choice).strip()
+    llm["model"] = ans_model if ans_model else default_choice
+
+    ans_key = input("   API key (leave empty if none / local): ").strip()
+    if ans_key:
+        _env_set("LLM_API_KEY", ans_key)
+        print(dim("   API key saved to .env as LLM_API_KEY"))
+    print()
+
+    print(bold("2. Mattermost Gateway (Chat)"))
+    cur_mm_url = mm.get("url") or ""
+    want_mm = input("   Configure Mattermost gateway? [%s]: " % ("y" if cur_mm_url else "n")).strip().lower()
+    if want_mm in ("y", "yes"):
+        mm_url = input("   Mattermost server URL (e.g. https://chat.example.com) [%s]: " % cur_mm_url).strip()
+        if mm_url:
+            mm["url"] = mm_url
+        mm_token = input("   Mattermost bot token (leave empty to keep current): ").strip()
+        if mm_token:
+            _env_set("MATTERMOST_BOT_TOKEN", mm_token)
+            print(dim("   Mattermost token saved to .env"))
+        cur_users = ",".join(mm.get("allowed_users") or [])
+        mm_users = input("   Allowed User ID(s) (comma-separated) [%s]: " % cur_users).strip()
+        if mm_users:
+            mm["allowed_users"] = [u.strip() for u in mm_users.split(",") if u.strip()]
+    print()
+
+    print(bold("3. Telegram Gateway (Chat)"))
+    cur_tg_users = ",".join(str(u) for u in (tg.get("allowed_users") or []))
+    want_tg = input("   Configure Telegram gateway? [%s]: " % ("y" if cur_tg_users else "n")).strip().lower()
+    if want_tg in ("y", "yes"):
+        tg_token = input("   Telegram bot token (leave empty to keep current): ").strip()
+        if tg_token:
+            _env_set("TELEGRAM_TOKEN", tg_token)
+            print(dim("   Telegram token saved to .env"))
+        tg_users = input("   Allowed numeric User ID(s) (comma-separated) [%s]: " % cur_tg_users).strip()
+        if tg_users:
+            try:
+                tg["allowed_users"] = [int(u.strip()) for u in tg_users.split(",") if u.strip()]
+            except ValueError:
+                tg["allowed_users"] = [u.strip() for u in tg_users.split(",") if u.strip()]
+    print()
+
+    try:
+        atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+        CONFIG.update(raw)
+        _MODEL_CACHE["at"] = 0.0
+    except Exception as e:
+        print(red("could not write config.json: %s" % e), file=sys.stderr)
+        return 1
+
+    summary = [
+        "LLM Endpoint : %s" % llm.get("base_url"),
+        "LLM Model    : %s" % llm.get("model"),
+        "---",
+        "Mattermost   : %s" % (mm.get("url") or "(disabled)"),
+        "MM Users     : %s" % (", ".join(mm.get("allowed_users") or []) or "(none)"),
+        "---",
+        "Telegram     : %s" % ("configured" if tg.get("allowed_users") else "(disabled)"),
+        "TG Users     : %s" % (", ".join(str(x) for x in (tg.get("allowed_users") or [])) or "(none)"),
+        "---",
+        "✓ Saved to config.json & .env",
+        "Run `tinycmdr restart` to apply to background service.",
+    ]
+    print(_cli_render_box("Setup Complete", summary))
+    return 0
+
+
+def _cli_model(rest):
+    tokens = (rest or "").strip().split()
+    sub = tokens[0].lower() if tokens else ""
+    is_global = any(t.lstrip("-").lower() in ("global", "g", "all")
+                    for t in tokens if t.startswith("-"))
+    force = any(t.lstrip("-").lower() in ("force", "f")
+                for t in tokens if t.startswith("-"))
+    clean_tokens = [t for t in tokens if not t.startswith("-")]
+
+    current = AGENT.model_overrides.get(_cli_key()) or CONFIG["llm"]["model"]
+    base_url = CONFIG["llm"]["base_url"]
+    budget = AGENT._context_budget()
+
+    # 1. Bare /model: show status box
+    if not tokens:
+        scope = "session override" if _cli_key() in AGENT.model_overrides else "config default"
+        box = _cli_render_box("Model Status", [
+            "Active:   %s (%s)" % (current, scope),
+            "Endpoint: %s" % base_url,
+            "Context:  ~%s tokens" % fmt_tokens(budget),
+            "---",
+            "Commands:",
+            "  /tinycmdr model list             list available models & endpoints",
+            "  /tinycmdr model <name>           switch model for this session",
+            "  /tinycmdr model <name> --global  set default model in config.json",
+            "  /tinycmdr model default          revert to config default",
+            "  /tinycmdr model add <url>        add fallback endpoint",
+            "  /tinycmdr model remove <name>    remove fallback endpoint",
+        ])
+        print(box)
+        return
+
+    # 2. List models
+    if sub in ("list", "ls", "models"):
+        try:
+            entries = model_catalog(force=True)
+        except Exception as e:
+            print(red("  could not query endpoints: %s" % e))
+            return
+        if not entries:
+            print(dim("  no models advertised by endpoint(s)"))
+            return
+        lines = []
+        width = 74
+        for e in entries:
+            name = e.get("name") or "?"
+            is_active = (name.lower() == current.lower())
+            star = "* " if is_active else "  "
+            tag = " (active)" if is_active else ""
+            left = "%s%s%s" % (star, name, tag)
+            if e.get("alias") and e.get("alias") is not True:
+                right = "[alias: %s] -> %s" % (e["alias"], e.get("send_as", ""))
+            elif e.get("alias") is True and e.get("send_as"):
+                right = "-> %s" % e["send_as"]
+            else:
+                loc = " (local)" if e.get("local") else " (fallback)"
+                right = "%s%s" % (e.get("url", ""), loc)
+            spacing = max(2, width - 4 - len(left) - len(right))
+            lines.append("%s%s%s" % (left, " " * spacing, right))
+        box = _cli_render_box("Available Models (%d)" % len(entries), lines, width=width)
+        print(box)
+        print(dim("  Switch: /tinycmdr model <name>  (add --global to persist)"))
+        return
+
+    # 3. Default / Reset
+    if sub in ("default", "reset", "off"):
+        if is_global:
+            prev, err = restore_global_model()
+            if err:
+                print(red("  could not revert globally: %s" % err))
+                return
+            AGENT.model_overrides.clear()
+            _save_overrides()
+            print(green("  reverted global model to %s (config.json)" % prev))
+            return
+        AGENT.model_overrides.pop(_cli_key(), None)
+        _save_overrides()
+        print(green("  reverted to default model: %s" % CONFIG["llm"]["model"]))
+        return
+
+    # 4. Add endpoint
+    if sub == "add":
+        args = tokens[1:]
+        if not args:
+            print(dim("  usage: /tinycmdr model add <url> [--model NAME] [--alias ALIAS] [--key-env VAR] [--primary] [--force]"))
+            return
+        opts, pos, idx = {}, [], 0
+        while idx < len(args):
+            a = args[idx]
+            if a in ("--model", "--alias", "--key-env"):
+                if idx + 1 >= len(args):
+                    print(red("  %s needs a value" % a))
+                    return
+                opts[a[2:]] = args[idx + 1]
+                idx += 2
+                continue
+            if a in ("--primary", "--force"):
+                opts[a[2:]] = True
+                idx += 1
+                continue
+            pos.append(a)
+            idx += 1
+        if not pos:
+            print(red("  model add requires an endpoint url (e.g. http://<host>:8081/v1)"))
+            return
+        url = pos[0].strip().rstrip("/")
+        if not url.lower().startswith(("http://", "https://")):
+            print(red("  endpoint url must start with http:// or https://"))
+            return
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(red("  could not read config.json: %s" % e))
+            return
+        llm = raw.setdefault("llm", {})
+        fbs = llm.setdefault("fallbacks", [])
+        if not isinstance(fbs, list):
+            fbs = llm["fallbacks"] = []
+        want_model = opts.get("model", "")
+        alias = opts.get("alias", "")
+        key_env = opts.get("key-env", "")
+        if opts.get("primary"):
+            llm["base_url"] = url
+            if want_model:
+                llm["model"] = want_model
+            CONFIG["llm"]["base_url"] = url
+            if want_model:
+                CONFIG["llm"]["model"] = want_model
+            line = "primary endpoint set to %s" % url
+        else:
+            entry = {"base_url": url, "model": want_model or "main"}
+            if alias:
+                entry["alias"] = alias
+            if key_env:
+                entry["api_key_env"] = key_env
+            fbs.append(entry)
+            CONFIG["llm"]["fallbacks"] = fbs
+            line = "added fallback endpoint %s -> %s" % (url, want_model or "(default)")
+        try:
+            atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+        except Exception as e:
+            print(red("  could not write config.json: %s" % e))
+            return
+        _MODEL_CACHE["at"] = 0.0
+        print(green("  ✓ %s" % line))
+        return
+
+    # 5. Remove endpoint
+    if sub in ("remove", "rm"):
+        args = clean_tokens[1:]
+        if not args:
+            print(dim("  usage: /tinycmdr model remove <name|alias|url>"))
+            return
+        target = args[0].strip().lower()
+        try:
+            raw = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except Exception as e:
+            print(red("  could not read config.json: %s" % e))
+            return
+        llm = raw.setdefault("llm", {})
+        fbs = llm.get("fallbacks") or []
+        keep, removed = [], None
+        for fb in fbs:
+            if not isinstance(fb, dict):
+                keep.append(fb)
+                continue
+            matches = [str(fb.get(k) or "").strip().rstrip("/").lower()
+                       for k in ("base_url", "model", "alias")]
+            if removed is None and target in matches:
+                removed = fb
+                continue
+            keep.append(fb)
+        if removed is None:
+            print(red("  no fallback endpoint matches %r" % target))
+            return
+        llm["fallbacks"] = keep
+        CONFIG["llm"]["fallbacks"] = keep
+        try:
+            atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+        except Exception as e:
+            print(red("  could not read config.json: %s" % e))
+            return
+        _MODEL_CACHE["at"] = 0.0
+        print(green("  ✓ removed fallback %s -> %s" % (removed.get("base_url"), removed.get("model"))))
+        return
+
+    # 6. Switch model: /model <name>
+    name = " ".join(clean_tokens).strip()
+    e = model_entry(name)
+    if not e:
+        if force:
+            target = name
+            CONFIG["llm"]["model"] = target
+            AGENT.model_overrides[_cli_key()] = target
+            print(amber("  ⚠ forced model to %s (unverified)" % target))
+            return
+        cat = model_catalog()
+        if not _MODEL_CACHE.get("live"):
+            # Test or offline mock: allow switch
+            CONFIG["llm"]["model"] = name
+            AGENT.model_overrides[_cli_key()] = name
+            print(dim("  endpoint did not advertise models; model set to %s (unverified)" % name))
+            return
+        print(red("  unknown model: %r" % name))
+        known = [x.get("name") for x in cat if x.get("name")]
+        if known:
+            print("  available models: %s" % ", ".join(known[:12]))
+            print(dim("  run `/tinycmdr model list` to view all endpoints, or append --force"))
+        return
+
+    target = e["name"]
+    if is_global:
+        prev, err = set_global_model(target)
+        if err:
+            print(red("  could not switch globally: %s" % err))
+            return
+        AGENT.model_overrides.clear()
+        _save_overrides()
+        print(green("  ✓ global model switched to %s (was %s) -> saved to config.json" % (target, prev)))
+        return
+
+    AGENT.model_overrides[_cli_key()] = target
+    CONFIG["llm"]["model"] = target
+    _save_overrides()
+    where = (" at %s" % e["url"]) if e.get("url") else ""
+    print(green("  ✓ model is now %s%s (this session)" % (target, where)))
+
+
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
     text = cmdr_strip(text)          # `/tinycmdr model` is `/model`, handled below
@@ -14814,13 +15172,11 @@ def _cli_command(text):
         AGENT.reset(_cli_key())
         print(green("  (context cleared, this machine's notes and ledger stay)"))
         return True
+    if verb == "/setup":
+        run_setup()
+        return True
     if verb == "/model":
-        if not rest:
-            print("  model %s at %s" % (green(CONFIG["llm"]["model"]), CONFIG["llm"]["base_url"]))
-            print(dim("  /tinycmdr model <name> switches it for this session"))
-            return True
-        CONFIG["llm"]["model"] = rest
-        print("  model is now %s (this session)" % green(rest))
+        _cli_model(rest)
         return True
     if verb in ("/sessions", "/conversations"):
         _cli_sessions()
@@ -15488,7 +15844,7 @@ def user_is_allowed(sender, user_id):
 #     re-implementing the kill/launch dance, because that dance is where two bots
 #     on one token came from.
 
-VERBS = ("status", "doctor", "health", "model", "config", "logs", "proc", "ports",
+VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc", "ports",
          "restart", "update", "clean", "token", "version", "run", "help")
 
 VERB_HELP = """tinycmdr <verb> — management, never a model call
@@ -15503,6 +15859,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      --primary makes it the one that answers, --model NAME,
                      --alias A, --key-env VAR, --force to add it unverified)
   model remove <x>   drop a fallback entry (by model name, alias or url)
+  setup              interactive wizard to configure model, Mattermost and Telegram
   config get|set|unset <dotted.key> [value]
                      read or edit config.json (a read-back is printed; secrets refused)
   health             one line + exit code: up, lane, model (no network, for scripts)
@@ -16041,6 +16398,21 @@ def _verb_update(rest):
     import tempfile
     import zipfile
     if not rest:
+        if (BASE_DIR / ".git").exists():
+            print("Running in git repository at %s" % BASE_DIR)
+            print("Checking for updates via git...")
+            rc, out, err, _ = run_capture(["git", "-C", str(BASE_DIR), "pull", "--ff-only"], 60)
+            if rc == 0:
+                print(out.strip())
+                if "Already up to date" not in out:
+                    print("Updated from git. Rebuilding CLI...")
+                    run_capture([sys.executable, str(BASE_DIR / "maintenance" / "build-cli-source.py")], 30)
+                    run_capture([sys.executable, str(BASE_DIR / "maintenance" / "build-cli-fix.py")], 30)
+                    print("Restart tinycmdr to run new build: `tinycmdr restart`")
+                return 0
+            else:
+                print("git pull failed: %s" % (err or out), file=sys.stderr)
+                return 1
         print("update <tinycmdr.py|package.zip|folder> — where is the newer build?",
               file=sys.stderr)
         return 2
@@ -16589,6 +16961,8 @@ def run_verb(argv):
         return _verb_proc()
     if verb == "ports":
         return _verb_ports()
+    if verb == "setup":
+        return run_setup(rest)
     if verb == "config":
         return _verb_config(rest)
     if verb == "update":

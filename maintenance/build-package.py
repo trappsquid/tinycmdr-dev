@@ -752,7 +752,7 @@ def main():
         print("  %d files in the package" % len(files))
 
         DIST.mkdir(exist_ok=True)
-        suffix = "-public" if public else ""
+        suffix = "" if public else "-fleet"
         zip_path = DIST / f"tinycmdr-{ver}-win{suffix}.zip"
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted(stage_dir.rglob("*")):
