@@ -8,9 +8,16 @@ rem  "Run with PowerShell") prints an error and the window closes before you
 rem  can read a word of it. This wrapper runs PowerShell with
 rem  -ExecutionPolicy Bypass, keeps the window open, and logs everything.
 rem
-rem  Needs administrator rights to register the scheduled task, and asks for
-rem  them itself (UAC). For a files-only install with no admin:
-rem      powershell -ExecutionPolicy Bypass -File install-tinycmdr.ps1 -SkipTask
+rem  NO ADMINISTRATOR RIGHTS ARE NEEDED. The install goes into your own
+rem  profile (%USERPROFILE%\tinycmdr), its dependencies go into a virtual
+rem  environment inside that folder, and it starts at logon through a
+rem  shortcut in your Startup folder. Nothing outside your profile is
+rem  touched, so Windows has nothing to ask you about.
+rem
+rem  The one exception is -AsService, which registers a boot-start Windows
+rem  scheduled task. Windows reserves those for administrators, so that
+rem  switch alone needs an elevated shell:
+rem      install-tinycmdr.cmd -AsService
 rem
 rem  Pass installer switches straight through, e.g.
 rem      install-tinycmdr.cmd -MattermostUrl chat.example.com -AllowedUser abc123
@@ -30,33 +37,6 @@ if not exist "%PS1%" (
     exit /b 1
 )
 
-rem -VerifyOnly and -SkipTask never touch the scheduled task, so no UAC for them
-set "NOELEV="
-echo %* | findstr /I /C:"-VerifyOnly" /C:"-SkipTask" >nul 2>&1 && set "NOELEV=1"
-
-rem already elevated? "net session" fails without admin rights
-net session >nul 2>&1
-if errorlevel 1 (
-    if "%NOELEV%"=="1" goto run
-    if not "%FB_NOELEV%"=="1" if not "%NOELEV%"=="1" (
-        rem Switches typed here have to survive the elevation: the first version forwarded
-        rem -File <ps1> only, so -Force / -MattermostTokenFile went nowhere and the elevated
-        rem window did the default install instead. An empty %* must not become an empty
-        rem argument, so it is only appended when there is something to append.
-        set "FB_ARGS=%*"
-        echo Asking for administrator rights ^(needed for the scheduled task^)...
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "$arg = '-NoProfile -ExecutionPolicy Bypass -File ' + [char]34 + $env:PS1 + [char]34 + ' ' + $env:FB_ARGS; Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $arg.Trim()"
-        echo.
-        echo The installer is running in the elevated window that just opened.
-        echo This window can be closed.
-        echo.
-        echo If that window closes without a word, read %LOG%
-        timeout /t 10 >nul
-        exit /b 0
-    )
-)
-
-:run
 echo Running the tinycmdr installer. Log: %LOG%
 echo.
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" -NoPause %*

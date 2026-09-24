@@ -340,6 +340,12 @@ def write_fleet_defaults(target):
         "allowed_user": users[0] if users else "",
         "model_base_url": llm.get("base_url") or "",
         "model": llm.get("model") or "main",
+        # A fleet host keeps the layout and the boot-start task it has always run.
+        # The PUBLIC package ships no fleet-defaults.json at all, so a reader gets
+        # the profile default (%USERPROFILE%\tinycmdr) and the logon autostart
+        # that needs no administrator rights.
+        "install_dir": "C:\\tinycmdr",
+        "as_service": True,
     }
     p = target / FLEET_FILE
     p.parent.mkdir(parents=True, exist_ok=True)

@@ -1,21 +1,35 @@
 <#
-    tinycmdr installer - copies the bot to this host and registers it to start at
-    logon and at boot, the way the fleet's Windows hosts run it.
+    tinycmdr installer - copies the bot into THIS USER's profile and makes it
+    available. NO ADMINISTRATOR RIGHTS ARE NEEDED for a normal install.
 
     Double-click ..\install-tinycmdr.cmd, or run this file from a shell:
 
         powershell -ExecutionPolicy Bypass -File .\install\install-tinycmdr.ps1
 
-    With no arguments it uses install\fleet-defaults.json from the package (that
-    file carries this fleet's Mattermost host, model endpoint and allowed user, so
-    a fleet host needs nothing typed in), reuses the bot token from an existing
-    .env, and asks for one only if there is none. A redo is:
+    With no arguments it:
+      * installs into %USERPROFILE%\tinycmdr (your own folder, nothing shared)
+      * finds Python 3.10+, and DOWNLOADS AND INSTALLS Python 3.12 if the machine
+        has none (winget, then the python.org installer) - no manual step
+      * builds the install's own virtual environment and installs the
+        dependencies into it (requests, mmpy_bot, croniter)
+      * uses install\fleet-defaults.json from the package when it is present
+        (a fleet host needs nothing typed in), reuses a bot token from an
+        existing .env, and asks for one only if there is none
+      * starts it at your next logon through a shortcut in your Startup folder
+        (no elevation, no service registration)
+
+    A redo is:
 
         install-tinycmdr.cmd -Force
 
     Other things it can do:
-        -VerifyOnly        is this install working? (no admin, no reinstall)
-        -Uninstall [-Force] stop the task, remove the folder
+        -AsService         register a Windows scheduled task instead (runs at
+                           BOOT, before you log in - this one DOES need an
+                           elevated shell, because Windows reserves boot-start
+                           tasks for administrators)
+        -InstallDir <d>    install somewhere else
+        -VerifyOnly        is this install working? (no reinstall)
+        -Uninstall [-Force] stop it, remove the folder and the autostart entry
 
     Exit codes:
         0  installed and verified
@@ -25,7 +39,8 @@
 #>
 [CmdletBinding()]
 param(
-    [string] $InstallDir      = "C:\tinycmdr",
+    [string] $InstallDir      = "",              # default: %USERPROFILE%\tinycmdr
+                                                 # (fleet-defaults.json may name one)
     [string] $TaskName        = "Tinycmdr",
     [string] $MattermostUrl   = "",              # default: fleet-defaults.json
     [int]    $MattermostPort  = 443,
@@ -45,9 +60,12 @@ param(
     [int]    $WebPort         = 8787,            # only used with -EnableWeb
     [switch] $EnableWeb,                         # legacy local chat page (off by default)
     [string] $Python          = "",              # full path to python.exe if auto-detect fails
-    [switch] $InstallPython,                     # winget-install Python 3.12 if missing
+    [switch] $InstallPython,                     # kept for compatibility: installing a
+                                                 # missing Python is now the DEFAULT
     [switch] $Force,                             # redo: stop what is running, overwrite everything
-    [switch] $SkipTask,                          # files only: no admin, no task, no start
+    [switch] $AsService,                         # register a boot-start scheduled task
+                                                 # instead of a logon shortcut (needs admin)
+    [switch] $SkipTask,                          # files only: no autostart, no service
     [switch] $NoStart,
     [switch] $NoPath,                            # leave the user PATH alone
     [switch] $NoPause,                           # for scripted runs (the .cmd uses this)
@@ -164,11 +182,14 @@ $elevated = ([Security.Principal.WindowsPrincipal] `
              [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
              [Security.Principal.WindowsBuiltInRole]::Administrator)
 
-# Elevation is needed only to touch the scheduled task, so -SkipTask and
-# -VerifyOnly work from a normal shell (and are testable).
-if (-not $elevated -and -not $SkipTask -and -not $VerifyOnly) {
+# Elevation is NOT required for a normal install any more. Everything a reader
+# gets by default lives in their own profile: the folder, the venv, the user
+# PATH entry and the Startup shortcut. Only -AsService (a boot-start scheduled
+# task) needs an elevated shell, and that is checked where it is used.
+if ($AsService -and -not $elevated -and -not $VerifyOnly -and -not $Uninstall) {
     Write-Host "This needs an elevated PowerShell to register the scheduled task." -ForegroundColor Red
-    Write-Host "Re-run as Administrator, or use -SkipTask to install files only."
+    Write-Host "Re-run as Administrator, or drop -AsService to install and start at logon"
+    Write-Host "(no administrator rights needed for that)."
     exit 1
 }
 
@@ -281,19 +302,39 @@ function Resolve-Python {
     param([string] $Explicit)
     $cands = @()
     if ($Explicit) { $cands += $Explicit }
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $cmdPath = (Get-Command python).Source
+        if ($cmdPath -notmatch 'WindowsApps\\python\.exe$') { $cands += $cmdPath }
+    }
     if (Get-Command py -ErrorAction SilentlyContinue) {
-        $p = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null)
-        if ($LASTEXITCODE -eq 0 -and $p) { $cands += $p.Trim() }
+        try {
+            $p = (& py -3.12 -c "import sys; print(sys.executable)" 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $p) { $cands += $p.Trim() }
+        } catch { }
+        try {
+            $p = (& py -3.11 -c "import sys; print(sys.executable)" 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $p) { $cands += $p.Trim() }
+        } catch { }
+        try {
+            $p = (& py -3.10 -c "import sys; print(sys.executable)" 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $p) { $cands += $p.Trim() }
+        } catch { }
     }
     $cands += @(Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python31*\python.exe" -ErrorAction SilentlyContinue |
                 Sort-Object FullName -Descending | Select-Object -ExpandProperty FullName)
+    $cands += @(Get-ChildItem "C:\Users\*\AppData\Local\Programs\Python\Python31*\python.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -ExpandProperty FullName)
+    $cands += @(Get-ChildItem "C:\Program Files\Python31*\python.exe" -ErrorAction SilentlyContinue |
+                Sort-Object FullName -Descending | Select-Object -ExpandProperty FullName)
     $cands += @(Get-ChildItem "C:\Python31*\python.exe" -ErrorAction SilentlyContinue |
                 Select-Object -ExpandProperty FullName)
-    foreach ($c in $cands) {
+    foreach ($c in ($cands | Select-Object -Unique)) {
         if (-not (Test-Path $c)) { continue }
-        $v = (Invoke-Py $c -c "import sys; print('%d.%d' % sys.version_info[:2])")
-        $v = ($v -split "`n" | Where-Object { $_.Trim() -match '^\d+\.\d+$' } | Select-Object -First 1)
-        if ($v -and [version]$v.Trim() -ge [version]"3.10") { return @{ Path = $c; Version = $v.Trim() } }
+        try {
+            $v = (Invoke-Py $c -c "import sys; print('%d.%d' % sys.version_info[:2])")
+            $v = ($v -split "`n" | Where-Object { $_.Trim() -match '^\d+\.\d+$' } | Select-Object -First 1)
+            if ($v -and [version]$v.Trim() -ge [version]"3.10") { return @{ Path = $c; Version = $v.Trim() } }
+        } catch { }
     }
     return $null
 }
@@ -317,14 +358,31 @@ if ($fleet) {
     if (-not $ModelBaseUrl -and $fleet.model_base_url) {
         $ModelBaseUrl = [string]$fleet.model_base_url; $fromFleet += "model endpoint" }
     if ($fleet.model -and ($Model -eq "main")) { $Model = [string]$fleet.model }
+    # A fleet kit names the fleet's own install folder and keeps the boot-start
+    # task the fleet's hosts run. The public package ships no fleet-defaults.json,
+    # so a reader gets the profile default and the no-admin autostart.
+    if (-not $InstallDir -and $fleet.install_dir) {
+        $InstallDir = [string]$fleet.install_dir; $fromFleet += "install dir" }
+    if ($fleet.as_service -eq $true) { $AsService = $true }
 }
+
+# ------------------------------------------------- where this install goes
+# Your own profile. Nothing outside it is written by a default install - no
+# C:\ root folder, no machine-wide PATH entry, no service registration - so no
+# elevated shell is involved and nothing has to be granted.
+if (-not $InstallDir) { $InstallDir = Join-Path $env:USERPROFILE "tinycmdr" }
+$InstallDir = $InstallDir.TrimEnd('\')
+# The autostart entry a default install owns (removed by -Uninstall). A -AsService
+# install does not use this file.
+$StartupLink = Join-Path $env:APPDATA ("Microsoft\Windows\Start Menu\Programs\Startup\" +
+                                       "$AppName.lnk")
 
 # ------------------------------------------------------------------ uninstall
 
 if ($Uninstall) {
     Head "uninstalling $AppName"
     $taskExists = $null -ne (Get-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue)
-    if (-not $taskExists -and -not (Test-Path $InstallDir)) {
+    if (-not $taskExists -and -not (Test-Path $InstallDir) -and -not (Test-Path $StartupLink)) {
         Say "nothing to remove (no task '$AppName', no $InstallDir)"
         try { Stop-TranscriptRedacted } catch { }
         exit 0
@@ -335,6 +393,10 @@ if ($Uninstall) {
             Unregister-ScheduledTask -TaskName $AppName -Confirm:$false -ErrorAction Stop
             Say "task    : $AppName removed"
         } catch { Say "task    : could not remove $AppName ($($_.Exception.Message))" }
+    }
+    if (Test-Path $StartupLink) {
+        Remove-Item $StartupLink -Force -ErrorAction SilentlyContinue
+        Say "startup : $AppName.lnk removed"
     }
     $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n process(es)" }
@@ -375,47 +437,48 @@ if ($fromFleet.Count) { Say "fleet   : $($fromFleet -join ', ') (from fleet-defa
 # ------------------------------------------------------------- 1. python 3.12
 Head "finding Python"
 $py = Resolve-Python -Explicit $Python
-if (-not $py -and $InstallPython) {
-    Say "no Python 3.10+ found - installing Python 3.12 via winget"
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { Fail "winget is unavailable; install Python 3.12 manually and re-run" }
-    & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements | Out-Null
+if (-not $py) {
+    Say "Python 3.10+ was not found on this machine - installing Python 3.12 automatically..."
+    $installed = $false
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        Say "installing Python 3.12 via winget..."
+        try {
+            & winget install -e --id Python.Python.3.12 --scope user --accept-package-agreements --accept-source-agreements
+            if ($LASTEXITCODE -eq 0) { $installed = $true }
+        } catch { }
+        # winget writes the new PATH into the registry; THIS process still holds the
+        # old one, so refresh it before looking again or the install just made is
+        # invisible to the search below.
+        $env:Path = ([Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
+                     [Environment]::GetEnvironmentVariable("Path", "User"))
+        Start-Sleep -Seconds 2
+    }
+    if (-not $installed) {
+        Say "downloading official installer from python.org..."
+        $installerUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe"
+        $installerPath = Join-Path $env:TEMP "python-3.12.8-amd64.exe"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
+            Say "running Python installer silently..."
+            $proc = Start-Process -FilePath $installerPath -ArgumentList "/quiet","InstallAllUsers=0","PrependPath=1","Include_pip=1" -Wait -PassThru
+            if ($proc.ExitCode -eq 0) { $installed = $true }
+        } catch {
+            Write-Host "download failed: $_" -ForegroundColor Red
+        }
+    }
     $py = Resolve-Python -Explicit $Python
 }
-if (-not $py) { Fail "no Python 3.10+ found. Install Python 3.12 (https://python.org) or pass -InstallPython" }
+if (-not $py) { Fail "could not automatically install Python 3.12. Please install from https://python.org and re-run." }
 Say "python  : $($py.Path)  (v$($py.Version))"
 
 # The dependency set is the one the code declares in its own header:
 #   pip install requests mmpy_bot croniter
 # Installing only `requests` produced a bot that started, logged two warnings and
 # never connected -- mmpy_bot IS the Mattermost client (live 2026-09-10).
-$reqFile = Join-Path $Source "requirements.txt"
-$missReq  = -not (Test-PyImport $py.Path "requests")
-$missMm   = -not (Test-PyImport $py.Path "mmpy_bot")
-$missCron = -not (Test-PyImport $py.Path "croniter")
-if ($missReq -or $missMm -or $missCron) {
-    $what = @()
-    if ($missReq)  { $what += "requests" }
-    if ($missMm)   { $what += "mmpy_bot" }
-    if ($missCron) { $what += "croniter" }
-    Say "deps    : missing $($what -join ', ') - installing (this needs internet/PyPI)"
-    if (Test-Path $reqFile) {
-        $pip = Invoke-Py $py.Path -m pip install --quiet --disable-pip-version-check -r $reqFile
-    } else {
-        $pip = Invoke-Py $py.Path -m pip install --quiet --disable-pip-version-check requests mmpy_bot croniter
-    }
-    $stillReq = -not (Test-PyImport $py.Path "requests")
-    $stillMm  = -not (Test-PyImport $py.Path "mmpy_bot")
-    if ($stillReq -or $stillMm) {
-        Write-Host (($pip.Trim() -split "`n" | Select-Object -Last 8) -join "`n")
-        Fail "could not install the required dependencies (requests, mmpy_bot) for $($py.Path) - pip's output is above. Check internet/proxy, then re-run."
-    }
-    if (-not (Test-PyImport $py.Path "croniter")) {
-        Say "deps    : croniter still missing - the schedule tool will be disabled"
-    }
-    Say "deps    : installed"
-} else {
-    Say "deps    : requests, mmpy_bot, croniter present"
-}
+# They are installed further down, into this install's OWN virtual environment:
+# that folder does not exist yet here, and the reader has not agreed to the
+# install. What matters now is only that an interpreter exists at all.
 
 # ---------------------------------------------------------------- verify only
 
@@ -426,6 +489,10 @@ if ($VerifyOnly) {
         exit 1
     }
     Head "verifying $InstallDir"
+    # An install carries its own interpreter; probe that one, or the check grades a
+    # different python than the bot actually runs under.
+    $venvProbe = Join-Path $InstallDir "venv\Scripts\python.exe"
+    if (Test-Path $venvProbe) { $py = @{ Path = $venvProbe; Version = $py.Version } }
     $p = Invoke-Probe -Dir $InstallDir -Python $py.Path
     Write-Host (($p.Trim() -split "`n" | Select-Object -Last 6) -join "`n")
     try { Stop-TranscriptRedacted } catch { }
@@ -630,7 +697,11 @@ if ($MattermostToken) {
             }
         }
     }
-    if (-not $MattermostToken -and -not $NoPause) {
+    # $Ask, not -not $NoPause: the .cmd wrapper ALWAYS passes -NoPause (it only means
+    # "keep the window open"), so gating this on it never fired for a double-click, and
+    # a scripted -NonInteractive run hung here forever waiting for a token nobody was
+    # there to type (measured 2026-09-24: a CI-style install stalled at this line).
+    if (-not $MattermostToken -and $Ask) {
         $sec = Read-Host "Mattermost bot token (blank = set it in .env later)" -AsSecureString
         $MattermostToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
             [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
@@ -654,6 +725,12 @@ $TgLane = [bool]($TelegramToken)
 $AnyLane = $ChatLane -or $TgLane
 $LocalWeb = (-not $AnyLane) -and $EnableWeb
 $RegisterTask = (-not $SkipTask) -and ($AnyLane -or $LocalWeb)
+# What the background supervisor is told to run. A token-less install serves the
+# LOCAL PAGE, and the supervisor has to be told that explicitly: started with no
+# arguments the bot runs the CHAT lane, which refuses to start without a token, so
+# the supervisor would respawn a dying process forever (measured 2026-09-24 on a
+# --web install started through the Startup shortcut).
+$SuperviseArgs = if ($LocalWeb) { "--web" } else { "" }
 
 # ---------------------------------------------------------------- 3. copy files
 Head "copying the app"
@@ -681,6 +758,62 @@ if (Test-Path $restart) { Copy-Item $restart (Join-Path $InstallDir "maintenance
 $stateDirs = @("sessions", "snapshots", "tools", "tmp")
 foreach ($d in $stateDirs) { New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir $d) | Out-Null }
 Say "copied  : $(($copy | Where-Object { Test-Path (Join-Path $Source $_) }) -join ', ')"
+
+# ------------------------------------------- 4. its own python + dependencies
+# The dependencies go into a virtual environment INSIDE the install folder rather
+# than into whatever python the machine happens to have. One install then owns its
+# stack, nothing else on the box can break it by upgrading a shared package, and
+# no administrator rights are involved - the folder is the reader's own.
+# A pre-existing venv is REUSED, so a -Force redo does not re-download anything.
+Head "python environment"
+$venvDir = Join-Path $InstallDir "venv"
+$venvPy  = Join-Path $venvDir "Scripts\python.exe"
+if (-not (Test-Path $venvPy)) {
+    Say "creating : $venvDir"
+    $null = Invoke-Py $py.Path -m venv $venvDir
+}
+if (Test-Path $venvPy) {
+    Say "python   : $venvPy"
+} else {
+    # A venv can fail to build (a store python, a locked-down temp folder). The
+    # install still works - the dependencies then go into the interpreter found
+    # above - so say so and carry on instead of stopping the reader here.
+    Say "note     : could not build a virtual environment - dependencies will go into"
+    Say "           $($py.Path) itself"
+    $venvPy = $py.Path
+}
+# A python whose ensurepip never ran has no pip at all, and then every install
+# below fails for a reason that is not the reader's fault.
+if (-not (Test-PyImport $venvPy "pip")) {
+    Say "pip      : missing - bootstrapping with ensurepip"
+    $null = Invoke-Py $venvPy -m ensurepip --upgrade
+}
+$reqFile = Join-Path $InstallDir "requirements.txt"
+$missing = @()
+foreach ($mod in @("requests", "mmpy_bot", "croniter")) {
+    if (-not (Test-PyImport $venvPy $mod)) { $missing += $mod }
+}
+if ($missing.Count) {
+    Say "deps     : installing $($missing -join ', ')  (needs internet/PyPI)"
+    $pipArgs = @("-m", "pip", "install", "--quiet", "--disable-pip-version-check")
+    if (Test-Path $reqFile) { $pipArgs += @("-r", $reqFile) }
+    else { $pipArgs += @("requests", "mmpy_bot", "croniter") }
+    $pipOut = Invoke-Py $venvPy @pipArgs
+    if ((-not (Test-PyImport $venvPy "requests")) -or (-not (Test-PyImport $venvPy "mmpy_bot"))) {
+        Write-Host (($pipOut.Trim() -split "`n" | Select-Object -Last 8) -join "`n")
+        Fail ("could not install the dependencies (requests, mmpy_bot) into $venvPy - " +
+              "pip's output is above. Check internet/proxy access, then re-run.")
+    }
+    if (-not (Test-PyImport $venvPy "croniter")) {
+        Say "deps     : croniter still missing - the schedule tool will be disabled"
+    }
+    Say "deps     : installed"
+} else {
+    Say "deps     : requests, mmpy_bot, croniter present"
+}
+# Everything below - the hidden launcher, the autostart entry and the probe - runs
+# the bot with this interpreter.
+$py = @{ Path = $venvPy; Version = $py.Version }
 
 # ------------------------------------------------------ the verb surface on PATH
 # audit F12: an install left no command behind, so day-two work meant hand-editing
@@ -919,7 +1052,8 @@ if ($EnableWeb) {
 Head "writing launcher"
 $vbs = @"
 ' Launches the tinycmdr SUPERVISOR hidden (no console window) and WAITS for it.
-' Registered as the scheduled task "$AppName". Run by hand:
+' Started by the logon shortcut (or by the scheduled task when -AsService was
+' used). Run by hand:
 '   wscript //B //Nologo "$InstallDir\tinycmdr-service.vbs"
 '
 ' The wait is load-bearing, and so is running the supervisor rather than the bot:
@@ -932,7 +1066,7 @@ $vbs = @"
 Dim sh
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = "$InstallDir"
-sh.Run """$($py.Path)"" tinycmdr-supervise.py", 0, True
+sh.Run """$($py.Path)"" tinycmdr-supervise.py $SuperviseArgs", 0, True
 "@
 # pythonw keeps a window from appearing; fall back to python.exe if pythonw is absent
 $pyw = Join-Path (Split-Path $py.Path) "pythonw.exe"
@@ -964,22 +1098,50 @@ try {
     Say "NOTE    : could not tighten the ACL on $InstallDir ($($_.Exception.Message))"
 }
 
-# ------------------------------------------------------------ 7. scheduled task
+# --------------------------------------------------------- 7. starting it up
+# Two ways, and the DEFAULT one needs no administrator rights at all:
+#   * a shortcut in your own Startup folder - starts at logon, in your session.
+#     This is what a plain install gets.
+#   * a scheduled task (-AsService) - starts at BOOT, before anyone logs in.
+#     Windows reserves boot-start tasks for administrators, so only that one
+#     needs an elevated shell. Nothing else in this installer does.
 if (-not $SkipTask -and -not $RegisterTask) {
-    Head "scheduled task: skipped"
+    Head "autostart: skipped"
     Say "no chat account and no -EnableWeb, so there is nothing to keep running in the"
     Say "background. Both local doors work from a shell:"
     Say "  python tinycmdr-cli.py          (a session in this window)"
     Say "  python tinycmdr.py --web        (a page on http://127.0.0.1:$WebPort)"
 }
-if ($RegisterTask) {
+if ($RegisterTask -and -not $AsService) {
+    Head "starting it at logon (no admin needed)"
+    $startupDir = Split-Path -Parent $StartupLink
+    New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
+    try {
+        # A shortcut rather than a copied script: one owner for the launcher, and
+        # removing one file undoes the autostart. wscript.exe runs the hidden
+        # launcher with no console window.
+        $ws  = New-Object -ComObject WScript.Shell
+        $lnk = $ws.CreateShortcut($StartupLink)
+        $lnk.TargetPath        = Join-Path $env:SystemRoot "System32\wscript.exe"
+        $lnk.Arguments         = "//B //Nologo `"$InstallDir\tinycmdr-service.vbs`""
+        $lnk.WorkingDirectory  = $InstallDir
+        $lnk.Description       = "tinycmdr ($AppName) - hidden background agent"
+        $lnk.Save()
+        Say "startup : $StartupLink"
+        Say "          starts hidden at your next logon (delete that shortcut to stop it)"
+    } catch {
+        Say "NOTE    : could not write the Startup shortcut ($($_.Exception.Message))"
+        Say "          start it by hand instead: $InstallDir\launch_tinycmdr.bat"
+    }
+}
+if ($RegisterTask -and $AsService) {
     Head "registering the scheduled task"
     if ($LocalWeb) {
         # No chat account: run the LOCAL PAGE, still under the supervisor so a crash is
         # respawned. This is the one case where the task does not run the chat lane.
         $pyw = Join-Path (Split-Path -Parent $py.Path) "pythonw.exe"
         if (-not (Test-Path $pyw)) { $pyw = $py.Path }
-        $action = New-ScheduledTaskAction -Execute $pyw -Argument "tinycmdr-supervise.py --web"
+        $action = New-ScheduledTaskAction -Execute $pyw -Argument "tinycmdr-supervise.py $SuperviseArgs"
         $action.WorkingDirectory = $InstallDir
         Say "mode    : local page only - no chat account, page on 127.0.0.1:$WebPort"
     } else {
@@ -1036,7 +1198,15 @@ if ($RegisterTask) {
 # ------------------------------------------------------------ 8. start + verify
 if ($RegisterTask -and -not $NoStart) {
     Head "starting and verifying"
-    Start-ScheduledTask -TaskName $AppName
+    if ($AsService) {
+        Start-ScheduledTask -TaskName $AppName
+    } else {
+        # No task to start: run the very launcher the logon shortcut runs, so the
+        # install is proven now instead of at the next logon. wscript with //B has
+        # no console window, and this returns as soon as it is launched.
+        Start-Process -FilePath (Join-Path $env:SystemRoot "System32\wscript.exe") `
+            -ArgumentList "//B //Nologo `"$InstallDir\tinycmdr-service.vbs`""
+    }
     Start-Sleep -Seconds 3
     $probe = Invoke-Probe -Dir $InstallDir -Python $py.Path
     Write-Host (($probe.Trim() -split "`n" | Select-Object -Last 6) -join "`n")
@@ -1045,9 +1215,13 @@ if ($RegisterTask -and -not $NoStart) {
     } else {
         Say "INSTALLED, BUT NOT VERIFIED: the probe did not get an answer."
         Say "That is a configuration gap, not a broken install - the files and the"
-        Say "scheduled task are in place. Set llm.base_url / llm.model in $cfgPath"
-        Say "(and see the output above), then:"
-        Say "  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName"
+        Say "$(if ($AsService) { 'scheduled task' } else { 'logon shortcut' }) are in place."
+        Say "Set llm.base_url / llm.model in $cfgPath (and see the output above), then:"
+        if ($AsService) {
+            Say "  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName"
+        } else {
+            Say "  tinycmdr restart      (or stop and start it from the Startup shortcut)"
+        }
         $Unverified = $true
     }
 }
@@ -1086,7 +1260,13 @@ if ($todo.Count -eq 0 -and $ChatLane) { Say "nothing - this install is configure
 elseif (-not $ChatLane -and $todo.Count -eq 0) { Say "nothing required - both local doors work" }
 else { $n = 1; foreach ($t in $todo) { Say "$n. $t"; $n++ } }
 Say ""
-if ($todo.Count -gt 0 -and $RegisterTask) { Say "after editing, restart:  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName" }
+if ($todo.Count -gt 0 -and $RegisterTask) {
+    if ($AsService) {
+        Say "after editing, restart:  Stop-ScheduledTask $AppName; Start-ScheduledTask $AppName"
+    } else {
+        Say "after editing, restart:  tinycmdr restart   (or delete/restore the Startup shortcut)"
+    }
+}
 if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr-cli.py   (or --web)" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
