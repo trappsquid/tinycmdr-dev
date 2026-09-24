@@ -5,7 +5,7 @@
   # tinycmdr
 
   ### The High-Efficiency Agent Harness for Local & Self-Hosted LLMs
-  *Dramatically faster TTFT · ~4K token overhead · 100% prefix-cache stable · Zero infrastructure.*
+  *Dramatically faster TTFT · ~4K token overhead · Prefix-cache optimized · Zero infrastructure.*
 
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#quick-install)
   [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
@@ -41,7 +41,7 @@ When you point those frameworks at local inference engines (llama.cpp, vLLM, Oll
 | :--- | :--- | :--- |
 | **Fixed Prompt Overhead** | 15,000 – 30,000 tokens | **~4,150 tokens** (measured, static + visible schemas) |
 | **Time to First Token (TTFT)** | 10 – 30s latency spikes on prompt eval | **Significantly faster** (skips prompt re-eval via warm prefix cache) |
-| **KV Prefix Cache Behavior** | Invalidation on every turn | **100% Warm** in llama.cpp / vLLM prefix slots |
+| **KV Prefix Cache Behavior** | Invalidation on every turn | **Cache-Stable Prefix** (static prompt + schemas; volatile context at tail) |
 | **KV Cache VRAM Footprint** | Heavy VRAM consumed by framework boilerplate | **Minimal KV Footprint** (dynamic disclosure keeps schemas lean) |
 | **Inference Slot Protection** | Wedged agent runs lock server slots | **Truthful Stop & Steer** frees slots immediately |
 | **Host Footprint** | Multi-container Docker, Vector DBs, Redis | **Single Python file**, zero database, no daemons |
