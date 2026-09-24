@@ -19,6 +19,13 @@ while [ -L "$SELF" ]; do
     esac
 done
 HERE="$(cd "$(dirname "$SELF")" && pwd)"
+case "$(uname -s 2>/dev/null)" in
+    *MINGW*|*MSYS*|*CYGWIN*)
+        if command -v cygpath >/dev/null 2>&1; then
+            HERE="$(cygpath -w "$HERE")"
+        fi
+        ;;
+esac
 
 PY="${TINYCMDR_PYTHON:-}"
 if [ -z "$PY" ]; then
@@ -31,7 +38,7 @@ if [ -z "$PY" ]; then
 fi
 if [ -z "$PY" ]; then
     for c in python3 python; do
-        if command -v "$c" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
+        if command -v "$c" >/dev/null 2>&1 && "$c" -c "import sys" >/dev/null 2>&1; then PY="$(command -v "$c")"; break; fi
     done
 fi
 if [ -z "$PY" ]; then
