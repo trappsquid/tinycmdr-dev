@@ -48,7 +48,7 @@ BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 # --- hermetic staging (same idiom as the other suites) ----------------------
-STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage"
+STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-fbrace"
 STAGE.mkdir(parents=True, exist_ok=True)
 shutil.copy2(SRC, STAGE / "tinycmdr.py")
 FIXTURE_CFG = STAGE / "config.json"
@@ -259,6 +259,106 @@ def test_each_writer_gets_its_own_temp_name():
     check("six writers, six distinct temp names", len(set(seen)) == 6, seen)
     check("...and none of them is the old pid-only name",
           all(n.startswith("temp-name-race.txt.tmp-") for n in seen), seen)
+
+
+# --- notes.md: the same race on the file `remember` writes ------------------
+
+def redirect_notes():
+    """notes.md state into TMP. NOTE the two locks below: `tool_remember` wears
+    `serialized_on(NOTES_FILE)`, which captured the ORIGINAL path object at def
+    time (same as tool_task + TASKS_FILE), while `curate_notes` looks its path up
+    at call time. Tests must hold the lock the code under test actually takes."""
+    fb.NOTES_FILE = TMP / "notes.md"
+    fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
+    fb.NOTES_AUTHORED_FILE = TMP / "notes-authored.json"
+    fb._NOTES_AUTHORED["loaded"] = False
+    fb._NOTES_AUTHORED["hashes"] = []
+    for f in (fb.NOTES_FILE, fb.NOTES_ARCHIVE_FILE, fb.NOTES_AUTHORED_FILE):
+        if Path(f).exists():
+            Path(f).unlink()
+
+
+def remember(args):
+    return fb.tool_remember(args, {})
+
+
+def test_parallel_remembers_all_land():
+    """WO8's measured shape: `remember` calls inside one 4-worker batch.
+
+    The drive's four facts landed in write order 1,3,4,2 - concurrent writers on
+    notes.md - and the append was only safe by luck: the curator that runs after
+    every remember is a whole-file rewrite with no lock over its read."""
+    redirect()
+    redirect_notes()
+    cap = Capture()
+    fb.log.addHandler(cap)
+    try:
+        asks = [{"note": "w8-fact-%d: fact %d" % (i, i)} for i in range(8)]
+        outs = fire(remember, *asks)
+        text = Path(fb.NOTES_FILE).read_text(encoding="utf-8")
+        check("eight parallel remembers are eight notes",
+              text.count("w8-fact-") == 8, text)
+        check("every remember answered OK",
+              all(str(o).startswith("OK") for o in outs), outs)
+        check("no atomic write fell back to the plain path",
+              not cap.atomic_failures(), cap.atomic_failures())
+    finally:
+        fb.log.removeHandler(cap)
+
+
+def test_tool_remember_runs_under_the_notes_lock():
+    """The lock has to cover the READ side too (the ledger's lesson): a
+    `remember` must wait while another writer holds the notes.md lock, or its
+    append lands inside a curator's read-modify-write and is erased."""
+    redirect()
+    redirect_notes()
+    import inspect
+    captured = inspect.getclosurevars(fb.tool_remember).nonlocals.get("path")
+    lock = fb._path_lock(str(captured if captured is not None else fb.NOTES_FILE))
+    done = threading.Event()
+    entered = threading.Event()
+
+    def go():
+        entered.set()
+        remember({"note": "lock probe fact"})
+        done.set()
+
+    with lock:
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        # The handshake matters: without it a thread that had not STARTED yet
+        # passes "blocks" for the wrong reason (measured flake under sweep load).
+        started = entered.wait(2.0)
+        blocked = started and not done.wait(0.5)
+    check("tool_remember blocks while the notes.md lock is held", blocked,
+          "thread started=%s" % started)
+    check("...and completes once it is released", done.wait(10.0))
+
+
+def test_curate_notes_runs_under_the_notes_lock():
+    """Same claim for the curator: its whole-file rewrite must wait its turn.
+    It wrote with a plain open("w") and no lock until 2026-09-23 - the exact
+    shape that lost the ledger's `done` and first `add`."""
+    redirect()
+    redirect_notes()
+    fb.tool_remember({"note": "a fact so the file is non-empty"}, {})
+    lock = fb._path_lock(str(fb.NOTES_FILE))
+    done = threading.Event()
+    entered = threading.Event()
+
+    def go():
+        entered.set()
+        fb.curate_notes("probe")
+        done.set()
+
+    with lock:
+        t = threading.Thread(target=go, daemon=True)
+        t.start()
+        started = entered.wait(2.0)
+        blocked = started and not done.wait(0.5)
+    check("curate_notes blocks while the notes.md lock is held", blocked,
+          "thread started=%s" % started)
+    check("...and completes once it is released", done.wait(10.0))
 
 
 def main():

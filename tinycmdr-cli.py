@@ -3834,6 +3834,17 @@ def curate_notes(reason="curator"):
     kept), age out entries older than notes_archive_days, trim to
     notes_keep_entries, then trim to notes_max_chars — oldest first, all of it
     archived. Returns a one-line report, or "" when nothing had to change."""
+    # The WHOLE read-modify-write runs under the notes.md lock. The task
+    # ledger lost an add and a done to a load-mutate-save race in a 4-worker
+    # batch (2026-09-23); curate_notes was the same shape on the file the
+    # model calls `remember` into, and a concurrent append between its read
+    # and its write was erased by the rewrite.
+    with _path_lock(str(NOTES_FILE)):
+        return _curate_notes_impl(reason)
+
+
+def _curate_notes_impl(reason="curator"):
+    """curate_notes' real body; every caller runs it under the notes.md lock."""
     if not NOTES_FILE.exists():
         return ""
     raw = NOTES_FILE.read_text(encoding="utf-8", errors="replace")
@@ -3900,8 +3911,10 @@ def curate_notes(reason="curator"):
         _archive_notes(evicted_entries, reason)
     doc = {"preamble": doc["preamble"], "entries": entries}
     new_text = _render_notes(doc, elided=len(evicted_entries))
-    with NOTES_FILE.open("w", encoding="utf-8", newline="") as f:
-        f.write(new_text)
+    # atomic, not open("w"): the plain write this replaces is one crash or one
+    # interleaved writer away from a spliced notes.md - the exact failure that
+    # filled the ledger with a duplicated fragment (see atomic_write_text).
+    atomic_write_text(NOTES_FILE, new_text)
     bits = []
     if dupes:
         bits.append(f"{dupes} duplicate(s) merged")
@@ -3916,6 +3929,7 @@ def curate_notes(reason="curator"):
             f"in {NOTES_ARCHIVE_FILE.name}.")
 
 
+@serialized_on(NOTES_FILE)
 def tool_remember(args, ctx):
     """Append a durable fact to notes.md, bounded at write time."""
     note = " ".join(str(args.get("note") or "").split())
@@ -3942,6 +3956,7 @@ def tool_remember(args, ctx):
     return msg
 
 
+@serialized_on(NOTES_FILE)
 def tool_notes(args, ctx):
     """Inspect or curate notes.md (the memory carried in every prompt)."""
     action = str(args.get("action") or "view").strip().lower()
@@ -8592,6 +8607,37 @@ class Agent:
                             return
                         if progress_cb:
                             progress_cb(name, raw_args)
+                        # An identical call TWICE IN THE SAME BATCH is one intent
+                        # or an artifact, never two: both copies land in the same
+                        # round either way. Run the first copy only - both ran
+                        # before this (drive 2026-09-23: one reply carried
+                        # read_file x2, read_file x2, execute_code x2 with
+                        # byte-identical args digests and every copy executed),
+                        # which doubles the side effect of anything mutating.
+                        for _j in range(i):
+                            _fj = tool_calls[_j].get("function", {})
+                            if (_fj.get("name") == name
+                                    and _fj.get("arguments", "") == raw_args):
+                                try:
+                                    parsed = json.loads(raw_args or "{}")
+                                except Exception:
+                                    parsed = {"raw": raw_args}
+                                results[i] = (tc, (name, parsed, (
+                                    f"NOT EXECUTED: an identical `{name}` call "
+                                    f"with the same arguments is already in "
+                                    f"THIS batch (position {_j + 1}) and ran "
+                                    f"once; this duplicate copy did not run. "
+                                    f"If you meant two runs on purpose, ask "
+                                    f"again in your next message.")))
+                                log.warning("[%s] %s duplicate within one "
+                                            "batch suppressed (positions %d "
+                                            "and %d)", session_key, name,
+                                            _j + 1, i + 1)
+                                with dedupe_lock:
+                                    usage["batch_dupes_suppressed"] = (
+                                        usage.get("batch_dupes_suppressed", 0)
+                                        + 1)
+                                return
                         # Duplicate refusal. Same call + same result twice means
                         # the answer is already in the transcript; running it a
                         # third time cannot produce anything new, and for a
@@ -8692,7 +8738,8 @@ class Agent:
                         # — in the tool output it reads — that it already has this.
                         key = _call_sig(
                             name, (tc.get("function") or {}).get("arguments", ""))
-                        refused = output.startswith("NOT RE-EXECUTED")
+                        refused = output.startswith(("NOT RE-EXECUTED",
+                                                     "NOT EXECUTED"))
                         repeat_no = 1
                         with dedupe_lock:
                             ent = executed.get(key)

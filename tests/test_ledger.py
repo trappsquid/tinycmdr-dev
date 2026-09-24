@@ -29,7 +29,7 @@ SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 # and the module refuses to start without one. These suites must run against a
 # fresh unpack (CI, a friend's box, a stranger's download), so import a
 # byte-identical copy from a temp dir that HAS a config.json beside it.
-STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage"
+STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-ledger"
 STAGE.mkdir(parents=True, exist_ok=True)
 shutil.copy2(SRC, STAGE / "tinycmdr.py")
 FIXTURE_CFG = STAGE / "config.json"
