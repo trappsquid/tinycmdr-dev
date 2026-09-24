@@ -240,6 +240,30 @@ out = fb.tool_shell({"command": "list_tools 2>&1 | Select-String \"delegate\""},
 check("a tool name as the first token of a pipeline is answered as a tool too",
       "is a TOOL on this box" in out, out[:160])
 
+# ---- round 6: the tool RUN AS A SCRIPT (`python toolsmith.py ...`) -------------------
+# Found on the drive 2026-09-23: every tool file in ./tools/ is also a runnable script, so
+# this miss SUCCEEDS and the model never self-corrects. Told to build a tool, the run read
+# toolsmith.py off disk, spilled it twice, tried `python -m toolsmith` (failed), ran
+# `python toolsmith.py "action=new" ...` (worked), then listed tools and called find_tools -
+# 12 calls in and it had never made the `toolsmith` TOOL CALL its prompt names.
+out = fb.tool_shell(
+    {"command": 'cd C:\\tinycmdr\\tools; python toolsmith.py "action=new" "name=x"'},
+    {"session_key": "s-script1"})
+check("a tool run as a script is answered as a tool",
+      "is a TOOL on this box" in out and "shell cannot" in out, out[:160])
+check("...and the answer carries that tool's arguments",
+      "Its arguments:" in out and "action" in out, out[:300])
+for _cmd in ("python -m toolsmith action=list",
+             "python C:\\tinycmdr\\tools\\toolsmith.py action=list",
+             "python tools/toolsmith.py action=list"):
+    out = fb.tool_shell({"command": _cmd}, {"session_key": "s-script-" + _cmd[:8]})
+    check("the same miss is answered for %r" % _cmd[:34],
+          "is a TOOL on this box" in out, out[:120])
+out = fb.tool_shell({"command": 'python -c "print(123)"'}, {"session_key": "s-script-c"})
+check("a plain interpreter one-liner still runs", "123" in out, out[:120])
+check("...and is not mistaken for a tool",
+      "is a TOOL on this box" not in out, out[:120])
+
 _keep_confirm = fb.CONFIG["agent"].get("confirm_patterns")
 try:
     fb.CONFIG["agent"]["confirm_patterns"] = ["\\bdel\\s+/[a-z]*[sq]"]

@@ -2995,6 +2995,21 @@ def charge_scan(ctx, seconds):
         _SCAN_SPEND[key] = _SCAN_SPEND.get(key, 0.0) + float(seconds)
 
 
+def _tool_args_shape(name):
+    """One tool's argument schema, short: the hop-saver the skill tool and the shell share.
+
+    An answer that only points elsewhere buys another tool call (measured 2026-09-23: the
+    skill tool was asked for tool names four times in two runs, each hop costing a step).
+    """
+    tool = REGISTRY.get(name) or {}
+    params = ((tool.get("schema") or {}).get("function") or {}).get("parameters") or {}
+    return json.dumps(params, separators=(",", ":"))[:280]
+
+
+def _registered_tool(name):
+    return bool(name) and (name in CORE_TOOLS or name in (REGISTRY.custom or {}))
+
+
 def _bare_tool_name(command):
     """The tool this command names outright, or "": the shell cannot run a tool.
 
@@ -3009,8 +3024,41 @@ def _bare_tool_name(command):
     # and read the PowerShell error as a tool that had failed.
     first = re.split(r"[\s|;&]+", bare, 1)[0]
     for cand in (bare, first):
-        if cand in CORE_TOOLS or cand in (REGISTRY.custom or {}):
+        if _registered_tool(cand):
             return cand
+    return ""
+
+
+def _tool_run_as_script(command):
+    """The tool this command RUNS AS A SCRIPT, or "": `python tools/x.py`, `python -m x`.
+
+    A different miss from a bare name, and a worse one, because the wrong door WORKS:
+    every tool file in ./tools/ is also a runnable script, so `python toolsmith.py
+    "action=new" ...` really does scaffold the tool. Measured on the drive 2026-09-23 -
+    told to build a tool, the run read toolsmith.py off disk, spilled it twice, tried
+    `python -m toolsmith` (which failed), ran `python toolsmith.py` (which worked), listed
+    tools, read the file again, and called find_tools; 12 calls in, it had never once made
+    the `toolsmith` TOOL CALL its prompt names. Success at the wrong door is why it never
+    self-corrects, so the answer is the door plus the arguments, not an error.
+    """
+    toks = [t for t in re.split(r"[\s|;&()]+", (command or "").strip()) if t]
+    for i, tok in enumerate(toks):
+        base = tok.strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].lower()
+        if not re.fullmatch(r"python[0-9]*(w)?(\.exe)?|py(\.exe)?", base):
+            continue
+        j = i + 1
+        while j < len(toks) and toks[j].startswith("-"):
+            if toks[j] == "-m":
+                j += 1
+                break
+            j += 1                      # -u, -X utf8, --version: not the module
+        if j >= len(toks):
+            continue
+        name = toks[j].strip("\"'").replace("\\", "/").rsplit("/", 1)[-1]
+        if name.lower().endswith(".py"):
+            name = name[:-3]
+        if _registered_tool(name):
+            return name
     return ""
 
 
@@ -3028,11 +3076,13 @@ def tool_shell(args, ctx):
         # because the cost being protected is the operator's wall clock.
         log.info("shell: capped %s rooted at %s to %ds (asked for %ds)",
                  cost_risk["shape"], cost_risk["root"], timeout, requested)
-    _named_tool = _bare_tool_name(command)
+    _named_tool = _bare_tool_name(command) or _tool_run_as_script(command)
     if _named_tool:
+        _shape = _tool_args_shape(_named_tool)
         return (f"ERROR: `{_named_tool}` is a TOOL on this box, not a program - the harness "
-                f"runs it as a tool call and the shell cannot. Call {_named_tool} directly; "
-                f"if its arguments are not in your list, one find_tools call gives them.")
+                f"runs it as a tool call and the shell cannot. Call {_named_tool} directly"
+                + (f". Its arguments: {_shape}" if _shape else "")
+                + f". If its arguments are not in your list, one find_tools call gives them.")
     confirm_hit = _confirm_hit(command) or _endpoint_self_harm(command)
     if confirm_hit:
         # One gate for shell and tools: it can REFUSE outright (a fresh steering gap),
@@ -5039,9 +5089,7 @@ def tool_skill(args, ctx):
             # The ARGUMENTS ride along: the drive asked the skill tool for tool names four
             # times in two runs (search_files, search_sessions x2, delegate_task x2) and each
             # answer that only points elsewhere buys another hop. Measured 2026-09-23.
-            tool = REGISTRY.get(name) or {}
-            params = ((tool.get("schema") or {}).get("function") or {}).get("parameters") or {}
-            shape = json.dumps(params, separators=(",", ":"))[:280]
+            shape = _tool_args_shape(name)
             return (f"{name!r} is a TOOL on this box, not a skill: call it by name and the "
                     f"harness runs it. Its arguments: {shape}. (If the call refuses for a "
                     f"missing argument, find_tools {name!r} gives the whole schema.) Skills "
