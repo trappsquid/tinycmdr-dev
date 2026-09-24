@@ -1010,6 +1010,10 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "I ran the command and it printed gamma.",
         "hash 3cdacefd347ee4faaef210d185f3c671ff7bf21d372e5e4bab65e51771627d7a",
         "the tool returned 12 items.",
+        # the audit's own corpus: shapes that must keep matching
+        "b1.txt: 19 bytes",
+        "12 files in the folder",
+        "the log has 240 lines",
     ]
     for text in fires:
         check("detector fires: %r" % text[:34], bool(rx.search(text)), text)
@@ -1019,6 +1023,15 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "I have no way to check that without a tool.",
         "Should I delete the old folder first?",
         "both files are written.",
+        # regress-audit.py over every fleet bot's DELIVERED answers found this
+        # one on the MacBook: a true-from-memory answer in a run with no tool
+        # call. A bare machine spec is not a claim about anything fetched, so
+        # the measurement branch needs box-ish context beside the number.
+        "16 GB unified memory.",
+        "The box has 8 GB of RAM.",
+        "That took 40 seconds.",
+        "MVT analysis complete on the decrypted backup. Here's the full "
+        "report:",
     ]
     for text in quiet:
         check("detector stays quiet: %r" % text[:34], not rx.search(text), text)

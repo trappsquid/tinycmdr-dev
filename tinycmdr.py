@@ -7594,9 +7594,13 @@ _RESULT_CLAIM_RX = re.compile(
     # (a) a filled-in label dump - "FILES: 5 4", "READBACK: alphabeta", "EXIT: 1".
     #     ALL-CAPS is the tell: it is a form's field name, not a sentence.
     r"(?-i:^[^\w\n]{0,3}[A-Z][A-Z0-9_ ]{1,24}:)"
-    # (b) a measured value with a unit - "5 bytes", "0 step(s)", "12 files"
-    r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|"
-    r"steps?|files?|kb|mb|gb|kib|mib|tokens?|tok|ms|seconds?)\b"
+    # (b) a measured value with a unit, ATTACHED to something on this box: "b1.txt: 19
+    #     bytes", "the file contains 3 lines", "12 files in the folder". The context
+    #     lookahead is what keeps a true-from-memory answer out of the class - the audit
+    #     caught "16 GB unified memory." on the MacBook, in a run with no tool call, and a
+    #     bare machine spec is not a claim about anything the run fetched.
+    r"|(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
+    r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b[^\n]{0,40}?(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)"
     # (c) a hash-shaped token: a value that can only come from running something
     r"|\b[0-9a-f]{16,}\b"
     # (d) narration that something WAS run or returned
