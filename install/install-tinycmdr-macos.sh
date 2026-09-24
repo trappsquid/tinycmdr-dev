@@ -138,11 +138,21 @@ printf '\n########## install-tinycmdr-macos.sh %s  (%s, %s)\n' \
 
 if [ "$UNINSTALL" = 1 ]; then
     say "uninstall"
+    # SCOPED, like the wrapper below and like the Linux installer's cleanup. A probe
+    # install (--install-dir /tmp/..., --no-launchd) shares the DEFAULT label with a
+    # real install, so an unscoped `bootout` + `rm` here stopped a live agent and
+    # deleted its plist: measured 2026-09-24 on a MacBook, where a probe uninstall
+    # took the running bot down with it. The plist is removed only when it names
+    # THIS install directory.
     if [ "$IS_MAC" = 1 ] && [ -f "$PLIST" ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null \
-            || launchctl unload -w "$PLIST" 2>/dev/null || true
-        rm -f "$PLIST"
-        info "removed $PLIST"
+        if grep -qF "$INSTALL_DIR" "$PLIST" 2>/dev/null; then
+            launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null \
+                || launchctl unload -w "$PLIST" 2>/dev/null || true
+            rm -f "$PLIST"
+            info "removed $PLIST"
+        else
+            info "kept $PLIST - it belongs to another install (not $INSTALL_DIR)"
+        fi
     fi
     # the PATH wrapper the install wrote outside its folder - only when it points
     # at THIS install (a probe uninstall must not take the real one's wrapper)
@@ -433,9 +443,15 @@ fi
 if [ -n "$TG_IDS" ] && [ -z "$TG_IDS_CLEAN" ]; then
     die "--telegram-ids needs numeric ids (message @userinfobot for yours): got '$TG_IDS'"
 fi
-if [ -z "$TOKEN" ]; then
-    printf '    Mattermost bot token (input hidden): '
-    read -rs TOKEN
+# Ask ONLY at a terminal. `read` returns non-zero at EOF, and under `set -euo
+# pipefail` that killed the whole installer the moment stdin was not a keyboard -
+# silently, right after printing the prompt, leaving a half-copied folder that then
+# refused a retry (measured on a MacBook 2026-09-24, installing over ssh). A
+# token-less run is a supported install: it serves the local page, which is what
+# the branch below already does.
+if [ -z "$TOKEN" ] && [ -t 0 ]; then
+    printf '    Mattermost bot token (input hidden, Enter to skip): '
+    read -rs TOKEN || true
     echo
 fi
 # A chat account is OPTIONAL: the harness also runs as a session (--cli) and as a local page

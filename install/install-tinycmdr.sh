@@ -305,6 +305,13 @@ fi
 say "configuration"
 info "mattermost   : https://${MM_HOST}:${MM_PORT}"
 info "model        : ${MODEL} @ ${MODEL_BASE_URL}"
+if [ -z "$MODEL" ]; then
+    # The reference config keeps the example's placeholder model id, so an install
+    # that was never told which model to use prints an empty name here. Say that
+    # plainly instead of leaving a blank in the summary.
+    info "WARNING      : llm.model is unset - set it in config.json (llm.model),"
+    info "               or pass --model <id>"
+fi
 if [ -z "$MODEL_BASE_URL" ]; then
     info "WARNING      : llm.base_url is still the template's loopback default -"
     info "               point it at your own OpenAI-compatible endpoint"

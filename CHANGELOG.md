@@ -5,6 +5,15 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] - 2026-09-24
+
+### Fixed
+- **The macOS uninstaller no longer takes another install down with it.** `--uninstall` booted out the launchd agent and deleted the plist even when that plist belonged to a DIFFERENT install, and the default label is shared: removing a probe install (`--install-dir /tmp/...`) stopped the box's real agent and deleted its plist. Measured on a MacBook 2026-09-24 - a probe uninstall took a live bot offline. The plist is now removed only when it names the install directory being removed, the same scoping the PATH wrapper and the Linux cleanup already had.
+- **The macOS installer no longer dies at its token prompt when nobody is there to answer it.** `read` returns non-zero at end-of-input, and under `set -euo pipefail` that killed the installer the moment stdin was not a keyboard: it stopped silently right after printing the prompt and left a half-copied folder behind, which then refused a retry without `--force`. A token-less run is a supported install - the agent serves its local page - so the prompt is now asked only when there is a terminal, and the run carries on to that lane.
+
+### Changed
+- **The Linux installer says so when no model was chosen**, instead of printing a blank model name in its summary. The reference config keeps the example's placeholder id, so an install that was never told which model to use now points at `llm.model` in `config.json` (or `--model <id>`).
+
 ## [1.0.3] - 2026-09-24
 
 ### Fixed
