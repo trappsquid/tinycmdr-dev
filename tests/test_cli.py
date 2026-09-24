@@ -264,7 +264,7 @@ def test_state_stays_in_the_folder():
 
 
 def test_no_web_search_in_this_build():
-    """Product decision (David, 2026-09-13): the enterprise build has no web search.
+    """Product decision (the operator, 2026-09-13): the enterprise build has no web search.
 
     No search tool, no provider keys, no search config block. The only local search
     tools (find files, recall past sessions) stay.
@@ -309,7 +309,7 @@ def test_the_endpoint_is_the_only_network_destination():
 
 
 def test_key_is_required_remotely_and_sent_when_present():
-    """The model endpoint needs a key (David, 2026-09-13); certificates it does not.
+    """The model endpoint needs a key (the operator, 2026-09-13); certificates it does not.
 
     The build carries no certificate handling at all. It does send the key it is given,
     and it refuses to start against a remote endpoint without one rather than letting

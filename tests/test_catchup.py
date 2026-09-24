@@ -7,7 +7,7 @@ Why this suite exists. The sweep's own docstring names the case it is for - "a m
 posted during a gap (or while the bot was restarting) is silently ignored" - but it walks
 the in-memory high-water map, and every new process starts with an empty one. So it had
 no channel to ask about until something arrived over the websocket, which is exactly what
-a post made inside a downtime never does. Measured on the Windows test box and the MacBook
+a post made inside a downtime never does. Measured on the Windows bed and the macOS bed
 2026-09-24: a restart was armed, the child was killed, an order was posted while it was
 down, and no run started, no answer was posted and nothing was logged. The operator's
 opinion of that is "the bot ate my message".

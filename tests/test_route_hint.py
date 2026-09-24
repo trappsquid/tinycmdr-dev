@@ -1,6 +1,6 @@
 """The route hint: a shell content search gets pointed at search_files, once per run.
 
-Measured on the operator drive's first work order (the Windows test box, 2026-09-23): "find every line
+Measured on the operator drive's first work order (the Windows bed, 2026-09-23): "find every line
 that calls atomic_write_text" became Select-String + a second Select-String for the def lines +
 a python regex in execute_code + a 13,482-char spill + a repeat-read map -- 6 calls and 4.5
 minutes for what ONE search_files call answers, with search_files never called. The hidden

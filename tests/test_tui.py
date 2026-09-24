@@ -166,7 +166,7 @@ scr6.card("narration", "thinking aloud, quietly")
 check("...and so does the drawn one, dim as the render has it",
       "  \u2026  thinking aloud, quietly" in scr6.out.getvalue())
 
-# --- the run's key is a filename; the editing surface is not one (bot-aTOWER
+# --- the run's key is a filename; the editing surface is not one (the Windows bed
 # measured 2026-09-22: a PromptSession in the key slot crashed _save() with
 # "expected string or bytes-like object", so sessions/ stayed empty and the
 # event log was never written) ---------------------------------------------

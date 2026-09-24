@@ -843,7 +843,7 @@ $cfgPath = Join-Path $InstallDir "config.json"
 # package's config.example.json over it on EVERY run, so a plain re-run - and an
 # update with -Force - replaced a working install's settings with the example's
 # placeholders (mattermost.url, allowed_users, the model endpoint) and the bot
-# could not start. Measured 2026-09-24 on a MacBook, where an in-place update did
+# could not start. Measured 2026-09-24 on the macOS bed, where an in-place update did
 # exactly that and had to be repaired by hand.
 $cfgFresh = -not (Test-Path $cfgPath)
 $cfgBase = if ($cfgFresh) { Join-Path $InstallDir "config.example.json" } else { $cfgPath }
@@ -982,7 +982,7 @@ if (Test-Path $envPath) {
             # Only the keys THIS INSTALL owns are withheld. The search keys were in
             # this list too, so a re-run without -SecretsFile dropped a working
             # host's TAVILY/ANYSEARCH keys - the same loss the config writer had,
-            # one file over (measured 2026-09-24 on a MacBook).
+            # one file over (measured 2026-09-24 on the macOS bed).
             if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
                           "TINYCMDR_WEB_TOKEN") -notcontains $k) {
                 $ownKeys[$k] = $v

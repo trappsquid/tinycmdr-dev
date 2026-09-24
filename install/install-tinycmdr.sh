@@ -612,7 +612,7 @@ import json, os, sys
 cfg_path = os.path.join(inst, "config.json")
 # The HOST's own config is the base whenever there is one, --force included: an
 # update carries the host's settings forward and changes only what this run was
-# told to change. Measured 2026-09-24 on a MacBook: --force rebuilt the file from
+# told to change. Measured 2026-09-24 on the macOS bed: --force rebuilt the file from
 # the package example, so a working install came back with a placeholder url,
 # an empty allowlist and the wrong model endpoint, and its bot would not start.
 fresh = not os.path.exists(cfg_path)

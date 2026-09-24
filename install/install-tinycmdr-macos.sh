@@ -141,7 +141,7 @@ if [ "$UNINSTALL" = 1 ]; then
     # SCOPED, like the wrapper below and like the Linux installer's cleanup. A probe
     # install (--install-dir /tmp/..., --no-launchd) shares the DEFAULT label with a
     # real install, so an unscoped `bootout` + `rm` here stopped a live agent and
-    # deleted its plist: measured 2026-09-24 on a MacBook, where a probe uninstall
+    # deleted its plist: measured 2026-09-24 on the macOS bed, where a probe uninstall
     # took the running bot down with it. The plist is removed only when it names
     # THIS install directory.
     if [ "$IS_MAC" = 1 ] && [ -f "$PLIST" ]; then
@@ -446,7 +446,7 @@ fi
 # Ask ONLY at a terminal. `read` returns non-zero at EOF, and under `set -euo
 # pipefail` that killed the whole installer the moment stdin was not a keyboard -
 # silently, right after printing the prompt, leaving a half-copied folder that then
-# refused a retry (measured on a MacBook 2026-09-24, installing over ssh). A
+# refused a retry (measured on the macOS bed 2026-09-24, installing over ssh). A
 # token-less run is a supported install: it serves the local page, which is what
 # the branch below already does.
 if [ -z "$TOKEN" ] && [ -t 0 ]; then

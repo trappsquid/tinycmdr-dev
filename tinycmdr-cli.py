@@ -5281,7 +5281,7 @@ def _ask_format(question, options):
 def _ask_record_choice(row, text):
     """Which option a reply reads as, or None.
 
-    A bare number is the selector. A number with a clause ("2 but not the MacBook")
+    A bare number is the selector. A number with a clause ("2 but not the macOS bed")
     keeps the whole text: the clause is an instruction, and the answer reaches the model
     verbatim either way. What resolving it adds is the reading - the model is told which
     option the words started from, so it does not re-ask a decision it already has.
@@ -7008,7 +7008,8 @@ _STATE_MARKER = (_STATE_PREFIX
                    "the operator]\n")
 
 
-def volatile_context(state_marker=True, session_key=None, atlas=False, shell=False):
+def volatile_context(state_marker=True, session_key=None, atlas=False, shell=False,
+                     prior_unfinished=""):
     """Notes + task ledger — everything in the prompt that changes mid-run.
 
     Sent as a TRAILING message, never baked into the system prompt. The system
@@ -7076,6 +7077,16 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     spill = spill_index_block()
     if spill:
         parts.append(spill)
+    # ONE line, only when the previous run of THIS conversation did not finish. Four
+    # measured runs answered a stale thread instead of the operator's new order, and in
+    # every one the previous exchange was left unfinished (promise, loop-guard stop,
+    # derail). Nothing is added on a healthy session, so this line costs nothing per turn
+    # on the fleet; it costs one line on the run that follows a wreck.
+    if prior_unfinished:
+        parts.append(
+            "Note: the previous run in this conversation did not finish (%s). The "
+            "message below is the CURRENT request - answer it. Do not carry on with the "
+            "unfinished task unless the operator asks for that." % prior_unfinished)
     if not parts:
         return ""
     body = "\n".join(parts)
@@ -7236,7 +7247,7 @@ _COMPLETION_RX = re.compile(
 # model says it is ABOUT TO work ("I'll gather ... then write it up") and stops there,
 # with no tool call at all. _COMPLETION_RX only counts announcements that arrive WITH
 # calls queued, so a promise delivered as the final answer looked like a finished run.
-# Measured on the MacBook 2026-09-24: four consecutive runs, ONE model call each, 0
+# Measured on the macOS bed 2026-09-24: four consecutive runs, ONE model call each, 0
 # tool calls, every reply a promise. The same task with the nudge text below in front
 # of it made its shell call in the same minute, so this is a missing trigger class
 # rather than a broken model.
@@ -7258,6 +7269,17 @@ _INTENT_RX = re.compile(
 # A promise is SHORT. A long reply that merely contains "let me ... check" is prose the
 # operator asked for, and re-asking it would spend a call for nothing.
 _INTENT_MAX_CHARS = 700
+# How the harness's OWN end-of-run lines begin when a run did not finish. A run that
+# stopped badly leaves one of these as the last assistant turn in the transcript, which is
+# what _prior_run_unfinished() reads (the state is durable, and clears itself as soon as a
+# run answers normally).
+_ABNORMAL_END_MARKERS = (
+    # (prefix of the harness's own line, the reason the next run is told)
+    ("\U0001F501 Stopped a loop", "the harness stopped the previous run mid-task"),
+    ("\u26a0\ufe0f **No answer", "the previous run ended without an answer"),
+    ("\u26a0\ufe0f LLM call failed", "the model endpoint failed mid-run"),
+    ("\u26d4 ", "the previous run ended on an error"),
+)
 # The THIRD shape of the same class, and the one BOTH test beds produced on 2026-09-24:
 # the reply neither promises nor claims a change - it reports RESULTS. One order each to
 # the two test beds, 2 model calls, 0 tool calls, and the answer that came back
@@ -7278,7 +7300,7 @@ _RESULT_CLAIM_RX = re.compile(
     # (b) a measured value with a unit, ATTACHED to something on this box: "b1.txt: 19
     #     bytes", "the file contains 3 lines", "12 files in the folder". The context
     #     lookahead is what keeps a true-from-memory answer out of the class - the audit
-    #     caught "16 GB unified memory." on the MacBook, in a run with no tool call, and a
+    #     caught "16 GB unified memory." on the macOS bed, in a run with no tool call, and a
     #     bare machine spec is not a claim about anything the run fetched.
     r"|(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
     r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b[^\n]{0,40}?(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)"
@@ -7626,6 +7648,30 @@ class Agent:
                  "front-drop invalidates the prefix cache, so this is done "
                  "rarely and deeply, not every turn)", key, before, target)
 
+    def _prior_run_unfinished(self, session_key):
+        """Why the LAST run of this conversation looks unfinished, or "".
+
+        Read from the session's own history, which is durable (the file on disk), and
+        self-clearing: the moment a run answers normally the last assistant turn is an
+        answer, and this returns "". Detecting it from the transcript rather than from a
+        flag in run_state is deliberate - run_state is per PROCESS, and the macOS bed's
+        hijack happened after a restart that would have wiped such a flag.
+        """
+        hist = (self.histories or {}).get(session_key) or []
+        last = ""
+        for msg in reversed(hist):
+            if msg.get("role") == "assistant" and (msg.get("content") or "").strip():
+                last = str(msg["content"]).strip()
+                break
+        if not last:
+            return ""
+        for marker, reason in _ABNORMAL_END_MARKERS:
+            if last.startswith(marker):
+                return reason
+        if len(last) <= _INTENT_MAX_CHARS and _INTENT_RX.search(last):
+            return "the previous run ended on a promise with no tool call"
+        return ""
+
     def _payload(self, messages, state=True, session_key=None, atlas=False, shell=False):
         """messages + the volatile state block, as a NEW list.
 
@@ -7659,7 +7705,9 @@ class Agent:
         messages = _repair_tool_pairing(messages)
         if not state:
             return messages
-        v = volatile_context(session_key=session_key, atlas=atlas, shell=shell)
+        v = volatile_context(session_key=session_key, atlas=atlas, shell=shell,
+                             prior_unfinished=(self._prior_run_unfinished(session_key)
+                                               if session_key else ""))
         if not v:
             return messages
         if messages and messages[-1].get("role") == "user":

@@ -1,6 +1,6 @@
 """Tool discovery: a capability question must not be answered with a wrong tool.
 
-Measured on a fleet box 2026-09-23 (the Windows test box, 35B-A3B, its own log): three find_tools
+Measured on a fleet box 2026-09-23 (the Windows bed, 35B-A3B, its own log): three find_tools
 calls, each answered "[HARNESS: now callable]" with a tool that does something else -
 
     "send Mattermost message to channel"            -> `schedule`  (the word "channel")

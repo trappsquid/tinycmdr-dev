@@ -47,7 +47,7 @@ def main():
         check("an empty ledger says so and says how to open one",
               "empty" in out.lower() and "action=add" in out, out[:90])
 
-        # ---- the fields are the the LAN model boxbot schema ----------------------------------
+        # ---- the fields are the a bot account schema ----------------------------------
         check("the record schema is theirs, verbatim (29 names)",
               len(fb.EXPERIMENT_FIELDS) == 29
               and fb.EXPERIMENT_FIELDS[:6] == ("id", "date", "agent", "status",

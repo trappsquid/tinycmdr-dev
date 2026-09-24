@@ -45,7 +45,7 @@ def note(ts, text):
 BOT_FACTS = [
     ("2026-09-14 19:41", "tinycmdr 2.5.4 is the fleet-wide build: all six hosts on 2.5.4"),
     ("2026-09-14 19:54", "host tooling quirks: schedule job names get dots rewritten to underscores"),
-    ("2026-09-14 23:45", "8787 web UI rewrite (unreleased) dev copy at C:\\Users\\<user>\\tinycmdr-webui-w"),
+    ("2026-09-14 23:45", "8787 web UI rewrite (unreleased) dev copy at C:/Users/<user>\\tinycmdr-webui-w"),
     ("2026-09-14 23:57", "the build was cut on the fleet manager, sha256 tinycmdr.py 5d9ec9c727a0851928d650a88821b281"),
     ("2026-09-15 00:09", "the release page lives at https://docs.example.com/tinycmdr/ (NOT /tinycmdr/)"),
 ]
@@ -65,7 +65,7 @@ def test_the_authorship_guard_cannot_deadlock_on_its_first_call():
     notes_authored() before record_authored_note(), so none of them takes the bootstrap
     path. This one calls record_authored_note() FIRST in a cold interpreter, which is
     exactly what tool_remember does on a freshly started bot. With a plain threading.Lock
-    it never returns - measured live on the Windows test box 2026-09-18, where the bot froze mid-run
+    it never returns - measured live on the Windows bed 2026-09-18, where the bot froze mid-run
     and stayed frozen holding its session lock - so the timeout here IS the assertion: a
     regression has to fail loudly, not hang the suite."""
     import subprocess

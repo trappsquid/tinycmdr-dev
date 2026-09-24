@@ -349,7 +349,7 @@ def test_stop_is_handled_out_of_band_not_queued_behind_the_run():
 
 
 def test_stop_after_the_run_was_already_flagged_does_not_say_nothing_is_running():
-    """Live 2026-09-12 on the Windows test box: the stall watchdog had already SET the wedged
+    """Live 2026-09-12 on the Windows bed: the stall watchdog had already SET the wedged
     run's cancel event, so /stop answered "Nothing is running right now" while the
     channel was still busy - which the operator reads as "my stop was ignored"."""
     d = _dispatcher()
@@ -998,7 +998,7 @@ def test_the_system_prompt_describes_the_repeat_guard_that_exists():
     """The prompt must match the guard's real behaviour. The old wording said "never
     re-issue a call" and told the model to invent a different command - but after a
     real change, re-running the SAME command is the only thing that proves anything,
-    and it does execute (2026-09-12: the Windows test box fixed a tool, got its own pre-edit
+    and it does execute (2026-09-12: the Windows bed fixed a tool, got its own pre-edit
     output back, and explained it away as the harness caching)."""
     sp = fb.build_system_prompt()
     check("prompt: the guard applies only while nothing has changed",
@@ -1124,7 +1124,7 @@ def test_sampling_is_always_inherited_never_sent():
 
 
 def test_props_parsing_matches_the_live_shape():
-    """Pinned against a real /props payload from a LAN address:8081."""
+    """Pinned against a real /props payload from the LAN model box:8081."""
     live = {"default_generation_settings": {"params": {
         "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.05,
         "repeat_penalty": 1.0, "seed": -1, "n_predict": -1}},
@@ -1380,7 +1380,7 @@ def test_startup_validation_catches_an_unconfigured_host():
 
 
 def test_console_output_survives_a_legacy_code_page():
-    """Live bot-aTOWER, first install: `tinycmdr.py --once` died printing its own
+    """Live the Windows bed, first install: `tinycmdr.py --once` died printing its own
     banner. A plain PowerShell console uses a legacy code page (cp437), which
     cannot encode the em dash, and a bare print() raises UnicodeEncodeError and
     takes the process with it. Reproduced by forcing PYTHONIOENCODING=cp437;
@@ -1431,7 +1431,7 @@ def test_a_hand_broken_config_says_what_is_wrong():
     quotes - which is not JSON. That must produce a sentence naming the mistake,
     not a traceback at import, and startup validation has to report it."""
     broken = '{"mattermost": {"url": "chat.example.com", '\
-             '"allowed_users": [<id>]}}'
+             '"allowed_users": [<mattermost-user-id>]}}'
     data, err = fb.parse_config_text(broken, "config.json")
     check("json: a missing quote is reported, not raised", data is None and err,
           err)
@@ -1460,15 +1460,15 @@ def test_the_allowlist_tolrates_null_and_a_bare_string():
     try:
         fb.CONFIG["mattermost"]["allowed_users"] = None
         check("allowlist: null is deny-all, not a crash",
-              fb.user_is_allowed("<id>", "u1") is False)
+              fb.user_is_allowed("<mattermost-user-id>", "u1") is False)
 
-        fb.CONFIG["mattermost"]["allowed_users"] = "<id>"
+        fb.CONFIG["mattermost"]["allowed_users"] = "<mattermost-user-id>"
         check("allowlist: a bare string still allows the exact id",
-              fb.user_is_allowed("<id>", None) is True)
+              fb.user_is_allowed("<mattermost-user-id>", None) is True)
         check("allowlist: a bare string does not allow a substring",
-              fb.user_is_allowed("<id>", None) is False)
+              fb.user_is_allowed("<unknown-id>", None) is False)
         check("allowlist: nor a longer name containing it",
-              fb.user_is_allowed("x<id>gp8g3k6qod9t5nwyroy", None) is False)
+              fb.user_is_allowed("x<mattermost-user-id>y", None) is False)
 
         fb.CONFIG["mattermost"]["allowed_users"] = ["a1", "b2"]
         check("allowlist: list membership by name", fb.user_is_allowed("a1", None) is True)
@@ -1546,7 +1546,7 @@ def test_shipped_requirements_cover_what_the_code_declares():
               "installer does not use the file")
     else:
         # The installer is Windows-only, so a Mac or Linux checkout has no install/:
-        # asserting it there fails for the wrong reason (found on the MacBook 2026-09-19).
+        # asserting it there fails for the wrong reason (found on the macOS bed 2026-09-19).
         check("deps: installer absent from this tree -> installer check skipped", True)
     check("deps: a missing Mattermost client is a loud failure",
           "needs mmpy_bot" in src and "sys.exit(2)" in src, "no loud path")
@@ -1733,7 +1733,7 @@ def test_a_correction_that_arrives_with_the_answer_gets_another_turn():
 
 
 def test_an_answer_that_arrives_with_the_correction_is_delivered():
-    """The measured loss this pins (drive 2026-09-23, the Windows test box): the model composed
+    """The measured loss this pins (drive 2026-09-23, the Windows bed): the model composed
     the full task answer, steering landed in the same second, the run took another
     turn - and the run's DELIVERED response carried only the steering reply. The
     composed answer survived only as the leftover streamed draft (its text lives in
@@ -1774,7 +1774,7 @@ def test_an_answer_that_arrives_with_the_correction_is_delivered():
 def test_a_mutation_lets_the_same_call_run_again():
     """The repeat guard must not outlive the change it was measured against.
 
-    Found in the Windows test box's own log: it ran a tool, edited that tool with edit_file,
+    Found in the Windows bed's own log: it ran a tool, edited that tool with edit_file,
     re-ran the check, got identical output, and read the repeat as "the harness caching
     a pre-edit call". Had it tried a third time, the guard would have REFUSED it and
     handed back the PRE-EDIT result - after which a fixed tool looks broken. So any
@@ -1963,7 +1963,7 @@ def test_a_finished_plan_ends_the_run_at_the_cap_without_continuing():
 
 def test_the_second_read_of_a_file_leaves_with_its_map():
     """24 of the 40 code calls in the 2026-09-18 run were another whole-file read of the
-    SAME 8,700-line source (measured on the Windows test box). A path read twice in one run leaves
+    SAME 8,700-line source (measured on the Windows bed). A path read twice in one run leaves
     with its index attached, so the next question goes to a region instead of through the
     whole file."""
     big = TMP / "big_source.py"
@@ -2029,7 +2029,7 @@ def test_list_tools_is_one_line_and_still_useful():
 
 
 def test_fetch_url_cannot_blow_up_the_context():
-    """The largest page in the Windows test box's ten-day log was 30,048 chars, 17.6% of that host's
+    """The largest page in the Windows bed's ten-day log was 30,048 chars, 17.6% of that host's
     result chars: the model may ask for more than the 8k default, not for 30 KB."""
     had = hasattr(fb, "requests")
     saved_get = getattr(fb.requests, "get", None) if had else None
@@ -2175,7 +2175,7 @@ def test_the_safety_seatbelt_covers_execute_code_too():
 
 
 def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
-    """Measured live on the Windows test box 2026-09-18: the model announced "fresh pass complete" five
+    """Measured live on the Windows bed 2026-09-18: the model announced "fresh pass complete" five
     times in 25 minutes and answered every announcement with another tool round, while every
     call was distinct, so no repeat-based guard could see it. The delivery guard counts
     announcements that arrive with tool calls queued, demands the report, then forces it."""

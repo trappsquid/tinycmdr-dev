@@ -1,6 +1,6 @@
 """Over-cap tool results are SPILLED, not shredded (2026-09-18).
 
-Proven on the Windows test box by the harness's own analysis: a 30,045-char tool result lost ~20,100
+Proven on the Windows bed by the harness's own analysis: a 30,045-char tool result lost ~20,100
 middle characters to truncate_middle, and re-issuing the call with `raw=true` lost the same
 middle (raw bypasses digestion, not the cap). These checks pin the replacement: the whole text
 lands on disk, the prompt gets both ends plus a pointer that works, and a spill that cannot be

@@ -6,7 +6,7 @@ it exactly like the suites do, runs a fixed task through AGENT.run() with no
 Mattermost connection, and prints one JSON line per run.
 
 Why CLI mode: the live bots are the thing we are trying to protect. Anything risky
-gets measured here first, and only then goes near the the manager box tinycmdr.
+gets measured here first, and only then goes near the manager box tinycmdr.
 
 Endpoints come from the environment so this file stays publishable (no LAN addresses):
     TINYCMDR_TEST_BASE_URL   default http://127.0.0.1:8081/v1

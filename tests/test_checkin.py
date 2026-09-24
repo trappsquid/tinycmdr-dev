@@ -847,7 +847,7 @@ def test_capability_line_reports_what_this_process_can_enforce():
 def test_a_promise_with_no_tool_call_is_asked_to_act_once():
     """The model says it is about to work and stops there, with no tool call at all.
 
-    Measured on the MacBook 2026-09-24: four runs in a row, ONE model call each, 0 tool
+    Measured on the macOS bed 2026-09-24: four runs in a row, ONE model call each, 0 tool
     calls, every reply a promise ("I'll gather what we did in the MVT session, then
     write and publish the post. Let me start by checking..."). The delivery guard only
     counted announcements that arrive WITH calls queued, so the promise was posted as
@@ -926,7 +926,7 @@ def test_a_report_after_real_work_is_never_nudged():
 
 # ------------- 1.0.8: a filled-in report with no tool call is not an answer
 
-# The live sample. One order each to the Windows test box and the MacBook on 2026-09-24, 2 model
+# The live sample. One order each to the Windows bed and the macOS bed on 2026-09-24, 2 model
 # calls and 0 tool calls on both boxes, and this came back as the run's report - for a
 # directory neither box had created. The promise guard missed it (nothing is promised),
 # and the evidence check missed it too (nothing is changed): a measured value is neither.
@@ -1024,7 +1024,7 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "Should I delete the old folder first?",
         "both files are written.",
         # regress-audit.py over every fleet bot's DELIVERED answers found this
-        # one on the MacBook: a true-from-memory answer in a run with no tool
+        # one on the macOS bed: a true-from-memory answer in a run with no tool
         # call. A bare machine spec is not a claim about anything fetched, so
         # the measurement branch needs box-ish context beside the number.
         "16 GB unified memory.",
@@ -1035,6 +1035,33 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
     ]
     for text in quiet:
         check("detector stays quiet: %r" % text[:34], not rx.search(text), text)
+
+
+def test_the_payload_carries_the_warning_only_after_a_wreck():
+    """Placement matters: the line rides the trailing state block, so the operator's
+    request still lands LAST in the payload (the 2026-09-10 rule).
+
+    Called on _payload directly: scripted_run_with_usage clears the histories it is given,
+    so seeding the session's transcript has to happen where nothing clears it.
+    """
+    redirect_files()
+    request = [{"role": "user", "content": "report the byte size of the config file"}]
+    fb.AGENT.histories["wreck"] = [
+        {"role": "assistant",
+         "content": "\U0001f501 Stopped a loop: `task` repeated 6 times"}]
+    out = fb.AGENT._payload(list(request), session_key="wreck")
+    body = "\n".join(str(m.get("content") or "") for m in out)
+    check("wreck: the payload carries the warning", "did not finish" in body, body[-300:])
+    check("wreck: the operator request is still last",
+          out[-1].get("content") == request[0]["content"], out[-1])
+    check("wreck: the warning rides the block, not the request",
+          "did not finish" not in str(out[-1].get("content") or ""), out[-1])
+    fb.AGENT.histories["clean-session"] = [
+        {"role": "assistant", "content": "Ledger holds 3 open items."}]
+    out2 = fb.AGENT._payload(list(request), session_key="clean-session")
+    body2 = "\n".join(str(m.get("content") or "") for m in out2)
+    check("clean session: no warning line", "did not finish" not in body2, body2[-200:])
+
 
 def main():
     tests = [v for k, v in sorted(globals().items())

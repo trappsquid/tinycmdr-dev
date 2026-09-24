@@ -67,13 +67,13 @@ PLAIN = [
 ]
 
 CODE_RISKY = [
-    'import os\nfor dp, dn, fn in os.walk(r"C:\\Users\\<user>"):\n    pass\n',
+    'import os\nfor dp, dn, fn in os.walk(r"C:/Users/<user>"):\n    pass\n',
     'from pathlib import Path\nlist(Path("/home").rglob("*.csv"))\n',
     'import glob\nprint(glob.glob("/var/**/*.log", recursive=True))\n',
     'import os\nfor e in os.scandir("C:\\\\"):\n    print(e)\n',
 ]
 CODE_PLAIN = [
-    'import os\nfor dp, dn, fn in os.walk(r"C:\\Users\\<user>\\tinycmdr"):\n    pass\n',
+    'import os\nfor dp, dn, fn in os.walk(r"C:/Users/<user>\\tinycmdr"):\n    pass\n',
     'print(open(r"C:\\tinycmdr\\tinycmdr.log").read()[:100])\n',
     'import json\nprint(json.load(open("config.json")))\n',
     'from pathlib import Path\nprint(Path("/home/dave/project").rglob("*.py"))\n',

@@ -3,7 +3,7 @@
 Run:  python tests/test_ledger_race.py            (all tests)
       python tests/test_ledger_race.py <substring>  (one test)
 
-The measured failure this suite pins (operator drive on the Windows test box, 2026-09-23):
+The measured failure this suite pins (operator drive on the Windows bed, 2026-09-23):
 ONE assistant turn issued `task done(#7)` plus three `task add` calls, the
 harness runs a turn's tool calls in a ThreadPoolExecutor of up to 4 workers, and
 every one of those calls is a read-modify-write pass over one JSON file.

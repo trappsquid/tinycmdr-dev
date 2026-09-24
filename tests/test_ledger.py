@@ -403,6 +403,62 @@ def test_evidence_rules():
     fb.REGISTRY.custom.pop("faux", None)
 
 
+
+# --------------------------------------------------------------------------
+# the run after a wreck: ONE payload line, derived from the transcript
+# --------------------------------------------------------------------------
+
+def test_a_finished_conversation_gets_no_warning_line():
+    """The line is conditional: on a healthy session the block is byte-identical to what it
+    was before this feature. That is the whole point of deriving the condition from the
+    transcript instead of carrying a flag - no rent on a session that is fine."""
+    fb.AGENT.histories["warn-clean"] = [
+        {"role": "user", "content": "what model are you on"},
+        {"role": "assistant", "content": "Model for this conversation: `main` (local)."},
+    ]
+    check("clean: no reason is derived",
+          fb.AGENT._prior_run_unfinished("warn-clean") == "",
+          fb.AGENT._prior_run_unfinished("warn-clean"))
+    block = fb.volatile_context(session_key="warn-clean", prior_unfinished="")
+    check("clean: no warning line in the block", "did not finish" not in block, block[-200:])
+
+
+def test_each_abnormal_end_is_named():
+    """The measured shapes of an unfinished exchange, and the reason each one yields."""
+    cases = [
+        ("\U0001f501 Stopped a loop: `task` repeated 6 times",
+         "the harness stopped the previous run mid-task"),
+        ("\u26a0\ufe0f **No answer** from the model twice in a row.",
+         "the previous run ended without an answer"),
+        ("I'll gather the logs, then write it up.",
+         "ended on a promise"),
+        ("config.json is 19448 bytes.", ""),
+    ]
+    for i, (line, expect) in enumerate(cases):
+        key = "warn-%d" % i
+        fb.AGENT.histories[key] = [{"role": "assistant", "content": line}]
+        got = fb.AGENT._prior_run_unfinished(key)
+        check("reason for %r" % line[:28],
+              (expect in got) if expect else got == "", (got, expect))
+    block = fb.volatile_context(session_key="warn-0",
+                                prior_unfinished="the harness stopped the previous run mid-task")
+    check("warning: the line says the message below is the current request",
+          "CURRENT request" in block, block[-260:])
+    check("warning: it does not invite continuing the stopped task",
+          "Do not carry on with the unfinished task" in block, block[-260:])
+
+
+def test_the_warning_clears_once_a_run_answers_normally():
+    """Self-clearing: the reason comes from the transcript, so a normal answer ends it."""
+    key = "warn-clear"
+    fb.AGENT.histories[key] = [{"role": "assistant", "content": "I'll check the ledger."}]
+    check("warning: present before a normal answer",
+          fb.AGENT._prior_run_unfinished(key) != "")
+    fb.AGENT.histories[key].append({"role": "assistant",
+                                    "content": "Ledger holds 3 open items."})
+    check("warning: gone after one", fb.AGENT._prior_run_unfinished(key) == "",
+          fb.AGENT._prior_run_unfinished(key))
+
 def scripted_run(seq, **cfg):
     """Run Agent.run against a scripted _chat, with files redirected."""
     redirect_files()
@@ -1104,7 +1160,7 @@ def test_compaction_budget_counts_the_trailing_state_block():
 
 
 # What the model box accepts in ONE request. Re-measured 2026-09-16 from the
-# server itself (`GET http://a LAN address:8081/props`): total_slots 3,
+# server itself (`GET http://the LAN model box:8081/props`): total_slots 3,
 # default_generation_settings.n_ctx 262144, i.e. -c 786432 split three ways.
 # It was 131072 when the box ran two slots, and this constant was left at the
 # old number, so the check failed on a config that in fact fits — a stale

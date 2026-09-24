@@ -1,6 +1,6 @@
 """`tinycmdr` with nothing after it opens a session - in both shims, without breaking anything else.
 
-Operator, 2026-09-22: "so I can open a terminal/cmd/powershell window on the Windows test box now and
+Operator, 2026-09-22: "so I can open a terminal/cmd/powershell window on the Windows bed now and
 type tinycmdr and it will open a cli instance?"
 
 It could not: the shims passed their arguments through and the build's no-argument case is
