@@ -575,7 +575,12 @@ umask 077
 # NO PROVIDER IS NAMED HERE on purpose - the key is whatever the endpoint issued,
 # and its variable name is the fallback entry's "api_key_env".
 SHARED_KEYS='^(TINYCMDR_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
-MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+# Only the keys THIS INSTALL owns are withheld from the carry-over. The search keys
+# are the host's own too: they were in this list, so an update without a
+# --secrets-file dropped a working host's TAVILY/ANYSEARCH keys - the same loss the
+# config writer had, one file over. A secrets file still supplies them when the host
+# has none, and wins when it does (it is the fleet's canonical copy).
+MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN)='
 KEEP_ENV=""
 if [ -f "$INSTALL_DIR/.env" ]; then
     KEEP_ENV=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$INSTALL_DIR/.env" \
@@ -590,14 +595,16 @@ SKIPPED_KEYS=""
     if [ -n "$WEB_TOKEN" ]; then
         printf 'TINYCMDR_WEB_TOKEN=%s\n' "$WEB_TOKEN"
     fi
+    if [ -n "$KEEP_ENV" ]; then
+        printf '%s\n' "$KEEP_ENV"
+    fi
+    # LAST, so the fleet's copy of a shared key wins over one the host already had
+    # (a duplicate line would otherwise be written for the same key).
     if [ -n "$SECRETS_FILE" ]; then
         [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"
         grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" | grep -E "$SHARED_KEYS" || true
         SKIPPED_KEYS=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" \
             | grep -vE "$SHARED_KEYS" | cut -d= -f1 | tr '\n' ' ' || true)
-    fi
-    if [ -n "$KEEP_ENV" ]; then
-        printf '%s\n' "$KEEP_ENV"
     fi
 } > "$INSTALL_DIR/.env"
 chmod 600 "$INSTALL_DIR/.env"

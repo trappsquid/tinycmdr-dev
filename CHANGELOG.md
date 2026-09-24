@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.6] - 2026-09-24
+
+### Fixed
+- **An update no longer drops the host's search keys.** The same file-survival bug as 1.0.5, one file over: `TAVILY_API_KEY` and `ANYSEARCH_API_KEY` were treated as installer-managed, so a run without a `--secrets-file` / `-SecretsFile` rewrote `.env` without them and web search went dead on a host that had them. They are the host's own keys; a secrets file still supplies them when the host has none, and takes precedence when it does.
+
 ## [1.0.5] - 2026-09-24
 
 ### Fixed

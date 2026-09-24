@@ -979,8 +979,12 @@ if (Test-Path $envPath) {
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.+)$') {
             $k = $matches[1]
             $v = $matches[2].Trim()
-            if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
-                          "TAVILY_API_KEY", "ANYSEARCH_API_KEY") -notcontains $k) {
+            # Only the keys THIS INSTALL owns are withheld. The search keys were in
+            # this list too, so a re-run without -SecretsFile dropped a working
+            # host's TAVILY/ANYSEARCH keys - the same loss the config writer had,
+            # one file over (measured 2026-09-24 on a MacBook).
+            if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
+                          "TINYCMDR_WEB_TOKEN") -notcontains $k) {
                 $ownKeys[$k] = $v
             }
         }
