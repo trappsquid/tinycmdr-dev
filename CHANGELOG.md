@@ -1,56 +1,32 @@
-# tinycmdr changelog (newest first, through 1.0.0)
+# Changelog
 
-> **Renamed to Tinycmdr on 2026-09-22.** The historical entries below were rewritten to the
-> current name on the same date, so a path, task name, env var or hash quoted in an older
-> entry is NOT necessarily what that release shipped: the bytes each release really produced
-> are the archives in `dist/` and the git history. Current naming: `tinycmdr.py`,
-> `tinycmdr-cli.py`, `TINYCMDR_MM_TOKEN`, scheduled task `Tinycmdr`.
+All notable changes to tinycmdr are documented in this file.
 
-## 1.0.0 - the project is Tinycmdr, and this is the first public release (2026-09-20)
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-The harness has run a six-box fleet since early September, but nobody outside has
-seen it, so the first public release starts its own numbering at 1.0.0 instead of
-claiming two major versions of private history. Everything below this entry keeps
-the number it shipped under.
+## [1.0.1] - 2026-09-24
 
-What changed is the name. `tinycmdr` became `Tinycmdr` everywhere: the agent file,
-the console build, the installers, the scheduled task, the service unit, the
-launchd label and the environment keys. A box that answered to the old name answers
-to this one, and nothing about how it works changed.
+### Fixed
+- **Windows Installer:** Quoted script invocation path during UAC elevation in `install/install-tinycmdr.cmd`. Resolves elevation failures when run from paths or usernames containing spaces.
+- **Linux Installer:** Aligned default web dashboard port to 8787 in `install/install-tinycmdr.sh` (matching `config.example.json` and `install-tinycmdr.ps1`). Added dynamic home directory resolution via `getent passwd` for root and custom user setups. Added `tinycmdr-supervise.py` to the installation copy manifest.
 
-- entry point `tinycmdr.py`, console build `tinycmdr-cli.py`
-- `TINYCMDR_MM_TOKEN` became `TINYCMDR_MM_TOKEN`. A host's `.env` and its code move
-  together, never separately: a restart in between would leave the agent without its
-  Mattermost token.
-- one agent per folder, unchanged: a second start refuses rather than double-answering
-  every DM on one bot token.
-- the CLI build scripts locate the tree from their own path instead of `~/<name>`,
-  so moving the folder can no longer break a build.
-- `tests/test_cost_guard.py` had 13 checks failing on a stub that never learned the
-  `cancel=` keyword. Repaired; it is a gate again.
+### Changed
+- **Documentation:** Restructured `README.md` to lead with core features, prefix-cache stability, ops runtime architecture, and unified interfaces. Replaced speculative latency phrasing with grounded explanations of prefix cache reuse.
 
-What the package ships has changed too, because the fleet was running numbers this
-package never documented:
+## [1.0.0] - 2026-09-20
 
-- the budgets the fleet proved out are now the shipped ones: `llm.max_context_tokens`
-  24000 to 131072, `llm.max_turns` 40 to 100 (the code and the reference file disagreed),
-  `llm.request_timeout` 600 to 1200, `agent.history_exchanges` 10 to 20,
-  `agent.tool_output_max_chars` 6000 to 10000, `agent.notes_max_chars` 4000 to 8000,
-  `agent.shell_timeout` 180 to 300. A context ceiling is a bound, not a spend: set too low
-  it fails quietly, because the harness compacts and the model re-buys what it already read.
-- `agent.tool_carry` is ON. It was held off for thin evidence and an untested failure mode;
-  that failure mode now has a guard which re-stats the file an entry came from and says so
-  in the payload, and the suite asserts both of its directions. With the carry off, the
-  saving was invisible and the reader paid for it.
-- `agent.event_log` and `agent.ask_user` are ON, and `ask_user` has a shipped key at all.
-  The code had none, so it answered to nothing the reference file said.
-- `config.example.json` carries the 21 hardened blocked patterns. The code shipped 21 and
-  the reference file shipped 2, and the reference file is the one an installer copies.
-- a fresh install on a machine with no domain ended with no scheduled task at all:
-  the installer built the account as `$env:USERDOMAIN\$env:USERNAME`, which is
-  `WORKGROUP\<user>` there, and that resolves to no account. It now resolves a real one,
-  or fails with a message that says what it tried.
-- the reference config is now checked against the code by VALUE, not by presence, for every
-  shipped key. On its first run it named the two keys that had drifted.
+Initial public release of tinycmdr, the high-efficiency agent harness built for local and self-hosted LLMs.
 
-
+### Added
+- **Multi-Interface Architecture:** Unified command set across Interactive Terminal CLI (`tinycmdr`), LAN Web UI dashboard (`tinycmdr web` on port 8787), and background Chat Bot services (Mattermost and Telegram).
+- **Prefix-Cache Efficiency:** Static prompt and visible schema footprint optimized to ~4,150 tokens. Dynamic runtime context is tail-anchored to maintain KV cache stability across turns for llama.cpp and vLLM.
+- **Autonomous Operations Runtime:**
+  - **Loop Guard:** Detects repetitive tool-call cycles, refuses repeat calls, and automatically resets upon filesystem state changes.
+  - **Stall Watchdog:** Background monitor that flags stalled turns and releases wedged inference slots.
+  - **Truthful Stop & Steer:** Real-time mid-run steering and a 3-state truthful `/stop` command that immediately releases server slots.
+  - **Persistent Task Ledger:** File-backed task management (`tasks.json`) preserving multi-turn objectives across disconnects and restarts.
+  - **Spill Indexing:** Offloads tool outputs exceeding size limits to `spill/` with compact disk pointers (`spill#N`).
+- **Zero-Infrastructure Footprint:** Single-process Python implementation with minimal dependencies (`requests`, `croniter`, `mmpy_bot`), requiring zero Docker containers or external databases.
+- **Extensibility:** Hermes-compatible prose skills (`SKILL.md`) loaded on demand (~23 tokens index rent), hot-loaded Python/PowerShell custom tools (`tools/`), and self-authoring tools (`create_tool`).
+- **Platform Installers:** One-step installer scripts and service definitions for Windows (Scheduled Task), Linux (systemd unit), and macOS (launchd).

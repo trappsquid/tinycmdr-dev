@@ -22,7 +22,7 @@
 #   --bot-name <n>        agent.bot_name (default: this hostname)
 #   --model-base-url <u>  llm.base_url (default: install/fleet-defaults.json)
 #   --model <m>           llm.model (default: install/fleet-defaults.json)
-#   --web-port <p>        local web/API fallback port (default 8788, loopback only)
+#   --web-port <p>        local web/API fallback port (default 8787, loopback only)
 #   --no-web              leave the local web port closed
 #   --force               reinstall in place (stops the running service first)
 #   --no-start            install and enable, do not start it now
@@ -41,7 +41,9 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
 SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
 RUN_USER="${TINYCMDR_USER:-${SUDO_USER:-$(id -un)}}"
-INSTALL_DIR="${TINYCMDR_DIR:-/home/$RUN_USER/tinycmdr}"
+USER_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
+USER_HOME="${USER_HOME:-${HOME:-/home/$RUN_USER}}"
+INSTALL_DIR="${TINYCMDR_DIR:-$USER_HOME/tinycmdr}"
 # the default, remembered BEFORE flags parse: the box-level removals in
 # --uninstall are scoped against it (2026-09-23: an un-scoped probe cleanup
 # removed a running box's whole install - twice over in one day)
@@ -52,7 +54,7 @@ PY="${TINYCMDR_PYTHON:-python3}"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""; MM_URL_ARG=""
 TG_TOKEN=""; TG_IDS=""
-WEB_PORT="8788"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
+WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
 # Generated later (in the config section), but READ earlier by the summary: under `set -u`
 # an unset name there is a crash, and the token-less + Telegram-only paths both fell into it.
 WEB_TOKEN=""
@@ -163,7 +165,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     else
         printf '  token in .env: NO\n'
     fi
-    port="$(cfgval web.port)"; port="${port:-8788}"
+    port="$(cfgval web.port)"; port="${port:-8787}"
     if [ "$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)" = active ]; then
         printf '  web health   : %s\n' "$(curl -sf --max-time 5 "http://127.0.0.1:$port/api/health" || echo "no answer on port $port")"
     fi
@@ -267,7 +269,7 @@ elif [ -z "$TOKEN" ]; then
     CHAT_LANE=0
     APP_ARGS="--web"
     info "no Mattermost bot token: installing WITHOUT a chat account"
-    info "the service will serve the local page: http://127.0.0.1:8787"
+    info "the service will serve the local page: http://127.0.0.1:${WEB_PORT}"
     info "a session needs no service at all:   $VENV_PY $INSTALL_DIR/tinycmdr-cli.py"
     info "add a chat account later: re-run this installer with --token-file <file>"
 elif [ "$TG_LANE" = 1 ]; then
@@ -341,7 +343,7 @@ mkdir -p "$INSTALL_DIR"
 # tinycmdr-cli.py goes in FLAT, beside tinycmdr.py, never in a folder of its own:
 # every door then reads ONE config.json and ONE .env (it resolves both from the
 # folder it sits in), and the doors are mediums rather than separate installs.
-for item in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt README.md \
+for item in tinycmdr.py tinycmdr-supervise.py tinycmdr-cli.py tinycmdr requirements.txt README.md \
             config.example.json .env.example field-notes.md soul.md \
             skills tools install maintenance; do
     if [ -e "$SRC/$item" ]; then
@@ -447,7 +449,7 @@ else:
     if webon == "1":
         # The token is a SECRET, so it goes to .env (TINYCMDR_WEB_TOKEN) with the bot
         # token: one file to look in, and nothing loose in the install folder.
-        cfg["web"] = {"enabled": True, "port": int(webport or 8788),
+        cfg["web"] = {"enabled": True, "port": int(webport or 8787),
                       "token": "", "host": "127.0.0.1"}
     else:
         cfg["web"] = {"enabled": False}
@@ -603,10 +605,10 @@ User=$RUN_USER
 Group=$RUN_USER
 WorkingDirectory=$INSTALL_DIR
 ExecStart=$VENV_PY $INSTALL_DIR/tinycmdr.py $APP_ARGS
-Environment="HOME=/home/$RUN_USER"
+Environment="HOME=$USER_HOME"
 Environment="USER=$RUN_USER"
 Environment="LOGNAME=$RUN_USER"
-Environment="PATH=$INSTALL_DIR/venv/bin:/home/$RUN_USER/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PATH=$INSTALL_DIR/venv/bin:$USER_HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="TINYCMDR_DIR=$INSTALL_DIR"
 Restart=always
 RestartSec=10
@@ -632,7 +634,7 @@ else
     # If something already listens on the local web port, the health check below
     # would report THAT process, not this install. Note it before we start.
     if [ "$WEB_ON" = 1 ]; then
-        pnow="$(cfgval web.port)"; pnow="${pnow:-8788}"
+        pnow="$(cfgval web.port)"; pnow="${pnow:-8787}"
         if command -v ss >/dev/null 2>&1 && ss -ltn 2>/dev/null \
                 | grep -qE "[:.]${pnow}[[:space:]]"; then
             PORT_BUSY_BEFORE="$pnow"
@@ -656,7 +658,7 @@ fi
 say "check"
 sleep 2
 tail -n 12 "$INSTALL_DIR/tinycmdr.log" 2>/dev/null | sed 's/^/    /' || true
-port="$(cfgval web.port)"; port="${port:-8788}"
+port="$(cfgval web.port)"; port="${port:-8787}"
 if [ "$WEB_ON" = 1 ]; then
     health="$(curl -sf --max-time 5 "http://127.0.0.1:$port/api/health" || true)"
     if [ -n "$health" ]; then
