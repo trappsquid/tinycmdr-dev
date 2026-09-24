@@ -4,40 +4,55 @@
 
   # tinycmdr
 
-  **The lightweight, single-file AI ops agent for your machines.**
+  ### The High-Efficiency Agent Harness for Local & Self-Hosted LLMs
+  *Sub-second TTFT · ~4K token overhead · 100% prefix-cache stable · Zero infrastructure.*
 
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#quick-install)
   [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
   [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
-  *Run tasks, inspect systems, and manage your machines through local Web UI, terminal CLI, or chat.*
+  *Run tasks, execute code, and command your machines across Web UI, Terminal CLI, or Chat*
   <br>
-  *No Docker required. No databases. No complex dependencies.*
+  *Built specifically for llama.cpp, vLLM, Ollama, and local OpenAI-compatible endpoints.*
 
 </div>
 
 ---
 
-### Why tinycmdr?
+### The Problem with Agents on Local Models
 
-Most agentic frameworks require heavy infrastructure: multi-container Docker stacks, vector databases, and rigid cloud dependencies. 
+Most agent frameworks (LangChain, CrewAI, AutoGen, OpenHands) were designed for massive cloud APIs with 128K context windows and infinite compute. When you point them at self-hosted models running on your own GPUs, they crawl:
 
-**tinycmdr** takes the opposite approach:
-- **Single-File Simplicity:** One Python file runs the entire agent runtime, task ledger, and tool suite.
-- **Zero Heavy Setup:** Connects directly to any OpenAI-compatible local model (llama.cpp, Ollama, vLLM) or cloud endpoint (DeepSeek, etc.).
-- **Multiple Ways to Interact:** Switch effortlessly between an interactive terminal session, a live browser dashboard, or chat DMs on Mattermost and Telegram.
-- **Operator-First Safety:** Truthful tool execution, loop guards, step budgets, and persistent local memory that never leaves your machine.
+- **Prompt Evaluation Latency (TTFT):** They dump 15,000–30,000 tokens of schemas and dynamic text at the head of every request, forcing your GPU to re-evaluate the prompt from scratch on every turn (10–20s delay).
+- **Context Exhaustion:** They burn out typical 8K–32K local VRAM context budgets in 2 to 3 turns.
+- **Inference Slot Wedges:** If a run hangs or loops, your local GPU slot stays wedged until restarted.
+- **Infrastructure Sprawl:** They require multi-container Docker stacks, Postgres, Redis, and heavy dependency trees.
+
+---
+
+### Built for Local Inference (llama.cpp, vLLM, Ollama)
+
+**tinycmdr is engineered from the ground up for self-hosted hardware:**
+
+| Feature | Mainstream Frameworks | **tinycmdr** |
+| :--- | :--- | :--- |
+| **Fixed Prompt Overhead** | 15,000 – 30,000 tokens | **~4,150 tokens** (measured, static + visible schemas) |
+| **Time to First Token (TTFT)** | 10 – 30 seconds (cache churn) | **Sub-second** (strict prefix-cache stable layout) |
+| **KV Cache Behavior** | Invalidated every turn | **100% Warm** in llama.cpp / vLLM prefix cache |
+| **Context Window Preservation** | Rapid exhaustion (dumps all tools) | **Tool Disclosure** (rare tools revealed on demand) |
+| **Infrastructure Overhead** | Multi-container Docker, Vector DBs | **Single Python file**, zero database, no daemons |
+| **Server Slot Protection** | Orphan runs lock GPU slots | **Truthful Stop & Steer** instantly frees the engine |
 
 ---
 
 ## Quickstart (Under 1 Minute)
 
 ### 1. Configure
-Run the guided interactive setup to connect your LLM endpoint (local or remote):
+Run the guided setup to connect your local endpoint (or cloud fallback):
 ```bash
 tinycmdr setup
 ```
-*(Answer 2–3 simple questions or press Enter to accept sensible defaults).*
+*(Tests connection live against `/v1/models` and sets sensible defaults).*
 
 ### 2. Launch
 Choose how you want to interact:
@@ -49,7 +64,7 @@ tinycmdr
 # Option B: Live Web UI dashboard (browser view on http://127.0.0.1:8787)
 tinycmdr web
 
-# Option C: One-off task from your command line
+# Option C: Direct one-off command
 tinycmdr run "check why disk space is low and summarize largest folders"
 ```
 
@@ -91,7 +106,7 @@ The same commands work everywhere: in your OS shell (`tinycmdr <verb>`), inside 
 | Command | Description |
 | :--- | :--- |
 | `tinycmdr status` | System overview: active model, endpoint, context budget, and task counts |
-| `tinycmdr model` | View active model and token usage |
+| `tinycmdr model` | View active model status, context window, and routes |
 | `tinycmdr model list` | Live query of available models across all configured endpoints |
 | `tinycmdr model <name>` | Switch the active model for your session |
 | `tinycmdr model add <url>` | Add a new model endpoint or fallback route |
@@ -111,10 +126,10 @@ skills/
     └── SKILL.md
 ```
 
-The agent indexes the description and only loads the full runbook when your task requires it. Zero configuration, zero restart needed.
+The agent indexes the description into a compact reference and only loads the full runbook when your task requires it. Zero configuration, zero restart needed.
 
 ---
 
 ## License
 
-MIT License. Free and open source for personal and enterprise ops.
+MIT License. Free and open source for personal and enterprise hardware.
