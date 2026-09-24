@@ -4583,9 +4583,11 @@ def _mutation_target(name, args):
 def _annotate_evidence(answer, muts, calls):
     """Append the machine's own view of what the run did, or return unchanged."""
     notes = []
-    if calls == 0 and _CHANGE_CLAIM_RE.search(answer or ""):
-        notes.append("this report claims a change but the run made no tool "
-                     "call at all — nothing here was checked against the box")
+    if calls == 0 and (_CHANGE_CLAIM_RE.search(answer or "")
+                       or _RESULT_CLAIM_RX.search(answer or "")):
+        notes.append("this report claims work or a measured value but the run "
+                     "made no tool call at all — nothing here was checked "
+                     "against the box")
     elif muts and calls == muts[-1][2]:
         name, target, n = muts[-1]
         where = f" `{name} {target}`" if target else f" `{name}`"
@@ -7179,17 +7181,25 @@ Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restar
 GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 
 
+# One writer at a time for the state file. It is a read-modify-write over a shared
+# document with several callers on different threads (a restart note, the model
+# choice, the carried last_seen below), so two of them can lose one update. RLock:
+# a guard that protects state must never be able to wedge the caller that holds it.
+_STATE_LOCK = threading.RLock()
+
+
 def _state(mutate=None):
     """Tiny persisted state file: durable model choices (and the config
     default remembered by '/model default --global')."""
-    try:
-        st = json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        st = {}
-    if mutate:
-        mutate(st)
-        atomic_write_text(GLOBAL_STATE_FILE, json.dumps(st, indent=2))
-    return st
+    with _STATE_LOCK:
+        try:
+            st = json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            st = {}
+        if mutate:
+            mutate(st)
+            atomic_write_text(GLOBAL_STATE_FILE, json.dumps(st, indent=2))
+        return st
 
 
 # A run can spin in its own "one more check" attractor while every tool call is distinct, so the
@@ -7229,6 +7239,36 @@ _INTENT_RX = re.compile(
 # A promise is SHORT. A long reply that merely contains "let me ... check" is prose the
 # operator asked for, and re-asking it would spend a call for nothing.
 _INTENT_MAX_CHARS = 700
+# The THIRD shape of the same class, and the one BOTH test beds produced on 2026-09-24:
+# the reply neither promises nor claims a change - it reports RESULTS. One order each to
+# the Windows test box and the MacBook, 2 model calls, 0 tool calls, and the answer that came back
+# was a filled-in form ("FILES: 5 4 ... BATCH: 4 calls issued in one message ... READBACK:
+# alphagammabetadelta") for directories neither box had created. Nothing in the harness
+# noticed: _INTENT_RX wants a stated intention, and the evidence check's _CHANGE_CLAIM_RE
+# wants a change verb - a measured value is neither, so the fabrication was delivered as
+# the run's report.
+#
+# The fence is the same fence the promise guard uses, and for the same reason: calls == 0.
+# A report that follows real tool work is never touched. The cost of a false positive is
+# one model call; the cost of a miss is an invented measurement delivered as fact.
+_RESULT_CLAIM_MAX_CHARS = 1200
+_RESULT_CLAIM_RX = re.compile(
+    # (a) a filled-in label dump - "FILES: 5 4", "READBACK: alphabeta", "EXIT: 1".
+    #     ALL-CAPS is the tell: it is a form's field name, not a sentence.
+    r"(?-i:^[^\w\n]{0,3}[A-Z][A-Z0-9_ ]{1,24}:)"
+    # (b) a measured value with a unit - "5 bytes", "0 step(s)", "12 files"
+    r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|"
+    r"steps?|files?|kb|mb|gb|kib|mib|tokens?|tok|ms|seconds?)\b"
+    # (c) a hash-shaped token: a value that can only come from running something
+    r"|\b[0-9a-f]{16,}\b"
+    # (d) narration that something WAS run or returned
+    r"|\b(?:i (?:ran|executed)|the (?:command|tool|script|output|result)s?"
+    r"[^.\n]{0,40}?\b(?:returned|return|showed|shows|gave|gives|printed|prints|"
+    r"reported|reports|said)\b"
+    r"|it (?:returned|return|printed|prints|showed|shows|reported|reports)\b"
+    r"|the file (?:contains|holds|now (?:says|reads))"
+    r"|exit(?:ed)? (?:code|status)\b|ran in parallel)\b",
+    re.IGNORECASE | re.MULTILINE)
 
 
 MARK_COMPACT = ("[earlier investigation context removed to fit context "
@@ -8500,10 +8540,17 @@ class Agent:
                         # tool call at all, so a report that follows real work is never
                         # touched, and only once - see _INTENT_RX.
                         _promise = (reply.get("content") or "").strip()
+                        _promised = bool(_INTENT_RX.search(_promise))
+                        # The sibling failure: a filled-in report of results the run
+                        # never fetched. No promise, no change claim - just measured
+                        # values with nothing behind them (see _RESULT_CLAIM_RX).
+                        _claimed = (not _promised and calls == 0
+                                    and bool(_RESULT_CLAIM_RX.search(_promise)))
                         if (not _no_call_nudge and calls == 0 and not spun
-                                and len(_promise) <= _INTENT_MAX_CHARS
+                                and len(_promise) <= (_INTENT_MAX_CHARS if _promised
+                                                      else _RESULT_CLAIM_MAX_CHARS)
                                 and not _promise.endswith("?")
-                                and _INTENT_RX.search(_promise)
+                                and (_promised or _claimed)
                                 and steps < max_steps
                                 and (time.time() - t0) < max_seconds):
                             _no_call_nudge = True
@@ -8518,9 +8565,18 @@ class Agent:
                                 "nothing has happened yet. Make the first tool call NOW, "
                                 "in this reply - do not describe it instead of doing it. "
                                 "If the task genuinely needs no tool, write the final "
-                                "answer with what you already have.")})
+                                "answer with what you already have."
+                                if _promised else
+                                "SYSTEM: your last reply reported results - values, "
+                                "contents, counts - but this run has made NO tool call at "
+                                "all, so nothing above was read from this box. Make the "
+                                "call NOW and report only what it actually returns. If "
+                                "those values did not come from this run, say so in one "
+                                "line instead.")})
                             _note = ("the model promised the work with no tool call - "
-                                     "asking it to act once")
+                                     "asking it to act once" if _promised else
+                                     "the model reported results with no tool call - "
+                                     "asking it to check once")
                             log.warning("[%s] %s", session_key, _note)
                             if say_cb:
                                 try:

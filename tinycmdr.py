@@ -4652,9 +4652,11 @@ def _mutation_target(name, args):
 def _annotate_evidence(answer, muts, calls):
     """Append the machine's own view of what the run did, or return unchanged."""
     notes = []
-    if calls == 0 and _CHANGE_CLAIM_RE.search(answer or ""):
-        notes.append("this report claims a change but the run made no tool "
-                     "call at all — nothing here was checked against the box")
+    if calls == 0 and (_CHANGE_CLAIM_RE.search(answer or "")
+                       or _RESULT_CLAIM_RX.search(answer or "")):
+        notes.append("this report claims work or a measured value but the run "
+                     "made no tool call at all — nothing here was checked "
+                     "against the box")
     elif muts and calls == muts[-1][2]:
         name, target, n = muts[-1]
         where = f" `{name} {target}`" if target else f" `{name}`"
@@ -7498,17 +7500,25 @@ Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restar
 GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 
 
+# One writer at a time for the state file. It is a read-modify-write over a shared
+# document with several callers on different threads (a restart note, the model
+# choice, the carried last_seen below), so two of them can lose one update. RLock:
+# a guard that protects state must never be able to wedge the caller that holds it.
+_STATE_LOCK = threading.RLock()
+
+
 def _state(mutate=None):
     """Tiny persisted state file: durable model choices (and the config
     default remembered by '/model default --global')."""
-    try:
-        st = json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        st = {}
-    if mutate:
-        mutate(st)
-        atomic_write_text(GLOBAL_STATE_FILE, json.dumps(st, indent=2))
-    return st
+    with _STATE_LOCK:
+        try:
+            st = json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            st = {}
+        if mutate:
+            mutate(st)
+            atomic_write_text(GLOBAL_STATE_FILE, json.dumps(st, indent=2))
+        return st
 
 
 # A run can spin in its own "one more check" attractor while every tool call is distinct, so the
@@ -7548,6 +7558,36 @@ _INTENT_RX = re.compile(
 # A promise is SHORT. A long reply that merely contains "let me ... check" is prose the
 # operator asked for, and re-asking it would spend a call for nothing.
 _INTENT_MAX_CHARS = 700
+# The THIRD shape of the same class, and the one BOTH test beds produced on 2026-09-24:
+# the reply neither promises nor claims a change - it reports RESULTS. One order each to
+# the two test beds, 2 model calls, 0 tool calls, and the answer that came back
+# was a filled-in form ("FILES: 5 4 ... BATCH: 4 calls issued in one message ... READBACK:
+# alphagammabetadelta") for directories neither box had created. Nothing in the harness
+# noticed: _INTENT_RX wants a stated intention, and the evidence check's _CHANGE_CLAIM_RE
+# wants a change verb - a measured value is neither, so the fabrication was delivered as
+# the run's report.
+#
+# The fence is the same fence the promise guard uses, and for the same reason: calls == 0.
+# A report that follows real tool work is never touched. The cost of a false positive is
+# one model call; the cost of a miss is an invented measurement delivered as fact.
+_RESULT_CLAIM_MAX_CHARS = 1200
+_RESULT_CLAIM_RX = re.compile(
+    # (a) a filled-in label dump - "FILES: 5 4", "READBACK: alphabeta", "EXIT: 1".
+    #     ALL-CAPS is the tell: it is a form's field name, not a sentence.
+    r"(?-i:^[^\w\n]{0,3}[A-Z][A-Z0-9_ ]{1,24}:)"
+    # (b) a measured value with a unit - "5 bytes", "0 step(s)", "12 files"
+    r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|"
+    r"steps?|files?|kb|mb|gb|kib|mib|tokens?|tok|ms|seconds?)\b"
+    # (c) a hash-shaped token: a value that can only come from running something
+    r"|\b[0-9a-f]{16,}\b"
+    # (d) narration that something WAS run or returned
+    r"|\b(?:i (?:ran|executed)|the (?:command|tool|script|output|result)s?"
+    r"[^.\n]{0,40}?\b(?:returned|return|showed|shows|gave|gives|printed|prints|"
+    r"reported|reports|said)\b"
+    r"|it (?:returned|return|printed|prints|showed|shows|reported|reports)\b"
+    r"|the file (?:contains|holds|now (?:says|reads))"
+    r"|exit(?:ed)? (?:code|status)\b|ran in parallel)\b",
+    re.IGNORECASE | re.MULTILINE)
 
 
 MARK_COMPACT = ("[earlier investigation context removed to fit context "
@@ -8833,10 +8873,17 @@ class Agent:
                         # tool call at all, so a report that follows real work is never
                         # touched, and only once - see _INTENT_RX.
                         _promise = (reply.get("content") or "").strip()
+                        _promised = bool(_INTENT_RX.search(_promise))
+                        # The sibling failure: a filled-in report of results the run
+                        # never fetched. No promise, no change claim - just measured
+                        # values with nothing behind them (see _RESULT_CLAIM_RX).
+                        _claimed = (not _promised and calls == 0
+                                    and bool(_RESULT_CLAIM_RX.search(_promise)))
                         if (not _no_call_nudge and calls == 0 and not spun
-                                and len(_promise) <= _INTENT_MAX_CHARS
+                                and len(_promise) <= (_INTENT_MAX_CHARS if _promised
+                                                      else _RESULT_CLAIM_MAX_CHARS)
                                 and not _promise.endswith("?")
-                                and _INTENT_RX.search(_promise)
+                                and (_promised or _claimed)
                                 and steps < max_steps
                                 and (time.time() - t0) < max_seconds):
                             _no_call_nudge = True
@@ -8851,9 +8898,18 @@ class Agent:
                                 "nothing has happened yet. Make the first tool call NOW, "
                                 "in this reply - do not describe it instead of doing it. "
                                 "If the task genuinely needs no tool, write the final "
-                                "answer with what you already have.")})
+                                "answer with what you already have."
+                                if _promised else
+                                "SYSTEM: your last reply reported results - values, "
+                                "contents, counts - but this run has made NO tool call at "
+                                "all, so nothing above was read from this box. Make the "
+                                "call NOW and report only what it actually returns. If "
+                                "those values did not come from this run, say so in one "
+                                "line instead.")})
                             _note = ("the model promised the work with no tool call - "
-                                     "asking it to act once")
+                                     "asking it to act once" if _promised else
+                                     "the model reported results with no tool call - "
+                                     "asking it to check once")
                             log.warning("[%s] %s", session_key, _note)
                             if say_cb:
                                 try:
@@ -10910,7 +10966,11 @@ class MattermostDispatcher:
         self.bot_username = None
         self.dead_roots = {}       # channel_id -> root_id the server rejected
         self.bot_user_id = None
-        self.last_seen = {}        # channel_id -> unix time of newest handled post
+        # channel_id -> unix time of newest handled post. CARRIED across a restart:
+        # it is the map the catch-up sweep queries, and a message posted while this
+        # process was down arrives with no websocket event at all, so an empty map
+        # means an unanswered order (see _restored_last_seen).
+        self.last_seen = self._restored_last_seen()
         self.channel_dm = {}       # channel_id -> bool (is a direct message)
         # Stall guard (2026-09-10). One worker thread serves a channel, so a run
         # that blocks for ever is indistinguishable from a dead bot: later
@@ -10930,6 +10990,54 @@ class MattermostDispatcher:
         # CHANNEL, so the door needs the reverse mapping to find the parked run; a
         # /stop also needs it, because it flags the channel's cancel events.
         self._session_channel = {}
+
+    def _restored_last_seen(self):
+        """The channels this box was talking in, with the time of the newest post it
+        handled, read back from state.json.
+
+        Measured on both test beds 2026-09-24: a restart was armed, the child
+        was killed, and the operator's order was posted inside the downtime. No run
+        started, no answer was ever posted, and the log said nothing - because the sweep
+        that exists for this case had no channel to ask about. The notice that records
+        WHICH channel asked for the restart is therefore also a floor for that channel.
+        """
+        seen = {}
+        try:
+            st = _state()
+        except Exception as e:                                   # noqa: BLE001
+            log.debug("no carried last_seen: %s", e)
+            return seen
+        raw = st.get("last_seen")
+        if isinstance(raw, dict):
+            for chan, ts in raw.items():
+                try:
+                    seen[str(chan)] = float(ts)
+                except (TypeError, ValueError):
+                    continue
+        note = st.get("announce_restart") or {}
+        if note.get("channel_id") and note.get("at"):
+            try:
+                seen.setdefault(str(note["channel_id"]), float(note["at"]))
+            except (TypeError, ValueError):
+                pass
+        return seen
+
+    def _remember_last_seen(self, channel_id):
+        """Persist one channel's high-water mark, bounded so the file cannot grow."""
+        ts = self.last_seen.get(channel_id)
+        if not ts:
+            return
+
+        def _mut(st):
+            seen = st.setdefault("last_seen", {})
+            seen[str(channel_id)] = float(ts)
+            if len(seen) > 20:            # a bot talks to a handful of channels
+                for old in sorted(seen, key=lambda k: seen[k])[:-20]:
+                    seen.pop(old, None)
+        try:
+            _state(_mut)
+        except Exception as e:                                   # noqa: BLE001
+            log.debug("could not persist last_seen for %s: %s", channel_id, e)
 
     def _stall_warn_minutes(self):
         return float(CONFIG["agent"].get("stall_warn_minutes", 8) or 0)
@@ -11200,6 +11308,7 @@ class MattermostDispatcher:
         created = float(getattr(message, "create_at", 0) or 0) / 1000.0
         self.last_seen[channel_id] = max(self.last_seen.get(channel_id, 0.0),
                                          created or time.time())
+        self._remember_last_seen(channel_id)
         if sender == self.bot_username:
             return
         # de-duplicate (a message can match more than one listener)
@@ -11424,9 +11533,12 @@ class MattermostDispatcher:
         window = int(CONFIG["agent"].get("catch_up_max_minutes") or 30) * 60
         total = 0
         for channel_id, since in list(self.last_seen.items()):
+            # +1ms: `since` is inclusive, and after a restart the in-memory dedupe set
+            # is empty, so asking from the high-water mark itself would hand the LAST
+            # message we already handled back to a fresh process as new work.
             try:
                 data = self.driver.posts.get_posts_for_channel(
-                    channel_id, params={"since": int(since * 1000),
+                    channel_id, params={"since": int(since * 1000) + 1,
                                         "per_page": 50}) or {}
             except Exception as e:
                 log.debug("catch-up: query for %s failed: %s", channel_id, e)
@@ -11467,6 +11579,18 @@ class MattermostDispatcher:
         every = max(15, int(CONFIG["agent"].get("catch_up_seconds") or 60))
         window = int(CONFIG["agent"].get("catch_up_max_minutes") or 30)
         log.info("catch-up sweep: every %ds, up to %dm back", every, window)
+        # ONE sweep before the first sleep. A restart is the case this sweep exists
+        # for, and the channels it has to ask about were just restored from
+        # state.json: waiting a full interval first leaves the operator's order
+        # unanswered for up to a minute longer than it needs to be.
+        if self.last_seen:
+            try:
+                recovered = self._catch_up_once()
+                if recovered:
+                    log.info("catch-up: recovered %d message(s) at startup "
+                             "(posted while this process was down)", recovered)
+            except Exception:
+                log.exception("startup catch-up sweep failed")
         while True:
             time.sleep(every)
             if self.driver:

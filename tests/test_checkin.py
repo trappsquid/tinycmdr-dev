@@ -859,8 +859,12 @@ def test_a_promise_with_no_tool_call_is_asked_to_act_once():
          "content": "I'll gather the logs, then write it up. Let me start by checking."},
         {"role": "assistant", "content": "Collected 3 files."},
     ])
+    # The delivered answer is the RETRY's, and the retry also made no tool call, so
+    # the evidence check rides with it - correct, and asserted rather than ignored.
     check("promise: the run does not end on the promise",
-          out == "Collected 3 files.", out)
+          out.startswith("Collected 3 files."), out)
+    check("promise: the retry's own numbers are marked unchecked",
+          "evidence check" in out, out)
     check("promise: the model was asked to act (2 calls)", len(seen) == 2, len(seen))
     if len(seen) == 2:
         check("promise: the nudge says to make the call now",
@@ -918,6 +922,106 @@ def test_a_report_after_real_work_is_never_nudged():
     check("after work: the answer is delivered",
           "gather the rest" in out, out)
 
+
+
+# ------------- 1.0.8: a filled-in report with no tool call is not an answer
+
+# The live sample. One order each to the Windows test box and the MacBook on 2026-09-24, 2 model
+# calls and 0 tool calls on both boxes, and this came back as the run's report - for a
+# directory neither box had created. The promise guard missed it (nothing is promised),
+# and the evidence check missed it too (nothing is changed): a measured value is neither.
+_FAKE_REPORT = ("Turn 1 - four calls in one batch.\n\nFILES: 5 4\nBATCH: 4 calls issued "
+                "in one message; they ran in parallel (harness returned all four "
+                "results in a single batch reply, not sequentially)\n"
+                "READBACK: alphagammabetadelta")
+
+
+def test_a_filled_in_report_with_no_tool_call_is_asked_to_check_once():
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": _FAKE_REPORT},
+        {"role": "assistant", "content": "alpha.txt is 5 bytes and beta.txt is 4."},
+    ])
+    # The retry also made no tool call, so the harness marks its numbers unchecked
+    # too: the fence is calls == 0, not the wording.
+    check("report: the run does not end on the fabricated report",
+          out.startswith("alpha.txt is 5 bytes and beta.txt is 4."), out)
+    check("report: the retry's own numbers are marked unchecked",
+          "evidence check" in out, out)
+    check("report: the model was asked to check (2 calls)", len(seen) == 2, len(seen))
+    if len(seen) == 2:
+        nudge = str(seen[1][-1].get("content"))
+        check("report: the nudge says to make the call now",
+              "Make the call NOW" in nudge, nudge)
+        check("report: the nudge asks only for what the call returns",
+              "report only what it actually returns" in nudge, nudge)
+        check("report: the fabricated turn is dropped before the retry",
+              all("READBACK: alphagammabetadelta" not in str(m.get("content"))
+                  for m in seen[1]), seen[1])
+        check("report: the retry ends with a plain user nudge",
+              seen[1][-1].get("role") == "user", seen[1][-1])
+
+
+def test_a_second_filled_in_report_is_delivered_not_asked_forever():
+    """One nudge, not a loop - the same bound the promise guard carries."""
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "FILES: 5 4\nREADBACK: alphabeta"},
+        {"role": "assistant", "content": "FILES: 5 4\nREADBACK: alphabeta"},
+    ])
+    check("two reports: exactly one nudge (2 calls)", len(seen) == 2, len(seen))
+    check("two reports: the second one is delivered",
+          "READBACK: alphabeta" in out, out)
+
+
+def test_a_report_after_real_work_is_not_nudged_for_results():
+    """calls > 0 is the fence here as well: measured values in a report that followed
+    tool work are exactly what a report is supposed to contain."""
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "function": {
+             "name": "shell",
+             "arguments": json.dumps({"command": "echo result-guard"})}}]},
+        {"role": "assistant", "content": "FILES: 5 4\nREADBACK: alphabeta"},
+    ])
+    check("after work: no nudge was spent", len(seen) == 2, len(seen))
+    check("after work: the report is delivered", "READBACK: alphabeta" in out, out)
+
+
+def test_neither_plain_prose_nor_a_question_is_nudged_for_results():
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "Nothing to do here."},
+    ])
+    check("plain prose: exactly one call", len(seen) == 1, len(seen))
+    check("plain prose: delivered unchanged", out == "Nothing to do here.", out)
+    # A question is a legitimate stop even when it quotes a number, which is why the
+    # fence is the trailing "?" and not the detector alone.
+    out2, seen2 = scripted_run_with_usage([
+        {"role": "assistant", "content": "Is 5 files the count you expected?"},
+    ])
+    check("a question back is not nudged for results", len(seen2) == 1, len(seen2))
+
+
+def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
+    rx = fb._RESULT_CLAIM_RX
+    fires = [
+        _FAKE_REPORT,
+        "FILES: 5 4\nREADBACK: alphabeta",
+        "EXIT: 1",
+        "the file contains 3 lines.",
+        "I ran the command and it printed gamma.",
+        "hash 3cdacefd347ee4faaef210d185f3c671ff7bf21d372e5e4bab65e51771627d7a",
+        "the tool returned 12 items.",
+    ]
+    for text in fires:
+        check("detector fires: %r" % text[:34], bool(rx.search(text)), text)
+    quiet = [
+        "Nothing to do here.",
+        "Port 8787 answers with ok.",
+        "I have no way to check that without a tool.",
+        "Should I delete the old folder first?",
+        "both files are written.",
+    ]
+    for text in quiet:
+        check("detector stays quiet: %r" % text[:34], not rx.search(text), text)
 
 def main():
     tests = [v for k, v in sorted(globals().items())
