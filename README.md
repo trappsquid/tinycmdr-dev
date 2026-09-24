@@ -4,8 +4,8 @@
 
   # tinycmdr
 
-  ### The High-Efficiency Agent Harness for Local and Self-Hosted LLMs
-  *Fast TTFT · ~4.1K token overhead · Prefix-cache stable · Zero infrastructure.*
+  ### High-Efficiency Agent Harness for Local and Self-Hosted LLMs
+  *~4.1K token overhead · Stable prefix caching · Built-in ops guards · Zero infrastructure.*
 
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#quick-install)
   [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
@@ -21,33 +21,33 @@
 
 ## Why tinycmdr?
 
-Most agent harnesses were built for cloud API budgets and heavy server clusters. When run against local hardware, they choke your GPU with massive prompts, thrash your KV cache, and crash without cleaning up inference slots.
+Most agent harnesses were built for cloud API endpoints with remote server infrastructure. When deployed against self-hosted models on local hardware, large boilerplate prompts and volatile prefixes cause recurrent prompt re-evaluations and unnecessary KV cache consumption.
 
-**tinycmdr is built from the ground up for self-hosted intelligence.** It pairs an ultra-lean prompt footprint with an autonomous operations runtime designed to protect your hardware and keep long-running tasks on track.
+**tinycmdr is built specifically for self-hosted setups.** It pairs a lean, prefix-stable prompt footprint with an operations runtime designed to handle failures gracefully and protect inference slots.
 
 ### Key Advantages and Features
 
-- **Instant TTFT and Stable Prefix Caching:** Fixed overhead is kept to ~4,150 tokens (static prompt + schemas). Dynamic, volatile context is strictly anchored to the tail of the prompt. Your model engine caches the entire prefix across turns, eliminating prompt re-evaluation delays and saving valuable KV cache VRAM.
+- **Stable Prefix Caching (~4.1K Token Overhead):** Fixed overhead is measured at ~4,150 tokens (static system prompt + core schemas). Volatile context is anchored to the tail of the prompt. Local inference engines (llama.cpp, vLLM) can keep the prefix warm in KV cache across turns, reducing prefill time and preserving VRAM for longer context history.
 - **Autonomous Ops Runtime:**
-  - **Loop Guard:** Detects repetitive tool-call cycles. Refuses identical calls after 2 repeats and halts runaway spins after 6, resetting automatically when a real state mutation (file write, edit) occurs.
-  - **Stall Watchdog and Self-Healing:** Monitors long runs, alerts on stalls, and automatically frees stuck slots. Built-in listener watchdogs recover dropped websockets and restart cleanly without losing session state.
-  - **Truthful Stop and Mid-Run Steering:** `/tinycmdr stop` has three verified truthful states (`stopping`, `already flagged`, `nothing running`) and frees GPU server slots immediately. Use `steer` to inject corrections into an active run without aborting.
+  - **Loop Guard:** Detects repetitive tool-call cycles. Refuses identical calls after 2 repeats and halts runaway spins after 6, resetting automatically when a disk mutation (file write, edit) occurs.
+  - **Stall Watchdog and Self-Healing:** Monitors execution progress, flags stalled turns, and frees stuck inference slots. Listener watchdogs automatically reconnect dropped websockets and recover without losing session state.
+  - **Truthful Stop and Mid-Run Steering:** `/tinycmdr stop` has three verified truthful states (`stopping`, `already flagged`, `nothing running`) and disconnects generation immediately to release GPU slots. Use `steer` to inject corrections into an active run without aborting.
   - **Persistent Task Ledger (`tasks.json`):** Tracks open, in-progress, completed, and abandoned items on disk. Multi-step work survives network drops and process restarts.
-  - **Spill Indexing (`spill/`):** Outputs exceeding character limits spill cleanly to indexed disk files (`spill#N`) rather than bloating the context window or silently truncating vital output.
+  - **Spill Indexing (`spill/`):** Outputs exceeding character limits spill to indexed disk files (`spill#N`) with clean pointers rather than overflowing the context window or silently dropping data.
 - **Three Unified Interfaces, One Vocabulary:**
   - **Terminal CLI:** Interactive TUI cards, live streaming output, and command history.
-  - **Web Dashboard:** Real-time LAN browser dashboard on port 8787 for monitoring tool execution, inspecting state, and reviewing diffs.
-  - **Chat Bot:** Native background service integration with Mattermost and Telegram for remote administration.
+  - **Web Dashboard:** LAN browser dashboard on port 8787 for monitoring tool execution, inspecting state, and reviewing diffs.
+  - **Chat Bot:** Background service integration with Mattermost and Telegram for remote administration.
   - The exact same verbs (`status`, `model`, `steer`, `stop`, `tasks`, `logs`, `restart`) work identically across shell, web, and chat.
 - **Zero Infrastructure, Single-File Architecture:**
-  - Runs as a single Python file with only 3 lightweight dependencies (`requests`, `croniter`, `mmpy_bot`).
-  - No Docker containers, no background databases (Postgres/Redis), no Node.js runtime. Inspectable and auditable in minutes.
+  - Runs as a single Python file with 3 standard dependencies (`requests`, `croniter`, `mmpy_bot`).
+  - No Docker containers, no background databases, no Node.js runtime. Inspectable and auditable in a single file.
 - **Zero-Bloat Skills and Hot-Loaded Tools:**
   - **Hermes-Compatible Prose Skills (`SKILL.md`):** Markdown operational runbooks index at only ~23 tokens each in the prompt, loading full procedures into context only when triggered.
-  - **Hot-Loaded Custom Tools (`tools/`):** Drop a `.py` or `.ps1` script into `./tools/` and it becomes callable on the next turn without restarting the agent. The agent can even author its own tools via `create_tool`.
-  - **Native Cron Scheduling:** Run scheduled autonomous health checks, backups, and maintenance runs in the background.
+  - **Hot-Loaded Custom Tools (`tools/`):** Drop a `.py` or `.ps1` script into `./tools/` and it becomes callable on the next turn without restarting the agent. The agent can also author its own tools via `create_tool`.
+  - **Native Cron Scheduling:** Run scheduled health checks, backups, and maintenance runs in the background.
 - **Privacy-Guarded and LAN-First:**
-  - Designed for local endpoints with configurable fallbacks. Strict privacy gates prevent local failures from falling through to public cloud APIs unless explicitly permitted (`allow_cloud_fallback`).
+  - Configurable fallback order. Strict privacy gates prevent local failures from falling through to public cloud APIs unless explicitly enabled (`allow_cloud_fallback`).
 
 ---
 
@@ -57,11 +57,11 @@ Most agent harnesses were built for cloud API budgets and heavy server clusters.
 | :--- | :--- | :--- |
 | **Fixed Prompt Overhead** | 15,000 – 30,000+ tokens | **~4,150 tokens** (measured, static prompt + core schemas) |
 | **KV Prefix Cache** | Invalidation on every turn (front-loaded status/time) | **Prefix-Cache Stable** (volatile context anchored at tail) |
-| **Time to First Token (TTFT)** | 10–30s latency spikes on prompt re-eval | **Near-instantaneous** (serves from warm prefix cache) |
-| **KV Cache VRAM Footprint** | Massive VRAM reserved for harness plumbing | **Minimal** (dynamic disclosure keeps schemas lean) |
-| **Runtime Reliability** | Loops spin unchecked; wedged agents lock GPU slots | **Loop Guard + Stall Watchdog + Slot-Freeing Stop** |
-| **Task State Management** | In-memory only or complex database tables | **Transparent Task Ledger** (`tasks.json` on disk) |
-| **Tool Spill Handling** | Silent string truncation or context overflow | **Spill Index** (`spill/` storage with `spill#N` pointers) |
+| **Prompt Ingestion / Prefill** | Full prompt re-evaluation on uncached turns | **Reuses prefix cache** (only new turns/tail evaluated) |
+| **KV Cache VRAM Footprint** | Large VRAM reserved for framework boilerplate | **Minimal** (compact prompt + on-demand runbook loading) |
+| **Runtime Reliability** | Loops can spin unchecked; wedged agents lock GPU slots | **Loop Guard + Stall Watchdog + Slot-Freeing Stop** |
+| **Task State Management** | In-memory only or external database tables | **Transparent Task Ledger** (`tasks.json` on disk) |
+| **Tool Spill Handling** | Silent truncation or context overflow | **Spill Index** (`spill/` storage with `spill#N` pointers) |
 | **Deployment Footprint** | Multi-container Docker, Node.js gateway, external DB | **Single Python file**, 3 dependencies, zero containers |
 | **Interfaces** | Single-purpose CLI or heavy web portal | **TUI CLI + Web UI (:8787) + Mattermost/Telegram Bot** |
 | **Extension Model** | Complex plugin SDKs or container rebuilds | **Prose Skills (`SKILL.md`) + Hot-loaded `.py`/`.ps1` tools** |
@@ -152,15 +152,15 @@ The loader picks it up immediately on the next call. The agent can also use `cre
 
 ## The Problem We Solve: Why Local LLMs Need a Different Harness
 
-Most agent frameworks were designed for cloud LLMs like GPT-4 or Claude. Running them on self-hosted inference (llama.cpp, vLLM, Ollama) exposes severe bottlenecks:
+Most agent frameworks were designed for cloud LLMs with dedicated remote infrastructure. Running them on self-hosted inference (llama.cpp, vLLM, Ollama) exposes practical friction points:
 
-- **Prompt Ingestion Latency (TTFT Spikes):** Injecting 15,000–30,000 tokens of boilerplate prompts and schemas on an uncached turn stalls local GPUs for 10–30 seconds before generating the first token.
-- **Prefix Cache Thrashing:** Many frameworks place dynamic timestamps, counters, or random IDs near the top of the prompt. This invalidates KV cache on every turn, forcing full prompt re-computation over and over.
-- **KV Cache VRAM Exhaustion:** In long-context setups (32K–256K), KV cache consumes substantial VRAM. Wasting 20,000+ tokens on harness overhead crowds out actual reasoning space, file context, and multi-slot concurrency.
-- **Inference Slot Wedging:** When an agent loops or crashes, generic harnesses leave generation calls hanging, locking active GPU slots on the model server.
-- **Container and Dependency Sprawl:** Heavy frameworks demand multi-container Docker stacks, Redis, Postgres, and Node.js runtimes just to run basic shell commands on a machine.
+- **Prompt Ingestion Latency:** Injecting 15,000–30,000 tokens of boilerplate prompts and schemas requires heavy prefill compute before generating the first token on uncached turns.
+- **Prefix Cache Thrashing:** Many frameworks place dynamic timestamps, counters, or random identifiers near the top of the prompt. This invalidates the KV cache on every turn, forcing the inference engine to recompute the entire prompt.
+- **KV Cache VRAM Consumption:** In long-context setups (32K–256K), KV cache consumes substantial GPU VRAM. Burning tens of thousands of tokens on harness plumbing reduces headroom for reasoning, file context, and multi-user concurrency.
+- **Inference Slot Wedging:** When an agent loops or encounters an error, generic harnesses often leave generation requests active, locking limited GPU slots on the model server.
+- **Container and Dependency Sprawl:** Heavy frameworks often require multi-container Docker topologies, Redis, Postgres, and Node.js runtimes to run basic shell commands on a machine.
 
-tinycmdr eliminates this waste by providing a lightweight, transparent single-process runtime optimized for local compute.
+tinycmdr addresses these bottlenecks with an auditable single-process runtime built around token efficiency and execution guards.
 
 ---
 
