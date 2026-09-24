@@ -10787,7 +10787,13 @@ class MattermostDestination(Destination):
         return ref
 
     def drop(self, ref):
-        self.d._delete(ref, self.channel_id)
+        # Do NOT delete the post: Mattermost delete_post leaves an ugly
+        # "(message deleted)" tombstone in the channel. Instead, retain the
+        # draft post id so the final answer edits it in place seamlessly.
+        if hasattr(self.d, "draft_posts"):
+            self.d.draft_posts[self.channel_id] = ref
+        else:
+            self.d._delete(ref, self.channel_id)
 
     def ask(self, question, options=None, wait=300.0, label=None):
         """Post the question and wait for the reply, as the confirm prompt did.
@@ -10847,6 +10853,7 @@ class MattermostDispatcher:
         self.active = {}           # channel_id -> run bookkeeping
         self.running = set()       # channel_ids with a message ACTUALLY being handled
         self.queued_notice = {}    # channel_id -> post id of the queued notice
+        self.draft_posts = {}      # channel_id -> post id of streamed draft to reuse
         # channel_id (or session key) -> the ask_user row a run is parked on. It lives
         # here, not in the run, because the ANSWER arrives on the listener thread and
         # has to be readable without touching the run.
@@ -10975,7 +10982,14 @@ class MattermostDispatcher:
         self._touch(channel_id)   # output here counts as run progress
         if root_id and self.dead_roots.get(channel_id) == root_id:
             root_id = None  # already known bad — go straight to top-level
-        for chunk in self._chunks(text):
+        draft_id = None if color else self.draft_posts.pop(channel_id, None)
+        chunks = list(self._chunks(text))
+        if draft_id and chunks:
+            # Seamlessly transform the streamed draft in place: no tombstone, no dupe
+            self._edit(draft_id, channel_id, chunks[0], color=None)
+            post_id = draft_id
+            chunks = chunks[1:]
+        for chunk in chunks:
             post = {"channel_id": channel_id, "message": chunk}
             if color and post_id is None:
                 post["message"] = ""
@@ -11035,6 +11049,8 @@ class MattermostDispatcher:
         if color:
             payload["message"] = ""
             payload["props"] = bar_props(text, color)
+        else:
+            payload["props"] = {}
         try:
             self.driver.posts.update_post(post_id, payload)
         except Exception as e:
