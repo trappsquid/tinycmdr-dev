@@ -1,9 +1,9 @@
 # tinycmdr
 
-A single-file Mattermost ops agent that runs on a Windows box: it takes requests
-by DM, runs tools (shell, file reads, PowerShell), keeps durable notes and a task
-ledger, and reports back with its own evidence. No framework, no server — one
-Python file plus a skills folder.
+A lightweight, single-file ops agent for Windows, Linux, and macOS: it takes requests
+via Web UI, interactive CLI, Mattermost, or Telegram, runs tools (shell, file operations,
+PowerShell/bash), keeps durable notes and a task ledger, and reports back with evidence.
+No framework, no heavy database — one Python file plus a skills folder.
 
 - Version: see `VERSION` in `tinycmdr.py`
 - Changelog: in the source repository (see the link above), not shipped here
@@ -287,6 +287,7 @@ tinycmdr status             version, folder, model, endpoint, context, log, inst
 tinycmdr doctor             check this install and name what is wrong (exit 1 when it is)
 tinycmdr model              the models this install can route to
 tinycmdr model use <name>   set the default model in config.json, catalog-checked
+tinycmdr setup              guided wizard for model endpoints, Mattermost, and Telegram
 tinycmdr logs [n]           the last n lines of tinycmdr.log (default 40)
 tinycmdr restart            restart through this host's own door (task, systemd, launchd)
 tinycmdr token              which secrets are set, and in which file (never their values)
@@ -310,7 +311,8 @@ console session or in chat. Bare `tinycmdr` opens a session in the install folde
 /tinycmdr new      start a fresh conversation (clears this channel's history)
 /tinycmdr undo     drop the last exchange
 /tinycmdr stop     stop the run in progress
-/tinycmdr model    show or change the model for this channel
+/tinycmdr model    show active model, list models, or switch
+/tinycmdr setup    interactive configuration wizard
 /tinycmdr help     the rest
 ```
 Durable memory lives in `notes.md` (capped, older entries spill to
