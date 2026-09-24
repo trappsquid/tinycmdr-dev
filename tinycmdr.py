@@ -5004,11 +5004,18 @@ def _skill_meta(text):
 
 
 def skill_index():
-    """Scan ./skills/ for Hermes-style skill folders (containing SKILL.md)."""
+    """Scan ./skills/ for Hermes-style skill folders (containing SKILL.md).
+
+    A dot dir is PARKED (skills/.imported-unused and friends): never indexed, so
+    kept-for-reference runbooks do not rent prompt on every call (measured
+    2026-09-23: 76 parked skills were 5,366 of the prompt's 20,942 chars).
+    """
     out = []
     if not SKILLS_DIR.is_dir():
         return out
     for md in sorted(SKILLS_DIR.rglob("SKILL.md")):
+        if any(p.startswith(".") for p in md.relative_to(SKILLS_DIR).parts):
+            continue
         meta = _skill_meta(_read_text_any(md))
         out.append({"name": meta.get("name") or md.parent.name,
                     "desc": meta.get("description", ""),

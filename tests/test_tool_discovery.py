@@ -18,6 +18,7 @@ capability is told so instead of being guessed at.
 import importlib.util
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -227,6 +228,30 @@ check("an ordinary skill miss stays an ordinary miss",
       "No skill named" in out and "is a TOOL" not in out, out[:120])
 check("and its name list is bounded on a box with many skills",
       len(out) < 1200 or "more (skill action=list" in out, len(out))
+
+# ---- parked skills are parked (efficiency review 2026-09-24) --------------------
+# skills/.imported-unused kept 76 SKILL.md runbooks for reference and skill_index()
+# rglob'd through them: the static prompt carried all 108 blurbs every call (5,366
+# of its 20,942 chars, measured 2026-09-23). A dot dir must never be indexed.
+_tmp = Path(tempfile.mkdtemp(prefix="tinycmdr-skills-"))
+(_tmp / "live").mkdir()
+(_tmp / "live" / "SKILL.md").write_text(
+    "---\nname: liveskill\ndescription: a live one\n---\nbody\n",
+    encoding="utf-8", newline="\n")
+(_tmp / ".imported-unused").mkdir()
+(_tmp / ".imported-unused" / "SKILL.md").write_text(
+    "---\nname: parkedskill\ndescription: a parked one\n---\nbody\n",
+    encoding="utf-8", newline="\n")
+_keep_skills_dir = fb.SKILLS_DIR
+try:
+    fb.SKILLS_DIR = _tmp
+    _names = [s["name"] for s in fb.skill_index()]
+    check("a skill in a parked dot dir never reaches the index",
+          "parkedskill" not in _names, _names)
+    check("the live skill beside it still does",
+          "liveskill" in _names, _names)
+finally:
+    fb.SKILLS_DIR = _keep_skills_dir
 
 out = fb.tool_shell({"command": "list_tools"}, {"session_key": "s-bare"})
 check("a bare tool name typed into the shell is answered as a tool",

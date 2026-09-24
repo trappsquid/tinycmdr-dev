@@ -602,6 +602,35 @@ def syntax_floor(folder):
     return problems
 
 
+def payload_floor():
+    """What ONE turn of this build rents before any history: the system prompt
+    plus the visible tool schemas, measured with the A/A staging (the shipped
+    fixture config, no skills, no custom tools) so the number compares between
+    builds and boxes. Item C of docs/plan-efficiency-2026-09-24.md: payload
+    growth is visible per cut."""
+    import hashlib
+    import importlib.util
+    with tempfile.TemporaryDirectory(prefix="tinycmdr-probe-") as tmp:
+        tmp = pathlib.Path(tmp)
+        shutil.copy2(ROOT / "tinycmdr.py", tmp / "tinycmdr.py")
+        shutil.copy2(ROOT / "tests" / "fixture-config.json", tmp / "config.json")
+        spec = importlib.util.spec_from_file_location("tinycmdr_probe",
+                                                  tmp / "tinycmdr.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["tinycmdr_probe"] = mod
+        spec.loader.exec_module(mod)
+        prompt = mod.build_system_prompt()
+        schemas = json.dumps(mod.select_tool_schemas(None))
+        tok = mod.est_tokens(prompt + schemas)
+        # the build's RotatingFileHandler holds tinycmdr.log open in the probe
+        # dir; release it or Windows refuses to delete the directory after
+        mod._log_listener.stop()
+        for _h in mod._log_listener.handlers:
+            _h.close()
+    digest = hashlib.sha256((ROOT / "tinycmdr.py").read_bytes()).hexdigest()[:16]
+    return len(prompt), len(schemas), tok, digest
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="show what would ship")
@@ -630,6 +659,13 @@ def main():
     print(f"host-specific values that must NOT appear: {len(host_vals)}")
     for label in host_vals:
         print(f"  will check: {label}")
+
+    try:
+        p_ch, s_ch, tok, digest = payload_floor()
+        print(f"payload floor: prompt {p_ch:,} ch + schemas {s_ch:,} ch "
+              f"= {p_ch + s_ch:,} (~{tok:,} est-tok) · build {digest}")
+    except Exception as exc:
+        print(f"payload floor: PROBE FAILED ({exc})")
 
     with tempfile.TemporaryDirectory(prefix="tinycmdr-pkg-") as tmp:
         stage_dir = pathlib.Path(tmp) / f"tinycmdr-{ver}"
