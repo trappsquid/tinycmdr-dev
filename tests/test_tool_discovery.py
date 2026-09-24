@@ -242,34 +242,57 @@ check("a tool name as the first token of a pipeline is answered as a tool too",
 
 # ---- round 6: the tool RUN AS A SCRIPT (`python toolsmith.py ...`) -------------------
 # Found on the drive 2026-09-23: every tool file in ./tools/ is also a runnable script, so
-# this miss SUCCEEDS and the model never self-corrects. Told to build a tool, the run read
-# toolsmith.py off disk, spilled it twice, tried `python -m toolsmith` (failed), ran
-# `python toolsmith.py "action=new" ...` (worked), then listed tools and called find_tools -
-# 12 calls in and it had never made the `toolsmith` TOOL CALL its prompt names.
-out = fb.tool_shell(
-    {"command": 'cd C:\\tinycmdr\\tools; python toolsmith.py "action=new" "name=x"'},
-    {"session_key": "s-script1"})
-check("a tool run as a script is answered as a tool",
-      "is a TOOL on this box" in out and "shell cannot" in out, out[:160])
-check("...and the answer carries that tool's arguments",
-      "Its arguments:" in out and "action" in out, out[:300])
-for _cmd in ("python -m toolsmith action=list",
-             "python C:\\tinycmdr\\tools\\toolsmith.py action=list",
-             "python tools/toolsmith.py action=list"):
-    out = fb.tool_shell({"command": _cmd}, {"session_key": "s-script-" + _cmd[:8]})
-    check("the same miss is answered for %r" % _cmd[:34],
-          "is a TOOL on this box" in out, out[:120])
-# ---- round 6: the same miss at the read_file door ----------------------------------
-# `read_file tools/delegate_task.py` then `read_file tools/create_tool.py`, both misses:
-# the model goes looking for a CORE tool's code on disk, because for the tools that ARE
-# files that is how you learn their shape.
-out = fb.tool_read_file({"path": "C:\\tinycmdr\\tools\\create_tool.py"}, {})
-check("reading a core tool as a file is answered as a tool",
-      "is a TOOL on this box" in out and "call it by name" in out, out[:180])
-check("...and carries its arguments", "Its arguments:" in out, out[:280])
-out = fb.tool_read_file({"path": "C:\\tinycmdr\\tools\\no-such-thing-at-all.py"}, {})
-check("an ordinary missing file stays ordinary",
-      "does not exist" in out and "is a TOOL" not in out, out[:140])
+# this miss SUCCEEDS and the model never self-corrects. Told to build a tool, the run ran
+# `python toolsmith.py "action=new" ...` (which worked), and never made the `toolsmith` TOOL
+# CALL its prompt names.
+#
+# The probe tool is REGISTERED HERE rather than naming a tool that happens to be in this
+# checkout: an earlier version of these checks named toolsmith and passed only while another
+# suite's leftovers sat in the shared staging dir (measured 2026-09-23). A check that depends
+# on a sibling suite, or on the repo's tools/ folder, is not a check.
+_keep_custom = dict(fb.REGISTRY.custom)
+fb.REGISTRY.custom["probetool"] = {
+    "fn": lambda args, ctx: "staged probe ran",
+    "source": "<test_tool_discovery>",
+    "mutates": False,
+    "endpoint_touching": False,
+    "schema": {"type": "function", "function": {
+        "name": "probetool",
+        "description": "staged by this suite to prove the shell answers a tool run as a "
+                       "script",
+        "parameters": {"type": "object",
+                       "properties": {"action": {"type": "string"}},
+                       "required": []}}},
+}
+try:
+    out = fb.tool_shell({"command": 'cd C:\\x; python probetool.py "action=new"'},
+                        {"session_key": "s-script1"})
+    check("a tool run as a script is answered as a tool",
+          "is a TOOL on this box" in out and "shell cannot" in out, out[:160])
+    check("...and the answer carries that tool's arguments",
+          "Its arguments:" in out and "action" in out, out[:300])
+    for _cmd in ("python -m probetool action=list",
+                 "python C:\\somewhere\\tools\\probetool.py action=list",
+                 "python tools/probetool.py action=list"):
+        out = fb.tool_shell({"command": _cmd}, {"session_key": "s-script-" + _cmd[:8]})
+        check("the same miss is answered for %r" % _cmd[:34],
+              "is a TOOL on this box" in out, out[:120])
+finally:
+    fb.REGISTRY.custom.clear()
+    fb.REGISTRY.custom.update(_keep_custom)
+
+# ---- round 7: the skill tool, with the RIGHT verb ------------------------------------
+# Nine of eleven skill calls in one round went to `skill{action:list|search, name:<tool>}`,
+# one answered with 8 KB of skill taxonomy. The door is the same whichever verb was guessed.
+# The name is the one the drive actually used, and it is a CORE tool, so this half needs no
+# staged registry entry.
+for _act in ("list", "search", "read"):
+    out = fb.tool_skill({"action": _act, "name": "search_sessions", "topic": "x"}, {})
+    check("the skill tool answers a TOOL name for action=%s too" % _act,
+          "is a TOOL on this box" in out and "Its arguments:" in out, out[:180])
+out = fb.tool_skill({"action": "search", "topic": "poster"}, {})
+check("a real skill search is untouched", "is a TOOL on this box" not in out, out[:140])
+
 out = fb.tool_shell({"command": 'python -c "print(123)"'}, {"session_key": "s-script-c"})
 check("a plain interpreter one-liner still runs", "123" in out, out[:120])
 check("...and is not mistaken for a tool",

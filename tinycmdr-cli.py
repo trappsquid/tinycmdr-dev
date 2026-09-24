@@ -5018,6 +5018,21 @@ def tool_skill(args, ctx):
     name = (args.get("name") or "").strip().lower()
     topic = (args.get("topic") or "").strip()
     skills = skill_index()
+    # A TOOL name handed to THIS tool is the miss the drive keeps making, and it does not
+    # care which verb was guessed. Measured 2026-09-23 (round 7): nine of eleven skill calls
+    # in one round went to `skill{action:list|search, name:search_sessions}`, one of them
+    # answered with 8 KB of skill taxonomy, before find_tools found the real tool; the same
+    # round asked `skill{action:list, name:free_gb}` twice. So the answer sits BEFORE the
+    # action dispatch, not only on the read path's no-match branch.
+    _skill_match = [s for s in skills if s["name"].lower() == name
+                    or s["dir"].name.lower() == name]
+    if name and not _skill_match and _registered_tool(name):
+        # The ARGUMENTS ride along: an answer that only points elsewhere buys another hop.
+        shape = _tool_args_shape(name)
+        return (f"{name!r} is a TOOL on this box, not a skill: call it by name and the "
+                f"harness runs it. Its arguments: {shape}. (If the call refuses for a "
+                f"missing argument, find_tools {name!r} gives the whole schema.) Skills "
+                f"are prose runbooks; this box has {len(skills)} of them.")
     if action == "list":
         if not skills:
             return ("No skills installed. Drop skill folders "
@@ -5032,15 +5047,6 @@ def tool_skill(args, ctx):
         # one (measured 2026-09-23: skill{read, name: search_files} came back as 1.7 KB of
         # skill names and nothing about the tool). Say which door this is, and keep the
         # list bounded - 105 names is a page of nothing.
-        if name in CORE_TOOLS or name in (REGISTRY.custom or {}):
-            # The ARGUMENTS ride along: the drive asked the skill tool for tool names four
-            # times in two runs (search_files, search_sessions x2, delegate_task x2) and each
-            # answer that only points elsewhere buys another hop. Measured 2026-09-23.
-            shape = _tool_args_shape(name)
-            return (f"{name!r} is a TOOL on this box, not a skill: call it by name and the "
-                    f"harness runs it. Its arguments: {shape}. (If the call refuses for a "
-                    f"missing argument, find_tools {name!r} gives the whole schema.) Skills "
-                    f"are prose runbooks; this box has {len(skills)} of them.")
         return (f"No skill named {name!r}. Installed: " + _skill_names_brief(skills))
     sdir = match[0]["dir"]
     if action == "read":
