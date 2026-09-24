@@ -7241,7 +7241,7 @@ _INTENT_RX = re.compile(
 _INTENT_MAX_CHARS = 700
 # The THIRD shape of the same class, and the one BOTH test beds produced on 2026-09-24:
 # the reply neither promises nor claims a change - it reports RESULTS. One order each to
-# the Windows test box and the MacBook, 2 model calls, 0 tool calls, and the answer that came back
+# the two test beds, 2 model calls, 0 tool calls, and the answer that came back
 # was a filled-in form ("FILES: 5 4 ... BATCH: 4 calls issued in one message ... READBACK:
 # alphagammabetadelta") for directories neither box had created. Nothing in the harness
 # noticed: _INTENT_RX wants a stated intention, and the evidence check's _CHANGE_CLAIM_RE

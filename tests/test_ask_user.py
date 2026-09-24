@@ -68,6 +68,12 @@ class FakeDispatcher(fb.MattermostDispatcher):
     """Dispatcher with the network stubbed out; records what it posted."""
 
     def __init__(self):
+        # Every test gets a FRESH box. The dispatcher carries the ids of the posts
+        # it has handled in state.json (so a message posted during a downtime is not
+        # replayed as new work), and this suite reuses one synthetic id for every fake
+        # message - a shared stage file would drop the next test's message as a
+        # duplicate. The suite's environment is not a clean one.
+        (STAGE / "state.json").unlink(missing_ok=True)
         super().__init__()
         self.posted = []
 

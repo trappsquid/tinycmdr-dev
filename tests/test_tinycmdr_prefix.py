@@ -124,6 +124,10 @@ def test_the_retired_prefix_gets_a_pointer():
 # --- the chat handler -------------------------------------------------------
 
 def make_dispatcher():
+    # A FRESH box per dispatcher: the dispatcher carries the ids of the posts it has
+    # handled in state.json (so a message posted during a downtime is not replayed as
+    # new work), and this suite's staged copy is shared by every test in the run.
+    (STAGE / "state.json").unlink(missing_ok=True)
     d = fb.MattermostDispatcher()
     d.bot_username = "bot"
     d.last_seen = {}

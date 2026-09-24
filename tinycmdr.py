@@ -10971,6 +10971,10 @@ class MattermostDispatcher:
         # process was down arrives with no websocket event at all, so an empty map
         # means an unanswered order (see _restored_last_seen).
         self.last_seen = self._restored_last_seen()
+        # The exact boundary, for the same reason: that time is this box's own clock
+        # (the live message object carries no create_at), so it can sit BEHIND the
+        # post it describes and hand an already-answered message back as new work.
+        self.seen.extend(self._restored_seen_ids())
         self.channel_dm = {}       # channel_id -> bool (is a direct message)
         # Stall guard (2026-09-10). One worker thread serves a channel, so a run
         # that blocks for ever is indistinguishable from a dead bot: later
@@ -11022,8 +11026,19 @@ class MattermostDispatcher:
                 pass
         return seen
 
-    def _remember_last_seen(self, channel_id):
-        """Persist one channel's high-water mark, bounded so the file cannot grow."""
+    @staticmethod
+    def _restored_seen_ids():
+        """The post ids handled just before the restart, oldest first."""
+        try:
+            ids = _state().get("seen_ids") or []
+        except Exception as e:                                   # noqa: BLE001
+            log.debug("no carried seen ids: %s", e)
+            return []
+        return [str(i) for i in ids if i][-50:]
+
+    def _remember_last_seen(self, channel_id, msg_id=None):
+        """Persist one channel's high-water mark and the id of the post it came from,
+        bounded so the file cannot grow."""
         ts = self.last_seen.get(channel_id)
         if not ts:
             return
@@ -11034,6 +11049,11 @@ class MattermostDispatcher:
             if len(seen) > 20:            # a bot talks to a handful of channels
                 for old in sorted(seen, key=lambda k: seen[k])[:-20]:
                     seen.pop(old, None)
+            if msg_id:
+                ids = st.setdefault("seen_ids", [])
+                if str(msg_id) not in ids:
+                    ids.append(str(msg_id))
+                del ids[:-50]
         try:
             _state(_mut)
         except Exception as e:                                   # noqa: BLE001
@@ -11308,11 +11328,11 @@ class MattermostDispatcher:
         created = float(getattr(message, "create_at", 0) or 0) / 1000.0
         self.last_seen[channel_id] = max(self.last_seen.get(channel_id, 0.0),
                                          created or time.time())
-        self._remember_last_seen(channel_id)
+        msg_id = getattr(message, "id", None)
+        self._remember_last_seen(channel_id, msg_id)
         if sender == self.bot_username:
             return
         # de-duplicate (a message can match more than one listener)
-        msg_id = getattr(message, "id", None)
         if msg_id:
             if msg_id in self.seen:
                 return

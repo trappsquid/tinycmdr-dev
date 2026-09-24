@@ -32,6 +32,11 @@ SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-stop"
 STAGE.mkdir(parents=True, exist_ok=True)
+# The dispatcher now CARRIES the ids of the posts it has handled across a restart
+# (state.json, so a message posted during a downtime is not replayed as new work).
+# A suite is not a fresh box: clear the staged copy, or the next dispatcher in this
+# run inherits the previous test's ids and drops its messages as duplicates.
+(STAGE / "state.json").unlink(missing_ok=True)
 shutil.copy2(SRC, STAGE / "tinycmdr.py")
 FIXTURE = Path(__file__).resolve().parent / "fixture-config.json"
 if not FIXTURE.exists():
@@ -246,6 +251,10 @@ class FakeMessage:
 
 
 def make_dispatcher():
+    # A FRESH box per dispatcher: the dispatcher carries the ids of the posts it has
+    # handled in state.json (so a message posted during a downtime is not replayed as
+    # new work), and this suite's staged copy is shared by every test in the run.
+    (STAGE / "state.json").unlink(missing_ok=True)
     d = fb.MattermostDispatcher()
     d.bot_username = "bot"
     d.last_seen = {}

@@ -207,6 +207,33 @@ def test_the_first_sweep_runs_before_the_first_sleep():
           order and order[0] == "sleep", order)
 
 
+
+def test_an_already_answered_post_is_not_recovered_after_a_restart():
+    """The high-water mark is a CLOCK (the live message object carries no create_at),
+    and this box's clock runs behind the Mattermost server's - measured 334 ms on the
+    day this was found, by watching an already-answered order come back as new work
+    after a restart. Ids are the exact boundary; carry them."""
+    base = time.time() - 60
+    write_state({"last_seen": {"chan-A": base}, "seen_ids": ["p-down", "p-older"]})
+    d = FakeDispatcher()
+    check("restart: the handled ids come back",
+          list(d.seen)[-2:] == ["p-down", "p-older"], list(d.seen))
+    d.driver = FakeDriver()
+    d.bot_user_id = "u-bot"
+    d._is_dm = lambda channel_id: True
+    check("restart: the already-answered post is not recovered again",
+          d._catch_up_once() == 0, d.handled)
+    d.enqueue(FakeMessage("chan-A", "a new order", msg_id="p-new"), "a new order")
+    ids = json.loads(STATE.read_text(encoding="utf-8")).get("seen_ids")
+    check("enqueue: the handled id is persisted", ids and ids[-1] == "p-new", ids)
+    check("enqueue: the ids stay bounded", len(ids) <= 50, len(ids))
+
+
+def test_the_dedupe_set_does_not_grow_without_bound():
+    write_state({"seen_ids": ["p%d" % i for i in range(200)]})
+    d = FakeDispatcher()
+    check("restore: at most 50 ids are carried", len(d.seen) <= 50, len(d.seen))
+
 def _run(d, stop):
     try:
         d._catch_up_loop()
