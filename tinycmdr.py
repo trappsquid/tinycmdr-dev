@@ -6707,6 +6707,8 @@ class _RunSpan:
             else:
                 event("run.end", session_key=self.key, status="exception",
                       error="%s: %s" % (exc_type.__name__, exc))
+            if event_log_on():
+                prune_events()
         except Exception:
             pass
         _EVENT_RUN.pop(self.key, None)
@@ -7139,7 +7141,7 @@ def annotate_repeat_read(name, args, out, ctx):
 # The five primitives are 88% of real calls; the rest are the doors the standing
 # instructions name (runbooks, the ledger, memory, research, and the discovery tool).
 _DEFAULT_CORE = ("shell", "execute_code", "read_file", "write_file", "edit_file",
-                 "skill", "task", "experiment", "remember", "web_search",
+                 "skill", "task", "remember", "web_search",
                  "fetch_url", "list_tools", "find_tools", "ask_user")
 
 _revealed = {}
@@ -11388,6 +11390,18 @@ class MattermostDispatcher:
                     self._catch_up_once()
                 except Exception:
                     log.exception("catch-up sweep failed")
+                # Listener liveness check (item F): if the websocket listener has been
+                # silent for >15m while the process is alive, exit 75 to let the
+                # supervisor cleanly relaunch us rather than staying silently deaf.
+                try:
+                    ws = getattr(self.driver, "websocket", None)
+                    last_msg = getattr(ws, "_last_msg", 0.0) if ws else 0.0
+                    if last_msg > 0 and (time.time() - last_msg > 900):
+                        log.critical("websocket listener dead (no message for %ds) - restarting",
+                                     int(time.time() - last_msg))
+                        os._exit(RESTART_EXIT_CODE)
+                except Exception:
+                    pass
 
     def _drain(self, channel_id):
         q = self.queues.get(channel_id)
@@ -13963,6 +13977,9 @@ def run_bot():
     # (mattermostautodriver keeps options on the driver as `.options`, and the
     # client holds the SAME dict, so this reaches the httpx calls.)
     bot.driver.options["request_timeout"] = 60
+    # Heartbeat and receive timeout detect dead sockets within 30-60s
+    # instead of blocking indefinitely (measured: the other Windows box deaf for 4h).
+    bot.driver.options["websocket_kw_args"] = {"heartbeat": 30.0, "receive_timeout": 60.0}
     dispatcher.attach(bot.driver, bot.driver.users.get_user("me")["username"])
     SCHEDULER.dispatcher = dispatcher    # so long jobs can report progress too
     REPORTER = lambda cid, text: dispatcher._post(cid, None, text)

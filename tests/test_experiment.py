@@ -141,14 +141,13 @@ def main():
         check("an unknown id names the way to list the ids",
               out.startswith("ERROR") and "action=index" in out, out[:120])
 
-        # ---- it rides in every prompt, and it is one tool ------------------------
-        names = [s["function"]["name"] for s in fb.select_tool_schemas(None)]
-        check("the experiment tool is always-on", "experiment" in names, str(names))
+        # ---- Item D: on-demand by default to save ~350 tokens/turn ---------------
+        check("the experiment tool is available on-demand",
+              "experiment" in fb.hidden_tools(None))
+        exp_s = [s for s in fb.REGISTRY.openai_schemas()
+                 if s["function"]["name"] == "experiment"][0]
         check("and its schema is inside the per-tool cap",
-              len(json.dumps([s for s in fb.select_tool_schemas(None)
-                              if s["function"]["name"] == "experiment"][0])) <= 1200,
-              str(len(json.dumps([s for s in fb.select_tool_schemas(None)
-                                  if s["function"]["name"] == "experiment"][0]))))
+              len(json.dumps(exp_s)) <= 1200, str(len(json.dumps(exp_s))))
         v = fb.volatile_context(session_key=None)
         check("the ledger index is in the prompt block", "experiment ledger" in v,
               v[-300:])

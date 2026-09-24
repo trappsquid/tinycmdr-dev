@@ -6387,6 +6387,8 @@ class _RunSpan:
             else:
                 event("run.end", session_key=self.key, status="exception",
                       error="%s: %s" % (exc_type.__name__, exc))
+            if event_log_on():
+                prune_events()
         except Exception:
             pass
         _EVENT_RUN.pop(self.key, None)
