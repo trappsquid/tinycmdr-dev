@@ -592,7 +592,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -7522,6 +7522,33 @@ _COMPLETION_RX = re.compile(
     r"|\b(writing|write)\b[^.\n]{0,20}\b(it|the report|the analysis|the write-?up)\b"
     r"|\bthen the report\b", re.IGNORECASE)
 
+# The other half of the same class, and the one the announcement regex misses: the
+# model says it is ABOUT TO work ("I'll gather ... then write it up") and stops there,
+# with no tool call at all. _COMPLETION_RX only counts announcements that arrive WITH
+# calls queued, so a promise delivered as the final answer looked like a finished run.
+# Measured on the MacBook 2026-09-24: four consecutive runs, ONE model call each, 0
+# tool calls, every reply a promise. The same task with the nudge text below in front
+# of it made its shell call in the same minute, so this is a missing trigger class
+# rather than a broken model.
+_INTENT_RX = re.compile(
+    # (a) a stated intention aimed at an ACTION verb: "I'll gather the logs",
+    #     "let me check the ledger" - but NOT "let me explain ...", which is an answer.
+    r"\b(i'?ll|i will|i'?m going to|i am going to|let me|let'?s|now i'?ll|next,? i'?ll|"
+    r"first,? i'?ll|i'?m about to|about to start|i plan to|i need to)\b"
+    r"[^.\n]{0,60}?"
+    r"\b(read|check|gather|search|look|find|run|write|create|fetch|copy|install|pull|"
+    r"inspect|open|review|start|begin|collect|query|scan|test|build|draft|list|verify|"
+    r"go|do)\b"
+    # (b) the same state said without an intention, which is how it actually read on
+    #     the box: "Continuing - gathering ...", "I'm mid-task: gathering ...".
+    r"|\b(i'?m mid-?task|mid-?task|continuing|still (?:gathering|working|checking|reading)|"
+    r"haven'?t (?:finished|started)|not (?:finished|done) (?:gathering|reading|checking)|"
+    r"as i (?:gather|read|check)|gathering the)\b",
+    re.IGNORECASE)
+# A promise is SHORT. A long reply that merely contains "let me ... check" is prose the
+# operator asked for, and re-asking it would spend a call for nothing.
+_INTENT_MAX_CHARS = 700
+
 
 MARK_COMPACT = ("[earlier investigation context removed to fit context "
                 "window]")
@@ -8568,6 +8595,11 @@ class Agent:
             # MODEL failed to answer is not a run that used its budget, so this has
             # its own small bound instead of spending a continuation segment.
             _no_answer = 0
+            # Promise retries for this run: a reply that announces the work and stops
+            # with no tool call at all. Bounded to one, for the same reason the
+            # no-answer retry is bounded - a model that will not act is reported, not
+            # asked forever.
+            _no_call_nudge = False
             _seg_raw = CONFIG["agent"].get("auto_continue_max")
             # 0 must mean 0 here, so no `or` default: an `or` turned an explicit
             # "no continuation" setting back into 2 (caught by tests/test_ledger.py).
@@ -8795,6 +8827,40 @@ class Agent:
                                                 f"has been delivered to the operator already - "
                                                 f"handle this steering now, and fold in "
                                                 f"whatever it changes] {msg}")})
+                            continue
+                        # A reply that PROMISES the work and then stops is not an answer,
+                        # and the run must not end on it. Only when the run has made NO
+                        # tool call at all, so a report that follows real work is never
+                        # touched, and only once - see _INTENT_RX.
+                        _promise = (reply.get("content") or "").strip()
+                        if (not _no_call_nudge and calls == 0 and not spun
+                                and len(_promise) <= _INTENT_MAX_CHARS
+                                and not _promise.endswith("?")
+                                and _INTENT_RX.search(_promise)
+                                and steps < max_steps
+                                and (time.time() - t0) < max_seconds):
+                            _no_call_nudge = True
+                            # Drop the promise turn: a transcript whose last word is
+                            # "let me start" invites the same words again (the same
+                            # reason the empty-answer retry drops its turn).
+                            if messages and messages[-1] is reply:
+                                messages.pop()
+                            messages.append({"role": "user", "content": (
+                                "SYSTEM: your last reply described what you are about to "
+                                "do and then stopped without making a single tool call, so "
+                                "nothing has happened yet. Make the first tool call NOW, "
+                                "in this reply - do not describe it instead of doing it. "
+                                "If the task genuinely needs no tool, write the final "
+                                "answer with what you already have.")})
+                            _note = ("the model promised the work with no tool call - "
+                                     "asking it to act once")
+                            log.warning("[%s] %s", session_key, _note)
+                            if say_cb:
+                                try:
+                                    say_cb(_note)
+                                except Exception:
+                                    log.debug("no-call nudge notice failed",
+                                              exc_info=True)
                             continue
                         answer = (reply.get("content") or "").strip()
                         if not answer:

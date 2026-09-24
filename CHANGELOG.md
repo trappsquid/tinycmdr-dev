@@ -5,6 +5,21 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] - 2026-09-24
+
+### Fixed
+- **A run no longer ends on a promise.** When the model replied with what it was about to do and made no tool call at all ("I'll gather what we did in the previous session, then write and publish the post. Let me start by checking the carried results..."), the harness delivered that promise as the run's answer and stopped, so the task never started and every "continue" produced another promise. Measured on a MacBook: four consecutive runs, one model call each, zero tool calls, nothing done. The run now takes one more turn with the model told to make the first tool call instead of describing it. It is bounded to a single retry, and it only fires when the run has made no tool call at all, so a report that follows real work is never touched.
+
+### Documentation
+- The download commands in the README are the standard download-extract-run shape, and they now change into the folder the archive actually extracts to before running the installer.
+
+# Changelog
+
+All notable changes to tinycmdr are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [1.0.2] - 2026-09-24
 
 ### Changed

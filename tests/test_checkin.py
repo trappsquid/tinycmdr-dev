@@ -842,6 +842,83 @@ def test_capability_line_reports_what_this_process_can_enforce():
         fb.CONFIG["agent"]["blocked_patterns"] = saved
 
 
+# ------------- 1.0.3: a promise with no tool call is not an answer
+
+def test_a_promise_with_no_tool_call_is_asked_to_act_once():
+    """The model says it is about to work and stops there, with no tool call at all.
+
+    Measured on the MacBook 2026-09-24: four runs in a row, ONE model call each, 0 tool
+    calls, every reply a promise ("I'll gather what we did in the MVT session, then
+    write and publish the post. Let me start by checking..."). The delivery guard only
+    counted announcements that arrive WITH calls queued, so the promise was posted as
+    the run's answer and the task never started. Asking once costs one call; not asking
+    leaves the operator with a bot that talks and never works.
+    """
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant",
+         "content": "I'll gather the logs, then write it up. Let me start by checking."},
+        {"role": "assistant", "content": "Collected 3 files."},
+    ])
+    check("promise: the run does not end on the promise",
+          out == "Collected 3 files.", out)
+    check("promise: the model was asked to act (2 calls)", len(seen) == 2, len(seen))
+    if len(seen) == 2:
+        check("promise: the nudge says to make the call now",
+              "Make the first tool call NOW" in str(seen[1][-1].get("content")),
+              seen[1][-1])
+        check("promise: the promise turn is dropped before the retry",
+              all(not (m.get("role") == "assistant"
+                       and "gather the logs" in str(m.get("content")))
+                  for m in seen[1]), seen[1])
+        check("promise: the retry ends with a plain user nudge",
+              seen[1][-1].get("role") == "user", seen[1][-1])
+
+
+def test_a_second_promise_is_reported_not_asked_forever():
+    """One nudge, not a loop: a model that promises twice is answered with its own words
+    rather than a third call."""
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "I'll gather the logs now."},
+        {"role": "assistant", "content": "Continuing - gathering the logs."},
+    ])
+    check("two promises: exactly one nudge (2 calls)", len(seen) == 2, len(seen))
+    check("two promises: the second one is delivered", "gathering the logs" in out, out)
+
+
+def test_a_plain_answer_is_not_nudged():
+    """The fence is 'the run made no tool call at all' PLUS a promise in the text: an
+    answer that needed no tool (a status line, a report, a question back) ends the run
+    exactly as it did before, or every chat reply would cost a second call."""
+    # No change-claim verb in the text: the evidence check appends its own note to a
+    # report that claims work, and this case is about the promise guard alone.
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "Port 8787 answers with ok."},
+    ])
+    check("plain answer: exactly one call", len(seen) == 1, len(seen))
+    check("plain answer: delivered unchanged",
+          out == "Port 8787 answers with ok.", out)
+
+    out2, seen2 = scripted_run_with_usage([
+        {"role": "assistant", "content": "Should I delete the old folder first?"},
+    ])
+    check("a question back is not nudged", len(seen2) == 1, len(seen2))
+
+
+def test_a_report_after_real_work_is_never_nudged():
+    """calls > 0 is the fence. A report that follows tool work is delivered even when
+    its wording matches the promise pattern."""
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "function": {
+             "name": "shell",
+             "arguments": json.dumps({"command": "echo promise-guard"})}}]},
+        {"role": "assistant", "content": "I'll gather the rest in a moment."},
+    ])
+    check("after work: no nudge was spent", len(seen) == 2, len(seen))
+    check("after work: the answer is delivered",
+          "gather the rest" in out, out)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

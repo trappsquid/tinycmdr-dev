@@ -1529,9 +1529,14 @@ def test_shipped_requirements_cover_what_the_code_declares():
           "mmpy_bot" in listed, sorted(listed))
     installer = BASE / "install" / "install-tinycmdr.ps1"
     if installer.exists():
+        # The installer must install from requirements.txt rather than a hand-written
+        # list. 1.0.2 changed the SHAPE: the dependencies now go into the install's own
+        # venv and the pip argv is built as an array, so the pin names the file
+        # variable and its use instead of one exact command line.
+        itext = installer.read_text(encoding="utf-8", errors="replace")
         check("deps: the installer installs from requirements.txt",
-              "pip install --quiet --disable-pip-version-check -r $reqFile"
-              in installer.read_text(encoding="utf-8", errors="replace"),
+              '$reqFile = Join-Path $InstallDir "requirements.txt"' in itext
+              and '"-r", $reqFile' in itext,
               "installer does not use the file")
     else:
         # The installer is Windows-only, so a Mac or Linux checkout has no install/:

@@ -167,41 +167,51 @@ tinycmdr addresses these bottlenecks with an auditable single-process runtime bu
 
 ## Quick Install
 
-Download the archive for your platform from [**GitHub Releases**](https://github.com/trappsquid/tinycmdr/releases/latest), extract it, and run the installer. No administrator rights are needed, and the installer fetches Python 3.12 for you if the machine has none.
+Download the archive for your platform from the [latest release](https://github.com/trappsquid/tinycmdr/releases/latest), unpack it, and run the installer inside. No administrator rights are needed, and the installer downloads Python 3.12 for you if the machine has none.
 
 ### Windows
 
-**Option A: Download and double-click**
-
-1. Download [**`tinycmdr-1.0.2-win.zip`**](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.2-win.zip).
-2. Extract the ZIP.
-3. Double-click **`INSTALL-WINDOWS.cmd`**.
-
-It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment inside that folder, adds `tinycmdr` to your user PATH, and starts the agent at your next logon. Nothing is written outside your profile, so Windows never asks you to elevate.
-
-**Option B: PowerShell**
+Download [`tinycmdr-1.0.3-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.3-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
 
 ```powershell
-curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.2-win.zip
-tar -xf tinycmdr-1.0.2-win.zip
+curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.3-win.zip
+Expand-Archive tinycmdr-1.0.3-win.zip
+cd tinycmdr-1.0.3
 .\INSTALL-WINDOWS.cmd
 ```
 
-Useful switches: `-InstallDir <folder>`, `-NoPath`, `-SkipTask` (files only, no autostart), `-Uninstall`, and `-AsService` for a boot-start scheduled task instead of a logon shortcut (this one needs an elevated shell, because Windows reserves boot-start tasks for administrators).
+It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment inside that folder, adds `tinycmdr` to your user PATH, and starts the agent at your next logon. Nothing is written outside your profile, so Windows never asks you to elevate.
 
 ### Linux (Ubuntu / Debian / systemd)
 
 ```bash
-curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.2-linux.tar.gz | tar -xz
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.3-linux.tar.gz
+tar -xzf tinycmdr-1.0.3-linux.tar.gz
+cd tinycmdr-1.0.3
 sudo bash install/install-tinycmdr.sh
 ```
 
 ### macOS (launchd)
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.2-macos.zip
-unzip tinycmdr-1.0.2-macos.zip
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.3-macos.zip
+unzip tinycmdr-1.0.3-macos.zip
+cd tinycmdr-1.0.3
 bash install/install-tinycmdr-macos.sh
+```
+
+### Installer switches (Windows)
+
+```text
+-InstallDir <folder>   install somewhere other than %USERPROFILE%\tinycmdr
+-NoPath                leave your user PATH alone
+-SkipTask              files only: no autostart entry
+-VerifyOnly            report on an existing install, change nothing
+-Uninstall [-Force]    stop it, remove the folder and the autostart entry
+-AsService             register a boot-start scheduled task instead of a
+                       logon shortcut (this one needs an elevated shell,
+                       because Windows reserves boot-start tasks for
+                       administrators)
 ```
 
 ---
