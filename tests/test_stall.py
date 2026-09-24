@@ -718,8 +718,13 @@ def test_an_exact_duplicate_call_is_refused_not_re_executed():
     fb.CONFIG["agent"]["loop_stop_repeats"] = 6
     fb.CONFIG["agent"]["max_steps"] = 100
     fb.CONFIG["agent"]["max_minutes"] = 30
-    scripted = ([dict(call) for _ in range(6)]
-                + [{"role": "assistant", "content": "Done: nothing further."}])
+    # Six identical attempts are scripted; the run uses FOUR. Attempts 1-2 execute, 3 and 4
+    # are refused, and the second refusal ends the run (see
+    # test_a_refusal_that_comes_back_ends_the_run), so the report is read from the reply that
+    # follows the calls. What this pins is unchanged: the loop never RUNS a third time.
+    scripted = ([copy.deepcopy(call) for _ in range(4)]
+                + [{"role": "assistant", "content": "Done: nothing further."}]
+                + [copy.deepcopy(call) for _ in range(2)])
     out, calls, payloads = _scripted_run(scripted)
     ticks = (counter.read_text(encoding="utf-8").count("tick")
              if counter.exists() else 0)
@@ -729,8 +734,87 @@ def test_an_exact_duplicate_call_is_refused_not_re_executed():
           "NOT RE-EXECUTED" in transcript, transcript[:200])
     check("duplicate: the cached result came back with it",
           "tick" in transcript, "cached output missing")
-    check("duplicate: the run still finished with an answer",
-          "Done: nothing further" in out, out[:160])
+    check("duplicate: the harness ends the spin itself, not the script",
+          calls == 5, f"model calls used: {calls}")
+    check("duplicate: the forced report is still delivered",
+          "Done: nothing further" in out, out[:300])
+
+
+def test_a_reformatted_identical_call_is_still_the_same_call():
+    """The refusal has to key on the CANONICAL signature, not on the raw string the model
+    happened to emit.
+
+    Measured 2026-09-24 on a fleet Windows box: the same directory listing really ran three
+    times inside one chat turn - three tool results with one identical output digest and one
+    byte length - while the loop guard counted it and the refusal that should have stopped
+    the third run never fired. The model had re-emitted identical arguments with different
+    formatting, and the refusal's lookup read that as a different call; the write side had
+    already been moved to _call_sig(). Every scripted reply in the old suite used one
+    identical json.dumps(), which is why the case could not be seen from here.
+    """
+    counter = TMP / "dedupe_reformat.txt"
+    if counter.exists():
+        counter.unlink()
+    cmd = shell_append(counter)
+    spellings = [json.dumps({"command": cmd}),
+                 json.dumps({"command": cmd}, separators=(",", ":")),
+                 '{"command":' + json.dumps(cmd) + '}',
+                 json.dumps({"command": cmd}, indent=1)]
+
+    def call(cid, raw):
+        return {"role": "assistant", "content": "",
+                "tool_calls": [{"id": cid, "function": {"name": "shell",
+                                                        "arguments": raw}}]}
+
+    fb.CONFIG["agent"]["loop_dedupe_after"] = 2
+    fb.CONFIG["agent"]["loop_stop_repeats"] = 6
+    fb.CONFIG["agent"]["max_steps"] = 100
+    fb.CONFIG["agent"]["max_minutes"] = 30
+    scripted = [call(str(i), s) for i, s in enumerate(spellings)]
+    scripted.append({"role": "assistant", "content": "Done: the counter says two."})
+    out, calls, payloads = _scripted_run(scripted)
+    ticks = (counter.read_text(encoding="utf-8").count("tick")
+             if counter.exists() else 0)
+    check("reformatted: the command ran twice, not four times", ticks == 2, ticks)
+    transcript = json.dumps(payloads[-1] if payloads else [])
+    check("reformatted: the cheaper spellings get the cached refusal",
+          "NOT RE-EXECUTED" in transcript, transcript[:200])
+
+
+def test_a_refusal_that_comes_back_ends_the_run():
+    """One refusal is the guard working as designed. The model issuing the same refused call
+    AGAIN is a spin, and the operator should not have to read another card for it.
+
+    Measured 2026-09-24 on a fleet Windows box: identical attempts kept arriving while the
+    guard counted them, and the run ended on a promise of future work instead of a report.
+    The hard stop needed `loop_stop_repeats` attempts with the SAME OUTPUT, which a refused
+    call never has - it returns the refusal text - so the ladder could not see this shape.
+    """
+    counter = TMP / "dedupe_refusal_spin.txt"
+    if counter.exists():
+        counter.unlink()
+    cmd = shell_append(counter)
+    call = {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "1", "function": {
+                "name": "shell", "arguments": json.dumps({"command": cmd})}}]}
+    fb.CONFIG["agent"]["loop_dedupe_after"] = 2
+    fb.CONFIG["agent"]["loop_stop_repeats"] = 6     # the old ladder's threshold
+    fb.CONFIG["agent"]["max_steps"] = 100
+    fb.CONFIG["agent"]["max_minutes"] = 30
+    # FOUR attempts and then the report: attempts 1-2 execute, 3 and 4 come back refused,
+    # and the run stops itself on the second refusal, so the NEXT model call is the forced
+    # final report. The script has to put the report exactly there.
+    scripted = ([copy.deepcopy(call) for _ in range(4)]
+                + [{"role": "assistant",
+                    "content": "Report: the counter holds two ticks."}])
+    out, calls, _ = _scripted_run(scripted)
+    ticks = (counter.read_text(encoding="utf-8").count("tick")
+             if counter.exists() else 0)
+    check("refusal spin: the run stops itself", "Stopped a loop" in out, out[:160])
+    check("refusal spin: well before the 6-repeat threshold", calls <= 5, calls)
+    check("refusal spin: the command still ran only twice", ticks == 2, ticks)
+    check("refusal spin: the forced report is delivered",
+          "counter holds two ticks" in out, out[:220])
 
 
 def test_duplicate_refusal_can_be_switched_off():

@@ -432,6 +432,9 @@ def test_each_abnormal_end_is_named():
          "the previous run ended without an answer"),
         ("I'll gather the logs, then write it up.",
          "ended on a promise"),
+        ("\u26a0\ufe0f Hit the turn limit without finishing. Send 'continue' and "
+         "I'll pick up where I left off.",
+         "hit its turn limit"),
         ("config.json is 19448 bytes.", ""),
     ]
     for i, (line, expect) in enumerate(cases):
@@ -444,8 +447,69 @@ def test_each_abnormal_end_is_named():
                                 prior_unfinished="the harness stopped the previous run mid-task")
     check("warning: the line says the message below is the current request",
           "CURRENT request" in block, block[-260:])
-    check("warning: it does not invite continuing the stopped task",
-          "Do not carry on with the unfinished task" in block, block[-260:])
+    check("warning: it resumes the unfinished work when the operator asks",
+          "If it asks to continue, resume that unfinished work" in block, block[-320:])
+    check("warning: and leaves the old task alone otherwise",
+          "leave the old task alone" in block, block[-320:])
+
+
+def test_an_unanswered_order_is_named_as_an_interruption():
+    """A killed run leaves the operator's message as the last turn and nothing after it.
+
+    Measured 2026-09-24 on the fleet's macOS bed: an order went in, the box was pushed
+    mid-run, and the run that followed ("Continue with the task") opened with an EMPTY
+    history and could only ask what the task was. Every path that ENDS a run appends an
+    assistant turn, so a dangling operator message is an interruption by construction.
+    """
+    key = "warn-interrupted"
+    fb.AGENT.histories[key] = [
+        {"role": "assistant", "content": "Model for this conversation: `main`."},
+        {"role": "user", "content": "Download the video in this link and send it here"},
+    ]
+    got = fb.AGENT._prior_run_unfinished(key)
+    check("interrupted: the reason names the unanswered order",
+          "never answered" in got and "interrupted" in got, got)
+    block = fb.volatile_context(session_key=key, prior_unfinished=got)
+    check("interrupted: the line says which request is current",
+          "CURRENT request" in block, block[-320:])
+    check("interrupted: and that 'continue' means resume it",
+          "resume that unfinished work" in block, block[-320:])
+
+
+def test_the_order_is_on_disk_before_the_first_model_call():
+    """The transcript was written only in the run's `finally`, so a process killed mid-run
+    took the operator's own message with it - the carry sidecar survived (it is written per
+    entry) and the conversation did not, which is how a bot can describe the work it did and
+    not the order it was doing it for.
+
+    Graded from DISK while the first model call is in flight, which is exactly what a
+    restart or a push sees.
+    """
+    redirect_files()
+    fb.AGENT.histories.clear()
+    path = fb.AGENT._session_path("order-session")
+    path.unlink(missing_ok=True)
+    seen = {}
+    saved_chat = fb.AGENT._chat
+
+    def peek(messages, *args, **kw):
+        # The harness calls _chat(payload, model) POSITIONALLY: a stub that only
+        # accepts **kw raises before it can observe anything, and the test then
+        # reads the failure as "the file was not written".
+        seen["exists"] = path.exists()
+        seen["text"] = path.read_text(encoding="utf-8") if path.exists() else ""
+        return {"role": "assistant", "content": "Done: nothing further."}
+
+    fb.AGENT._chat = peek
+    try:
+        fb.AGENT.run("order-session", "download the video and send it here")
+    finally:
+        fb.AGENT._chat = saved_chat
+    check("durable order: the transcript is on disk during the run",
+          seen.get("exists"), seen.get("text", "")[:120])
+    check("durable order: it already holds the operator's message",
+          "download the video and send it here" in (seen.get("text") or ""),
+          seen.get("text", "")[:200])
 
 
 def test_the_warning_clears_once_a_run_answers_normally():

@@ -7406,8 +7406,10 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     if prior_unfinished:
         parts.append(
             "Note: the previous run in this conversation did not finish (%s). The "
-            "message below is the CURRENT request - answer it. Do not carry on with the "
-            "unfinished task unless the operator asks for that." % prior_unfinished)
+            "message below is the CURRENT request. If it asks to continue, resume that "
+            "unfinished work and finish it from what the transcript and the carried "
+            "results already show; otherwise answer the new message and leave the old "
+            "task alone." % prior_unfinished)
     if not parts:
         return ""
     body = "\n".join(parts)
@@ -7598,6 +7600,7 @@ _ABNORMAL_END_MARKERS = (
     ("\u26a0\ufe0f **No answer", "the previous run ended without an answer"),
     ("\u26a0\ufe0f LLM call failed", "the model endpoint failed mid-run"),
     ("\u26d4 ", "the previous run ended on an error"),
+    ("\u26a0\ufe0f Hit the turn limit", "the previous run hit its turn limit mid-task"),
 )
 # The THIRD shape of the same class, and the one BOTH test beds produced on 2026-09-24:
 # the reply neither promises nor claims a change - it reports RESULTS. One order each to
@@ -7970,10 +7973,26 @@ class Agent:
         """
         hist = (self.histories or {}).get(session_key) or []
         last = ""
+        newest = ""
         for msg in reversed(hist):
-            if msg.get("role") == "assistant" and (msg.get("content") or "").strip():
+            role = msg.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            if not newest:
+                newest = role
+            if role == "assistant" and (msg.get("content") or "").strip():
                 last = str(msg["content"]).strip()
                 break
+        # THE ORDER WAS NEVER ANSWERED. A run that is killed leaves the operator's message as
+        # the last turn of the conversation and nothing after it - the shape "Continue with the
+        # task" was typed into on the macOS bed 2026-09-24, where the harness could only answer
+        # "I don't have context for what 'the task' refers to". Every path that ENDS a run
+        # leaves an assistant turn (the stop, the budget and the turn-limit lines all append
+        # one), so a dangling operator message is an interruption by construction. Read from
+        # the transcript, so the condition survives the restart that caused it.
+        if newest == "user":
+            return ("the order the operator gave here was never answered - that run was "
+                    "interrupted before it finished")
         if not last:
             return ""
         for marker, reason in _ABNORMAL_END_MARKERS:
@@ -8620,6 +8639,17 @@ class Agent:
             hist = self._history(session_key)
             hist.append({"role": "user", "content": user_text})
             self._trim_history(session_key)
+            # THE ORDER LANDS ON DISK BEFORE THE FIRST MODEL CALL. The transcript used to be
+            # written only in this run's `finally`, so a process killed mid-run - a push, a
+            # restart, a crash - took the operator's own message with it. Measured 2026-09-24
+            # on the fleet's macOS bed: the order went in at 16:20:07, the box was pushed at
+            # 16:23:56, and the run at 16:25:04 ("Continue with the task") opened with an EMPTY
+            # history, because the killed run had never written and the file had been cleared
+            # by /new two minutes earlier. The TOOL RESULTS survived (the carry sidecar is
+            # written per entry) and the CONVERSATION did not, so the bot could name the work
+            # it had done and not the order it had been doing it for. One short write per run,
+            # and a restart can no longer erase what was asked.
+            self._save(session_key)
             messages = [{"role": "system", "content": build_system_prompt()}]
             # Carried tool results ride between the system prompt and the
             # conversation: byte-identical for every call of this run, so only the
@@ -8752,7 +8782,8 @@ class Agent:
             muts = []        # (tool, target, call#) for calls that changed state
             status = "ok"    # run classification: ok|truncated|empty|infra|...
             repeated = {}   # (tool, args, result) signature -> times seen
-            executed = {}   # (tool, raw args) -> [times run, its output]
+            executed = {}   # (tool, args) signature -> [times run, its output]
+            refused_seen = {}   # (tool, args) signature -> times a refusal came back
             dedupe_lock = threading.Lock()
             spun = False    # loop guard hard stop: why we stopped the run
             spun_tool = ""
@@ -9217,8 +9248,20 @@ class Agent:
                         # conversation, on both the local and the cloud model).
                         # Hand back the result we already have instead.
                         if dedupe_after:
+                            # ONE KEY, BOTH GUARDS. This read used `(name, raw_args)` - the RAW
+                            # argument STRING - while every entry is WRITTEN under _call_sig()'s
+                            # canonical form, so the refusal only ever fired when the model's own
+                            # JSON happened to be byte-identical to json.dumps(parsed,
+                            # sort_keys=True). Measured 2026-09-24 on a fleet Windows box: the same
+                            # directory listing really ran THREE times inside one chat turn, the
+                            # loop guard counting it ("repeated identically 3 time(s)") while the
+                            # refusal that should have stopped the third run never fired, because
+                            # the model had re-emitted identical arguments with different
+                            # formatting and this lookup read that as a different call. The
+                            # canonical signature helper exists for exactly this; both sides read
+                            # it now.
                             with dedupe_lock:
-                                prior = executed.get((name, raw_args))
+                                prior = executed.get(_call_sig(name, raw_args))
                             if prior and prior[0] >= dedupe_after:
                                 try:
                                     parsed = json.loads(raw_args or "{}")
@@ -9311,6 +9354,25 @@ class Agent:
                             name, (tc.get("function") or {}).get("arguments", ""))
                         refused = output.startswith(("NOT RE-EXECUTED",
                                                      "NOT EXECUTED"))
+                        if output.startswith("NOT RE-EXECUTED"):
+                            # A REFUSAL THAT COMES BACK IS A SPIN. The result text already told
+                            # the model that it has this answer, that nothing has changed since,
+                            # and to make a change or give the final report instead; issuing the
+                            # same call again ignores it. Measured 2026-09-24 on a fleet Windows
+                            # box: the identical listing kept coming, every attempt posting
+                            # another card for the operator to read, until the run ended on a
+                            # promise. ONE refusal is the guard working as designed; the second
+                            # means it is not being read, so the run is wrapped up with what it
+                            # has rather than burning the rest of the ladder.
+                            _refusals = refused_seen.get(key, 0) + 1
+                            refused_seen[key] = _refusals
+                            if _refusals >= 2 and not spun:
+                                spun = (f"`{name}` re-issued after its identical call was "
+                                        f"already refused")
+                                spun_tool = name
+                                log.warning("[%s] loop guard: %s came back after being "
+                                            "refused - forcing the final report",
+                                            session_key, name)
                         repeat_no = 1
                         with dedupe_lock:
                             ent = executed.get(key)
@@ -9562,8 +9624,10 @@ class Agent:
                                 f"{int(time.time() - t0)}s) — " + _tail
                                 + (answer or "(no summary)"))
 
-                return ("⚠️ Hit the turn limit without finishing. "
+                _limit = ("⚠️ Hit the turn limit without finishing. "
                         "Send 'continue' and I'll pick up where I left off.")
+                hist.append({"role": "assistant", "content": _limit})
+                return _limit
             finally:
                 usage["steps"] = steps
                 usage["secs"] = time.time() - t0
