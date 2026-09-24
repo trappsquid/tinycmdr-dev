@@ -177,6 +177,10 @@ trap {
 }
 
 $Unverified = $false    # install ok, but the model endpoint did not answer
+# Which of these the caller actually passed (an update must not push the shipped
+# loopback/`main` defaults over a host that is working).
+$ModelBaseUrlGiven = [bool]$ModelBaseUrl
+$ModelGiven        = $Model -and $Model -ne "main"
 $AppName = $TaskName
 $elevated = ([Security.Principal.WindowsPrincipal] `
              [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
@@ -835,7 +839,14 @@ if ($NoPath -or $SkipTask) {
 # --------------------------------------------------------------- 4. config.json
 Head "writing config.json"
 $cfgPath = Join-Path $InstallDir "config.json"
-Copy-Item (Join-Path $InstallDir "config.example.json") $cfgPath -Force
+# The HOST's own config is the base whenever there is one. This used to copy the
+# package's config.example.json over it on EVERY run, so a plain re-run - and an
+# update with -Force - replaced a working install's settings with the example's
+# placeholders (mattermost.url, allowed_users, the model endpoint) and the bot
+# could not start. Measured 2026-09-24 on a MacBook, where an in-place update did
+# exactly that and had to be repaired by hand.
+$cfgFresh = -not (Test-Path $cfgPath)
+$cfgBase = if ($cfgFresh) { Join-Path $InstallDir "config.example.json" } else { $cfgPath }
 if (-not $BotName) {
     $BotName = ($env:COMPUTERNAME).ToLower()          # host-style short name
 }
@@ -852,24 +863,36 @@ $webLink = if ($EnableWeb) {
     "http://127.0.0.1:$WebPort"
 } else { "" }
 
-$cfg = Get-Content $cfgPath -Raw | ConvertFrom-Json
-$cfg.mattermost.url           = $MattermostUrl
-$cfg.mattermost.port          = $MattermostPort
-$cfg.mattermost.token         = ""
-$cfg.mattermost.allowed_users = if ($AllowedUser) { @($AllowedUser) } else { @() }
-if (-not $ModelBaseUrl) { $ModelBaseUrl = "http://127.0.0.1:8081/v1" }
-$cfg.llm.base_url             = $ModelBaseUrl
-$cfg.llm.model                = $Model
+if (-not (Test-Path $cfgBase)) {
+    Fail "no config.json and no config.example.json in $InstallDir"
+}
+$cfg = Get-Content $cfgBase -Raw | ConvertFrom-Json
+# Only what this run was TOLD. An update passes no -AllowedUser and no -ModelBaseUrl,
+# and re-applying the shipped defaults over a working host is what emptied an
+# allowlist (a bot that ignores every DM) and moved a LAN endpoint to loopback.
+if ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com") {
+    $cfg.mattermost.url = $MattermostUrl
+} elseif (-not $cfg.mattermost.url) {
+    $cfg.mattermost.url = "CHANGE-ME.example.com"
+}
+if ($MattermostPort -and $MattermostPort -ne 443) { $cfg.mattermost.port = $MattermostPort }
+$cfg.mattermost.token = ""
+if ($AllowedUser) { $cfg.mattermost.allowed_users = @($AllowedUser) }
+if ($ModelBaseUrlGiven) {
+    $cfg.llm.base_url = $ModelBaseUrl
+} elseif ($cfgFresh) {
+    $cfg.llm.base_url = "http://127.0.0.1:8081/v1"
+}
+if ($ModelGiven -or $cfgFresh) { $cfg.llm.model = $Model }
 if ($ModelKey) {
     # The primary's key is not env-resolved (only fallback entries have api_key_env), so a
     # hosted endpoint that needs a key carries it here. A key in .env plus a fallback entry is
     # the tidier shape - see README, "Model endpoints".
-    $cfg.llm.api_key          = $ModelKey
+    $cfg.llm.api_key = $ModelKey
 }
 # The local chat page is opt-in. tinycmdr is driven from Mattermost; a fresh
 # install has no reason to open a port, and local checks don't need one.
-# The template's web block is off, and the local chat page is opt-in per host, so
-# only turn it on when it is actually wanted; the code default is "off" too.
+# Only turn it on when it is actually wanted; the code default is "off" too.
 if ($EnableWeb) {
     if (-not $cfg.PSObject.Properties['web']) {
         $cfg | Add-Member -NotePropertyName web -NotePropertyValue ([pscustomobject]@{})
@@ -898,10 +921,10 @@ if ($TelegramIds -and $tgIds.Count -eq 0) {
 if (-not $cfg.PSObject.Properties['telegram']) {
     $cfg | Add-Member -NotePropertyName telegram -NotePropertyValue ([pscustomobject]@{})
 }
-$cfg.telegram.token         = ""
-$cfg.telegram.allowed_users = @($tgIds)
-$cfg.agent.bot_name           = $BotName
-$cfg.agent.debug_dump_dir     = ""
+$cfg.telegram.token = ""
+if ($tgIds.Count -gt 0) { $cfg.telegram.allowed_users = @($tgIds) }
+$cfg.agent.bot_name       = $BotName
+$cfg.agent.debug_dump_dir = ""
 
 # Write UTF-8 WITHOUT a BOM: PowerShell 5.1's Set-Content -Encoding UTF8 adds one,
 # and a BOM breaks json parsing (and a BOM'd token file breaks the HTTP auth header

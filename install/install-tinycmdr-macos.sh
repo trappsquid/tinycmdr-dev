@@ -476,6 +476,20 @@ elif [ -z "$TOKEN" ]; then
 fi
 # ---------------------------------------------------------------- config ---
 say "config"
+# What the CALLER asked for, captured before any default is filled in. An update
+# (--force, in place) must only change what it was told to change: measured
+# 2026-09-24, this writer used the PACKAGE's config.example.json as its base every
+# time, so re-running the installer replaced a working host's config with the
+# example's placeholders - mattermost.url, allowed_users, the model endpoint and
+# the Telegram allowlist all went back to defaults and the bot would not start.
+MODEL_BASE_GIVEN="$MODEL_BASE_URL"
+MODEL_GIVEN="$MODEL"
+WEB_CLI_GIVEN=0
+for a in "$@"; do
+    case "$a" in
+        --web-port|--no-web) WEB_CLI_GIVEN=1 ;;
+    esac
+done
 [ -n "$MM_URL_ARG" ] || MM_URL_ARG="$(jget "$DEFAULTS" mattermost_url)"
 [ -n "$ALLOWED_ARG" ] || ALLOWED_ARG="$(jget "$DEFAULTS" allowed_user)"
 if [ "$USE_FLEET_MODEL" = 1 ]; then
@@ -508,10 +522,15 @@ fi
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \
 TG_IDS_CLEAN="$TG_IDS_CLEAN" \
 MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" WEB_ON="$WEB_ON" WEB_PORT="$WEB_PORT" \
+MODEL_BASE_GIVEN="$MODEL_BASE_GIVEN" MODEL_GIVEN="$MODEL_GIVEN" \
+WEB_CLI_GIVEN="$WEB_CLI_GIVEN" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
-cfg = json.load(open(src, encoding="utf-8-sig"))
+# The HOST's own config is the base whenever there is one: an update carries the
+# host's settings forward and changes only what this run was told to change.
+fresh = not os.path.exists(dst)
+cfg = json.load(open(dst if not fresh else src, encoding="utf-8-sig"))
 cfg = {k: v for k, v in cfg.items() if not k.startswith("_")}
 mm = cfg.setdefault("mattermost", {})
 mm["token"] = ""                       # the token belongs in .env, never here
@@ -524,20 +543,30 @@ if au:
 # copy in here is ignored with a warning), so only the numeric allowlist lands here.
 tg = cfg.setdefault("telegram", {})
 tg["token"] = ""
-tg["allowed_users"] = os.environ.get("TG_IDS_CLEAN", "").split()
+_tg_ids = os.environ.get("TG_IDS_CLEAN", "").split()
+if _tg_ids or fresh:
+    tg["allowed_users"] = _tg_ids
 cfg.setdefault("agent", {})["bot_name"] = os.environ["BOT_NAME"]
 llm = cfg.setdefault("llm", {})
-llm["base_url"] = os.environ["MODEL_BASE_URL"]
-llm["model"] = os.environ["MODEL"]
+# Only when the caller chose: --model-base-url/--use-fleet-model/--model. The
+# defaults exist for a FIRST install, and re-applying them over a working host is
+# how a LAN endpoint became a cloud one on an update.
+if os.environ.get("MODEL_BASE_GIVEN") or fresh:
+    llm["base_url"] = os.environ["MODEL_BASE_URL"]
+if os.environ.get("MODEL_GIVEN") or fresh:
+    llm["model"] = os.environ["MODEL"]
 web = cfg.setdefault("web", {})
-web["enabled"] = os.environ["WEB_ON"] == "1"
-web["port"] = int(os.environ["WEB_PORT"])
+if os.environ.get("WEB_CLI_GIVEN") == "1" or fresh:
+    web["enabled"] = os.environ["WEB_ON"] == "1"
+    web["port"] = int(os.environ["WEB_PORT"])
 web["token"] = ""                       # it lives in .env (TINYCMDR_WEB_TOKEN)
 with open(dst, "w", encoding="utf-8", newline="\n") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
-print("    wrote config.json (mattermost=%s, model=%s, allowed_users=%s)"
-      % (mm.get("url", "?"), llm["model"], mm.get("allowed_users", [])))
+print("    config.json: %s (mattermost=%s, model=%s, allowed_users=%s)"
+      % ("kept this host's settings, applied what this run changed" if not fresh
+         else "written", mm.get("url", "?"), llm.get("model", "?"),
+         mm.get("allowed_users", [])))
 PY
 
 umask 077
@@ -584,8 +613,19 @@ fi
 if [ "$WEB_ON" != 1 ]; then
     info "web UI disabled (--no-web)"
 elif [ -z "$MM_URL_ARG" ]; then
-    warn "no Mattermost host given and no fleet-defaults.json: set mattermost.url in"
-    warn "$INSTALL_DIR/config.json before starting, or re-run with --mattermost-url"
+    # Read the file that was just written: on an UPDATE the host already has its own
+    # mattermost.url, and warning about a missing one there is a false alarm on the
+    # line a reader is most likely to act on.
+    _u=$("$VPY" - "$INSTALL_DIR/config.json" <<'PY' 2>/dev/null || true
+import json, sys
+print((json.load(open(sys.argv[1], encoding="utf-8-sig")).get("mattermost") or {}).get("url") or "")
+PY
+)
+    case "$_u" in
+        ""|chat.example.com|CHANGE-ME.example.com)
+            warn "no Mattermost host is set: put mattermost.url in"
+            warn "$INSTALL_DIR/config.json (or re-run with --mattermost-url)" ;;
+    esac
 fi
 if [ -z "$ALLOWED_ARG" ]; then
     warn "mattermost.allowed_users is empty, and this bot is deny-by-default: it will ignore"

@@ -53,6 +53,9 @@ LOG="${TINYCMDR_INSTALL_LOG:-/tmp/tinycmdr-install.log}"
 PY="${TINYCMDR_PYTHON:-python3}"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""; MM_URL_ARG=""
+# What the CALLER asked for, captured before the defaults below fill anything in:
+# an update must only change what it was told to change.
+MODEL_BASE_GIVEN=""; MODEL_GIVEN=""; WEB_CLI_GIVEN=0
 TG_TOKEN=""; TG_IDS=""
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
 # Generated later (in the config section), but READ earlier by the summary: under `set -u`
@@ -87,6 +90,14 @@ while [ $# -gt 0 ]; do
         -h|--help)          usage; exit 0 ;;
         *) echo "install-tinycmdr.sh: unknown switch '$1'" >&2; usage >&2; exit 2 ;;
     esac
+done
+# Which of these a caller ACTUALLY passed, captured now that the flags are parsed
+# (empty means "not given"): an update must only change what it was told to change.
+MODEL_BASE_GIVEN="$MODEL_BASE_URL"
+MODEL_GIVEN="$MODEL"
+WEB_CLI_GIVEN=0
+for _a in "$@"; do
+    case "$_a" in --web-port|--no-web) WEB_CLI_GIVEN=1 ;; esac
 done
 
 say()  { printf '\n=== %s\n' "$*"; }
@@ -303,24 +314,32 @@ install/fleet-defaults.json for a fleet package."
 fi
 
 say "configuration"
+# The truth for an UPDATE is the file on disk, not this run's flags: with no
+# fleet-defaults and no --model, MODEL is empty here while the host's config.json is
+# perfectly set. Report (and warn about) the values the install will actually run
+# with, so an update does not cry wolf about settings it just kept.
+EFF_MODEL="$(cfgval llm.model)";   [ -n "$EFF_MODEL" ] || EFF_MODEL="$MODEL"
+EFF_BASE="$(cfgval llm.base_url)"; [ -n "$EFF_BASE" ] || EFF_BASE="$MODEL_BASE_URL"
+EFF_ALLOWED="$(cfgval mattermost.allowed_users)"
+[ -n "$EFF_ALLOWED" ] || EFF_ALLOWED="$ALLOWED_USER"
 info "mattermost   : https://${MM_HOST}:${MM_PORT}"
-info "model        : ${MODEL} @ ${MODEL_BASE_URL}"
-if [ -z "$MODEL" ]; then
-    # The reference config keeps the example's placeholder model id, so an install
-    # that was never told which model to use prints an empty name here. Say that
-    # plainly instead of leaving a blank in the summary.
+if [ -n "$EFF_MODEL" ]; then
+    info "model        : ${EFF_MODEL} @ ${EFF_BASE}"
+else
+    info "model        : (none set) @ ${EFF_BASE}"
     info "WARNING      : llm.model is unset - set it in config.json (llm.model),"
     info "               or pass --model <id>"
 fi
-if [ -z "$MODEL_BASE_URL" ]; then
-    info "WARNING      : llm.base_url is still the template's loopback default -"
-    info "               point it at your own OpenAI-compatible endpoint"
-    info "               (llama.cpp, vLLM, Ollama, any OpenAI-compatible server)"
-fi
-if [ -n "$ALLOWED_USER" ]; then
-    info "allowed user : ${ALLOWED_USER}"
+case "$EFF_BASE" in
+    ""|http://192.0.2.10:8081/v1|http://127.0.0.1:8081/v1)
+        info "WARNING      : llm.base_url is still a template default - point it at"
+        info "               your own OpenAI-compatible endpoint (llama.cpp, vLLM,"
+        info "               Ollama, any OpenAI-compatible server)" ;;
+esac
+if [ -n "$EFF_ALLOWED" ] && [ "$EFF_ALLOWED" != "[]" ]; then
+    info "allowed user : ${EFF_ALLOWED}"
 else
-    info "allowed user : NONE in fleet-defaults.json - the bot will ignore everybody"
+    info "allowed user : NONE - the bot will ignore everybody until you add one"
 fi
 info "bot name     : ${BOT_NAME}"
 if [ "$WEB_ON" = 1 ]; then
@@ -424,46 +443,61 @@ if [ "$WEB_ON" = "1" ]; then
 fi
 "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$WEB_PORT" "$WEB_ON" "$FORCE" \
-        "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" <<'PY'
-import json, os, secrets, sys
+        "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" \
+        "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$WEB_CLI_GIVEN" <<'PY'
+import json, os, sys
 (inst, example, bot, base, model, webport, webon,
- force, mm_host, mm_port, allowed, tg_ids) = sys.argv[1:13]
+ force, mm_host, mm_port, allowed, tg_ids,
+ base_given, model_given, web_given) = sys.argv[1:16]
 cfg_path = os.path.join(inst, "config.json")
-if force != "1" and os.path.exists(cfg_path):
-    print("    keeping the existing config.json (use --force to rewrite it)")
-else:
-    cfg = json.load(open(example, encoding="utf-8-sig"))
-    mm = cfg.setdefault("mattermost", {})
-    if mm_host:
-        mm["url"] = mm_host
-    mm["port"] = int(mm_port or 443)
+# The HOST's own config is the base whenever there is one, --force included: an
+# update carries the host's settings forward and changes only what this run was
+# told to change. Measured 2026-09-24 on a MacBook: --force rebuilt the file from
+# the package example, so a working install came back with a placeholder url,
+# an empty allowlist and the wrong model endpoint, and its bot would not start.
+fresh = not os.path.exists(cfg_path)
+cfg = json.load(open(cfg_path if not fresh else example, encoding="utf-8-sig"))
+mm = cfg.setdefault("mattermost", {})
+if mm_host:
+    mm["url"] = mm_host
+if mm_port:
+    mm["port"] = int(mm_port)
+if allowed or fresh:
     mm["allowed_users"] = [allowed] if allowed else []
-    # Secrets live in .env. A token left in the template or a hand-edited
-    # config.json would shadow TINYCMDR_MM_TOKEN, and the bot would try to
-    # authenticate with a placeholder and fail.
-    mm["token"] = ""
-    llm = cfg.setdefault("llm", {})
-    if base:
-        llm["base_url"] = base
-    if model:
-        llm["model"] = model
-    # The third door: the TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a
-    # copy in here is ignored with a warning), so only the numeric allowlist lands here.
-    tg = cfg.setdefault("telegram", {})
-    tg["token"] = ""
-    tg["allowed_users"] = [i for i in (tg_ids or "").split() if i]
-    cfg.setdefault("agent", {})["bot_name"] = bot
+# Secrets live in .env. A token left in the template or a hand-edited config.json
+# would shadow TINYCMDR_MM_TOKEN, and the bot would try to authenticate with a
+# placeholder and fail.
+mm["token"] = ""
+llm = cfg.setdefault("llm", {})
+# Only when the caller chose one: the defaults exist for a FIRST install, and
+# re-applying them over a working host is how a LAN endpoint became a cloud one.
+if base and (base_given or fresh):
+    llm["base_url"] = base
+if model and (model_given or fresh):
+    llm["model"] = model
+# The third door: the TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a
+# copy in here is ignored with a warning), so only the numeric allowlist lands here.
+tg = cfg.setdefault("telegram", {})
+tg["token"] = ""
+_ids = [i for i in (tg_ids or "").split() if i]
+if _ids or fresh:
+    tg["allowed_users"] = _ids
+cfg.setdefault("agent", {})["bot_name"] = bot
+web = cfg.setdefault("web", {})
+if web_given or fresh:
+    # The token is a SECRET, so it goes to .env (TINYCMDR_WEB_TOKEN) with the bot
+    # token: one file to look in, and nothing loose in the install folder.
+    web["enabled"] = webon == "1"
     if webon == "1":
-        # The token is a SECRET, so it goes to .env (TINYCMDR_WEB_TOKEN) with the bot
-        # token: one file to look in, and nothing loose in the install folder.
-        cfg["web"] = {"enabled": True, "port": int(webport or 8787),
-                      "token": "", "host": "127.0.0.1"}
-    else:
-        cfg["web"] = {"enabled": False}
-    with open(cfg_path, "w", encoding="utf-8", newline="\n") as fh:
-        json.dump(cfg, fh, indent=2)
-        fh.write("\n")
-    print(f"    wrote config.json (bot_name={bot}, web={'on' if webon == '1' else 'off'})")
+        web["port"] = int(webport or 8787)
+        web.setdefault("host", "127.0.0.1")
+web["token"] = ""
+with open(cfg_path, "w", encoding="utf-8", newline="\n") as fh:
+    json.dump(cfg, fh, indent=2)
+    fh.write("\n")
+print("    config.json: %s (bot_name=%s, web=%s)"
+      % ("kept this host's settings" if not fresh else "written",
+         bot, "on" if webon == "1" else "off"))
 PY
 chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/config.json"
 chmod 644 "$INSTALL_DIR/config.json"

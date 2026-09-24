@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.5] - 2026-09-24
+
+### Fixed
+- **An update no longer overwrites the host's `config.json`.** All three installers rebuilt that file from the package's `config.example.json` every time they ran, so re-running the installer - and in particular an in-place update with `--force` / `-Force` - replaced a working install's settings with the example's placeholders: `mattermost.url` went back to `chat.example.com`, `allowed_users` came out empty, and the model endpoint moved to the loopback/cloud default. The bot then refused to start. Measured on a MacBook 2026-09-24: an update to a newer release left a bot that could not connect, and its config had to be restored by hand. The host's own `config.json` is now the base whenever there is one, and each writer applies only what the run was actually told to change (a switch that was not passed no longer blanks a working value).
+
 ## [1.0.4] - 2026-09-24
 
 ### Fixed
