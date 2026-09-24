@@ -46,16 +46,16 @@ sub('Narrate as you go: the operator watches the chat.',
     'Narrate as you go: the operator is watching the terminal.',
     "prompt: narration target")
 
-sub("Under 15 words, no headers, no preamble — it is posted as its own message "
-    "the moment you emit it, then the tools run.",
+sub("Under 15 words, no headers, no preamble; it posts the moment you emit it, "
+    "then the tools run.",
     "Under 15 words, no headers, no preamble — it is printed the moment you emit "
     "it, then the tools run.",
     "prompt: narration delivery")
 
-sub('- Anything recurring ("check X every morning", "hourly") becomes a schedule '
-    "job — it runs autonomously and reports back to the channel. Use "
-    "search_sessions to recall how past issues were solved, and delegate_task to "
-    "farm out self-contained subtasks in parallel.",
+sub('- Anything recurring ("check X every morning") becomes a schedule job: it '
+    "runs autonomously and reports back to the channel. Use search_sessions to "
+    "recall how past issues were solved, delegate_task to farm out self-contained "
+    "subtasks in parallel.",
     '- Anything recurring ("check X every morning", "hourly") cannot be scheduled '
     "from here: this build has no cron, and nothing runs while the window is "
     "closed. Say that in the final report and give the exact one-shot command "
@@ -175,12 +175,11 @@ sub_re(r'_DEFAULT_CORE = \([^)]*\)',
 
 
 
-sub("- Prefer the OS's native mechanisms for routine maintenance — they are faster "
-    "and safer than manual alternatives. On Windows: Windows Update "
-    "(Microsoft.Update.Session COM or PSWindowsUpdate module), pnputil, winget, DISM, "
-    "Get-ComputerInfo. On Linux: the system package manager, systemctl, journalctl, "
-    "docker. Downloading installers from vendor websites or scraping download pages is "
-    "the LAST resort for when native channels genuinely lack the software.",
+sub("- Prefer the OS's native mechanisms for routine maintenance: they are faster "
+    "and safer. Windows: Windows Update (Microsoft.Update.Session COM or "
+    "PSWindowsUpdate), pnputil, winget, DISM, Get-ComputerInfo. Linux: the system "
+    "package manager, systemctl, journalctl, docker. Downloading installers from "
+    "vendor sites is the LAST resort when native channels lack the software.",
     "- Use what the machine already has. This build sits on a closed network: no package "
     "manager reaches a repository, no update channel answers, no installer can be "
     "downloaded, and the only thing that leaves this process is a request to the model "
@@ -191,11 +190,11 @@ sub("- Prefer the OS's native mechanisms for routine maintenance — they are fa
     "you would need, and stop there.",
     "prompt: closed network, no updates")
 
-sub("- Web search is for the UNFAMILIAR: an error you don't recognize, a "
-    "version-specific quirk, something that smells like a known issue — check GitHub "
-    "issues, Reddit, and forums for the exact error message, early and in parallel "
-    "with local checks. For routine procedures you already know (updates, service "
-    "restarts, log checks), just do them — no research phase.",
+sub("- Web search is for the UNFAMILIAR: an error you don't recognize, a version "
+    "quirk, something that smells like a known issue. Check GitHub issues, Reddit "
+    "and forums for the exact error message early, in parallel with local checks. "
+    "Routine procedures you already know (updates, restarts, log checks): just do "
+    "them, no research phase.",
     "- This build is closed: there is NO web search and NO URL fetching, and the only "
     "network destination is the model endpoint in config.json. Work from the machine's "
     "own evidence — logs, configs, package metadata, vendor documents already on disk, "
@@ -204,9 +203,9 @@ sub("- Web search is for the UNFAMILIAR: an error you don't recognize, a "
     "rather than guessing at an answer.",
     "prompt: closed network")
 
-sub("- Time-box research: if two or three searches haven't cracked the problem, act on "
-    "what you have or report back with options. Never spelunk the web for ten minutes "
-    "on a task with a built-in command.",
+sub("- Time-box research: if two or three searches haven't cracked it, act on what "
+    "you have or report back with options. Never spelunk the web for ten minutes on "
+    "a task with a built-in command.",
     "- Time-box the digging: if reading the local evidence twice has not cracked it, act "
     "on what you have, or report the options and what you would need to go further.",
     "prompt: time-box digging")
@@ -478,15 +477,14 @@ sub('    head = ["Machine atlas (facts about this machine, from the harness - yo
     "atlas: header names where it came from")
 
 # --- nothing here reaches for an update channel --------------------------------
-sub("- Don't gold-plate. When the OS update channel offers a stable update, take it — "
-    "chasing the vendor's absolute-latest version number is not the goal. Working and "
-    "done beats perfect and pending.",
+sub("- Don't gold-plate: take the stable update the channel offers. Working and done "
+    "beats perfect and pending.",
     "- Don't gold-plate. Working and done beats perfect and pending: do not chase version "
     "numbers, and do not start an update to close a version gap. Report the gap instead.",
     "prompt: no update chasing")
 
 sub('write ONE short plain-text line saying what you are about to check or do '
-    '("Checking what holds the file lock:", "Reading the last 50 lines of the service log:")',
+    '("Checking what holds the file lock:")',
     'write ONE short plain-text line saying what you are about to do ("Reading the last '
     '50 lines of the service log:", "Listing the containers:")',
     "prompt: narration example wording")
