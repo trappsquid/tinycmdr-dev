@@ -45,7 +45,7 @@ Most agent harnesses were built for cloud API endpoints with remote server infra
   - No Docker containers, no background databases, no Node.js runtime. Inspectable and auditable in a single file.
 - **Zero-Bloat Skills and Hot-Loaded Tools:**
   - **Hermes-Compatible Prose Skills (`SKILL.md`):** Markdown operational runbooks index at only ~23 tokens each in the prompt, loading full procedures into context only when triggered.
-  - **Hot-Loaded Custom Tools (`tools/`):** Drop a `.py` or `.ps1` script into `./tools/` and it becomes callable on the next turn without restarting the agent. The agent can also author its own tools via `create_tool`.
+  - **Hot-Loaded Custom Tools (`tools/`):** Drop a native `.py` (or a register-style `.py`, or a `<name>.tool.json` manifest) into `./tools/` and it is callable from the next start; `create_tool` writes one that is live at the next call. Every tool is listed in the prompt by NAME and shelf, with descriptions one `find_tools` call away, so a growing `tools/` folder stays flat in the payload (measured: 5.9 chars of index per tool at 80 tools, against 167.8 before).
   - **Native Cron Scheduling:** Run scheduled health checks, backups, and maintenance runs in the background.
 - **Privacy-Guarded and LAN-First:**
   - Configurable fallback order. Strict privacy gates prevent local failures from falling through to public cloud APIs unless explicitly enabled (`allow_cloud_fallback`).
@@ -56,7 +56,7 @@ Most agent harnesses were built for cloud API endpoints with remote server infra
 
 | Feature | Heavy Gateways and Frameworks (e.g. OpenClaw, OpenHands) | **tinycmdr** |
 | :--- | :--- | :--- |
-| **Fixed Prompt Overhead** | 15,000 – 30,000+ tokens | **~4,150 tokens** (measured, static prompt + core schemas) |
+| **Fixed Prompt Overhead** | 15,000 – 30,000+ tokens | **~5,300 tokens** (measured on a clean unpack of the shipped archive: system prompt + the 14 schemas a request sends) |
 | **KV Prefix Cache** | Invalidation on every turn (front-loaded status/time) | **Prefix-Cache Stable** (volatile context anchored at tail) |
 | **Prompt Ingestion / Prefill** | Full prompt re-evaluation on uncached turns | **Reuses prefix cache** (only new turns/tail evaluated) |
 | **KV Cache VRAM Footprint** | Large VRAM reserved for framework boilerplate | **Minimal** (compact prompt + on-demand runbook loading) |
@@ -65,7 +65,7 @@ Most agent harnesses were built for cloud API endpoints with remote server infra
 | **Tool Spill Handling** | Silent truncation or context overflow | **Spill Index** (`spill/` storage with `spill#N` pointers) |
 | **Deployment Footprint** | Multi-container Docker, Node.js gateway, external DB | **Single Python file**, 3 dependencies, zero containers |
 | **Interfaces** | Single-purpose CLI or heavy web portal | **TUI CLI + Web UI (:8787) + Mattermost/Telegram Bot** |
-| **Extension Model** | Complex plugin SDKs or container rebuilds | **Prose Skills (`SKILL.md`) + Hot-loaded `.py`/`.ps1` tools** |
+| **Extension Model** | Complex plugin SDKs or container rebuilds | **Prose Skills (`SKILL.md`) + hot-loaded `.py`/`.tool.json` tools** |
 
 ---
 

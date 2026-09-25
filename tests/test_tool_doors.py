@@ -156,7 +156,7 @@ check("list_tools: it reports the count this session really holds",
       (f"{shown} of {total}" in out) if hidden else (f"all {total}" in out), out[:200])
 check("list_tools: the hidden core tools are NAMED, not just counted",
       all(n in out for n in hidden if n in fb.CORE_TOOLS), out[:200])
-check("list_tools: it stays bounded", len(out) < 700, len(out))
+check("list_tools: it stays bounded", len(out) < 2500, len(out))
 
 # ---- a file written into ./tools/ gets the loader's verdict -----------------------
 

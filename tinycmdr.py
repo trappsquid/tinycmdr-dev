@@ -258,6 +258,13 @@ DEFAULT_CONFIG = {
         "tool_disclosure": True,
         "core_tools": [],
         "disclosure_max": 4,
+        # The tool index in the static prompt is CATEGORIES + NAMES, capped so a 500-tool
+        # box renders like a 9-tool one. Measured before this (2026-09-25,
+        # tests/tool_index_scale.py): a description line per custom tool cost 167.8 ch /
+        # 49.4 est-tok PER TOOL on every call, unbounded. A capped line renders its
+        # overflow as "... +N more (find_tools {"category": "<cat>"})".
+        "tool_index_max_categories": 12,
+        "tool_index_max_names_per_line": 12,
         # The run's plan is held by the harness and re-sent with the position each turn.
         # plan_drift_after is how many tool calls may pass with no plan step moving before
         # the harness says so; plan_max_steps bounds what a plan may carry.
@@ -655,7 +662,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.15"
+VERSION = "1.0.16"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -5865,6 +5872,10 @@ def tool_find_tools(args, ctx):
     What a MISS returns matters more than the scoring: it names this box's whole remaining
     surface rather than a bare list, because the model cannot ask again about a tool it
     does not know exists.
+
+    A CATEGORY argument (the shelves the static prompt lists names under) returns that
+    category's tools with their descriptions and no schemas: the prose the prompt no longer
+    carries per tool, one call away.
     """
     session = (ctx or {}).get("session_key")
     query = str(args.get("query") or "").strip()
@@ -5881,6 +5892,12 @@ def tool_find_tools(args, ctx):
                 "tool is now in your list for this session - if the question was which tools "
                 "are hidden, THIS list is the answer:]\n" % len(names)
                 + "\n".join(f"- {n}: {_tool_blurb(n)}" for n in names))
+    # The tree's leaf. A category answer is a LOOKUP, not a reveal: a reveal is per-session
+    # schema rent, and calling a tool by name afterwards reveals it anyway. This is the
+    # path that replaced a description line per tool in the static prompt.
+    cat = str(args.get("category") or "").strip()
+    if cat:
+        return _category_answer(cat, session)
     if not query:
         names = hidden_tools(session)
         if not names:
@@ -5911,10 +5928,21 @@ def tool_find_tools(args, ctx):
             "directly]\n" + "\n".join(blocks) + _surface_tail(session, exclude=names))
 
 def tool_list_tools(args, ctx):
-    """One line, deliberately. The core tools are already in the schema block the model
-    holds; the only thing it cannot see here is the CUSTOM tools this box has added.
-    Measured 2026-09-19: 615 calls and 0.46 MB of context over ten days spent repeating
-    a list that was already in the prompt."""
+    """Every tool on this machine, with what each one does - the DOOR, not a bare list.
+
+    The core tools are already in the schema block the model holds, so this answer carries
+    the core COUNT and the missing names; the CUSTOM tools this box added are the part it
+    cannot see anywhere else. Measured 2026-09-19: 615 calls and 0.46 MB of context over
+    ten days spent repeating a list that was already in the prompt - which is why this was
+    one bare line of names while the prompt listed every custom tool's description.
+
+    Since the tool tree moved those descriptions OUT of the prompt (2026-09-25), the names
+    alone are no longer a complete answer: this is the door the model actually calls.
+    Measured driving the tool-tree build on a fleet box, asked what its added file/drive
+    tools do: the run called list_tools and then read EIGHT tool files, three of them
+    twice, for what one answer here says. So the answer carries each custom tool's shelf
+    and its one-line blurb, capped like the prompt index, and it is spent only when asked.
+    """
     try:
         custom = sorted(getattr(REGISTRY, "custom", {}) or {})
     except Exception:
@@ -5949,18 +5977,22 @@ def tool_list_tools(args, ctx):
     # The NAME is what the model calls and the FILE is what it can read: a register-shape
     # file registers under another name, and that mapping was invisible (measured
     # 2026-09-24: a dropped-in hermes_todo.py registers as todo_list, and the run that
-    # read the load lines reported the tool as missing).
-    named = []
-    for n in custom:
+    # read the load lines reported the tool as missing). A matching name spends
+    # characters on nothing, so the file rides along only when it differs from the NAME.
+    cap = max(1, int(CONFIG["agent"].get("tool_index_max_names_per_line") or 12))
+    lines = []
+    for n in custom[:cap]:
         src = (REGISTRY.custom.get(n) or {}).get("source")
-        # The file is worth naming only when it does NOT match the tool name: that
-        # mapping is invisible otherwise (a dropped-in hermes_todo.py registers as
-        # todo_list). A matching name spends characters on nothing.
-        if src and Path(src).stem != n:
-            named.append("%s (from %s)" % (n, Path(src).name))
-        else:
-            named.append(n)
-    return ("Custom tools: %s. %s" % (", ".join(named), core))
+        where = (", from %s" % Path(src).name) if (src and Path(src).stem != n) else ""
+        lines.append("  %s (%s%s): %s"
+                     % (n, _tool_category(n), where, _blurb_short(n, 110)))
+    if len(custom) > cap:
+        lines.append("  ... +%d more (find_tools with no query names every one of them)"
+                     % (len(custom) - cap))
+    return ("Custom tools on this machine: %d, in shelves (call one by name and it "
+            "stays for the session; find_tools {\"category\": \"<shelf>\"} returns "
+            "one shelf's descriptions and arguments):\n" % len(custom)
+            + "\n".join(lines) + "\n" + core)
 
 
 def tool_schedule(args, ctx):
@@ -7343,6 +7375,35 @@ def _load_failure_route(err):
     return ""
 
 
+# The loader's reader for an author's tool-index shelf (the table it feeds is further
+# down the file, beside the index renderer: only this half is needed at import).
+def _declared_category(path):
+    """The shelf an AUTHOR declared for a dropped-in tool file, or "" for none.
+
+    Native and register-style .py files declare `CATEGORY = "..."`; a manifest carries
+    "category". Read from the SOURCE rather than from the loaded module, so a file is still
+    exec'd exactly once (re-exec'ing a tool to ask it a question is how a planted file runs
+    twice), and a file that declares nothing needs no edit at all: _tool_category() derives a
+    shelf from its name and its description.
+    read from the SOURCE, never from a loaded module, because re-exec'ing a tool to ask
+    it a question is how a planted file runs twice. It sits UP HERE, above the registry,
+    on purpose: REGISTRY is built at import and every load calls this, so a helper
+    defined further down the file is a NameError on the one path that matters (measured
+    2026-09-25: a box with no custom tools never touches it, so the suite stayed green).
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    if str(path).endswith(".tool.json"):
+        try:
+            return " ".join(str((json.loads(text) or {}).get("category") or "").split())
+        except Exception:
+            return ""
+    m = re.search(r"^\s*CATEGORY\s*=\s*[\"']([^\"'\n]{1,40})[\"']", text, re.M)
+    return " ".join(m.group(1).split()) if m else ""
+
+
 def load_tool_defs(path):
     """[(name, description, parameters, fn, mutates)] for one drop-in file.
 
@@ -7589,6 +7650,10 @@ class ToolRegistry:
                 # ... and the endpoint marker, so a tool that restarts the model box is
                 # gated exactly like a shell command that does (agent.endpoint_tools).
                 "endpoint_touching": _endpoint_touching_tool(tname, desc),
+                # The author's own shelf for the tool index, when the file declared one
+                # (CATEGORY = "..." in a .py, "category" in a manifest); "" means
+                # _tool_category() derives it from the name and description.
+                "category": _declared_category(path),
                 "schema": {"type": "function", "function": {
                     "name": tname,
                     "description": desc,
@@ -7601,8 +7666,17 @@ class ToolRegistry:
         return True, None
 
     def custom_summary(self):
-        return "\n".join(f"  {n}: {t['schema']['function']['description']}"
-                         for n, t in sorted(self.custom.items()))
+        """The tool INDEX the static prompt carries: category -> names, capped.
+
+        The descriptions moved out of the prompt on 2026-09-25 (tests/tool_index_scale.py):
+        one "name: full description" line per custom tool measured 167.8 ch / 49.4 est-tok
+        PER TOOL, unbounded - 80 tools took the prompt from 2,920 to 6,870 est-tok on
+        every call, which is +16 s of prefill at the LAN box's measured ~240 tok/s before
+        the run does anything. The NAMES stay (a name the model cannot see is a capability
+        it does not have: the macOS drive spent 22 calls and 194.8K prompt tokens echoing
+        a hidden send_file in the shell) and the prose is one find_tools call away.
+        """
+        return tool_index_block(self.custom)
 
     def get(self, name):
         if name in CORE_TOOLS:
@@ -8547,6 +8621,155 @@ def _tool_blurb(name):
             .get("function", {}).get("description", "")
     return " ".join(str(desc).split())
 
+# --------------------------------------------------------------------------
+# The tool tree: the prompt carries CATEGORIES + NAMES, one call returns the leaf
+# --------------------------------------------------------------------------
+#
+# Measured 2026-09-25 (tests/tool_index_scale.py): one "name: full description" line per
+# custom tool cost 167.8 ch / 49.4 est-tok in the STATIC prompt, unbounded. 80 custom tools
+# took the prompt from 2,920 to 6,870 est-tok on every call - +16 s of prefill at the LAN
+# box's measured ~240 tok/s (+35 s at 200 tools) before the run does anything. The always-on
+# schemas were already flat (7,828 ch over 14 tools at 0/5/10/20/40/80 tools); a growing
+# tools/ folder was the one surface that moved.
+#
+# The fix is a SKELETON in the prompt and a leaf behind one call. A per-tool decision tree
+# written INTO the prompt would still be O(tools); this one is O(categories) and resolves in
+# one find_tools call, which is the contract the disclosure layer already has. Every NAME
+# stays: a name the model cannot see is a capability it does not have (the macOS falsifier -
+# a pinned core_tools list hid send_file and the run spent 22 calls and 194.8K prompt tokens
+# echoing the name in the shell, then reported failure). Prose is the cost; names are the
+# recall path. A tool whose name says nothing about what it does is still findable by its
+# description, because _match_tools scores the blurb too.
+#
+# The labels are the operator's own vocabulary on purpose: a category nobody would guess is
+# a tool nobody finds. ORDER MATTERS - the first bucket whose words match wins, so the
+# narrow shelves come first and `other` is last.
+_TOOL_BUCKETS = (
+    ("messaging & chat",  r"attach\b|the chat the operator is reading|mattermost|"
+                          r"operator one question"),
+    ("tools & runbooks",  r"\btools?\b|scaffold|\bmanifest\b|\bregistry\b|runbook|"
+                          r"\bskill\b|SKILL\.md"),
+    ("agents & jobs",     r"agent|delegate|schedul|\bjob\b|\bcron\b|subtask"),
+    ("checks & probes",   r"checks?\b|probe|\baudit\b|\bdrift\b|monitor|read-only|"
+                          r"\bscan\b"),
+    ("web & publish",     r"\bweb\b|\bhttp|fetch|\burl\b|blog|publish|\bpage\b|"
+                          r"anysearch|tavily"),
+    ("sessions & memory", r"session|memor|remember|\bnotes?\b|history|transcript|ledger|"
+                          r"\bplan\b|\btasks?\b|recall"),
+    ("files & edit",      r"\bfiles?\b|folder|director|fuzzy anchor|\bpatch\b|glob|bytes?|"
+                          r"\btree\b|drive letter|largest"),
+    ("system & shell",    r"\bshell\b|command|service|process|restart|docker|container|"
+                          r"reboot|firewall|\bport\b"),
+)
+_TOOL_CATEGORY_OTHER = "other"
+
+
+def _tool_category(name, desc="", tools=None):
+    """The shelf a tool sits on: the file's own CATEGORY if it declared one, else the first
+    bucket in _TOOL_BUCKETS that matches - the NAME first, then the description - else
+    `other`.
+
+    Two passes, and the order between them matters: a description is prose and carries
+    words that belong to no shelf (measured 2026-09-25: `shell`'s blurb ends "background to
+    a file and poll it", and one haystack of name+description filed the shell tool under
+    files & edit). The NAME is what an author chose to say the tool IS, so it decides, and
+    a name that says nothing (`experiment`, `patch`) is settled by what the tool does.
+
+    `tools` points the lookup at another registry's dict, which is how the drop-in
+    suite stages one without touching this process's REGISTRY.
+    """
+    shelf = (getattr(REGISTRY, "custom", None) or {}) if tools is None else tools
+    tool = shelf.get(name) or {}
+    declared = " ".join(str(tool.get("category") or "").split())
+    if declared:
+        return declared
+    low = name.lower()
+    for label, rx in _TOOL_BUCKETS:
+        if re.search(rx, low):
+            return label
+    if not desc:
+        desc = (tool.get("schema", {}).get("function", {}).get("description")
+                or _tool_blurb(name))
+    hay = ("%s" % desc).lower()
+    for label, rx in _TOOL_BUCKETS:
+        if re.search(rx, hay):
+            return label
+    return _TOOL_CATEGORY_OTHER
+
+
+def tool_index_block(tools=None):
+    """The static prompt's tool INDEX: one line per category, names only, capped.
+
+    Bounded by CATEGORIES rather than by tools: a box with 500 tools renders inside
+    tool_index_max_categories lines of tool_index_max_names_per_line names each, and the
+    overflow line names both the size of what it left out and the call that resolves it (a
+    name the model can neither see nor reach is the macOS falsifier again, one level up).
+    Static per process, so it costs one prefill per session and nothing per turn.
+    """
+    tools = (getattr(REGISTRY, "custom", None) or {}) if tools is None else tools
+    if not tools:
+        return ""
+    shelves = {}
+    for name in sorted(tools):
+        shelves.setdefault(_tool_category(name, tools=tools), []).append(name)
+    known = [label for label, _rx in _TOOL_BUCKETS] + [_TOOL_CATEGORY_OTHER]
+    labels = ([l for l in known if l in shelves]
+              + sorted(l for l in shelves if l not in known))
+    cap_cats = max(1, int(CONFIG["agent"].get("tool_index_max_categories") or 12))
+    cap_names = max(1, int(CONFIG["agent"].get("tool_index_max_names_per_line") or 12))
+    lines = []
+    for label in labels[:cap_cats]:
+        names = shelves[label]
+        line = "  %s: %s" % (label, ", ".join(names[:cap_names]))
+        if len(names) > cap_names:
+            line += (" ... +%d more (find_tools {\"category\": \"%s\"})"
+                     % (len(names) - cap_names, label))
+        lines.append(line)
+    if len(labels) > cap_cats:
+        lines.append("  ... +%d more categories (find_tools with no query names every tool "
+                     "on this box)" % (len(labels) - cap_cats))
+    return "\n".join(lines)
+
+
+_CATEGORY_ANSWER_MAX = 24      # lines one category answer may carry; bounded like the rest
+
+
+def _category_names(label):
+    everything = set(CORE_TOOLS) | set(REGISTRY.custom)
+    return sorted(n for n in everything if _tool_category(n) == label)
+
+
+def _category_answer(cat, session_key):
+    """find_tools {"category": ...}: that category's tools WITH descriptions, no schemas.
+
+    The tree's leaf. Nothing is revealed here - the empty-query path already lists without
+    revealing, and a reveal is per-session schema rent - so the model reads the prose and
+    then CALLS the one it wants, which reveals it and runs it. The answer is bounded: a
+    category with 40 tools renders like every other answer on this surface.
+    """
+    known = [label for label, _rx in _TOOL_BUCKETS] + [_TOOL_CATEGORY_OTHER]
+    known += sorted({_tool_category(n) for n in (set(CORE_TOOLS) | set(REGISTRY.custom))}
+                    - set(known))
+    want = str(cat or "").strip().lower()
+    hit = (next((l for l in known if l.lower() == want), None)
+           or next((l for l in known if l.lower().startswith(want)), None)
+           or next((l for l in known if want in l.lower()), None))
+    if not hit:
+        counts = ", ".join("%s (%d)" % (l, len(_category_names(l)))
+                           for l in known if _category_names(l))
+        return ("[HARNESS: no category named %r on this box. The categories are: %s. Pass "
+                "one of those, or ask with a query.]" % (cat, counts))
+    names = _category_names(hit)
+    if not names:
+        return "Nothing on this box is in %r." % hit
+    shown = names[:_CATEGORY_ANSWER_MAX]
+    out = ("[HARNESS: %d tool(s) on this box are in %r. No schema is added by this call: "
+           "call any of them by name and it stays for the session.]\n"
+           % (len(names), hit)
+           + "\n".join("- %s: %s" % (n, _blurb_short(n, 110)) for n in shown))
+    if len(names) > len(shown):
+        out += "\n... +%d more in this category" % (len(names) - len(shown))
+    return out
 
 # Words that appear across half the registry, so an overlap on one of them says nothing
 # about capability. Measured 2026-09-23 on a fleet box: "send Mattermost message to
@@ -8803,8 +9026,13 @@ def build_system_prompt():
     custom = REGISTRY.custom_summary()
     # F2: the hidden-tool inventory rides the static prompt (generated, see below).
     inventory = hidden_inventory_line()
-    custom_block = ("\nCustom tools already installed on this machine "
-                    "(prefer these over raw shell for their domains):\n"
+    # The tool index. The header says the two things a bare name list cannot: every name
+    # is callable as it stands, and one find_tools call returns a category's descriptions
+    # and arguments. It is one line + one line per category, so a box with 500 tools
+    # renders like this one. See _TOOL_BUCKETS for the shape and the measurement.
+    custom_block = ("\nMore tools on this box, by category (every name is callable as it "
+                    "stands; find_tools {\"category\": \"<cat>\"} returns the "
+                    "category's descriptions and arguments):\n"
                     + custom + "\n") if custom else ""
     skills = skill_index()
     skills_block = ("\nProse skills installed (runbooks of local procedures "

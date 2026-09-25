@@ -18,9 +18,10 @@ dependencies        requests, croniter, mmpy_bot (3)
 processes           one; no daemon, no gateway, no database
 interfaces          Mattermost bot (DMs + @mentions), --cli, --once "task",
                     small web UI (:8788: chat + /api/health + token header)
-core tools          17 (section 2)
-custom tools        hot-loaded .py/.ps1 from ./tools/; 6 written on the manager box, and the
-                    agent writes its own with create_tool
+core tools          22, of which 14 are always-on; the rest answer by name (section 2)
+custom tools        three file shapes load from ./tools/ (native .py, register-style .py,
+                    <name>.tool.json); 9 on the manager box, and the agent writes its own
+                    with create_tool. The prompt lists them by SHELF, descriptions on demand
 chat commands       31 (section 3.1)
 prose skills        43 runbook folders on the manager box (SKILL.md, read on demand)
 tests               4,345 lines across three suites + 2 harness scripts;
@@ -31,7 +32,7 @@ state on disk       sessions/*.json (per channel), notes.md, tasks.json (ledger)
                     jobs.json (cron), uploads/, logs
 ```
 
-## 2. Tool surface (17 core)
+## 2. Tool surface (22 core, 14 always-on)
 
 ```
 shell           run a command on this machine (bash / PowerShell), per-call timeout
@@ -51,12 +52,22 @@ remember        shorter-form memory write
 search_sessions past conversations, across channels
 delegate_task   sub-agent with a fresh context for one subtask
 skill           list, read, or search the prose runbooks
+send_file       attach a file to the chat the operator is reading
+find_tools      ask for a tool by name or by what it does; a category returns a shelf
+plan            the run's own plan, re-sent every turn with the position
+experiment      what this box has already tested, so an arm is not run twice
+ask_user        one blocking question to the operator, and the run stops for the answer
 ```
 
-Custom tools are the extension path: a `.py` in `./tools/` exposes a function and a JSON schema, and
-the loader picks it up without a restart. the manager box's six are BIOS checks, driver scans, Docker update
-checks, power-config checks, a self-restart helper, and the blog tool (lint, humanize, audit, publish
-helpers).
+Custom tools are the extension path, and there are three shapes to write one in: a native `.py`
+(NAME, DESCRIPTION, SCHEMA, `run(args, ctx)`), a register-style `.py` that calls
+`registry.register()` at import, or a `<name>.tool.json` manifest that runs any script in any
+language with the arguments on stdin. A hand-dropped file loads at the NEXT START (`create_tool`
+writes one that is live at the next call). A `.ps1` in `./tools/` is NOT a tool - the loader reads
+`*.py` and `*.tool.json`. The manager box's nine are the file and disk reports (`big_files`,
+`dir_usage`, `drive_space`), the fuzzy-anchor edit (`patch`), background jobs (`process`), the
+self-restart helper, the Docker update check, the blog tool, and `toolsmith`, the tool that
+writes tools.
 
 ## 3. The runtime around the model call (the distinctive half)
 
@@ -163,12 +174,14 @@ because it is the real threat model.
 
 ```
 no framework        the framework it replaced cost 16K+ tokens before the first tool call; this one
-                    measures 3,469 tokens of fixed overhead on a clean unpack of the shipped
-                    archive (system prompt + 17 tool schemas + an empty skills index). Each prose
-                    runbook costs about 23 tokens of index, and each custom tool costs about 250
-                    because it carries a schema: 30 runbooks = 4,167, 42 runbooks = 4,395, and
-                    the manager box's live install (42 runbooks + 3 custom tools) = 5,186. On a prefill-bound
-                    local model that difference is minutes before the first action.
+                    measures 5,333 tokens of fixed overhead AS SENT on a clean unpack of the
+                    shipped archive (system prompt + the 14 tool schemas a request really carries
+                    + the skills index; 3,022 of it is the prompt). Each prose runbook costs
+                    about 23 tokens of index, and each custom tool costs its NAME on its shelf's
+                    line - 5.9 chars per tool measured at 80 tools - with its schema riding along
+                    only while a session has revealed it. A tool fleet no longer competes with
+                    the runbooks for the prompt. On a prefill-bound local model that difference
+                    is minutes before the first action.
 one file            auditable end to end by one person; you can read the whole agent
 no database         sessions/jobs/notes/tasks are JSON/text next to the bot
 no daemon           the bot IS the process; systemd / launchd / a scheduled task supervises it
@@ -184,17 +197,21 @@ The bot computes it at startup and prints it, from the same expression used here
 
 ```
 python -c "import sys,json; sys.path.insert(0,'.'); import tinycmdr as fb; \
-  print(fb.est_tokens(fb.build_system_prompt() + json.dumps(fb.REGISTRY.openai_schemas())))"
-# clean unpack of tinycmdr-1.9.32-linux-public.tar.gz -> 3469   (17 schemas, no skills)
-# same tree with 30 runbook folders copied in          -> 4167   (17 schemas, 30 skills)
-# same tree with 42 runbook folders copied in          -> 4395   (17 schemas, 42 skills)
-# the manager box live install                                    -> 5186   (20 schemas, 42 skills)
+  print(fb.est_tokens(fb.build_system_prompt() + json.dumps(fb.select_tool_schemas(None))))"
+# clean unpack of tinycmdr-1.0.16-linux.tar.gz -> 5333   (the 14 schemas a request SENDS)
+# the same tree counting EVERY schema held      -> 7912   (25 schemas: openai_schemas())
 ```
 
-Measured 2026-09-13. The deltas are the interesting part: about 23 tokens per runbook, about 250 per
-custom tool (a schema is expensive, prose is cheap), which is the whole argument for runbooks over
-more tools. The figure moves with the number of skills and custom tools installed, which is
-why the post should quote the unpack number and say what it was measured on.
+Measured 2026-09-25 on a clean unpack of the shipped archive; the 2026-09-13 figure was 3,469 on
+1.9.32, before the tool set and the guard prose grew, and every later number since has been a
+measurement of a different tree. What a request SENDS is the two-line expression above: the
+system prompt plus the always-on schemas. The registry holds eleven more schemas that only a
+session which asked for them carries, which is why the old expression (every schema the registry
+holds) reads 7,912 here and the sent floor is 5,333. The deltas are the interesting part: about
+23 tokens per runbook of index, and a custom tool now costs its NAME on its shelf's line (5.9
+chars per tool at 80 tools, measured with `tests/tool_index_scale.py`) instead of a schema or a
+description line on every call. The figure moves with the number of skills and custom tools
+installed, which is why the post should quote the unpack number and say what it was measured on.
 
 ## 5. What it does NOT have
 

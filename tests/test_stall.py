@@ -2106,10 +2106,15 @@ def test_list_tools_is_bounded_and_still_useful():
     since 2026-09-24, an honest count of the core tools THIS session holds: the old wording
     said all 22 were in the block while the payload carried part of them, and a box asked to
     build a tool read that, never reached for create_tool, and went to the shell instead."""
+    # The bound is the CAP, not the tool count: 12 blurbs (the prompt index's cap is reused)
+    # plus the core-tools paragraph, so 9 tools and 900 tools answer the same size. It was
+    # 700 while the answer was a bare line of names; measured 1,402 ch on the repo's 9 tools
+    # after list_tools became the door the prose lives behind (a live drive read EIGHT tool
+    # files, three of them twice, for what this one answer says).
     out = fb.tool_list_tools({}, {})
     # bounded, and truthful about what THIS session holds (see test_tool_discovery for the
     # measurement that changed it: the old one-line wording claimed all 22 core tools).
-    check("list_tools stays bounded", len(out) < 700, len(out))
+    check("list_tools stays bounded", len(out) < 2500, len(out))
     check("it does not re-list the core tools", "shell," not in out and "read_file," not in out,
           out[:160])
     check("it says where the rest of the core set is", "in your list" in out, out[:160])

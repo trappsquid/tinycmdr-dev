@@ -27,6 +27,7 @@ and the file defines four things:
         return "clear text result"
 
     MUTATES = True        # only if the tool changes local state
+    CATEGORY = "files & edit"   # optional: the shelf it is listed under in the prompt
 
 `run` returns text. `ctx["shell"](cmd)` runs a shell command the way the shell
 tool does (guards and all) and `ctx["config"]` is the bot config. Handle your
@@ -69,7 +70,8 @@ too: greet.tool.json carries "name": "greet".
                  "properties": {"who": {"type": "string"}}},
       "command": ["bash", "greet.sh"],
       "timeout": 60,
-      "mutates": false
+      "mutates": false,
+      "category": "messaging & chat"
     }
 
 `command` is an argv list (or one shell string). It runs with this folder as
@@ -79,9 +81,17 @@ is nonzero). `timeout` is seconds (default 120). `mutates` marks a state change.
 
 ## How a tool is found and called
 
-The model sees one line per tool in its prompt and calls it by NAME (not by
-file name). Tools outside its always-on list are still named there (disclosure
-holds back their argument schemas, not their existence), and `list_tools` /
-`find_tools` name everything on the box with what each one does. `create_tool` writes native files for the model and
+The model sees your tool's NAME in its prompt, on the line of the shelf it files
+under (its `CATEGORY`/`category` if you set one, otherwise derived from the name and
+the description), and calls it by NAME - not by file name. What each tool DOES is one
+`find_tools {category: ...}` call away: the prompt carries the names and the cats, the
+prose is on demand, because a description line per tool grew with the fleet. Tools
+outside the always-on list are named there too (disclosure holds back their argument
+schemas, not their existence), and `list_tools` / `find_tools` name everything on the
+box with what each one does. `create_tool` writes native files for the model and
 verifies through the same loader these shapes use, so what it reports as loaded
 really loaded.
+
+A shelf you invent is a new line in the index: keep it a few words the operator would
+say out loud ("files & edit", "checks & probes"), because a category nobody would guess
+is a tool nobody finds.

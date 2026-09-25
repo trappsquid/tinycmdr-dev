@@ -444,6 +444,75 @@ def test_a_tools_file_not_seen_at_the_last_start_announces_itself():
         fb.log.removeHandler(handler)
 
 
+def test_tool_index_files_a_tool_on_its_declared_shelf():
+    """The index's shelf for a tool: declared by the author, else derived, never missing.
+
+    A declared CATEGORY is the author's own word for the shelf, and it is read from the
+    SOURCE (a native file's module attribute, a manifest's "category"), not from the loaded
+    module - re-exec'ing a tool to ask it a question is how a planted file runs twice. A
+    file that declares nothing gets a derived shelf, which is why a dropped-in tool needs no
+    edit to appear in the prompt's index.
+    """
+    d = tool_files_dir("index")
+    (d / "sweep.py").write_text(
+        'NAME = "sweep"\n'
+        'DESCRIPTION = "Tidy the workshop"\n'
+        'CATEGORY = "shop & tools"\n'
+        'SCHEMA = {"type": "object", "properties": {}}\n'
+        'def run(args, ctx):\n    return "ok"\n',
+        encoding="utf-8", newline="")
+    (d / "greet.tool.json").write_text(json.dumps({
+        "name": "greet", "description": "Greet someone", "category": "messaging & chat",
+        "schema": {"type": "object"},
+        "command": [sys.executable, "-c", "print('hi')"]}), encoding="utf-8")
+    for _n in ("plain", "small"):
+        (d / ("%s.py" % _n)).write_text(
+            'NAME = "%s"\n'
+            'DESCRIPTION = "Report free space on a drive letter"\n'
+            'SCHEMA = {"type": "object", "properties": {}}\n'
+            'def run(args, ctx):\n    return "ok"\n' % _n,
+            encoding="utf-8", newline="")
+    reg = fb.ToolRegistry(d)
+    check("a native CATEGORY is read off the source", reg.custom["sweep"]["category"]
+          == "shop & tools", reg.custom["sweep"].get("category"))
+    check("a manifest's category is read too",
+          reg.custom["greet"]["category"] == "messaging & chat",
+          reg.custom["greet"].get("category"))
+    check("a file that declares nothing carries no shelf",
+          reg.custom["plain"]["category"] == "", reg.custom["plain"].get("category"))
+    block = fb.tool_index_block(reg.custom)
+    check("the declared shelf is the line the tool is listed under",
+          "shop & tools: sweep" in block, block)
+    check("a derived shelf sits beside a declared one", "files & edit: plain" in block, block)
+    check("and the block is names only, never description prose",
+          "Tidy the workshop" not in block and "Report free space" not in block, block)
+    _shelves = {fb._tool_category(n, tools=reg.custom) for n in reg.custom}
+    check("the index is one line per SHELF, not one per tool",
+          len(block.splitlines()) == len(_shelves) and len(reg.custom) > len(_shelves),
+          (block, sorted(_shelves)))
+    _keep = dict(fb.CONFIG["agent"])
+    try:
+        fb.CONFIG["agent"]["tool_index_max_names_per_line"] = 1
+        wide = fb.tool_index_block(reg.custom)
+        check("a capped NAME list names what it left out and the call that resolves it",
+              '+1 more (find_tools {"category": "files & edit"})' in wide, wide)
+        check("...and it still shows one name per shelf, not none",
+              "files & edit: plain ..." in wide, wide)
+        fb.CONFIG["agent"]["tool_index_max_categories"] = 1
+        narrow = fb.tool_index_block(reg.custom)
+        check("a capped CATEGORY list says how many shelves it hid",
+              "+2 more categories" in narrow and narrow.count("\n") == 1, narrow)
+        # (the cap's own bound is graded at 300 tools in tests/tool_index_scale.py: on a
+        #  three-shelf registry the overflow TEXT can make a tighter cap the longer render)
+        check("and the tighter cap is the shorter render", len(narrow) < len(wide),
+              (narrow, wide))
+    finally:
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(_keep)
+    check("the caps are restored after the probe",
+          fb.tool_index_block(reg.custom) == block)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

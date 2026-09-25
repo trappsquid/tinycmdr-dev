@@ -117,7 +117,7 @@ check("no hidden tools, no tail", fb._surface_tail("done", exclude=sorted(hidden
 # The answer now names the count it really has and the tools it does not; it is spent
 # only when the model asks, so the budget is a few hundred characters, not 220.
 out = fb.tool_list_tools({}, {})
-check("list_tools stays bounded", len(out) < 700, len(out))
+check("list_tools stays bounded", len(out) < 2500, len(out))
 check("and it forwards to discovery", "find_tools" in out, out)
 
 # ---- an unknown tool name teaches the surface, absent stays absent --------------
@@ -448,6 +448,42 @@ check("an unpinned host is not warned", fb.pinned_core_tools_missing() == [],
       fb.pinned_core_tools_missing())
 check("and its capability line carries no warning",
       "WARNING" not in fb.capability_line("cli"))
+# ---- the tool tree: find_tools {category: ...} is the leaf the prompt points at -----
+# The static prompt carries the SKELETON (a shelf per line, the names on it) and the prose
+# sits behind this call: a description line per custom tool cost 167.8 ch / 49.4 est-tok
+# PER TOOL on every call (measured 2026-09-25, tests/tool_index_scale.py), so the index is
+# capped and the leaf is on demand. Three things a shelf has to do: resolve from the label
+# the prompt shows (and from a shorter word for it), name its tools WITH descriptions, and
+# reveal NOTHING - a reveal is per-session schema rent that calling the tool pays anyway.
+_shelves = {}
+for _n in sorted(set(fb.CORE_TOOLS) | set(fb.REGISTRY.custom)):
+    _shelves.setdefault(fb._tool_category(_n), []).append(_n)
+check("every tool files on a shelf (nothing strays into `other`)",
+      not _shelves.get("other"), _shelves.get("other"))
+for _shelf, _members in sorted(_shelves.items()):
+    _out = fb.tool_find_tools({"category": _shelf}, {"session_key": "cat-probe"})
+    check("%r names its %d tools with what they do" % (_shelf, len(_members)),
+          all(n in _out for n in _members) and "- " in _out, _out[:120])
+check("a shorter word for a shelf resolves too (the prompt's own labels are guessable)",
+      "files & edit" in fb.tool_find_tools({"category": "files"},
+                                           {"session_key": "cat-short"}))
+check("a category answer reveals nothing (a reveal is schema rent)",
+      fb.visible_tool_names("cat-short") == fb.visible_tool_names("cat-never-used"))
+_out = fb.tool_find_tools({"category": "zzz-not-a-shelf"}, {"session_key": "cat-miss"})
+check("an unknown category names the real ones instead of guessing",
+      "no category named" in _out and "files & edit" in _out, _out[:160])
+check("and the miss stays bounded", len(_out) < 600, len(_out))
+_sp = fb.build_system_prompt()
+check("prompt: the index header teaches the call that returns the prose",
+      'find_tools {"category": "<cat>"}' in _sp)
+check("prompt: the sentence is one field, not a doubled line",
+      _sp.count('find_tools {"category": "<cat>"}') == 1)
+check("prompt: the index block carries NAMES with no per-tool description line",
+      all(not _sp.count("  %s: " % n) or _sp.count("  %s: " % n) == 1
+          for n in fb.REGISTRY.custom) and
+      all(fb.REGISTRY.custom[n]["schema"]["function"]["description"][:30] not in _sp
+          for n in fb.REGISTRY.custom), [n for n in fb.REGISTRY.custom])
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

@@ -5,6 +5,59 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.16] - 2026-09-25
+
+The tool index: a growing `tools/` folder no longer buys prompt tokens. The always-on schemas
+were already flat (7,828 ch over 14 tools at 0/5/10/20/40/80 tools), but the custom-tool block
+put a full DESCRIPTION line per tool into the STATIC prompt - measured with
+`tests/tool_index_scale.py`: 167.8 chars / 49.4 est-tok PER CUSTOM TOOL, unbounded. 80 tools
+took the prompt from 2,920 to 6,870 est-tok on every call (+16 s of prefill at the LAN box's
+measured ~240 tok/s, ~+35 s at 200 tools) before the run did anything. The prompt now carries
+the skeleton - a category per line, the names on it - and the prose is one call away. On a box
+with 9 custom tools the static prompt drops 11,432 -> 10,381 ch (-263 est-tok per call) with
+the disclosed schema block byte-identical; at 80 tools the index costs 5.9 ch per tool instead
+of 167.8, and 300 tools render inside the caps. A/A both ways: `tests/aa_payload_floor.py`.
+
+### Changed
+- **The custom-tool block is a CATEGORY INDEX, not a description per tool.** Every custom tool
+  is still NAMED there (a name the model cannot see is a capability it does not have: the
+  pinned-`core_tools` drive measured 22 calls and 194.8K prompt tokens spent chasing a hidden
+  `send_file`), grouped onto one line per shelf the operator would say out loud - `files &
+  edit`, `web & publish`, `checks & probes`, `tools & runbooks`, `messaging & chat`, `sessions
+  & memory`, `agents & jobs`, `system & shell`, with `other` last.
+- **A shelf is DERIVED when a tool declares none**, from its name first and its description
+  second. The name decides because a description is prose: `shell`'s own blurb ends
+  "background to a file and poll it", and one haystack of name+description filed the shell
+  tool under files & edit.
+- **`list_tools` answers with each custom tool's shelf and its one-line description.**
+  Measured driving this build on a fleet box: asked what its added file/drive tools do, the run
+  called `list_tools` and then read EIGHT tool files (three of them twice) for what one answer
+  says. The prompt had stopped carrying that prose, so the door the model actually calls now
+  carries it - capped exactly like the index (12 blurbs, then `... +N more`).
+- **`find_tools` answers a category.** `find_tools {"category": "files"}` resolves the shelf
+  (a shorter word for it works), names that shelf's tools with what each does, reveals NOTHING
+  (a reveal is per-session schema rent that calling the tool by name pays anyway), and an
+  unknown category answers with the real ones instead of guessing.
+- **`tools/README.md`** documents the shelf an author may declare (`CATEGORY = "..."` at module
+  level in a `.py`, `"category"` in a `.tool.json`) and the index that carries it.
+
+### Added
+- `agent.tool_index_max_categories` (12) and `agent.tool_index_max_names_per_line` (12), in
+  `DEFAULT_CONFIG` and `config.example.json`. The block is bounded by CATEGORIES rather than by
+  tools, and a capped line renders its overflow as `... +N more (find_tools {"category":
+  "<cat>"})`, so a 500-tool box renders like a 9-tool one. No per-tool authoring is required
+  for the tools already installed.
+- `tests/tool_index_scale.py` now gates the LIVE tree too (this repo's own `tools/`) beside the
+  scale table: every name present, no description prose, every shelf resolvable, the block
+  under 400 ch, and the flat-schema invariant at every tool count.
+
+### Notes
+- The dirs' own numbers moved with this (docs re-baselined in the same batch): the README's
+  fixed-overhead figure and `docs/tinycmdr-what-it-is.md`'s "3,469 tokens on a clean unpack"
+  and "about 250 per custom tool because it carries a schema".
+- Nothing is pushed by this entry: the tree, the dist shapes and the fleet stay where they are
+  until the operator says otherwise.
+
 ## [1.0.15] - 2026-09-25
 
 Six invented daily-work orders (a status sheet to attach, a folder to clear, a scan hunt, a
