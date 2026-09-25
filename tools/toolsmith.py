@@ -293,7 +293,7 @@ def run(args, ctx):
             if p.parent != tdir:
                 # lib/ is NOT read by the loader (only tools/*.py and tools/*.tool.json
                 # are), so a helper listed like a tool invites a call to a name that does
-                # not exist. Measured 2026-09-25 driving HOST-A: `toolsmith list` answered 10
+                # not exist. Measured 2026-09-25 driving the fleet box: `toolsmith list` answered 10
                 # names where the registry really holds 6, and the four extras were lib
                 # helpers (blog_lint, humanize_native, owui_humanizer, tech_guide_humanize).
                 lines.append("- %s%s [helper library - imported by a tool, NOT callable "

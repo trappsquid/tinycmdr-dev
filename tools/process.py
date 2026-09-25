@@ -133,7 +133,7 @@ def run(args, ctx):
         # A string is a SHELL command, a list is argv verbatim.
         if isinstance(cmd, str) and cmd.startswith("["):
             # A model whose session never had this schema sends the ARGV LIST as a JSON
-            # string, and a string runs through the shell: measured 2026-09-25 on HOST-A,
+            # string, and a string runs through the shell: measured 2026-09-25 on the fleet box,
             # '["powershell.exe","-File","C:\Users\..."]' reached cmd.exe and died with
             # '"[powershell.exe"' is not recognized as an internal or external command'.
             # Repairing the shape costs nothing; the alternative is a thrown-away step.
@@ -146,7 +146,7 @@ def run(args, ctx):
                 cmd = parsed
         # A string is a SHELL command, and it has to run in the box's real shell: the
         # harness hands us the same argv the shell tool uses (PowerShell on Windows, bash
-        # elsewhere) plus the guard its own tier applies. Measured 2026-09-25 on HOST-A: with
+        # elsewhere) plus the guard its own tier applies. Measured 2026-09-25 on the fleet box: with
         # cmd.exe underneath, a bash-style and a PowerShell-style loop both died inside cmd
         # and a third form "succeeded" (exit 0) having echoed the command as text.
         if isinstance(cmd, str):

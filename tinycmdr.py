@@ -1195,7 +1195,7 @@ def _secret_values():
     for section in ("mattermost", "search", "web"):
         for k, v in (CONFIG.get(section) or {}).items():
             # A field NAMED token/key/secret is a secret whatever its length. The 12-char
-            # floor here hid the one that leaked (measured 2026-09-25 driving HOST-A: asked
+            # floor here hid the one that leaked (measured 2026-09-25 driving the fleet box: asked
             # where the web token lived, the run quoted it into chat - a 10-char value the
             # sweep had skipped). The floor stays for ENVIRONMENT values below, where a
             # short value is usually a word like "none".
@@ -2933,7 +2933,7 @@ _SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docke
 # ---------------------------------------------------------------------------
 # Minting: the one judgment the model has no data for
 # ---------------------------------------------------------------------------
-# Measured 2026-09-25 driving HOST-A: given a repeatable procedure the run does it BY HAND,
+# Measured 2026-09-25 driving the fleet box: given a repeatable procedure the run does it BY HAND,
 # every time, and never offers to keep it - and the whole log of six days holds ONE
 # `remember` call, because nothing ever asks either. The model sees one run at a time, so
 # "this is the fourth time this week" is invisible to it; a nudge it must act on would be
@@ -3128,7 +3128,7 @@ def order_census_note(session_key, text):
 
 
 # An order that asks WHERE or WHICH a durable fact lives ("which port", "where is the token
-# file") is the case `remember` exists for - and measured 2026-09-25 driving HOST-A, the run
+# file") is the case `remember` exists for - and measured 2026-09-25 driving the fleet box, the run
 # answered one of those and saved nothing, because nothing anywhere asks. Same machinery as
 # route_hint: the nudge rides the result that just answered the question, at most once per
 # run, logged, and silent the moment the run has saved something.
@@ -3389,7 +3389,7 @@ def _tool_door_answer(name, shape="", note=""):
     """One miss, one wording, on every door: the tool, its arguments, and that it is now IN
     the session's tool list.
 
-    The reveal is the part that was missing. Measured 2026-09-24 (win-host-a): told to call
+    The reveal is the part that was missing. Measured 2026-09-24 (a fleet Windows box): told to call
     a tool, the run made eight execute_code calls running tools/toolsmith.py, was answered
     "call toolsmith directly" at least four times, and never made the call - the door was
     named but the tool's schema was in neither its payload nor the answer.
@@ -3438,7 +3438,7 @@ def _bare_tool_name(command):
 def _tool_for_file_name(stem):
     """The tool a ./tools/<stem>.py registers, or "" - the file name is not the tool name.
 
-    A register-shape file answers to the NAME inside it: measured 2026-09-24 on win-host-a,
+    A register-shape file answers to the NAME inside it: measured 2026-09-24 on a fleet Windows box,
     where the run read `hermes_todo.py` off its own tools/ listing and spent six
     execute_code calls running that FILE, because nothing said it registers as todo_list.
     """
@@ -3493,7 +3493,7 @@ def _tool_named_in_code(code):
     The shell door cannot see inside Python: `subprocess.run(["python3",
     ".../tools/power_report.py"])` and `from toolsmith import run` are the same miss as
     `python tools/power_report.py` typed into the shell, and it is the door the drive
-    reaches for first (measured 2026-09-24, macOS and win-host-a: seven execute_code calls
+    reaches for first (measured 2026-09-24, macOS and a Windows box: seven execute_code calls
     between them, no tool call).
     """
     text = code or ""
@@ -3565,7 +3565,7 @@ def tool_shell(args, ctx):
     if _named_tool:
         # The tool is REVEALED as well as named: the measured reason a run keeps reaching
         # for the script is that it has never seen the tool's arguments (2026-09-24: eight
-        # execute_code calls at toolsmith.py on win-host-a with the door named twice, and a
+        # execute_code calls at toolsmith.py on a fleet Windows box with the door named twice, and a
         # tool whose schema was in neither place). Naming the door without opening it is
         # what the run walks past.
         _named_tool = _tool_for_file_name(_named_tool) or _named_tool
@@ -3862,7 +3862,7 @@ def endpoint_gate(subject, why, confirm_cb):
 def _missing_argument_answer(name, missing, params):
     """What a call that left out a DECLARED argument is told, or "" if it did not.
 
-    Measured 2026-09-25 driving HOST-A: `create_tool` answered a bare
+    Measured 2026-09-25 driving the fleet box: `create_tool` answered a bare
     `ERROR in tool 'create_tool': 'name'` and the run retried the identical call. An
     answer that names the argument and lists the shape costs nothing and saves the retry.
     """
@@ -3879,7 +3879,7 @@ def _missing_argument_answer(name, missing, params):
 def shell_guard(text, ctx):
     """The shell tool's own tier, exposed to a drop-in tool that spawns its own process.
 
-    Measured 2026-09-25 driving HOST-A: `process start` launched a .ps1 whose body did
+    Measured 2026-09-25 driving the fleet box: `process start` launched a .ps1 whose body did
     exactly what the shell tier refuses, so the seatbelt was one tool call away from
     bypassed - the same shape execute_code had before 2026-09-18. A tool that starts a
     process asks here first: the string goes through the confirm tier (quoted back to the
@@ -4096,7 +4096,7 @@ def tool_edit_file(args, ctx):
 def tool_search_files(args, ctx):
     """Find files by name glob and/or content regex (Hermes search_files).
 
-    Two contracts meet in this tool and they disagreed (measured 2026-09-25 driving HOST-A):
+    Two contracts meet in this tool and they disagreed (measured 2026-09-25 driving the fleet box):
     the SCHEMA below calls `pattern` a name glob and puts the grep in `content`, while the
     route hint and the routing bullet in the system prompt both teach
     `search_files {"pattern": "<regex>", "path": "<file or directory>"}`. A run that
@@ -4236,7 +4236,7 @@ def tools_dir_verdict(path):
 
     Measured 2026-09-24 on three boxes: asked to build a tool, every run wrote the file
     with write_file and then found out whether it was valid by running the loader by hand
-    in a subprocess - three drafts on linux-host-a, and on win-host-a a file that was refused
+    in a subprocess - three drafts on a fleet Linux box, and on a fleet Windows box a file that was refused
     at the next start and is not a tool at all. The harness knows the answer at the moment
     of the write; saying it there removes the whole detour.
     """
@@ -4685,7 +4685,7 @@ def tool_remember(args, ctx):
     """Append, replace or forget ONE durable fact in notes.md, bounded at write time.
 
     The schema has always said "replace stale facts instead of stacking contradictions",
-    and the tool could only ever APPEND (measured 2026-09-25 driving HOST-A: a run had
+    and the tool could only ever APPEND (measured 2026-09-25 driving the fleet box: a run had
     recorded a workaround as a durable fact, a harness fix made it false an hour later,
     and there was no way to correct it - the note had to be removed by hand). Replace and
     forget are the missing half.
@@ -5099,7 +5099,7 @@ def tool_task(args, ctx):
                     return (f"ERROR: no open tasks in the ledger to mark {action}. "
                             f"Use action=add first to track multi-step work, or "
                             f"`action=list` to inspect the ledger.")
-                # Measured 2026-09-25 driving HOST-A (work order 2): two items were open, the
+                # Measured 2026-09-25 driving the fleet box (work order 2): two items were open, the
                 # model called done with no id, got a one-liner that listed the IDS only, and
                 # moved on - it stopped using the ledger for the rest of the run. Naming each
                 # open item costs nothing and answers the question the model actually has.
@@ -5469,7 +5469,7 @@ def _annotate_promise(answer, calls):
 def tool_create_tool(args, ctx):
     """Write a new custom tool into tools/ and hot-load it."""
     # `name` is derivable, and the run that derives it is the one that omits it (measured
-    # 2026-09-25 driving HOST-A): the call carried `code` alone with the name in the file's
+    # 2026-09-25 driving the fleet box): the call carried `code` alone with the name in the file's
     # own `# NAME: big_files` header, came back as a bare KeyError('name'), and the run
     # retried the identical call. The loader needs the file's NAME to equal the file name
     # anyway, so the name inside the code is the truth.
@@ -5526,7 +5526,7 @@ def tool_create_tool(args, ctx):
               if v.get("source") == path and t != name]
     # It is callable AND now visible: a created tool used to be callable-by-name only, so
     # the run that had just built it still reached for python to check its own work
-    # (measured 2026-09-24 on win-host-a: three `python -c "import biggest_dirs"` calls after
+    # (measured 2026-09-24 on a fleet Windows box: three `python -c "import biggest_dirs"` calls after
     # create_tool, and never the tool call). One reveal closes that loop.
     reveal_tools((ctx or {}).get("session_key"), [name])
     return (f"OK: tool '{name}' created and loaded. It is now callable and in your tool "
@@ -5647,7 +5647,7 @@ def tool_list_tools(args, ctx):
             if missing else "."
         since = sorted(revealed_tools(session) & set(CORE_TOOLS))
         if since and not missing:
-            # Measured 2026-09-25 driving HOST-A (work order 5): asked which tools were NOT in
+            # Measured 2026-09-25 driving the fleet box (work order 5): asked which tools were NOT in
             # its list, the run called this and find_tools(all) in ONE batch, read "22 of 22",
             # and answered "None are hidden" - the sibling call had revealed them all a
             # moment earlier. Naming the reveal makes that inference impossible.
@@ -7399,8 +7399,8 @@ def _run_state_reset(key):
 
     /new cleared history, transcripts and carry but not the plan, and the plan is re-sent
     in the trailing block of every turn: a fresh session therefore opened with the
-    PREVIOUS task's steps already in the payload. Measured 2026-09-24 on win-host-a and
-    linux-host-a - both spent the new run revising a stale plan (git steps, a finished
+    PREVIOUS task's steps already in the payload. Measured 2026-09-24 on a fleet Windows box and
+    a fleet Linux box - both spent the new run revising a stale plan (git steps, a finished
     notes.zip exercise) instead of the order they had just been given, and one never
     built the tool it was asked for at all.
     """
@@ -8155,7 +8155,7 @@ def reveal_tools_named_in(session_key, text, cap=_ORDER_REVEAL_CAP):
     """Reveal the tools the ORDER names, BEFORE the run starts substituting for them.
 
     The disclosure layer's bet was that a named tool gets called by name. Measured three
-    times in one evening (2026-09-24, macOS + win-host-a): an order naming tools that were
+    times in one evening (2026-09-24, macOS and a Windows box): an order naming tools that were
     not in the session's payload produced substitutions, never the call - the run reached
     for edit_file, then execute_code (eight calls at a tool file), then skill{action=list}
     (seven calls, 2.8 KB of runbook names each), and never once called toolsmith or
@@ -8173,7 +8173,7 @@ def reveal_tools_named_in(session_key, text, cap=_ORDER_REVEAL_CAP):
     if not named and _TOOL_BUILD_RX.search(str(text)) and "create_tool" in hidden:
         # "Build yourself a tool" names no tool and names the job: create_tool is the door,
         # and a run asked to build a tool substituted three ways instead of calling it
-        # (measured 2026-09-24 on macOS, win-host-a and linux-host-a: it wrote the file with
+        # (measured 2026-09-24 on macOS and two fleet boxes: it wrote the file with
         # write_file or scaffolded one through the shell, and one host left a file the
         # loader refuses). The job's own tool is worth a reveal.
         named = ["create_tool"]
@@ -9680,7 +9680,7 @@ class Agent:
             out = str(tool["fn"](args, ctx))
         except KeyError as e:
             # A call missing a required argument used to come back as
-            # `ERROR in tool 'create_tool': 'name'` - measured 2026-09-25 driving HOST-A,
+            # `ERROR in tool 'create_tool': 'name'` - measured 2026-09-25 driving the fleet box,
             # where the run had just done that twice and learned nothing from it. If the
             # key is one this tool declares, say which argument is missing and list the
             # arguments it takes; anything else keeps the honest generic wording.
@@ -17701,7 +17701,7 @@ VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc
          "restart", "update", "clean", "token", "version", "run", "help")
 
 # Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
-# (Windows installs by default, and win-host-a had no git at all on 2026-09-24).
+# (Windows installs by default, and a fleet Windows box had no git at all on 2026-09-24).
 DEFAULT_UPDATE_REPO = "https://github.com/trappsquid/tinycmdr.git"
 _GIT_CANDIDATES = ("git", "/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git",
                    "C:\\Program Files\\Git\\cmd\\git.exe", "C:\\PortableGit\\cmd\\git.exe")
