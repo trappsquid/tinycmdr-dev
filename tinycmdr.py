@@ -3242,7 +3242,11 @@ def tool_execute_code(args, ctx):
             return (f"TIMEOUT after {timeout}s — the code and everything it "
                     f"started were killed (a survivor holding the output pipe "
                     f"would freeze this channel). Partial output:\n{out}")
-        return f"exit_code={rc}\n{out}"
+        hint = ""
+        if rc != 0 and "NameError:" in out:
+            hint = ("\n[HINT: execute_code runs each snippet in an isolated Python process "
+                    "— include all required imports (e.g. `import os, subprocess`) in your code]")
+        return f"exit_code={rc}\n{out}{hint}"
     except OperatorStop:
         return ("STOPPED by the operator (`/tinycmdr stop`): this code and everything it started "
                 "were killed. Do not retry it and do not write a final answer — the run "
@@ -3532,7 +3536,7 @@ def tool_edit_file(args, ctx):
             return (f"ERROR: {why} after whitespace normalisation. Include more "
                     f"surrounding lines to make it unique, or set replace_all.")
         old_lines = lf_old.split("\n")
-        new_lines = lf_new.split("\n")
+        new_lines = lf_new.split("\n") if lf_new else []
         lines = lines[:idx] + new_lines + lines[idx + len(old_lines):]
         new_lf = "\n".join(lines)
         strategy = why
@@ -3541,8 +3545,27 @@ def tool_edit_file(args, ctx):
         if count > 1 and not replace_all:
             return (f"ERROR: old_string occurs {count} times. Include more "
                     f"surrounding context to make it unique, or set replace_all.")
-        new_lf = (lf_text.replace(lf_old, lf_new) if replace_all
-                  else lf_text.replace(lf_old, lf_new, 1))
+        if lf_new == "" and not lf_old.endswith("\n"):
+            if "\n" not in lf_old:
+                pat = r"(?m)^[ \t]*" + re.escape(lf_old) + r"[ \t]*\n?"
+                if re.search(pat, lf_text):
+                    cnt = 0 if replace_all else 1
+                    new_lf = re.sub(pat, "", lf_text, count=cnt)
+                else:
+                    new_lf = (lf_text.replace(lf_old, "") if replace_all
+                              else lf_text.replace(lf_old, "", 1))
+            else:
+                target = "\n" + lf_old + "\n"
+                wrapped = "\n" + lf_text + "\n"
+                if target in wrapped:
+                    new_lf = (wrapped.replace(target, "\n")[1:-1] if replace_all
+                              else wrapped.replace(target, "\n", 1)[1:-1])
+                else:
+                    new_lf = (lf_text.replace(lf_old, "") if replace_all
+                              else lf_text.replace(lf_old, "", 1))
+        else:
+            new_lf = (lf_text.replace(lf_old, lf_new) if replace_all
+                      else lf_text.replace(lf_old, lf_new, 1))
 
     # ---- 3. write back atomically, in the file's own newline convention
     out = new_lf.replace("\n", nl) if nl != "\n" else new_lf
@@ -4415,6 +4438,12 @@ def tool_task(args, ctx):
             ids = ", ".join("#%s" % i.get("id") for i in active_items) or "none"
             if not args.get("id"):
                 if not active_items:
+                    if action in ("done", "drop", "dropped"):
+                        closed = sum(1 for i in items if i.get("status") in ("done", "dropped"))
+                        return (f"Notice: all tasks in the ledger are already closed "
+                                f"({closed} task(s) closed, 0 open). No open tasks remain "
+                                f"to mark {action}. Deliver your final report to the user "
+                                f"now without calling task again.")
                     return (f"ERROR: no open tasks in the ledger to mark {action}. "
                             f"Use action=add first to track multi-step work, or "
                             f"`action=list` to inspect the ledger.")
@@ -6935,6 +6964,16 @@ def _carry_save(key):
             ensure_ascii=False))
     except Exception as e:
         log.debug("tool carry not saved: %s", e)
+
+
+def _carry_reset(key):
+    """Clear in-memory and on-disk carry store for a reset session."""
+    with _CARRY_LOCK:
+        _CARRY.pop(key, None)
+    try:
+        _carry_path(key).unlink(missing_ok=True)
+    except Exception as e:
+        log.debug("tool carry unlink failed: %s", e)
 
 
 def _carry_args_brief(args):
@@ -9944,10 +9983,18 @@ class Agent:
     def reset(self, session_key):
         reset_scan_spend(session_key)
         self.histories.pop(session_key, None)
+        self.model_overrides.pop(session_key, None)
+        _carry_reset(session_key)
         try:
             self._session_path(session_key).unlink(missing_ok=True)
         except Exception:
             pass
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
+        for suffix in (".transcript.jsonl", ".web.jsonl"):
+            try:
+                (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
+            except Exception:
+                pass
 
     def undo(self, session_key, n=1):
         """Remove the last N user turns (and their answers) from history."""

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Prior-run false interruption alerts:** Active turns were incorrectly flagged as interrupted because `_prior_run_unfinished()` evaluated the in-flight user message. Fixed by ignoring the active user turn during live execution.
 - **Empty-ledger task error:** Calling `task action=done` without an ID when no tasks were active returned contradictory `no task #None`. Fixed with clear message indicating no active tasks.
 - **PowerShell 5.1 command chaining with `&&`:** Windows PowerShell 5.1 rejected `&&` command separators. Added quote-aware translation to `; if ($?) { ... }` in `tool_shell`.
+- **Carry store persistence across session reset:** Resetting a session with `/new` or `/reset` wiped conversation history but left the carry sidecar (`.carry.json`) in memory and on disk. Fixed by unlinking `.carry.json` and evicting in-memory carry in `AGENT.reset()`.
+- **Task completion spin on empty ledger:** Calling `task action=done` when all ledger tasks were already closed returned an error instructing the model to add tasks, triggering repetitive retry loops. Fixed by returning a completion notice directing the model to deliver its report.
+- **Line deletion residue in `edit_file`:** Deleting text via `edit_file` with `new_string=""` left blank lines in both exact full-line and fuzzy line-window replacements. Fixed line slicing and full-line matching so deleted lines leave no blank lines.
+- **Process isolation guidance in `execute_code`:** Added runtime diagnostic hint on `NameError` reminding the model that snippets execute in isolated processes requiring self-contained imports.
 
 ## [1.0.11] - 2026-09-24
 
