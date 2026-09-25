@@ -136,6 +136,32 @@ def main():
         check(ids2 and ids2[-1] == str(fb._SPILL_SEQ["n"]),
               "  and it is the OLDEST lines that drop, never the newest")
 
+        # ---- the index belongs to ONE session, and /new drops that session's pointers ----
+        # Measured 2026-09-25 driving a fleet box: process-wide, the index put one
+        # conversation's spilled output in front of every other conversation's model, and it
+        # survived /new - a fresh order ("how much room is left on the C drive") was answered
+        # in two calls and then spent ten more reading the PREVIOUS, stopped run's spill files
+        # and re-running its scans.
+        # the marker leads, because the index previews a spill's FIRST line only
+        fb.cap_output("shell", "mine-s1 " + "q" * (cap + 200), "command output",
+                      session="sess-A")
+        fb.cap_output("shell", "mine-s2 " + "q" * (cap + 200), "command output",
+                      session="sess-B")
+        a_idx, b_idx = fb.spill_index_block("sess-A"), fb.spill_index_block("sess-B")
+        check("mine-s1" in a_idx and "mine-s2" not in a_idx,
+              "a session's prompt carries only its OWN spill pointers")
+        check("mine-s2" in b_idx and "mine-s1" not in b_idx,
+              "  and the other session carries only its own")
+        mine = fb._spill_rows("sess-A")
+        on_disk = (fb.BASE_DIR / mine[-1]["path"]).exists()
+        fb.AGENT.reset("sess-A")
+        check(fb.spill_index_block("sess-A") == "",
+              "/new drops this session's spill pointers")
+        check(fb.spill_index_block("sess-B") != "",
+              "  and does not touch another session's")
+        check(on_disk and (fb.BASE_DIR / mine[-1]["path"]).exists(),
+              "  the spilled FILE stays on disk - nothing was dropped")
+
         print()
         if FAILS:
             print(f"{len(FAILS)} check(s) FAILED")

@@ -217,6 +217,29 @@ def test_checkin_shows_memory():
           fb.mem_line().startswith("RAM"), fb.mem_line())
 
 
+def test_scope_note_past_the_threshold():
+    """A vague order can run 30-58 tool calls with no operator-facing signal but the tool
+    lines themselves (measured driving a fleet box, 2026-09-25). One line, once per run,
+    past scope_note_steps - and nothing at all where nobody reads this lane."""
+    d, rep = reporter(scope_note_steps=40)
+    check("no scope note under the threshold", rep.scope_note(12, "shell") == "")
+    note = rep.scope_note(41, "shell")
+    check("the scope note names the count, the last tool and the verb that ends the run",
+          "41 tool calls" in note and "/tinycmdr stop" in note and "shell" in note, note)
+    check("and it fires only ONCE per run", rep.scope_note(80, "shell") == "")
+    d2, rep2 = reporter(scope_note_steps=40)
+    rep2.dest.has_human = False
+    check("silent on a lane with nobody to read it", rep2.scope_note(41, "shell") == "")
+    d3, rep3 = reporter(scope_note_steps=0)
+    check("0 switches it off entirely", rep3.scope_note(99, "shell") == "")
+    d4, rep4 = reporter(scope_note_steps=40)
+    d4.has_human = True
+    rep4.steps = 41
+    rep4.progress("shell", {"command": "x"})     # the check-in lives in progress()
+    body = "\n".join(x[2] for x in d4.posts) + "\n".join(x[2] for x in d4.edits)
+    check("the check-in path posts it without being asked", "still working" in body, body[:200])
+
+
 def test_tool_line_single_call():
     d, rep = reporter()
     rep.tool_done("shell", {"command": "Get-PSDrive C"}, "exit_code=0\nfree", 0.4)

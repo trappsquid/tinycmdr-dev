@@ -145,6 +145,19 @@ def main():
         check(len(fb.select_tool_schemas("s4")) == len(everything),
               "an all=true session carries the full registry again")
 
+        # ---- a reset pays the rent again ------------------------------------
+        # A reveal is per-SESSION rent, so a cleared conversation must not keep it.
+        # Measured 2026-09-25 driving a fleet Windows box: find_tools{all:true} took the
+        # payload from 14 schemas to 30, and every later turn - THROUGH /new, which says
+        # "Session cleared. Fresh context." - carried ~3.4K extra prompt tokens (step-0
+        # prompt_tok 6,505 -> 10,086 on identical orders). Falsified against the pre-fix
+        # build: without the reset pop this fails with 30 schemas still on the wire.
+        fb.AGENT.reset("s4")
+        check(fb.hidden_tools("s4") != [],
+              "a reset session hides the rare tools again")
+        check(len(fb.select_tool_schemas("s4")) == len(visible),
+              "a reset session pays the reveal rent again")
+
         # ---- a bad query is honest ------------------------------------------
         out = fb.tool_find_tools({"query": "zzzznothing"}, {"session_key": "s5"})
         check("No tool matched" in out and "all=true" in out,

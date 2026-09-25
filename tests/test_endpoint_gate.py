@@ -252,6 +252,41 @@ def main():
               fb.steering_gap_note())
         check("and the recovered post really was queued", d.queued == ["hello?"],
               str(d.queued))
+
+        # ---- the CONTENT tier: prose in a file is not a command (2026-09-25) ----
+        # Three writes in ONE run were gated over the word in a script's own section header
+        # ("# ---------- REBOOT / UPDATE STATE ----------"): a 300s stall, a declined write
+        # and a rewrite - while the same run's real tree move, `robocopy /MOVE` of 194 items,
+        # matched nothing in either tier.
+        def gate(text):
+            return fb.confirm_gate(text, "write_file x.ps1", {"confirm_cb": yes})
+
+        check("a section header mentioning REBOOT is NOT a command",
+              gate("# ---------- REBOOT / UPDATE STATE ----------") is None)
+        check("a quoted string mentioning REBOOT is NOT a command",
+              gate('[void]$out.Append("RECENT REBOOT/CRITICAL EVENTS:")') is None)
+        check("a real reboot line in a file IS a command",
+              gate("echo done\nreboot\n") is not None)
+        check("a real recursive delete in a file IS a command",
+              gate("Remove-Item C:\\tmp -Recurse -Force") is not None)
+        check("a tree MOVE in a file IS a command",
+              gate("robocopy C:\\a C:\\b /E /MOVE") is not None)
+        check("a shell command still takes the command tier",
+              fb._confirm_hit("shutdown /r /t 0") is not None)
+
+        # ---- the strict-mode shell is a per-host CHOICE (measured before it was offered) ----
+        if fb.IS_WINDOWS:
+            fb.CONFIG["agent"]["shell_strict_mode"] = False
+            off = fb.tool_shell({"command": "$s = Get-CimInstance Win32_OperatingSystem; "
+                                            "'free=' + [int]$s.NoSuchPropHere"}, {})
+            fb.CONFIG["agent"]["shell_strict_mode"] = True
+            on = fb.tool_shell({"command": "$s = Get-CimInstance Win32_OperatingSystem; "
+                                           "'free=' + [int]$s.NoSuchPropHere"}, {})
+            fb.CONFIG["agent"]["shell_strict_mode"] = False
+            check("strict OFF: a missing property reads as 0 and says nothing",
+                  "free=0" in off and "cannot be found" not in off, off[:120])
+            check("strict ON: the same command FAILS loudly",
+                  "cannot be found" in on, on[:160])
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

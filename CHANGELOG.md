@@ -5,6 +5,60 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.14] - 2026-09-25
+
+Six orders typed the way a non-technical operator actually types them ("this thing has been realy
+slow", "i think iv lost a file", "clear out the junk for me") were driven at a fleet box and graded
+from that box's own journal. Everything below is a measurement from those runs, not a theory.
+
+### Fixed
+- **`/new` cleared the conversation but kept the rent.** A `find_tools {all: true}` took a session
+  from 14 tool schemas to 30, and every later turn - INCLUDING a fresh session that had just been
+  told "Session cleared. Fresh context." - carried ~3.4K extra prompt tokens (step-0 prompt_tok
+  6,505 -> 10,086 on the same order). `AGENT.reset` now drops the session's reveals, so a cleared
+  conversation starts at the floor again.
+- **The spill index was process-wide and survived `/new`.** The index of oversized tool results
+  rides every prompt, so one conversation's spilled output - its first line and its path - was put
+  in front of every OTHER conversation's model, and it outlived a reset: measured, a fresh order
+  ("how mutch room is left on the c drive thing") was answered in two calls and then spent ten more
+  reading the PREVIOUS, stopped run's spill files and re-running its printer/LAN scans. Spills are
+  now keyed by session, `spill#<id>` resolves inside the session that made it, and a reset drops
+  that session's pointers while the files stay on disk.
+- **The confirm tier read PROSE in a file as a command.** `\breboot\b` gated three writes in ONE run
+  over the words in a script's own section header ("# ---------- REBOOT / UPDATE STATE ----------"):
+  a 300s stall, a declined write, and a rewrite - while the same run's actual destructive act, a
+  `robocopy /MOVE` of a 194-item directory, matched nothing in either tier. Writes now take a
+  CONTENT tier (`agent.confirm_content_patterns`): the machine verbs fire only where they stand as
+  a command, and `/MOVE` joins the list because it deletes the source tree.
+- **`remember` stacked near-duplicates.** The reply NAMED the older entry and suggested the replace
+  call; the model re-issued the identical note instead, the repeat guard folded it, and the file
+  kept two entries for one fact - the char budget paying twice, forever. A new note that shares
+  `agent.notes_supersede_share` (0.85) of its words with an existing one now supersedes it in
+  place and says so. The 0.7-0.85 band still asks, because only the model knows if it is the same
+  fact said differently.
+- **The check-in's memory gauge read `RAM 0.0 GiB` on a healthy process.** MiB was formatted as GiB
+  with one decimal, so a lean 32 MB child - exactly the healthy case - rendered as a failed probe.
+  Under 1 GiB it reads in MiB now.
+- **A PowerShell property that does not exist is silent, and $null in arithmetic is 0.** Measured:
+  `$sys.FreeMemory` (the real name is `FreePhysicalMemory`) made a run report "0 MB free RAM" as its
+  ROOT CAUSE while the box had 18 GB free - exit code 0, no warning, nothing to read as wrong.
+  `agent.shell_strict_mode` (Windows, OFF by default) runs inline PowerShell under
+  `Set-StrictMode -Version 2.0`, which fails the read instead. It ships off because the same
+  measurement showed version 2.0 ALSO errors on a read of an unset variable and adds stderr noise to
+  the everyday `Get-ChildItem | Where-Object { $_.Length -gt 1MB }` idiom (right answer, new noise):
+  it is a choice for a box you diagnose, not one you operate. Turn it on per host.
+
+### Added
+- **One line on a long run, once, with the verb that ends it.** Five of the six driven orders ran
+  30-58 tool calls over 17-20 minutes and the only signal an operator got was the tool lines
+  themselves; two were still hunting when a `/stop` arrived. Past `agent.scope_note_steps` (40) the
+  check-in adds how many calls the run has made and that `/tinycmdr stop` ends it. Zero prompt
+  bytes: nothing here reaches the model, and it is silent on a lane with nobody reading it.
+
+### Changed
+- `config.example.json` documents the four new keys: `shell_strict_mode`,
+  `confirm_content_patterns`, `notes_supersede_share`, `scope_note_steps`.
+
 ## [1.0.13] - 2026-09-25
 
 ### Changed

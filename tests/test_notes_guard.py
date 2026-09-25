@@ -264,9 +264,27 @@ def main():
         check(fb.tool_remember({"action": "squash", "note": "x"}, {}).startswith("ERROR"),
               "remember: an unknown action is refused by name")
         fb.tool_remember({"note": "probe fact: the widget dial is blue"}, {})
+        before = len(fb._parse_notes(fb.NOTES_FILE.read_text(encoding="utf-8"))["entries"])
+        # The SAME fact in new words (measured share 1.00) does not need asking about: the
+        # harness did what the Replace offer asks, because the model did not take it
+        # (2026-09-25: it re-issued the identical note, the loop guard folded it, and notes.md
+        # kept BOTH entries for one fact - the char budget paying for it twice).
         out = fb.tool_remember({"note": "probe fact: the widget dial is blue and round"}, {})
+        entries = fb._parse_notes(fb.NOTES_FILE.read_text(encoding="utf-8"))["entries"]
+        check("superseded" in out and "one fact, one entry" in out,
+              f"remember: the same fact reworded SUPERSEDES the entry it repeats ({out[:70]!r})")
+        check(len(entries) == before,
+              f"remember: and adds no second entry ({before} -> {len(entries)})")
+        check(sum(1 for x in (e["text"] for e in entries) if "widget dial" in x) == 1,
+              "remember: one fact, one entry in the file")
+        kept = [e["text"] for e in entries if "widget dial" in e["text"]]
+        check(bool(kept) and "and round" in kept[0],
+              f"remember: the NEWER words are the ones kept ({kept[:1]})")
+        # A merely RELATED fact (measured share 0.83) is still flagged, never replaced: the
+        # model is the one that knows whether it is the same fact said differently.
+        out = fb.tool_remember({"note": "probe fact: the widget dial is green"}, {})
         check("nearly the same thing" in out and "replace" in out,
-              "remember: a near-duplicate is named with the replace call")
+              "remember: a related-but-different fact is flagged, not replaced")
 
         print()
         if FAILS:

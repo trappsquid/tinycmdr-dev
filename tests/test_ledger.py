@@ -187,7 +187,11 @@ def test_remember_auto_curates():
     fb.CONFIG["agent"]["notes_archive_days"] = 9999
     out = ""
     for i in range(12):
-        out = fb.tool_remember({"note": f"fact {i} " + "z" * 60}, {})
+        # DISTINCT facts on purpose: twelve notes that say the same thing in the same words
+        # are now superseded rather than stacked (notes_supersede_share), which is the point
+        # of that rule - this test is about the budget, so each note has to be its own fact.
+        out = fb.tool_remember(
+            {"note": f"fact {i}: the widget{i} dial reads value{i} " + "z" * 60}, {})
     check("curation triggered by remember", "curated" in out, out[-200:])
     check("notes bounded at write time",
           len(fb.NOTES_FILE.read_text(encoding="utf-8")) <= 400,

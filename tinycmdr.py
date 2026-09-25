@@ -310,6 +310,16 @@ DEFAULT_CONFIG = {
         # harness parses them into the plan. Measured necessity: the model was offered the
         # plan tool in 16 graded runs and called it zero times.
         "plan_from_request": True,
+        "shell_strict_mode": False,
+        # Windows shell only. A PowerShell property that does not exist reads as $null, and
+        # $null in arithmetic is 0: measured 2026-09-25 driving a fleet box, `$sys.FreeMemory`
+        # (the real name is FreePhysicalMemory) computed to 0 and the run reported "0 MB free
+        # RAM" as its ROOT CAUSE while the box had 18 GB free - exit 0, no warning. True runs
+        # inline PowerShell under `Set-StrictMode -Version 2.0`, which turns that into an
+        # error. OFF by default on purpose: measured on the same box, version 2.0 ALSO errors
+        # on a read of an unset variable and adds stderr noise to the everyday
+        # `Get-ChildItem | Where-Object { $_.Length -gt 1MB }` idiom (right answer, new noise).
+        # Turn it on for a box you DIAGNOSE; leave it off for one you operate.
         "shell_timeout": 300,
         # A recursive walk from a BROAD root is the one command shape measured to
         # eat whole minutes of the operator's time: one graded sample spent 608 of
@@ -334,12 +344,16 @@ DEFAULT_CONFIG = {
         # it overflows the context window on each request and no amount of
         # prompt-side truncation helps. Long content belongs in a file.
         "notes_max_note_chars": 1200,
+        "notes_supersede_share": 0.85,   # a new note this close to an existing one REPLACES
+                                         # it instead of piling up beside it (see tool_remember)
         "notes_keep_entries": 60,   # entries kept in notes.md before ageing out
         "notes_archive_days": 45,   # older than this -> notes-archive.md
         "tasks_max_open": 15,       # refuse new tasks past this many open ones
         "tasks_done_keep": 3,       # finished tasks still shown in the prompt
         "checkin_minutes": 5,     # post a NEW progress message this often (0 = off)
         "checkin_steps": 30,      # ...or every N tool steps, whichever comes first
+        "scope_note_steps": 40,   # one line, once per run, past this many tool calls: the
+                                  # operator's only signal on a long vague order (0 = off)
         "catch_up_seconds": 60,   # sweep for messages lost to WS gaps/restarts (0 = off)
         "catch_up_max_minutes": 30,  # never replay anything older than this
         # Stall guard: one worker serves a channel, so a wedged run would queue
@@ -444,6 +458,27 @@ DEFAULT_CONFIG = {
             r"\b(stop|restart)-computer\b",
             r"\brd\s+/s\b", r"\brmdir\s+/s\b", r"\bdel\s+/[a-z]*[sq]",
             r"\bremove-item\b[^|;]*-recurse",
+            # /MOVE deletes the source tree when the copy lands. Measured 2026-09-25: a run
+            # answered "clear out the junk" with `robocopy /MOVE` of a 194-item directory and
+            # NOTHING in either tier matched it - only the model's own question protected it.
+            r"\brobocopy\b[^|;]*/move\b",
+        ],
+        # The CONTENT tier: the same idea over the TEXT of a file the harness is about to
+        # write (write_file/edit_file content, create_tool code, a manifest command). Kept
+        # apart from confirm_patterns because a bare word is a command in a shell and PROSE in
+        # a file: measured 2026-09-25 driving a fleet box, `\breboot\b` gated three writes over
+        # the words in a script's section header ("# ---------- REBOOT / UPDATE STATE
+        # ----------") - a 300s stall, a declined write and a rewrite - while the same run's
+        # actual destructive act matched nothing at all. Here the machine verbs fire only
+        # where they stand as a command. A host that sets its own confirm_patterns keeps that
+        # list; this key is separate so the two cannot drift into each other.
+        "confirm_content_patterns": [
+            r"(?im)^\s*(?:sudo\s+)?(?:shutdown|reboot|poweroff|halt)\b",
+            r"(?im)^\s*(?:sudo\s+)?(?:stop|restart)-computer\b",
+            r"[;&|]\s*(?:sudo\s+)?(?:shutdown|reboot|poweroff|halt)\b",
+            r"\brd\s+/s\b", r"\brmdir\s+/s\b", r"\bdel\s+/[a-z]*[sq]",
+            r"\bremove-item\b[^|;]*-recurse",
+            r"\brobocopy\b[^|;]*/move\b",
         ],
         # What a lane with NOBODY to ask decides (a scheduled job, a sub-agent): a
         # confirm-pattern command is declined, never assumed yes. "allow" is the other
@@ -617,7 +652,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.13"
+VERSION = "1.0.14"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -1317,8 +1352,26 @@ _SPILLS_MAX = 12
 _SPILL_SEQ = {"n": 0}
 
 
-def _spill_record(name, rel, text):
-    """Remember one spill for the prompt index. Never raises."""
+def _spill_rows(session=None):
+    """The spill-index rows for one session, oldest first. `None` = every row.
+
+    A caller with no session key (a fixture, a sub-agent) keeps the old whole-index
+    behaviour; a real conversation sees only its own spills.
+    """
+    with _SPILLS_LOCK:
+        return [e for e in _SPILLS if session is None or e.get("session") == session]
+
+
+def _spill_record(name, rel, text, session=None):
+    """Remember one spill for the prompt index. Never raises.
+
+    Keyed by SESSION since 2026-09-25: the index rides every prompt, so an unkeyed one
+    put one conversation's spilled output - its first line and its path - in front of
+    every other conversation's model, and it survived /new, which is how a fresh order
+    was dragged back into a stopped run's work (measured driving a fleet box: the new
+    order answered in two calls, then spent ten more reading the PREVIOUS, stopped run's
+    spill files and re-running its scans).
+    """
     try:
         first = next((ln.strip() for ln in str(text).splitlines()
                       if ln.strip()), "")
@@ -1326,31 +1379,30 @@ def _spill_record(name, rel, text):
             _SPILL_SEQ["n"] += 1
             _SPILLS.append({"id": _SPILL_SEQ["n"], "tool": str(name)[:24],
                             "path": rel, "first": first[:110],
-                            "chars": len(str(text)), "at": int(time.time())})
+                            "chars": len(str(text)), "at": int(time.time()),
+                            "session": session or ""})
             del _SPILLS[:-_SPILLS_MAX]
     except Exception as e:
         log.debug("spill index: %s", e)
 
 
-def _spill_path(want):
-    """The spill path behind `spill#<id>`, or "" when this process has no such id."""
+def _spill_path(want, session=None):
+    """The spill path behind `spill#<id>` for THIS session, or "" when there is none."""
     try:
         n = int(str(want).split("#", 1)[1])
     except (IndexError, ValueError):
         return ""
-    with _SPILLS_LOCK:
-        for e in _SPILLS:
-            if e["id"] == n:
+    for e in _spill_rows(session):
+        if e["id"] == n:
                 # Absolute on purpose: an index line shows a relative path and the
                 # model may well be in another folder by the time it reads it back.
                 return str(BASE_DIR / e["path"])
     return ""
 
 
-def spill_index_block():
-    """The index of this session's spills (newest last), or "" when there are none."""
-    with _SPILLS_LOCK:
-        rows = list(_SPILLS)
+def spill_index_block(session=None):
+    """The index of THIS session's spills (newest last), or "" when there are none."""
+    rows = _spill_rows(session)
     if not rows:
         return ""
     lines = []
@@ -1368,7 +1420,7 @@ def spill_index_block():
             "but their files stay in spill/.]\n" + "\n".join(lines))
 
 
-def cap_output(name, text, label="output", limit=None):
+def cap_output(name, text, label="output", limit=None, session=None):
     """Cap a tool result, spilling the whole text to disk first when it is over the limit.
 
     Returns the text unchanged when it fits, a head+tail window plus a pointer when it does
@@ -1392,7 +1444,7 @@ def cap_output(name, text, label="output", limit=None):
         log.warning("spill write failed (%s) - falling back to truncation", e)
         return truncate_middle(text, cap, label)
     rel = f"spill/{path.name}"
-    _spill_record(name, rel, text)
+    _spill_record(name, rel, text, session)
     head = int(cap * 0.35)
     tail = int(cap * 0.35)
     log.info("[cap] %s: %d chars over the %d cap -> spilled to %s", name, len(text), cap, rel)
@@ -1445,15 +1497,18 @@ def is_blocked(command):
     return None
 
 
-def _confirm_hit(text):
-    """The first confirm_pattern `text` matches, or None.
+def _confirm_hit(text, kind="confirm_patterns"):
+    """The first pattern of `kind` that `text` matches, or None.
 
     One place for the confirm tier, read by tool_shell, tool_execute_code and
     confirm_gate (every write path), so none of them can drift apart on what
     needs a 'yes' (audit, 2026-09-22; write coverage 2026-09-23). Case-insensitive
     for the same reason is_blocked is: PowerShell cmdlets are capitalised.
+
+    `kind` is the CONTENT tier for a file's text and the COMMAND tier for a shell
+    string: a bare word is a command in a shell and prose in a file (2026-09-25).
     """
-    for pat in _patterns("confirm_patterns"):
+    for pat in _patterns(kind):
         if pat.search(text):
             return pat.pattern
     return None
@@ -2600,16 +2655,27 @@ def _cgroup_mem_mb():
     return None
 
 
+def _fmt_mb(mb):
+    """MiB under 1 GiB: `RAM 0.0 GiB` for a healthy 32 MB process reads as a broken probe.
+
+    Measured 2026-09-25 on a fleet box whose every check-in said `RAM 0.0 GiB` while the
+    running child held 32.5 MB - an operator reads that as a failed gauge, not as a lean
+    process.
+    """
+    mb = float(mb or 0)
+    return f"{mb:.0f} MiB" if mb < 1024 else f"{mb / 1024:.1f} GiB"
+
+
 def mem_line():
     """`RAM 1.4/32 GiB` (plus what children hold) for the check-in, or ''."""
     rss = _self_rss_mb()
     if not rss:
         return ""
     cap = _self_mem_cap_mb()
-    bits = [f"RAM {rss / 1024:.1f}" + (f"/{cap / 1024:.0f}" if cap else "") + " GiB"]
+    bits = [f"RAM {_fmt_mb(rss)}" + (f"/{int(cap / 1024)} GiB" if cap else "")]
     cg = _cgroup_mem_mb()
     if cg and cg - rss > 512:       # something THIS process launched is holding RAM
-        bits.append(f"children {cg / 1024:.1f} GiB")
+        bits.append(f"children {_fmt_mb(cg)}")
     return " · ".join(bits)
 
 
@@ -2648,8 +2714,8 @@ def _mem_probe():
         return None
     try:
         snap = tracemalloc.take_snapshot()
-        rows = [f"RAM {rss / 1024:.1f} GiB, unit {cg / 1024:.1f} GiB, "
-                f"cap {(_self_mem_cap_mb() or 0) / 1024:.0f} GiB — {time.ctime()}", ""]
+        rows = [f"RAM {_fmt_mb(rss)}, unit {_fmt_mb(cg)}, "
+                f"cap {int((_self_mem_cap_mb() or 0) / 1024)} GiB — {time.ctime()}", ""]
         for st in snap.statistics("lineno")[:10]:
             rows.append(f"{st.size / 1048576:9.1f} MiB  {st.count:>8} allocs  "
                         f"{st.traceback[0] if st.traceback else '?'}")
@@ -3588,6 +3654,10 @@ def tool_shell(args, ctx):
                 f"it, and then work from the result they give you. Do not look for a "
                 f"way around it.")
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
+    if IS_WINDOWS and CONFIG["agent"].get("shell_strict_mode"):
+        # Opt-in (agent.shell_strict_mode): makes a property that does not exist an error
+        # instead of a silent $null. Measured before it was offered, not after.
+        shell_cmd = "Set-StrictMode -Version 2.0; " + shell_cmd
     shell_argv = (["powershell", "-NoProfile", "-Command", shell_cmd] if IS_WINDOWS
                   else ["bash", "-c", command])
     try:
@@ -3606,7 +3676,8 @@ def tool_shell(args, ctx):
         # the digest's own signal selection.
         out = digest_output("shell", args, out)
         out = out + verify_shell_writes(command)
-        out = cap_output("shell", out, "command output")
+        out = cap_output("shell", out, "command output",
+                         session=(ctx or {}).get("session_key"))
         if timeout_hit:
             if cost_risk:
                 return (
@@ -3701,7 +3772,8 @@ def tool_execute_code(args, ctx):
             out += ("\n--- stderr ---\n" if out else "") + stderr
         out = out.strip() or "(no output)"
         out = digest_output("execute_code", args, out)
-        out = cap_output("execute_code", out, "code output")
+        out = cap_output("execute_code", out, "code output",
+                         session=(ctx or {}).get("session_key"))
         if timeout_hit:
             return (f"TIMEOUT after {timeout}s — the code and everything it "
                     f"started were killed (a survivor holding the output pipe "
@@ -3915,7 +3987,7 @@ def confirm_gate(text, subject, ctx):
     Quotes the matching line for the ask, like tool_execute_code does. Returns
     None to proceed, or the refusal text.
     """
-    hit = _confirm_hit(text)
+    hit = _confirm_hit(text, "confirm_content_patterns")
     if not hit:
         return None
     lines = [l.strip() for l in str(text or "").splitlines() if l.strip()]
@@ -4180,7 +4252,7 @@ def tool_read_file(args, ctx):
     # while the file name is not something the model should have to retype.
     want = str(args.get("path") or "")
     if want.lower().startswith("spill#"):
-        resolved = _spill_path(want)
+        resolved = _spill_path(want, (ctx or {}).get("session_key"))
         if not resolved:
             return (f"ERROR: no {want} in this process. The spill index in the prompt "
                     f"lists the ones that exist, and the files are under spill/.")
@@ -4228,7 +4300,8 @@ def tool_read_file(args, ctx):
         header = f"(lines {offset}–{offset + len(selected)} of {len(lines)})"
     body = "\n".join(selected)
     body = digest_output("read_file", args, body)
-    return f"{path} {header}\n" + cap_output("read_file", body, "file content")
+    return f"{path} {header}\n" + cap_output("read_file", body, "file content",
+                                              session=(ctx or {}).get("session_key"))
 
 
 def tools_dir_verdict(path):
@@ -4273,7 +4346,7 @@ def tool_write_file(args, ctx):
     # was asked (drive, 2026-09-23: a `.cmd` payload matched confirm_patterns and the run
     # reported "the harness wrote back OK" with no mention that a human had been asked).
     _gated = "  [HARNESS: this content matched agent.confirm_patterns and the operator " \
-             "approved it]" if _confirm_hit(_content) else ""
+             "approved it]" if _confirm_hit(_content, "confirm_content_patterns") else ""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         if args.get("append"):
@@ -4392,13 +4465,14 @@ def tool_fetch_url(args, ctx):
     # The model may ask for more than the 8k default, but not for 30 KB: the largest page
     # in one host's ten-day log was 30,048 chars, 17.6% of that host's result chars.
     max_chars = max(1000, min(int(args.get("max_chars") or 8000), ceil))
-    pages = [(url, _fetch_page(url, max_chars)) for url in urls]
+    session = (ctx or {}).get("session_key")
+    pages = [(url, _fetch_page(url, max_chars, session)) for url in urls]
     if len(pages) == 1:
         return pages[0][1]
     return "\n\n".join(f"--- {url} ---\n{page}" for url, page in pages)
 
 
-def _fetch_page(url, max_chars):
+def _fetch_page(url, max_chars, session=None):
     try:
         # stream=True and a BOUNDED read. resp.text materialised the whole body before
         # cap_output trimmed it, so one multi-GB response (or a page that never ends)
@@ -4425,7 +4499,7 @@ def _fetch_page(url, max_chars):
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
-    return cap_output("fetch_url", text, "page", limit=max_chars)
+    return cap_output("fetch_url", text, "page", limit=max_chars, session=session)
 
 
 # --------------------------------------------------------------------------
@@ -4749,17 +4823,49 @@ def tool_remember(args, ctx):
                f"{hit['ts']} ({head!r}).")
     else:
         timestamp = time.strftime("%Y-%m-%d %H:%M")
-        with NOTES_FILE.open("a", encoding="utf-8") as f:
-            f.write(f"- [{timestamp}] {note}\n")
-        record_authored_note(note)         # the guard knows this entry is the bot's own
-        msg = f"OK: noted at {timestamp}."
+        # A near-duplicate is the pile-up the schema warns about, and the model cannot see the
+        # file it just wrote to. Measured 2026-09-25 driving a fleet box: the same web-UI fact
+        # was saved twice in slightly different words, the reply NAMED the older entry and
+        # suggested the replace call - and the model re-issued the identical note, so the file
+        # kept both and the char budget pays for one fact twice. Above
+        # `notes_supersede_share` the harness does what the model was asked to do: the newer
+        # words win, in the older entry's slot, and the pile-up does not happen.
+        superseded = None
+        new_words = set(re.findall(r"[a-z0-9_]{3,}", note.lower()))
+        share_cap = float(CONFIG["agent"].get("notes_supersede_share") or 0.85)
+        for e in entries:
+            old_words = set(re.findall(r"[a-z0-9_]{3,}", (e.get("text") or "").lower()))
+            if not new_words or not old_words:
+                continue
+            share = len(new_words & old_words) / float(min(len(new_words), len(old_words)))
+            if share >= share_cap:
+                superseded = (e, share)
+                break
+        if superseded:
+            e, share = superseded
+            lines = list(doc["preamble"])
+            for x in entries:
+                if x is e:
+                    lines.append("- [%s] %s" % (x["ts"], note))
+                else:
+                    lines.append("- [%s] %s" % (x["ts"], x["text"]))
+                    lines.extend(x.get("extra") or [])
+            NOTES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            record_authored_note(note)
+            msg = (f"OK: superseded the entry from {e['ts']} ({share:.0%} of the same "
+                   f"words - one fact, one entry).")
+        else:
+            with NOTES_FILE.open("a", encoding="utf-8") as f:
+                f.write(f"- [{timestamp}] {note}\n")
+            record_authored_note(note)     # the guard knows this entry is the bot's own
+            msg = f"OK: noted at {timestamp}."
     after = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
              if NOTES_FILE.exists() else "")
     doc2 = _parse_notes(after)
     # A near-duplicate is the pile-up the schema warns about, and the model cannot see the
     # file it just wrote to. Measured 2026-09-25: the same web-UI fact was saved twice within
     # two minutes in slightly different words, and nothing said so.
-    if action == "note":
+    if action == "note" and not superseded:
         new_words = set(re.findall(r"[a-z0-9_]{3,}", note.lower()))
         for e in doc2["entries"][:-1]:
             old_words = set(re.findall(r"[a-z0-9_]{3,}", (e.get("text") or "").lower()))
@@ -7178,7 +7284,7 @@ def _run_manifest_tool(name, entry, args, cancel=None, ctx=None):
     text = f"exit_code={rc}\n{out}"
     if err and (rc or not out.strip()):
         text += f"\n--- stderr ---\n{err}"
-    return cap_output(name, text, "output")
+    return cap_output(name, text, "output", session=(ctx or {}).get("session_key"))
 
 
 def probe_tool(path):
@@ -8390,7 +8496,7 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
         run = run_block(session_key)
         if run:
             parts.append(run)
-    spill = spill_index_block()
+    spill = spill_index_block(session_key)
     if spill:
         parts.append(spill)
     # ONE line, only when the previous run of THIS conversation did not finish. Four
@@ -10936,6 +11042,21 @@ class Agent:
         self.model_overrides.pop(session_key, None)
         _carry_reset(session_key)
         _run_state_reset(session_key)
+        # A reveal is per-SESSION rent, so a cleared conversation pays it again: measured
+        # 2026-09-25 driving a fleet Windows box, `find_tools {all: true}` took a session
+        # from 14 schemas to 30 and every later turn - through /new, which says "Session
+        # cleared. Fresh context." - carried ~3.4K extra prompt tokens (step-0 prompt_tok
+        # 6,505 -> 10,086 on identical orders).
+        with _revealed_lock:
+            _revealed.pop(session_key or "", None)
+        # ...and the same for the spill INDEX. The files stay on disk (nothing was dropped),
+        # but this session's pointers to them do not ride the next prompt of this conversation:
+        # measured 2026-09-25 driving a fleet box, /new answered "how much room is left on the
+        # C drive" in two calls and then spent ten more reading the PREVIOUS, stopped run's
+        # spill files and re-running its printer/LAN scans. A pointer to abandoned work is how
+        # a fresh order becomes a continuation of the old one.
+        with _SPILLS_LOCK:
+            _SPILLS[:] = [e for e in _SPILLS if e.get("session") != (session_key or "")]
         try:
             self._session_path(session_key).unlink(missing_ok=True)
         except Exception:
@@ -11437,6 +11558,7 @@ class RunReporter:
         self.last_edit = 0.0
         self.last_checkin = time.time()
         self.last_checkin_step = 0
+        self.scope_noted = False
         self.last_note = {}
         self.last_tool = {}
         self.tool_ref = {}
@@ -11472,6 +11594,25 @@ class RunReporter:
 
     def checkin_text(self, steps, elapsed, name=None, args=None):
         return checkin_line(self.session_key, steps, elapsed, name, args)
+
+    def scope_note(self, steps, name=None):
+        """One line, once per run, when a run is long and the operator has heard nothing else.
+
+        Measured 2026-09-25 driving a fleet box: five vague orders ran 30-58 tool calls over
+        17-20 minutes each, and the only signal the operator got was the tool lines - nothing
+        said "this is still going, here is the verb that ends it". The harness already counts
+        the calls; this is that count, said out loud. Once per run, only past
+        `scope_note_steps`, only where a human actually reads this lane. Zero prompt bytes:
+        nothing here reaches the model.
+        """
+        gate = int(CONFIG["agent"].get("scope_note_steps") or 0)
+        if not gate or steps < gate or self.scope_noted \
+                or not getattr(self.dest, "has_human", False):
+            return ""
+        self.scope_noted = True
+        last = f" (last: `{name}`)" if name else ""
+        return (f"⏳ still working: {steps} tool calls and no report yet{last}. "
+                f"Say `/tinycmdr stop` to end this run, or let it finish.")
 
     def note(self, text, src=None):
         """The model's own interstitial line ("Checking what holds the lock:").
@@ -11813,6 +11954,9 @@ class RunReporter:
         if checkin:
             self._draw("checkin", self.checkin_text(steps, now - self.t0,
                                                     name, args), src)
+            note = self.scope_note(steps, name)
+            if note:
+                self._draw("checkin", note, src)
         elif edit is not None:
             # Live visibility for the anti-loop machinery: if the model has tried
             # to repeat a call, the operator sees it happening rather than only
