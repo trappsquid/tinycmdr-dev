@@ -127,6 +127,7 @@ import json as _json
 import tempfile as _tempfile
 _proc = Path(_tempfile.mkdtemp(prefix="fbtest-mint-")) / "procedure-census.json"
 fb.PROC_CENSUS_FILE = _proc
+fb._CENSUS_FORCE = True          # this suite is the census's test, not the running bot
 _ord1 = fb.order_census_note("ord-sess", "Check free space on C, the 5 biggest files in logs, "
                                           "and the newest warnings in the supervisor log")
 _ord1b = fb.order_census_note("ord-sess", "check free space on C: the 5 biggest files under "
@@ -171,6 +172,22 @@ check("no nudge when the order was not a lookup",
       fb.remember_nudge("shell", {}, {"session_key": "nudge-3"}) == "")
 check("the nudge is a config lever",
       fb.DEFAULT_CONFIG["agent"].get("remember_nudge") is True)
+_st9 = fb.run_state("mintline-1", create=True)
+check("no report-time invitation without a fired census",
+      fb.mint_offer_line("mintline-1") == "")
+_st9["mint_ent"] = {"count": 2, "sample": "Get-PSDrive C | Select-Object Used,Free"}
+_line9 = fb.mint_offer_line("mintline-1")
+check("a fired census invites the model to offer it in the report",
+      "SAY SO in your report" in _line9 and "2 separate runs" in _line9, _line9[:200])
+check("...once per run", fb.mint_offer_line("mintline-1") == "")
+_st10 = fb.run_state("mintline-2", create=True)
+_st10["mint_ent"] = {"count": 3, "sample": "x"}
+_st10["calls_by"] = {"toolsmith": 1}
+check("no invitation when the run minted it", fb.mint_offer_line("mintline-2") == "")
+check("the invitation rides the trailing block, not the system prompt",
+      "Repeatable procedure, offered not assumed" in fb.volatile_context(
+          state_marker=False, session_key="mintline-3")
+      or fb.mint_offer_line("mintline-3") == "")
 _st7 = fb.run_state("offer-7", create=True)
 _st7["calls_by"] = {"shell": 3, "read_file": 1}
 _st7["order_is_lookup"] = 1
@@ -198,11 +215,20 @@ def _bump(run_id):
 
 e1 = _bump("run-1"); e2 = _bump("run-2"); e3 = _bump("run-3")
 check("the count is RUNS, not calls", e3["count"] == 3, e3)
+fb._CENSUS_FORCE = False
+check("an imported module (a suite) never reaches the census",
+      fb.procedure_census_bump("shell", {"command": _CMD}, "test-stall-x") is None)
+check("...and neither does a harness-written turn",
+      fb.order_census_note("mm-x", "SYSTEM: that cap is a CHECKPOINT - carry on") is None)
+fb._CENSUS_FORCE = True
+
 check("the same run bumped twice still counts once",
       _bump("run-3")["count"] == 3)
 _ctx = {"session_key": "mint-1"}
-check("no hint below the threshold", fb.mint_hint("shell", {}, _ctx, e2) == "")
-first = fb.mint_hint("shell", {}, _ctx, e3)
+check("the hint needs the SECOND run, not the third",
+      fb.mint_hint("shell", {}, _ctx, e2) != "")
+_ctx2 = {"session_key": "mint-2"}
+first = fb.mint_hint("shell", {}, _ctx2, e3)
 check("the hint fires once the shape has run in 3 runs",
       "separate runs" in first and "toolsmith" in first, first[:160])
 check("...and only once per run", fb.mint_hint("shell", {}, _ctx, e3) == "")
@@ -243,7 +269,7 @@ check("a runbook executed by hand is offered by NAME (the skill-to-tool case)",
       line and "fleet-access" in line and "mint it" in line, line)
 check("the gates are config keys with defaults",
       fb.DEFAULT_CONFIG["agent"].get("mint_hint") is True
-      and int(fb.DEFAULT_CONFIG["agent"].get("mint_hint_after")) == 3
+      and int(fb.DEFAULT_CONFIG["agent"].get("mint_hint_after")) == 2
       and fb.DEFAULT_CONFIG["agent"].get("mint_offer") is True
       and int(fb.DEFAULT_CONFIG["agent"].get("mint_offer_steps")) == 4
       and float(fb.DEFAULT_CONFIG["agent"].get("order_repeat_overlap")) == 0.6)

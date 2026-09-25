@@ -382,7 +382,8 @@ DEFAULT_CONFIG = {
         # census of by-hand procedures and asks the OPERATOR whether one should become a
         # tool. Both are result-text/notice behaviour: no prompt bytes, bounded, logged.
         "mint_hint": True,          # one line when a command shape has run in N runs
-        "mint_hint_after": 3,       # ... that N
+        "mint_hint_after": 2,       # ... that N (2 = the second run, where a human would
+                                    # say "this is the second time I have done this")
         "mint_offer": True,         # ask the operator after a run that repeated work
         "mint_offer_steps": 4,      # ... with at least this many hand-driven calls
         "order_repeat_overlap": 0.6,  # shared-word share that reads as "the same request"
@@ -2998,6 +2999,8 @@ def procedure_census_bump(name, args, session_key=None):
     A run that retries the same command five times is one procedure, not five: the count
     is the number of distinct run ids, which is what 'I keep doing this by hand' means.
     """
+    if not _census_enabled():
+        return None
     sig = _procedure_sig(name, args)
     if not sig:
         return None
@@ -3027,7 +3030,7 @@ def mint_hint(name, args, ctx, ent):
     """
     if not CONFIG["agent"].get("mint_hint", True):
         return ""
-    need = int(CONFIG["agent"].get("mint_hint_after") or 3)
+    need = int(CONFIG["agent"].get("mint_hint_after") or 2)
     if not ent or ent.get("count", 0) < need or ent.get("minted"):
         return ""
     key = (ctx or {}).get("session_key")
@@ -3038,12 +3041,40 @@ def mint_hint(name, args, ctx, ent):
     log.info("[%s] mint hint: this shape has now run in %d separate runs (%s)",
              key or "-", ent["count"], ent["sig"][:60])
     return ("\n[HARNESS: you have now used this same set of commands in %d separate runs "
-            "on this box (most recently %s), e.g. `%s`. If it is a routine you repeat, mint "
-            "it once - toolsmith {\"action\": \"new\", \"name\": \"<snake_name>\", "
-            "\"description\": \"<one line>\", \"argspec\": \"<arg:type=default, ...>\"} - and "
-            "every later run starts from one call instead of rebuilding it.]"
+            "on this box (most recently %s), e.g. `%s`. Two things to do about it, and the "
+            "second is the one that matters:\n"
+            "  1. if it is routine, mint it - toolsmith {\"action\": \"new\", "
+            "\"name\": \"<snake_name>\", \"description\": \"<one line>\", "
+            "\"argspec\": \"<arg:type=default, ...>\"};\n"
+            "  2. if you are not minting it now, SAY SO in your report and offer it: one line "
+            "naming the repetition (N runs) and what the tool would do, so the operator can "
+            "answer \"mint it\". An operator who is never offered a tool never gets one.]"
             % (ent["count"], ent.get("last") or "earlier",
                (ent.get("sample") or ent["sig"])[:100]))
+
+
+# The census belongs to the RUNNING bot, not to a suite that imports this file. Measured
+# 2026-09-25: test_checkin drives AGENT.run 30 times with one fixture order, and the live
+# census recorded "carry on with the job" as an order seen 30 times - a real box would then
+# have offered a tool for a sentence no operator ever typed. A suite that TESTS the census
+# sets `fb._CENSUS_FORCE = True` (see tests/test_route_hint.py).
+_CENSUS_FORCE = False
+
+
+def _census_enabled():
+    return (__name__ == "__main__") or bool(_CENSUS_FORCE)
+
+
+def _is_operator_text(text):
+    """A real request, not something the harness injected into the history."""
+    t = str(text or "").lstrip()
+    if not t:
+        return False
+    for prefix in ("SYSTEM:", "[HARNESS", "[operator", "[CONTEXT COMPACTION",
+                   "[Note:", "<system", "SYSTEM "):
+        if t.startswith(prefix):
+            return False
+    return True
 
 
 def order_census_note(session_key, text):
@@ -3056,6 +3087,8 @@ def order_census_note(session_key, text):
     Never raises, never blocks a run.
     """
     try:
+        if not _census_enabled() or not _is_operator_text(text):
+            return None
         words = set(re.findall(r"[a-z][a-z0-9_]{2,}", str(text or "").lower()))
         if len(words) < 4:
             return None
@@ -5066,8 +5099,20 @@ def tool_task(args, ctx):
                     return (f"ERROR: no open tasks in the ledger to mark {action}. "
                             f"Use action=add first to track multi-step work, or "
                             f"`action=list` to inspect the ledger.")
-                return (f"ERROR: multiple tasks are open (open now: {ids}). Pass id=<n> "
-                        f"to specify which task to mark {action} — `action=list` shows them.")
+                # Measured 2026-09-25 driving HOST-A (work order 2): two items were open, the
+                # model called done with no id, got a one-liner that listed the IDS only, and
+                # moved on - it stopped using the ledger for the rest of the run. Naming each
+                # open item costs nothing and answers the question the model actually has.
+                _rows = "\n".join(
+                    "  #%s [%s] %s" % (i.get("id"), i.get("status"),
+                                       (i.get("desc") or "")[:90])
+                    for i in open_items[:8])
+                _more = ("\n  (+%d more: `action=list`)"
+                         % (len(open_items) - 8) if len(open_items) > 8 else "")
+                return (f"ERROR: {len(open_items)} tasks are open and this call named none of "
+                        f"them, so it cannot pick one to mark {action}:\n{_rows}{_more}\n"
+                        f"Pass id=<n> for the task you actually finished (one call per task), "
+                        f"or action=list for the whole ledger.")
             return (f"ERROR: no task #{args.get('id')} in the ledger. Pass id=<n> — "
                     f"`action=list` shows them (open now: {ids}).")
         if status == "done" and not (note or item.get("note")):
@@ -6698,7 +6743,10 @@ CORE_TOOLS = {
         "fn": tool_create_tool,
         "schema": _schema(
             "Create a reusable custom tool on this machine, then call it "
-            "immediately. Repeatable procedures only. The file must define NAME, "
+            "immediately. Repeatable procedures only - and when you have just done the "
+            "SAME thing by hand twice, or walked through a runbook step by step, OFFER to "
+            "mint it in your report (one line: what it would do) instead of quietly doing "
+            "it again. The file must define NAME, "
             "DESCRIPTION (one line), SCHEMA (JSON-schema of the args), "
             "run(args, ctx) -> str; inside run, ctx['shell'](cmd) runs a "
             "command and ctx['config'] is the bot config. Set module-level "
@@ -8249,6 +8297,33 @@ _STATE_MARKER = (_STATE_PREFIX
                    "the operator]\n")
 
 
+def mint_offer_line(session_key):
+    """One trailing line, for a run whose census ALREADY fired.
+
+    The mid-run hint gets skimmed: measured 2026-09-25, the hint fired on a real routine run
+    ("this shape has now run in 2 separate runs") and the report did not mention it - the
+    model had already decided what it was going to say. This rides the block it reads while
+    composing the answer, and only runs whose census fired pay its rent.
+    """
+    if not CONFIG["agent"].get("mint_hint", True):
+        return ""
+    st = run_state(session_key) or {}
+    ent = st.get("mint_ent") or {}
+    if not ent.get("count") or st.get("offer_line_shown"):
+        return ""
+    by = st.get("calls_by") or {}
+    if int(by.get("create_tool") or 0) or int(by.get("toolsmith") or 0):
+        return ""
+    st["offer_line_shown"] = 1
+    log.info("[%s] report-time mint invitation (shape seen in %d runs)",
+             session_key or "-", int(ent["count"]))
+    return ("- Repeatable procedure, offered not assumed: this run has now used `%s`-shaped "
+            "commands in %d separate runs. Either mint it now (toolsmith action=new) or, if "
+            "you are not minting it, SAY SO in your report in one line - name the repetition "
+            "and what the tool would do - so the operator can answer \"mint it\"."
+            % (ent.get("sample") or "the same commands", int(ent["count"])))
+
+
 def volatile_context(state_marker=True, session_key=None, atlas=False, shell=False,
                      prior_unfinished=""):
     """Notes + task ledger — everything in the prompt that changes mid-run.
@@ -8330,6 +8405,11 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
             "unfinished work and finish it from what the transcript and the carried "
             "results already show; otherwise answer the new message and leave the old "
             "task alone." % prior_unfinished)
+    # The mint invitation, same discipline: it rides the block the model reads while writing
+    # its report, and only a run whose census already fired pays for the line.
+    mint_line = mint_offer_line(session_key) if session_key else ""
+    if mint_line:
+        parts.append(mint_line)
     if not parts:
         return ""
     body = "\n".join(parts)
@@ -9635,6 +9715,9 @@ class Agent:
                     hint = mint_hint(name, args, ctx, ent)
                     if hint:
                         out += hint
+                        _st["mint_ent"] = {"count": ent["count"],
+                                           "sample": (ent.get("sample")
+                                                      or ent.get("sig") or "")[:110]}
             except Exception:
                 log.debug("mint census failed", exc_info=True)
         elif ctx is not None:

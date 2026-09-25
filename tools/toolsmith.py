@@ -37,7 +37,9 @@ from pathlib import Path
 NAME = "toolsmith"
 DESCRIPTION = ("Make, import or index a drop-in tool: scaffold a native tool from a short arg "
                "spec, wrap any existing script as a manifest tool, list what tools/ has and "
-               "which names it registers, or check one file through the harness's own loader.")
+               "which names it registers, or check one file through the harness's own loader. "
+               "When you have just done the same job by hand twice, or walked a runbook step "
+               "by step, offer to mint it here instead of doing it again.")
 SCHEMA = {
     "type": "object",
     "properties": {
