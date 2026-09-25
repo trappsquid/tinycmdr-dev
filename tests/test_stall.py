@@ -2100,15 +2100,19 @@ def test_the_map_cache_stays_bounded():
           len(fb._MAP_CACHE))
 
 
-def test_list_tools_is_one_line_and_still_useful():
+def test_list_tools_is_bounded_and_still_useful():
     """615 calls and 0.46 MB of context over ten days on the manager box were spent re-reading a
-    list that is already in the model's own schema block. The one thing it cannot see is
-    the CUSTOM tools on this box, so that is what the answer carries now."""
+    list that is already in the model's own schema block. It carries the CUSTOM tools - and,
+    since 2026-09-24, an honest count of the core tools THIS session holds: the old wording
+    said all 22 were in the block while the payload carried part of them, and a box asked to
+    build a tool read that, never reached for create_tool, and went to the shell instead."""
     out = fb.tool_list_tools({}, {})
-    check("list_tools answers in one short line", len(out) < 220, len(out))
+    # bounded, and truthful about what THIS session holds (see test_tool_discovery for the
+    # measurement that changed it: the old one-line wording claimed all 22 core tools).
+    check("list_tools stays bounded", len(out) < 700, len(out))
     check("it does not re-list the core tools", "shell," not in out and "read_file," not in out,
           out[:160])
-    check("it points at the schema block instead", "schema list" in out, out[:160])
+    check("it says where the rest of the core set is", "in your list" in out, out[:160])
 
 
 def test_fetch_url_cannot_blow_up_the_context():

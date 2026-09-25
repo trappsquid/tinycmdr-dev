@@ -110,9 +110,14 @@ if len(hidden0) > 2:
     check("and it says how many it left out", "more, all=true" in many, many[-80:])
 check("no hidden tools, no tail", fb._surface_tail("done", exclude=sorted(hidden0)) == "")
 
-# ---- list_tools stays one line (pinned in test_stall too: it was measured) -------
+# ---- list_tools stays BOUNDED (pinned in test_stall too). Not one bare line any more:
+# under disclosure the payload carries part of the core set, and the old wording told the
+# model it already held all of them - measured 2026-09-24 on three boxes, where the run
+# that read it never reached for create_tool and scaffolded the file through the shell.
+# The answer now names the count it really has and the tools it does not; it is spent
+# only when the model asks, so the budget is a few hundred characters, not 220.
 out = fb.tool_list_tools({}, {})
-check("list_tools answers in one line", len(out) < 220, len(out))
+check("list_tools stays bounded", len(out) < 700, len(out))
 check("and it forwards to discovery", "find_tools" in out, out)
 
 # ---- an unknown tool name teaches the surface, absent stays absent --------------
@@ -254,7 +259,8 @@ finally:
 
 out = fb.tool_shell({"command": "list_tools"}, {"session_key": "s-bare"})
 check("a bare tool name typed into the shell is answered as a tool",
-      "is a TOOL on this box" in out and "shell cannot" in out, out[:160])
+      "is a TOOL on this box" in out and "Call list_tools directly" in out
+      and "schema is now in your tool list" in out, out[:160])
 out = fb.tool_shell({"command": "echo hi"}, {"session_key": "s-bare2"})
 check("a real command still runs", "exit_code=0" in out, out[:80])
 
@@ -292,7 +298,8 @@ try:
     out = fb.tool_shell({"command": 'cd C:\\x; python probetool.py "action=new"'},
                         {"session_key": "s-script1"})
     check("a tool run as a script is answered as a tool",
-          "is a TOOL on this box" in out and "shell cannot" in out, out[:160])
+          "is a TOOL on this box" in out and "Call probetool directly" in out
+          and "schema is now in your tool list" in out, out[:160])
     check("...and the answer carries that tool's arguments",
           "Its arguments:" in out and "action" in out, out[:300])
     for _cmd in ("python -m probetool action=list",

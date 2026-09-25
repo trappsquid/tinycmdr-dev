@@ -3000,6 +3000,22 @@ def charge_scan(ctx, seconds):
         _SCAN_SPEND[key] = _SCAN_SPEND.get(key, 0.0) + float(seconds)
 
 
+def _tool_door_answer(name, shape="", note=""):
+    """One miss, one wording, on every door: the tool, its arguments, and that it is now IN
+    the session's tool list.
+
+    The reveal is the part that was missing. Measured 2026-09-24 (win-host-a): told to call
+    a tool, the run made eight execute_code calls running tools/toolsmith.py, was answered
+    "call toolsmith directly" at least four times, and never made the call - the door was
+    named but the tool's schema was in neither its payload nor the answer.
+    """
+    return (f"ERROR: `{name}` is a TOOL on this box, not a program - the harness runs it as "
+            f"a tool call, and a shell or Python cannot. Call {name} directly; its schema "
+            f"is now in your tool list for this session, so the arguments are there."
+            + (f" Its arguments: {shape}" if shape else "")
+            + (f" {note}" if note else ""))
+
+
 def _tool_args_shape(name):
     """One tool's argument schema, short: the hop-saver the skill tool and the shell share.
 
@@ -3034,6 +3050,25 @@ def _bare_tool_name(command):
     return ""
 
 
+def _tool_for_file_name(stem):
+    """The tool a ./tools/<stem>.py registers, or "" - the file name is not the tool name.
+
+    A register-shape file answers to the NAME inside it: measured 2026-09-24 on win-host-a,
+    where the run read `hermes_todo.py` off its own tools/ listing and spent six
+    execute_code calls running that FILE, because nothing said it registers as todo_list.
+    """
+    if not stem:
+        return ""
+    try:
+        want = str(REGISTRY.tools_dir / f"{stem}.py")
+    except Exception:
+        return ""
+    for name, tool in (getattr(REGISTRY, "custom", None) or {}).items():
+        if str(tool.get("source") or "") == want:
+            return name
+    return ""
+
+
 def _tool_run_as_script(command):
     """The tool this command RUNS AS A SCRIPT, or "": `python tools/x.py`, `python -m x`.
 
@@ -3064,6 +3099,31 @@ def _tool_run_as_script(command):
             name = name[:-3]
         if _registered_tool(name):
             return name
+    return ""
+
+
+def _tool_named_in_code(code):
+    """The registered tool this PYTHON source runs or imports as a file, or "".
+
+    The shell door cannot see inside Python: `subprocess.run(["python3",
+    ".../tools/power_report.py"])` and `from toolsmith import run` are the same miss as
+    `python tools/power_report.py` typed into the shell, and it is the door the drive
+    reaches for first (measured 2026-09-24, macOS and win-host-a: seven execute_code calls
+    between them, no tool call).
+    """
+    text = code or ""
+    if not text:
+        return ""
+    cands = [m.group(1) for m in re.finditer(r"[\w./\\-]*[\\/]([A-Za-z_][\w]*)\.py", text)]
+    cands += [m.group(1) or m.group(2) for m in re.finditer(
+        r"(?:^|\n)[ \t]*(?:from[ \t]+([A-Za-z_][\w]*)[ \t]+import"
+        r"|import[ \t]+([A-Za-z_][\w]*))", text)]
+    cands += [m.group(1) for m in re.finditer(r"-m[ \t]+([A-Za-z_][\w]*)", text)]
+    for cand in cands:
+        # A tools/ FILE whose stem is not a tool name is the same miss one step out:
+        # `import hermes_todo` names the file, and the tool it registers is todo_list.
+        if _registered_tool(cand) or _tool_for_file_name(cand):
+            return cand
     return ""
 
 
@@ -3118,11 +3178,14 @@ def tool_shell(args, ctx):
                  cost_risk["shape"], cost_risk["root"], timeout, requested)
     _named_tool = _bare_tool_name(command) or _tool_run_as_script(command)
     if _named_tool:
-        _shape = _tool_args_shape(_named_tool)
-        return (f"ERROR: `{_named_tool}` is a TOOL on this box, not a program - the harness "
-                f"runs it as a tool call and the shell cannot. Call {_named_tool} directly"
-                + (f". Its arguments: {_shape}" if _shape else "")
-                + f". If its arguments are not in your list, one find_tools call gives them.")
+        # The tool is REVEALED as well as named: the measured reason a run keeps reaching
+        # for the script is that it has never seen the tool's arguments (2026-09-24: eight
+        # execute_code calls at toolsmith.py on win-host-a with the door named twice, and a
+        # tool whose schema was in neither place). Naming the door without opening it is
+        # what the run walks past.
+        _named_tool = _tool_for_file_name(_named_tool) or _named_tool
+        reveal_tools((ctx or {}).get("session_key"), [_named_tool])
+        return _tool_door_answer(_named_tool, _tool_args_shape(_named_tool))
     confirm_hit = _confirm_hit(command) or _endpoint_self_harm(command)
     if confirm_hit:
         # One gate for shell and tools: it can REFUSE outright (a fresh steering gap),
@@ -3187,6 +3250,22 @@ def tool_shell(args, ctx):
 def tool_execute_code(args, ctx):
     """Run Python code directly (Hermes execute_code equivalent)."""
     code = args["code"]
+    # The tool-file-as-script miss, on the door the drive actually reaches for. The shell
+    # door answers it (_tool_run_as_script) but code that runs or imports ./tools/<name>.py
+    # from inside Python walked straight past that guard: measured 2026-09-24 on macOS,
+    # told to call power_report and toolsmith the run made four execute_code calls that ran
+    # and imported the tool FILES, then reported their output as the tools' answer. Same
+    # wording as the shell door, so one miss has one answer wherever it is attempted.
+    _script_tool = _tool_run_as_script(code) or _tool_named_in_code(code)
+    if _script_tool:
+        _file_tool = _tool_for_file_name(_script_tool)
+        # The mapping only earns characters when it is NOT the obvious one.
+        _note = (f"(`{_script_tool}.py` is the FILE; the tool it registers is "
+                 f"`{_file_tool}` - the file name is not the tool name.)"
+                 if _file_tool and _file_tool != _script_tool else "")
+        _script_tool = _file_tool or _script_tool
+        reveal_tools((ctx or {}).get("session_key"), [_script_tool])
+        return _tool_door_answer(_script_tool, _tool_args_shape(_script_tool), _note)
     requested = int(args.get("timeout") or 120)
     # A walk in Python costs what a walk in the shell costs, and this is where the
     # measured dodge landed once the shell ceiling bit.
@@ -3685,6 +3764,36 @@ def tool_read_file(args, ctx):
     return f"{path} {header}\n" + cap_output("read_file", body, "file content")
 
 
+def tools_dir_verdict(path):
+    """The loader's own answer about a file written into the bot's ./tools/ (or "").
+
+    Measured 2026-09-24 on three boxes: asked to build a tool, every run wrote the file
+    with write_file and then found out whether it was valid by running the loader by hand
+    in a subprocess - three drafts on linux-host-a, and on win-host-a a file that was refused
+    at the next start and is not a tool at all. The harness knows the answer at the moment
+    of the write; saying it there removes the whole detour.
+    """
+    try:
+        target = Path(path).resolve()
+        if target.parent != Path(REGISTRY.tools_dir).resolve():
+            return ""
+    except OSError:
+        return ""
+    if target.suffix not in (".py", ".json"):
+        return ""
+    try:
+        defs = load_tool_defs(target)
+    except Exception as e:                                       # noqa: BLE001
+        return (f"  [HARNESS: ./tools/{target.name} is a drop-in tool file and the loader "
+                f"REFUSES it: {e}. It is NOT a tool on this box, now or at the next "
+                f"start. A native tool file needs NAME, DESCRIPTION, SCHEMA and "
+                f"run(args, ctx) - create_tool writes exactly that shape for you.]")
+    names = ", ".join(d[0] for d in defs)
+    return (f"  [HARNESS: ./tools/{target.name} loads as the tool(s) {names} - the model "
+            f"calls those NAMES. Live at once only through create_tool; a file written "
+            f"this way is callable after the next start.]")
+
+
 @serialized_by_path
 def tool_write_file(args, ctx):
     path = Path(args["path"]).expanduser()
@@ -3721,7 +3830,8 @@ def tool_write_file(args, ctx):
             note += ("  WARNING: %s files must use CRLF line endings on Windows "
                      "and this one has LF only - it will not run. Rewrite it with "
                      "CRLF." % path.suffix.lower())
-        return (f"OK: wrote {len(args['content'])} chars to {path}" + note + _gated)
+        return (f"OK: wrote {len(args['content'])} chars to {path}" + note + _gated
+                + tools_dir_verdict(path))
     except Exception as e:
         return f"ERROR writing {path}: {e}"
 
@@ -4840,7 +4950,13 @@ def tool_create_tool(args, ctx):
                 f"Fix and retry.")
     extras = [t for t, v in REGISTRY.custom.items()
               if v.get("source") == path and t != name]
-    return (f"OK: tool '{name}' created and loaded. It is now callable. "
+    # It is callable AND now visible: a created tool used to be callable-by-name only, so
+    # the run that had just built it still reached for python to check its own work
+    # (measured 2026-09-24 on win-host-a: three `python -c "import biggest_dirs"` calls after
+    # create_tool, and never the tool call). One reveal closes that loop.
+    reveal_tools((ctx or {}).get("session_key"), [name])
+    return (f"OK: tool '{name}' created and loaded. It is now callable and in your tool "
+            f"list for this session. "
             + (f"Also registered from the same file: {', '.join(extras)}. "
                if extras else "")
             + "Remember durable usage details with the remember tool."
@@ -4939,12 +5055,40 @@ def tool_list_tools(args, ctx):
         custom = sorted(getattr(REGISTRY, "custom", {}) or {})
     except Exception:
         custom = []
-    rest = " The rest is a find_tools call away (no query lists it)."
+    session = (ctx or {}).get("session_key")
+    # The count has to be the count THIS session holds, not the size of the registry.
+    # With disclosure on the payload carries PART of the core set, and the old line told
+    # the model it already had every one of them (measured 2026-09-24, three boxes: asked
+    # to build a tool, the run read "the 22 already in your schema list", never reached
+    # for create_tool, and scaffolded the file through the shell instead).
+    if disclosure_on():
+        shown = sorted(visible_tool_names(session) & set(CORE_TOOLS))
+        missing = [n for n in sorted(CORE_TOOLS) if n not in set(shown)]
+        core = ("Core tools: %d of %d are in your list for this session"
+                % (len(shown), len(CORE_TOOL_NAMES)))
+        core += (". The other %d answer when you call them by name, or one find_tools "
+                 "call names them: %s" % (len(missing), ", ".join(missing))) \
+            if missing else "."
+    else:
+        core = ("Core tools: all %d are in your list (tool disclosure is off on this box)."
+                % len(CORE_TOOL_NAMES))
     if not custom:
-        return ("Custom tools on this machine: none. Core tools: the %d already in your "
-                "schema list, no need to ask again.%s" % (len(CORE_TOOL_NAMES), rest))
-    return ("Custom tools on this machine: %s. Core tools: the %d already in your schema "
-            "list.%s" % (", ".join(custom), len(CORE_TOOL_NAMES), rest))
+        return ("Custom tools on this machine: none. " + core)
+    # The NAME is what the model calls and the FILE is what it can read: a register-shape
+    # file registers under another name, and that mapping was invisible (measured
+    # 2026-09-24: a dropped-in hermes_todo.py registers as todo_list, and the run that
+    # read the load lines reported the tool as missing).
+    named = []
+    for n in custom:
+        src = (REGISTRY.custom.get(n) or {}).get("source")
+        # The file is worth naming only when it does NOT match the tool name: that
+        # mapping is invisible otherwise (a dropped-in hermes_todo.py registers as
+        # todo_list). A matching name spends characters on nothing.
+        if src and Path(src).stem != n:
+            named.append("%s (from %s)" % (n, Path(src).name))
+        else:
+            named.append(n)
+    return ("Custom tools: %s. %s" % (", ".join(named), core))
 
 
 def tool_schedule(args, ctx):
@@ -6260,8 +6404,18 @@ class _RegistryShim:
         self.calls.append({"name": name, "schema": schema or {},
                            "handler": handler, "opts": kw})
 
-    def tool_error(self, msg):
-        return json.dumps({"error": str(msg)})
+    def tool_error(self, msg, **extra):
+        return json.dumps({"error": str(msg), **extra})
+
+    def tool_result(self, data=None, **kw):
+        """Hermes' second registry helper: a ported file that imports it must load.
+
+        Measured 2026-09-24: `from tools.registry import registry, tool_error, tool_result`
+        raised ImportError at exec, so the whole file was refused - the drop-in promise in
+        tools/README.md ("a file from another agent harness that speaks this shape drops in
+        as it is") broke on an import, before a single argument was read.
+        """
+        return json.dumps(data if data is not None else kw, ensure_ascii=False)
 
 
 _SHIM = None
@@ -6281,6 +6435,7 @@ def _registry_shim():
         reg_mod = types.ModuleType("tools.registry")
         reg_mod.registry = shim
         reg_mod.tool_error = shim.tool_error
+        reg_mod.tool_result = shim.tool_result
         pkg = types.ModuleType("tools")
         pkg.__path__ = [str(TOOLS_DIR)]
         pkg.registry = reg_mod
@@ -6288,6 +6443,29 @@ def _registry_shim():
         sys.modules["tools.registry"] = reg_mod
         _SHIM = shim
     return _SHIM
+
+
+_PORTED_MODULE_RX = re.compile(r"No module named '(tools|agent|hermes_cli|gateway|"
+                               r"plugins|hermes_constants)[.']")
+
+
+def _load_failure_route(err):
+    """The fix for a refused drop-in file, one line, appended to the load warning.
+
+    A refused file only reports what was wrong with it, and the operator (or the model
+    reading its own log) is left to work out the route. Measured 2026-09-24: a Hermes tool
+    dropped into tools/ failed with "No module named 'tools.feishu_lark'", and the run
+    that read that line reported the file as unfixable.
+    """
+    msg = str(err)
+    if "tool_result" in msg or _PORTED_MODULE_RX.search(msg):
+        return (" - written for ANOTHER harness (Hermes): it needs that tree's own modules. "
+                "Wrap the script it drives as <name>.tool.json (tools/README.md shape 3), "
+                "or rewrite it with create_tool (shape 1).")
+    if "native attributes" in msg or "half a native tool" in msg:
+        return (" - a native tool is NAME, DESCRIPTION, SCHEMA and run(args, ctx): "
+                "create_tool writes that shape for you.")
+    return ""
 
 
 def load_tool_defs(path):
@@ -6450,7 +6628,8 @@ class ToolRegistry:
         for path in self._tool_files():
             ok, err = self._load_path(path)
             if not ok:
-                log.warning("custom tool %s failed to load: %s", path.name, err)
+                log.warning("custom tool %s failed to load: %s%s", path.name, err,
+                            _load_failure_route(err))
 
     def note_provenance(self):
         """Announce any tools/ file that was not there at the last start.
@@ -6486,7 +6665,12 @@ class ToolRegistry:
                 if name not in known:
                     log.warning("custom tool %s was NOT in tools/ at the last "
                                 "start - it runs now, as the bot user: review "
-                                "it (tools-provenance.json is the record)", name)
+                                "it (tools-provenance.json is the record). "
+                                "Loaded this start as: %s", name,
+                                ", ".join(sorted(
+                                    t for t, tool in (self.custom or {}).items()
+                                    if str(tool.get("source") or "").endswith(name))
+                                ) or "NOTHING - see the failed-to-load line above")
         if files:
             try:
                 record.write_text(json.dumps({"files": files}, indent=1),
@@ -6614,6 +6798,20 @@ def set_derived_plan(key, steps, cap=None):
     st["progress_at"] = 0
     st["derived"] = True
     return plan_render(key)
+
+
+def _run_state_reset(key):
+    """Forget one session's run state - the plan the harness re-sends every turn.
+
+    /new cleared history, transcripts and carry but not the plan, and the plan is re-sent
+    in the trailing block of every turn: a fresh session therefore opened with the
+    PREVIOUS task's steps already in the payload. Measured 2026-09-24 on win-host-a and
+    linux-host-a - both spent the new run revising a stale plan (git steps, a finished
+    notes.zip exercise) instead of the order they had just been given, and one never
+    built the tool it was asked for at all.
+    """
+    with _RUNS_LOCK:
+        _RUNS.pop(key or "", None)
 
 
 def run_state(key, create=False):
@@ -7348,6 +7546,49 @@ def select_tool_schemas(session_key=None):
 def hidden_tools(session_key=None):
     return sorted((set(CORE_TOOLS) | set(REGISTRY.custom))
                   - visible_tool_names(session_key))
+
+
+# An order that asks for a TOOL BUILT names the job, not a tool: create_tool is that door.
+_TOOL_BUILD_RX = re.compile(r"\b(?:build|create|make|write|add)\b[^.\n]{0,40}\btool\b", re.I)
+
+
+# How many tools one order may reveal. Rent is real - a revealed schema rides the payload
+# for the rest of the session - so this is a hand's worth, not "everything the text hits".
+_ORDER_REVEAL_CAP = 4
+
+
+def reveal_tools_named_in(session_key, text, cap=_ORDER_REVEAL_CAP):
+    """Reveal the tools the ORDER names, BEFORE the run starts substituting for them.
+
+    The disclosure layer's bet was that a named tool gets called by name. Measured three
+    times in one evening (2026-09-24, macOS + win-host-a): an order naming tools that were
+    not in the session's payload produced substitutions, never the call - the run reached
+    for edit_file, then execute_code (eight calls at a tool file), then skill{action=list}
+    (seven calls, 2.8 KB of runbook names each), and never once called toolsmith or
+    todo_list. The prompt already names every hidden tool; what the model reads before it
+    acts is the SCHEMA, so a name the operator typed is a reveal - the same reveal a
+    by-name call gives, one turn earlier, and only for the tools actually named.
+
+    Returns the names revealed (for the log and for tests).
+    """
+    if not disclosure_on() or not str(text or "").strip():
+        return []
+    words = set(re.findall(r"[a-z][a-z0-9_]{2,}", str(text).lower()))
+    hidden = hidden_tools(session_key)
+    named = [n for n in hidden if n.lower() in words]
+    if not named and _TOOL_BUILD_RX.search(str(text)) and "create_tool" in hidden:
+        # "Build yourself a tool" names no tool and names the job: create_tool is the door,
+        # and a run asked to build a tool substituted three ways instead of calling it
+        # (measured 2026-09-24 on macOS, win-host-a and linux-host-a: it wrote the file with
+        # write_file or scaffolded one through the shell, and one host left a file the
+        # loader refuses). The job's own tool is worth a reveal.
+        named = ["create_tool"]
+    if not named:
+        return []
+    chosen = sorted(named)[:max(1, int(cap or 1))]
+    reveal_tools(session_key, chosen)
+    log.info("revealed from the order: %s", ", ".join(chosen))
+    return chosen
 
 def hidden_inventory_line():
     """One STATIC prompt line naming the tools this box has that its tool list does not.
@@ -8859,6 +9100,10 @@ class Agent:
             hist = self._history(session_key)
             hist.append({"role": "user", "content": user_text})
             self._trim_history(session_key)
+            # A tool the operator names in the order is visible to this run from its first
+            # payload: the alternative, measured three times on 2026-09-24, is a run that
+            # substitutes a verb it holds for a tool it cannot see.
+            reveal_tools_named_in(session_key, user_text)
             # THE ORDER LANDS ON DISK BEFORE THE FIRST MODEL CALL. The transcript used to be
             # written only in this run's `finally`, so a process killed mid-run - a push, a
             # restart, a crash - took the operator's own message with it. Measured 2026-09-24
@@ -9985,6 +10230,7 @@ class Agent:
         self.histories.pop(session_key, None)
         self.model_overrides.pop(session_key, None)
         _carry_reset(session_key)
+        _run_state_reset(session_key)
         try:
             self._session_path(session_key).unlink(missing_ok=True)
         except Exception:
