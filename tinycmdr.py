@@ -598,7 +598,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.9"
+VERSION = "1.0.10"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -7672,6 +7672,86 @@ _RESULT_CLAIM_RX = re.compile(
     r"|exit(?:ed)? (?:code|status)\b|ran in parallel)\b",
     re.IGNORECASE | re.MULTILINE)
 
+# --------------------------------------------------------------------------
+# What one turn WAS, as data (added 2026-09-24, logging only)
+# --------------------------------------------------------------------------
+# The fleet's question: "why does the model sometimes write a sentence instead of
+# calling a tool - is it the server, the model, or us?" Nothing in the log could
+# answer it. We recorded the turns that TRIPPED a guard and nothing about the ones
+# that did not, so every answer was a theory and every fix was a guess. These
+# helpers carry the facts a cause needs, and they decide nothing: the same
+# classification the run already acts on (see _INTENT_RX / _RESULT_CLAIM_RX),
+# named, plus the context it happened in.
+
+
+def _turn_shape(reply, tool_calls):
+    """One word for what this turn is, the way the operator experiences it."""
+    if tool_calls:
+        return "tool_calls"
+    text = (reply.get("content") or "").strip()
+    if not text:
+        return "empty"
+    if _INTENT_RX.search(text):
+        return "promise"
+    if _RESULT_CLAIM_RX.search(text):
+        return "claim"
+    return "answer"
+
+
+_HARNESS_MARKERS = ("SYSTEM:", "[HARNESS:", "[operator, mid-run")
+
+
+def _harness_spoke_last(messages, reply=None):
+    """Did the harness itself send the last thing the model read?
+
+    Every guard in the run loop talks to the model in the operator's own channel (a
+    `user` message opening SYSTEM: or [HARNESS:), so a turn that answers in prose
+    means something different when the last thing it read was one of OURS - "you
+    already have this answer", "make the first tool call NOW" - than when it was the
+    operator's own order. Nothing recorded which, which is why "the model stopped
+    acting" had no cause attached to it.
+    """
+    for m in reversed(messages):
+        if m is reply:
+            continue
+        if m.get("role") != "user":
+            continue
+        first = str(m.get("content") or "").lstrip()
+        return any(first.startswith(p) or p in first[:40] for p in _HARNESS_MARKERS)
+    return False
+
+
+def _messages_chars(messages):
+    """Roughly what the operator's context costs, in the characters on the wire."""
+    return sum(len(str(m.get("content") or "")) for m in messages)
+
+
+def _log_turn_facts(session_key, step, calls_in_run, prompt_tok, peak_prompt,
+                    completion_tok, finish, reasoning_chars, tools_offered,
+                    harness_before, reply, tool_calls, payload_chars, final=False):
+    """ONE LINE PER MODEL TURN, always - the turn that worked as much as the one
+    that did not.
+
+    Greppable fields: `shape=` (tool_calls/answer/promise/claim/empty), the prompt
+    and completion tokens the SERVER reported, the peak prompt of the run, the tool
+    count that was actually offered, whether the last message was the harness's own
+    nudge, and how much the model reasoned before it spoke. Logging only: it changes
+    no decision here, and it must stay that way - it exists so the next change to
+    this loop can be argued from measurements instead of from stories.
+    """
+    text = (reply.get("content") or "").strip()
+    log.info(
+        "turn session=%s step=%d calls=%d shape=%s final=%d tools=%d "
+        "payload_chars=%d prompt_tok=%d peak_prompt=%d completion_tok=%d "
+        "finish=%s reasoning_chars=%d harness_before=%d reply_chars=%d "
+        "intent=%d claim=%d q=%d",
+        session_key, step, calls_in_run, _turn_shape(reply, tool_calls),
+        1 if final else 0, tools_offered, payload_chars, prompt_tok, peak_prompt,
+        completion_tok, finish or "-", reasoning_chars, 1 if harness_before else 0,
+        len(text), 1 if _INTENT_RX.search(text) else 0,
+        1 if _RESULT_CLAIM_RX.search(text) else 0, 1 if text.endswith("?") else 0)
+
+
 
 MARK_COMPACT = ("[earlier investigation context removed to fit context "
                 "window]")
@@ -8822,6 +8902,7 @@ class Agent:
             executed = {}   # (tool, args) signature -> [times run, its output]
             refused_seen = {}   # (tool, args) signature -> times a refusal came back
             _last_narr = ""     # the previous turn's narration, for the restate guard
+            _prompt_seen = 0    # usage["prompt"] as of the last logged turn
             _restated = 0       # how many turns in a row restated the same status
             _restate_note = None   # the nudge that goes in with the next tool results
             _restate_nudge = int(CONFIG["agent"].get("restate_nudge_after", 3) or 0)
@@ -8938,6 +9019,23 @@ class Agent:
                                      "content": strip_inline_tool_calls(
                                          reply.get("content"))}
                             messages[-1] = reply
+                    # WHAT THIS TURN LOOKED LIKE, logged for EVERY turn - the one that
+                    # called a tool, the one that answered, and the one that promised and
+                    # stopped - before anything acts on it (see _log_turn_facts). It sits
+                    # here because it is the one point every turn passes through: a turn
+                    # with tool calls never reaches the answer path below.
+                    _prompt_now = int(usage.get("prompt", 0))
+                    _log_turn_facts(
+                        session_key, steps, calls, _prompt_now - _prompt_seen,
+                        int(usage.get("peak_prompt", 0)),
+                        int(usage.get("completion", 0)),
+                        usage.get("finish_reason", ""),
+                        int(usage.get("reasoning_chars", 0)),
+                        len(select_tool_schemas(session_key)),
+                        _harness_spoke_last(messages, reply),
+                        reply, tool_calls, _messages_chars(messages))
+                    _prompt_seen = _prompt_now
+
                     # Delivery guard: count announcements of completion that arrive WITH more
                     # tool calls queued. Reach the threshold and the run is told to deliver;
                     # two past that and the wrap-up is forced, because the alternative is
@@ -9681,6 +9779,22 @@ class Agent:
                                 max_tokens=CONFIG["llm"].get("final_max_tokens")
                                 or None)
                             answer = (reply.get("content") or "").strip()
+                            # This call carries NO tool list (use_tools=False) and says
+                            # so in the prompt, so a promise-shaped reply here is the
+                            # harness's own asking, not the model refusing to act. It is
+                            # logged with tools=0 and final=1 so the two are never
+                            # counted together.
+                            _final_prompt = int(usage.get("prompt", 0))
+                            _log_turn_facts(
+                                session_key, steps, calls,
+                                _final_prompt - _prompt_seen,
+                                int(usage.get("peak_prompt", 0)),
+                                int(usage.get("completion", 0)),
+                                usage.get("finish_reason", ""),
+                                int(usage.get("reasoning_chars", 0)),
+                                0, _harness_spoke_last(messages, reply), reply,
+                                [], _messages_chars(messages), final=True)
+                            _prompt_seen = _final_prompt
                         except Exception as e:
                             answer = f"(final report failed: {e})"
                             status = ("infra" if isinstance(e, InfraError)

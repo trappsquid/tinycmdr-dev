@@ -2444,6 +2444,109 @@ def test_the_restatement_nudge_is_queued_with_the_batch():
     check("and it is not appended inside the per-call loop",
           src.find("if _restate_note:") < k, f"{src.find('if _restate_note:')} {k}")
 
+# --------------------------------------------------------------------------
+# the turn-facts line (measurement build, 2026-09-24)
+# --------------------------------------------------------------------------
+# The question this exists for: "why does the model sometimes write a sentence
+# instead of calling a tool - the server, the model, or our harness?" Nothing in
+# the log could answer it, because only the turns that TRIPPED a guard were
+# recorded. These check that every turn now carries its own facts, including the
+# two the cause needs: the tool list that was really on the wire, and whether the
+# last thing the model read was the harness's own nudge.
+
+def _capture_turns():
+    """Run something with the log captured; returns (records, stop_fn)."""
+    import logging
+    cap = []
+
+    class Cap(logging.Handler):
+        def emit(self, rec):
+            try:
+                cap.append(rec.getMessage())
+            except Exception:
+                pass
+
+    h = Cap()
+    fb.log.addHandler(h)
+    return cap, (lambda: fb.log.removeHandler(h))
+
+
+def test_a_turn_is_classified_the_way_the_operator_reads_it():
+    check("a turn with a call is a call",
+          fb._turn_shape({"content": "Let me check."}, [{"id": "1"}]) == "tool_calls")
+    check("a sentence that announces work is a promise",
+          fb._turn_shape({"content": "Let me check the other file next."}, []) == "promise")
+    # The classifier mirrors the guards' OWN phrasing, so these are examples of
+    # what those regexes actually catch - measured, not assumed. Two things worth
+    # knowing that fell out of writing this: "the file holds ..." IS a claim (the
+    # result-claim guard's own pattern), and "The log says 12 errors" is NOT (it
+    # needs "it returned/printed/showed/reported", not "says"). Whether that second
+    # gap matters is a question for the fix, with data, not for this build.
+    check("a bare answer is an answer",
+          fb._turn_shape({"content": "Port 8065 is open."}, []) == "answer")
+    check("a filled-in report with no call is a claim",
+          fb._turn_shape({"content": "Done: the file holds ok."}, []) == "claim")
+    check("nothing at all is empty", fb._turn_shape({"content": "  "}, []) == "empty")
+    check("a question is not a promise",
+          fb._turn_shape({"content": "Which file did you mean?"}, []) == "answer")
+    msgs = [{"role": "user", "content": "SYSTEM: make the first tool call NOW"},
+            {"role": "assistant", "content": "ok"}]
+    check("the harness is recognised as the last speaker",
+          fb._harness_spoke_last(msgs) is True)
+    check("the operator is not",
+          fb._harness_spoke_last([{"role": "user", "content": "check the logs"}]) is False)
+
+
+def test_every_model_turn_is_logged_with_its_facts():
+    """A promise that follows real work must be visible with its cause attached -
+    that is exactly the case no guard touches (calls != 0), and the one the
+    operator kept hitting."""
+    probe = TMP / "facts_probe.txt"
+    probe.write_text("ok\n", encoding="utf-8")
+    cap, done = _capture_turns()
+    try:
+        scripted = [
+            {"role": "assistant", "content": "",
+             "tool_calls": [{"id": "1", "function": {
+                 "name": "read_file",
+                 "arguments": json.dumps({"path": str(probe)})}}]},
+            {"role": "assistant", "content": "Let me check the other file next."},
+        ]
+        fb.CONFIG["agent"]["max_steps"] = 10
+        fb.CONFIG["agent"]["max_minutes"] = 5
+        out, calls, payloads = _scripted_run(scripted)
+    finally:
+        done()
+    turns = [m for m in cap if "turn session=" in m]
+    check("a facts line is logged for the model turn", len(turns) >= 2, turns)
+    check("the turn that called a tool is tagged and carries the tool count",
+          any("shape=tool_calls" in m and "tools=0 " not in m for m in turns), turns)
+    check("the promise after real work is tagged, with the call count that exempts it",
+          any("shape=promise" in m and "intent=1" in m and " calls=1" in m for m in turns),
+          turns)
+    check("the facts say whether the harness had just spoken",
+          any("harness_before=" in m for m in turns), turns)
+    check("and how big the prompt was, per turn",
+          any("prompt_tok=" in m and "payload_chars=" in m for m in turns), turns)
+
+
+def test_the_facts_line_marks_the_harness_as_the_last_speaker_when_it_nudged():
+    cap, done = _capture_turns()
+    try:
+        scripted = [{"role": "assistant",
+                     "content": "Let me look at the config file first."},
+                    {"role": "assistant", "content": "Done: nothing to change."}]
+        fb.CONFIG["agent"]["max_steps"] = 10
+        fb.CONFIG["agent"]["max_minutes"] = 5
+        _scripted_run(scripted)
+    finally:
+        done()
+    turns = [m for m in cap if "turn session=" in m]
+    check("the zero-call promise is caught by the guard",
+          any("promised the work with no tool call" in m for m in cap), cap[-4:])
+    check("and the turn after it records that the harness spoke last",
+          any("harness_before=1" in m for m in turns), turns)
+
 def main():
     # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

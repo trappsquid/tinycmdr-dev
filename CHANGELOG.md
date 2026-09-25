@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.10] - 2026-09-24
+
+### Added
+- **Every model turn is now logged with the facts that decide it.** A question the fleet could not answer from its own logs: why does a model handed 17 tools sometimes write a sentence instead of calling one - is it the endpoint, the model, or the harness? Only the turns that tripped a guard were recorded, so every answer was a story. Each turn now logs one line, always: `shape=` (tool_calls / answer / promise / claim / empty), the number of tools actually on the wire, the prompt and completion tokens the server reported, the run's peak prompt, how much the model reasoned before it spoke, whether the last thing it read was the harness's own nudge, and the size of the reply. `grep 'shape=promise'` is now a measurement.
+
+### Notes
+- Logging only: this release changes no decision, and the checks that grade it fail against 1.0.9 and pass here. Two things it already showed while being written, both recorded rather than fixed: the result-claim guard does not catch "the log says 12 errors" (its pattern wants "it returned/printed/showed/reported"), and a promise that ends a run which already did work is not touched by any guard at all - the case the operator keeps hitting on the fleet.
+
 ## [1.0.9] - 2026-09-24
 
 ### Fixed
