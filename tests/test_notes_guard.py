@@ -231,8 +231,42 @@ def main():
         out = fb.tool_remember({"note": mid}, {})
         check(out.startswith("OK") and mid in fb.NOTES_FILE.read_text(encoding="utf-8"),
               "a long but sane note is stored WHOLE")
-        check("clipped" not in fb.NOTES_FILE.read_text(encoding="utf-8"),
-              "...with no clipped marker riding into future prompts")
+
+        # ---- the reply says WHAT was written, and stale facts can be CORRECTED --------
+        # Measured 2026-09-25 driving HOST-A: `remember` answered "OK: noted." (no entry
+        # count, no text), and the schema promised "replace stale facts instead of stacking
+        # contradictions" while the tool could only append - the run that had saved a
+        # workaround as a fact had no way to take it back.
+        check("Memory now holds" in out and mid[:40] in out and "chars" in out,
+              "remember: the reply names the entry, the text and how full memory is")
+        check(fb.tool_remember({"action": "replace", "old": "web ui port"}, {})
+              .startswith("ERROR"),
+              "remember: replace with no `note` says what replace needs")
+        out = fb.tool_remember({"note": "web ui port 8787; token file web-token.txt"}, {})
+        check(out.startswith("OK") and "Memory now holds" in out,
+              "remember: a fresh fact reports the entry count and the text")
+        out = fb.tool_remember({"action": "replace", "old": "web ui port 8787",
+                                "note": "web ui port 8787, token in web-token.txt (bearer)"}, {})
+        check(out.startswith("OK") and "replaced" in out
+              and "web-token.txt (bearer)" in fb.NOTES_FILE.read_text(encoding="utf-8"),
+              "remember: replace rewrites the matching entry")
+        check("web ui port 8787; token file" not in fb.NOTES_FILE.read_text(encoding="utf-8"),
+              "remember: ...and the stale wording is gone")
+        out = fb.tool_remember({"action": "replace", "old": "nothing in memory says this",
+                                "note": "x"}, {})
+        check(out.startswith("ERROR") and "no memory entry contains" in out
+              and "entries now" in out.lower(),
+              "remember: a replace that matches nothing changes nothing and lists entries")
+        out = fb.tool_remember({"action": "forget", "old": "web-token.txt (bearer)"}, {})
+        check(out.startswith("OK") and "forgot" in out
+              and "web-token.txt" not in fb.NOTES_FILE.read_text(encoding="utf-8"),
+              "remember: forget drops the entry and says which")
+        check(fb.tool_remember({"action": "squash", "note": "x"}, {}).startswith("ERROR"),
+              "remember: an unknown action is refused by name")
+        fb.tool_remember({"note": "probe fact: the widget dial is blue"}, {})
+        out = fb.tool_remember({"note": "probe fact: the widget dial is blue and round"}, {})
+        check("nearly the same thing" in out and "replace" in out,
+              "remember: a near-duplicate is named with the replace call")
 
         print()
         if FAILS:

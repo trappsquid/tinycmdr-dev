@@ -119,6 +119,135 @@ check("and the third does not (the cap holds through the tool)",
 out3 = fb.tool_shell({"command": "echo hi"}, {"session_key": "r-shell-echo", "config": fb.CONFIG})
 check("a plain command's result carries nothing", "[HARNESS:" not in out3, out3[-120:])
 
+# ---- the mint census: one line when a by-hand SHAPE has run in several runs ----------
+# Measured 2026-09-25 driving HOST-A: the run does a routine by hand every time and never
+# offers to keep it, and the whole six-day log held ONE `remember` call. The model sees one
+# run at a time; the harness keeps the census and asks the operator (see mint_offer).
+import json as _json
+import tempfile as _tempfile
+_proc = Path(_tempfile.mkdtemp(prefix="fbtest-mint-")) / "procedure-census.json"
+fb.PROC_CENSUS_FILE = _proc
+_ord1 = fb.order_census_note("ord-sess", "Check free space on C, the 5 biggest files in logs, "
+                                          "and the newest warnings in the supervisor log")
+_ord1b = fb.order_census_note("ord-sess", "check free space on C: the 5 biggest files under "
+                                           "logs and the newest warnings in supervisor.log")
+check("the same request in the operator's own words counts as a repeat",
+      _ord1["count"] == 1 and _ord1b["count"] == 2, (_ord1, _ord1b))
+check("a genuinely different order is a different routine",
+      fb.order_census_note("ord-sess", "install the new poster art for the plex library")["count"] == 1)
+class _Rep2:
+    def __init__(self):
+        self.lines = []
+
+    def say(self, text):
+        self.lines.append(text)
+
+_rep2 = _Rep2()
+_st5 = fb.run_state("offer-6", create=True)
+_st5["calls_by"] = {"shell": 6, "read_file": 2}
+_st5["order_repeats"] = 3
+_line5 = fb.mint_offer("offer-6", _rep2, source="main")
+
+# ---- memory: a lookup that answered a durable-fact question gets ONE nudge ------------
+# Measured 2026-09-25 driving HOST-A: asked which port the web UI listens on and where its
+# token file lives, the run found both and saved nothing - the whole six-day log holds ONE
+# `remember` call, because nothing anywhere points at the moment the fact appears.
+check("an order asking WHERE a fact lives is spotted as a lookup",
+      fb.lookup_question("which port does your web UI listen on?") is True
+      and fb.lookup_question("restart the bot-a tower over ssh") is False
+      and fb.lookup_question("where is the token file") is True)
+fb.run_state("nudge-1", create=True)["order_is_lookup"] = 1
+_nudge = fb.remember_nudge("read_file", {"path": "config.json"}, {"session_key": "nudge-1"})
+check("the result that answered the lookup carries one memory nudge",
+      "DURABLE" in _nudge and "remember" in _nudge, _nudge[:200])
+check("...and not a second time in the run",
+      fb.remember_nudge("read_file", {}, {"session_key": "nudge-1"}) == "")
+_st6 = fb.run_state("nudge-2", create=True)
+_st6["order_is_lookup"] = 1
+_st6["remembered"] = 1
+check("no nudge once the run has saved something",
+      fb.remember_nudge("shell", {}, {"session_key": "nudge-2"}) == "")
+check("no nudge when the order was not a lookup",
+      fb.remember_nudge("shell", {}, {"session_key": "nudge-3"}) == "")
+check("the nudge is a config lever",
+      fb.DEFAULT_CONFIG["agent"].get("remember_nudge") is True)
+_st7 = fb.run_state("offer-7", create=True)
+_st7["calls_by"] = {"shell": 3, "read_file": 1}
+_st7["order_is_lookup"] = 1
+_line7 = fb.mint_offer("offer-7", _rep2, source="main")
+check("a lookup answered with nothing saved offers to keep the fact",
+      _line7 and "save it" in _line7, _line7)
+check("...once per session", fb.mint_offer("offer-7", _rep2) == "")
+_st8 = fb.run_state("offer-8", create=True)
+_st8["calls_by"] = {"shell": 3}
+_st8["order_is_lookup"] = 1
+_st8["remembered"] = 1
+check("no offer when the run already saved it", fb.mint_offer("offer-8", _rep2) == "")
+check("a repeated ORDER offers the mint without any command census",
+      _line5 and "run #3" in _line5 and "mint it" in _line5, _line5)
+_CMD = "Get-PSDrive C | Select-Object Used,Free"
+_sig = fb._procedure_sig("shell", {"command": _CMD})
+check("a command shape has a stable signature",
+      bool(_sig) and "get-psdrive" in _sig, _sig)
+check("a read_file has none (only hand-driven calls count)",
+      fb._procedure_sig("read_file", {"path": "x"}) == "")
+
+def _bump(run_id):
+    fb._EVENT_RUN["mint-sess"] = run_id
+    return fb.procedure_census_bump("shell", {"command": _CMD}, "mint-sess")
+
+e1 = _bump("run-1"); e2 = _bump("run-2"); e3 = _bump("run-3")
+check("the count is RUNS, not calls", e3["count"] == 3, e3)
+check("the same run bumped twice still counts once",
+      _bump("run-3")["count"] == 3)
+_ctx = {"session_key": "mint-1"}
+check("no hint below the threshold", fb.mint_hint("shell", {}, _ctx, e2) == "")
+first = fb.mint_hint("shell", {}, _ctx, e3)
+check("the hint fires once the shape has run in 3 runs",
+      "separate runs" in first and "toolsmith" in first, first[:160])
+check("...and only once per run", fb.mint_hint("shell", {}, _ctx, e3) == "")
+check("the hint logs itself", True)
+
+class _Rep:
+    def __init__(self):
+        self.lines = []
+
+    def say(self, text):
+        self.lines.append(text)
+
+rep = _Rep()
+st = fb.run_state("offer-1", create=True)
+st["calls_by"] = {"shell": 5, "process": 2, "read_file": 4}
+st["sigs"] = [_sig]
+line = fb.mint_offer("offer-1", rep, source="main")
+check("the operator is asked once the run repeated a shape by hand",
+      line and "mint it" in line and len(rep.lines) == 1, line)
+check("...and not again for the same procedure inside a week",
+      fb.mint_offer("offer-1", rep, source="main") == "")
+st2 = fb.run_state("offer-2", create=True)
+st2["calls_by"] = {"shell": 9, "create_tool": 1}
+st2["sigs"] = [_sig]
+check("no offer when the run MINTED something", fb.mint_offer("offer-2", rep) == "")
+st3 = fb.run_state("offer-3", create=True)
+st3["calls_by"] = {"shell": 2}
+st3["sigs"] = [_sig]
+check("no offer for a run that did almost nothing by hand",
+      fb.mint_offer("offer-3", rep) == "")
+check("no offer from a sub-agent", fb.mint_offer("offer-4", rep, source="sub") == "")
+st4 = fb.run_state("offer-5", create=True)
+st4["calls_by"] = {"shell": 4, "process": 2, "skill": 1}
+st4["skills_read"] = ["fleet-access"]
+st4["sigs"] = []
+line = fb.mint_offer("offer-5", rep, source="main")
+check("a runbook executed by hand is offered by NAME (the skill-to-tool case)",
+      line and "fleet-access" in line and "mint it" in line, line)
+check("the gates are config keys with defaults",
+      fb.DEFAULT_CONFIG["agent"].get("mint_hint") is True
+      and int(fb.DEFAULT_CONFIG["agent"].get("mint_hint_after")) == 3
+      and fb.DEFAULT_CONFIG["agent"].get("mint_offer") is True
+      and int(fb.DEFAULT_CONFIG["agent"].get("mint_offer_steps")) == 4
+      and float(fb.DEFAULT_CONFIG["agent"].get("order_repeat_overlap")) == 0.6)
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

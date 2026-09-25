@@ -72,6 +72,27 @@ finally:
     fb.CONFIG = SAVED_CFG
     os.environ.pop("TINYCMDR_ENV_TOKEN", None)
 
+# ---- a SHORT secret is still a secret -------------------------------------------------
+# Measured 2026-09-25 driving HOST-A: asked where the web UI token lived, the run read
+# config.json and quoted the 10-char token into chat - the sweep's 12-char floor had
+# skipped it, so neither the answer nor the log was masked.
+SAVED_SECRETS2 = fb._SECRETS
+try:
+    fb.CONFIG.setdefault("web", {})["token"] = "Rev10chars"
+    fb._SECRETS = fb._secret_values()
+    check("a short config token is collected as a secret",
+          "Rev10chars" in fb._SECRETS, sorted(fb._SECRETS)[:4])
+    check("...and masked in text on its way out",
+          fb.scrub("the web token is Rev10chars") == "the web token is «redacted»",
+          fb.scrub("the web token is Rev10chars"))
+    fb.CONFIG["web"]["token"] = "tiny"
+    fb._SECRETS = fb._secret_values()
+    check("a 4-char value is not collected (it would redact ordinary words)",
+          "tiny" not in fb._SECRETS)
+finally:
+    fb.CONFIG.pop("web", None)
+    fb._SECRETS = SAVED_SECRETS2
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

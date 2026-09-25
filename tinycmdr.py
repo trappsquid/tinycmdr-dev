@@ -378,6 +378,15 @@ DEFAULT_CONFIG = {
         # 17 real runs ended on a cap, and every one of them cost the operator that
         # message). auto_continue_max is how many EXTRA segments one task may have;
         # sub-agents never continue - their budget is the parent's protection.
+        # Minting and memory: the model sees one run at a time, so the harness keeps the
+        # census of by-hand procedures and asks the OPERATOR whether one should become a
+        # tool. Both are result-text/notice behaviour: no prompt bytes, bounded, logged.
+        "mint_hint": True,          # one line when a command shape has run in N runs
+        "mint_hint_after": 3,       # ... that N
+        "mint_offer": True,         # ask the operator after a run that repeated work
+        "mint_offer_steps": 4,      # ... with at least this many hand-driven calls
+        "order_repeat_overlap": 0.6,  # shared-word share that reads as "the same request"
+        "remember_nudge": True,     # one line when a lookup answers a durable-fact question
         "auto_continue": True,
         "auto_continue_max": 2,
         # Delivery guard: how many times a run may announce the work as complete while still
@@ -1184,7 +1193,12 @@ def _secret_values():
     vals = set()
     for section in ("mattermost", "search", "web"):
         for k, v in (CONFIG.get(section) or {}).items():
-            if isinstance(v, str) and len(v) >= 12 and (
+            # A field NAMED token/key/secret is a secret whatever its length. The 12-char
+            # floor here hid the one that leaked (measured 2026-09-25 driving HOST-A: asked
+            # where the web token lived, the run quoted it into chat - a 10-char value the
+            # sweep had skipped). The floor stays for ENVIRONMENT values below, where a
+            # short value is usually a word like "none".
+            if isinstance(v, str) and len(v) >= 6 and (
                     "token" in k or "key" in k or "secret" in k):
                 vals.add(v)
     for fb in CONFIG["llm"].get("fallbacks", []):
@@ -1442,6 +1456,19 @@ def _confirm_hit(text):
         if pat.search(text):
             return pat.pattern
     return None
+
+
+_HARNESS_NOTE_RX = re.compile(r"\[HARNESS[^\]]*\]", re.S)
+
+
+def _dedupe_text(text):
+    """The text the repeat guard compares: the TOOL's answer, none of the harness's notes.
+
+    Measured 2026-09-25: the mint hint rides the second call's result, so the third
+    identical call looked DIFFERENT to the guard and re-ran the command - the exact repeat
+    the guard exists to refuse. A hint the harness adds is not the world changing.
+    """
+    return _HARNESS_NOTE_RX.sub("", str(text or "")).strip()
 
 
 def _call_sig(name, args):
@@ -2902,6 +2929,322 @@ _SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docke
                                  r"netstat|tasklist|get-process|get-childitem|ps\b)\b")
 
 
+# ---------------------------------------------------------------------------
+# Minting: the one judgment the model has no data for
+# ---------------------------------------------------------------------------
+# Measured 2026-09-25 driving HOST-A: given a repeatable procedure the run does it BY HAND,
+# every time, and never offers to keep it - and the whole log of six days holds ONE
+# `remember` call, because nothing ever asks either. The model sees one run at a time, so
+# "this is the fourth time this week" is invisible to it; a nudge it must act on would be
+# permanent prompt rent. So the harness keeps the census and asks the OPERATOR, who is the
+# one party that knows whether the job recurs.
+
+MINT_HINT_TOOLS = ("shell", "execute_code", "process")
+PROC_CENSUS_FILE = BASE_DIR / "logs" / "procedure-census.json"
+_PROC_LOCK = threading.Lock()
+
+
+_CMDLET_RX = re.compile(r"\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b")
+_SHELL_VERB_RX = re.compile(r"\b(?:get|set|new|remove|select|sort|where|measure|test|"
+                            r"start|stop|restart|copy|move|invoke|out|write|read|"
+                            r"find|grep|awk|sed|curl|ssh|tar|ps|df|du|date|python)\b",
+                            re.I)
+
+
+def _procedure_sig(name, args):
+    """The VOCABULARY of a hand-driven command: 'Get-PSDrive + Select-Object'.
+
+    Measured 2026-09-25: a first cut that used the command's own text matched nothing
+    across runs - the same job gets typed with different flags, quoting and order every
+    time, so the fingerprint moved with the phrasing. What repeats is the SET of things
+    the command is made of: the cmdlets (PowerShell) or the verbs (a shell). Sorting them
+    makes the same routine one key however it was spelled; the sample the census keeps is
+    what the operator gets shown, so a coarser key stays honest.
+    """
+    if name not in MINT_HINT_TOOLS:
+        return ""
+    args = args or {}
+    text = str(args.get("command") or args.get("code") or "")
+    if not text:
+        return ""
+    cmds = sorted({m.group(0).lower() for m in _CMDLET_RX.finditer(text)})
+    if not cmds:
+        cmds = sorted({m.group(0).lower() for m in _SHELL_VERB_RX.finditer(text)})
+    if len(cmds) < 1:
+        return ""
+    return "+".join(cmds[:6])
+
+
+def _census_load():
+    try:
+        return json.loads(PROC_CENSUS_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _census_save(data):
+    try:
+        PROC_CENSUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PROC_CENSUS_FILE.with_name(PROC_CENSUS_FILE.name + ".tmp")
+        tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, PROC_CENSUS_FILE)
+    except OSError as e:
+        log.warning("procedure census not saved: %s", e)
+
+
+def procedure_census_bump(name, args, session_key=None):
+    """Count this shape across RUNS (not calls) and hand the entry back.
+
+    A run that retries the same command five times is one procedure, not five: the count
+    is the number of distinct run ids, which is what 'I keep doing this by hand' means.
+    """
+    sig = _procedure_sig(name, args)
+    if not sig:
+        return None
+    run_id = _EVENT_RUN.get(session_key or "") or ""
+    with _PROC_LOCK:
+        data = _census_load()
+        ent = data.setdefault(sig, {"runs": [], "offered": "", "minted": ""})
+        sample = re.sub(r"\s+", " ", str((args or {}).get("command")
+                                        or (args or {}).get("code") or "")).strip()
+        if sample:
+            ent["sample"] = sample[:120]
+        if run_id and run_id not in ent["runs"]:
+            ent["runs"] = (ent["runs"] + [run_id])[-8:]
+        ent["last"] = time.strftime("%Y-%m-%d %H:%M")
+        _census_save(data)
+        out = dict(ent)
+        out["count"] = len(ent["runs"])
+        out["sig"] = sig
+        return out
+
+
+def mint_hint(name, args, ctx, ent):
+    """One line, at most once per run, when this exact shape has been run before.
+
+    Same shape as route_hint (bounded, logged, silent when it cannot help), different
+    question: route_hint says WHICH TOOL answers a miss, this says the shape is a routine.
+    """
+    if not CONFIG["agent"].get("mint_hint", True):
+        return ""
+    need = int(CONFIG["agent"].get("mint_hint_after") or 3)
+    if not ent or ent.get("count", 0) < need or ent.get("minted"):
+        return ""
+    key = (ctx or {}).get("session_key")
+    st = run_state(key, create=True) if key else {}
+    if st.get("mint_hint_used"):
+        return ""
+    st["mint_hint_used"] = 1
+    log.info("[%s] mint hint: this shape has now run in %d separate runs (%s)",
+             key or "-", ent["count"], ent["sig"][:60])
+    return ("\n[HARNESS: you have now used this same set of commands in %d separate runs "
+            "on this box (most recently %s), e.g. `%s`. If it is a routine you repeat, mint "
+            "it once - toolsmith {\"action\": \"new\", \"name\": \"<snake_name>\", "
+            "\"description\": \"<one line>\", \"argspec\": \"<arg:type=default, ...>\"} - and "
+            "every later run starts from one call instead of rebuilding it.]"
+            % (ent["count"], ent.get("last") or "earlier",
+               (ent.get("sample") or ent["sig"])[:100]))
+
+
+def order_census_note(session_key, text):
+    """(repeats, sample) for an ORDER this box has been given before.
+
+    The strongest evidence that a job is a ROUTINE is the operator's own words coming back:
+    a weekly check gets asked for in near-identical language while the commands the model
+    types move every time (measured 2026-09-25: two runs of the same routine produced zero
+    shared command text but a 95% shared request). Token overlap >= 0.7 is the same order.
+    Never raises, never blocks a run.
+    """
+    try:
+        words = set(re.findall(r"[a-z][a-z0-9_]{2,}", str(text or "").lower()))
+        if len(words) < 4:
+            return None
+        with _PROC_LOCK:
+            data = _census_load()
+            orders = data.setdefault("__orders__", [])
+            hit, best = None, 0.0
+            for o in orders:
+                w = set(o.get("words") or [])
+                if not w:
+                    continue
+                # CONTAINMENT (shared / smaller), not Jaccard. Measured on two real runs of
+                # one routine: Jaccard 0.70 (right on any sane threshold), containment 0.88,
+                # while a different routine sharing the verb "check" scored 0.27. A routine
+                # repeats its NOUNS; the phrasing around them moves.
+                share = len(words & w) / float(min(len(words), len(w)))
+                if share >= float(CONFIG["agent"].get("order_repeat_overlap") or 0.6) \
+                        and share > best:
+                    hit, best = o, share
+            if hit is None:
+                hit = {"words": sorted(words)[:60], "count": 0, "last": "",
+                       "sample": " ".join(str(text).split())[:120]}
+                orders.append(hit)
+            hit["count"] = int(hit.get("count") or 0) + 1
+            hit["last"] = time.strftime("%Y-%m-%d %H:%M")
+            data["__orders__"] = orders[-40:]
+            _census_save(data)
+            out = dict(hit)
+            out["overlap"] = round(best, 2)
+        if out["count"] > 1:
+            log.info("[%s] this order has now been given %d time(s) (overlap %.2f)",
+                     session_key or "-", out["count"], best)
+        return out
+    except Exception:
+        log.debug("order census failed", exc_info=True)
+        return None
+
+
+# An order that asks WHERE or WHICH a durable fact lives ("which port", "where is the token
+# file") is the case `remember` exists for - and measured 2026-09-25 driving HOST-A, the run
+# answered one of those and saved nothing, because nothing anywhere asks. Same machinery as
+# route_hint: the nudge rides the result that just answered the question, at most once per
+# run, logged, and silent the moment the run has saved something.
+_FACT_ASK_RX = re.compile(
+    r"(?i)\b(?:which|what|where)\b[^.\n]{0,40}\b(?:port|path|folder|directory|file|"
+    r"token|key|credential|account|password|url|address|host|name|version|quirk|"
+    r"convention|default)\b")
+
+LOOKUP_TOOLS = ("read_file", "shell", "execute_code", "search_files")
+
+
+def lookup_question(text):
+    """True when the ORDER is a lookup question about a durable fact."""
+    return bool(_FACT_ASK_RX.search(str(text or "")))
+
+
+def remember_nudge(name, args, ctx):
+    """One line on the result that answered a "where is X" question.
+
+    Deliberately narrow: it fires only for a run whose ORDER asked where a durable fact
+    lives, only after a lookup, and only if nothing has been saved in this run yet.
+    """
+    if not CONFIG["agent"].get("remember_nudge", True):
+        return ""
+    key = (ctx or {}).get("session_key")
+    if not key:
+        return ""
+    st = run_state(key, create=True) or {}
+    if st.get("remember_nudge_used") or st.get("remembered"):
+        return ""
+    if not st.get("order_is_lookup"):
+        return ""
+    st["remember_nudge_used"] = 1
+    log.info("[%s] remember nudge: a lookup answered a durable-fact question", key)
+    return ("\n[HARNESS: if the answer to the operator's question is a DURABLE fact about "
+            "this box (a port, a path, a credential location, a quirk, a version), save it "
+            "now - remember {\"note\": \"<one line: the fact>\"} - and say in your report "
+            "what you saved. It rides in every future prompt, so the next run does not look "
+            "it up again.]")
+
+
+def mint_offer(session_key, reporter, source="main"):
+    """Ask the OPERATOR whether a by-hand routine should become a tool.
+
+    The harness, not the model, asks, because the operator is the only one who knows if the
+    job recurs, and because a model-side nudge is a prompt line on every host forever. The
+    gate is real work: this run made at least `mint_offer_steps` hand-driven calls
+    (shell / execute_code / process), minted nothing, and repeated a shape the census has
+    seen in another run. One offer per procedure per week, and never for a sub-agent.
+    """
+    if not CONFIG["agent"].get("mint_offer", True) or source != "main":
+        return ""
+    st = run_state(session_key) or {}
+    by = st.get("calls_by") or {}
+    hand = sum(int(by.get(t) or 0) for t in MINT_HINT_TOOLS)
+    # A lookup that produced a durable fact needs no threshold of its own: two calls that
+    # answered "where is X" are enough to offer keeping it (see the remember offer below).
+    _lookup_offer = bool(st.get("order_is_lookup")) and hand >= 2
+    if hand < int(CONFIG["agent"].get("mint_offer_steps") or 4) and not _lookup_offer:
+        return ""
+    if int(by.get("create_tool") or 0) or int(by.get("toolsmith") or 0):
+        return ""
+    if st.get("order_is_lookup") and not st.get("remembered") \
+            and hand >= 2 and not st.get("remember_offer_done"):
+        # The other half of the memory gap (measured 2026-09-25: asked which port the UI
+        # listens on and where its token lives, the run answered both and saved nothing).
+        # The harness asks, because the operator is the one who knows whether the fact will
+        # be needed again - same shape as the mint offer, and only once per session.
+        st["remember_offer_done"] = 1
+        line = ("💡 Nothing about this was saved to memory. If that fact is one you will "
+                "need again, say **save it** and I will keep it in notes.md - it then rides "
+                "in my prompt every run, so I stop looking it up.")
+        try:
+            if reporter is not None:
+                reporter.say(line)
+            log.info("[%s] remember offer posted (lookup order, %d hand calls)",
+                     session_key, hand)
+        except Exception:
+            log.debug("remember offer failed", exc_info=True)
+        return line
+    repeats = int(st.get("order_repeats") or 0)
+    if repeats >= 2:
+        line = (f"💡 That was run #{repeats} of nearly this same request, and it took {hand} "
+                f"hand-driven calls again. If it is a routine, say **mint it** and I will "
+                f"build the tool once so later runs are one call.")
+        try:
+            if reporter is not None:
+                reporter.say(line)
+            log.info("[%s] mint offer (order seen %d times, %d hand calls)",
+                     session_key, repeats, hand)
+        except Exception:
+            log.debug("mint offer failed", exc_info=True)
+        return line
+    books = [b for b in (st.get("skills_read") or []) if b]
+    if books:
+        # The run READ a runbook and then did its steps by hand. That is the "combine the
+        # skill into a tool" case the operator named, and it needs no census: the runbook
+        # IS the procedure, and its name is the tool's name.
+        book = books[-1]
+        line = (f"💡 That run executed the `{book}` runbook by hand ({hand} calls). If that "
+                f"procedure is routine here, say **mint it** and I will turn it into a tool "
+                f"so one call does what the whole runbook walked you through.")
+        try:
+            if reporter is not None:
+                reporter.say(line)
+            log.info("[%s] mint offer (runbook %s, %d hand calls)", session_key, book, hand)
+        except Exception:
+            log.debug("mint offer failed", exc_info=True)
+        return line
+    sigs = st.get("sigs") or []
+    if not sigs:
+        return ""
+    with _PROC_LOCK:
+        data = _census_load()
+        week = time.time() - 7 * 86400
+        best = None
+        for sig in sigs:
+            ent = data.get(sig)
+            if not ent or len(ent.get("runs") or []) < max(
+                    3, int(CONFIG["agent"].get("mint_hint_after") or 3)):
+                continue
+            when = ent.get("offered") or ""
+            if when:
+                try:
+                    if time.mktime(time.strptime(when, "%Y-%m-%d %H:%M")) > week:
+                        continue
+                except ValueError:
+                    pass
+            if best is None or len(ent["runs"]) > len(data[best]["runs"]):
+                best = sig
+        if best is None:
+            return ""
+        data[best]["offered"] = time.strftime("%Y-%m-%d %H:%M")
+        _census_save(data)
+    runs = len(data[best].get("runs") or [])
+    head = (data[best].get("sample") or best)[:90]
+    line = (f"💡 That run drove {hand} calls by hand over the same set of commands it has "
+            f"now used in {runs} different runs (`{head}`). If it is a routine, say "
+            f"**mint it** and I will build it into a tool this box keeps.")
+    try:
+        if reporter is not None:
+            reporter.say(line)
+        log.info("[%s] mint offer posted (%d runs, %d hand calls): %s",
+                 session_key, runs, hand, head)
+    except Exception:
+        log.debug("mint offer failed", exc_info=True)
+    return line
+
+
 def route_hint(command, ctx):
     """A one-line pointer to search_files after a shell content search. Bounded, once a run."""
     cmd = command or ""
@@ -4304,13 +4647,31 @@ def _curate_notes_impl(reason="curator"):
 
 
 @serialized_on(NOTES_FILE)
+@serialized_on(NOTES_FILE)
 def tool_remember(args, ctx):
-    """Append a durable fact to notes.md, bounded at write time."""
+    """Append, replace or forget ONE durable fact in notes.md, bounded at write time.
+
+    The schema has always said "replace stale facts instead of stacking contradictions",
+    and the tool could only ever APPEND (measured 2026-09-25 driving HOST-A: a run had
+    recorded a workaround as a durable fact, a harness fix made it false an hour later,
+    and there was no way to correct it - the note had to be removed by hand). Replace and
+    forget are the missing half.
+
+    The reply also says WHAT was written, WHICH entry changed and HOW FULL the memory is.
+    "OK: noted." told the operator nothing about what the bot had just decided to carry
+    into every future run, which is why a memory write looked like any other call.
+    """
+    action = str(args.get("action") or "note").strip().lower()
     note = " ".join(str(args.get("note") or "").split())
-    if not note:
-        return "ERROR: the note is empty."
+    old = " ".join(str(args.get("old") or "").split())
+    if action not in ("note", "replace", "forget"):
+        return "ERROR: action must be note, replace or forget."
+    if action in ("replace", "forget") and not old:
+        return (f"ERROR: {action} needs `old` - the words already in the entry you mean "
+                f"(matched case-insensitively against the note text).")
     cap = int(CONFIG["agent"].get("notes_max_note_chars") or 1200)
-    if len(note) > cap * 4:
+    budget = int(CONFIG["agent"].get("notes_max_chars") or 8000)
+    if action != "forget" and len(note) > cap * 4:
         # NEVER truncate. A mutilated fact is worse than a missing one: the clipped
         # text rides in every future prompt, so the model reasons from half a sentence
         # and re-derives the rest - the redo pattern an audit of the campaign harness
@@ -4319,12 +4680,69 @@ def tool_remember(args, ctx):
                 "it would leave a half-true fact in every future prompt. Put the long "
                 "version in a file (notes/<topic>.md or a project doc), then remember "
                 "ONE line: the path and the conclusion." % (len(note), cap))
-    timestamp = time.strftime("%Y-%m-%d %H:%M")
-    with NOTES_FILE.open("a", encoding="utf-8") as f:
-        f.write(f"- [{timestamp}] {note}\n")
-    record_authored_note(note)         # the guard knows this entry is the bot's own
-    msg = "OK: noted."
-    report = curate_notes("auto")     # acts only when the file is over budget
+    if action == "replace" and not note:
+        return ("ERROR: replace needs `note` - the corrected fact that should stand in "
+                "place of the old entry.")
+    if action != "forget" and not note:
+        return "ERROR: the note is empty."
+    raw = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
+           if NOTES_FILE.exists() else "")
+    doc = _parse_notes(raw)
+    entries = doc["entries"]
+    if action in ("replace", "forget"):
+        needle = old.lower()
+        hit = next((e for e in entries
+                    if needle in (e.get("text") or "").lower()), None)
+        if hit is None:
+            heads = "; ".join("%s %r" % (e["ts"], (e.get("text") or "")[:60])
+                              for e in entries[:5]) or "(none)"
+            return (f"ERROR: no memory entry contains {old!r}, so nothing was changed. "
+                    f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} now, "
+                    f"oldest first: {heads}"
+                    + (". The rest are in the file: notes action=view."
+                       if len(entries) > 5 else ""))
+        keep = [e for e in entries if e is not hit]
+        head = (hit.get("text") or "")[:70]
+        if action == "replace":
+            keep.append({"ts": hit["ts"], "text": note, "extra": []})
+        lines = list(doc["preamble"])
+        for e in keep:
+            lines.append("- [%s] %s" % (e["ts"], e["text"]))
+            lines.extend(e.get("extra") or [])
+        NOTES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        if action == "replace":
+            record_authored_note(note)
+        msg = (f"OK: {'replaced' if action == 'replace' else 'forgot'} the entry from "
+               f"{hit['ts']} ({head!r}).")
+    else:
+        timestamp = time.strftime("%Y-%m-%d %H:%M")
+        with NOTES_FILE.open("a", encoding="utf-8") as f:
+            f.write(f"- [{timestamp}] {note}\n")
+        record_authored_note(note)         # the guard knows this entry is the bot's own
+        msg = f"OK: noted at {timestamp}."
+    after = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
+             if NOTES_FILE.exists() else "")
+    doc2 = _parse_notes(after)
+    # A near-duplicate is the pile-up the schema warns about, and the model cannot see the
+    # file it just wrote to. Measured 2026-09-25: the same web-UI fact was saved twice within
+    # two minutes in slightly different words, and nothing said so.
+    if action == "note":
+        new_words = set(re.findall(r"[a-z0-9_]{3,}", note.lower()))
+        for e in doc2["entries"][:-1]:
+            old_words = set(re.findall(r"[a-z0-9_]{3,}", (e.get("text") or "").lower()))
+            if not new_words or not old_words:
+                continue
+            share = len(new_words & old_words) / float(min(len(new_words), len(old_words)))
+            if share >= 0.7:
+                msg += (f" NOTE: an entry from {e['ts']} says nearly the same thing "
+                        f"({share:.0%} of the same words) - if this supersedes it, call "
+                        f"remember {{action: \"replace\", old: \"{((e.get('text') or '')[:40])}\""
+                        f", note: \"<the one that should stand>\"}} instead of keeping both.")
+                break
+    msg += (f" Memory now holds {len(doc2['entries'])} entr"
+            f"{'y' if len(doc2['entries']) == 1 else 'ies'}, {len(after)}/{budget} chars."
+            + (" Saved: " + note[:160] if note else ""))
+    report = curate_notes("auto")         # acts only when the file is over budget
     if report:
         msg += " " + report
     return msg
@@ -9201,6 +9619,53 @@ class Agent:
             reveal_tools(ctx.get("session_key") if ctx else None, [name])
             out += (f"\n[HARNESS: `{name}` was not in your tool list; it is now, for the "
                     f"rest of this session.]")
+        # The mint census rides the same hook point: every hand-driven call is counted by
+        # SHAPE across runs, and the third run of one shape earns a single line saying so.
+        if name in MINT_HINT_TOOLS and not out.startswith(("ERROR", "BLOCKED", "DECLINED")):
+            try:
+                _key = ctx.get("session_key") if ctx else None
+                ent = procedure_census_bump(name, args, _key)
+                if ent:
+                    _st = run_state(_key, create=True) if _key else {}
+                    sigs = _st.setdefault("sigs", [])
+                    if ent["sig"] not in sigs:
+                        sigs.append(ent["sig"])
+                    _by = _st.setdefault("calls_by", {})
+                    _by[name] = int(_by.get(name) or 0) + 1
+                    hint = mint_hint(name, args, ctx, ent)
+                    if hint:
+                        out += hint
+            except Exception:
+                log.debug("mint census failed", exc_info=True)
+        elif ctx is not None:
+            # the mint decision needs the OTHER half too: did this run mint anything, and
+            # did it EXECUTE a runbook by hand (the "combine a skill into a tool" case)?
+            try:
+                _st = run_state(ctx.get("session_key"), create=True) or {}
+                _by = _st.setdefault("calls_by", {})
+                _by[name] = int(_by.get(name) or 0) + 1
+                if name == "skill" and str(args.get("action") or "read").lower() in (
+                        "read", "show", "get"):
+                    _book = str(args.get("name") or "").strip()
+                    if _book:
+                        _books = _st.setdefault("skills_read", [])
+                        if _book not in _books:
+                            _books.append(_book)
+            except Exception:
+                log.debug("tool census failed", exc_info=True)
+        if name in LOOKUP_TOOLS and ctx is not None:
+            try:
+                nudge = remember_nudge(name, args, ctx)
+                if nudge:
+                    out += nudge
+            except Exception:
+                log.debug("remember nudge failed", exc_info=True)
+        elif name == "remember" and ctx is not None:
+            # the run saved something: the nudge has done its job
+            try:
+                run_state(ctx.get("session_key"), create=True)["remembered"] = 1
+            except Exception:
+                log.debug("remember flag failed", exc_info=True)
         # One hook for every tool, core and custom: a failed result whose signature
         # is already understood leaves with the known cause attached.
         out = annotate_failure(name, args, out)
@@ -9238,6 +9703,13 @@ class Agent:
             reset_scan_spend(session_key)   # a run starts with a fresh scan budget
             hist = self._history(session_key)
             hist.append({"role": "user", "content": user_text})
+            _ord = order_census_note(session_key, user_text)
+            _st0 = run_state(session_key, create=True)
+            if _ord:
+                _st0["order_repeats"] = _ord["count"]
+            if lookup_question(user_text):
+                _st0["order_is_lookup"] = 1
+                log.info("[%s] order reads as a durable-fact lookup", session_key)
             self._trim_history(session_key)
             # A tool the operator names in the order is visible to this run from its first
             # payload: the alternative, measured three times on 2026-09-24, is a run that
@@ -10087,11 +10559,12 @@ class Agent:
                         repeat_no = 1
                         with dedupe_lock:
                             ent = executed.get(key)
-                            if ent and ent[1] == output:
+                            _cmp = _dedupe_text(output)
+                            if ent and ent[1] == _cmp:
                                 ent[0] += 1
                                 repeat_no = ent[0]
                             elif not refused:
-                                executed[key] = [1, output]
+                                executed[key] = [1, _cmp]
                             elif ent:
                                 repeat_no = ent[0]
                         body = scrub(output)
@@ -10767,6 +11240,8 @@ def checkin_line(session_key, steps, elapsed, name=None, args=None):
 # --- the tones, as Mattermost attachment colours ------------------------------
 # Kept here with the reporter because they are the reporting palette, not a
 # Mattermost detail: the browser maps the same tones to CSS, the terminal to ANSI.
+_MEMORY_LABELS = {"remember": "📝 memory", "notes": "📝 notes"}
+
 COLOR_NARRATION = "#2ecc71"
 COLOR_TOOL = "#f1c40f"   # amber: a tool call that ran
 COLOR_STATUS = "#ffffff"
@@ -11117,7 +11592,10 @@ class RunReporter:
         if floor and elapsed < floor:
             return
         src = src or self.src
-        line = f"`{name}`"
+        # A memory write changes what the bot carries into EVERY future run: it is not one
+        # more command, and the line should say so (measured 2026-09-25: `remember` answered
+        # "OK: noted." and its progress line read like any other tool call).
+        line = f"`{_MEMORY_LABELS.get(name, name)}`"
         # The result card previews the RESULT, not the call: the call card and
         # the check-in already show the command, and echoing it here hid the one
         # line that says how it went (operator's call, 2026-09-22). Falls back
@@ -11358,20 +11836,27 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
     subsets, which is exactly how the browser ended up without the exit codes,
     the failure reasons, the check-ins or the confirm door.
     """
-    return AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
-                     channel_id=channel_id, source=source,
-                     say_cb=reporter.say,
+    answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
+                       channel_id=channel_id, source=source,
+                       say_cb=reporter.say,
                      progress_cb=reporter.progress,
                      interim_cb=reporter.note,
                      narration_cb=reporter.narration,
                      narration_drop_cb=reporter.narration_drop,
                      reasoning_cb=reporter.reasoning,
                      progress_done_cb=reporter.tool_done,
-                     confirm_cb=reporter.confirm,
-                     cancel_event=cancel_event,
-                     steer_cb=steer_cb,
-                     ask_door=ask_door,
-                     send_file_cb=reporter.attach)
+                       confirm_cb=reporter.confirm,
+                       cancel_event=cancel_event,
+                       steer_cb=steer_cb,
+                       ask_door=ask_door,
+                       send_file_cb=reporter.attach)
+    # One offer per run, after the answer, from the harness: the operator is the only party
+    # who knows whether a by-hand routine recurs (see mint_offer).
+    try:
+        mint_offer(session_key, reporter, source=source)
+    except Exception:
+        log.debug("mint offer failed", exc_info=True)
+    return answer
 
 
 
