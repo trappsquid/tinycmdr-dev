@@ -1062,6 +1062,69 @@ def test_the_payload_carries_the_warning_only_after_a_wreck():
     check("clean session: no warning line", "did not finish" not in body2, body2[-200:])
 
 
+# --------------------------------------------------------------------------
+# the copy-paste repeat problem (macOS bed, 2026-09-24)
+# --------------------------------------------------------------------------
+# One stuck run posted the same sentence EIGHT times in three minutes: eight
+# narration lines that all opened "The video is already downloaded (9.2 MB ..."
+# and differed only after that, every one of them a notification. The guard that
+# existed compared the whole line, so none of them matched. These pin the fold -
+# and, just as important, that it does NOT swallow lines that differ: a first cut
+# of this fix compared the opening six words with digits stripped, made `step-0`
+# and `step-1` the same line, and dropped one of them from the operator's view.
+
+def test_a_restated_note_updates_its_line_and_a_new_note_still_posts():
+    d, rep = reporter(checkin_note_min_seconds=0)
+    rep.note("Checking the chat lane for the file I already downloaded (9.2 MB)")
+    check("the first note posts", len(d.posts) == 1, d.posts)
+    rep.note("Checking the chat lane for the file I already downloaded, 9.2 MB, unchanged")
+    check("a restated note is not posted again", len(d.posts) == 1, d.posts)
+    check("it updates the line on screen instead",
+          bool(d.edits) and d.edits[-1][0] == d.ids[0], d.edits)
+    check("and the newest wording is what the line says",
+          "unchanged" in d.edits[-1][2], d.edits[-1][2] if d.edits else None)
+    check("the repeat was counted", rep.note_repeats.get(rep.src) == 1, rep.note_repeats)
+    rep.note("Now checking how much disk space is left")
+    check("a different note still posts", len(d.posts) == 2, d.posts)
+
+
+def test_a_restated_narration_does_not_open_a_new_line():
+    """The measured shape: eight lines opening "The video is already downloaded
+    (9.2 MB ..." and differing only after that."""
+    d, rep = reporter(checkin_stream_seconds=0)
+    rep.narration("The video is already downloaded (9.2 MB at /tmp/download/x.mp4)",
+                  final=False, new_turn=True)
+    check("the first status opens a line", len(d.posts) == 1, d.posts)
+    rep.narration("The video is already downloaded (9.2 MB, from an earlier run)",
+                  final=False, new_turn=True)
+    check("a restated turn does not post a second line", len(d.posts) == 1, d.posts)
+    check("it updates the line already there",
+          bool(d.edits) and d.edits[-1][0] == d.ids[0], d.edits)
+    check("the repeat was counted", rep.stream_repeats.get(rep.src) == 1, rep.stream_repeats)
+    rep.narration("Listing the tools this lane offers", final=False, new_turn=True)
+    check("a genuinely new status opens a new line", len(d.posts) == 2, d.posts)
+
+
+def test_a_repeated_card_folds_into_one_card_with_a_count():
+    d, rep = reporter(checkin_tool_merge_seconds=0)
+    rep.tool_done("shell", {"command": "ls -la"}, "exit_code=0", 0.2)
+    rep.tool_done("shell", {"command": "ls -la"}, "exit_code=0", 0.3)
+    check("the same card twice is ONE card", len(d.posts) == 1, d.posts)
+    check("the card that stayed says how many it absorbed",
+          "(×2)" in (d.edits[-1][2] if d.edits else ""), d.edits)
+
+
+def test_two_different_calls_are_never_folded_into_one():
+    """The regression that stopped the first draft: folding on the opening words
+    with digits removed made `step-0` and `step-1` one line, and the operator lost
+    the list of what actually ran."""
+    d, rep = reporter(checkin_tool_merge_seconds=60, checkin_tool_max_lines=2)
+    for i in range(3):
+        rep.tool_done("shell", {"command": f"step-{i}"}, "exit_code=0", 0.2)
+    body = "\n".join(x[2] for x in d.posts) + "\n".join(x[2] for x in d.edits)
+    check("every call is on the surface", all(f"step-{i}" in body for i in range(3)), body)
+    check("the cap still forces a second message", len(d.posts) == 2, d.posts)
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

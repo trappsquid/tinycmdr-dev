@@ -2315,6 +2315,135 @@ def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
           all("segment" not in (s or "") for s in seen), seen)
 
 
+# --------------------------------------------------------------------------
+# the restatement guard (macOS bed, 2026-09-24)
+# --------------------------------------------------------------------------
+# Measured: a stuck run described the SAME status EIGHT times in three minutes
+# while every call it made failed and nothing changed. The calls were different,
+# so the identical-call guard never fired; the sentences were reworded after the
+# first few words, so the exact-match guard never fired either. The operator read
+# the same sentence eight times with no way to tell it apart from progress.
+
+def _restate_script(head, tails):
+    """N turns that open with the same status and end in a call that FAILS."""
+    scripted = []
+    for i, tail in enumerate(tails):
+        scripted.append({"role": "assistant", "content": f"{head} {tail}",
+                         "tool_calls": [{"id": f"r{i}", "function": {
+                             "name": "read_file",
+                             "arguments": json.dumps(
+                                 {"path": str(TMP / f"missing-{i}.txt")})}}]})
+    return scripted
+
+
+def test_a_run_that_only_restates_itself_ends_itself():
+    # The MEASURED shape: every line opens "The video is already downloaded (9.2 MB"
+    # and diverges after it, which is what made an exact-match guard useless.
+    tails = ["at /tmp/download/Interesting.mp4)",
+             ", from an earlier run)",
+             " in /tmp/download, unchanged)",
+             ", still there from the earlier run)",
+             " at /tmp/download/Interesting.mp4, nothing new)",
+             ", the same file I downloaded before)",
+             " in /tmp/download, untouched)",
+             ", unchanged since the last check)",
+             " - the same download, nothing on disk changed)",
+             ", still 9.2 MB, still nothing to do)"]
+    fb.CONFIG["agent"]["restate_nudge_after"] = 3
+    fb.CONFIG["agent"]["restate_stop_after"] = 6
+    fb.CONFIG["agent"]["max_steps"] = 60
+    fb.CONFIG["agent"]["max_minutes"] = 20
+    out, calls, payloads = _scripted_run(
+        _restate_script("The video is already downloaded (9.2 MB", tails))
+    sent = json.dumps(payloads)
+    check("restated run: the model is told once, in the results it reads",
+          "described the same status 3 times" in sent, sent[-300:])
+    check("restated run: the run ends with its own reason",
+          "kept restating the same status" in out, out[:300])
+    # Ten turns are scripted and the stop belongs on the EIGHTH: the first turn
+    # STATES the status, the sixth restatement of it is the one that ends the run.
+    # Two turns left over is what proves the run ended itself rather than running
+    # the script out (the stub raises if it is asked for an eleventh).
+    check("restated run: it stops at the threshold, not the step ladder",
+          calls == 8, f"model calls: {calls}")
+    check("restated run: the report it already had still goes out",
+          "Stopped a loop" in out, out[:200])
+
+
+def test_a_run_whose_status_changes_is_not_stopped_by_it():
+    scripted = [{"role": "assistant",
+                 "content": f"Step {i}: checking item {i} of the list",
+                 "tool_calls": [{"id": f"s{i}", "function": {
+                     "name": "read_file",
+                     "arguments": json.dumps(
+                         {"path": str(TMP / f"missing-{i}.txt")})}}]}
+                for i in range(6)]
+    scripted.append({"role": "assistant",
+                     "content": "Done: nothing else to check."})
+    fb.CONFIG["agent"]["max_steps"] = 60
+    fb.CONFIG["agent"]["max_minutes"] = 20
+    out, calls, payloads = _scripted_run(scripted)
+    sent = json.dumps(payloads)
+    check("changing status: no restatement nudge",
+          "described the same status" not in sent, sent[-200:])
+    check("changing status: the run ends on its own answer",
+          "nothing else to check" in out, out[:200])
+    check("changing status: every scripted turn was used",
+          calls == 7, f"model calls: {calls}")
+
+
+def test_a_write_clears_the_restatement_count():
+    """Real work resets the count: the promise is that any write or edit starts
+    the count over, so a legitimate verify-after-fix is never read as a stuck
+    status. Counted straight through, the identical status would trip a stop of 3
+    in the middle of the task."""
+    probe = TMP / "restate_probe.txt"
+    probe.write_text("constant\n", encoding="utf-8")
+    status = "Checking whether the file is still the one I downloaded"
+
+    def rd(cid):
+        return {"role": "assistant", "content": f"{status} (9.2 MB)",
+                "tool_calls": [{"id": cid, "function": {
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": str(probe)})}}]}
+
+    write = {"role": "assistant", "content": f"{status} (9.2 MB)",
+             "tool_calls": [{"id": "w", "function": {
+                 "name": "write_file",
+                 "arguments": json.dumps({"path": str(probe),
+                                          "content": "constant\n",
+                                          "no_backup": True})}}]}
+    fb.CONFIG["agent"]["restate_nudge_after"] = 2
+    fb.CONFIG["agent"]["restate_stop_after"] = 3
+    fb.CONFIG["agent"]["max_steps"] = 60
+    fb.CONFIG["agent"]["max_minutes"] = 20
+    out, calls, payloads = _scripted_run(
+        [rd("1"), rd("2"), write, rd("3"), rd("4"),
+         {"role": "assistant", "content": "Done: re-checked after the write."}])
+    check("a write: the count starts over instead of stopping the run",
+          "Stopped a loop" not in out, out[:300])
+    check("a write: the run ends with its own answer",
+          "re-checked after the write" in out, out[:200])
+    check("a write: every scripted turn was used", calls == 6,
+          f"model calls: {calls}")
+
+
+def test_the_restatement_nudge_is_queued_with_the_batch():
+    """Source shape, because the failure it prevents is a 400 from a strict
+    provider: a user message landing between the tool results of a batched turn.
+    The loop guard's nudge stays the FIRST `nudges.append(` in the file; the
+    restatement nudge goes in with the batch, after it."""
+    src = (SRC).read_text(encoding="utf-8")
+    i = src.find("nudges.append(")
+    j = src.find("nudges.append(_restate_note)")
+    k = src.find("for _nudge in nudges:")
+    check("the loop guard's nudge is still the first one queued",
+          0 <= i < j, f"{i} {j}")
+    check("the restatement nudge is queued with the batch, after it",
+          i < j < k, f"{i} {j} {k}")
+    check("and it is not appended inside the per-call loop",
+          src.find("if _restate_note:") < k, f"{src.find('if _restate_note:')} {k}")
+
 def main():
     # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

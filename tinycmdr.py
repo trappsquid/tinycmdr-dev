@@ -353,6 +353,13 @@ DEFAULT_CONFIG = {
         # a weak local model burn the whole wall clock re-running the same
         # commands (the nudge at 3 repeats is advisory and was ignored).
         "loop_stop_repeats": 6,
+        # A model that keeps RESTATING its status is not moving either. The
+        # reporter folds the repeat (same_open) so the operator reads one line
+        # instead of the same sentence eight times, and the run says it out loud
+        # once, then wraps up with the report it already has. Any mutation clears
+        # the count, so real work never reaches it. 0 disables either half.
+        "restate_nudge_after": 3,
+        "restate_stop_after": 6,
         # An exact repeat (same tool, same args, same output) is refused after
         # this many real executions: it cannot produce new information, and for
         # a mutating command re-running it is harmful. 0 disables the refusal.
@@ -591,7 +598,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.8"
+VERSION = "1.0.9"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -8814,6 +8821,11 @@ class Agent:
             repeated = {}   # (tool, args, result) signature -> times seen
             executed = {}   # (tool, args) signature -> [times run, its output]
             refused_seen = {}   # (tool, args) signature -> times a refusal came back
+            _last_narr = ""     # the previous turn's narration, for the restate guard
+            _restated = 0       # how many turns in a row restated the same status
+            _restate_note = None   # the nudge that goes in with the next tool results
+            _restate_nudge = int(CONFIG["agent"].get("restate_nudge_after", 3) or 0)
+            _restate_stop = int(CONFIG["agent"].get("restate_stop_after", 6) or 0)
             dedupe_lock = threading.Lock()
             spun = False    # loop guard hard stop: why we stopped the run
             spun_tool = ""
@@ -9182,6 +9194,37 @@ class Agent:
                             except Exception:
                                 log.debug("interim_cb failed", exc_info=True)
 
+                    # A MODEL THAT KEEPS RESTATING ITSELF IS NOT MOVING. The reporter
+                    # folds the repeat so the operator reads one line, and the run does its
+                    # part: say it out loud once, then wrap up with the report it already
+                    # has. Measured on the macOS bed 2026-09-24: one stuck run restated the
+                    # same status EIGHT times in three minutes while every call it made
+                    # failed (no chat lane on that box, a curl at a port nothing served),
+                    # and the operator read the same sentence eight times with no way to
+                    # tell it apart from progress. Counted on consecutive turns only: any
+                    # mutation, and any different status, clears it.
+                    _narr = (reply.get("content") or "").strip()
+                    if _narr:
+                        if same_open(_narr, _last_narr):
+                            _restated += 1
+                            if _restate_stop and _restated >= _restate_stop:
+                                spun = (f"it described the same status {_restated} "
+                                        f"times without anything changing")
+                                spun_tool = ""
+                                log.warning("[%s] restatement loop: the same status %d "
+                                            "time(s) in a row - forcing the final report",
+                                            session_key, _restated)
+                            elif _restate_nudge and _restated >= _restate_nudge:
+                                _restate_note = (
+                                    f"SYSTEM: you have now described the same status "
+                                    f"{_restated} times and nothing has changed in "
+                                    f"between. Stop restating it: either make the call "
+                                    f"that changes it, or write your final report now "
+                                    f"with what you have.")
+                        else:
+                            _restated = 0
+                        _last_narr = _narr
+
                     # The assistant turn that ASKED for these tools must be in
                     # the transcript — the standard OpenAI shape, and what Hermes
                     # always sends. Without it the payload was a pile of tool
@@ -9452,6 +9495,7 @@ class Agent:
                             # before the fix kept climbing toward loop_stop_repeats
                             # and could force a report mid-task (audit, 2026-09-22).
                             repeated.clear()
+                            _restated = 0      # real work: the status is not the story
                         log.info("[%s] %s(%s) -> %d chars",
                                  session_key, name,
                                  json.dumps(args)[:120], len(output))
@@ -9538,6 +9582,13 @@ class Agent:
                             f"delivered a report. Stop starting new checks. Emit the final "
                             f"report in your next reply with NO further tool calls, and say "
                             f"plainly which parts you could not verify.")
+                    if _restate_note:
+                        # LAST, and never inside the per-call loop above: the loop
+                        # guard's nudge must stay the first one queued (a user
+                        # message between the tool results of a batched turn is a
+                        # 400 from a strict provider - live 2026-09-11).
+                        nudges.append(_restate_note)
+                        _restate_note = None
                     for _nudge in nudges:
                         messages.append({"role": "user", "content": _nudge})
 
@@ -9638,10 +9689,11 @@ class Agent:
                         answer = _annotate_evidence(answer, muts, calls)
                         hist.append({"role": "assistant", "content": scrub(answer)})
                         if spun:
-                            return (f"🔁 Stopped a loop: {spun} — repeated the "
-                                    f"same `{spun_tool}` call with identical "
-                                    f"arguments and results {loop_stop} times "
-                                    f"without moving on, so I wrapped up "
+                            _why = ((f"repeated the same `{spun_tool}` call with "
+                                     f"identical arguments and results {loop_stop} "
+                                     f"times without moving on") if spun_tool else
+                                    "kept restating the same status without moving on")
+                            return (f"🔁 Stopped a loop: {spun} — {_why}, so I wrapped up "
                                     f"instead of burning the budget "
                                     f"({steps} steps, {int(time.time() - t0)}s)."
                                     f"\n\n" + (answer or "(no summary)"))
@@ -10085,6 +10137,61 @@ def _relay_callbacks(ctx, src):
             "narration_drop_cb": bind(rep.get("drop"))}
 
 
+# How many words at the START of two outgoing lines must agree before they read as
+# ONE line repeated. Six, because that is what the measured sample needed and no
+# more (see same_open).
+_RESTATE_WORDS = 6
+_CARD_SECONDS = re.compile(r"\s*·\s*[0-9.]+s")
+
+
+def _line_words(text):
+    """The words of an outgoing line, with DIGITS KEPT.
+
+    Digits are the difference between one line and the next in this harness:
+    `step-0` / `step-1`, "exit 0" / "exit 1", a byte count, a port. Dropping
+    them made two DIFFERENT tool lines read as one and one of them vanished
+    from the operator's view - caught by tests/test_checkin.py (the cap test)
+    before this shipped. Punctuation, emoji and case still come out: a stuck
+    model re-types those differently every turn.
+    """
+    return re.findall(r"[a-z0-9]+", str(text or "").lower())
+
+
+def same_open(a, b):
+    """True when two NARRATION lines open with the same words as read.
+
+    Measured on the macOS bed 2026-09-24: one stuck run posted eight lines that
+    all opened "The video is already downloaded (9.2 MB ..." and were the same
+    sentence to the operator, differing only in the tail - a path, the words
+    "from an earlier run", a clause about the chat lane being down. The exact
+    match this used to be compared on never fired, so the surface showed the
+    status eight times and every one of them was a notification.
+
+    PREFIX, not similarity: the rewordings diverge four words in, so no
+    token-overlap score separates them from real new work, while the opening
+    clause is what a reader actually recognises as "you said this already".
+    Short lines have to match whole.
+    """
+    wa, wb = _line_words(a), _line_words(b)
+    if not wa or not wb:
+        return False
+    if max(len(wa), len(wb)) <= _RESTATE_WORDS:
+        return wa == wb
+    return wa[:_RESTATE_WORDS] == wb[:_RESTATE_WORDS]
+
+
+def card_sig(line):
+    """The identity of a tool card: the call, its result line, its exit code and
+    its reason - WITHOUT the duration, so the same call twice folds into one card
+    instead of two cards that differ only in "· 0.2s" vs "· 0.3s".
+
+    Whole-line, not prefix: a tool line's tail is what tells two calls apart
+    (`--dry-run` vs not, one path vs another), and the fold here is only allowed
+    when the card reads as the same card to the end.
+    """
+    return tuple(_line_words(_CARD_SECONDS.sub("", str(line or ""))))
+
+
 class RunReporter:
     """What a run says about itself, written once for every interface.
 
@@ -10118,6 +10225,11 @@ class RunReporter:
         self.stream_text = {}      # what the line says now
         self.stream_open = {}      # what the line was OPENED with
         self.last_stream = {}
+        self.stream_repeats = {}   # restatements folded into the current line
+        self.note_text = {}        # the last note per source, for the fold
+        self.note_ref = {}         # its post id, so a restatement updates it
+        self.note_repeats = {}     # how many restatements that line absorbed
+        self.card_last = {}        # (signature, ref, times) of the previous card
         self.reason_ref = {}       # the reasoning line, where the lane wants one
         self.last_reason = {}
         self.lock = threading.Lock()
@@ -10163,7 +10275,24 @@ class RunReporter:
             if now - self.last_note.get(src, 0.0) < gap:
                 return
             self.last_note[src] = now
-        self._draw("note", f"💬 {text}", src)
+        # A RESTATED NOTE IS THE SAME LINE. The model's interstitial narration is
+        # where the copy-paste repeats showed up (eight near-identical 💬 posts in
+        # one stuck run, each one a notification on the phone). A line that opens
+        # with the same words UPDATES the note already on screen instead of adding
+        # another one: nothing is lost - the newest wording is what the operator
+        # reads - and nothing new is posted for the reader to scroll past.
+        if same_open(text, self.note_text.get(src, "")):
+            self.note_repeats[src] = self.note_repeats.get(src, 0) + 1
+            log.info("[%s] restated note updates its line (#%d): %s",
+                     self.session_key, self.note_repeats[src], text[:80])
+            ref = self.note_ref.get(src)
+            if ref:
+                self._redraw(ref, "note", f"💬 {text}", src)
+                return
+        else:
+            self.note_repeats[src] = 0
+        self.note_text[src] = text
+        self.note_ref[src] = self._draw("note", f"💬 {text}", src)
 
     def say(self, text, src=None):
         """A line from the HARNESS, not the model: the notice that a run
@@ -10203,7 +10332,12 @@ class RunReporter:
             # a fresh post on the surface for every turn of a looping run: nine
             # identical "💬 I will list the tools first:" posts, one per turn.
             ref = self.stream_ref.get(src)
-            if new_turn and body != (self.stream_open.get(src) or ""):
+            # SAME OPENING = THE SAME LINE. An exact match kept a looping run from
+            # re-posting an IDENTICAL line, and left the near-identical ones: eight
+            # posts that all opened with the same sentence and differed in the tail
+            # (macOS bed, 2026-09-24). same_open folds those into the line that is
+            # already there.
+            if new_turn and not same_open(body, self.stream_open.get(src) or ""):
                 ref = None
                 self.stream_text[src] = ""
                 self.stream_open[src] = ""
@@ -10216,6 +10350,17 @@ class RunReporter:
                     return
                 if body == self.stream_text.get(src):
                     return
+                if same_open(body, self.stream_open.get(src) or ""):
+                    # The line is the model's CURRENT status, and a reworded version
+                    # of the same sentence is still that one line: it is UPDATED in
+                    # place below, never posted again (the measured eight-post
+                    # storm). Nothing is lost - the newest wording is what the
+                    # operator reads - and no reader gets another notification.
+                    self.stream_repeats[src] = self.stream_repeats.get(src, 0) + 1
+                    log.info("[%s] restated line updates its post (#%d): %s",
+                             self.session_key, self.stream_repeats[src], body[:80])
+                else:
+                    self.stream_repeats[src] = 0
             self.stream_text[src] = body
             self.last_stream[src] = now
         if fresh:
@@ -10325,40 +10470,74 @@ class RunReporter:
             line += f" — {why}"
         merge = float(CONFIG["agent"].get("checkin_tool_merge_seconds", 2.0) or 0)
         cap = int(CONFIG["agent"].get("checkin_tool_max_lines", 4) or 4)
+        sig = card_sig(line)
         with self.lock:
             now = time.time()
             ref = self.tool_ref.get(src)
             lines = self.tool_lines.get(src) or []
-            # Merging a burst of calls into one message is a NOTIFICATION
-            # decision, not a reporting one: on a phone five posts in two seconds
-            # is noise, and in a browser five lines is just the transcript. The
-            # thresholds themselves are the operator's, from config.
-            if not self.dest.merge_tools:
-                fresh = True
-            else:
-                fresh = (not ref or not lines
-                         or (cap and len(lines) >= cap)
-                         or now - self.last_tool.get(src, 0.0) > merge)
-            if fresh:
-                lines = [line]
-                self.tool_failed[src] = bool(rc)
-                ref = None
-            else:
-                lines = lines + [line]
+            prev = self.card_last.get(src)     # (signature, ref, times, the line itself)
+            # A REPEATED CARD IS THE SAME CARD. Two cards that read the same - same
+            # call, same preview, same exit code, same reason - differ only in the
+            # duration, and the second one makes the channel look like it is
+            # copy-pasting itself (measured 2026-09-24: the same card twice in a
+            # row, in its own post each time). It is COUNTED on the card already on
+            # screen instead, in whichever shape it arrives: inside the batch that
+            # is still open, or as a post of its own behind it. Identity is the
+            # whole line minus the duration, so a card whose tail differs is a
+            # different call and always posts.
+            if prev and prev[0] == sig:
+                times = prev[2] + 1
+                shown = f"{prev[3]} (×{times})"
+                if lines and card_sig(lines[-1]) == prev[0]:
+                    lines = lines[:-1] + [shown]     # the batch that is still open
+                    keep = ref
+                else:
+                    lines = [shown]                  # the card stands alone
+                    keep = prev[1]
+                self.tool_lines[src] = lines
+                self.last_tool[src] = now
+                self.card_last[src] = (sig, prev[1] or ref, times, prev[3])
                 self.tool_failed[src] = self.tool_failed.get(src, False) or bool(rc)
-            self.tool_lines[src] = lines
-            self.last_tool[src] = now
+                log.info("[%s] repeat card folded (x%d): %s", self.session_key,
+                         times, prev[3][:80])
+            else:
+                # Merging a burst of calls into one message is a NOTIFICATION
+                # decision, not a reporting one: on a phone five posts in two
+                # seconds is noise, and in a browser five lines is just the
+                # transcript. The thresholds themselves are the operator's, from
+                # config.
+                if not self.dest.merge_tools:
+                    fresh = True
+                else:
+                    fresh = (not ref or not lines
+                             or (cap and len(lines) >= cap)
+                             or now - self.last_tool.get(src, 0.0) > merge)
+                if fresh:
+                    lines = [line]
+                    self.tool_failed[src] = bool(rc)
+                    ref = None
+                else:
+                    lines = lines + [line]
+                    self.tool_failed[src] = (self.tool_failed.get(src, False)
+                                             or bool(rc))
+                self.tool_lines[src] = lines
+                self.last_tool[src] = now
+                self.card_last[src] = (sig, None, 1, line)
+                keep = ref
             failed = self.tool_failed[src]
         body = self._batch_text(lines)
         # a batch containing a failed call is a failure even if it also contains
         # good ones: the line has to read as "something in here broke"
         kind = "tool_fail" if failed else "tool_done"
-        if ref is None:
+        if keep is None:
             new_ref = self._draw(kind, body, src)
             with self.lock:
                 self.tool_ref[src] = new_ref
+                cur = self.card_last.get(src)
+                if cur and cur[1] is None:
+                    self.card_last[src] = (cur[0], new_ref, cur[2], cur[3])
         else:
-            self._redraw(ref, kind, body, src)
+            self._redraw(keep, kind, body, src)
 
     @staticmethod
     def _batch_text(lines):

@@ -5,6 +5,12 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.9] - 2026-09-24
+
+### Fixed
+- **The same status is no longer posted eight times.** A stuck run on the macOS box described one status in eight near-identical lines over three minutes, and every one of them was a notification the operator had to read and dismiss. The line the model narrates (and the interstitial note) now compares its opening words, so a restated sentence UPDATES the line already on screen instead of adding another post - nothing is lost, the newest wording is what the line says - and a repeated tool card is counted on the card that is already there (`(×2)`) rather than posted a second time. Identity keeps digits, so `step-0` and `step-1` are different lines and both stay visible.
+- **A run that only restates itself ends itself.** Six restatements in a row while nothing changed ends the run with the report it already has (`🔁 Stopped a loop: it described the same status 6 times without anything changing`); at three it is told once, in the tool results it reads, to stop restating and either make the change or write the report. Any write or edit clears the count, so a legitimate verify-after-fix never trips it. `agent.restate_nudge_after` (3) and `agent.restate_stop_after` (6) tune both halves; 0 disables either.
+
 ## [1.0.8] - 2026-09-24
 
 ### Added
