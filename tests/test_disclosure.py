@@ -68,10 +68,8 @@ def main():
         run_scenario.stage_install(workdir, 24000)
         fb = run_scenario.load(workdir)
 
-        # The example tool has to exist in the build under test. The CLI build cuts the
-        # scheduler along with the chat layer, so a suite hardcoded to "schedule" failed
-        # there for the wrong reason; every check below therefore uses EX. (Found by
-        # running this suite against tinycmdr-cli.py for the first time.)
+        # The example tool has to exist in the build under test, so every check below
+        # uses EX rather than assuming the scheduler is there.
         EX = "schedule" if fb.REGISTRY.get("schedule") else "delegate_task"
         EX_QUERY = {"schedule": "schedule a job every morning",
                     "delegate_task": "delegate a task"}[EX]

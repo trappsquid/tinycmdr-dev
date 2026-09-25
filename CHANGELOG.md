@@ -29,7 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **A scoped install no longer overwrites a working install's PATH verb.** The wrapper is only written when the existing file already points at this install dir, the same rule the macOS plist and the sudoers file follow.
 - **`.gitignore` had a doubled carriage return on every line, so no pattern matched.** `.env` and `config.json` showed up as untracked in a public repo; one `git add -A` would have published the bot token.
-- **The shipped CLI README claimed a version that does not exist** ("From 1.0.7 a window this build owns stays open"), in the package readers actually download.
 - **The GitHub repo description still said "Fast TTFT"** after the same claim was removed from the README.
 
 ## [1.0.6] - 2026-09-24

@@ -194,7 +194,7 @@ fetch_python() {
     # password, no Homebrew, no system change. Measured on an M-series Mac:
     # about a second for the uv bootstrap, 943 ms for the interpreter, 71 MB
     # on disk, and a venv built on it pip-installs mmpy_bot 2.2.1 and runs the
-    # shipped console build (rc=0).
+    # shipped build (rc=0).
     # STDOUT IS THE RESULT: every progress line goes to stderr, or the caller's
     # PY="$(fetch_python)" captures chatter and then cannot run it.
     local tools="$INSTALL_DIR/.tools" pydir="$INSTALL_DIR/.python" uv="" boot=""
@@ -366,10 +366,10 @@ if [ "$FORCE" = 1 ]; then
     done
 fi
 
-# tinycmdr-cli.py is installed FLAT, beside tinycmdr.py: every door then reads ONE
+# Everything is installed FLAT in one folder: every door then reads ONE
 # config.json and ONE .env, so a session, the page and the bot cannot disagree
 # about which config was last edited.
-for f in tinycmdr.py tinycmdr-cli.py tinycmdr requirements.txt config.example.json README.md field-notes.md soul.md; do
+for f in tinycmdr.py tinycmdr requirements.txt config.example.json README.md field-notes.md soul.md; do
     if [ -f "$SRC/$f" ]; then
         cp -f "$SRC/$f" "$INSTALL_DIR/$f"
     elif [ -f "$INSTALL_DIR/$f" ]; then
@@ -470,7 +470,7 @@ elif [ -z "$TOKEN" ]; then
     WEB_ON=1
     info "no Mattermost bot token: installing WITHOUT a chat account"
     info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
-    info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr-cli.py"
+    info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr.py --cli"
     info "the page will ask for its token (printed below, and in .env)"
     info "add a chat account later: re-run with --token-file <file>"
 fi

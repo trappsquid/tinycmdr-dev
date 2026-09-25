@@ -16,8 +16,8 @@ controls, so "steer mid-run" and "stop mid-run" don't race a stub.
 
     python tests/test_webui_browser.py
 
-Skips (does not fail) when playwright or an Edge/Chromium binary is missing, and
-in a console build with no web layer.
+Skips (does not fail) when playwright or an Edge/Chromium binary is missing, and in a
+build with no web layer.
 """
 import json
 import sys

@@ -43,8 +43,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 
-# Which build to import: the Mattermost bot by default, the chatless CLI build
-# with TINYCMDR_SRC=tinycmdr-cli.py.
+# This suite imports the bot build.
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 # --- hermetic staging (same idiom as the other suites) ----------------------

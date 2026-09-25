@@ -127,7 +127,7 @@ def _tools_dir(args):
 def _app_path():
     """The build beside this file: the loader this tool defers to lives in it."""
     here = Path(__file__).resolve().parent
-    for cand in (here.parent / "tinycmdr.py", here.parent / "tinycmdr-cli.py"):
+    for cand in (here.parent / "tinycmdr.py",):
         if cand.exists():
             return cand
     return None

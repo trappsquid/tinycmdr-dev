@@ -16,7 +16,6 @@ What this pins:
   * a question is closed again afterwards (no box left open to eat the next request)
   * /stop while a question is open releases the run as a STOP, not a timeout
   * `--once` has no reader thread, so a question there reads stdin itself
-  * the generated console build carries all of it
 
     python tests/test_cli_prompt.py            (all checks)
     python tests/test_cli_prompt.py <substring>
@@ -194,21 +193,6 @@ def test_4_stop_releases_a_parked_question():
     status = (got.get("value") or ("<none>", ""))[0]
     check("/stop releases the parked run as a STOP, not a timeout", status == "stopped",
           got)
-
-
-def test_5_the_generated_console_build_carries_it():
-    gen = BASE / "tinycmdr-cli.py"
-    if not gen.exists():
-        skip("generated console build", "not in this tree")
-        return
-    body = gen.read_text(encoding="utf-8", errors="replace")
-    check("the question channel survives the cut", "def cli_ask_line(" in body
-          and "def cli_question_answer(" in body)
-    check("the reader answers an open question", 'if _CLI.get("ask") is not None:' in body)
-    check("the console wires the door", "ask_door=reporter.dest" in body)
-    check("--once starts no reader thread", '_CLI["reader"] = not once' in body)
-    check("CliDestination is ask_user's door there too",
-          "def opener(self, question, options, wait, label=None):" in body)
 
 
 def main():

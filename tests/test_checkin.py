@@ -19,8 +19,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 
-# Which build to import: the Mattermost bot by default, the chatless CLI build
-# with TINYCMDR_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
+# This suite imports the bot build.
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 spec = importlib.util.spec_from_file_location("tinycmdr_checkin_under_test",
                                               SRC)
@@ -33,9 +32,9 @@ TMP = Path(tempfile.mkdtemp(prefix="fbcheckin-"))
 # should not leave a directory behind for every run.
 atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
 if not hasattr(fb, "ProgressReporter"):
-    # The chat lane's reporter factory is cut from the console build on
-    # purpose (one reporter, lane destinations); there is nothing here for
-    # that build to grade. Declared skip, not a green lie.
+    # The chat lane's reporter factory exists only when this build has a chat
+    # layer (one reporter, lane destinations); there is nothing here to grade
+    # without it. Declared skip, not a green lie.
     print("skip: this suite grades the chat lane (ProgressReporter); "
           "this build has none - run it against tinycmdr.py")
     sys.exit(0)

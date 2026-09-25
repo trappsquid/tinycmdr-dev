@@ -430,7 +430,7 @@ elif [ -z "$TOKEN" ]; then
     APP_ARGS="--web"
     info "no Mattermost bot token: installing WITHOUT a chat account"
     info "the service will serve the local page: http://127.0.0.1:${WEB_PORT}"
-    info "a session needs no service at all:   $VENV_PY $INSTALL_DIR/tinycmdr-cli.py"
+    info "a session needs no service at all:   $VENV_PY $INSTALL_DIR/tinycmdr.py --cli"
     info "add a chat account later: re-run this installer with --token-file <file>"
 elif [ "$TG_LANE" = 1 ]; then
     info "both tokens are set: Mattermost wins in this process, so Telegram needs"
@@ -515,10 +515,10 @@ if [ "$FORCE" = 1 ] && [ -d "$INSTALL_DIR" ]; then
     done
 fi
 mkdir -p "$INSTALL_DIR"
-# tinycmdr-cli.py goes in FLAT, beside tinycmdr.py, never in a folder of its own:
+# The console door goes in FLAT, never in a folder of its own:
 # every door then reads ONE config.json and ONE .env (it resolves both from the
 # folder it sits in), and the doors are mediums rather than separate installs.
-for item in tinycmdr.py tinycmdr-supervise.py tinycmdr-cli.py tinycmdr requirements.txt README.md \
+for item in tinycmdr.py tinycmdr-supervise.py tinycmdr requirements.txt README.md \
             config.example.json .env.example field-notes.md soul.md \
             skills tools install maintenance; do
     if [ -e "$SRC/$item" ]; then
@@ -938,7 +938,7 @@ tinycmdr is installed.
   logs     : journalctl ${JCTL_SCOPE}-u $SERVICE_NAME -f    and    $INSTALL_DIR/tinycmdr.log
   restart  : ${SCTL_HINT} restart $SERVICE_NAME
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
-  session  : $VENV_PY $INSTALL_DIR/tinycmdr-cli.py
+  session  : $VENV_PY $INSTALL_DIR/tinycmdr.py --cli
   page     : $VENV_PY $INSTALL_DIR/tinycmdr.py --web   -> http://127.0.0.1:$WEB_PORT
   verify   : bash $HERE/$(basename "${BASH_SOURCE[0]}") --verify-only --mode $INSTALL_MODE
   remove   : ${SUDO_IF_ROOT}bash $HERE/$(basename "${BASH_SOURCE[0]}") --uninstall --mode $INSTALL_MODE

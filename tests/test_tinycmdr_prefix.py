@@ -20,8 +20,6 @@ What must hold, and what this pins:
   * the LISTENER thread: `/tinycmdr stop` and `/tinycmdr restart force` are read while a run
     owns the channel - the whole point of that early path
   * the web lane and the console lane
-  * the generated console build carries the helper and calls it (it is above the
-    generator's cut on purpose)
 
     python tests/test_cmdr.py            (all checks)
     python tests/test_cmdr.py <substring>
@@ -250,23 +248,6 @@ def test_console_lane():
         fb._cli_while_running("/tinycmdr wibble")
     check("a prefixed verb is understood by the mid-run reader",
           "not a command" not in out.getvalue(), out.getvalue()[:120])
-
-
-def test_the_generated_console_build_carries_it():
-    gen = BASE / "tinycmdr-cli.py"
-    if not gen.exists():
-        skip("generated console build", "not in this tree")
-        return
-    body = gen.read_text(encoding="utf-8", errors="replace")
-    check("the helper survives the cut", "def cmdr_strip(" in body
-          and "def cmdr_legacy_prefix(" in body)
-    start = body.find("def _cli_command(")
-    end = body.find("\nFAST_VERBS", start)
-    region = body[start:end] if start >= 0 and end > start else ""
-    check("the console lane calls it", "cmdr_strip(text)" in region,
-          region[:200])
-    check("nothing cut still references it",
-          body.count("cmdr_strip(") >= 3, body.count("cmdr_strip("))
 
 
 def main():

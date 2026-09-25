@@ -9,7 +9,6 @@ tool's NAME is in the prompt now; its argument SHAPE is not, and the payload bud
 already paid for can say: here is the call.
 
     python tests/test_route_hint.py
-    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_route_hint.py
 
 Falsify: point it at a build without route_hint() (the checks go through getattr and FAIL).
 """

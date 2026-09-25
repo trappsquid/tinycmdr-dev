@@ -515,7 +515,7 @@ if ($VerifyOnly) {
 # check is the one place where a file that stopped shipping is fatal instead of silent, and
 # the reader is the one who finds out. build-package.py verifies this list against the
 # staged package, so the two cannot drift apart again.
-$required = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr-cli.py",
+$required = @("tinycmdr.py", "tinycmdr-supervise.py",
               "config.example.json", ".env.example", "skills")
 foreach ($f in $required) {
     if (-not (Test-Path (Join-Path $Source $f))) { Fail "package is missing $f (run the installer from the extracted zip)" }
@@ -715,7 +715,7 @@ if ($MattermostToken) {
 
 # -------------------------------------------------------------------- the chat lane
 # A Mattermost account is OPTIONAL: the harness has three doors - a chat bot, the CLI
-# (`python tinycmdr-cli.py`) and the local page (`python tinycmdr.py --web` -> 127.0.0.1:8787,
+# (`python tinycmdr.py --cli`) and the local page (`python tinycmdr.py --web` -> 127.0.0.1:8787,
 # which is dispatched before the token check). With no token there is no chat lane, and a
 # chat-lane task would exit immediately (tinycmdr.py refuses to start without a token, on
 # purpose: a missing token used to fail silently as "never connects") while the supervisor
@@ -747,7 +747,7 @@ if ($Force) {
     Start-Sleep -Seconds 2
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-$copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr-cli.py", "tinycmdr.cmd", "requirements.txt", "config.example.json",
+$copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr.cmd", "requirements.txt", "config.example.json",
           ".env.example", "README.md", "field-notes.md", "soul.md", "skills",
           "tools",    # the starter drop-in tools; tools/README.md has the shapes
           "install")  # the installer family incl. uninstall-tinycmdr.ps1
@@ -1136,7 +1136,7 @@ if (-not $SkipTask -and -not $RegisterTask) {
     Head "autostart: skipped"
     Say "no chat account and no -EnableWeb, so there is nothing to keep running in the"
     Say "background. Both local doors work from a shell:"
-    Say "  python tinycmdr-cli.py          (a session in this window)"
+    Say "  python tinycmdr.py --cli        (a session in this window)"
     Say "  python tinycmdr.py --web        (a page on http://127.0.0.1:$WebPort)"
 }
 if ($RegisterTask -and -not $AsService) {
@@ -1265,7 +1265,7 @@ if ($TgLane -and -not $ChatLane) {
     Say "This install has NO chat account, which is a supported way to run it. Two doors are"
     Say "open right now, and neither needs a chat server:"
     Say ""
-    Say "  a session   :  cd $InstallDir ; python tinycmdr-cli.py"
+    Say "  a session   :  cd $InstallDir ; python tinycmdr.py --cli"
     Say "  a local page:  cd $InstallDir ; python tinycmdr.py --web"
     Say "                 then open http://127.0.0.1:$WebPort"
     if ($LocalWeb) {
@@ -1294,7 +1294,7 @@ if ($todo.Count -gt 0 -and $RegisterTask) {
         Say "after editing, restart:  tinycmdr restart   (or delete/restore the Startup shortcut)"
     }
 }
-if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr-cli.py   (or --web)" }
+if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --cli   (or --web)" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
     if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
@@ -1306,10 +1306,10 @@ if ($Ask) {
         }
     }
     if ($WantCli) {
-        Say "a session needs nothing running:  cd $InstallDir ; python tinycmdr-cli.py"
+        Say "a session needs nothing running:  cd $InstallDir ; python tinycmdr.py --cli"
         if (Ask-Yes "Open a session now?" $false) {
             Say "starting a session - type your task, Ctrl-C to leave"
-            try { & $py.Path (Join-Path $InstallDir "tinycmdr-cli.py") } catch { }
+            try { & $py.Path (Join-Path $InstallDir "tinycmdr.py") "--cli" } catch { }
         }
     }
     if ($WantTg) {
@@ -1325,7 +1325,7 @@ if ($EnableWeb) {
     Say "web page : $webLink   (it asks for its token on first open)"
     Say "  token: the 'page token' line printed above, and TINYCMDR_WEB_TOKEN in .env"
 }
-Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr-cli.py)"
+Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"
 try { Stop-TranscriptRedacted } catch { }
 if (-not $NoPause) { Read-Host "`nPress Enter to close" }

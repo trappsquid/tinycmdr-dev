@@ -1,7 +1,6 @@
 """Tests for the event log (stage 4 of the MiniDSH plan), shadow only.
 
     python tests/test_events.py
-    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_events.py
 
 The artifact is a file nothing reads yet, so nothing downstream will ever notice when it is
 wrong. Every property it has to have - one line per event, valid JSON, no secrets on disk, a

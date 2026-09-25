@@ -7,7 +7,6 @@ OWN loader accepts it: `check` runs load_tool_defs, the single reader create_too
 write verifier both use, so "OK" is the loader's verdict and not this tool's opinion.
 
     python tests/test_toolsmith.py
-    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_toolsmith.py
 """
 import importlib.util
 import json

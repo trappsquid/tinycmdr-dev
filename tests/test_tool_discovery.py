@@ -13,7 +13,6 @@ MISS now returns this box's whole remaining surface instead, and a query that na
 capability is told so instead of being guessed at.
 
     python tests/test_tool_discovery.py
-    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_tool_discovery.py
 """
 import importlib.util
 import os

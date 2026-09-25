@@ -15,7 +15,6 @@ Custom tools:  drop .py files into ./tools/ (the agent also writes its own
 Run as bot:    python tinycmdr.py
 Run in a terminal:  tinycmdr            (the shim: no verb means a session)
                python tinycmdr.py --cli  the same thing in the open
-               (or tinycmdr-cli.py, the console build packaged beside this file)
 One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
 
@@ -1706,15 +1705,15 @@ def annotate_failure(name, args, text):
 # Shell rights: what this process can actually do (the elevation problem)
 # --------------------------------------------------------------------------
 #
-# Measured reason this exists: the console build, launched from an ordinary terminal on an
+# Measured reason this exists: a session launched from an ordinary terminal on an
 # account that IS an administrator, hit `Access is denied` reading event logs and a root\wmi
 # class, and reported it to the operator as a mystery ("permission elevation is denied for this
 # shell"). Nothing in the harness was denying anything. UAC hands an administrator TWO tokens,
 # and a process started from a normal console gets the filtered one, so "my account is admin"
 # and "this shell can do admin work" are different statements.
 #
-# The bot build never meets this because its Scheduled Task runs with highest privileges; the
-# console build inherits whatever console started it. So the fix is not to elevate (a silent
+# The bot lane never meets this because its Scheduled Task runs with highest privileges; a
+# console session inherits whatever console started it. So the fix is not to elevate (a silent
 # UAC prompt would be worse), it is to tell the truth about the current process up front and
 # stop the model retrying commands that cannot work.
 
@@ -1957,7 +1956,6 @@ def looks_like_path_failure(text):
 
 _ATLAS_KNOWN_FILES = (
     ("tinycmdr.py", "the agent itself"),
-    ("tinycmdr-cli.py", "the enterprise build of the same agent"),
     ("config.json", "settings; secrets live in .env, never read those out loud"),
     ("field-notes.md", "known-failure library; a matching tool failure arrives annotated"),
     ("notes.md", "durable memory, newest entries ride in this prompt"),
@@ -6616,11 +6614,9 @@ def run_block(key):
 # --------------------------------------------------------------------------
 # One place creates sessions/, and it is created on a write, never at import
 # --------------------------------------------------------------------------
-# The CLI build's suites assert this by counting the string in the generated file
-# ("no mkdir at import: sessions/ is made on the first save"), because the rule is that
-# opening that build creates nothing. A second mkdir of the sessions folder anywhere in the
-# source trips that count even when the new writer is behaviourally correct, so every writer
-# calls this instead.
+# The rule this file is built on: opening the agent creates NOTHING. A second
+# mkdir of the sessions folder anywhere in the source breaks that, even when the new
+# writer is behaviourally correct, so every writer calls this instead.
 
 
 def _ensure_sessions_dir():
@@ -7207,9 +7203,8 @@ def disclosure_on():
 
 
 def core_tool_names():
-    """The always-visible names, filtered to what this build actually has: the
-    enterprise build cuts whole subsystems, and a default list naming a tool that does
-    not exist would just be a lie in the source."""
+    """The always-visible names, filtered to the tools this build actually has, so a
+    default list can never name a tool that is not there."""
     names = [n for n in (CONFIG["agent"].get("core_tools") or []) if n]
     if not names:
         names = list(_DEFAULT_CORE)
@@ -9863,7 +9858,7 @@ def _save_overrides():
 # tool call with what it ran and what came back, the model's own narration as it
 # streams, a check-in every so often, the questions, and the answer. That used to
 # be written three times - ProgressReporter for Mattermost, WebRun's callbacks for
-# the browser, and a pile of print() closures inside the console build - so the
+# the browser, and a pile of print() closures inside the console lane - so the
 # three drifted: the browser lost exit codes, failure reasons and check-ins
 # entirely, and the console could not even import the wording (the generator cuts
 # this file between model_command and run_cli, so anything the console needs has
@@ -14921,9 +14916,8 @@ def run_telegram():
 
 
 # ------------------------------------------------------------------ the console
-# Shared by both builds: the bot's `--cli` and tinycmdr-cli.py run THIS code.
-# build-cli-source.py cuts the Mattermost layer up to the line above, so nothing
-# in here is replaced - one console, one place to change (audit, 2026-09-21).
+# This is the console: `tinycmdr` with no verb, or `--cli`. No second build cuts
+# it, so every change lands here and nowhere else (audit, 2026-09-21).
 _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
         "leave": False, "stream": "", "streamed": "", "streamed_answer": "",
         # "ask": the question a run is parked on (None when none is open), and
@@ -16846,9 +16840,7 @@ def _verb_update(rest):
             if rc == 0:
                 print(out.strip())
                 if "Already up to date" not in out:
-                    print("Updated from git. Rebuilding CLI...")
-                    run_capture([sys.executable, str(BASE_DIR / "maintenance" / "build-cli-source.py")], 30)
-                    run_capture([sys.executable, str(BASE_DIR / "maintenance" / "build-cli-fix.py")], 30)
+                    print("Updated from git.")
                     print("Restart tinycmdr to run new build: `tinycmdr restart`")
                 return 0
             else:
@@ -16908,7 +16900,7 @@ def _verb_update(rest):
         print("this one : %s (VERSION %s)" % (CONFIG_PATH.parent, VERSION))
         stamp = time.strftime("%Y%m%d-%H%M%S")
         changed = []
-        for name in ("tinycmdr.py", "tinycmdr-cli.py"):
+        for name in ("tinycmdr.py",):
             candidate = find(name)
             if candidate is None:
                 continue

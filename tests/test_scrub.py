@@ -1,12 +1,11 @@
-"""Secrets are scrubbed in BOTH builds (audit, 2026-09-22).
+"""Secrets are scrubbed (audit, 2026-09-22).
 
-The review found the console build's secret sweep cut down to environment variables; the
-real hole was that NEITHER build scrubbed the primary llm.api_key, which is the key a
-hosted endpoint keeps in config.json and the one in use on every call. This suite grades
-the sweep itself, on the code's own terms, and runs against either build:
+The review found the secret sweep covering environment variables only; the real hole was
+that it never scrubbed the primary llm.api_key, which is the key a hosted endpoint keeps in
+config.json and the one in use on every call. This suite grades the sweep itself, on the
+code's own terms:
 
     python tests/test_scrub.py
-    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_scrub.py
 """
 import importlib.util
 import os
@@ -46,8 +45,8 @@ try:
 
     out = fb.scrub("the endpoint answered with key " + KEY)
     check("the PRIMARY llm.api_key is redacted", KEY not in out and "«redacted»" in out, out)
-    # This build may have no fallback endpoints at all (the console build cuts them);
-    # ask the source rather than the config, which the suite has just written.
+    # This build may have no fallback endpoints at all; ask the source rather than the
+    # config, which the suite has just written.
     if 'vals.add(fb["api_key"])' in SRC.read_text(encoding="utf-8", errors="replace"):
         out = fb.scrub("failover used " + FBKEY)
         check("a fallback api_key is still redacted", FBKEY not in out, out)

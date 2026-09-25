@@ -27,9 +27,8 @@ PASSES = []
 FAILS = []
 
 if not hasattr(fb, "tg_escape"):
-    # The console build has no Telegram lane: it is a bot lane, and
-    # build-cli-source.py cuts it the same way it cuts Mattermost.
-    print("the console build has no Telegram lane - nothing to grade here")
+    # No Telegram lane in this build: it is a bot lane and this build has none.
+    print("no Telegram lane in this build - nothing to grade here")
     sys.exit(0)
 
 

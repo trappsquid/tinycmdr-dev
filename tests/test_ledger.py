@@ -20,8 +20,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 
-# Which build to import: the Mattermost bot by default, the chatless CLI build
-# with TINYCMDR_SRC=tinycmdr-cli.py (that build has no chat layer to fake).
+# This suite imports the bot build.
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 # --- hermetic staging -------------------------------------------------------
@@ -2122,9 +2121,7 @@ def test_a_length_cut_that_fills_the_window_is_an_overflow_not_a_cap():
         _budget_clear()
         fb.CONFIG = saved_cfg
 def main():
-    # One suite serves both builds. The chatless CLI build (TINYCMDR_SRC=tinycmdr-cli.py)
-    # carries no failover list and no restart handover, so the tests that describe those
-    # features are skipped there rather than deleted: they still guard the Mattermost build.
+    # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")
     CHAT_ONLY = ("test_restart_", "test_an_explicit_cloud_model", "test_cloud_failover",
                  "test_a_cloud_stream_without_usage", "test_a_local_model_stays_local", "test_a_spawned_replacement", "test_streaming_asks_for_usage")

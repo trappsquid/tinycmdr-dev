@@ -18,7 +18,7 @@
     "                       wins when both tokens are set, so a Telegram-only process",
     "                       is:  python tinycmdr.py --telegram",
     "  a local page         nothing:   python tinycmdr.py --web      (no chat account)",
-    "  a session by hand    nothing:   python tinycmdr-cli.py",
+    "  a session by hand    nothing:   python tinycmdr.py --cli",
     "",
     "llm.base_url and llm.model are NOT checked at start: a wrong endpoint shows up as a",
     "run that fails, and `tinycmdr doctor` names it. mattermost.* is unused by the",

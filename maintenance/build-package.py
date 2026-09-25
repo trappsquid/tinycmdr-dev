@@ -34,8 +34,8 @@ DIST = ROOT / "dist"
 # files/dirs that ship, in package-relative form
 SHIP = [
     "tinycmdr.py",
-    # The watchdog the Windows scheduled task runs. It belongs to THIS package (the bot
-    # install), not to the hardened console build. Without it the installer's task points
+    # The watchdog the Windows scheduled task runs. It belongs to THIS package; without
+    # it the installer's task points
     # at a file that is not there, which is how boxes ended up with no respawn at all.
     "tinycmdr-supervise.py",
     "field-notes.md",
@@ -68,14 +68,6 @@ SHIP = [
     "tinycmdr",
     "maintenance/restart-tinycmdr.ps1",
     "maintenance/restart-tinycmdr.sh",
-    # The generator that produces cli/tinycmdr-cli.py from tinycmdr.py. Shipping the console
-    # build without it leaves a 9,900-line near-twin in the package with no explanation and
-    # no way to reproduce or verify it (audit, 2026-09-22). Two steps and a cut list, ~55 KB;
-    # tests/test_cli.py regenerates from them and requires byte-identity with the shipped
-    # file, so a stale copy cannot be packed either.
-    "maintenance/build-cli-source.py",
-    "maintenance/build-cli-fix.py",
-    "maintenance/cli_blocks.py",
     "skills",
     # The starter drop-in tools, the shapes doc and the toolsmith. tools/ is
     # otherwise per-host payload and stays banned from directory walks below
@@ -120,19 +112,15 @@ SECRETS_FILE = "install/fleet-secrets.env"
 FLEET_WIDE_KEYS = ("TAVILY_API_KEY", "ANYSEARCH_API_KEY")
 FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
 
-# What in maintenance/ is generic enough to ship: the restart helpers an install needs,
-# plus the generator SHIP carries so the console build can be regenerated and
-# byte-identity-checked. Everything else in this folder is the manager box-specific - fleet pushes,
+# What in maintenance/ is generic enough to ship: the restart helpers an install needs.
+# Everything else in this folder is the manager box-specific - fleet pushes,
 # migrations, probes, backups - and stays out.
 #
 # This is the SAME list as SHIP's maintenance/ entries, written twice, and the two drifting
-# apart refuses the whole build: 2026-09-22 a batch added the three generator files to SHIP
-# and not here, and every build refused with "host-specific maintenance script" until the
-# rebuild that publishing owed. When you ship a new file from this folder, add it to BOTH,
+# apart refuses the whole build. When you ship a new file from this folder, add it to BOTH,
 # and cut the package in the same batch.
 ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
-                       "restart-tinycmdr-macos.sh",
-                       "build-cli-source.py", "build-cli-fix.py", "cli_blocks.py"}
+                       "restart-tinycmdr-macos.sh"}
 
 # Values that must not appear ANYWHERE (they are secrets, or this box's identity)
 
@@ -393,19 +381,6 @@ def stage(target):
             shutil.copy2(src, dst)
             lf_only(dst)
 
-    # The console build (generated from tinycmdr.py by build-cli-source.py) is staged
-    # at the ROOT, beside tinycmdr.py, and never in a folder of its own. The installers
-    # copy it flat into the install dir, where both builds resolve the SAME config.json
-    # and .env, because each resolves them from the folder it sits in. A second folder
-    # holding a second config.json is how a reader ends up unsure which file they last
-    # edited, and the doors are mediums rather than separate installs.
-    cli = ROOT / "tinycmdr-cli.py"
-    if cli.exists():
-        out = target / "tinycmdr-cli.py"
-        shutil.copy2(cli, out)
-        lf_only(out)
-    else:
-        print("  ! missing tinycmdr-cli.py — the console build is NOT bundled")
     return target
 
 
@@ -438,7 +413,7 @@ def sanitize(target, host_vals):
             continue
         # Bytes in, bytes out. A text-mode read applies universal newlines, so a CRLF file
         # comes back LF and the generator's stray `\r\r\n` insertions come back as an extra
-        # blank line each (measured 2026-09-22: the shipped public console build carried 84
+        # blank line each (measured 2026-09-22: the shipped public build carried 84
         # extra blank lines and no longer matched the file the suites grade). A scrub must
         # change the strings it names and nothing else, newlines included.
         text = f.read_bytes().decode("utf-8", "surrogateescape")
@@ -730,8 +705,7 @@ def main():
                     "install/install-tinycmdr.ps1", "install/install-tinycmdr.cmd",
                     "install/install-tinycmdr.sh",
                     "install/install-tinycmdr-macos.sh",
-                    "install/com.tinycmdr.agent.plist",
-                    "tinycmdr-cli.py"):
+                    "install/com.tinycmdr.agent.plist"):
             p = stage_dir / rel
             if p.exists():
                 print("    %s  %s" % (hashlib.sha256(p.read_bytes()).hexdigest()[:16], rel))

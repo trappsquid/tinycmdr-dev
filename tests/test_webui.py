@@ -177,9 +177,9 @@ def main():
         fb = run_scenario.load(workdir)
 
         if not hasattr(fb, "WEB_PAGE"):
-            # the console build is generated with the whole chat/web layer cut
-            # out, so there is nothing here to check. Skip, do not fail.
-            print("skipped: this build has no web layer (console build)")
+            # this build has no chat/web layer at all, so there is nothing
+            # here to check. Skip, do not fail.
+            print("skipped: this build has no web layer")
             return 0
 
         # the page's own contract: a bottom bar plus the four endpoints

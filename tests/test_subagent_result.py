@@ -11,7 +11,6 @@ marker saying the shape is missing. Losing the work to a parse error would be wo
 losing the shape.
 
     python tests/test_subagent_result.py
-    TINYCMDR_SRC=tinycmdr-cli.py python tests/test_subagent_result.py
 """
 import importlib.util
 import json
