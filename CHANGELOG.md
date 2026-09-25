@@ -5,6 +5,19 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.8] - 2026-09-24
+
+### Added
+- **The agent can hand you a file.** A new `send_file` tool attaches a file from the machine into the chat it is answering in (`path`, plus an optional one-line `note`) and reports what actually happened: `sent: clip.mp4 (9,212,317 bytes) is now in this chat`. The harness could read and write files and had no way to deliver one, so an order to "send it here in chat" was impossible; a run asked to do it went looking for a way in (token files, `docker ps`, the chat API) for a file that had been on disk the whole time, and ended on a promise instead. One file per call, refused above `agent.send_file_max_bytes` (50 MB default) before the bytes move, and a lane that cannot carry a file (the console, a job with no destination) says so rather than pretending.
+
+### Fixed
+- **A conversation survives an interruption.** The session transcript was written only when a run ended, so a process killed mid-run - an update, a restart, a crash - took the operator's own message with it: the next run opened with an empty history and could only ask what "the task" was, while the tool results it had already produced were still on disk. The transcript is now written before the first model call.
+- **"Continue" means resume.** A run that never answered the order it was given (an interruption, or the turn limit) is a named state now, and the single line a run after a wreck carries says what it is for: resume that unfinished work when the message asks to continue, leave it alone when the message asks something else. The turn limit is recorded like every other end, so that state is never invisible either.
+- **A repeated tool call is refused, and a refusal that comes back stops the run.** The duplicate guard looked up its map by the raw argument string while entries were stored under the canonical signature, so a re-formatted identical call ran again while the loop counter watched it happen - one directory listing really ran three times inside a single chat turn. Both guards read one signature now, and a second refusal of the same call with nothing changed ends the run with the report it has.
+- **An order posted while the bot was down is no longer dropped.** The catch-up sweep that exists for that case walked a high-water map each new process started empty, so it had no channel to ask about, and a post made inside the downtime never arrived over the websocket either. The map is carried in `state.json` now, together with the ids of the posts already handled, so a restart recovers what it missed and never replays what it answered.
+- **One file, one lock.** Per-path locking keyed on the string the caller passed, so a Unix-style and a Windows-style spelling of one path took different locks and two edits of one file in a single batch could run at once: both reported success and one edit was silently lost. The key is the file now (expanded, resolved, case-folded where the platform does that).
+- **A report with no tool call behind it is asked once to make the call.** A run that answered with a filled-in result - counts, contents, a hash - without running anything had the fabrication delivered as its answer, because the promise guard wants a stated intention and the evidence check wants a change verb, and a measured value is neither. A true-from-memory answer ("16 GB unified memory") still stays quiet: a bare quantity is not a claim about anything the run fetched.
+
 ## [1.0.7] - 2026-09-24
 
 ### Added

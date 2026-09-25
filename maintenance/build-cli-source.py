@@ -99,6 +99,26 @@ def span_of_dict_key(key):
     return best
 
 
+def span_of_core_tool(key):
+    """Line span of ONE entry in the CORE_TOOLS registry dict.
+
+    Deliberately not span_of_dict_key(): that walks every dict in the module, so a
+    key that also appears in a nested literal resolved to the wrong node - a run's own
+    ctx carries "send_file" as well, and the first version of this cut removed the ctx
+    line and left the registry entry naming a function this build does not define
+    (measured 2026-09-24: the built CLI refused to import with NameError).
+    """
+    reparse()
+    for n in ast.walk(TREE):
+        if not (isinstance(n, ast.Assign) and n.targets
+                and getattr(n.targets[0], "id", "") == "CORE_TOOLS"):
+            continue
+        for k, v in zip(n.value.keys, n.value.values):
+            if isinstance(k, ast.Constant) and k.value == key:
+                return k.lineno, v.end_lineno
+    die("no CORE_TOOLS entry for %r" % key)
+
+
 def replace_block(start_sub, end_sub, new_text, why, region=None):
     a = one(start_sub, region)
     b = one(end_sub, region)
@@ -213,15 +233,25 @@ drop_line('"TAVILY_API_KEY": ("search", "tavily_api_key"),', "search env key 2")
 sa = one("def _anysearch(query, max_results):")
 sb = one("def tool_fetch_url(")
 cut(sa, sb, "web search providers + web_search tool")
-sp = span_of_dict_key("web_search")            # the tool registry entry
+sp = span_of_core_tool("web_search")          # the tool registry entry
 if '"web_search"' not in lines[sp[0] - 1]:
     die("the web_search registry entry span looks wrong: %s -> %r"
         % (sp, lines[sp[0] - 1][:60]))
 cut(sp[0] - 1, sp[1], "web_search tool schema")
+# send_file's FUNCTION sits inside the span cut above (it is defined beside the web
+# tools). Its registry entry does not, and a registry entry naming a function that is
+# not in this build is an ImportError at load, not a cosmetic leftover - measured
+# 2026-09-24, the build refused to import with NameError: tool_send_file. The tool
+# uploads into a CHAT channel and this build has no channel, so the entry goes too.
+sp = span_of_core_tool("send_file")          # the tool registry entry
+if '"send_file"' not in lines[sp[0] - 1]:
+    die("the send_file registry entry span looks wrong: %s -> %r"
+        % (sp, lines[sp[0] - 1][:60]))
+cut(sp[0] - 1, sp[1], "send_file tool schema")
 sa = one("def tool_fetch_url(args, ctx):")
 sb = one("NOTE_LINE_RE = re.compile(")     # the notes section header follows the function
 cut(sa, sb, "fetch_url tool (single network destination)")
-sp = span_of_dict_key("fetch_url")             # the tool registry entry
+sp = span_of_core_tool("fetch_url")          # the tool registry entry
 if '"fetch_url"' not in lines[sp[0] - 1]:
     die("the fetch_url registry entry span looks wrong: %s -> %r"
         % (sp, lines[sp[0] - 1][:60]))
@@ -244,7 +274,7 @@ cut(sa, sb, "Scheduler class")
 sa = one("def tool_schedule(args, ctx):")
 sb = one("def tool_search_sessions(")
 cut(sa, sb, "tool_schedule")
-sp = span_of_dict_key("schedule")             # the tool registry entry
+sp = span_of_core_tool("schedule")           # the tool registry entry
 if '"schedule"' not in lines[sp[0] - 1]:
     die("the schedule registry entry span looks wrong: %s -> %r"
         % (sp, lines[sp[0] - 1][:60]))

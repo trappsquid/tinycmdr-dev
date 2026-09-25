@@ -448,7 +448,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 BUILD = "cli"          # this file is the enterprise build; tinycmdr.py in the repo is the bot
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
@@ -8294,7 +8294,7 @@ class Agent:
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
             reasoning_cb=None,
-            ask_door=None, source="main"):
+            ask_door=None, source="main", send_file_cb=None):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
         replaces user_text for this turn only (history stores text only).
@@ -8346,6 +8346,8 @@ class Agent:
                    # Only a door that owns a blocking wait sets it (the Mattermost
                    # dispatcher, the web run, the CLI prompt).
                    "ask_door": ask_door,
+                   # The file door: how this run puts a file in front of the operator.
+                   "send_file": send_file_cb,
                    # What this run reports THROUGH, and under which source. A tool
                    # that starts another run (delegate_task) hands these down so a
                    # subtask is visible in every lane instead of silent in all of
@@ -9553,6 +9555,19 @@ class Destination:
         """Return the operator's answer, or None when nobody can be asked."""
         return None
 
+    def attach(self, path, note=""):
+        """Put a file in front of the human this lane reaches, if it can.
+
+        An order to "send it here in chat" had no door at all before this, so a run
+        asked to send a file could only hunt for one: measured on the fleet's macOS
+        bed 2026-09-24, 21 tool calls looking for a way in (mm_say, tokens, docker,
+        the Mattermost API) for a video that had been on disk for three minutes. A
+        lane with no attachment transport says so, and the path IS the delivery
+        there. Returns one line, which is what the tool hands the model.
+        """
+        return (f"NOT SENT: this lane cannot carry a file. The file is at {path} "
+                f"- tell the operator the path.")
+
 
 # --- the failure verdict, shared by every tool line ---------------------------
 _FAILURE_MARKERS = ("ERROR", "BLOCKED", "DECLINED", "TIMEOUT", "STOPPED")
@@ -9894,6 +9909,13 @@ class RunReporter:
         if ref is not None:
             self.dest.drop(ref)
 
+    def attach(self, path, note="", src=None):
+        """The file door, for the tool: returns the line the model reads back."""
+        try:
+            return self.dest.attach(str(path), note or "")
+        except Exception as e:                                   # noqa: BLE001
+            return f"ERROR: could not send {path}: {e}"
+
     def tool_done(self, name, args, output, elapsed, src=None):
         """The line for one finished call: the preview, the duration, the exit
         code and the REASON it failed. "failed read_file" with no reason sends
@@ -10129,7 +10151,8 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                      confirm_cb=reporter.confirm,
                      cancel_event=cancel_event,
                      steer_cb=steer_cb,
-                     ask_door=ask_door)
+                     ask_door=ask_door,
+                     send_file_cb=reporter.attach)
 
 
 

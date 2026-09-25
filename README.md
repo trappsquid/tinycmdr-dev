@@ -171,12 +171,12 @@ Download the archive for your platform from the [latest release](https://github.
 
 ### Windows
 
-Download [`tinycmdr-1.0.7-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
+Download [`tinycmdr-1.0.8-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.8-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
 
 ```powershell
-curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-win.zip
-Expand-Archive tinycmdr-1.0.7-win.zip
-cd tinycmdr-1.0.7
+curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.8-win.zip
+Expand-Archive tinycmdr-1.0.8-win.zip
+cd tinycmdr-1.0.8
 .\INSTALL-WINDOWS.cmd
 ```
 
@@ -188,9 +188,9 @@ It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment ins
 passwordless sudo):
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-linux.tar.gz
-tar -xzf tinycmdr-1.0.7-linux.tar.gz
-cd tinycmdr-1.0.7
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.8-linux.tar.gz
+tar -xzf tinycmdr-1.0.8-linux.tar.gz
+cd tinycmdr-1.0.8
 sudo bash install/install-tinycmdr.sh
 ```
 
@@ -208,9 +208,9 @@ without a prompt, and `--yes` takes the default for who you are.
 ### macOS (launchd)
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.7-macos.zip
-unzip tinycmdr-1.0.7-macos.zip
-cd tinycmdr-1.0.7
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.8-macos.zip
+unzip tinycmdr-1.0.8-macos.zip
+cd tinycmdr-1.0.8
 bash install/install-tinycmdr-macos.sh
 ```
 

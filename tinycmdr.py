@@ -592,7 +592,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -3695,6 +3695,27 @@ def _tavily(query, max_results):
              "snippet": r.get("content", "")[:400]} for r in results]
 
 
+def tool_send_file(args, ctx):
+    """Attach a file from this machine to the chat the operator is reading.
+
+    The door is supplied by the lane (ctx["send_file"]). A lane with no attachment
+    transport answers honestly, which is what keeps a run from claiming a delivery
+    that never happened.
+    """
+    door = (ctx or {}).get("send_file")
+    if not door:
+        return ("ERROR: this run's lane cannot carry a file, so nothing was sent. "
+                "Give the operator the absolute path instead.")
+    path = str(args.get("path") or "").strip()
+    if not path:
+        return "ERROR: send_file needs a path."
+    note = " ".join(str(args.get("note") or "").split())
+    try:
+        return str(door(path, note))
+    except Exception as e:                                       # noqa: BLE001
+        return f"ERROR: could not send {path}: {e}"
+
+
 def tool_web_search(args, ctx):
     query = args["query"]
     max_results = int(args.get("max_results")
@@ -5863,6 +5884,18 @@ CORE_TOOLS = {
              "no_backup": {"type": "boolean"}},
             ["path", "content"]),
     },
+    "send_file": {
+        "fn": tool_send_file,
+        "schema": _schema(
+            "Attach a file from this machine to the chat the operator is reading "
+            "- use it when the order is to SEND or SHOW a file rather than to "
+            "report a path. The file goes out as a real attachment in this channel.",
+            {"path": {"type": "string",
+                      "description": "Absolute path of the file to attach"},
+             "note": {"type": "string",
+                      "description": "One short line to post with it"}},
+            ["path"]),
+    },
     "web_search": {
         "fn": tool_web_search,
         "schema": _schema(
@@ -7162,7 +7195,7 @@ def annotate_repeat_read(name, args, out, ctx):
 # The five primitives are 88% of real calls; the rest are the doors the standing
 # instructions name (runbooks, the ledger, memory, research, and the discovery tool).
 _DEFAULT_CORE = ("shell", "execute_code", "read_file", "write_file", "edit_file",
-                 "skill", "task", "remember", "web_search",
+                 "send_file", "skill", "task", "remember", "web_search",
                  "fetch_url", "list_tools", "find_tools", "ask_user")
 
 _revealed = {}
@@ -8623,7 +8656,7 @@ class Agent:
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
             reasoning_cb=None,
-            ask_door=None, source="main"):
+            ask_door=None, source="main", send_file_cb=None):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
         replaces user_text for this turn only (history stores text only).
@@ -8675,6 +8708,8 @@ class Agent:
                    # Only a door that owns a blocking wait sets it (the Mattermost
                    # dispatcher, the web run, the CLI prompt).
                    "ask_door": ask_door,
+                   # The file door: how this run puts a file in front of the operator.
+                   "send_file": send_file_cb,
                    # What this run reports THROUGH, and under which source. A tool
                    # that starts another run (delegate_task) hands these down so a
                    # subtask is visible in every lane instead of silent in all of
@@ -9902,6 +9937,19 @@ class Destination:
         """Return the operator's answer, or None when nobody can be asked."""
         return None
 
+    def attach(self, path, note=""):
+        """Put a file in front of the human this lane reaches, if it can.
+
+        An order to "send it here in chat" had no door at all before this, so a run
+        asked to send a file could only hunt for one: measured on the fleet's macOS
+        bed 2026-09-24, 21 tool calls looking for a way in (mm_say, tokens, docker,
+        the Mattermost API) for a video that had been on disk for three minutes. A
+        lane with no attachment transport says so, and the path IS the delivery
+        there. Returns one line, which is what the tool hands the model.
+        """
+        return (f"NOT SENT: this lane cannot carry a file. The file is at {path} "
+                f"- tell the operator the path.")
+
 
 # --- the failure verdict, shared by every tool line ---------------------------
 _FAILURE_MARKERS = ("ERROR", "BLOCKED", "DECLINED", "TIMEOUT", "STOPPED")
@@ -10243,6 +10291,13 @@ class RunReporter:
         if ref is not None:
             self.dest.drop(ref)
 
+    def attach(self, path, note="", src=None):
+        """The file door, for the tool: returns the line the model reads back."""
+        try:
+            return self.dest.attach(str(path), note or "")
+        except Exception as e:                                   # noqa: BLE001
+            return f"ERROR: could not send {path}: {e}"
+
     def tool_done(self, name, args, output, elapsed, src=None):
         """The line for one finished call: the preview, the duration, the exit
         code and the REASON it failed. "failed read_file" with no reason sends
@@ -10478,7 +10533,8 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                      confirm_cb=reporter.confirm,
                      cancel_event=cancel_event,
                      steer_cb=steer_cb,
-                     ask_door=ask_door)
+                     ask_door=ask_door,
+                     send_file_cb=reporter.attach)
 
 
 
@@ -10982,6 +11038,10 @@ def model_command(session_key, arg):
 
 
 MAX_POST_LEN = 16000  # Mattermost default limit is 16383 chars
+# One file per send_file call, bounded BEFORE the bytes move: a run must not push a
+# multi-gigabyte file through the chat's upload path because a model picked the wrong
+# path. The server has its own limit; this one fails fast and says so.
+SEND_FILE_MAX = 50 * 1024 * 1024
 
 
 class _CatchUpMessage:
@@ -11072,6 +11132,9 @@ class MattermostDestination(Destination):
         answered = ev.wait(wait)
         row = self.d.pending.pop(self.channel_id, {"answer": None})
         return row.get("answer") if answered else None
+
+    def attach(self, path, note=""):
+        return self.d.send_file(self.channel_id, self.root_id, path, note)
 
 
 def ProgressReporter(dispatcher, channel_id, root_id, session_key,
@@ -11386,6 +11449,39 @@ class MattermostDispatcher:
             self.driver.posts.update_post(post_id, payload)
         except Exception as e:
             log.debug("failed to edit post %s: %s", post_id, e)
+
+    # -- sending a file into the chat ---------------------------------------
+    def send_file(self, channel_id, root_id, path, note=""):
+        """Upload a local file into a channel and post it. The send_file tool's door.
+
+        Files only travel this way; no line of prose can hand somebody a video.
+        Failures come back as text for the model, because a run that claims a
+        delivery that did not happen is the failure class this batch is about.
+        """
+        p = Path(str(path)).expanduser()
+        if not p.is_file():
+            return f"ERROR: no such file: {p}"
+        size = p.stat().st_size
+        cap = int(CONFIG["agent"].get("send_file_max_bytes") or SEND_FILE_MAX)
+        if size > cap:
+            return (f"ERROR: {p.name} is {size:,} bytes, over this box's {cap:,}-byte "
+                    f"send limit (agent.send_file_max_bytes). It is at {p}.")
+        try:
+            ids = self.driver.upload_files([str(p)], channel_id)
+        except Exception as e:                                   # noqa: BLE001
+            return f"ERROR: upload failed: {e}"
+        post = {"channel_id": channel_id,
+                "message": " ".join(str(note or "").split())[:MAX_POST_LEN],
+                "file_ids": ids}
+        if root_id:
+            post["root_id"] = root_id
+        try:
+            resp = self.driver.posts.create_post(post)
+        except Exception as e:                                   # noqa: BLE001
+            return f"ERROR: the file uploaded but the post failed: {e}"
+        self._touch(channel_id)
+        log.info("sent %s (%d bytes) into %s", p.name, size, channel_id)
+        return f"sent: {p.name} ({size:,} bytes) is now in this chat"
 
     @staticmethod
     def _chunks(text):
