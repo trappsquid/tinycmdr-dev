@@ -5,6 +5,28 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.13] - 2026-09-25
+
+### Changed
+- **A machine shutdown or restart ASKS now instead of being unappealable.** The operator ordered a host restart from chat; the absolute tier refused the verb, and the run then spent 40+ steps writing a script and launching it through a tool, so the restart reached the host with the pattern never in sight - the block cost the yes, not the restart. `shutdown`, `poweroff`, `reboot` and `(Stop|Restart)-Computer` moved to `confirm_patterns`: quoted back to the operator, and declined on a lane with nobody to ask. The irreversible tier keeps disks, partitions, filesystems, shadow copies, the fork bomb and an encoded command blob; the prompt's shell line now names what it really blocks, at the same length.
+- **A drop-in tool that spawns its own process gets the box's real shell and the safety tier.** `shell_argv` and `shell_guard` ride the tool context beside `confirm_cb`, and `process` uses both: a string command ran under the Windows command interpreter while the prompt says the shell is PowerShell (a bash-style and a PowerShell-style loop both died in it, and a third form exited 0 having echoed the command as text). A script launched through a tool was also the last route around the tier that refuses the same verb in the shell.
+
+### Fixed
+- **`search_files` did not work in the shape the prompt teaches.** Its own schema read `pattern` as a file-name glob and put the grep in `content`, while the route hint and the routing bullet both teach `{"pattern": "<regex>", "path": "<file or directory>"}` - so the taught call answered a confident "No matches." for a string the file held ten times. A file path is grepped directly now, `pattern` greps content as well as names, and `content` keeps its scoping job.
+- **`create_tool` took four calls to land.** The name is derived from the code when the `name` argument is absent (the run had written it in the file's own header), empty code says so instead of writing a bad file, and any call that leaves out a declared argument is told which one and what the tool takes.
+- **The tool-disclosure answers carried no diff.** Asked which tools were NOT in its list, a run called `list_tools` and `find_tools(all=true)` in one batch, read "22 of 22 are in your list", and answered "none are hidden" - its own sibling call had revealed them all a moment earlier. `find_tools all=true` now names the tools that were not in the list a moment ago, and `list_tools` names the reveal.
+- **`process` ran a JSON argument list as a shell string** (`'["powershell.exe"' is not recognized`), and `toolsmith list` counted `lib/` helper files as callable tools.
+- **A `done` that named no task listed only the ids**, so a run with two items open dropped the ledger for the rest of the run; it names every open item with its text now.
+- **A repeat guard could be defeated by the harness's own hint.** The mint hint rides the second call's result, so the third identical call looked different and re-ran; the guard compares the tool's answer with harness annotations stripped.
+- **A config field NAMED token/key/secret is masked from six characters**, not twelve. A ten-character web token was quoted into chat by a run that answered "where is the token file" - the sweep had skipped it.
+- **`remember` could only append while its own schema promised "replace stale facts instead of stacking contradictions".** It takes `action=note|replace|forget`, the reply names the entry, the text and the budget instead of "OK: noted", and a near-duplicate entry is named with the replace call to use.
+
+### Added
+- **Minting: the harness keeps the census the model cannot have.** `logs/procedure-census.json` counts a command's vocabulary (the cmdlets or verbs it is made of) per RUN, and one line rides the third run's result naming the mint call. The second run is the threshold, because that is where a human says "this is the second time".
+- **The operator is asked, once per procedure per week.** After a run that drove several hand-made calls, minted nothing, and either repeated the same request or executed a runbook by hand, the harness posts one line offering to build the tool.
+- **The bot offers it in its own report.** A run whose census fired gets one line in its trailing block inviting it to mint or to say so in the report - and it does: "Routine and repetitive (this is the 3rd+ run of it on the box) - I can mint a small tool ... Your call."
+- **Memory is visible and volunteered.** A memory write's progress line reads `memory`, a lookup that answered a durable-fact question gets one nudge on the result, the harness offers to keep the fact at run end, and the tools' own descriptions carry the judgment about when to mint or save.
+
 ## [1.0.12] - 2026-09-24
 
 ### Fixed
