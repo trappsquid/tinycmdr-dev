@@ -18185,9 +18185,11 @@ def _verb_run(rest):
 
 # The verbs that make sense from a chat message. The rest need a terminal: `run` opens a
 # session, `setup` and `token set` prompt, `restart` has its own fast path that must work
-# while a run owns the channel.
+# while a run owns the channel. `help` is NOT here on purpose: the chat lane answers
+# `/tinycmdr help` with its own list of commands (the "**Commands**" block), which names the
+# chat verbs a host-side help page cannot, and a suite pins it.
 _CHAT_VERB_SET = frozenset(("status", "doctor", "health", "version", "proc", "ports",
-                            "config", "model", "logs", "clean", "update", "help"))
+                            "config", "model", "logs", "clean", "update"))
 
 
 def verb_from_chat(argv_line):
@@ -18203,6 +18205,8 @@ def verb_from_chat(argv_line):
     if not argv:
         return VERB_HELP
     verb = argv[0].lower()
+    if verb == "help":
+        return VERB_HELP          # the lane's own /help block answers this in chat
     if verb not in _CHAT_VERB_SET:
         if verb in VERBS:
             return ("`%s` needs a terminal on the host (it prompts, opens a session, or has "
