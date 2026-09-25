@@ -147,6 +147,7 @@
     "notes_max_chars": 8000,
     "notes_max_note_chars": 1200,
     "notes_supersede_share": 0.85,
+    "notes_supersede_min_words": 5,
     "notes_keep_entries": 60,
     "notes_archive_days": 45,
     "_comment_ledger": "The task ledger (tasks.json / tasks.md) is what survives a restart: what this box is in the middle of. tasks_max_open refuses new tasks past that many open ones, so it stays readable.",
@@ -201,7 +202,8 @@
       "\\brd\\s+/s\\b",
       "\\brmdir\\s+/s\\b",
       "\\bdel\\s+/[a-z]*[sq]",
-      "\\bremove-item\\b[^|;]*-recurse"
+      "\\bremove-item\\b[^|;]*-recurse",
+      "\\brobocopy\\b[^|;]*/move\\b"
     ],
     "confirm_content_patterns": [
       "(?im)^\\s*(?:sudo\\s+)?(?:shutdown|reboot|poweroff|halt)\\b",

@@ -293,6 +293,20 @@ def test_parallel_remembers_all_land():
               text.count("w8-fact-") == 8, text)
         check("every remember answered OK",
               all(str(o).startswith("OK") for o in outs), outs)
+        # ...and the SUPERSEDE rule must not swallow them: these eight notes share their only
+        # 3+ char word ("fact"), so a bare containment share reads 1.00 and collapses them
+        # into one entry. That is exactly what happened on the 1.0.14 build (measured
+        # 2026-09-25: this suite 35 passed, 1 failed). A short note is not a near-duplicate
+        # of another short note, so superseding needs a minimum shared vocabulary.
+        redirect_notes()
+        o1 = remember({"note": "probe-a: alpha"})
+        o2 = remember({"note": "probe-b: bravo"})
+        txt = Path(fb.NOTES_FILE).read_text(encoding="utf-8")
+        check("two SHORT notes that share their only word are both kept",
+              "probe-a" in txt and "probe-b" in txt,
+              f"{o1[:60]!r} / {o2[:60]!r} / {txt[:120]!r}")
+        check("and the second one did not supersede the first",
+              "superseded" not in o2, o2[:120])
     finally:
         fb.log.removeHandler(cap)
 

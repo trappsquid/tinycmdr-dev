@@ -274,6 +274,55 @@ def main():
         check("a shell command still takes the command tier",
               fb._confirm_hit("shutdown /r /t 0") is not None)
 
+        # A fresh reconnect gap REFUSES instead of asking (the whole point of the guard),
+        # so clear it here: this block is about what the load gate does on a healthy lane.
+        fb._ENDPOINT_GAP["at"] = 0.0
+        fb._ENDPOINT_GAP["note"] = ""
+
+        # ---- the gate covers LOAD, not just restarts (measured 2026-09-25) -------
+        # An operator order about a slow machine made the run send real completion requests
+        # to the production model box (~900 generated tokens, 2+ slots of load) while it was
+        # itself using that box to think. Reads stay free: gating /props, /metrics or
+        # /v1/models would teach the model to avoid its own box's telemetry.
+        for shape in (f'curl -X POST http://{host}/v1/chat/completions -d \'{{"max_tokens": 400}}\'',
+                      f'python -c "import urllib.request; '
+                      f'urllib.request.urlopen(\'http://{host}/v1/completions\')"'):
+            check(f"a generation request to the endpoint is gated ({shape[:44]!r})",
+                  bool(fb._endpoint_load_request(shape)), shape)
+        for shape in (f"curl -s http://{host}/v1/models",
+                      f"curl -s http://{host}/props",
+                      f"curl -s http://{host}/metrics"):
+            check(f"a READ of the endpoint is not gated ({shape[:36]!r})",
+                  fb._endpoint_load_request(shape) is None,
+                  str(fb._endpoint_load_request(shape)))
+        check("a generation request to a DIFFERENT host is not ours to gate",
+              fb._endpoint_load_request("curl http://10.0.0.9:11434/v1/completions") is None)
+
+        _probe_code = (f"import urllib.request\n"
+                       f"urllib.request.urlopen('http://{host}/v1/chat/completions')\n")
+        out = fb.tool_execute_code({"code": _probe_code}, {})
+        check("the execute_code door gates it too (no door -> DECLINED)",
+              out.startswith("DECLINED") or out.startswith("REFUSED"), out[:200])
+        calls.clear()
+        out = fb.tool_execute_code({"code": _probe_code}, {"confirm_cb": yes})
+        check("and the operator is asked, with the code line quoted back",
+              bool(calls) and "chat/completions" in calls[0], str(calls))
+
+        # ---- a shell WRITE to the bot's own memory asks first -------------------
+        # The injected note's LAST step was `printf 'notes cleared by cleanup' > notes.md`,
+        # and the run did it: the bot's whole memory replaced by a line from a file it had
+        # been told to read. Reads stay free.
+        _note = str(fb.BASE_DIR / "notes.md")
+        for shape, want in (
+                (f"printf 'x\\n' > {_note}", True),
+                (f"echo hi >> {_note}", True),
+                (f"Set-Content -Path {_note} -Value 'x'", True),
+                (f"cat {_note}", False),
+                (f"grep -n canary {_note}", False),
+                ("printf 'x\\n' > /tmp/scratch.md", False)):
+            got = bool(fb._prompt_surface_write(shape))
+            check(f"surface write: {shape[:50]!r} -> {want}", got == want, f"got {got}")
+
         # ---- the strict-mode shell is a per-host CHOICE (measured before it was offered) ----
         if fb.IS_WINDOWS:
             fb.CONFIG["agent"]["shell_strict_mode"] = False

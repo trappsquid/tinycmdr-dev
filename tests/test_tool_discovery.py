@@ -418,6 +418,36 @@ check("list_tools after a reveal names the reveal, so 22 of 22 cannot read as 'n
 check("find_tools all=true on an already-visible set says so, not an empty diff",
       fb.tool_find_tools({"all": True}, {"session_key": fresh})
       == "All tools are already in your list for this session.")
+# ---- a CAPABILITY phrase reveals the tool that serves it --------------------------
+# Measured 2026-09-25 on the macOS box: the operator asked for a file to be ATTACHED and the
+# run spent 22 calls and 194.8K prompt tokens echoing send_file's name in the shell, then
+# failed - the name-driven reveal above never fires for "attach it, do not just paste".
+_saved_core = fb.CONFIG["agent"].get("core_tools")
+fb.CONFIG["agent"]["core_tools"] = ["shell"]
+try:
+    check("with send_file hidden, the capability phrase reveals it",
+          fb.reveal_tools_named_in(
+              "disc-capability",
+              "save it as ~/mac-status.txt and attach it, do not just paste the text")
+          == ["send_file"], sorted(fb.revealed_tools("disc-capability")))
+    check("a neutral order still reveals nothing",
+          fb.reveal_tools_named_in("disc-capability-none",
+                                   "tell me how much disk is left on this box") == [])
+    _missing = fb.pinned_core_tools_missing()
+    check("a pinned core_tools list is checked against _DEFAULT_CORE",
+          "send_file" in _missing and "read_file" in _missing, _missing)
+    _line = fb.capability_line("cli")
+    check("and the startup line warns about the stale pin",
+          "WARNING" in _line and "send_file" in _line, _line[:400])
+finally:
+    if _saved_core is None:
+        fb.CONFIG["agent"].pop("core_tools", None)
+    else:
+        fb.CONFIG["agent"]["core_tools"] = _saved_core
+check("an unpinned host is not warned", fb.pinned_core_tools_missing() == [],
+      fb.pinned_core_tools_missing())
+check("and its capability line carries no warning",
+      "WARNING" not in fb.capability_line("cli"))
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

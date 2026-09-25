@@ -546,6 +546,45 @@ def audit_public(stage_dir):
 PY_FLOOR = (3, 10)
 
 
+def tier_drift():
+    """Problems where config.example.json disagrees with DEFAULT_CONFIG's safety tiers.
+
+    Measured 2026-09-25: every installer writes a new host's config.json FROM
+    config.example.json, and the example was missing the `robocopy /MOVE` confirm pattern
+    that DEFAULT_CONFIG and that release's own changelog both carry (8 vs 9) - so a fresh
+    install shipped without the gate the changelog announced. Nothing caught it: the suites
+    run against tests/fixture-config.json, which holds ZERO confirm and content patterns, so
+    "all suites green" says nothing about the file the installers copy. The safety tiers must
+    match the code exactly; the other keys are the reader-facing template and may differ.
+    """
+    import socket as _socket
+    problems = []
+    src = (ROOT / "tinycmdr.py").read_text(encoding="utf-8", errors="replace")
+    tree = ast.parse(src)
+    node = next((n for n in tree.body if isinstance(n, ast.Assign)
+                 and any(getattr(t, "id", None) == "DEFAULT_CONFIG" for t in n.targets)), None)
+    if node is None:
+        return ["tinycmdr.py: DEFAULT_CONFIG not found, cannot check config.example.json"]
+    ns = {"socket": _socket, "os": __import__("os"), "platform": __import__("platform")}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), "<default-config>", "exec"), ns)
+    code = ns["DEFAULT_CONFIG"]["agent"]
+    example = json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))["agent"]
+    for key in ("blocked_patterns", "confirm_patterns", "confirm_content_patterns"):
+        want = [str(x) for x in (code.get(key) or [])]
+        have = [str(x) for x in (example.get(key) or [])]
+        for pat in want:
+            if pat not in have:
+                problems.append(
+                    f"config.example.json: {key} is missing {pat!r} (DEFAULT_CONFIG has it, "
+                    f"and every installer copies this file)")
+        for pat in have:
+            if pat not in want:
+                problems.append(
+                    f"config.example.json: {key} has {pat!r}, which DEFAULT_CONFIG does NOT "
+                    f"(the two lists must agree)")
+    return problems
+
+
 def syntax_floor(folder):
     """Problems for any shipped .py that does not parse on the stated minimum."""
     problems, checked = [], 0
@@ -676,6 +715,7 @@ def main():
         if public:
             problems += audit_public(stage_dir)
         problems += syntax_floor(stage_dir)
+        problems += tier_drift()
         if problems:
             print("\nBUILD REFUSED — the package would carry secrets or host data:")
             for p in problems:

@@ -73,6 +73,10 @@ maintenance/start-containers.ps1
 maintenance/task-audit.ps1
 maintenance/restart-tinycmdr-the manager box.ps1
 docs/handoff-*.md
+docs/staged-*.md
+# The pre-edit copy of the build the batch is graded against (A/A): it is a whole
+# build, not source, so it is a scratch artifact.
+probe-pre.py
 launch_tinycmdr.bat
 tinycmdr-service.vbs
 
