@@ -79,3 +79,9 @@ tinycmdr-service.vbs
 # The fleet's private inventory (host names, ids, addresses, secret labels).
 # build-package.py refuses to build a public package without it.
 maintenance/private_rules.py
+
+# --- found by adopting the git path on the fleet (2026-09-24): every host showed these
+# as untracked, which makes `git status` useless for spotting real drift.
+venv/
+.DS_Store
+.DS_Store?

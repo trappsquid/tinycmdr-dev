@@ -6683,6 +6683,13 @@ class ToolRegistry:
                      self.tools_dir / f"{name}.tool.json"):
             if cand.exists():
                 return self._load_path(cand)
+        # A register-shape file answers to the name INSIDE it, which need not be the file
+        # name: hermes_todo.py registers todo_list (measured 2026-09-24). Reloading by tool
+        # name follows the registration the file already has, so an imported tool is
+        # reloadable exactly like a native one instead of "no tools/todo_list.py to load".
+        src = (self.custom.get(name) or {}).get("source")
+        if src and Path(src).exists():
+            return self._load_path(Path(src))
         return False, f"no tools/{name}.py or tools/{name}.tool.json to load"
 
     def _load_path(self, path):

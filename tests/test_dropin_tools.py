@@ -106,6 +106,28 @@ def test_register_shape_loads():
         check("register: a missing requires_env is refused", "env var" in str(e), e)
 
 
+def test_reload_tool_finds_a_ported_file_by_its_registered_name():
+    """A register-shape file answers to the name inside it, which need not be the file name.
+
+    Measured 2026-09-24: a Hermes file dropped in as hermes_todo.py registers todo_list, and
+    reload_tool("todo_list") answered "no tools/todo_list.py or .tool.json to load" - so an
+    imported tool could not be reloaded the way a native one can.
+    """
+    d = tool_files_dir("portedreload")
+    (d / "ported_probe.py").write_text(
+        "from tools.registry import registry\n"
+        "registry.register(name='ported_probe_tool', schema={'name': 'ported_probe_tool',\n"
+        "    'description': 'probe', 'parameters': {}},\n"
+        "    handler=lambda args, **kw: 'probe ok')\n", encoding="utf-8", newline="")
+    reg = type(fb.REGISTRY)(d)
+    check("a ported file loads under its registered name", "ported_probe_tool" in reg.custom,
+          sorted(reg.custom))
+    ok, err = reg.reload_tool("ported_probe_tool")
+    check("and reload_tool finds it by that name", ok, err)
+    check("the file name is not the tool name (the point of the check)",
+          not (d / "ported_probe_tool.py").exists())
+
+
 def test_manifest_shape_loads_and_runs():
     d = tool_files_dir("man")
     (d / "greet.tool.json").write_text(json.dumps({
