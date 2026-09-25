@@ -5126,7 +5126,9 @@ def tool_find_tools(args, ctx):
         if not names:
             return "All tools are already in your list for this session."
         reveal_tools(session, names)
-        return ("[HARNESS: every remaining tool is now in your list for this session]\n"
+        return ("[HARNESS: these %d tools were NOT in your list a moment ago; every remaining "
+                "tool is now in your list for this session - if the question was which tools "
+                "are hidden, THIS list is the answer:]\n" % len(names)
                 + "\n".join(f"- {n}: {_tool_blurb(n)}" for n in names))
     if not query:
         names = hidden_tools(session)
@@ -5180,6 +5182,14 @@ def tool_list_tools(args, ctx):
         core += (". The other %d answer when you call them by name, or one find_tools "
                  "call names them: %s" % (len(missing), ", ".join(missing))) \
             if missing else "."
+        since = sorted(revealed_tools(session) & set(CORE_TOOLS))
+        if since and not missing:
+            # Measured 2026-09-25 driving HOST-A (work order 5): asked which tools were NOT in
+            # its list, the run called this and find_tools(all) in ONE batch, read "22 of 22",
+            # and answered "None are hidden" - the sibling call had revealed them all a
+            # moment earlier. Naming the reveal makes that inference impossible.
+            core += (" %d of them were revealed earlier in THIS session: %s"
+                     % (len(since), ", ".join(since)))
     else:
         core = ("Core tools: all %d are in your list (tool disclosure is off on this box)."
                 % len(CORE_TOOL_NAMES))

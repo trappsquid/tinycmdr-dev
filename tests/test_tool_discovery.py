@@ -398,6 +398,26 @@ check("search_files: content= with a glob keeps the glob as the scope",
 out = fb.tool_search_files({"path": str(srch / "missing.txt")}, {})
 check("search_files: a missing path still errors", out.startswith("ERROR"), out[:120])
 
+# ---- the disclosure answer cannot be misread as "nothing is hidden" -------------------
+# Measured 2026-09-25 driving HOST-A (work order 5): asked which tools were NOT in its list,
+# the run called list_tools and find_tools(all=true) in ONE batch, read "22 of 22", and
+# answered "None are hidden" - the sibling call had already revealed them all.
+fresh = "wp5-fresh"
+out = fb.tool_list_tools({}, {"session_key": fresh})
+check("list_tools on a fresh session says part of the core set is missing",
+      " of 22 are in your list" in out and "answer when you call them by name" in out, out[:220])
+check("list_tools: a fresh session names no reveal", "revealed earlier" not in out, out[-160:])
+revealed_now = fb.tool_find_tools({"all": True}, {"session_key": fresh})
+check("find_tools all=true says which tools were NOT in the list",
+      "were NOT in your list a moment ago" in revealed_now, revealed_now[:200])
+check("find_tools all=true still says every one of them is now in the list",
+      "every remaining tool is now in your list" in revealed_now, revealed_now[:200])
+after = fb.tool_list_tools({}, {"session_key": fresh})
+check("list_tools after a reveal names the reveal, so 22 of 22 cannot read as 'none hidden'",
+      "revealed earlier in THIS session" in after and "create_tool" in after, after[:300])
+check("find_tools all=true on an already-visible set says so, not an empty diff",
+      fb.tool_find_tools({"all": True}, {"session_key": fresh})
+      == "All tools are already in your list for this session.")
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)
