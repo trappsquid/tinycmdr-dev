@@ -301,6 +301,13 @@ def test_process_lifecycle():
     tool({"action": "start", "command": quick}, None)
     out = tool({"action": "wait", "id": "b2", "timeout": 30}, None)
     check("process: wait returns on completion", "exit 0" in out, out)
+    # the argv list sent as a JSON STRING: a session that never held this schema guesses
+    # the shape (measured 2026-09-25 on HOST-A, where the call died inside cmd.exe)
+    tool({"action": "start",
+          "command": json.dumps([sys.executable, "-c", "print(7)"])}, None)
+    out = tool({"action": "wait", "id": "b3", "timeout": 30}, None)
+    check("process: an argv list sent as a JSON string is repaired",
+          "exit 0" in out, out)
     out = tool({"action": "list"}, None)
     check("process: list shows both jobs", "b1" in out and "b2" in out, out)
     out = tool({"action": "status", "id": "b9"}, None)

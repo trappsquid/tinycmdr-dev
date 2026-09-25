@@ -2210,6 +2210,21 @@ def test_the_safety_seatbelt_covers_execute_code_too():
           fb.tool_shell({"command": "mkfs.ext4 /dev/sda1"},
                         {"session_key": "belt-s"}).startswith("BLOCKED:"))
 
+    # The host-restart verbs moved from the absolute tier to the CONFIRM tier (measured
+    # 2026-09-25 on HOST-A): the operator ordered "Restart the bot-a tower computer over
+    # ssh", the absolute tier refused it, and the run spent 40+ steps writing a .ps1 and
+    # launching it through the process tool - the restart reached the remote box with the
+    # pattern never in sight. The block did not stop the restart, it cost the yes.
+    for probe in ("shutdown /r /t 5", "Restart-Computer -Force",
+                  "Stop-Computer", "sudo reboot now"):
+        out = fb.tool_shell({"command": probe}, {"session_key": "belt-s"})
+        check(f"shell: {probe.split()[0]} ASKS, never an unappealable block",
+              out.startswith("DECLINED") and "confirmation" in out, out[:160])
+    check("shell: a restart is confirm-tier, not blocked",
+          fb._confirm_hit("shutdown /r /t 5") is not None
+          and fb.is_blocked("shutdown /r /t 5") is None
+          and fb.is_blocked("Restart-Computer -Force") is None)
+
     # The write paths take the CONFIRM tier too (security review 2026-09-23):
     # the fastest route for a steered model is a file or a tool, not a command.
     wp = TMP / "belt-write.txt"

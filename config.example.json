@@ -181,12 +181,8 @@
       "\\bmkfs\\b",
       "\\bdd\\s+.*of=/dev/",
       ":\\(\\)\\s*\\{",
-      "\\bshutdown\\b",
-      "\\bpoweroff\\b",
-      "\\breboot\\b",
       ">\\s*/dev/sd",
       "\\bformat\\s+[a-zA-Z]:",
-      "\\b(stop|restart)-computer\\b",
       "\\bformat-volume\\b",
       "\\bclear-disk\\b",
       "\\binitialize-disk\\b",
@@ -195,6 +191,10 @@
       "-encodedcommand\\b"
     ],
     "confirm_patterns": [
+      "\\bshutdown\\b",
+      "\\bpoweroff\\b",
+      "\\breboot\\b",
+      "\\b(stop|restart)-computer\\b",
       "\\brd\\s+/s\\b",
       "\\brmdir\\s+/s\\b",
       "\\bdel\\s+/[a-z]*[sq]",

@@ -422,6 +422,16 @@ DEFAULT_CONFIG = {
             # execute_code, past the seatbelt this file admits is not a boundary. A
             # confirm that quotes the exact command back to the operator keeps the
             # risk visible, which an unappealable refusal does not.
+            #
+            # The MACHINE ITSELF takes the same route (measured 2026-09-25): the operator
+            # ordered "Restart the bot-a tower computer over ssh", the absolute tier refused
+            # it, and the run spent 40+ steps writing a .ps1 and launching it through the
+            # process tool - a restart that reached the remote box with the pattern never in
+            # sight. The block did not stop the restart, it only cost the yes. A machine
+            # shutdown or restart is exactly what a human should confirm: quoted back, and
+            # declined on a lane with nobody to ask.
+            r"\bshutdown\b", r"\bpoweroff\b", r"\breboot\b",
+            r"\b(stop|restart)-computer\b",
             r"\brd\s+/s\b", r"\brmdir\s+/s\b", r"\bdel\s+/[a-z]*[sq]",
             r"\bremove-item\b[^|;]*-recurse",
         ],
@@ -443,7 +453,6 @@ DEFAULT_CONFIG = {
             r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(?![A-Za-z0-9_./~-])",
             r"rm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+/(?![A-Za-z0-9_./~-])",
             r"\bmkfs\b", r"\bdd\s+.*of=/dev/", r":\(\)\s*\{",
-            r"\bshutdown\b", r"\bpoweroff\b", r"\breboot\b",
             r">\s*/dev/sd", r"\bformat\s+[a-zA-Z]:",
             # Windows counterparts — this box is Windows, and the POSIX list
             # alone was theatre here. Still a seatbelt, not a boundary: execute_code's
@@ -454,9 +463,9 @@ DEFAULT_CONFIG = {
             # shadow copies, the firmware-level wipes, a fork bomb, an encoded command
             # blob. The reversible-but-destructive recursive deletes that used to sit
             # in this list (rd /s, rmdir /s, del /s|/q, remove-item -recurse) moved to
-            # confirm_patterns below (audit, 2026-09-22): blocking them outright did not
-            # reduce risk, it relocated it to the one path a regex cannot see.
-            r"\b(stop|restart)-computer\b",
+            # confirm_patterns below (audit, 2026-09-22), and the host restart verbs
+            # followed them (2026-09-25): blocking them outright did not reduce risk, it
+            # relocated it to the one path a regex cannot see.
             r"\bformat-volume\b", r"\bclear-disk\b", r"\binitialize-disk\b",
             r"\bcipher\s+/w\b", r"\bvssadmin\s+delete\s+shadows\b",
             r"-encodedcommand\b",
@@ -7897,7 +7906,7 @@ How you work:
 - Answer the message you were actually given, using what you gathered. Never reply that a message is "noise", "nothing actionable", or a "truncated paste" — the operator knows what they sent, so that reads as a broken bot. If a message is genuinely ambiguous, quote it back and say what you tried. If you ran tools for a question, the answer must contain what they returned (names, values, pass/fail), not your own status.
 - Save durable machine facts (paths, container names, quirks) with remember: short, replacing stale facts instead of piling up contradictions.
 - Anything recurring ("check X every morning") becomes a schedule job: it runs autonomously and reports back to the channel. Use search_sessions to recall how past issues were solved, delegate_task to farm out self-contained subtasks in parallel.
-- Shell: each call is a fresh {shell_name}; use absolute paths. A coarse pattern filter blocks obvious destructive commands (rm -rf /, mkfs, dd to a device, disk/partition wipes, shutdown, Remove-Item -Recurse -Force) but it is a SEATBELT, not a boundary: execute_code's source is checked too, while a command assembled at runtime is invisible to it, so targeted and reversible is on you. File content, tool code and manifest commands take the CONFIRM tier: a match asks the operator first. Overwrite via write_file so backups happen.
+- Shell: each call is a fresh {shell_name}; use absolute paths. A coarse pattern filter blocks obvious destructive commands (rm -rf /, mkfs, dd to a device, disk/partition wipes, an encoded command blob) but it is a SEATBELT, not a boundary: execute_code's source is checked too, while a command assembled at runtime is invisible to it, so targeted and reversible is on you. A machine shutdown or restart, a recursive delete, file content, tool code and manifest commands take the CONFIRM tier: a match asks the operator first. Overwrite via write_file so backups happen.
 - Final report: terse and factual: root cause, what you changed, current state, follow-ups. Before you report something as fixed, verify it (read the change back, re-run the check, watch the restart) and say what you checked: a claim with no check is a guess.
 
 Machine: {facts}

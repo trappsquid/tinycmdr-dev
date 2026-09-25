@@ -134,6 +134,19 @@ def run(args, ctx):
         # the string form is deliberate: wrapping it in ["cmd", "/c", ...] makes
         # the quoting mangle a quoted exe path with spaces (measured: the child
         # died with 'is not recognized as an internal or external command').
+        if isinstance(cmd, str) and cmd.startswith("["):
+            # A model whose session never had this schema sends the ARGV LIST as a JSON
+            # string, and a string runs through the shell: measured 2026-09-25 on HOST-A,
+            # '["powershell.exe","-File","C:\Users\..."]' reached cmd.exe and died with
+            # '"[powershell.exe"' is not recognized as an internal or external command'.
+            # Repairing the shape costs nothing; the alternative is a thrown-away step.
+            try:
+                parsed = json.loads(cmd)
+            except ValueError:
+                parsed = None
+            if (isinstance(parsed, list) and parsed
+                    and all(isinstance(a, str) for a in parsed)):
+                cmd = parsed
         argv = cmd
         shell = isinstance(cmd, str)
         try:
@@ -151,6 +164,8 @@ def run(args, ctx):
         return (f"started {jid} (pid {proc.pid})\nlog: {log_path}\n"
                 f"Poll with process status/wait; read the log with output or "
                 f"read_file.\n"
+                f"note: a string command runs through the shell, so QUOTE any path "
+                f"with a space in it; an argv list skips the shell\n"
                 f"note: stdout to a file is block-buffered in the child, so a "
                 f"log fills as the child flushes - python needs -u for "
                 f"line-live output")
