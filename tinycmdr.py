@@ -12688,6 +12688,14 @@ class MattermostDispatcher:
             else:
                 self._post(channel_id, post_root, "Nothing to undo.")
             return
+        # `/tinycmdr <verb>` for the management verbs: one word per thing, every surface.
+        # Measured 2026-09-24: this lane dispatched /new /stop /restart /model /status /undo
+        # and nothing else, so `/tinycmdr update` - the command the fleet is updated with -
+        # fell through to the model as ordinary text.
+        _v = low[1:].split()[0] if low.startswith("/") and len(low) > 1 else ""
+        if _v in _CHAT_VERB_SET:
+            self._post(channel_id, post_root, verb_from_chat(stripped[1:]))
+            return
         if low == "/retry":
             last = AGENT.pop_last_user(session_key)
             if last is None:
@@ -16975,6 +16983,88 @@ def user_is_allowed(sender, user_id):
 VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc", "ports",
          "restart", "update", "clean", "token", "version", "run", "help")
 
+# Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
+# (Windows installs by default, and win-host-a had no git at all on 2026-09-24).
+DEFAULT_UPDATE_REPO = "https://github.com/trappsquid/tinycmdr.git"
+_GIT_CANDIDATES = ("git", "/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git",
+                   "C:\\Program Files\\Git\\cmd\\git.exe", "C:\\PortableGit\\cmd\\git.exe")
+
+
+def _git_exe():
+    """The git binary on this host, or "" - PATH first, then the places Windows puts it."""
+    import shutil as _shutil
+    for cand in _GIT_CANDIDATES:
+        if cand == "git":
+            hit = _shutil.which(cand)
+            if hit:
+                return hit
+        elif Path(cand).exists():
+            return cand
+    return ""
+
+
+def _run_git(git, args, timeout=120):
+    """run_capture for git, with a missing or unrunnable binary answered like a failure.
+
+    The suite caught this: `update` on a host whose git candidate was stale raised
+    FileNotFoundError straight out of the verb, so a chat command would have posted nothing
+    at all. A verb reports; it does not traceback.
+    """
+    try:
+        return run_capture([git] + list(args), timeout)
+    except OSError as e:
+        # run_capture's shape is (rc, out, err, elapsed): the callers unpack four.
+        return 1, "", "cannot run %s: %s" % (git, e), 0.0
+
+
+def _build_hash():
+    """First 16 hex of this install's tinycmdr.py - the only thing that tells two builds
+    apart while VERSION matches (fleet-version-report uses the same idea)."""
+    import hashlib
+    try:
+        return hashlib.sha256((BASE_DIR / "tinycmdr.py").read_bytes()).hexdigest()[:16]
+    except OSError:
+        return "unreadable"
+
+
+def update_adopt_git(git, repo):
+    """Make this install a git checkout, then check out the published branch.
+
+    A fresh install is a folder of files, not a clone, so `tinycmdr update` had nothing to
+    pull: five of the six fleet hosts were in exactly that state on 2026-09-24, and `update`
+    answered with a usage line. The metadata comes from a --no-checkout clone; the checkout
+    writes TRACKED source only, because every per-host file (config.json, notes.md, tasks.json,
+    atlas.md, sessions/, logs/, spill/, tools/* except the starters, .env, *.bak) is ignored by
+    the repo's .gitignore and is left exactly as it was.
+    """
+    import shutil as _shutil
+    import tempfile
+    tmp = Path(tempfile.mkdtemp(prefix="tinycmdr-adopt-"))
+    try:
+        rc, out, err, _ = _run_git(git, ["clone", "--no-checkout", repo,
+                                         str(tmp / "repo")], 300)
+        if rc != 0:
+            print("git clone failed: %s" % ((err or out).strip()[:400]), file=sys.stderr)
+            return 1
+        target = BASE_DIR / ".git"
+        if target.exists():
+            _shutil.rmtree(target, ignore_errors=True)
+        _shutil.move(str(tmp / "repo" / ".git"), str(target))
+    finally:
+        _shutil.rmtree(tmp, ignore_errors=True)
+    before = _build_hash()
+    for args in (["fetch", "--prune", "origin"],
+                 ["checkout", "-f", "-B", "main", "origin/main"]):
+        rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR)] + args, 300)
+        if rc != 0:
+            print("git %s failed: %s" % (args[0], (err or out).strip()[:400]), file=sys.stderr)
+            return 1
+    _run_git(git, ["-C", str(BASE_DIR), "branch", "--set-upstream-to=origin/main", "main"], 60)
+    print("adopted %s: this install is a checkout of main now (tinycmdr.py %s -> %s)"
+          % (repo, before, _build_hash()))
+    print("Restart tinycmdr to run it: `tinycmdr restart`")
+    return 0
+
 VERB_HELP = """tinycmdr <verb> — management, never a model call
 
   (nothing)          a session in this folder: what the `tinycmdr` shim does when you
@@ -16994,6 +17084,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   version            the version alone
   proc               the processes running from THIS folder, and the web port's holder
   ports              what this install listens on + the LAN firewall rule it needs
+  update             pull the published build (git; adopts the checkout on a fresh install)
   update <src>       put a newer build in place (file, zip or folder) with a backup
   clean [--yes]      list the junk in this folder; --yes removes it (state is kept)
   logs [n]           the last n lines of tinycmdr.log (default 40)
@@ -17526,22 +17617,37 @@ def _verb_update(rest):
     import tempfile
     import zipfile
     if not rest:
-        if (BASE_DIR / ".git").exists():
-            print("Running in git repository at %s" % BASE_DIR)
-            print("Checking for updates via git...")
-            rc, out, err, _ = run_capture(["git", "-C", str(BASE_DIR), "pull", "--ff-only"], 60)
-            if rc == 0:
-                print(out.strip())
-                if "Already up to date" not in out:
-                    print("Updated from git.")
-                    print("Restart tinycmdr to run new build: `tinycmdr restart`")
-                return 0
-            else:
-                print("git pull failed: %s" % (err or out), file=sys.stderr)
-                return 1
-        print("update <tinycmdr.py|package.zip|folder> — where is the newer build?",
-              file=sys.stderr)
-        return 2
+        repo = str(CONFIG["agent"].get("update_repo") or DEFAULT_UPDATE_REPO)
+        git = _git_exe()
+        if not git:
+            print("no git binary on this host and this install is not a checkout, so there is "
+                  "nothing to pull from. Install git, or hand `update` a build: "
+                  "`update <tinycmdr.py|package.zip|folder>`.", file=sys.stderr)
+            return 2
+        if not (BASE_DIR / ".git").exists():
+            print("this install is not a git checkout - adopting %s" % repo)
+            return update_adopt_git(git, repo)
+        print("Running in git repository at %s" % BASE_DIR)
+        print("Checking for updates via git...")
+        before = _build_hash()
+        rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "pull", "--ff-only"], 120)
+        if rc != 0:
+            print("git pull failed: %s" % ((err or out).strip()[:600]), file=sys.stderr)
+            return 1
+        print(out.strip())
+        after = _build_hash()
+        if before != after:
+            print("tinycmdr.py %s -> %s (VERSION %s)" % (before, after, VERSION))
+            print("Restart tinycmdr to run new build: `tinycmdr restart`")
+        else:
+            short = (_run_git(git, ["-C", str(BASE_DIR), "rev-parse", "--short", "HEAD"],
+                              30)[1] or "").strip()
+            dirty = bool((_run_git(git, ["-C", str(BASE_DIR), "status", "--porcelain",
+                                         "--", "tinycmdr.py"], 30)[1] or "").strip())
+            print("Already up to date: HEAD %s, tinycmdr.py %s (VERSION %s)%s"
+                  % (short or "?", after, VERSION,
+                     " - with local uncommitted edits (a dev tree)" if dirty else ""))
+        return 0
     src = Path(rest[0]).expanduser()
     if not src.exists():
         print("no such file or folder: %s" % src, file=sys.stderr)
@@ -18061,6 +18167,48 @@ def _verb_run(rest):
         print("could not start the agent: %s" % e, file=sys.stderr)
         return 1
     return 0
+
+
+# The verbs that make sense from a chat message. The rest need a terminal: `run` opens a
+# session, `setup` and `token set` prompt, `restart` has its own fast path that must work
+# while a run owns the channel.
+_CHAT_VERB_SET = frozenset(("status", "doctor", "health", "version", "proc", "ports",
+                            "config", "model", "logs", "clean", "update", "help"))
+
+
+def verb_from_chat(argv_line):
+    """Run one management verb for a chat request and return what it printed.
+
+    `tinycmdr update` in a shell and `/tinycmdr update` in a chat are the same command, so the
+    output goes back to the channel rather than to a console nobody is looking at. Verbs that
+    need a terminal are refused by name instead of half-run.
+    """
+    import contextlib
+    import io
+    argv = [a for a in str(argv_line or "").split() if a]
+    if not argv:
+        return VERB_HELP
+    verb = argv[0].lower()
+    if verb not in _CHAT_VERB_SET:
+        if verb in VERBS:
+            return ("`%s` needs a terminal on the host (it prompts, opens a session, or has "
+                    "its own fast path), so it is not a chat verb. From chat: %s."
+                    % (verb, ", ".join(sorted(_CHAT_VERB_SET))))
+        return ("unknown verb %r. From chat: %s."
+                % (verb, ", ".join(sorted(_CHAT_VERB_SET))))
+    buf = io.StringIO()
+    code = 0
+    try:
+        with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+            code = run_verb(argv)
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 0
+    except Exception as e:                                       # noqa: BLE001
+        return "`%s` failed: %s" % (verb, e)
+    out = buf.getvalue().strip() or "(no output)"
+    if len(out) > 3500:
+        out = out[:3500] + "\n... (truncated)"
+    return "```\n%s\n```\n(exit %s)" % (out, code)
 
 
 def run_verb(argv):

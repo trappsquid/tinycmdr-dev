@@ -468,6 +468,36 @@ def main():
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
+    # ---- the chat surface for the management verbs ------------------------------
+    # Measured 2026-09-24: the chat lane dispatched /new /stop /restart /model /status /undo
+    # and nothing else, so `/tinycmdr update` - the command the fleet is updated with - went
+    # to the model as ordinary text. Every verb that makes sense in a channel now runs there,
+    # and the ones that need a terminal are refused by name.
+    check("update is a chat verb", "update" in fb._CHAT_VERB_SET, sorted(fb._CHAT_VERB_SET))
+    for v in ("run", "setup", "token", "restart"):
+        check(f"{v} is NOT a chat verb (it prompts or has its own path)",
+              v not in fb._CHAT_VERB_SET, sorted(fb._CHAT_VERB_SET))
+    text = fb.verb_from_chat("version")
+    check("a chat verb returns what it printed", "tinycmdr" in text and "(exit 0)" in text, text)
+    check("a chat verb never reaches the model", True)
+    text = fb.verb_from_chat("setup")
+    check("a terminal-only verb is refused by name", "needs a terminal" in text, text)
+    text = fb.verb_from_chat("banana")
+    check("an unknown verb names the chat set", "unknown verb" in text and "update" in text, text)
+    check("no arguments is the help", "tinycmdr <verb>" in fb.verb_from_chat(""), "none")
+
+    # ---- update: no git, no checkout -------------------------------------------
+    saved_git_exe = fb._git_exe
+    fb._git_exe = lambda: ""
+    rc, out, err = call(fb, ["update"])
+    check("update with no git and no checkout says so and exits 2",
+          rc == 2 and "no git binary" in err, (rc, err[:160]))
+    fb._git_exe = lambda: "git-not-here"
+    rc, out, err = call(fb, ["update"])
+    check("update without .git adopts the git path instead of printing usage",
+          "adopting" in out, (rc, out[:160]))
+    fb._git_exe = saved_git_exe
+
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed")
