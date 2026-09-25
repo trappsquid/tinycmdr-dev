@@ -17629,23 +17629,30 @@ def _verb_update(rest):
             return update_adopt_git(git, repo)
         print("Running in git repository at %s" % BASE_DIR)
         print("Checking for updates via git...")
-        before = _build_hash()
+
+        def head_of():
+            """(short HEAD, tinycmdr.py hash): either moving is a real update - a docs-only
+            commit moves HEAD and must not read as 'already up to date'."""
+            return ((_run_git(git, ["-C", str(BASE_DIR), "rev-parse", "--short", "HEAD"],
+                              30)[1] or "").strip() or "?",
+                    _build_hash())
+
+        head_before, file_before = head_of()
         rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "pull", "--ff-only"], 120)
         if rc != 0:
             print("git pull failed: %s" % ((err or out).strip()[:600]), file=sys.stderr)
             return 1
         print(out.strip())
-        after = _build_hash()
-        if before != after:
-            print("tinycmdr.py %s -> %s (VERSION %s)" % (before, after, VERSION))
+        head_after, file_after = head_of()
+        if (head_before, file_before) != (head_after, file_after):
+            print("HEAD %s -> %s, tinycmdr.py %s -> %s (VERSION %s)"
+                  % (head_before, head_after, file_before, file_after, VERSION))
             print("Restart tinycmdr to run new build: `tinycmdr restart`")
         else:
-            short = (_run_git(git, ["-C", str(BASE_DIR), "rev-parse", "--short", "HEAD"],
-                              30)[1] or "").strip()
             dirty = bool((_run_git(git, ["-C", str(BASE_DIR), "status", "--porcelain",
                                          "--", "tinycmdr.py"], 30)[1] or "").strip())
             print("Already up to date: HEAD %s, tinycmdr.py %s (VERSION %s)%s"
-                  % (short or "?", after, VERSION,
+                  % (head_after, file_after, VERSION,
                      " - with local uncommitted edits (a dev tree)" if dirty else ""))
         return 0
     src = Path(rest[0]).expanduser()
