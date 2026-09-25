@@ -598,7 +598,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.11"
+VERSION = "1.0.12"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -3067,6 +3067,41 @@ def _tool_run_as_script(command):
     return ""
 
 
+def _pwsh_chain_and(command):
+    """Translate unquoted && into PowerShell 5.1 compatible '; if ($?) { ... }'."""
+    if "&&" not in command:
+        return command
+    parts, in_quote = [], None
+    i, n, last_i = 0, len(command), 0
+    while i < n:
+        c = command[i]
+        if in_quote:
+            if c == in_quote:
+                if i > 0 and command[i - 1] in ('`', '\\'):
+                    pass
+                else:
+                    in_quote = None
+            i += 1
+        else:
+            if c in ("'", '"'):
+                in_quote = c
+                i += 1
+            elif c == '&' and i + 1 < n and command[i + 1] == '&':
+                parts.append(command[last_i:i])
+                i += 2
+                last_i = i
+            else:
+                i += 1
+    parts.append(command[last_i:])
+    if len(parts) <= 1:
+        return command
+    segments = [p.strip() for p in parts]
+    res = segments[0]
+    for seg in segments[1:]:
+        res += f"; if ($?) {{ {seg} }}"
+    return res
+
+
 def tool_shell(args, ctx):
     """Run a shell command. bash on Linux/macOS, PowerShell on Windows."""
     command = args["command"]
@@ -3104,7 +3139,8 @@ def tool_shell(args, ctx):
                 f"agent.blocked_patterns in config.json if this box genuinely needs "
                 f"it, and then work from the result they give you. Do not look for a "
                 f"way around it.")
-    shell_argv = (["powershell", "-NoProfile", "-Command", command] if IS_WINDOWS
+    shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
+    shell_argv = (["powershell", "-NoProfile", "-Command", shell_cmd] if IS_WINDOWS
                   else ["bash", "-c", command])
     try:
         scan_t0 = time.time()
@@ -4375,8 +4411,15 @@ def tool_task(args, ctx):
             if len(active) == 1:
                 item = active[0]
         if not item:
-            ids = ", ".join("#%s" % i.get("id") for i in items
-                            if i.get("status") in TASK_ACTIVE) or "none"
+            active_items = [i for i in items if i.get("status") in TASK_ACTIVE]
+            ids = ", ".join("#%s" % i.get("id") for i in active_items) or "none"
+            if not args.get("id"):
+                if not active_items:
+                    return (f"ERROR: no open tasks in the ledger to mark {action}. "
+                            f"Use action=add first to track multi-step work, or "
+                            f"`action=list` to inspect the ledger.")
+                return (f"ERROR: multiple tasks are open (open now: {ids}). Pass id=<n> "
+                        f"to specify which task to mark {action} — `action=list` shows them.")
             return (f"ERROR: no task #{args.get('id')} in the ledger. Pass id=<n> — "
                     f"`action=list` shows them (open now: {ids}).")
         if status == "done" and not (note or item.get("note")):
@@ -8108,6 +8151,8 @@ class Agent:
         hijack happened after a restart that would have wiped such a flag.
         """
         hist = (self.histories or {}).get(session_key) or []
+        if session_key in _EVENT_RUN and hist and hist[-1].get("role") == "user":
+            hist = hist[:-1]
         last = ""
         newest = ""
         for msg in reversed(hist):

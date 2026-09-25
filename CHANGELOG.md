@@ -5,6 +5,13 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.12] - 2026-09-24
+
+### Fixed
+- **Active turns no longer falsely trigger prior-run interruption warnings.** `_prior_run_unfinished()` ignores the in-flight user message when evaluating conversation state during an active run.
+- **Clearer error when completing tasks on an empty ledger.** Calling `task action=done` without an ID when no tasks are open returns a clear explanation rather than `no task #None`.
+- **PowerShell 5.1 command chaining with `&&` on Windows.** `tool_shell` translates unquoted `&&` separators into `; if ($?) { ... }`, preventing syntax parse errors in Windows PowerShell 5.1.
+
 ## [1.0.11] - 2026-09-24
 
 ### Fixed
