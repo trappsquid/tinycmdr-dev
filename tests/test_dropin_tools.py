@@ -313,6 +313,27 @@ def test_process_lifecycle():
     out = tool({"action": "status", "id": "b9"}, None)
     check("process: an unknown id says so", out.startswith("ERROR"), out)
 
+    # The harness hands a drop-in tool its own shell and its safety tier (measured
+    # 2026-09-25 on HOST-A: string commands went to cmd.exe while the prompt says the shell
+    # is PowerShell, and a .ps1 launched through this tool did what the shell tier refuses).
+    ps_ctx = {"shell_argv": lambda c: ["powershell", "-NoProfile", "-Command", c],
+              "shell_guard": lambda text: None}
+    tool({"action": "start",
+          "command": "for ($i=1; $i -le 2; $i++) { Write-Output (\"tick \" + $i) }"},
+         ps_ctx)
+    out = tool({"action": "wait", "id": "b4", "timeout": 30}, ps_ctx)
+    check("process: a string command runs in the harness's own shell",
+          "exit 0" in out, out)
+    out = tool({"action": "output", "id": "b4"}, ps_ctx)
+    check("process: and its PowerShell loop really ran",
+          "tick 1" in out and "tick 2" in out, out)
+    guarded = {"shell_argv": lambda c: ["powershell", "-NoProfile", "-Command", c],
+               "shell_guard": lambda text: "BLOCKED: test refusal"}
+    out = tool({"action": "start", "command": "mkfs.ext4 /dev/sda1"}, guarded)
+    check("process: a refused command never starts", out.startswith("BLOCKED"), out)
+    out = tool({"action": "start", "command": ["mkfs.ext4", "/dev/sda1"]}, guarded)
+    check("process: an argv list is guarded too", out.startswith("BLOCKED"), out)
+
 
 # ------------------------------------------------------------ fetch multi
 

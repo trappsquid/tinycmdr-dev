@@ -368,6 +368,36 @@ check("prompt: a result that is not in context means the call did not happen",
 check("prompt: and mining files for it is named as the slow way",
       "the slowest way to answer" in sp2)
 
+# ---- search_files: the shape the prompt teaches must actually grep -------------------
+# Measured 2026-09-25 driving HOST-A: the route hint and the routing bullet both teach
+# `search_files {"pattern": "<regex>", "path": "<file or directory>"}`, while the tool read
+# `pattern` as a NAME glob and the grep as `content`. The run followed the taught shape and
+# got a confident "No matches." for a string the file holds ten times - a silent wrong
+# answer, and the whole reason the tool is named in the prompt.
+srch = Path(tempfile.mkdtemp(prefix="fbtest-search-"))
+(srch / "one.py").write_text("alpha = 1\nblocked_patterns here\nbeta = 2\n", encoding="utf-8")
+(srch / "two.py").write_text("gamma\n", encoding="utf-8")
+out = fb.tool_search_files({"pattern": "blocked_patterns",
+                            "path": str(srch / "one.py")}, {})
+check("search_files: a FILE path with a regex pattern greps it",
+      "one.py:2:" in out and "blocked_patterns here" in out, out[:200])
+out = fb.tool_search_files({"pattern": "blocked_patterns", "path": str(srch)}, {})
+check("search_files: a DIRECTORY with a regex pattern greps its files",
+      "one.py:2:" in out, out[:200])
+out = fb.tool_search_files({"pattern": "*.py", "path": str(srch)}, {})
+check("search_files: a name glob still lists names",
+      "two.py" in out and ":2:" not in out, out[:200])
+out = fb.tool_search_files({"pattern": "nothing_here_at_all", "path": str(srch)}, {})
+check("search_files: a real miss still answers No matches", out == "No matches.", out[:120])
+out = fb.tool_search_files({"content": "gamma", "path": str(srch)}, {})
+check("search_files: content= still greps (the schema-honest shape)",
+      "two.py:1:" in out, out[:200])
+out = fb.tool_search_files({"content": "gamma", "pattern": "*.py", "path": str(srch)}, {})
+check("search_files: content= with a glob keeps the glob as the scope",
+      "one.py" not in out and "two.py:1:" in out, out[:200])
+out = fb.tool_search_files({"path": str(srch / "missing.txt")}, {})
+check("search_files: a missing path still errors", out.startswith("ERROR"), out[:120])
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

@@ -130,10 +130,7 @@ def run(args, ctx):
         jid = f"b{n}"
         log_path = (BASE / "logs" / f"proc-{jid}.log")
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        # A string is a SHELL command, a list is argv verbatim. shell=True for
-        # the string form is deliberate: wrapping it in ["cmd", "/c", ...] makes
-        # the quoting mangle a quoted exe path with spaces (measured: the child
-        # died with 'is not recognized as an internal or external command').
+        # A string is a SHELL command, a list is argv verbatim.
         if isinstance(cmd, str) and cmd.startswith("["):
             # A model whose session never had this schema sends the ARGV LIST as a JSON
             # string, and a string runs through the shell: measured 2026-09-25 on HOST-A,
@@ -147,8 +144,28 @@ def run(args, ctx):
             if (isinstance(parsed, list) and parsed
                     and all(isinstance(a, str) for a in parsed)):
                 cmd = parsed
-        argv = cmd
-        shell = isinstance(cmd, str)
+        # A string is a SHELL command, and it has to run in the box's real shell: the
+        # harness hands us the same argv the shell tool uses (PowerShell on Windows, bash
+        # elsewhere) plus the guard its own tier applies. Measured 2026-09-25 on HOST-A: with
+        # cmd.exe underneath, a bash-style and a PowerShell-style loop both died inside cmd
+        # and a third form "succeeded" (exit 0) having echoed the command as text.
+        if isinstance(cmd, str):
+            make_argv = (ctx or {}).get("shell_argv")
+            refusal = None
+            guard = (ctx or {}).get("shell_guard")
+            if guard:
+                refusal = guard(cmd)
+            if refusal:
+                return refusal
+            argv = make_argv(cmd) if make_argv else cmd
+            shell = make_argv is None        # older harness: the raw shell string
+        else:
+            guard = (ctx or {}).get("shell_guard")
+            refusal = guard(" ".join(str(a) for a in cmd)) if guard else None
+            if refusal:
+                return refusal
+            argv = cmd
+            shell = False
         try:
             with open(log_path, "wb") as fout:
                 proc = subprocess.Popen(argv, shell=shell, stdout=fout,

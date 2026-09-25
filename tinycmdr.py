@@ -3483,6 +3483,51 @@ def endpoint_gate(subject, why, confirm_cb):
     return None
 
 
+def _missing_argument_answer(name, missing, params):
+    """What a call that left out a DECLARED argument is told, or "" if it did not.
+
+    Measured 2026-09-25 driving HOST-A: `create_tool` answered a bare
+    `ERROR in tool 'create_tool': 'name'` and the run retried the identical call. An
+    answer that names the argument and lists the shape costs nothing and saves the retry.
+    """
+    declared = (params or {}).get("properties") or {}
+    if not missing or missing not in declared:
+        return ""
+    required = (params or {}).get("required") or []
+    return (f"ERROR: the call to {name} is missing the argument {missing!r}"
+            + (f" (required: {', '.join(required)})" if required else "")
+            + f". Its arguments are: {', '.join(sorted(declared))}. "
+              f"Nothing was written - call it again with {missing!r} set.")
+
+
+def shell_guard(text, ctx):
+    """The shell tool's own tier, exposed to a drop-in tool that spawns its own process.
+
+    Measured 2026-09-25 driving HOST-A: `process start` launched a .ps1 whose body did
+    exactly what the shell tier refuses, so the seatbelt was one tool call away from
+    bypassed - the same shape execute_code had before 2026-09-18. A tool that starts a
+    process asks here first: the string goes through the confirm tier (quoted back to the
+    operator when a door exists) and then the absolute tier. Returns None to proceed, or
+    the refusal text.
+    """
+    text = str(text or "")
+    hit = _confirm_hit(text) or _endpoint_self_harm(text)
+    if hit:
+        refusal = endpoint_gate("process: " + text[:110], hit,
+                                (ctx or {}).get("confirm_cb"))
+        if refusal:
+            return refusal
+    blocked = is_blocked(text)
+    if blocked:
+        return (f"BLOCKED: this command matches safety pattern '{blocked}', which "
+                f"cannot be approved in-band - no confirmation unlocks this tier. Ask "
+                f"the operator to run it by hand, or to take '{blocked}' out of "
+                f"agent.blocked_patterns in config.json if this box genuinely needs "
+                f"it, and then work from the result they give you. Do not look for a "
+                f"way around it.")
+    return None
+
+
 def confirm_gate(text, subject, ctx):
     """The CONFIRM tier over text on its way to DISK or into a shell wrapper.
 
@@ -3673,14 +3718,49 @@ def tool_edit_file(args, ctx):
 
 
 def tool_search_files(args, ctx):
-    """Find files by name glob and/or content regex (Hermes search_files)."""
+    """Find files by name glob and/or content regex (Hermes search_files).
+
+    Two contracts meet in this tool and they disagreed (measured 2026-09-25 driving HOST-A):
+    the SCHEMA below calls `pattern` a name glob and puts the grep in `content`, while the
+    route hint and the routing bullet in the system prompt both teach
+    `search_files {"pattern": "<regex>", "path": "<file or directory>"}`. A run that
+    followed the taught shape asked for a string its file holds ten times and got a
+    confident "No matches." - a silent wrong answer, which is worse than a refusal, and it
+    cost the whole point of the search. The taught shape works now:
+
+      * `path` may be a FILE: its own lines are grepped, with line numbers.
+      * `pattern` is tried against line CONTENT as well as against file NAMES (the content
+        pass is skipped when it will not compile, so a name glob like "*.md" stays a glob).
+      * when `content` IS given, `pattern` keeps its scoping job: only files matching it
+        are grepped (schema-honest shape unchanged).
+    """
     import fnmatch
     root = Path(args.get("path") or ".").expanduser()
     if not root.exists():
         return f"ERROR: {root} does not exist"
-    name_glob = args.get("pattern") or "*"
-    content_re = re.compile(args["content"]) if args.get("content") else None
+    pat = args.get("pattern") or "*"
     max_results = int(args.get("max_results") or 50)
+    asked_content = args.get("content")
+    grepper = asked_content or pat
+    try:
+        content_re = re.compile(grepper)
+    except re.error:
+        content_re = None       # a name glob such as "*.md" is not a regex: names only
+    if root.is_file():
+        if content_re is None:
+            return (f"ERROR: {root} is one file and {grepper!r} is not a valid regex - pass "
+                    f"the line pattern you want, or a directory to glob file names in")
+        try:
+            text = root.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return f"ERROR: {e}"
+        hits = []
+        for i, line in enumerate(text.splitlines(), 1):
+            if content_re.search(line):
+                hits.append(f"{root}:{i}: {line.strip()[:160]}")
+                if len(hits) >= max_results:
+                    break
+        return "\n".join(hits) if hits else "No matches."
     hits, content_hits = [], []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
@@ -3688,23 +3768,25 @@ def tool_search_files(args, ctx):
                            (".git", "node_modules", "__pycache__", ".venv")]
             for fn in filenames:
                 full = Path(dirpath) / fn
-                if fnmatch.fnmatch(fn, name_glob):
-                    if content_re:
-                        try:
-                            if full.stat().st_size > 2_000_000:
-                                continue
-                            for i, line in enumerate(
-                                    full.read_text(encoding="utf-8",
-                                                   errors="replace")
-                                    .splitlines(), 1):
-                                if content_re.search(line):
-                                    content_hits.append(
-                                        f"{full}:{i}: {line.strip()[:160]}")
-                                    break
-                        except OSError:
+                globbed = fnmatch.fnmatch(fn, pat)
+                # `content` given => `pattern` SCOPES the grep (the schema-honest shape),
+                # so the name list stays out of the results; `content` absent => the name
+                # glob is the output and `pattern` also greps.
+                if globbed and not asked_content:
+                    hits.append(str(full))
+                if content_re is not None and (globbed or not asked_content):
+                    try:
+                        if full.stat().st_size > 2_000_000:
                             continue
-                    else:
-                        hits.append(str(full))
+                        for i, line in enumerate(
+                                full.read_text(encoding="utf-8",
+                                               errors="replace").splitlines(), 1):
+                            if content_re.search(line):
+                                content_hits.append(
+                                    f"{full}:{i}: {line.strip()[:160]}")
+                                break
+                    except OSError:
+                        continue
                 if len(hits) + len(content_hits) >= max_results:
                     break
             if len(hits) + len(content_hits) >= max_results:
@@ -4923,11 +5005,31 @@ def _annotate_promise(answer, calls):
 
 def tool_create_tool(args, ctx):
     """Write a new custom tool into tools/ and hot-load it."""
-    name = re.sub(r"[^a-zA-Z0-9_]", "_", args["name"]).strip("_").lower()
+    # `name` is derivable, and the run that derives it is the one that omits it (measured
+    # 2026-09-25 driving HOST-A): the call carried `code` alone with the name in the file's
+    # own `# NAME: big_files` header, came back as a bare KeyError('name'), and the run
+    # retried the identical call. The loader needs the file's NAME to equal the file name
+    # anyway, so the name inside the code is the truth.
+    _name = str(args.get("name") or "").strip()
+    _code = str(args.get("code") or "")
+    if not _name:
+        m = (re.search(r"^[ \t]*#[ \t]*NAME:[ \t]*([A-Za-z0-9_]+)", _code, re.M)
+             or re.search(r"^[ \t]*NAME[ \t]*=[ \t]*[\"']([A-Za-z0-9_]+)[\"']", _code, re.M))
+        _name = m.group(1) if m else ""
+    name = re.sub(r"[^a-zA-Z0-9_]", "_", _name).strip("_").lower()
     if not name:
-        return "ERROR: invalid tool name"
+        return ("ERROR: create_tool needs `name` (snake_case) and `code` - neither the "
+                "argument nor a NAME line in the code was there. Pass both, e.g. "
+                "{\"name\": \"disk_report\", \"code\": \"NAME = 'disk_report'..."
+                "\"}. Or write a register()-style file or a .tool.json manifest with "
+                "write_file (shapes: tools/README.md).")
     if name in CORE_TOOL_NAMES:
         return f"ERROR: '{name}' is a core tool name; pick another."
+    if not _code.strip():
+        return (f"ERROR: create_tool got no code for {name!r}, so there is nothing to "
+                f"write. Pass the complete Python source in `code` (NAME, DESCRIPTION, "
+                f"SCHEMA, run(args, ctx)), or write a register()-style file or a "
+                f".tool.json manifest with write_file - shapes: tools/README.md.")
     path = TOOLS_DIR / f"{name}.py"
     if path.exists():
         return (f"ERROR: tools/{name}.py already exists. Read it with "
@@ -4936,7 +5038,7 @@ def tool_create_tool(args, ctx):
                            "create_tool %s" % name, ctx)
     if refusal:
         return refusal
-    path.write_text(args["code"], encoding="utf-8")
+    path.write_text(_code, encoding="utf-8")
     # Validate: can we import it and does it satisfy the contract?
     ok, err = REGISTRY.reload_tool(name)
     if not ok:
@@ -9068,6 +9170,17 @@ class Agent:
                 return name, args, refusal
         try:
             out = str(tool["fn"](args, ctx))
+        except KeyError as e:
+            # A call missing a required argument used to come back as
+            # `ERROR in tool 'create_tool': 'name'` - measured 2026-09-25 driving HOST-A,
+            # where the run had just done that twice and learned nothing from it. If the
+            # key is one this tool declares, say which argument is missing and list the
+            # arguments it takes; anything else keeps the honest generic wording.
+            missing = str(e.args[0]) if e.args else ""
+            params = (((tool.get("schema") or {}).get("function") or {})
+                      .get("parameters") or {})
+            out = (_missing_argument_answer(name, missing, params)
+                   or f"ERROR in tool '{name}': {e}")
         except Exception as e:
             out = f"ERROR in tool '{name}': {e}"
         # A call for a tool the payload did not carry is honoured and then revealed for
@@ -9143,6 +9256,16 @@ class Agent:
             if rich_content is not None:
                 messages[-1] = {"role": "user", "content": rich_content}
             ctx = {"shell": lambda c, **kw: tool_shell({"command": c, **kw}, ctx),
+                   # A drop-in tool that starts its OWN process needs two things the shell
+                   # tool already had: the box's real shell (measured 2026-09-25: `process`
+                   # string commands went to cmd.exe while the prompt says the shell is
+                   # PowerShell, so PowerShell and bash loops both died in cmd and one of
+                   # them "succeeded" doing nothing) and the safety tier. One wiring point,
+                   # like send_file.
+                   "shell_argv": (lambda c: ["powershell", "-NoProfile", "-Command",
+                                             _pwsh_chain_and(c)] if IS_WINDOWS
+                                  else ["bash", "-c", c]),
+                   "shell_guard": lambda text: shell_guard(text, ctx),
                    "config": CONFIG, "depth": depth,
                    "confirm_cb": confirm_cb, "channel_id": channel_id,
                    # A /stop has to reach work already in flight, so the tools get the same

@@ -2225,6 +2225,19 @@ def test_the_safety_seatbelt_covers_execute_code_too():
           and fb.is_blocked("shutdown /r /t 5") is None
           and fb.is_blocked("Restart-Computer -Force") is None)
 
+    # A TOOL that spawns its own process asks the same tier (measured 2026-09-25: `process`
+    # ran a .ps1 whose body did what the shell tier refuses, so the seatbelt was one tool
+    # call away from bypassed). `shell_guard` is the harness's answer, wired into the tool
+    # context beside `shell`.
+    check("shell_guard: an absolute-tier command is refused, not run",
+          str(fb.shell_guard("mkfs.ext4 /dev/sda1", {})).startswith("BLOCKED:"),
+          fb.shell_guard("mkfs.ext4 /dev/sda1", {}))
+    check("shell_guard: a confirm-tier command is declined with no door",
+          str(fb.shell_guard("shutdown /r /t 5", {})).startswith("DECLINED"),
+          fb.shell_guard("shutdown /r /t 5", {}))
+    check("shell_guard: an ordinary command passes",
+          fb.shell_guard("python -c \"print(1)\"", {}) is None)
+
     # The write paths take the CONFIRM tier too (security review 2026-09-23):
     # the fastest route for a steered model is a file or a tool, not a command.
     wp = TMP / "belt-write.txt"

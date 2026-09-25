@@ -17,6 +17,7 @@ Run:  python tests/test_tool_doors.py
 import importlib.util
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -218,6 +219,54 @@ check("plan: a plan exists before the reset", "stale one" in fb.plan_render(key)
 fb.AGENT.reset(key)
 check("reset: /new drops the previous run's plan", fb.plan_render(key) == "",
       fb.plan_render(key))
+
+# ---- a call that leaves out a declared argument is told WHICH one --------------------
+# Measured 2026-09-25 driving HOST-A (work order 3): `create_tool` sent `code` alone with the
+# name in the file's own `# NAME: big_files` header, answered a bare KeyError('name'), and
+# the run retried the identical call before going at the tools folder with three shell
+# commands. Both halves are answered at runtime now.
+msg = fb._missing_argument_answer(
+    "create_tool", "name",
+    {"properties": {"name": {"type": "string"}, "code": {"type": "string"}},
+     "required": ["name", "code"]})
+check("a missing argument names itself and lists the call's arguments",
+      "missing the argument 'name'" in msg and "code" in msg and "name" in msg, msg)
+check("...and a KeyError over something the tool does not declare keeps the generic answer",
+      fb._missing_argument_answer("create_tool", "nonsense", {"properties": {"name": {}}}) == "")
+
+_tmp_tools = Path(tempfile.mkdtemp(prefix="fbtest-doors-create-"))
+_saved_tools_dir = fb.TOOLS_DIR
+_saved_registry_dir = fb.REGISTRY.tools_dir
+try:
+    # the tool writes to TOOLS_DIR and the loader reads the REGISTRY's dir: both move, or
+    # the create lands in one folder and the reload looks in the other (and unlinks it).
+    fb.TOOLS_DIR = _tmp_tools
+    fb.REGISTRY.tools_dir = _tmp_tools
+    # the code carries the name in its own NAME line (`# NAME:` is the header style the
+    # model wrote when it hit this), and the file must be a real native tool.
+    out = fb.tool_create_tool(
+        {"code": "NAME = \"big_files\"\nDESCRIPTION = 'x'\n"
+                 "SCHEMA = {'type': 'object', 'properties': {}}\n"
+                 "def run(args, ctx):\n    return 'ok'\n"}, {})
+    check("create_tool: the name comes from the code when the argument is absent",
+          out.startswith("OK") and (_tmp_tools / "big_files.py").exists(), out[:200])
+    # the model's own header style (a `# NAME:` comment) with a valid body: the file still
+    # has to carry the native NAME attribute, and the name comes off the code either way.
+    out = fb.tool_create_tool(
+        {"code": "# NAME: disk_report\nNAME = \"disk_report\"\nDESCRIPTION = 'x'\n"
+                 "SCHEMA = {'type': 'object', 'properties': {}}\n"
+                 "def run(args, ctx):\n    return 'ok'\n"}, {})
+    check("create_tool: a `# NAME:` header names the file too",
+          out.startswith("OK") and (_tmp_tools / "disk_report.py").exists(), out[:200])
+    out = fb.tool_create_tool({"name": "nothing_here"}, {})
+    check("create_tool: an empty code says so instead of writing a bad file",
+          out.startswith("ERROR") and "code" in out, out[:220])
+    out = fb.tool_create_tool({}, {})
+    check("create_tool: with no name and no code it says what the call needs",
+          out.startswith("ERROR") and "name" in out and "code" in out, out[:220])
+finally:
+    fb.TOOLS_DIR = _saved_tools_dir
+    fb.REGISTRY.tools_dir = _saved_registry_dir
 
 print(f"\n{len(PASSES)} checks passed, {len(FAILURES)} failed")
 sys.exit(1 if FAILURES else 0)
