@@ -5,6 +5,19 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.11] - 2026-09-24
+
+### Fixed
+- **A promise that ended a run which had already done work is answered.** The guard for "the model says what it is about to do and stops" fired only when the run had made no tool call at all - so a run that had done real work and then ended on "Let me find where." was never touched. Measured in the fleet's own transcripts: two of win-host-b's runs end that way, and the operator's next message is "wait why didnt you download anything". Such a run now gets one more ask, in the tool results it reads, naming how many calls it has already made and what to do instead; if it still stops on an intention, the delivered answer carries a plain `stopped short` note instead of passing the sentence through as if it were an outcome.
+- **The result-claim guard now catches the phrasing it missed.** "The log says 12 errors and 0 warnings" went through unclassified: the pattern wanted a unit word next to the number. A report verb joined to a subject that exists only on the box, followed by a number, is a claim now - and it still leaves plain answers ("Port 8065 is open") and promises alone.
+
+### Verified
+- six new checks fail against 1.0.10 and pass here; `tests/test_stall.py` 300 checks green; the sweep is 42 suites with zero failures;
+- the turn-facts line added in 1.0.10 is what these two were built on: `shape=`, the tool count on the wire (14 in every observed turn), the server's own token counts, and whether the last thing the model read was the harness's own nudge.
+
+### Notes
+- Worth saying plainly, since it was asked: the measurements from the fleet do NOT show the endpoint dropping requests (0 truncated generations in 714, 1 generation of <=6 tokens) or the harness withholding tools (14 schemas on every observed turn). What they show is the model stopping on an intention, and until 1.0.10 nothing recorded that.
+
 ## [1.0.10] - 2026-09-24
 
 ### Added

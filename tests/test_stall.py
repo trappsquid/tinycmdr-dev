@@ -2547,6 +2547,96 @@ def test_the_facts_line_marks_the_harness_as_the_last_speaker_when_it_nudged():
     check("and the turn after it records that the harness spoke last",
           any("harness_before=1" in m for m in turns), turns)
 
+# --------------------------------------------------------------------------
+# a promise that ends a run which already did work (2026-09-24)
+# --------------------------------------------------------------------------
+# Measured, from the fleet's own transcripts: win-host-b's conversation ends two runs
+# on "Let me find where." / "Let me dig deeper for actual downloadable TAK map
+# files." AFTER real tool work, and the operator's next message is "wait why didnt
+# you download anything". The guard that existed fires only when the run has made
+# NO tool call at all, so it never saw these. These pin the sibling: one more ask,
+# and if it stops again, a delivery that says so.
+
+def _call_reply(cid, tool="read_file", args=None):
+    return {"role": "assistant", "content": "",
+            "tool_calls": [{"id": cid, "function": {
+                "name": tool,
+                "arguments": json.dumps(args or {"path": str(TMP / "facts_probe.txt")})}}]}
+
+
+def test_a_promise_after_real_work_gets_one_more_ask():
+    probe = TMP / "promise_probe.txt"
+    probe.write_text("ok\n", encoding="utf-8")
+    fb.CONFIG["agent"]["max_steps"] = 10
+    fb.CONFIG["agent"]["max_minutes"] = 5
+    cap, done = _capture_turns()
+    try:
+        out, calls, payloads = _scripted_run([
+            _call_reply("1", args={"path": str(probe)}),
+            {"role": "assistant", "content": "Let me find where the config is read from."},
+            _call_reply("2", args={"path": str(probe)}),
+            {"role": "assistant", "content": "Done: the config is read from the install dir."},
+        ])
+    finally:
+        done()
+    sent = json.dumps(payloads)
+    check("the promise did not end the run",
+          "Done: the config is read from the install dir." in out, out[:200])
+    check("the model was told, in the results it reads, that it had promised",
+          "This run has already" in sent, sent[-260:])
+    check("and that ask is logged with the work it followed",
+          any("ended the turn on a promise after 1 tool call(s)" in m for m in cap), cap[-4:])
+    check("a promise that was NOT the end of the run is not flagged in the delivery",
+          "stopped short" not in out, out[:200])
+
+
+def test_a_run_that_stops_on_a_promise_twice_says_so_in_the_delivery():
+    probe = TMP / "promise_probe2.txt"
+    probe.write_text("ok\n", encoding="utf-8")
+    fb.CONFIG["agent"]["max_steps"] = 10
+    fb.CONFIG["agent"]["max_minutes"] = 5
+    out, calls, payloads = _scripted_run([
+        _call_reply("1", args={"path": str(probe)}),
+        {"role": "assistant", "content": "Let me find where the config is read from."},
+        {"role": "assistant", "content": "Let me search the other drive next."},
+    ])
+    check("the delivery says the run stopped short",
+          "stopped short" in out, out[:300])
+    check("and it says what did run", "tool call(s) and its last turn asked for none" in out,
+          out[:300])
+
+
+def test_the_result_claim_guard_catches_the_report_phrasing_it_missed():
+    """Measured gap found while writing the classifier: "the log says 12 errors" went
+    through unclassified because the pattern wanted a unit word beside the number."""
+    check("a report verb + a box subject + a number is a claim",
+          bool(fb._RESULT_CLAIM_RX.search("The log says 12 errors and 0 warnings.")))
+    check("so is the output showing counts",
+          bool(fb._RESULT_CLAIM_RX.search("The output shows 3 failures.")))
+    check("a plain answer with a number is still not a claim",
+          not fb._RESULT_CLAIM_RX.search("Port 8065 is open."))
+    check("and neither is a promise",
+          not fb._RESULT_CLAIM_RX.search("Let me check the other file next."))
+
+def test_a_run_that_complies_after_the_ask_is_delivered_untouched():
+    """The flaw this caught in its own first draft: the flag that marks "this run was
+    asked to act" stayed set, so a run that was nudged and then WROTE ITS REPORT
+    properly would have been labelled "stopped short" - the harness lying about a
+    model that did what it was asked."""
+    probe = TMP / "promise_probe3.txt"
+    probe.write_text("ok\n", encoding="utf-8")
+    fb.CONFIG["agent"]["max_steps"] = 10
+    fb.CONFIG["agent"]["max_minutes"] = 5
+    out, calls, payloads = _scripted_run([
+        _call_reply("1", args={"path": str(probe)}),
+        {"role": "assistant", "content": "Let me find where the config is read from."},
+        {"role": "assistant",
+         "content": "Report: the probe file holds ok. The config source is still unresolved."},
+    ])
+    check("a report written after the ask is delivered as written",
+          "still unresolved" in out, out[:200])
+    check("and it is NOT labelled as stopping short", "stopped short" not in out, out[:250])
+
 def main():
     # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

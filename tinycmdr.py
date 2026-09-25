@@ -598,7 +598,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.10"
+VERSION = "1.0.11"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -4714,6 +4714,22 @@ def _annotate_evidence(answer, muts, calls):
               "until something is read back.")
 
 
+def _annotate_promise(answer, calls):
+    """Say plainly that this answer ends on an intention, not on a result.
+
+    Measured (2026-09-24): a run that has done real work can still end on "Let me find
+    where." - the model stops without a call and the operator reads a status line as if
+    it were the outcome. The run gets one more ask (see the promise branch in the loop);
+    if it stops again, the delivery itself carries the truth rather than the harness
+    quietly passing the sentence through.
+    """
+    if not answer:
+        return answer
+    return (answer + "\n\n⚠️ **stopped short** — this answer ends on a stated intention, "
+            f"not on a result: the run made {calls} tool call(s) and its last turn asked "
+            "for none. Whatever it says it was about to do has not run yet.")
+
+
 def tool_create_tool(args, ctx):
     """Write a new custom tool into tools/ and hot-load it."""
     name = re.sub(r"[^a-zA-Z0-9_]", "_", args["name"]).strip("_").lower()
@@ -7660,6 +7676,11 @@ _RESULT_CLAIM_RX = re.compile(
     #     caught "16 GB unified memory." on the macOS bed, in a run with no tool call, and a
     #     bare machine spec is not a claim about anything the run fetched.
     r"|(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
+    # (b2) a report VERB joined to a subject that exists only on the box: "the log
+    #     says 12 errors", "the output shows 3 failures". Measured gap (2026-09-24):
+    #     (b) needs a unit word beside the number, so this phrasing went through
+    #     unclassified even though nothing in the run had read anything.
+    r"|\b(?:log|logs|output|config|journal|report|results?|stdout|stderr|error|errors)\b[^\n]{0,30}?\b(?:says|said|shows|showed|reads|lists|listed|reports?|reported|contains|holds)\b[^\n]{0,20}?\b\d"
     r"|\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b[^\n]{0,40}?(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)"
     # (c) a hash-shaped token: a value that can only come from running something
     r"|\b[0-9a-f]{16,}\b"
@@ -8903,6 +8924,7 @@ class Agent:
             refused_seen = {}   # (tool, args) signature -> times a refusal came back
             _last_narr = ""     # the previous turn's narration, for the restate guard
             _prompt_seen = 0    # usage["prompt"] as of the last logged turn
+            _promise_asked = False   # the after-work promise nag, once per run
             _restated = 0       # how many turns in a row restated the same status
             _restate_note = None   # the nudge that goes in with the next tool results
             _restate_nudge = int(CONFIG["agent"].get("restate_nudge_after", 3) or 0)
@@ -9035,7 +9057,6 @@ class Agent:
                         _harness_spoke_last(messages, reply),
                         reply, tool_calls, _messages_chars(messages))
                     _prompt_seen = _prompt_now
-
                     # Delivery guard: count announcements of completion that arrive WITH more
                     # tool calls queued. Reach the threshold and the run is told to deliver;
                     # two past that and the wrap-up is forced, because the alternative is
@@ -9160,6 +9181,42 @@ class Agent:
                                     log.debug("no-call nudge notice failed",
                                               exc_info=True)
                             continue
+                        # A PROMISE THAT ENDS A RUN WHICH ALREADY DID WORK.
+                        # The guard above is deliberately narrow - it fires only when the
+                        # run has made NO tool call at all, "so a report that follows real
+                        # work is never touched". Measured on the fleet 2026-09-24: that
+                        # is exactly where the model stops - two runs in one host's own
+                        # conversation end on "Let me find where." / "Let me dig deeper
+                        # for downloadable files." after real tool work, and the operator's
+                        # next message is "wait why didnt you download anything". One more
+                        # ask, once per run; if it stops again the delivery says so (see
+                        # _annotate_promise).
+                        if (_promised and not _promise_asked and calls > 0 and not spun
+                                and len(_promise) <= _INTENT_MAX_CHARS
+                                and not _promise.endswith("?")
+                                and steps < max_steps
+                                and (time.time() - t0) < max_seconds):
+                            _promise_asked = True
+                            if messages and messages[-1] is reply:
+                                messages.pop()
+                            messages.append({"role": "user", "content": (
+                                f"SYSTEM: your last line said what you were about to "
+                                f"do and the turn ended there, with no tool call, so "
+                                f"nothing further has happened. This run has already "
+                                f"made {calls} tool call(s) - continue from their "
+                                f"results and make the next call now, or, if you are "
+                                f"genuinely finished, write the final report with what "
+                                f"you have and say plainly what is left undone.")})
+                            _note = ("the model ended the turn on a promise after "
+                                     f"{calls} tool call(s) - asking it to act once")
+                            log.warning("[%s] %s", session_key, _note)
+                            if say_cb:
+                                try:
+                                    say_cb(_note)
+                                except Exception:
+                                    log.debug("promise nudge notice failed",
+                                              exc_info=True)
+                            continue
                         answer = (reply.get("content") or "").strip()
                         if not answer:
                             # reasoning-model failure modes: the tokens went
@@ -9270,6 +9327,11 @@ class Agent:
                                 narration_drop_cb()
                             except Exception:
                                 log.debug("narration_drop_cb failed", exc_info=True)
+                        # Asked to act once already and still ending on an intention: say
+                        # so. A run that COMPLIED after the ask (wrote its report with what
+                        # it had) is delivered exactly as written.
+                        if _promise_asked and _promised:
+                            answer = _annotate_promise(answer, calls)
                         answer = _annotate_evidence(answer, muts, calls)
                         if _dropped_answers:
                             # No say_cb lane (the bare console/web runs): earlier

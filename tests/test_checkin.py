@@ -908,18 +908,44 @@ def test_a_plain_answer_is_not_nudged():
 
 
 def test_a_report_after_real_work_is_never_nudged():
-    """calls > 0 is the fence. A report that follows tool work is delivered even when
-    its wording matches the promise pattern."""
+    """calls > 0 is the fence for a REPORT: results that follow tool work are delivered
+    as written, never re-asked.
+
+    2026-09-24, when the promise sibling below was added: this fence stands. What moved
+    is only the PROMISE case after work, and it moved because the fleet's own transcripts
+    showed it was where runs actually stop ("Let me find where." after real tool work,
+    with the operator's next message being "wait why didnt you download anything").
+    A report is an outcome; a promise is not, and only the second one is asked again.
+    """
+    out, seen = scripted_run_with_usage([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "function": {
+             "name": "shell",
+             "arguments": json.dumps({"command": "echo promise-guard"})}}]},
+        {"role": "assistant",
+         "content": "Report: the echo returned promise-guard; nothing else was checked."},
+    ])
+    check("after work: no nudge was spent", len(seen) == 2, len(seen))
+    check("after work: the report is delivered",
+          "nothing else was checked" in out, out)
+
+
+def test_a_promise_after_real_work_gets_one_ask_then_the_report():
+    """The sibling: the same turn shape, but it promises instead of reporting."""
     out, seen = scripted_run_with_usage([
         {"role": "assistant", "content": "",
          "tool_calls": [{"id": "1", "function": {
              "name": "shell",
              "arguments": json.dumps({"command": "echo promise-guard"})}}]},
         {"role": "assistant", "content": "I'll gather the rest in a moment."},
+        {"role": "assistant",
+         "content": "Gathered: the echo returned promise-guard, and nothing else exists."},
     ])
-    check("after work: no nudge was spent", len(seen) == 2, len(seen))
-    check("after work: the answer is delivered",
-          "gather the rest" in out, out)
+    check("promise after work: the model is asked once", len(seen) == 3, len(seen))
+    check("promise after work: the ask names the work already done",
+          "This run has already made 1 tool call(s)" in json.dumps(seen[-1]), seen[-1][-1])
+    check("promise after work: the run then delivers the report",
+          "nothing else exists" in out, out)
 
 
 
