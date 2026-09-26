@@ -31,12 +31,17 @@ def stage():
         shutil.rmtree(STAGE, ignore_errors=True)
     STAGE.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SRC, STAGE / "tinycmdr.py")
-    (STAGE / "config.json").write_text(
-        json.dumps({"agent": {"tasks_file": str(STAGE / "tasks.json")}}), encoding="utf-8")
+    # An empty config: the build merges its defaults. The old one carried an
+    # `agent.tasks_file` key that nothing in tinycmdr.py reads - the ledger's paths are
+    # module globals - so this suite pins them directly instead of relying on a dead key.
+    (STAGE / "config.json").write_text("{}", encoding="utf-8")
     spec = importlib.util.spec_from_file_location("tinycmdr_journal", STAGE / "tinycmdr.py")
     fb = importlib.util.module_from_spec(spec)
     sys.modules["tinycmdr_journal"] = fb
     spec.loader.exec_module(fb)
+    fb.TASKS_FILE = STAGE / "tasks.json"
+    fb.TASKS_DOC = STAGE / "tasks.md"
+    fb.TASKS_JOURNAL = STAGE / "tasks.journal.jsonl"
     return fb
 
 

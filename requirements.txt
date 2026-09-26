@@ -1,5 +1,9 @@
 # tinycmdr's dependencies - the set its own header declares:
 #   pip install requests mmpy_bot croniter rich prompt_toolkit
+# Python band: 3.10-3.12. 3.9 predates Path.write_text(newline=...), which the config
+# writer and the atomic writer both call, and 3.13+ resolves an mmpy_bot whose
+# mattermostautodriver is broken against the pinned client; the installers refuse 3.9 and
+# 3.13+ by name rather than failing somewhere deeper.
 # requests       : HTTP (Mattermost REST, LLM calls, tools)
 # mmpy_bot       : the Mattermost client (WebSocket + listener dispatch). REQUIRED:
 #                  without it the bot starts and never connects.

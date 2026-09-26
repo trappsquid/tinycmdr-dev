@@ -457,27 +457,41 @@ def test_a_batch_of_two_spellings_keeps_both_edits():
     check("two spellings: the first edit survives", b"MARKER-A1" in body, body[:60])
     check("two spellings: the second edit survives", b"MARKER-B1" in body, body[-60:])
 
-def test_denied_rename_still_writes():
-    """Force os.replace to be denied: the write must land anyway, via the plain path.
+def test_denied_rename_keeps_old_file():
+    """Force os.replace to be denied: the OLD file must survive byte-identical.
 
-    Windows denies a rename when another handle holds the target, so the fallback is real
-    behaviour, not an edge case. Waiting for the OS to deny it made this suite flaky; denying
-    it ourselves tests the fallback every run.
+    This test used to pin the opposite ("the add answers OK even with the rename
+    denied", via a plain non-atomic fallback). That fallback is how a denied rename
+    turned a 20-item ledger into a zero-byte one (BUGREPORT §D1): the handler for a
+    failed atomic write wrote the file non-atomically. Windows denies a rename when
+    another handle holds the target, so the failure is real, not an edge case.
     """
     redirect()
     cap = Capture()
     fb.log.addHandler(cap)
+    fb.tool_task({"action": "add", "task": "seed item"}, {})
+    before = Path(fb.TASKS_FILE).read_bytes()
     real_replace = fb.os.replace
     def deny(*a, **k):
         raise PermissionError(5, "Access is denied")
     try:
         fb.os.replace = deny
-        out = fb.tool_task({"action": "add", "task": "forced fallback"}, {})
-        check("the add answers OK even with the rename denied", str(out).startswith("OK"), out)
-        check("the fallback is logged", bool(cap.atomic_failures()), cap.atomic_failures())
-        items = json.loads(Path(fb.TASKS_FILE).read_text(encoding="utf-8"))["items"]
-        check("the item landed through the plain write",
-              any("forced fallback" in (i.get("desc") or "") for i in items), items)
+        raised = None
+        try:
+            fb.tool_task({"action": "add", "task": "must not land"}, {})
+        except Exception as e:
+            raised = e
+        check("a denied rename RAISES instead of swallowing the save",
+              raised is not None, "no exception: the write was silently accepted")
+        check("the failure is logged", bool(cap.atomic_failures()), cap.atomic_failures())
+        after = Path(fb.TASKS_FILE).read_bytes()
+        check("the previous ledger survives byte-identical", after == before,
+              "%d bytes -> %d bytes" % (len(before), len(after)))
+        items = json.loads(after.decode("utf-8"))["items"]
+        check("the seeded item is intact",
+              any("seed item" in (i.get("desc") or "") for i in items), items)
+        check("the failed item did not land",
+              not any("must not land" in (i.get("desc") or "") for i in items), items)
     finally:
         fb.os.replace = real_replace
         fb.log.removeHandler(cap)

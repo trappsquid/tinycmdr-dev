@@ -8,6 +8,8 @@ code's own terms:
     python tests/test_scrub.py
 """
 import importlib.util
+import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -92,6 +94,75 @@ try:
 finally:
     fb.CONFIG.pop("web", None)
     fb._SECRETS = SAVED_SECRETS2
+
+# ---- BUGREPORT §M4: a 401 body that echoes the key ---------------------------
+# Measured: a provider that echoes the request's Authorization header in its error body
+# put the live key into the fatal notes, the run's return value, the log and the chat.
+# (Earlier checks in this suite restore _SECRETS to the import-time set, which does not
+# hold KEY, so seed it here - the sweep is what scrub() masks, and that is the point.)
+_prev_secrets = fb._SECRETS
+fb._SECRETS = set(fb._SECRETS) | {KEY}
+
+
+class _Echo401:
+    class response:
+        status_code = 401
+        text = ('{"error": {"message": "invalid api key: Bearer %s"}}' % KEY)
+
+
+def _echo_exc():
+    e = Exception("401")
+    e.response = _Echo401.response
+    return e
+
+
+try:
+    _body = fb._http_body(_echo_exc())
+    check("an error body is scrubbed at the boundary", KEY not in _body, _body)
+    check("and still says what the endpoint said", "invalid api key" in _body, _body)
+
+    _usage = {}
+    fb._record_attempt(_usage, "https://example.invalid/v1", "fatal",
+                       "401: " + _Echo401.response.text, 0.1)
+    check("usage['attempts'] carries no key", KEY not in json.dumps(_usage), _usage)
+    check("the attempt is still reported",
+          "401" in _usage["attempts"][0]["detail"], _usage)
+
+    _seen = []
+    _handler = logging.Handler()
+    _handler.emit = lambda r: _seen.append(r.getMessage())
+    fb.log.addHandler(_handler)
+    try:
+        import requests as _rq
+        _real_post = fb._post_watchdog
+
+        def _echo_post(url, headers, payload, timeout, grace, cancel_event=None,
+                       stream=False):
+            raise _rq.HTTPError("401", response=_Echo401.response)
+
+        fb._post_watchdog = _echo_post
+        fb.AGENT._window_cache = 32768
+        fb.AGENT._window_at = 0.0
+        fb.AGENT._envelope_cache = None
+        _msg = ""
+        try:
+            fb.AGENT._chat([{"role": "system", "content": "s"},
+                            {"role": "user", "content": "hi"}],
+                           session_key="scrub401")
+        except fb.InfraError as e:
+            _msg = str(e)
+        except Exception as e:                                # noqa: BLE001
+            _msg = "%s: %s" % (type(e).__name__, e)
+        finally:
+            fb._post_watchdog = _real_post
+    finally:
+        fb.log.removeHandler(_handler)
+    check("the run's failure message carries no key", KEY not in _msg, _msg)
+    check("and it names the credential problem", "rejected the request" in _msg, _msg)
+    check("the log carries no key", all(KEY not in m for m in _seen),
+          [m for m in _seen if KEY in m])
+finally:
+    fb._SECRETS = _prev_secrets
 
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))

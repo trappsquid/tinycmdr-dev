@@ -16,10 +16,11 @@ controls, so "steer mid-run" and "stop mid-run" don't race a stub.
 
     python tests/test_webui_browser.py
 
-Skips (does not fail) when playwright or an Edge/Chromium binary is missing, and in a
-build with no web layer.
+Exits 77 (SKIP, never a green 0) when playwright or an Edge/Chromium binary is missing,
+and in a build with no web layer; tests/run_all.py counts that as red.
 """
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -37,6 +38,18 @@ import test_webui as tw  # noqa: E402  (stub helpers: one place, one stub)
 
 FAILS = []
 TOKEN = "test-token-browser"
+
+# Cannot-grade-here is an exit code, not a success. This suite used to print
+# "skipped: ..." and return 0, so a machine with no browser reported a green run that
+# had graded nothing (BUGREPORT T4); tests/run_all.py now counts 77 as red.
+SKIP_EXIT = 77
+
+# The channel to drive. Default msedge = the author's box, byte-identical to before.
+# CI needs this variable because no runner image is guaranteed to have Edge: it installs
+# playwright's bundled chromium and sets the variable empty, which drops the channel
+# kwarg (a channel named "" is not a browser). A channel that is not installed is caught
+# below and lands on SKIP_EXIT, never a silent pass.
+CHANNEL = os.environ.get("TINYCMDR_TEST_BROWSER_CHANNEL", "msedge")
 
 DUMP = r"""
 (() => {
@@ -167,7 +180,7 @@ def main():
         from playwright.sync_api import sync_playwright
     except Exception as e:  # noqa: BLE001
         print(f"skipped: playwright not importable ({e})")
-        return 0
+        return SKIP_EXIT
 
     workdir = Path(tempfile.mkdtemp(prefix="fbwebb-"))
     fb = None
@@ -178,7 +191,7 @@ def main():
         fb = run_scenario.load(workdir)
         if not hasattr(fb, "WEB_PAGE"):
             print("skipped: this build has no web layer (console build)")
-            return 0
+            return SKIP_EXIT
 
         fb.CONFIG["web"] = {"enabled": True, "port": 0, "host": "127.0.0.1",
                             "token": TOKEN}
@@ -210,10 +223,11 @@ def main():
 
         pw = sync_playwright().start()
         try:
-            browser = pw.chromium.launch(channel="msedge", headless=True)
+            browser = pw.chromium.launch(
+                **({"channel": CHANNEL} if CHANNEL else {}), headless=True)
         except Exception as e:  # noqa: BLE001
-            print(f"skipped: no Edge/Chromium to drive ({str(e)[:120]})")
-            return 0
+            print(f"skipped: no {CHANNEL or 'chromium'} to drive ({str(e)[:120]})")
+            return SKIP_EXIT
 
         ctx = browser.new_context(viewport={"width": 900, "height": 800})
         page = ctx.new_page()

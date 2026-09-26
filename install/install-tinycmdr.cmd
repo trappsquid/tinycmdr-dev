@@ -21,6 +21,12 @@ rem      install-tinycmdr.cmd -AsService
 rem
 rem  Pass installer switches straight through, e.g.
 rem      install-tinycmdr.cmd -MattermostUrl chat.example.com -AllowedUser abc123
+rem
+rem  To remove an install again, this same wrapper -Uninstall switches to the
+rem  uninstaller without a second download. -InstallDir is honoured (the uninstaller's
+rem  own default is %USERPROFILE%\tinycmdr and cannot find a custom folder on its own),
+rem  and so is -Force (delete without asking):
+rem      install-tinycmdr.cmd -Uninstall [-InstallDir D:\tinycmdr] -Force
 rem =====================================================================
 setlocal
 set "HERE=%~dp0"

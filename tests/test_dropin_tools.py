@@ -1,7 +1,8 @@
 """Drop-in tools: the three loader shapes, the starter tools, fetch_url multi.
 
 Run:  python tests/test_dropin_tools.py
-      python -m pytest -q tests/test_dropin_tools.py
+      (the whole gate: python tests/run_all.py - it reads this script's exit code,
+       which pytest never did: check() only prints)
 Same shape as tests/test_ledger.py: imports the build under test as a module
 (TINYCMDR_TEST_APP or TINYCMDR_SRC picks the build; default tinycmdr.py), works
 in a temp tree, no network and no Mattermost connection.
@@ -316,18 +317,25 @@ def test_process_lifecycle():
     # The harness hands a drop-in tool its own shell and its safety tier (measured
     # 2026-09-25 on the manager box: string commands went to cmd.exe while the prompt says the shell
     # is PowerShell, and a .ps1 launched through this tool did what the shell tier refuses).
-    ps_ctx = {"shell_argv": lambda c: ["powershell", "-NoProfile", "-Command", c],
-              "shell_guard": lambda text: None}
-    tool({"action": "start",
-          "command": "for ($i=1; $i -le 2; $i++) { Write-Output (\"tick \" + $i) }"},
-         ps_ctx)
-    out = tool({"action": "wait", "id": "b4", "timeout": 30}, ps_ctx)
+    # PowerShell's loop on Windows, sh's on POSIX: the point of these two checks is that
+    # the STRING command went through ctx["shell_argv"] (the harness's own shell) rather
+    # than being split into argv itself - not that the shell is PowerShell, which does not
+    # exist on the macOS/Linux CI runners this suite also runs on.
+    if os.name == "nt":
+        shell_argv = lambda c: ["powershell", "-NoProfile", "-Command", c]
+        loop = "for ($i=1; $i -le 2; $i++) { Write-Output (\"tick \" + $i) }"
+    else:
+        shell_argv = lambda c: ["sh", "-c", c]
+        loop = 'for i in 1 2; do echo "tick $i"; done'
+    shell_ctx = {"shell_argv": shell_argv, "shell_guard": lambda text: None}
+    tool({"action": "start", "command": loop}, shell_ctx)
+    out = tool({"action": "wait", "id": "b4", "timeout": 30}, shell_ctx)
     check("process: a string command runs in the harness's own shell",
           "exit 0" in out, out)
-    out = tool({"action": "output", "id": "b4"}, ps_ctx)
-    check("process: and its PowerShell loop really ran",
+    out = tool({"action": "output", "id": "b4"}, shell_ctx)
+    check("process: and its shell loop really ran",
           "tick 1" in out and "tick 2" in out, out)
-    guarded = {"shell_argv": lambda c: ["powershell", "-NoProfile", "-Command", c],
+    guarded = {"shell_argv": shell_argv,
                "shell_guard": lambda text: "BLOCKED: test refusal"}
     out = tool({"action": "start", "command": "mkfs.ext4 /dev/sda1"}, guarded)
     check("process: a refused command never starts", out.startswith("BLOCKED"), out)
@@ -511,6 +519,64 @@ def test_tool_index_files_a_tool_on_its_declared_shelf():
         fb.CONFIG["agent"].update(_keep)
     check("the caps are restored after the probe",
           fb.tool_index_block(reg.custom) == block)
+
+
+def test_a_tool_that_exits_at_import_does_not_brick_the_install():
+    """BUGREPORT §I2: `sys.exit(3)` in a tools/*.py used to end the whole process at
+    the next start, because SystemExit is a BaseException and the loader's
+    `except Exception` never saw it. The registry must refuse the file, name the
+    exception type in the log, and carry on with the other tools."""
+    import logging as _logging
+    d = tool_files_dir("evil")
+    (d / "evil.py").write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+    seen = []
+    handler = _logging.Handler()
+    handler.emit = lambda r: seen.append(r.getMessage())
+    fb.log.addHandler(handler)
+    try:
+        reg = fb.ToolRegistry(d)          # __init__ runs load_all(); must not raise
+    finally:
+        fb.log.removeHandler(handler)
+    check("a tool that exits at import does not kill the process", True)
+    check("the exited tool is absent from the registry", "evil" not in reg.custom,
+          sorted(reg.custom))
+    check("the refusal names the FILE and the exception type",
+          any("evil.py" in m and "SystemExit" in m for m in seen), seen)
+
+
+def test_reload_reports_an_exit_instead_of_raising():
+    """The create_tool rollback depends on this: reload_tool must RETURN the failure
+    (so create_tool can unlink the file it just wrote) instead of taking the process
+    down with it."""
+    d = tool_files_dir("rollback")
+    reg = fb.ToolRegistry(d)
+    (d / "boomer.py").write_text("import sys\nsys.exit(9)\n", encoding="utf-8")
+    raised = None
+    try:
+        ok, err = reg.reload_tool("boomer")
+    except BaseException as e:
+        ok, err, raised = None, None, e
+    check("reload_tool returns a refusal rather than raising", raised is None,
+          repr(raised))
+    check("the refusal names the tool and SystemExit",
+          ok is False and "SystemExit" in str(err), (ok, err))
+    check("nothing was half-registered", "boomer" not in reg.custom, sorted(reg.custom))
+
+
+def test_create_tool_unlinks_a_file_that_exits_at_load():
+    """accept §I2: the file create_tool just wrote is removed when its reload fails."""
+    d = tool_files_dir("create_rollback")
+    saved_dir, saved_reg = fb.TOOLS_DIR, fb.REGISTRY
+    fb.TOOLS_DIR, fb.REGISTRY = d, fb.ToolRegistry(d)
+    try:
+        out = fb.tool_create_tool(
+            {"name": "boomer", "code": "import sys\nsys.exit(9)\n"}, {})
+    finally:
+        fb.TOOLS_DIR, fb.REGISTRY = saved_dir, saved_reg
+    check("create_tool refuses a file that exits at load",
+          str(out).startswith("ERROR"), str(out)[:160])
+    check("the broken file is not left behind", not (d / "boomer.py").exists(),
+          sorted(p.name for p in d.iterdir()))
 
 
 def main():

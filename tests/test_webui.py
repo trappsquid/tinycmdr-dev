@@ -960,8 +960,86 @@ def main():
                 else:
                     agent_cfg[k] = v
 
+        # -- BUGREPORT §S7: a page on any site can POST to a loopback page, and this
+        # lane carries no token by default. Host/Origin decide, not luck.
+        def raw(headers, path="/api/run", body=b"{}", method="POST"):
+            s = _sock.create_connection(("127.0.0.1", port), timeout=10)
+            try:
+                req = ("%s %s HTTP/1.0\r\n" % (method, path)
+                       + "".join("%s: %s\r\n" % (k, v) for k, v in headers.items())
+                       + "Content-Length: %d\r\n\r\n" % len(body))
+                s.sendall(req.encode() + body)
+                out = []
+                try:
+                    while True:
+                        c = s.recv(4096)
+                        if not c:
+                            break
+                        out.append(c)
+                except OSError:
+                    pass
+                return b"".join(out)
+            finally:
+                s.close()
+
+        def status_of(headers, **kw):
+            return raw(headers, **kw).split(b"\r\n", 1)[0]
+
+        head = status_of({"Host": "127.0.0.1", "Origin": "http://evil.example",
+                          "Content-Type": "application/json"})
+        check(b" 403 " in head,
+              f"a cross-origin POST is refused (CSRF against the page) ({head!r})")
+        head = status_of({"Host": "127.0.0.1", "Origin": "null",
+                          "Content-Type": "application/json"})
+        check(b" 403 " in head, f"an opaque null origin is refused ({head!r})")
+        head = status_of({"Host": "evil.example",
+                          "Content-Type": "application/json"})
+        check(b" 403 " in head, f"a non-loopback Host is refused ({head!r})")
+        head = status_of({"Host": "127.0.0.1", "Origin": "http://127.0.0.1:%d" % port,
+                          "X-Tinycmdr-Token": TOKEN,
+                          "Content-Type": "application/json"})
+        check(b" 403 " not in head,
+              f"a same-origin POST is not refused ({head!r})")
+
+        # -- BUGREPORT §S8: 33 half-open sockets must not take the page down. The cap
+        # refuses past MAX_CONN, so what is graded is that the refusal is not a hang and
+        # that the page comes back the moment the idle peers go away.
+        idle = []
+        for _ in range(33):
+            try:
+                idle.append(_sock.create_connection(("127.0.0.1", port), timeout=5))
+            except OSError as e:
+                check(False, f"could not open 33 sockets: {e}")
+                break
+        check(len(idle) == 33, f"33 half-open sockets were accepted ({len(idle)})")
+        code, _j = http(f"{base}/api/health", token=None, attempts=1, timeout=8)
+        check(code in (0, 200, 503),
+              f"the request past the cap is refused or served, never a hang ({code})")
+        for _s in idle:
+            try:
+                _s.close()
+            except OSError:
+                pass
+        back = wait_for(lambda: http(f"{base}/api/health", token=None, attempts=1,
+                                     timeout=5)[0] == 200, timeout=20)
+        check(bool(back), "the page answers again once the idle sockets are gone")
+
+        # -- BUGREPORT §S9: a restart inside the kernel's TIME_WAIT window must rebind
         srv.shutdown()
         srv.server_close()
+        fb.CONFIG["web"] = dict(saved_web, port=port)
+        t0 = time.time()
+        srv2 = fb.run_webui()
+        check(srv2 is not None,
+              f"a restart rebinds port {port} immediately ({time.time() - t0:.1f}s)")
+        if srv2 is not None:
+            code, j = http(f"http://127.0.0.1:{srv2.server_address[1]}/api/health",
+                           token=None, attempts=1)
+            check(code == 200 and j.get("ok") is True,
+                  "the rebound page answers")
+            srv2.shutdown()
+            srv2.server_close()
+        fb.CONFIG["web"] = saved_web
 
         print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all web UI checks passed'}")
         return 1 if FAILS else 0

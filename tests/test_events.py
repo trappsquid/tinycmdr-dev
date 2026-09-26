@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+import atexit
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -25,11 +26,15 @@ sys.modules["tinycmdr_events_under_test"] = fb
 spec.loader.exec_module(fb)
 
 TMP = Path(tempfile.mkdtemp(prefix="fbevents-"))
-fb.NOTES_FILE = TMP / "notes.md"
+atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
+sys.path.insert(0, str(BASE / "tests"))
+import hermetic                                                          # noqa: E402
+
+# This suite runs the agent, and the app writes its ledger journal, its state files and the
+# tools-provenance record beside itself: rebind every one of them into TMP instead of naming
+# three by hand (run_all.py's leak report named tools-provenance.json for this suite).
+hermetic.redirect_repo_files(fb, TMP)
 fb.NOTES_FILE.write_text("", encoding="utf-8")
-fb.TASKS_FILE = TMP / "tasks.json"
-fb.SESSIONS_DIR = TMP / "sessions"
-fb.SESSIONS_DIR.mkdir(exist_ok=True)
 
 PASSES = []
 FAILS = []

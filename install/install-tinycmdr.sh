@@ -49,12 +49,15 @@
 #   --no-start            install and enable, do not start it now
 #   --no-deps             do not touch apt (python3-venv must already be present)
 #   --no-sudoers         do not grant the service user passwordless sudo
+#   --no-path            do not put the `tinycmdr` verb on PATH
 #   --verify-only         report on an existing install, change nothing, no root
 #   --uninstall           stop, disable, remove the unit and the install dir
 #   -h | --help           this text
 #
-# Everything is transcribed to /tmp/tinycmdr-install.log, so a failure always
-# leaves the reason on disk.
+# Everything is transcribed to /tmp/tinycmdr-install.log (mode 600), so a failure always
+# leaves the reason on disk. No token is ever echoed into it: the bot token and the page
+# token go to .env (mode 600) and the transcript says where to read them - a secret in a
+# transcript is a secret in a file nobody thinks to delete.
 #
 set -euo pipefail
 
@@ -97,12 +100,20 @@ DEFAULT_MODEL="main"
 # system | user | "" (decide from who you are). TINYCMDR_MODE is the env door, the
 # --mode flag the CLI door: a fleet push sets the env one and never prompts.
 INSTALL_MODE="${TINYCMDR_MODE:-}"; ASK_MODE=1; DIR_GIVEN=0; RUN_UID=""
+# Set by the parse loop when the caller actually passed --web-port/--no-web: an update
+# must only change what it was told to change. Captured INSIDE the loop - a `for _a in
+# "$@"` after it is already empty and silently says "nothing was given".
+WEB_CLI_GIVEN=0
 # Generated later (in the config section), but READ earlier by the summary: under `set -u`
 # an unset name there is a crash, and the token-less + Telegram-only paths both fell into it.
 WEB_TOKEN=""
 PORT_BUSY_BEFORE=""
 
-usage() { sed -n '3,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+# The whole comment header, whatever its length: a fixed range stopped mid-sentence as
+# soon as the header grew past it, and every new switch restarted the drift.
+usage() {
+    sed -n '3,/^set -/p' "${BASH_SOURCE[0]}" | sed '/^set -/d' | sed 's/^# \{0,1\}//'
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -122,8 +133,8 @@ while [ $# -gt 0 ]; do
         --mattermost-url)   MM_URL_ARG="$2"; shift 2 ;;
         --model-base-url)   MODEL_BASE_URL="$2"; shift 2 ;;
         --model)            MODEL="$2"; shift 2 ;;
-        --web-port)         WEB_PORT="$2"; shift 2 ;;
-        --no-web)           WEB_ON=0; shift ;;
+        --web-port)         WEB_PORT="$2"; WEB_CLI_GIVEN=1; shift 2 ;;
+        --no-web)           WEB_ON=0; WEB_CLI_GIVEN=1; shift ;;
         --force)            FORCE=1; shift ;;
         --no-start)         NO_START=1; shift ;;
         --no-path)          NO_PATH=1; shift ;;
@@ -139,13 +150,10 @@ done
 # (empty means "not given"): an update must only change what it was told to change.
 MODEL_BASE_GIVEN="$MODEL_BASE_URL"
 MODEL_GIVEN="$MODEL"
-WEB_CLI_GIVEN=0
-for _a in "$@"; do
-    case "$_a" in --web-port|--no-web) WEB_CLI_GIVEN=1 ;; esac
-done
 
 say()  { printf '\n=== %s\n' "$*"; }
 info() { printf '    %s\n' "$*"; }
+warn() { printf '    ! %s\n' "$*" >&2; }
 die()  { printf '\n*** %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------- logging ---
@@ -154,6 +162,17 @@ die()  { printf '\n*** %s\n' "$*" >&2; exit 1; }
 # into a "tee: Permission denied" wall, and --verify-only changes nothing anyway.
 if [ "$VERIFY_ONLY" = 1 ]; then
     LOG=/dev/null
+fi
+# The log must be born unreadable by others: it transcribes every line this run prints,
+# and a mode check of a real sandbox install found cleartext page tokens inside the
+# install log - 0644 under the default umask. Create it 0600 BEFORE tee opens it (tee -a
+# keeps the mode of an existing file) and tighten one left by an older build.
+if [ "$LOG" != "/dev/null" ]; then
+    if [ ! -e "$LOG" ] && [ -d "$(dirname "$LOG")" ] && [ -w "$(dirname "$LOG")" ]; then
+        (umask 077; : > "$LOG") 2>/dev/null || true
+    elif [ -e "$LOG" ] && [ -w "$LOG" ]; then
+        chmod 600 "$LOG" 2>/dev/null || true
+    fi
 fi
 if [ "$LOG" = "/dev/null" ]; then
     :
@@ -242,6 +261,19 @@ if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" = 0 ]; then
     fi
 fi
 RUN_UID="$(id -u "$RUN_USER" 2>/dev/null || echo "")"
+# The PRIMARY GROUP, resolved rather than assumed to be named after the user. `id -gn`
+# answers for AD/LDAP/SSSD accounts, for `useradd -N`, wherever USERGROUPS_ENAB=no, and
+# on a Mac-style `staff` group - every one of which made `chown user:user` fail with
+# "illegal group name", and under `set -e` that killed the run right after config.json
+# (leaving no .env and no unit) and put a Group= systemd cannot switch to in the unit.
+RUN_GROUP="$(id -gn "$RUN_USER" 2>/dev/null || true)"
+[ -n "$RUN_GROUP" ] || RUN_GROUP="$(id -gn 2>/dev/null || true)"
+[ -n "$RUN_GROUP" ] || RUN_GROUP="$RUN_USER"
+# True when the installer is already running as the account it installs for: the common
+# user-mode case, where a chown is a no-op at best. A chown that cannot work (not root)
+# must never kill the run and must never be silent.
+CHOWN_NEEDED=1
+if [ "$(id -un)" = "$RUN_USER" ]; then CHOWN_NEEDED=0; fi
 if [ "$INSTALL_MODE" = user ]; then
     UNIT="$USER_HOME/.config/systemd/user/$SERVICE_NAME.service"
     WRAPPER="$USER_HOME/.local/bin/tinycmdr"
@@ -267,8 +299,28 @@ else
     BOOT_DEPS="After=network-online.target
 Wants=network-online.target"
     UNIT_USER_LINES="User=$RUN_USER
-Group=$RUN_USER"
+Group=$RUN_GROUP"
 fi
+
+# Hand files to the service user, and never die trying. `chown user:user` used to be
+# written out at every site below: on a host where the group is not named after the user
+# it failed ("illegal group name") and `set -e` aborted the install - measured on an
+# AD-backed box, which came out with a config.json and no .env and no unit. A chown that
+# fails now says what it could not do and the install carries on, so the worst case is a
+# warning plus files owned by whoever ran the installer.
+chown_to() {   # chown_to [-R] <path>...   non-fatal, names what it could not change
+    if [ "$CHOWN_NEEDED" = 0 ]; then return 0; fi
+    local rec="" p=""
+    if [ "${1:-}" = "-R" ]; then rec="-R"; shift; fi
+    for p in "$@"; do
+        [ -e "$p" ] || continue
+        if chown $rec "$RUN_USER:$RUN_GROUP" "$p" 2>/dev/null; then
+            continue
+        fi
+        warn "could not chown $p to $RUN_USER:$RUN_GROUP - it stays $(id -un):$(id -gn);"
+        warn "              the service may not be able to write it"
+    done
+}
 
 # systemctl/journalctl in the right scope. A user unit is driven through that user's
 # own systemd instance: as root we have to go through runuser to reach it, because
@@ -381,20 +433,32 @@ info "version      : $(version_of "$SRC/tinycmdr.py")"
 info "install dir  : $INSTALL_DIR"
 info "mode         : $INSTALL_MODE$( [ "$INSTALL_MODE" = user ] && echo "   (your own systemd instance, starts at login, no sudo for the agent)" || echo "   (system service, boots with the machine)" )"
 info "service user : $RUN_USER"
-"$PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
-    || die "$PY is $(python3 -V 2>&1); tinycmdr needs Python 3.10 or newer"
+# Named, not assumed: every chown above and the unit's Group= use the PRIMARY group,
+# which is not the user name on an AD/LDAP box, a `useradd -N` account, a host with
+# USERGROUPS_ENAB=no, or a Mac-style `staff` group.
+info "service group: $RUN_GROUP"
+"$PY" -c 'import sys; sys.exit(0 if (3, 10) <= sys.version_info[:2] <= (3, 12) else 1)' \
+    || die "$PY is $("$PY" -V 2>&1); tinycmdr runs on Python 3.10-3.12.
+python3.13 and newer resolve a broken mmpy_bot; 3.9 predates write_text(newline=...).
+Install python3.12 (apt install python3.12 python3.12-venv), or point this run at one:
+TINYCMDR_PYTHON=/usr/bin/python3.12 bash $0 ..."
 info "python       : $($PY -V 2>&1)  ($(command -v "$PY"))"
 
 if [ "$UNINSTALL" = 1 ]; then
     say "uninstall"
+    _removed=0
     sctl disable --now "$SERVICE_NAME" 2>/dev/null || true
-    rm -f "$UNIT"
+    if [ -f "$UNIT" ]; then
+        rm -f "$UNIT"
+        _removed=1
+    fi
     sctl daemon-reload 2>/dev/null || true
     # The two things the install writes OUTSIDE its folder, both SCOPED: a probe
     # uninstall (--install-dir /tmp/...) must never take a real install's verb
     # wrapper or sudo grant with it (measured 2026-09-23: it ate a live install's wrapper and grant).
     if [ -f "$WRAPPER" ] && grep -qF "$INSTALL_DIR" "$WRAPPER" 2>/dev/null; then
         rm -f "$WRAPPER"
+        _removed=1
         info "PATH wrapper removed ($WRAPPER)"
     fi
     # A user install can be removed for the user by root too; ~/.local/bin is left
@@ -413,9 +477,21 @@ if [ "$UNINSTALL" = 1 ]; then
     fi
     if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] && [ -d "$INSTALL_DIR" ]; then
         rm -rf "$INSTALL_DIR"
+        _removed=1
         info "removed $INSTALL_DIR (token, notes and history went with it)"
     fi
-    info "unit $SERVICE_NAME removed"
+    if [ "$_removed" = 0 ]; then
+        # A removal that finds nothing must SAY so. Under `sudo` the installer used to
+        # resolve the invoker's home wrong on a Mac and print "done." having removed
+        # nothing at all - silence is what made that look like success.
+        warn "nothing to remove: no unit at $UNIT, no PATH wrapper pointing at"
+        warn "$INSTALL_DIR, and no install folder there."
+        info "checked unit    : $UNIT"
+        info "checked wrapper : $WRAPPER"
+        info "an install that lives elsewhere: --install-dir <its folder>"
+    else
+        info "unit $SERVICE_NAME removed"
+    fi
     exit 0
 fi
 
@@ -498,6 +574,19 @@ fi
 if [ -z "$TG_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
     TG_TOKEN="$(grep -m1 '^TINYCMDR_TG_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
     [ -n "$TG_TOKEN" ] && info "reusing the Telegram token already in .env"
+fi
+# The package's secrets file can carry the bot token, so read it HERE - before the lane
+# is chosen. It used to be read only where .env is WRITTEN, which is after the lane
+# branch: a fleet secrets file with TINYCMDR_MM_TOKEN produced "installing WITHOUT a chat
+# account", an empty `TINYCMDR_MM_TOKEN=` as the FIRST line of .env with the file's real
+# one below it - and _load_env_file keeps the FIRST occurrence - so the bot answered no
+# DMs while config.json and .env both looked configured.
+if [ -z "$TOKEN" ] && [ -f "$SRC/install/fleet-secrets.env" ]; then
+    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$SRC/install/fleet-secrets.env" \
+        | cut -d= -f2- | tr -d ' \r' || true)"
+    if [ -n "$TOKEN" ]; then
+        info "bot token   : TINYCMDR_MM_TOKEN from the package's fleet-secrets.env"
+    fi
 fi
 # The lane is deny-by-default, so a token with no id is a bot that ignores every DM.
 # Refuse here, with the reason, rather than at 03:00 in a log nobody is reading.
@@ -712,11 +801,22 @@ if [ -z "$TOKEN" ] && [ "$TG_LANE" = 1 ]; then
     info "allowlist    : $TG_IDS_CLEAN"
 elif [ -z "$TOKEN" ]; then
     CHAT_LANE=0
-    APP_ARGS="--web"
-    info "no Mattermost bot token: installing WITHOUT a chat account"
-    info "the service will serve the local page: http://127.0.0.1:${WEB_PORT}"
-    info "a session needs no service at all:   $VENV_PY $INSTALL_DIR/tinycmdr.py --cli"
-    info "add a chat account later: re-run this installer with --token-file <file>"
+    # --web only when the page is WANTED. This branch used to set it unconditionally,
+    # whatever --no-web said: --web forces web.enabled=True for that process, the page
+    # token was minted only when WEB_ON=1 (so none existed), and _auth_ok answers True
+    # when no token is configured - the agent's HTTP API, which runs shell, was open to
+    # any local process on every boot after the operator closed it.
+    if [ "$WEB_ON" = 1 ]; then
+        APP_ARGS="--web"
+        info "no Mattermost bot token: installing WITHOUT a chat account"
+        info "the service will serve the local page: http://127.0.0.1:${WEB_PORT}"
+        info "a session needs no service at all:   $VENV_PY $INSTALL_DIR/tinycmdr.py --cli"
+        info "add a chat account later: re-run this installer with --token-file <file>"
+    else
+        info "no Mattermost bot token and --no-web: the service has no lane to run."
+        info "a session still works:  $VENV_PY $INSTALL_DIR/tinycmdr.py --cli"
+        info "give it a lane with a token (--token-file <file>) or with the page on."
+    fi
 elif [ "$TG_LANE" = 1 ]; then
     info "both tokens are set: Mattermost wins in this process, so Telegram needs"
     info "  $VENV_PY $INSTALL_DIR/tinycmdr.py --telegram   (its own unit, not this one)"
@@ -844,7 +944,7 @@ chmod +x "$INSTALL_DIR/tinycmdr" 2>/dev/null || true
 # uninstall step. --no-path leaves the box untouched.
 if [ "${NO_PATH:-0}" != "1" ] && [ "$INSTALL_MODE" = user ]; then
     mkdir -p "$USER_HOME/.local/bin"
-    chown "$RUN_USER:$RUN_USER" "$USER_HOME/.local" "$USER_HOME/.local/bin" 2>/dev/null || true
+    chown_to "$USER_HOME/.local" "$USER_HOME/.local/bin"
 fi
 if [ "${NO_PATH:-0}" != "1" ] && [ -f "$WRAPPER" ] \
         && ! grep -qF "$INSTALL_DIR" "$WRAPPER" 2>/dev/null; then
@@ -855,7 +955,7 @@ if [ "${NO_PATH:-0}" != "1" ] && [ -f "$WRAPPER" ] \
 elif [ "${NO_PATH:-0}" != "1" ] && [ -d "$(dirname "$WRAPPER")" ] && { [ -w "$(dirname "$WRAPPER")" ] || [ "$(id -u)" = 0 ]; }; then
     printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > "$WRAPPER"
     chmod 0755 "$WRAPPER"
-    chown "$RUN_USER:$RUN_USER" "$WRAPPER" 2>/dev/null || true
+    chown_to "$WRAPPER"
     info "verbs      : tinycmdr status | doctor | model | logs | restart | token"
 else
     info "verbs      : not on PATH - run $INSTALL_DIR/tinycmdr (or re-run without --no-path)"
@@ -901,8 +1001,12 @@ if [ "$WEB_ON" = "1" ]; then
     # code execution on this box. The page prompts for it; print it for paste.
     # Here and not in the earlier summary: that block runs before this mints the
     # token, so its old ready-link line never printed at all (probe, 2026-09-23).
-    info "page token   : ${WEB_TOKEN}   (paste it when the page asks)"
-    info "               (also in .env: TINYCMDR_WEB_TOKEN)"
+    # The VALUE is not printed: stdout is transcribed to the install log, and a mode
+    # check of a real sandbox install found cleartext page tokens in it. Same one
+    # grep, nothing secret written down twice.
+    info "page token   : in .env (TINYCMDR_WEB_TOKEN, mode 600) - not echoed here,"
+    info "               this transcript is a log file. Read it with:"
+    info "               grep TINYCMDR_WEB_TOKEN $INSTALL_DIR/.env"
 fi
 "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$WEB_PORT" "$WEB_ON" "$FORCE" \
@@ -1011,8 +1115,8 @@ if _specs:
 if page_host:
     print("    web page   : bound to %s:%s" % (page_host, web.get("port")))
 PY
-chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/config.json"
-chmod 644 "$INSTALL_DIR/config.json"
+chown_to "$INSTALL_DIR/config.json"
+chmod 600 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
 "$PY" - "$INSTALL_DIR/.env" "$TOKEN" "$SRC/install/fleet-secrets.env" "$WEB_TOKEN" "$TG_TOKEN" \
@@ -1056,8 +1160,13 @@ if os.path.exists(secrets):
             continue
         key, _, val = line.partition("=")
         key = key.strip()
-        if key not in ("TINYCMDR_MM_TOKEN", "TINYCMDR_WEB_TOKEN",
-                       "TAVILY_API_KEY", "ANYSEARCH_API_KEY"):
+        if key in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN"):
+            # Installer-managed: written from THIS run's resolved values below. Taking
+            # the file's copy too would write the same key twice, and _load_env_file
+            # keeps the FIRST occurrence - so an empty managed line would win over the
+            # file's real token even after the lane was chosen from it.
+            continue
+        if key not in ("TAVILY_API_KEY", "ANYSEARCH_API_KEY"):
             # A model key is per bot: never deploy one from a shared secrets file.
             # Hosts that took theirs from here all shared one key, and the provider's
             # dashboard showed every per-bot key as unused afterwards.
@@ -1094,7 +1203,7 @@ if refused:
     print("             %s by hand, or re-run with a real install/fleet-secrets.env."
           % envp)
 PY
-chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/.env"
+chown_to "$INSTALL_DIR/.env"
 
 # ------------------------------------------------------------- privileges ---
 # The agent administers the host it lives on, so it gets passwordless sudo by
@@ -1113,7 +1222,7 @@ if [ "$VERIFY_ONLY" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "$NO_SUDOERS" = 0 ]; then
         if ! grep -qi 'user install' "$NOTES" 2>/dev/null; then
             printf -- '- [%s] Privileges on this host: NO passwordless sudo (user install, no root). `sudo` will prompt for a password and the shell tool has no tty. Do NOT probe with `sudo -n` or keep retrying it: a password prompt is a prompt, not proof. Root work here needs the operator, or a system install (sudo bash install-tinycmdr.sh --mode system).\n' \
                 "$(date +%F)" >> "$NOTES"
-            chown "$RUN_USER:$RUN_USER" "$NOTES" 2>/dev/null || true
+            chown_to "$NOTES"
         fi
     elif [ "$(id -u)" != 0 ]; then
         info "not root: leaving sudo alone (re-run under sudo to grant passwordless sudo)"
@@ -1155,13 +1264,18 @@ if [ "$VERIFY_ONLY" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "$NO_SUDOERS" = 0 ]; then
         else
             info "notes.md: privilege model already recorded"
         fi
-        chown "$RUN_USER:$RUN_USER" "$NOTES" 2>/dev/null || true
+        chown_to "$NOTES"
     fi
 fi
 
 # ---------------------------------------------------------------- unit file ---
 say "systemd unit"
-chown -R "$RUN_USER:$RUN_USER" "$INSTALL_DIR"      # venv and site-packages too
+# systemd does not create ~/.config/systemd/user for you (there is no tmpfiles entry for
+# it), so `cat > $UNIT` failed with "No such file or directory" and `set -e` killed the
+# run - AFTER the venv, config.json and .env existed and BEFORE any unit, enable or start.
+# A clean Debian/Ubuntu box with no desktop session is exactly the door this install is for.
+mkdir -p "$(dirname "$UNIT")"
+chown_to -R "$INSTALL_DIR"      # venv and site-packages too
 VENV_PY="$INSTALL_DIR/venv/bin/python"
 cat > "$UNIT" <<EOF
 [Unit]

@@ -40,8 +40,11 @@
 #   --python <path>       interpreter to build the venv from (default: 3.12, else 3.11/3.10)
 #   --install-python      fetch a private python 3.12 with uv when none is here
 #                         (the installer also OFFERS this when it finds no 3.10-3.12)
+#   --force-python        accept an interpreter NEWER than 3.12 and hope: the pinned
+#                         mmpy_bot is the last release that connects on 3.13+
 #   --label <l>           launchd label (default com.tinycmdr.agent)
 #   --secrets-file <f>    extra KEY=VALUE lines for .env (search keys etc)
+#   --no-path             do not put the `tinycmdr` verb on PATH
 #   --no-launchd          install the files only; do not register the agent
 #                         (also the way to dry-run this installer off macOS)
 # The questions, in order: the bot token, the Mattermost server and your user id,
@@ -62,17 +65,49 @@
 #   --uninstall           stop the agent, remove it and the install dir
 #   -h | --help           this text
 #
-# Everything is transcribed to $TMPDIR/tinycmdr-install.log, so a failure always
-# leaves the reason on disk.
+# Everything is transcribed to $TMPDIR/tinycmdr-install.log (mode 600), so a failure
+# always leaves the reason on disk. Tokens are never echoed into it: the bot token goes
+# to .env, and the page token is written to .env (TINYCMDR_WEB_TOKEN) with a line saying
+# where to read it - the install log is a transcript, and a secret in a transcript is a
+# secret in a file nobody thinks to delete.
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
-INSTALL_DIR="${TINYCMDR_DIR:-$HOME/tinycmdr}"
+# The install belongs to the person who ran the installer, not to $HOME. `sudo` resets
+# HOME to /var/root (sudoers(5) env_reset), so every $HOME-derived path below pointed at
+# root's home the moment a reader followed install/README-macos.md's documented removal
+# `sudo bash install/uninstall-tinycmdr-macos.sh`. Measured 2026-09-26: under sudo the
+# uninstaller looked in /var/root, found nothing, printed "done." and exited 0, while the
+# launchd job kept KeepAlive-ing a tinycmdr.py that was still there. So resolve the
+# INVOKING user first (SUDO_USER, else the account behind this uid) and that user's home
+# from the account database, and use it everywhere $HOME used to appear.
+user_home() {   # user_home <name> -> that user's home directory, or empty
+    local u="$1" h=""
+    h="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)" || true            # Linux
+    [ -n "$h" ] || h="$(dscl . -read "/Users/$u" NFSHomeDirectory 2>/dev/null \
+        | awk '{print $2}')" || true                                       # macOS
+    printf '%s' "$h"
+}
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id -u "$SUDO_USER" >/dev/null 2>&1; then
+    RUN_USER="$SUDO_USER"
+else
+    RUN_USER="$(id -un)"
+fi
+RUN_HOME="$(user_home "$RUN_USER")"
+# Nothing in the account database answered (a container, a hand-made passwd entry): fall
+# back to $HOME rather than refusing.
+[ -n "$RUN_HOME" ] || RUN_HOME="$HOME"
+INSTALL_DIR="${TINYCMDR_DIR:-$RUN_HOME/tinycmdr}"
 LABEL="${TINYCMDR_LABEL:-com.tinycmdr.agent}"
+LABEL_GIVEN=0
+# Where the install records the label it registered, so --uninstall (and the shipped
+# uninstaller) can remove a `--label <l>` install: nothing used to record it, and every
+# shipped door only ever looked for the default plist.
+LABEL_FILE_NAME=".tinycmdr-label"
 LOGDIR="$INSTALL_DIR/logs"
-PLIST_DIR="$HOME/Library/LaunchAgents"
+PLIST_DIR="$RUN_HOME/Library/LaunchAgents"
 PLIST="$PLIST_DIR/$LABEL.plist"
 LOG="${TINYCMDR_INSTALL_LOG:-${TMPDIR:-/tmp}/tinycmdr-install.log}"
 PY_ARG=""
@@ -85,6 +120,10 @@ DEFAULT_MODEL="main"
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
 TG_TOKEN=""; TG_IDS=""
 MM_URL_ARG=""; MM_PORT_ARG=""; SECRETS_FILE=""
+# Set by the parse loop when the caller actually passed --web-port/--no-web: an update
+# must only change what it was told to change. Captured INSIDE the loop - the scan that
+# used to run after it read an already-shifted "$@" and always answered "nothing given".
+WEB_CLI_GIVEN=0
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
 # Generated later (in the config section), but READ earlier by the no-token branch: under
 # `set -u` an unset name there is a crash.
@@ -96,7 +135,9 @@ WEB_HOST_ARG=""        # --web-host: the page's bind address, without being aske
 # Extra endpoints (llm.fallbacks) and where the page may be reached from.
 FALLBACK_SPECS=""; FB_ENV_LINES=""; PAGE_HOST=""; LAN_IP=""
 
-usage() { sed -n '3,65p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() {
+    sed -n '3,/^set -/p' "${BASH_SOURCE[0]}" | sed '/^set -/d' | sed 's/^# \{0,1\}//'
+}
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -110,11 +151,11 @@ while [ $# -gt 0 ]; do
         --bot-name)        BOT_NAME="$2"; shift 2 ;;
         --model-base-url)  MODEL_BASE_URL="$2"; shift 2 ;;
         --model)           MODEL="$2"; shift 2 ;;
-        --web-port)        WEB_PORT="$2"; shift 2 ;;
-        --no-web)          WEB_ON=0; shift ;;
+        --web-port)        WEB_PORT="$2"; WEB_CLI_GIVEN=1; shift 2 ;;
+        --no-web)          WEB_ON=0; WEB_CLI_GIVEN=1; shift ;;
         --python)          PY_ARG="$2"; shift 2 ;;
         --use-fleet-model) USE_FLEET_MODEL=1; shift ;;
-        --label)           LABEL="$2"; PLIST="$PLIST_DIR/$LABEL.plist"; shift 2 ;;
+        --label)           LABEL="$2"; LABEL_GIVEN=1; PLIST="$PLIST_DIR/$LABEL.plist"; shift 2 ;;
         --secrets-file)    SECRETS_FILE="$2"; shift 2 ;;
         --no-launchd)      NO_LAUNCHD=1; shift ;;
         --force)           FORCE=1; shift ;;
@@ -222,6 +263,18 @@ IS_MAC=0
 if [ "$VERIFY_ONLY" = 1 ]; then
     LOG=/dev/null
 fi
+# The log must be born unreadable by others. It transcribes every line this run prints,
+# and a mode check of a real sandbox install found SIX cleartext page tokens inside
+# ${TMPDIR:-/tmp}/tinycmdr-install.log - 0644 under the default umask, on a shared
+# /tmp. Create it 0600 BEFORE tee opens it (tee -a keeps the mode of an existing file)
+# and tighten one left behind by an earlier build.
+if [ "$LOG" != "/dev/null" ]; then
+    if [ ! -e "$LOG" ] && [ -d "$(dirname "$LOG")" ] && [ -w "$(dirname "$LOG")" ]; then
+        (umask 077; : > "$LOG") 2>/dev/null || true
+    elif [ -e "$LOG" ] && [ -w "$LOG" ]; then
+        chmod 600 "$LOG" 2>/dev/null || true
+    fi
+fi
 if [ "$LOG" = "/dev/null" ]; then
     :                                  # --verify-only changes nothing, so it writes no log
 elif [ -e "$LOG" ]; then
@@ -236,6 +289,19 @@ printf '\n########## install-tinycmdr-macos.sh %s  (%s, %s)\n' \
 
 if [ "$UNINSTALL" = 1 ]; then
     say "uninstall"
+    _removed=0
+    # FIRST, the label: a `--label <l>` install could not be removed by any shipped door,
+    # because the uninstaller only ever looked for the default plist. The installer
+    # records the label in the install folder for exactly this; read it before the folder
+    # goes, and only when the caller did not name one.
+    if [ "$LABEL_GIVEN" != 1 ] && [ -f "$INSTALL_DIR/$LABEL_FILE_NAME" ]; then
+        _recorded="$(head -n1 "$INSTALL_DIR/$LABEL_FILE_NAME" 2>/dev/null || true)"
+        if [ -n "$_recorded" ]; then
+            LABEL="$_recorded"
+            PLIST="$PLIST_DIR/$LABEL.plist"
+            info "launchd label from the install: $LABEL"
+        fi
+    fi
     # SCOPED, like the wrapper below and like the Linux installer's cleanup. A probe
     # install (--install-dir /tmp/..., --no-launchd) shares the DEFAULT label with a
     # real install, so an unscoped `bootout` + `rm` here stopped a live agent and
@@ -247,6 +313,7 @@ if [ "$UNINSTALL" = 1 ]; then
             launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null \
                 || launchctl unload -w "$PLIST" 2>/dev/null || true
             rm -f "$PLIST"
+            _removed=1
             info "removed $PLIST"
         else
             info "kept $PLIST - it belongs to another install (not $INSTALL_DIR)"
@@ -255,7 +322,7 @@ if [ "$UNINSTALL" = 1 ]; then
     # the PATH wrappers the install wrote outside its folder - /usr/local/bin when it
     # was writable, else ~/.local/bin. Only the one that points at THIS install goes
     # (a probe uninstall must not take the real one's wrapper).
-    for _wrap in /usr/local/bin/tinycmdr "$HOME/.local/bin/tinycmdr"; do
+    for _wrap in /usr/local/bin/tinycmdr "$RUN_HOME/.local/bin/tinycmdr"; do
         [ -f "$_wrap" ] || continue
         grep -qF "$INSTALL_DIR" "$_wrap" 2>/dev/null || continue
         # A wrapper written by a sudo install is root-owned inside a root-owned directory,
@@ -269,16 +336,18 @@ if [ "$UNINSTALL" = 1 ]; then
             warn "$_wrap is owned by root and could not be removed here."
             warn "finish that one line by hand:  sudo rm -f $_wrap"
         else
+            _removed=1
             info "removed $_wrap"
         fi
     done
     # the PATH line this installer added to a shell profile, and only that line
-    for _pf in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+    for _pf in "$RUN_HOME/.zshrc" "$RUN_HOME/.bash_profile"; do
         [ -f "$_pf" ] || continue
         grep -q '^# tinycmdr$' "$_pf" 2>/dev/null || continue
         _tmp="$_pf.tinycmdr-tmp"
         if grep -v -e '^# tinycmdr$' -e '^export PATH="\$HOME/\.local/bin:\$PATH"$' "$_pf" > "$_tmp" 2>/dev/null \
                 && mv "$_tmp" "$_pf" 2>/dev/null; then
+            _removed=1
             info "removed the ~/.local/bin PATH line from $_pf"
         else
             rm -f "$_tmp" 2>/dev/null || true
@@ -288,6 +357,15 @@ if [ "$UNINSTALL" = 1 ]; then
     if [ -d "$INSTALL_DIR" ]; then
         info "removing $INSTALL_DIR"
         rm -rf "$INSTALL_DIR"
+        _removed=1
+    fi
+    if [ "$_removed" != 1 ]; then
+        # Silence here is how a wrong-directory removal looked like success: under sudo the
+        # uninstaller used to resolve /var/root, find nothing and print "done.".
+        warn "nothing to remove - no launchd job for '$LABEL', no PATH wrapper pointing at"
+        warn "$INSTALL_DIR, no '# tinycmdr' PATH line, and no folder there."
+        info "checked plist   : $PLIST"
+        info "checked wrapper : $RUN_HOME/.local/bin/tinycmdr, /usr/local/bin/tinycmdr"
     fi
     info "done. The Mattermost bot account still exists; the token in it is unused"
     info "now - revoke it in Profile > Security > Personal Access Tokens if you want it gone."
@@ -326,7 +404,7 @@ fetch_python() {
     mkdir -p "$tools" "$pydir" || die "could not create the python folders in $INSTALL_DIR"
     uv="$(command -v uv 2>/dev/null || true)"
     local c
-    for c in "$HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
+    for c in "$RUN_HOME/.local/bin/uv" /opt/homebrew/bin/uv /usr/local/bin/uv; do
         [ -n "$uv" ] && break
         [ -x "$c" ] && uv="$c"
     done
@@ -389,15 +467,38 @@ check_python() {
                 die "python $v resolves an ancient, broken mmpy_bot (the bot starts and never
 connects). Use 3.12:  brew install python@3.12   then re-run with --python
 /opt/homebrew/bin/python3.12   (or pass --force-python to try anyway)" ;;
-            *)
-                if [ "$tries" = 0 ] && [ -z "$PY_ARG" ] \
-                   && { [ "$INSTALL_PYTHON" = 1 ] || tty_ask "no python 3.10-3.12 on this Mac ($v). Fetch a private python 3.12 now (uv, no password, ~66 MB)?"; }; then
+            3.[0-9])
+                # --install-python is an explicit "give me a 3.12", so it wins over a 3.9
+                # that was passed by name (or found): fetch rather than refuse (the fetch
+                # used to be unreachable when --python was also passed).
+                if [ "$tries" = 0 ] && [ "$INSTALL_PYTHON" = 1 ]; then
                     say "python"
                     tries=1
                     PY="$(fetch_python)"
                     continue
                 fi
-                die "python $v is not supported (need 3.10, 3.11 or 3.12).
+                # Otherwise 3.9 is the one version that is neither fixable by a flag nor
+                # worth trying: the config writer calls Path.write_text(newline=...), a
+                # 3.10 keyword, so the run ends in a TypeError inside the writer. Refuse
+                # with the BAND named (the README said "3.10+", which 3.9 satisfies), and
+                # do it even under -y: no amount of consenting makes 3.9 work.
+                die "python $v is too old: tinycmdr runs on 3.10-3.12, and 3.9 fails
+inside the config writer (Path.write_text(newline=...) is a 3.10 keyword).
+Install one:  brew install python@3.12   then re-run with --python /opt/homebrew/bin/python3.12
+- or have this installer fetch one:  --install-python" ;;
+            *)
+                # No interpreter at all (or one whose version cannot be read): -y means the
+                # reader has already said "ask me nothing", and there is no too-old trap
+                # here - a fetch is the only way the install can finish, so -y is consent.
+                if [ "$tries" = 0 ] \
+                   && { [ "$INSTALL_PYTHON" = 1 ] || [ "$YES" = 1 ] \
+                        || tty_ask "no python 3.10-3.12 on this Mac ($v). Fetch a private python 3.12 now (uv, no password, ~66 MB)?"; }; then
+                    say "python"
+                    tries=1
+                    PY="$(fetch_python)"
+                    continue
+                fi
+                die "python $v is not supported (need 3.10-3.12).
 Install one with:  brew install python@3.12   (or python.org), then re-run with --python <its path>,
 or let this installer fetch one for you:  --install-python" ;;
         esac
@@ -458,7 +559,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
         warn "no venv at $INSTALL_DIR/venv"
     fi
     [ -f "$INSTALL_DIR/config.json" ] && info "config.json: present" || warn "no config.json"
-    if [ -x /usr/local/bin/tinycmdr ] || [ -x "$HOME/.local/bin/tinycmdr" ]; then
+    if [ -x /usr/local/bin/tinycmdr ] || [ -x "$RUN_HOME/.local/bin/tinycmdr" ]; then
         info "verb: tinycmdr is on PATH"
     else
         warn "no tinycmdr command on PATH (use $INSTALL_DIR/tinycmdr, or re-install without --no-path)"
@@ -823,6 +924,22 @@ fi
 # running the chat lane would exit at once (tinycmdr.py refuses to start without a token, on
 # purpose) and KeepAlive would loop it forever.
 APP_ARGS=""
+if [ -z "$TOKEN" ] && [ -n "$SECRETS_FILE" ]; then
+    # Read HERE - before the lane is chosen. It used to be read only where .env is
+    # written, which is after the lane branch: a secrets file with TINYCMDR_MM_TOKEN
+    # produced "installing WITHOUT a chat account", an empty `TINYCMDR_MM_TOKEN=` as the
+    # FIRST line of .env with the file's real one below it - and the build keeps the
+    # FIRST occurrence - so the bot answered no DMs while config.json and .env both
+    # looked configured (I9).
+    [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"
+    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$SECRETS_FILE" | cut -d= -f2- \
+        | tr -d ' \r' || true)"
+    if [ -n "$TOKEN" ]; then
+        info "bot token   : TINYCMDR_MM_TOKEN from $SECRETS_FILE"
+    else
+        info "$SECRETS_FILE carries no TINYCMDR_MM_TOKEN line"
+    fi
+fi
 if [ -z "$TOKEN" ] && [ -n "$TG_TOKEN" ]; then
     # The Telegram lane starts by itself with no Mattermost token, so the agent runs
     # the BOT here (no --web): this is a chat lane, and calling it "without a chat
@@ -830,13 +947,26 @@ if [ -z "$TOKEN" ] && [ -n "$TG_TOKEN" ]; then
     info "no Mattermost token, but a Telegram one: the agent runs the TELEGRAM lane"
     info "allowlist  : $TG_IDS_CLEAN"
 elif [ -z "$TOKEN" ]; then
-    APP_ARGS="--web"
-    WEB_ON=1
-    info "no Mattermost bot token: installing WITHOUT a chat account"
-    info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
-    info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr.py --cli"
-    info "the page will ask for its token (printed below, and in .env)"
-    info "add a chat account later: re-run with --token-file <file>"
+    # --web is passed to the AGENT only when the page is wanted: this branch used to
+    # force it (and WEB_ON=1) whatever the caller had chosen, so `--no-web` wrote
+    # "enabled": false into config.json and then started the agent with `--web`, which
+    # forces web.enabled=True for that process - the page answered and _auth_ok returns
+    # True when no token is configured, so the agent's HTTP API (which runs shell) was
+    # open to any local process on every boot (I11).
+    if [ "$WEB_ON" = 1 ]; then
+        APP_ARGS="--web"
+        info "no Mattermost bot token: installing WITHOUT a chat account"
+        info "the agent will serve the local page: http://127.0.0.1:$WEB_PORT"
+        info "a session needs no service:         $VPY $INSTALL_DIR/tinycmdr.py --cli"
+        info "the page will ask for its token (it is in .env, TINYCMDR_WEB_TOKEN)"
+        info "add a chat account later: re-run with --token-file <file>"
+    else
+        info "no Mattermost bot token and the local page is off (--no-web): nothing is"
+        info "left for the agent to run as a service. A session still works:"
+        info "  $VPY $INSTALL_DIR/tinycmdr.py --cli"
+        info "re-run with a chat token (--token-file <file>) or with the page on to"
+        info "give it a lane."
+    fi
 fi
 # ---------------------------------------------------------------- config ---
 say "config"
@@ -848,12 +978,6 @@ say "config"
 # the Telegram allowlist all went back to defaults and the bot would not start.
 MODEL_BASE_GIVEN="$MODEL_BASE_URL"
 MODEL_GIVEN="$MODEL"
-WEB_CLI_GIVEN=0
-for a in "$@"; do
-    case "$a" in
-        --web-port|--no-web) WEB_CLI_GIVEN=1 ;;
-    esac
-done
 [ -n "$MM_URL_ARG" ] || MM_URL_ARG="$(jget "$DEFAULTS" mattermost_url)"
 [ -n "$ALLOWED_ARG" ] || ALLOWED_ARG="$(jget "$DEFAULTS" allowed_user)"
 if [ "$USE_FLEET_MODEL" = 1 ]; then
@@ -869,6 +993,13 @@ fi
 [ -n "$MODEL" ] || MODEL="$DEFAULT_MODEL"
 [ -n "$BOT_NAME" ] || BOT_NAME="$(hostname -s)"
 
+# Every file this installer writes under $INSTALL_DIR is ours alone - config.json can
+# hold a live llm.api_key, .env holds the tokens, and the log transcribes both. Owned by
+# one user, readable by one user: umask 077 from here to the end of the writes, plus an
+# explicit chmod on each file, because config.json used to be opened 0644 while .env was
+# written 0600 (I13).
+umask 077
+
 # The page token is a secret like the bot token, so it is written to .env (one secrets
 # file per install) rather than into config.json or a loose .txt in the folder.
 WEB_TOKEN=""
@@ -876,11 +1007,14 @@ if [ "$WEB_ON" = "1" ]; then
     WEB_TOKEN="$("$VPY" -c 'import secrets;print(secrets.token_hex(24))')"
     # no ?token= link (security review 2026-09-23): the token in a URL lands in
     # the request line, browser history and any proxy log, and it is shell and
-    # code execution on this box. The page prompts for it; print it for paste.
-    # Here and not in the earlier summary: that block runs before this mints the
-    # token, so its old ready-link line never printed at all (probe, 2026-09-23).
-    info "page token   : $WEB_TOKEN   (paste it when the page asks)"
-    info "               (also in .env: TINYCMDR_WEB_TOKEN)"
+    # code execution on this box. The page prompts for it.
+    # The value itself is NOT printed: everything on stdout is transcribed to the
+    # install log, and a mode check of a real sandbox install found SIX cleartext
+    # page tokens in ${TMPDIR:-/tmp}/tinycmdr-install.log. Point at the file instead -
+    # same one grep, nothing secret written down twice.
+    info "page token   : in .env (TINYCMDR_WEB_TOKEN, mode 600). Not echoed here:"
+    info "               this transcript is a log file. Read it with:"
+    info "               grep TINYCMDR_WEB_TOKEN $INSTALL_DIR/.env"
 fi
 
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \
@@ -990,6 +1124,7 @@ if _specs:
 if os.environ.get("PAGE_HOST"):
     print("    web page   : bound to %s:%s" % (os.environ["PAGE_HOST"], web.get("port")))
 PY
+chmod 600 "$INSTALL_DIR/config.json"
 
 umask 077
 # A model key is per bot: keep whatever this host already has, and never take one
@@ -1009,12 +1144,31 @@ MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN)='
 if [ -n "$FB_ENV_LINES" ]; then
     MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN|TINYCMDR_ENDPOINT[0-9]+_API_KEY)='
 fi
+# What the secrets file will actually supply, so nothing is written twice: a duplicate
+# line for a key the install already wrote is not harmless - the build keeps the FIRST
+# occurrence, so whichever copy landed first is the one the bot uses.
+SECRET_SHARED=""
+SECRET_SKIPPED=""
+if [ -n "$SECRETS_FILE" ]; then
+    [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"
+    # The installer-managed keys are excluded: they were written from this run's own
+    # resolved values, and the file's TINYCMDR_MM_TOKEN is the one that made TOKEN
+    # non-empty in the first place.
+    SECRET_SHARED=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" \
+        | grep -E "$SHARED_KEYS" | grep -vE "$MANAGED_KEYS" | cut -d= -f1 || true)
+    SECRET_SKIPPED=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" \
+        | grep -vE "$SHARED_KEYS" | cut -d= -f1 | tr '\n' ' ' || true)
+fi
 KEEP_ENV=""
 if [ -f "$INSTALL_DIR/.env" ]; then
     KEEP_ENV=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$INSTALL_DIR/.env" \
         | grep -vE "$MANAGED_KEYS" || true)
+    # a key the secrets file is about to carry is dropped here: the file's copy wins
+    for _k in $SECRET_SHARED; do
+        KEEP_ENV=$(printf '%s\n' "$KEEP_ENV" | grep -vE "^${_k}=" || true)
+    done
 fi
-SKIPPED_KEYS=""
+SKIPPED_KEYS="$SECRET_SKIPPED"
 {
     printf 'TINYCMDR_MM_TOKEN=%s\n' "$TOKEN"
     if [ -n "$TG_TOKEN" ]; then
@@ -1029,14 +1183,10 @@ SKIPPED_KEYS=""
     if [ -n "$KEEP_ENV" ]; then
         printf '%s\n' "$KEEP_ENV"
     fi
-    # LAST, so the fleet's copy of a shared key wins over one the host already had
-    # (a duplicate line would otherwise be written for the same key).
-    if [ -n "$SECRETS_FILE" ]; then
-        [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"
-        grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" | grep -E "$SHARED_KEYS" || true
-        SKIPPED_KEYS=$(grep -E '^[A-Za-z_][A-Za-z0-9_]*=' "$SECRETS_FILE" \
-            | grep -vE "$SHARED_KEYS" | cut -d= -f1 | tr '\n' ' ' || true)
-    fi
+    # LAST, so the fleet's copy of a shared key wins over one the host already had.
+    for _k in $SECRET_SHARED; do
+        grep -E "^${_k}=" "$SECRETS_FILE" | tail -n1 || true
+    done
 } > "$INSTALL_DIR/.env"
 chmod 600 "$INSTALL_DIR/.env"
 info ".env written (mode 600, token not in config.json)"
@@ -1109,8 +1259,8 @@ VERB_PATH=""
 if [ "${NO_PATH:-0}" != "1" ]; then
     if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
         VERB_PATH=/usr/local/bin
-    elif mkdir -p "$HOME/.local/bin" 2>/dev/null; then
-        VERB_PATH="$HOME/.local/bin"
+    elif mkdir -p "$RUN_HOME/.local/bin" 2>/dev/null; then
+        VERB_PATH="$RUN_HOME/.local/bin"
     fi
 fi
 path_line() {   # path_line <profile-file> <create?> - one marked line, added once
@@ -1132,12 +1282,12 @@ if [ -n "$VERB_PATH" ]; then
     chmod 0755 "$VERB_PATH/tinycmdr"
     info "verbs      : $VERB_PATH/tinycmdr"
     info "             tinycmdr status | doctor | model | config | logs | restart | token"
-    if [ "$VERB_PATH" = "$HOME/.local/bin" ]; then
+    if [ "$VERB_PATH" = "$RUN_HOME/.local/bin" ]; then
         case ":$PATH:" in
-            *":$HOME/.local/bin:"*) ;;
+            *":$RUN_HOME/.local/bin:"*) ;;
             *) if [ "$IS_MAC" = 1 ]; then
-                   path_line "$HOME/.zshrc" 1                 # macOS default shell
-                   [ -f "$HOME/.bash_profile" ] && path_line "$HOME/.bash_profile" 0
+                   path_line "$RUN_HOME/.zshrc" 1                 # macOS default shell
+                   [ -f "$RUN_HOME/.bash_profile" ] && path_line "$RUN_HOME/.bash_profile" 0
                fi ;;
         esac
     fi
@@ -1165,6 +1315,11 @@ PY
 fi
 plutil -lint "$PLIST" >/dev/null || die "the generated plist is not valid: $PLIST"
 info "wrote $PLIST"
+# Write the label down where --uninstall can find it: a `--label <l>` install used to be
+# unremovable by every shipped door, because nothing recorded which job it had registered.
+# Done BEFORE the load, so a failed bootstrap still leaves the label recorded.
+printf '%s\n' "$LABEL" > "$INSTALL_DIR/$LABEL_FILE_NAME"
+chmod 600 "$INSTALL_DIR/$LABEL_FILE_NAME" 2>/dev/null || true
 
 if [ "$NO_START" = 1 ]; then
     info "--no-start: not loading the agent"

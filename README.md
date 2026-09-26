@@ -9,7 +9,7 @@
 
   [![GitHub Release](https://img.shields.io/github/v/release/trappsquid/tinycmdr?style=flat-square)](https://github.com/trappsquid/tinycmdr/releases/latest)
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#quick-install)
-  [![Python](https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
+  [![Python](https://img.shields.io/badge/python-3.10--3.12-blue?style=flat-square)](https://www.python.org/)
   [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
 
   *Run tasks, execute code, and command your machines across Web UI, Terminal CLI, or Chat.*
@@ -164,11 +164,14 @@ Most agent frameworks were designed for cloud LLMs with dedicated remote infrast
 tinycmdr addresses these bottlenecks with an auditable single-process runtime built around token efficiency and execution guards.
 
 ---
-## Quick Install
+
+## Quick Install
 
 Linux and macOS: one line, below. Windows: download [`tinycmdr-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-win.zip) from the [latest release](https://github.com/trappsquid/tinycmdr/releases/latest) and double-click **`INSTALL-WINDOWS.cmd`** inside it. Windows needs no administrator rights at all, a Linux *user* install needs none either, and only the Linux *system* install and a macOS install with `sudo` ask for root.
 
 The links below are stable names that always point at the newest build, so they never need re-pinning to a version.
+
+Python **3.10–3.12**. 3.9 predates `Path.write_text(newline=...)` (a `TypeError` deep inside the config writer) and 3.13+ resolves a `mmpy_bot` whose driver is broken against the pinned client, so both installers refuse those by name and point at `--install-python`.
 
 ### Windows
 
@@ -295,9 +298,18 @@ Whatever installed it can remove it, from the folder it installed into:
 
 **Windows** - the package door, or the copy that ships inside the install:
 
+```text
+INSTALL-WINDOWS.cmd -Uninstall -Force
+install-tinycmdr.cmd -Uninstall -Force [-InstallDir D:\tinycmdr]
+```
+
+Both wrappers pass switches through, and `-InstallDir <folder>` is required for an install
+that did not land in `%USERPROFILE%\tinycmdr` — the `.ps1` behind them defaults to that
+folder. To call the `.ps1` directly, stock Windows blocks `.ps1` files, so pass
+`-ExecutionPolicy Bypass`:
+
 ```powershell
-INSTALL-WINDOWS.cmd -Uninstall
-powershell -File "$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1" -Force
+powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1" -InstallDir <folder> -Force
 ```
 
 **Linux** - the uninstaller inside the install (`--mode user` for a user install, which needs no sudo):

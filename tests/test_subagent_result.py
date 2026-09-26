@@ -11,6 +11,7 @@ marker saying the shape is missing. Losing the work to a parse error would be wo
 losing the shape.
 
     python tests/test_subagent_result.py
+    (the whole gate: python tests/run_all.py)
 """
 import importlib.util
 import json

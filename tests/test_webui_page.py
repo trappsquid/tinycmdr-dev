@@ -14,8 +14,8 @@ through every "green" release:
 
 Here the real page script is extracted from tinycmdr.py and executed in Node
 against a DOM shim and a fake server that mirrors WebRun's line semantics, so
-the renderer is graded the way a browser really uses it. Skips cleanly if node
-is not installed.
+the renderer is graded the way a browser really uses it. Exits 77 (SKIP, never a
+green 0) when node is not installed.
 
     python tests/test_webui_page.py
 """
@@ -33,6 +33,10 @@ HARNESS = Path(__file__).resolve().parent / "webui_page_harness.js"
 NODE = shutil.which("node") or shutil.which("node.exe")
 
 FAILS = []
+
+# No node, nothing graded - and that is not a pass. This suite used to print a SKIP
+# line and return 0 (BUGREPORT T4); tests/run_all.py counts 77 as red.
+SKIP_EXIT = 77
 
 
 def check(cond, what):
@@ -109,7 +113,7 @@ def has(res, needle, cls=None):
 def main():
     if not NODE:
         print("SKIP node is not installed; cannot run the page renderer")
-        return 0
+        return SKIP_EXIT
     script = page_script()
     print(f"node {NODE}")
     print(f"page script: {len(script)} chars")

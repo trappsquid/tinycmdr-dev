@@ -11,7 +11,7 @@ whether it did - run it before the tag and again after the release.
 
 Exit 0 when every name resolves, 1 with one line per name that does not.
 """
-import argparse, json, os, pathlib, re, subprocess, sys
+import argparse, hashlib, json, pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -25,9 +25,23 @@ ALIASES = {
 
 
 def _sha(path):
-    pulled = subprocess.run(["sha256sum" if os.name != "nt" else "sha256sum", str(path)],
-                            capture_output=True, text=True)
-    return pulled.stdout.split()[0] if pulled.returncode == 0 else ""
+    """sha256 of a file, in-process.
+
+    This ran `subprocess.run(["sha256sum" ...])` - with the same command in both arms of
+    a platform pick - and turned a failed lookup into "", so on a stock macOS box (where
+    /usr/bin has no sha256sum and Coreutils is not a given) the dist check died on
+    FileNotFoundError instead of comparing anything (BUGREPORT T5). hashlib is in the
+    stdlib everywhere this ships, and a file it cannot read is a loud stop, not a "" that
+    would read as "different bytes".
+    """
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError as e:
+        sys.exit("cannot compute the sha256 of %s: %s" % (path, e))
+    return h.hexdigest()
 
 
 def target_of(dist_dir, name):

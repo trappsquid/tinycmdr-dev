@@ -1,6 +1,6 @@
 """Tests for the v1.9.0 ledger + transport work.
 
-Run:  python -m pytest -q tests/test_ledger.py       (or plain python, see main)
+Run:  python tests/test_ledger.py        (the whole gate: python tests/run_all.py)
 They import the live tinycmdr.py as a module (no Mattermost connection, no
 scheduled jobs, no lock) and redirect every file it writes at a temp dir.
 """
@@ -1033,11 +1033,19 @@ def test_force_shrink():
 # --------------------------------------------------------------------------
 
 def _budget_clear():
-    """_context_budget()/_endpoint_window() memoise on the instance — drop both
-    when a test changes llm.max_context_tokens or stubs the served window, or the
-    previous test's value sticks."""
-    fb.AGENT.__dict__.pop("_budget_cache", None)
-    fb.AGENT.__dict__.pop("_window_cache", None)
+    """Drop everything the build memoises for the window and the budget.
+
+    Re-pointed 2026-09-26 (the batch that deleted REPLY_HEADROOM): _envelope() is the one
+    accessor and it caches per session, so a suite that changes llm.max_context_tokens or
+    stubs the served window has to drop _window_cache/_window_at, _envelope_cache and the
+    static-prompt cache - clearing only the window left a stale envelope in place, and eight
+    checks read a 19,254-token budget out of it instead of the 4,000 they had configured.
+    `_budget_cache` is kept in the list for an OLD build under TINYCMDR_SRC.
+    """
+    for name in ("_window_cache", "_window_at", "_envelope_cache", "_budget_cache"):
+        fb.AGENT.__dict__.pop(name, None)
+    if hasattr(fb, "_STATIC_CACHE"):
+        fb._STATIC_CACHE.clear()
 
 
 def test_system_prompt_is_static_state_is_trailing():
@@ -1180,8 +1188,8 @@ def test_history_trims_in_blocks_not_every_turn():
 def test_compact_goes_deep_then_stays_put():
     redirect_files()
     try:
-        fb.CONFIG["llm"]["max_context_tokens"] = 4000
-        _budget_clear()
+        fb.CONFIG["llm"]["max_context_tokens"] = 4000   # the ceiling IS the budget here
+        _window_stub(0)                                # no server reporting a window
         msgs = [{"role": "system", "content": "sys"}]
         for i in range(12):
             msgs.append({"role": "user", "content": f"u{i} " + "x" * 3000})
@@ -1189,9 +1197,15 @@ def test_compact_goes_deep_then_stays_put():
             msgs.append({"role": "tool", "tool_call_id": str(i),
                          "content": "y" * 3000})
         fb.AGENT._compact(msgs)
-        est = fb.AGENT._messages_token_est(msgs)
+        # The unit is the CONVERSATION (messages[0] is counted by `static`, not here), and
+        # _compact lands it on its own low-water mark: low = max(2000, int(budget * 0.6))
+        # where budget is the messages budget left after the trailing state block.
+        est = fb.AGENT._conversation_token_est(msgs)
+        budget = (fb.AGENT._context_budget()
+                  - fb.est_tokens(fb.volatile_context()))
+        low = max(2000, int(budget * 0.6))
         check("lands under the low-water mark, not merely the budget",
-              est < 4000 * 0.6 + 400, est)
+              est <= low, (est, low))
         check("system prompt survives compaction", msgs[0]["content"] == "sys")
         check("no orphan tool message",
               all(msgs[i].get("role") != "tool" or
@@ -1213,19 +1227,23 @@ def test_compaction_budget_counts_the_trailing_state_block():
         redirect_files()
         fb.CONFIG["agent"]["notes_max_chars"] = 9000
         fb.CONFIG["llm"]["max_context_tokens"] = 6000
-        _budget_clear()
+        # No server: the configured ceiling IS the budget (deterministic, no probe). The
+        # trailing block is then bounded by mem_limit_chars, which scales with the window
+        # (audit D5), so the absolute size of the block is not a fixed number any more -
+        # what this test grades is that a bigger block is CHARGED to compaction.
+        _window_stub(0)
         if note_chars:
             fb.NOTES_FILE.write_text("- [10:00] " + "n" * note_chars,
                                      encoding="utf-8")
         msgs = [{"role": "system", "content": "sys"}]
-        for i in range(12):
-            msgs.append({"role": "user", "content": f"u{i} " + "x" * 3000})
+        for i in range(60):
+            msgs.append({"role": "user", "content": f"u{i} " + "x" * 200})
             msgs.append({"role": "assistant", "content": ""})
             msgs.append({"role": "tool", "tool_call_id": str(i),
-                         "content": "y" * 3000})
+                         "content": "y" * 200})
         fb.AGENT._compact(msgs)
         raw = fb.volatile_context()
-        return (fb.AGENT._messages_token_est(msgs), fb.est_tokens(raw), raw)
+        return (fb.AGENT._conversation_token_est(msgs), fb.est_tokens(raw), raw)
 
     est_small, vol_small, raw_small = run(0)
     est_big, vol_big, raw_big = run(7000)
@@ -1235,11 +1253,16 @@ def test_compaction_budget_counts_the_trailing_state_block():
           raw_small.startswith(fb._STATE_MARKER) and "Current date and time" in raw_small
           and "Notes from previous sessions" not in raw_small and vol_small < 60,
           (vol_small, raw_small[:90]))
-    check("the state block is genuinely large", vol_big > 1500, vol_big)
+    check("the state block is genuinely large",
+          vol_big > 200 and vol_big > 5 * vol_small, (vol_big, vol_small))
     check("a large state block makes compaction cut deeper",
           est_big < est_small, f"{est_small} vs {est_big}")
+    # The budget is the CONVERSATION's, and the trailing block is part of the payload even
+    # though it is not in the message list: what compaction leaves must fit under the budget
+    # once the block is counted too.
+    budget = fb.AGENT._context_budget()
     check("payload + state block fits the budget",
-          est_big + vol_big <= 6000, f"{est_big} + {vol_big}")
+          est_big + vol_big <= budget, f"{est_big} + {vol_big} vs {budget}")
     redirect_files()
     _budget_clear()
 
@@ -1392,6 +1415,14 @@ def test_the_loop_guard_nudge_waits_for_the_whole_tool_batch():
 # under systemd it produced two instances fighting over the web port. The owner
 # now decides.
 
+# restart_owner() reads exactly these three. A suite asserting about the owner must OWN
+# all three: measured 2026-09-26, a macOS shell carries XPC_SERVICE_NAME=0 (launchd sets it
+# in every process it starts, and "0" is not our label), so leaving it inherited made the
+# "self" case assert about the host's own session instead of about the branch.
+_RESTART_MARKERS = ("INVOCATION_ID", "TINYCMDR_SUPERVISED", "XPC_SERVICE_NAME")
+_UNOWNED = {k: None for k in _RESTART_MARKERS}
+
+
 def _with_restart_env(env, fn):
     saved = {k: os.environ.get(k) for k in env}
     for k, v in env.items():
@@ -1412,15 +1443,25 @@ def _with_restart_env(env, fn):
 def test_restart_owner_reads_the_environment():
     def run():
         out = []
-        os.environ.pop("INVOCATION_ID", None)
-        os.environ.pop("TINYCMDR_SUPERVISED", None)
+        for k in _RESTART_MARKERS:
+            os.environ.pop(k, None)
         out.append(("self", fb.restart_owner()))
         os.environ["TINYCMDR_SUPERVISED"] = "1"
         out.append(("supervisor", fb.restart_owner()))
         os.environ["INVOCATION_ID"] = "test-unit-start"
         out.append(("systemd", fb.restart_owner()))
+        os.environ.pop("INVOCATION_ID")
+        os.environ.pop("TINYCMDR_SUPERVISED")
+        os.environ["XPC_SERVICE_NAME"] = "com.tinycmdr.agent"
+        out.append(("launchd", fb.restart_owner()))
+        # The marker a plain GUI app carries must NOT read as our supervisor: launchd sets
+        # XPC_SERVICE_NAME in every process it starts, so only OUR label means launchd owns
+        # this bot. (A darwin catch-all made a hand-started mac bot take the hand-over path
+        # and stay dead - measured 2026-09-26, reported as a code site.)
+        os.environ["XPC_SERVICE_NAME"] = "com.apple.Terminal"
+        out.append(("self", fb.restart_owner()))
         return out
-    got = _with_restart_env({"INVOCATION_ID": None, "TINYCMDR_SUPERVISED": None}, run)
+    got = _with_restart_env(dict(_UNOWNED), run)
     for want, actual in got:
         check(f"restart owner with that environment is '{want}'",
               actual == want, actual)
@@ -1462,7 +1503,8 @@ def _restart_with(env):
 
 
 def test_restart_hands_over_instead_of_spawning_when_supervised():
-    c = _restart_with({"TINYCMDR_SUPERVISED": "1", "INVOCATION_ID": None})
+    c = _restart_with({"TINYCMDR_SUPERVISED": "1", "INVOCATION_ID": None,
+                       "XPC_SERVICE_NAME": None})
     check("a supervised restart does not spawn a second process",
           c["spawn"] == 0, c)
     check("it exits with the hand-over code", c["code"] == fb.RESTART_EXIT_CODE, c)
@@ -1471,13 +1513,26 @@ def test_restart_hands_over_instead_of_spawning_when_supervised():
 
 
 def test_restart_hands_over_under_systemd():
-    c = _restart_with({"INVOCATION_ID": "test-unit-start", "TINYCMDR_SUPERVISED": None})
+    c = _restart_with({"INVOCATION_ID": "test-unit-start", "TINYCMDR_SUPERVISED": None,
+                       "XPC_SERVICE_NAME": None})
     check("under systemd it does not spawn either", c["spawn"] == 0, c)
     check("and it exits with the hand-over code", c["code"] == fb.RESTART_EXIT_CODE, c)
 
 
+def test_restart_hands_over_under_launchd():
+    """The macOS lane, graded on every host: launchd owns the job, so exiting 75 IS the
+    restart (KeepAlive.SuccessfulExit=false). This is the only place the lane is
+    measurable - the plist's own interpreter here is python, and a launchd job's process
+    sees XPC_SERVICE_NAME=<label> (measured 2026-09-26, throwaway label)."""
+    c = _restart_with({"XPC_SERVICE_NAME": "com.tinycmdr.agent",
+                       "TINYCMDR_SUPERVISED": None, "INVOCATION_ID": None})
+    check("under launchd it does not spawn either", c["spawn"] == 0, c)
+    check("and it exits with the code KeepAlive.SuccessfulExit=false relaunches on",
+          c["code"] == fb.RESTART_EXIT_CODE, c)
+
+
 def test_restart_spawns_a_replacement_when_nobody_owns_it():
-    c = _restart_with({"TINYCMDR_SUPERVISED": None, "INVOCATION_ID": None})
+    c = _restart_with(_UNOWNED)
     check("with no owner it spawns exactly one replacement", c["spawn"] == 1, c)
     check("and exits 0, because the replacement is already up", c["code"] == 0, c)
 
@@ -1983,22 +2038,41 @@ def test_state_files_are_replaced_atomically():
           not list(TMP.glob("*.tmp-*")), sorted(p.name for p in TMP.iterdir()))
 
 
-def test_a_failed_atomic_write_still_leaves_a_parseable_ledger():
+def test_a_failed_atomic_write_keeps_the_old_ledger():
+    """BUGREPORT §D1 changed this contract: a save that cannot land must not touch the
+    destination AT ALL, and it must say so. The old shape (fall back to writing the
+    destination in place) is what spliced a half-written ledger on a full disk."""
     redirect_files()
     fb.save_tasks({"items": [{"id": 1, "desc": "first", "status": "open",
                               "note": ""}], "next_id": 2})
+    before = fb.TASKS_FILE.read_bytes()
+    records = []
+    log = fb.logging.getLogger()
+    handler = fb.logging.Handler()
+    handler.emit = lambda rec: records.append(rec.getMessage())
+    log.addHandler(handler)
     real_fsync = fb.os.fsync
+    raised = None
     try:
         fb.os.fsync = lambda _fd: (_ for _ in ()).throw(OSError("disk gone"))
-        fb.save_tasks({"items": [{"id": 2, "desc": "second", "status": "open",
-                                  "note": ""}], "next_id": 3})
+        try:
+            fb.save_tasks({"items": [{"id": 2, "desc": "second", "status": "open",
+                                      "note": ""}], "next_id": 3})
+        except Exception as e:               # noqa: BLE001 - the point of the test
+            raised = e
     finally:
         fb.os.fsync = real_fsync
+        log.removeHandler(handler)
+    check("a save that cannot land raises instead of writing the destination",
+          raised is not None, raised)
+    check("...and the ledger on disk is byte-identical to what was there",
+          fb.TASKS_FILE.read_bytes() == before, fb.TASKS_FILE.read_bytes()[:200])
     loaded = json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))
-    check("a write that fails mid-flight never leaves a spliced file",
-          len(loaded["items"]) == 1
-          and loaded["items"][0]["desc"] in ("first", "second"), loaded)
-    check("the fallback path cleans up after itself",
+    check("...so it still parses, with the old items and no splice",
+          len(loaded["items"]) == 1 and loaded["items"][0]["desc"] == "first", loaded)
+    check("...and the failure is named in the log",
+          any("atomic write of tasks.json failed" in r for r in records), records[-3:])
+    check("the failed attempt cleans up after itself",
           not list(TMP.glob("*.tmp-*")), sorted(p.name for p in TMP.iterdir()))
 
 
@@ -2035,18 +2109,20 @@ def test_a_restarted_endpoint_is_noticed_after_the_ttl():
         _budget_clear()
         fb.AGENT.__dict__.pop("_window_cache", None)
         fb.AGENT.__dict__.pop("_window_at", None)
-        room = fb.REPLY_HEADROOM + 16384
-        first = fb.AGENT._context_budget()
+        first_env = fb.AGENT._envelope()
         check("ttl: the first budget is what the server reported",
-              first == 262144 - room, first)
+              first_env["source"] == "server" and first_env["window"] == 262144
+              and first_env["budget"] == max(fb.ENVELOPE_MIN_BUDGET, 262144 - first_env["static"]
+                                             - first_env["reply"]), first_env)
         check("ttl: and it is not re-asked on every payload",
-              fb.AGENT._context_budget() == first and calls["n"] == 1, calls)
+              fb.AGENT._context_budget() == first_env["budget"] and calls["n"] == 1, calls)
         fb.AGENT.__dict__["_window_at"] = time.time() - (fb.WINDOW_TTL + 60)
         _budget_clear()
-        second = fb.AGENT._context_budget()
+        second_env = fb.AGENT._envelope()
         check("ttl: past the TTL the endpoint is asked again, so a restarted box "
               "is noticed",
-              second == 131072 - room and calls["n"] == 2, (second, calls))
+              second_env["window"] == 131072 and calls["n"] == 2
+              and second_env["budget"] < first_env["budget"], (second_env, calls))
     finally:
         fb._detect_window = saved_detect
         fb.AGENT.__dict__.pop("_window_cache", None)
@@ -2066,40 +2142,47 @@ def test_the_budget_is_clamped_by_what_the_endpoint_serves():
         cfg["llm"]["max_context_tokens"] = 200000
         cfg["llm"]["max_tokens"] = 16384
         _window_stub(131072)
-        got = fb.AGENT._context_budget()
+        env = fb.AGENT._envelope()
         check("the served window clamps a bigger budget",
-              got == 131072 - fb.REPLY_HEADROOM - 16384, got)
+              env["window"] == 131072
+              and env["budget"] == max(fb.ENVELOPE_MIN_BUDGET, 131072 - env["static"] - env["reply"]),
+              env)
         _window_stub(262144)
+        roomy = fb.AGENT._envelope()
         check("a roomier server does not raise the configured budget",
-              fb.AGENT._context_budget() == 200000, fb.AGENT._context_budget())
+              roomy["window"] == 262144 and roomy["budget"] == 200000,
+              (roomy["budget"], roomy["window"]))
+        # The ceiling is the ceiling: min(llm.max_context_tokens, window - static - reply),
+        # never under ENVELOPE_MIN_BUDGET.
+        cfg["llm"]["max_context_tokens"] = 12000
+        _window_stub(32768)
+        capped = fb.AGENT._envelope()
+        check("a configured ceiling below the room is the budget",
+              capped["budget"] == 12000, capped)
+        _window_stub(8192)
+        floored = fb.AGENT._envelope()
+        check("...and the floor wins when the window cannot hold it",
+              floored["budget"] == fb.ENVELOPE_MIN_BUDGET, floored)
+        cfg["llm"]["max_context_tokens"] = 200000
         _window_stub(0)
         check("a server that does not say keeps the configured budget",
               fb.AGENT._context_budget() == 200000, fb.AGENT._context_budget())
         cfg["llm"]["max_context_tokens"] = "auto"
         _window_stub(131072)
+        auto_env = fb.AGENT._envelope()
         check("auto still means what the server says",
-              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
-              fb.AGENT._context_budget())
+              auto_env["budget"] == max(fb.ENVELOPE_MIN_BUDGET, 131072 - auto_env["static"]
+                                        - auto_env["reply"]), auto_env)
         # "auto" is the shipped default, so a hand-edit around it must not be able to kill
         # a run: the value arrives from a text file. Casing and spacing are not syntax, 0 is
         # documented as auto, and anything else that is not a number asks the endpoint
         # rather than raising ValueError out of int() (audit, 2026-09-22).
-        cfg["llm"]["max_context_tokens"] = "AUTO"
-        _window_stub(131072)
-        check("auto in any casing means the same thing",
-              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
-              fb.AGENT._context_budget())
-        cfg["llm"]["max_context_tokens"] = 0
-        _window_stub(131072)
-        check("zero means auto, not an empty budget",
-              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
-              fb.AGENT._context_budget())
-        cfg["llm"]["max_context_tokens"] = "12k"
-        _window_stub(131072)
-        check("a value that is neither a number nor auto asks the endpoint instead of "
-              "killing the run",
-              fb.AGENT._context_budget() == 131072 - fb.REPLY_HEADROOM - 16384,
-              fb.AGENT._context_budget())
+        for weird in ("AUTO", 0, "12k"):
+            cfg["llm"]["max_context_tokens"] = weird
+            _window_stub(131072)
+            got = fb.AGENT._envelope()
+            check(f"{weird!r} means auto, not an empty budget",
+                  got["budget"] == max(fb.ENVELOPE_MIN_BUDGET, 131072 - got["static"] - got["reply"]), got)
     finally:
         fb.AGENT.__dict__.pop("_window_cache", None)
         _budget_clear()

@@ -10,10 +10,16 @@ setlocal
 set "HERE=%~dp0"
 set "PY="
 if exist "%HERE%venv\Scripts\python.exe" set "PY=%HERE%venv\Scripts\python.exe"
-if not defined PY for %%I in (python.exe) do if exist "%%~$PATH:I" set "PY=%%~$PATH:I"
-if not defined PY for %%I in (py.exe) do if exist "%%~$PATH:I" set "PY=%%~$PATH:I"
+REM PATH is a trap on Windows: %LOCALAPPDATA%\Microsoft\WindowsApps sits early on it and
+REM holds the Microsoft Store's python.exe STUB, which opens the Store instead of running
+REM anything. The installer's own Python discovery excludes that path (audit W8); this shim
+REM did not, so after a failed venv build or a deleted venv\ `tinycmdr status` opened the
+REM Store. The venv is preferred above; both PATH fallbacks below skip the stub.
+if not defined PY call :findpy python.exe
+if not defined PY call :findpy py.exe
 if not defined PY (
-    echo tinycmdr: no python on PATH - install Python 3.9+ or re-run the installer. 1>&2
+    echo tinycmdr: no Python found - install Python 3.10-3.12, or re-run the installer. 1>&2
+    echo           (the Microsoft Store stub on PATH is not a usable interpreter.) 1>&2
     exit /b 127
 )
 REM No arguments means a human at a keyboard, so give them a session. The bot keeps
@@ -24,3 +30,10 @@ if "%~1"=="" (
     "%PY%" "%HERE%tinycmdr.py" %*
 )
 exit /b %ERRORLEVEL%
+
+:findpy
+for /f "delims=" %%I in ('where %~1 2^>nul') do (
+    echo(%%I| findstr /i /c:"WindowsApps" >nul
+    if errorlevel 1 if not defined PY set "PY=%%I"
+)
+exit /b 0

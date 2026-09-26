@@ -1,8 +1,7 @@
 """Tests for the v1.9.3 check-ins: the model's own narration (interim_cb) and the
 harness-side per-tool lines (progress_done_cb).
 
-Run:  python tests/test_checkin.py            (plain python, no pytest needed)
-      python -m pytest -q tests/test_checkin.py
+Run:  python tests/test_checkin.py            (the whole gate: python tests/run_all.py)
 Same shape as tests/test_ledger.py: imports the live tinycmdr.py as a module,
 redirects every file it writes into a temp dir, no Mattermost connection.
 """
@@ -31,13 +30,22 @@ TMP = Path(tempfile.mkdtemp(prefix="fbcheckin-"))
 # Clean the scratch dir on exit: running the suites on a fresh host
 # should not leave a directory behind for every run.
 atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
+sys.path.insert(0, str(BASE / "tests"))
+import hermetic                                                          # noqa: E402
+
+# redirect_files() below covers the ledger's own four paths, but the app also writes its
+# journal, its state files and the tools-provenance record beside itself, and it writes them
+# from code this suite does not name per test: run_all.py's leak report named
+# tasks.journal.jsonl and tools-provenance.json for this suite. Rebind all of them into TMP.
+hermetic.redirect_repo_files(fb, TMP)
 if not hasattr(fb, "ProgressReporter"):
     # The chat lane's reporter factory exists only when this build has a chat
     # layer (one reporter, lane destinations); there is nothing here to grade
-    # without it. Declared skip, not a green lie.
+    # without it. Declared skip, not a green lie: exit 77 is what run_all.py counts
+    # as "this suite graded nothing", so it can never read as a pass (BUGREPORT T4).
     print("skip: this suite grades the chat lane (ProgressReporter); "
           "this build has none - run it against tinycmdr.py")
-    sys.exit(0)
+    sys.exit(77)
 PRISTINE = copy.deepcopy(fb.CONFIG)
 FAILURES = []
 PASSES = []

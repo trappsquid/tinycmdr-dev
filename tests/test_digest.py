@@ -19,6 +19,7 @@ TESTS = BASE / "tests"
 sys.path.insert(0, str(TESTS))
 
 import run_scenario  # noqa: E402
+import hermetic      # noqa: E402  (stages the field-notes fixture a clean clone lacks)
 
 FAILS = []
 
@@ -129,11 +130,17 @@ def main():
         check("[HARNESS" not in tiny, "a digest that would drop nothing is not announced")
 
         # ---- field notes ---------------------------------------------------
-        real = (BASE / "field-notes.md").read_text(encoding="utf-8")
-        (workdir / "field-notes.md").write_text(real, encoding="utf-8")
+        # The library a host actually runs on is the operator's own field-notes.md, which
+        # is gitignored - so reading it from the repo root was this suite's first failure
+        # on a clean clone (FileNotFoundError, measured 2026-09-26) while every check
+        # below grades real behaviour. Stage the fixture the repo DOES ship instead: the
+        # same shape the parser reads, one entry per signature asserted here.
+        lib = hermetic.field_notes_fixture()
+        (workdir / "field-notes.md").write_text(lib.read_text(encoding="utf-8"),
+                                                encoding="utf-8")
         fb._FIELD_NOTES_CACHE["mtime"] = None
         entries = fb.field_notes()
-        check(len(entries) >= 10, f"the shipped library parses ({len(entries)} entries)")
+        check(len(entries) >= 10, f"the notes library parses ({len(entries)} entries)")
         titles = [e["title"] for e in entries]
         check(any("dpkg" in t for t in titles), "the dpkg entry is parsed")
         for e in entries:

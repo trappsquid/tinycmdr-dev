@@ -6,6 +6,12 @@
 # there - so a system install needs sudo once, while a user-mode install needs no password at
 # all. Asking unconditionally made a harmless removal look dangerous, and asking on the way
 # is why an uninstall could stop half-way through.
+#
+# Under sudo the uninstaller resolves the INVOKING user (SUDO_USER) rather than reading
+# $HOME, which sudo resets to /var/root - the reason `sudo bash uninstall-...sh` used to
+# find nothing, print "done." and exit 0 while the agent kept running (2026-09-26). It also
+# reads the launchd label out of the install folder, so a --label install is removable from
+# this door too.
 set -u
 cd "$(dirname "$0")" || exit 1
 

@@ -16,6 +16,7 @@ import os
 import shutil
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -24,11 +25,13 @@ sys.path.insert(0, str(TESTS))
 
 import run_scenario  # noqa: E402
 
+PASSES = []
 FAILS = []
 
 
 def check(name, cond, detail=""):
     if cond:
+        PASSES.append(name)
         print(f"ok   {name}")
     else:
         FAILS.append(f"{name}: {detail}")
@@ -103,19 +106,39 @@ def main():
 
         # ---- status: an endpoint that says nothing, then one that answers ----
         saved_detect = fb._detect_window
+
+        def forget_probes():
+            """Drop the probe caches the agent holds, whatever this build calls them.
+
+            Measured 2026-09-26: this block cleared _window_cache and _budget_cache, but
+            the envelope built from the probe had been renamed to _envelope_cache, so the
+            "endpoint answers" checks below graded the PREVIOUS probe's verdict ("assumed",
+            i.e. no answer) and went red on a box where the stub answered 131072. The names
+            drift; the intent - forget what the last probe said - does not.
+            """
+            for _n in [n for n in fb.AGENT.__dict__ if n.endswith("_cache")]:
+                fb.AGENT.__dict__.pop(_n, None)
+
         fb._detect_window = lambda url, headers=None: 0
+        forget_probes()
         rc, out, err = call(fb, ["status"])
         check("status with an unreachable endpoint exits 1", rc == 1, rc)
         check("...and names the reason on stderr", "did not answer" in err, err[:200])
         check("...and still reports the box and the instance", "instance" in out, out[:200])
 
         fb._detect_window = lambda url, headers=None: 131072
-        fb.AGENT.__dict__.pop("_window_cache", None)
-        fb.AGENT.__dict__.pop("_budget_cache", None)
+        forget_probes()
         rc, out, err = call(fb, ["status"])
         check("status exits 0 when the endpoint answers", rc == 0, (rc, err[:200]))
+        # The line must carry the model, the window the server reported and the arithmetic
+        # built from it. Asserted against the build's OWN formatter, not one spelling of it:
+        # this check used to require the word "usable", which the status line stopped
+        # printing when the envelope line took over (the banner still says it), so it graded
+        # prose instead of the numbers the operator reads.
+        env = fb.AGENT._envelope()
         check("...and prints the model, the window and the context",
-              "131.1K" in out and "main" in out and "usable" in out, out[:400])
+              env.get("source") == "server" and fb.fmt_tokens(env["window"]) in out
+              and "main" in out and fb.envelope_line(env) in out, out[:400])
 
         # ---- doctor ----------------------------------------------------------
         rc, out, err = call(fb, ["doctor"])
@@ -123,6 +146,7 @@ def main():
         check("doctor says so plainly", "no problems found" in out, out[-200:])
 
         fb._detect_window = lambda url, headers=None: 0
+        forget_probes()
         rc, out, err = call(fb, ["doctor"])
         check("doctor exits 1 when the endpoint does not answer", rc == 1, rc)
         check("...and names the endpoint on stderr",
@@ -393,12 +417,22 @@ def main():
             return 0, "helper said it restarted", "", False
 
         # the packaged install carries the helper; the staging harness copies only the
-        # app, so put one where the verb looks for it
+        # app, so put EVERY host's helper where the verb looks for it and assert the verb
+        # picked this host's. Only the .ps1 used to be staged here, so on macOS and Linux
+        # _verb_restart found nothing, run_capture was never called, the helper read back
+        # as '' and os.path.samefile('') raised FileNotFoundError - aborting the suite and
+        # silently dropping every check after it (BUGREPORT T1: "~20 checks").
         (workdir / "maintenance").mkdir(exist_ok=True)
-        (workdir / "maintenance" / "restart-tinycmdr.ps1").write_text(
-            "# a helper for the suite", encoding="utf-8")
+        host_helper = ("restart-tinycmdr.ps1" if os.name == "nt"
+                       else "restart-tinycmdr-macos.sh" if sys.platform == "darwin"
+                       else "restart-tinycmdr.sh")
+        for _name in ("restart-tinycmdr.ps1", "restart-tinycmdr.sh",
+                      "restart-tinycmdr-macos.sh"):
+            (workdir / "maintenance" / _name).write_text(
+                "# a helper for the suite\n", encoding="utf-8")
 
         saved_run, saved_elev, saved_running = fb.run_capture, fb._is_elevated, fb._verb_running
+        saved_owned = getattr(fb, "_scheduled_task_owned", None)
         fb.run_capture = fake_run
         fb._is_elevated = lambda: True
         fb._verb_running = lambda: True
@@ -406,25 +440,39 @@ def main():
             rc, out, err = call(fb, ["restart"])
             helper = (seen.get("argv") or [""])[-1]
             check("restart calls the shipped helper for this host",
-                  os.path.basename(helper) in ("restart-tinycmdr.ps1",
-                                               "restart-tinycmdr.sh",
-                                               "restart-tinycmdr-macos.sh"),
-                  str(seen.get("argv")))
+                  os.path.basename(helper) == host_helper,
+                  (host_helper, str(seen.get("argv"))))
             # samefile, not a string compare: on Windows mkdtemp can hand back the 8.3
             # short form of the user's temp path while the module resolved the long one
             check("...from THIS install, not somewhere else",
-                  os.path.samefile(helper,
-                                   workdir / "maintenance" / "restart-tinycmdr.ps1"),
+                  os.path.samefile(helper, workdir / "maintenance" / host_helper),
                   helper)
             check("...and says the instance is back", rc == 0 and "back up" in out,
                   (rc, out[:120], err[:160]))
+            # Elevation is a PER-HOST rule, so assert this host's rule: Windows wants an
+            # elevated shell for the task lane, Windows/Linux need root, and macOS needs
+            # neither (launchd owns the process - exiting is the restart). The old check
+            # demanded the refusal everywhere and would have aborted here on macOS, where
+            # the helper is called instead.
             fb._is_elevated = lambda: False
-            fb.run_capture = boom_run
-            rc, out, err = call(fb, ["restart"])
-            check("without rights it says how to get them instead of failing oddly",
-                  rc == 1 and ("elevated" in err or "root" in err), (rc, err[:200]))
+            if os.name == "nt":
+                fb._scheduled_task_owned = lambda: True
+            rights_needed = os.name == "nt" or (os.name == "posix"
+                                                and sys.platform != "darwin"
+                                                and os.geteuid() != 0)
+            if rights_needed:
+                fb.run_capture = boom_run
+                rc, out, err = call(fb, ["restart"])
+                check("without rights it says how to get them instead of failing oddly",
+                      rc == 1 and ("elevated" in err or "root" in err), (rc, err[:200]))
+            else:
+                rc, out, err = call(fb, ["restart"])
+                check("with no rights needed on this host, restart still calls the helper",
+                      rc == 0 and "back up" in out, (rc, err[:160]))
         finally:
             fb.run_capture, fb._is_elevated, fb._verb_running = saved_run, saved_elev, saved_running
+            if saved_owned is not None:
+                fb._scheduled_task_owned = saved_owned
 
         # --- `tinycmdr web`: the page lane in one word (2026-09-22) -----------------
         # The operator: "so what if I want to startup the tinycmdr web-ui? type tinycmdr web
@@ -479,7 +527,13 @@ def main():
             port = free.getsockname()[1]
             free.close()
             text = "\n".join(fb.web_busy_note("127.0.0.1", port))
-            check("a free port says nothing is listening", "Nothing is listening" in text, text)
+            # On a FREE port the note must not invent a holder (the held-port case above
+            # names one, and that is the whole discrimination). The old wording asserted the
+            # sentence "Nothing is listening", which a later revision of web_busy_note
+            # dropped - so this asserts the fact, not the phrasing.
+            check("a free port is not reported as someone else's",
+                  ("127.0.0.1:%d" % port) in text and "listening there" not in text
+                  and "already usable" not in text, text)
             text = "\n".join(fb.web_busy_note("127.0.0.1", "nope"))
             check("a junk web.port does not crash the note", "Could not start" in text, text)
         finally:
@@ -518,11 +572,34 @@ def main():
     fb._git_exe = saved_git_exe
 
     print()
-    if FAILS:
-        print(f"{len(FAILS)} check(s) failed")
-        sys.exit(1)
-    print("all verb checks passed")
+    _tail()
+    return 1 if FAILS else 0
+
+
+def _tail(aborted=""):
+    """The suite's own count line, and the ONE contract run_all.py reads for it.
+
+    Measured 2026-09-26 (BUGREPORT T1): a crash on a helper the suite never staged aborted
+    this run mid-file and the checks after it vanished without a word - the runner could
+    only print a traceback, so "how much of this suite graded" was unanswerable. `N passed,
+    M failed` on the last line is that answer, and it prints on the way out of a crash too.
+    """
+    line = "%d passed, %d failed" % (len(PASSES), len(FAILS))
+    print(line)
+    if aborted:
+        print("ABORTED after %d check(s): %s" % (len(PASSES) + len(FAILS), aborted))
 
 
 if __name__ == "__main__":
-    main()
+    _abort = ""
+    try:
+        _rc = main()
+    except SystemExit as e:
+        raise e                                 # main() already said what it means
+    except BaseException as e:                   # noqa: BLE001 - a crash is a red run
+        traceback.print_exc()
+        _abort = "%s: %s" % (type(e).__name__, e)
+        _rc = 1
+    if _abort:
+        _tail(_abort)
+    sys.exit(_rc)

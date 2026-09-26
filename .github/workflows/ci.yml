@@ -1,0 +1,92 @@
+# The gate: one workflow, three platforms, one command per job.
+#
+# The tree had no CI at all, so every "45/45 green" in the changelog was a hand run
+# with no exit code behind it - and eight suites were quietly red on the author's own
+# Mac (BUGREPORT T1); six of them on this host. Each job below is
+# `python tests/run_all.py` (or a --select of it) and nothing else: the runner is the
+# gate, CI only gives it a machine.
+#
+# A SKIP is a failure here on purpose. Three suites used to print a skip line and
+# return 0 when playwright / node / rich were absent, so a machine that graded
+# nothing reported success; now they exit 77 and run_all.py counts that as red
+# unless a developer passes --allow-skips, which no step below does.
+#
+# What the gate says today: measured on a clean clone on macOS 2026-09-26,
+# `python tests/run_all.py` reports 0 failed, 0 skipped (see the tail in the G2 batch's
+# changelog note). Nothing is staged by hand any more: tests/test_config_example.py stages
+# maintenance/private_rules.example.py as private_rules.py on sys.path itself, and
+# tests/test_digest.py stages the field-notes library from tests/fixture-field-notes.md, so
+# a clone grades itself without writing into the checkout - which the runner's own leak
+# report would flag. The runner splits that report per suite: a suite that writes into the
+# tree instead of its own temp dir is named, with the path it touched.
+name: gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # macOS + Linux: the whole sweep, including the suites that drive a browser and the
+  # page renderer under node. These are the platforms Phase 1 touches.
+  unix:
+    name: ${{ matrix.os }} / python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+        python: ["3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: install requirements.txt + requirements-test.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-test.txt
+      - name: install playwright's chromium (with the system libs on Linux)
+        if: runner.os == 'Linux'
+        run: python -m playwright install --with-deps chromium
+      - name: install playwright's chromium
+        if: runner.os != 'Linux'
+        run: python -m playwright install chromium
+      - name: gate
+        # The browser suite defaults to the msedge channel (the author's box has
+        # Edge); CI has playwright's own chromium, so clear the channel. An empty
+        # value means "launch the bundled build", not "the browser named ''".
+        env:
+          TINYCMDR_TEST_BROWSER_CHANNEL: ""
+        run: python tests/run_all.py
+
+  # Windows: the pure-Python suites only, for the same reason the install work is
+  # split - a Windows runner cannot drive the browser/node suites and Phase 1's
+  # Windows fixes are reasoned, not executed. This job is therefore [READ]-verified
+  # like them: the first CI run on Windows is the real test.
+  windows:
+    name: windows / pure-python suites
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: install requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: gate (ledger, events, config example, tool discovery)
+        run: >
+          python tests/run_all.py
+          --select tests/test_ledger*.py
+          --select tests/test_events.py
+          --select tests/test_config_example.py
+          --select tests/test_tool_discovery.py

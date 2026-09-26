@@ -5,6 +5,267 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.24] - 2026-09-26
+
+Phase 1 of the 2026-09-26 audit: the request envelope becomes a measured quantity instead of a
+guess, a failed write can no longer destroy the file that was there, the guard tiers cover what
+they claim, a fresh install completes on all three platforms by the documented path, and a slow
+box stops paying for the harness's own impatience. `python tests/run_all.py` is the gate; each
+entry below names the suite that pins it and the measurement that proved it.
+
+The installer half of this release lands ON TOP of 1.0.22/1.0.23 rather than replacing them:
+the questions those releases added (whether the page should be reachable from your network,
+"Add another endpoint?", the Telegram lane, the Mattermost host:port split) and their guard
+against taking a registration another install already owns (a launchd label, a systemd unit
+name, a Windows task or Startup name) are all still here. What the installers lose on the way
+is the page token echoed into the transcript and into the install log, a `config.json` that
+shipped world-readable, and `chown user:user` - each described below with what it used to cost.
+
+### The envelope (the premise)
+
+Fixed
+- The context budget was `max(4000, window − 7000 − max_tokens)` with the static half subtracted
+  from nothing, and `max_tokens` sent unclamped. Measured: an 8,192-token endpoint received a
+  9,275-token payload and a 16,384-token completion request — the request could not fit by
+  construction, and the "budget" was a floor rather than a measurement. The static overhead
+  (system prompt + the tool schemas the session actually sends) is now counted, the reply is
+  clamped to `min(llm.max_tokens, window // 4)` (2,048 at an 8k window), and the messages budget
+  is `max(1024, window − static − reply)` — 19,254 at 32,768 where the old arithmetic gave 9,384.
+  `REPLY_HEADROOM` is gone; there is one computation (`Agent._envelope`) and `_compact`,
+  `_force_shrink` and the request path all read it.
+- A window below 8,192 is now REFUSED with the arithmetic on stdout (window, static, reply,
+  budget) instead of sending a request the endpoint has to reject; below 16,384 it runs and says
+  so. `llm.max_context_tokens` still overrides, and an endpoint that reports nothing falls back
+  to the configured number, then to a conservative assumed window that the log names.
+- The budget is measured against the CONVERSATION (`_conversation_token_est`, every message
+  except the system prompt), not the whole payload: `static` already counts the system prompt,
+  and counting it again made every compaction decision 3,012 tokens optimistic about what it had
+  freed.
+- Memory limits follow the WINDOW, not the model name: notes, fetch and tool output are
+  `min(configured, window // 8)` and `history_exchanges` scales by the same envelope. Measured:
+  an 8,000-char notes block on a 16,384-token window used to be most of the payload.
+- `status`, `doctor`, `health` and the CLI banner print the five numbers
+  (`window · static · reply · budget · remaining`), so the next report like this one is one line
+  of output. `doctor` exits non-zero when the endpoint is below the minimum.
+- A NUMBER in `llm.max_context_tokens` is still a CEILING on the messages budget: the envelope
+  takes the tighter of it and what the endpoint serves, so a box restarted into a bigger window
+  cannot raise a limit the operator set. (The first cut of this change let the window win
+  outright; caught by the ledger suite.)
+- `ps aux` is digested. It was the one process listing that slipped through the digest shapes
+  (which required a dash or a pipe after `ps`) — measured: 190,499 chars / 56,029 estimated
+  tokens rode into the context whole; it is 41 lines and ~2,072 tokens now. A bare `ps` counts
+  only at the start of a command or after an operator, so `grep -i ps file` is untouched.
+
+### Durability
+
+Fixed
+- `atomic_write_text`'s error handler fell back to a PLAIN write, so a denied rename, a full
+  disk or a locked target turned the surviving file into a zero-byte or half-written one — the
+  loss the function exists to prevent, committed by its own handler. It now retries under a
+  second sibling temp name and then raises, leaving the previous file byte-identical and telling
+  the caller it failed. Measured on the 20-item ledger: intact, and the failure surfaces.
+- Every write preserves the file's mode (`fchmod` of the temp to the destination's mode, 0600 for
+  a new file), so a secret cannot become world-readable on its way to `.env`, and a 0600 state
+  file stays 0600.
+- The remaining non-atomic writers go through the same door: tool output spilling, the procedure
+  census (whose fixed `.tmp` name two concurrent writers shared), `update` replacing the live
+  build, and `create_tool`'s file. `remember`'s rewrite is atomic; a failed replace leaves
+  `notes.md` untouched.
+- A `tools/*.py` that calls `sys.exit()` at import no longer bricks the install. `SystemExit` is a
+  `BaseException`, so the loader's `except Exception` never saw it and the process died silently
+  at the next start (`printf 'import sys\nsys.exit(3)' > tools/evil.py`). The loader now catches
+  `BaseException` (re-raising a stop), names the type in the log, and `create_tool` removes the
+  file it just wrote when the reload refuses it.
+
+### Guards
+
+Fixed
+- The POSIX recursive deletes had no coverage in either tier: `rm -rf /etc`, `rm -r -f /`,
+  `rm --recursive --force /`, `rm -rf ~/Documents`, `find / -delete` and
+  `find / -exec rm -rf {} +` all ran ungated, because the only patterns required `r` and `f` in
+  one flag word immediately before a bare `/`. The recursive-delete rule now reads the FLAGS in
+  any order and spelling and the TARGET: a whole tree is refused, a named directory is confirmed.
+- The false positives are gone: `dd if=/dev/zero of=/dev/null bs=1M count=100` (a measuring
+  stick, not a disk), `ls /sbin/mkfs*` and `grep -rn mkfs` (inspecting the tooling) were all
+  refused by the unanchored `\bmkfs\b` and `of=/dev/` patterns.
+- The Windows machine-verb class the audit measured — `taskkill`, `diskpart /s`, `takeown`,
+  `icacls`, `net user … /add`, `New-LocalUser`, `schtasks /delete`, `Set-ExecutionPolicy`,
+  `Stop-Service`, `Stop-Process`, `reg delete`, `Clear-EventLog`, `wmic shadowcopy delete`,
+  `git reset --hard`, `git clean -xfd` — is in the confirm tier now. `git clean -xfd` is there
+  because the agent runs inside its own checkout, where `.gitignore` covers `.env`, `sessions/`
+  and `notes.md`.
+- PowerShell aliases and short forms are covered: `ri -r -fo C:\x`, `rm -r -fo C:\x`,
+  `gci C:\x | ri -Recurse` are gated, and `-e`/`-ec`/`-EncodedCommand` is refused only with a
+  base64-looking argument — `echo 'this note mentions -EncodedCommand'` is allowed again.
+- `write_file`/`edit_file` on the bot's OWN files (`notes.md`, `tasks.json`, `tasks.md`,
+  `atlas.md`, `field-notes.md`) go through the same decision the shell door gets; measured, a
+  tool call replaced `notes.md` with no gate at all while `printf … > notes.md` was stopped.
+- A `.tool.json` manifest's command walks the whole shell tier (it only met the content tier
+  before), and an absolute-tier command is refused at LOAD, so a dropped-in manifest cannot
+  carry one into the box.
+- A `config.json` that REPLACES a shipped guard list can no longer silently downgrade the tiers:
+  the shipped lists carry a version (v3), `<list>_extra` extends instead of replacing, the log
+  names every pattern the box is not enforcing, and `doctor` exits non-zero on it.
+- Endpoint error bodies and the run's recorded attempts are scrubbed before they are stored or
+  printed, so a provider that echoes the API key in its 401 body cannot put it into the fatal
+  notes, the usage footer, the log or the chat.
+- The local page refuses a request whose `Host` is not loopback/configured or whose `Origin` is
+  not same-origin (a page on any site could POST to a loopback-only page with no token — CSRF
+  against shell access), reads the body under an absolute deadline, and rebinds a port inside
+  the kernel's TIME_WAIT window on POSIX while `web_busy_note` stops claiming the port is free.
+
+### Turn engine
+
+Fixed
+- The idle timer covered the PREFILL, so a healthy long prompt was declared wedged. The first
+  byte is now bounded by `request_timeout` (that is the model thinking) and
+  `stream_idle_seconds` applies only BETWEEN chunks.
+- A stream that died after the first delta was handed back as the model's complete answer,
+  because the reader-error check only fired when nothing had arrived at all. A reader error is
+  fatal unless a terminal chunk or `[DONE]` arrived; the caller's same-endpoint retry handles it.
+- Streamed tool calls without an `index` were all keyed on `0`, so two distinct calls MERGED —
+  a run that asked for `echo A` and `echo B` executed `echo AB`. Fragments are keyed by `index`,
+  else by `id`, else a new slot when a fragment starts a call; a byte-identical repeated fragment
+  is no longer appended twice.
+- A 400 that names `stream_options` or `chat_template_kwargs` (a provider saying "unknown
+  argument") used to be classified FATAL, so a cosmetic difference killed the run. The field is
+  dropped and the same endpoint is retried once.
+- `llm.allow_cloud_fallback=false` now covers the whole failover chain, the primary included: a
+  hosted `llm.base_url` was reached as the failover for a privacy-pinned local choice. The
+  CHOSEN endpoint (the config primary, or the model `/model` pinned) still routes where it says.
+- Locality is classified by resolution: `127.1`, `[::1]`, `0.0.0.0`, `*.local` and a LAN
+  hostname (resolved to RFC1918) are local now, so failover and `stream_options` work on exactly
+  the boxes this build targets; an unresolvable name stays remote.
+- `OperatorStop` raised during TOOL execution escaped `Agent.run()` (only the model call had a
+  handler) and every lane but Telegram/CLI catches `Exception`, so the answer was never posted,
+  the progress line stayed open and the queued message was dropped. The turn now catches it and
+  answers with the stop notice, and the lane boundary catches `BaseException`.
+- The repeat guard's signature hashes the full canonical arguments instead of their first 400
+  characters, so two calls that differ later are no longer treated as the same call.
+
+### Install, Unix/macOS
+
+Fixed
+- A fresh Linux *user*-mode install aborted at the unit (`~/.config/systemd/user` is never
+  created by systemd) after the venv, `config.json` and `.env` were on disk and before any unit,
+  `enable` or start. The installer creates the unit's directory.
+- `sudo bash install/uninstall-tinycmdr-macos.sh` — the line the docs print — removed nothing,
+  because `sudo` resets `HOME` to `/var/root` and every removal path was derived from `$HOME`.
+  Both installers resolve the INVOKING user (`SUDO_USER`, else the account behind the uid) and
+  that account's home; an install made with `--label` records its label and the uninstaller reads
+  it back; a removal that finds nothing says so and names the paths it checked, and the PATH
+  wrapper and profile line are removed even when the folder stays.
+- The release zip recorded permission bits without the file-type bits, so Finder-extracted
+  `INSTALL-MACOS.command`, `UNINSTALL-MACOS.command` and `tinycmdr` landed `-rw-r--r--` and the
+  double-click door could not run — for exactly the readers who have no terminal to `chmod +x`.
+  Both zip writers are one `write_zip()` now and write Unix regular files with their modes;
+  `maintenance/check-package-modes.py` proves it by extracting with `ditto -x -k`, the tool
+  Archive Utility uses.
+- The package omitted `maintenance/restart-tinycmdr-macos.sh` while the installer and the README
+  print it as the day-two command; it is in `SHIP`, and the build refuses a package where
+  `SHIP`'s `maintenance/` entries and `ALLOWED_MAINTENANCE` disagree.
+- Installer-written `config.json` (which can hold a live `llm.api_key`) was world-readable beside
+  a 0600 `.env`, and the install log held the page token in cleartext. Both installers write
+  `config.json`, `.env` and the log 0600 and never echo the token.
+- `--no-web` did not close the port on Linux (the no-token branch passed `--web` regardless, with
+  no token minted, so the agent's HTTP API — which runs shell — was open to any local process on
+  every boot); `--web-port` was ignored on an update. Both decide inside the real argument loop.
+- On a Mac whose only interpreter was 3.9, `-y` could not complete: the fallback sat behind a
+  live-terminal prompt that never consulted `--yes`. `-y` consents to the fetch, `--install-python`
+  wins over `--python`, and 3.9 is refused by name with the supported band (3.10–3.12).
+- `--secrets-file` carrying `TINYCMDR_MM_TOKEN` still installed "WITHOUT a chat account": the lane
+  was decided before the file was read and `.env` got an empty `TINYCMDR_MM_TOKEN=` first (which
+  `_load_env_file` keeps). The secrets file is read before the lane decision and managed keys are
+  written once.
+- `chown "$RUN_USER:$RUN_USER"` assumed the group is named after the user, which is not true on
+  AD/LDAP/SSSD accounts, under `useradd -N`, or wherever `USERGROUPS_ENAB=no` — `chown: illegal
+  group name` ended a Linux install right after `config.json`. The primary group comes from
+  `id -gn`, and a chown that cannot work is a named warning.
+- `--help` truncated its own header mid-sentence (so `--no-path` and `--force-python` were
+  documented nowhere), and a headless run printed `/dev/tty: Device not configured` on every run.
+
+### Install, Windows
+
+**Verified at runtime on a real Windows box**, not just read: Windows 11 Pro build 26200,
+OpenSSH 9.5, Python 3.12.10 — 40 checks pass, 0 fail. That includes a **plain
+install run as a NON-elevated user**, which exits 0, writes `config.json`, builds the venv and
+installs the deps with no administrator rights at all, and the fleet-kit refusal below, which
+happens before anything is written. `tests/test_installer_windows.py` still pins the shipped
+text for regressions.
+
+The Windows installer stops finding out about a missing administrator three quarters of the way
+through, and stops rewriting the machine's PATH on its way out.
+
+Fixed
+- A fleet kit's `as_service: true` walked past the elevation guard (which ran before
+  `fleet-defaults.json` could set `-AsService`) and then died inside the *fallback*
+  `Register-ScheduledTask`, which was bare — files, venv, `config.json` and `.env` already
+  written, `INSTALL FAILED`, exit 2. Elevation is re-checked after the fleet defaults, and the
+  fallback registration is caught and answered with "re-run as Administrator". Measured with a
+  non-elevated logon: the refusal is **exit 1** (the installer's documented "bad input or
+  missing prerequisite" — the guard refuses before it tries, so 1 and not 2), it names both the
+  Administrator route and the non-admin lane, and nothing is written.
+- An install with no chat lane and the local page off now says so when it registers no autostart
+  entry. `-AsService` on such a box produced no task and no explanation, which reads like a
+  failed install; the summary now names the reason (there is nothing to run in the background)
+  and the switch that changes it. Found by driving the installer on Windows.
+- Installing or removing rewrote the whole user PATH with `SetEnvironmentVariable`, which EXPANDS
+  other installers' `%JAVA_HOME%\bin`-style entries on read and stores the expanded text back as
+  `REG_SZ`. Both now edit `HKCU\Environment` directly (`DoNotExpandEnvironmentNames` on read,
+  `ExpandString` on write).
+- `-VerifyOnly` installed Python 3.12 before it verified anything; it now probes the install's own
+  interpreter and changes nothing.
+- The generated launchers were written `-Encoding ASCII` with an absolute path baked in, so a
+  non-ASCII profile path could kill autostart; they are path-free (`%~dp0`,
+  `WScript.ScriptFullName`) and ASCII by construction.
+- The documented uninstall command omitted `-ExecutionPolicy Bypass` and hardcoded the default
+  install dir; the README now shows the wrapper with `-InstallDir`.
+- `tinycmdr restart` demanded elevation on every Windows install, including the Startup-shortcut
+  lane where no task exists and a normal shell can restart the bot — a dead end the operator can
+  never satisfy. Elevation is required only when a scheduled task supervises THIS install.
+- `Stop-TinycmdrProcesses` could not see the supervisor (`tinycmdr-supervise.py`) or a
+  `wscript.exe` launcher; the folder removal retries.
+- The remaining W8–W11 items as reported: `tinycmdr.cmd`'s python fallback avoids the Microsoft
+  Store stub, `-SkipTask` withholds only the task, the Python fallback is not hardcoded to amd64,
+  and the uninstaller asks about the folder before removing the PATH entry.
+
+### The gate
+
+Added
+- `tests/run_all.py`: discovers `tests/test_*.py`, runs each as its own subprocess with a
+  per-file timeout, prints `file → pass/fail/skip`, and exits non-zero on any failure or skip.
+  The suites that were only ever "run by hand" (and the `python -m pytest` lines in their
+  docstrings, which never worked) are now one command with a real exit code.
+- `requirements-test.txt` and one CI workflow (macOS + Linux running the gate, a Windows job
+  running the pure-Python suites).
+- Suites added by this phase: `test_envelope.py` (the arithmetic, the refusal, the memory caps,
+  the static-overhead ceiling), `test_prefix_stability.py` (prefix reuse ≥ 90 %, exactly one
+  trailing state block, disclosure at 80 tools), `test_guard_battery.py` (every destructive
+  spelling gated, nothing else), `test_stream_calls.py` (prefill vs idle, torn streams, tool-call
+  merging, the optional-field retry, locality, the stop path), `test_atomic_write.py`,
+  `test_installer_unix.py`, `test_installer_windows.py`.
+
+### Changed
+
+- `llm.max_tokens` is a CEILING, not what is sent: the reply is clamped per request to
+  `min(llm.max_tokens, window // 4)` unless a caller names one deliberately (the forced
+  wrap-up and the cut-off-mid-think escalation, which only fire on a server that answered).
+- The tool schemas the session will send are part of the budget, so adding 100 disclosed tools
+  visibly lowers the messages budget instead of riding free.
+- `agent.tool_disclosure` is unchanged; the tool INDEX still bounds the static prompt.
+- `TINYCMDR_LOG_FILE` redirects the file log, and the task journal is written beside the
+  ledger instead of always beside the build. Both existed so a test install could own its own
+  files: the suites that only relocated the ledger still appended to `tinycmdr.log` in the
+  checkout, where `git status` cannot show an ignored file. The gate's repo-tree report is
+  what finally named it.
+
+### Known, deferred to Phase 2
+
+- The README's "~4.1K token overhead" predates this measurement: the static half is 5,236–5,322
+  tokens as shipped, and trimming it is Phase 2's prompt-section work (audit D3/D10), together
+  with the doc-number drift.
+
+
 ## [1.0.23] - 2026-09-26
 
 One install can no longer take another one's autostart, and a fresh config no longer inherits an
@@ -80,7 +341,8 @@ Fixed
   the uninstaller both name the real location. The uninstaller removes that wrapper and that line.
 - The extensionless `tinycmdr` launcher shipped with CRLF endings in every shape. It is the file
   the PATH wrapper execs, so the verb died on a Mac or Linux with
-  `set: -: invalid option` as soon as it resolved. `build-package.py` normalised `.sh` and
+  `set: -
+: invalid option` as soon as it resolved. `build-package.py` normalised `.sh` and
   `.command` only; it now normalises any shipped script with a shebang, whatever its name, and
   `.gitattributes` pins the launcher to LF so a Windows checkout cannot put it back.
 - A fresh install kept the example's `REPLACE_WITH_YOUR_MATTERMOST_USER_ID` in

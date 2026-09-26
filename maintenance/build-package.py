@@ -54,6 +54,35 @@ def wants_exec_bit(path):
     return p.name in EXEC_NAMES or p.suffix in (".sh", ".command")
 
 
+def write_zip(stage_dir, zip_path):
+    """Write one staged tree as a zip with real Unix file modes. ONE writer, called by
+    both the Windows/Linux zip and the macOS zip.
+
+    The file-TYPE bits are load-bearing. `external_attr = mode << 16` carries permission
+    bits only, so a reader who expands the package with Finder (Archive Utility is
+    `ditto -x -k`) got every file as -rw-r--r-- whatever mode the build recorded -
+    INSTALL-MACOS.command, UNINSTALL-MACOS.command and the extensionless `tinycmdr`
+    launcher all came out non-executable (measured 2026-09-26 on the published
+    tinycmdr-macos.zip; plain `unzip`, which is what the curl door uses, rebuilds 0755
+    from the permission bits and hid the bug for as long as it existed). S_IFREG
+    (0o100000) plus `create_system = 3` is what marks the entry as a Unix regular file
+    carrying those modes. Do not "simplify" either line; maintenance/check-package-modes.py
+    extracts the built zip with ditto and fails when the doors are not -rwxr-xr-x.
+    """
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(stage_dir.rglob("*")):
+            if not f.is_file():
+                continue
+            arc = f.relative_to(stage_dir.parent).as_posix()
+            mode = 0o755 if wants_exec_bit(f) else 0o644
+            zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
+            zi.create_system = 3                    # Unix, or readers ignore the type bits
+            zi.external_attr = (0o100000 | mode) << 16
+            zi.compress_type = zipfile.ZIP_DEFLATED
+            z.writestr(zi, f.read_bytes())
+    return zip_path
+
+
 # files/dirs that ship, in package-relative form
 SHIP = [
     "tinycmdr.py",
@@ -96,6 +125,14 @@ SHIP = [
     "tinycmdr",
     "maintenance/restart-tinycmdr.ps1",
     "maintenance/restart-tinycmdr.sh",
+    # The macOS twin. The macOS installer prints
+    # `bash $INSTALL_DIR/maintenance/restart-tinycmdr-macos.sh` as the day-two command and
+    # install/README-macos.md documents the same path, but SHIP listed only the .ps1 and the
+    # .sh while ALLOWED_MAINTENANCE permitted all three - so the macOS package shipped
+    # without the file the reader was told to run, and the installer's copy loop said
+    # nothing about the miss (measured 2026-09-26: `unzip -l tinycmdr-macos.zip` had no
+    # macOS variant). ALLOWED_MAINTENANCE only ever *permits*; SHIP is what ships.
+    "maintenance/restart-tinycmdr-macos.sh",
     "skills",
     # The starter drop-in tools, the shapes doc and the toolsmith. tools/ is
     # otherwise per-host payload and stays banned from directory walks below
@@ -145,8 +182,10 @@ FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
 # migrations, probes, backups - and stays out.
 #
 # This is the SAME list as SHIP's maintenance/ entries, written twice, and the two drifting
-# apart refuses the whole build. When you ship a new file from this folder, add it to BOTH,
-# and cut the package in the same batch.
+# apart refuses the whole build (maintenance_drift() below; it was only a comment until
+# 2026-09-26, and the permitted-but-absent macOS restart helper is what the comment missed).
+# When you ship a new file from this folder, add it to BOTH, and cut the package in the
+# same batch.
 ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
                        "restart-tinycmdr-macos.sh"}
 
@@ -584,6 +623,28 @@ def audit_public(stage_dir):
 PY_FLOOR = (3, 10)
 
 
+def maintenance_drift():
+    """Problems where SHIP's maintenance/ entries disagree with ALLOWED_MAINTENANCE.
+
+    Measured 2026-09-26: ALLOWED_MAINTENANCE permitted restart-tinycmdr-macos.sh while
+    SHIP never listed it, so the macOS package shipped without the file the installer
+    prints as its day-two command and install/README-macos.md §5 documents - while the
+    installer's copy loop said nothing about the miss. `audit()` only rejects files that
+    are PAST ALLOWED_MAINTENANCE, so a permitted-but-absent file was invisible. The two
+    lists are now asserted equal, in both directions.
+    """
+    shipped = {rel.split("/", 1)[1] for rel in SHIP if rel.startswith("maintenance/")}
+    allowed = set(ALLOWED_MAINTENANCE)
+    problems = []
+    for name in sorted(allowed - shipped):
+        problems.append(f"SHIP omits maintenance/{name}, which ALLOWED_MAINTENANCE permits "
+                        f"(the package would not carry a file an install is told to run)")
+    for name in sorted(shipped - allowed):
+        problems.append(f"SHIP lists maintenance/{name}, which ALLOWED_MAINTENANCE does not "
+                        f"permit (audit() would refuse this build)")
+    return problems
+
+
 def tier_drift():
     """Problems where config.example.json disagrees with DEFAULT_CONFIG's safety tiers.
 
@@ -754,6 +815,7 @@ def main():
             problems += audit_public(stage_dir)
         problems += syntax_floor(stage_dir)
         problems += tier_drift()
+        problems += maintenance_drift()
         if problems:
             print("\nBUILD REFUSED — the package would carry secrets or host data:")
             for p in problems:
@@ -792,16 +854,7 @@ def main():
         DIST.mkdir(exist_ok=True)
         suffix = "" if public else "-fleet"
         zip_path = DIST / f"tinycmdr-{ver}-win{suffix}.zip"
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
-            for f in sorted(stage_dir.rglob("*")):
-                if not f.is_file():
-                    continue
-                arc = f.relative_to(stage_dir.parent).as_posix()
-                mode = 0o755 if wants_exec_bit(f) else 0o644
-                zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
-                zi.external_attr = mode << 16
-                zi.compress_type = zipfile.ZIP_DEFLATED
-                z.writestr(zi, f.read_bytes())
+        write_zip(stage_dir, zip_path)
 
         # verify the zip itself, not just the staging dir
         with zipfile.ZipFile(zip_path) as z:
@@ -912,16 +965,7 @@ def main():
         mac_ok = True
         if args.macos:
             mac_path = DIST / f"tinycmdr-{ver}-macos{suffix}.zip"
-            with zipfile.ZipFile(mac_path, "w", zipfile.ZIP_DEFLATED) as z:
-                for f in sorted(stage_dir.rglob("*")):
-                    if not f.is_file():
-                        continue
-                    arc = f.relative_to(stage_dir.parent).as_posix()
-                    mode = 0o755 if wants_exec_bit(f) else 0o644
-                    zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
-                    zi.external_attr = mode << 16
-                    zi.compress_type = zipfile.ZIP_DEFLATED
-                    z.writestr(zi, f.read_bytes())
+            write_zip(stage_dir, mac_path)
             with zipfile.ZipFile(mac_path) as z:
                 mac_names = z.namelist()
                 macbad = [n for n in mac_names

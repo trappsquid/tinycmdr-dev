@@ -16,12 +16,31 @@ capability is told so instead of being guessed at.
 """
 import importlib.util
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+
+# A `python` reachable BY NAME for the checks that run one through the shell.
+# The shell tool runs its command in the real shell, so `python -c "print(123)"` needs an
+# interpreter called `python` on PATH. run_all.py invokes this suite as
+# `<venv>/bin/python tests/...`, which does NOT put that bin on the child's PATH: measured
+# 2026-09-26, the one-liner answered exit_code=127 and this suite went 125 passed / 2
+# failed purely from how it was started. The interpreter running this file always exists,
+# so make it reachable by that name.
+os.environ["PATH"] = str(Path(sys.executable).parent) + os.pathsep + os.environ.get("PATH", "")
+if shutil.which("python") is None:
+    _shim_dir = Path(tempfile.mkdtemp(prefix="fbshell-python-"))
+    _shim = _shim_dir / ("python.exe" if os.name == "nt" else "python")
+    try:
+        os.symlink(sys.executable, _shim)
+    except (OSError, NotImplementedError):
+        shutil.copy2(sys.executable, _shim)      # a copy is a poor alias, but it runs
+    os.environ["PATH"] = str(_shim_dir) + os.pathsep + os.environ["PATH"]
+
 spec = importlib.util.spec_from_file_location("tinycmdr_discovery_under_test", SRC)
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_discovery_under_test"] = fb
@@ -183,8 +202,35 @@ check("the line says these are CORE tools (the drive mislabeled them custom)",
       "Those are core tools" in fb.hidden_inventory_line(), fb.hidden_inventory_line()[:200])
 check("and points at the custom block for the rest",
       "custom tools listed at the end" in fb.hidden_inventory_line())
-check("prompt: a skill is a runbook, not a tool, so a tools inventory names tools",
-      "a skill is a runbook, not a tool" in sp)
+# The skill block is generated from the runbooks INSTALLED on the box, and ./skills is
+# gitignored (they are the operator's own procedures), so a clean clone has none and the
+# sentence above was never in the prompt: measured 2026-09-26, this check was the suite's
+# only real failure. Own the input instead of the host's disk, the way the parked-skill
+# block below does: point SKILLS_DIR at a temp dir, once with a runbook in it and once with
+# nothing, so both halves of the contract are graded.
+skdir = Path(tempfile.mkdtemp(prefix="fbskills-"))
+(skdir / "demo-runbook").mkdir()
+(skdir / "demo-runbook" / "SKILL.md").write_text(
+    "---\nname: demo-runbook\ndescription: a fixture runbook\n---\nsteps\n",
+    encoding="utf-8", newline="\n")
+(skdir / "empty").mkdir()
+_keep_skills_dir = fb.SKILLS_DIR
+try:
+    fb.SKILLS_DIR = skdir / "demo-runbook"
+    sp_skilled = fb.build_system_prompt()
+    fb.SKILLS_DIR = skdir / "empty"
+    sp_bare = fb.build_system_prompt()
+finally:
+    fb.SKILLS_DIR = _keep_skills_dir
+    shutil.rmtree(skdir, ignore_errors=True)
+check("prompt: the runbook block carries the rule this inventory depends on",
+      "a skill is a runbook, not a tool" in sp_skilled)
+check("...and names the runbook that is installed",
+      "demo-runbook" in sp_skilled)
+check("...and is absent when no runbook is installed (no dangling header)",
+      "a skill is a runbook, not a tool" not in sp_bare
+      and "Prose skills installed" not in sp_bare)
+
 check("prompt: the routing bullet names the shell verbs it replaces",
       "Select-String" in sp and "findstr" in sp and "search_files {pattern, path}" in sp)
 check("prompt: the routing bullet carries search_files' own call shape",
@@ -342,16 +388,19 @@ check("...and is not mistaken for a tool",
       "is a TOOL on this box" not in out, out[:120])
 
 _keep_confirm = fb.CONFIG["agent"].get("confirm_patterns")
+# The probe writes go to a temp dir, never into tests/sessions/: a suite grades the build,
+# and a write into the checkout is state the next run (and `git status`) has to explain.
+_wprobe = Path(tempfile.mkdtemp(prefix="fbdiscovery-writes-"))
 try:
     fb.CONFIG["agent"]["confirm_patterns"] = ["\\bdel\\s+/[a-z]*[sq]"]
     said = []
-    res = fb.tool_write_file({"path": str(BASE / "tests" / "sessions" / "gated-probe.cmd"),
+    res = fb.tool_write_file({"path": str(_wprobe / "gated-probe.cmd"),
                               "content": "del /q /s C:\\nowhere\\x\n", "no_backup": True},
                              {"session_key": "s-gate", "confirm_cb": lambda s: said.append(s) or True})
     check("a gated write asks the operator first", bool(said), said)
     check("and the result says the operator approved it",
           "confirm_patterns" in res and "approved" in res, res[:200])
-    res2 = fb.tool_write_file({"path": str(BASE / "tests" / "sessions" / "ungated-probe.txt"),
+    res2 = fb.tool_write_file({"path": str(_wprobe / "ungated-probe.txt"),
                                "content": "just text\n", "no_backup": True},
                               {"session_key": "s-gate2", "confirm_cb": lambda s: said.append(s) or True})
     check("an ordinary write carries no such line", "approved" not in res2, res2[:160])
@@ -360,6 +409,7 @@ finally:
         fb.CONFIG["agent"].pop("confirm_patterns", None)
     else:
         fb.CONFIG["agent"]["confirm_patterns"] = _keep_confirm
+    shutil.rmtree(_wprobe, ignore_errors=True)
 
 typed_probe = {"status": "ok", "summary": "everything was fine",
                "evidence": ["a diff"], "blockers": [], "followups": []}

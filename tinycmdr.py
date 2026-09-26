@@ -75,7 +75,21 @@ JOBS_FILE = BASE_DIR / "jobs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
 TASKS_FILE = BASE_DIR / "tasks.json"      # durable task ledger (source of truth)
 TASKS_DOC = BASE_DIR / "tasks.md"         # human-readable render of the ledger
-TASKS_JOURNAL = BASE_DIR / "tasks.journal.jsonl"   # append-only ledger history, one JSON line per save
+_TASKS_JOURNAL_DEFAULT = BASE_DIR / "tasks.journal.jsonl"
+TASKS_JOURNAL = _TASKS_JOURNAL_DEFAULT   # append-only ledger history, one JSON line per save
+
+
+def _journal_path():
+    """The ledger's journal: beside the LEDGER, not always beside the build.
+
+    TASKS_JOURNAL was a constant, so a caller that relocated TASKS_FILE (a suite, a test
+    install) kept writing the journal - and creating the file - in BASE_DIR; the gate's
+    repo-tree report is what named it (2026-09-26). A caller that pinned TASKS_JOURNAL
+    explicitly still wins, which is how the suites redirect it.
+    """
+    if Path(TASKS_JOURNAL) != _TASKS_JOURNAL_DEFAULT:
+        return Path(TASKS_JOURNAL)
+    return Path(TASKS_FILE).with_name("tasks.journal.jsonl")
 EXPERIMENTS_FILE = BASE_DIR / "experiments.jsonl"  # append-only experiment ledger, one JSON line per record
 NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt
 
@@ -107,11 +121,17 @@ _log_queue = queue.Queue(-1)
 # Rotating so a long-running bot can't fill the disk (the log grows ~370 KB/day
 # and nothing else prunes it).
 _log_console = logging.StreamHandler()
+# Where the file log lands. TINYCMDR_LOG_FILE redirects it, which is what the suites need:
+# every suite that logs otherwise appends into the checkout, and `git status` cannot show it
+# (the file is gitignored), so the leak stays invisible - tests/run_all.py's repo-tree report
+# is what finally named it (2026-09-26). The env var and not a config key on purpose: this
+# handler is attached at import, before CONFIG exists.
+_log_path = Path(os.environ.get("TINYCMDR_LOG_FILE") or (BASE_DIR / "tinycmdr.log"))
 _log_listener = logging.handlers.QueueListener(
     _log_queue,
     _log_console,
     logging.handlers.RotatingFileHandler(
-        BASE_DIR / "tinycmdr.log", maxBytes=5 * 1024 * 1024,
+        _log_path, maxBytes=5 * 1024 * 1024,
         backupCount=3, encoding="utf-8"))
 _log_listener.start()
 logging.basicConfig(
@@ -492,6 +512,21 @@ DEFAULT_CONFIG = {
             # answered "clear out the junk" with `robocopy /MOVE` of a 194-item directory and
             # NOTHING in either tier matched it - only the model's own question protected it.
             r"\brobocopy\b[^|;]*/move\b",
+            # The Windows machine-verb class (BUGREPORT §S1, measured on a Windows bed):
+            # every one of these was `is_blocked=False, confirm=None`, so the whole class
+            # ran with no gate at all. They are confirm-tier, not absolute: stopping a
+            # service and stopping the wrong one look identical to a regex, and that is
+            # exactly what a human should answer. `git clean -xfd` / `reset --hard` are
+            # here because the agent lives INSIDE its own checkout, where .gitignore covers
+            # .env, sessions/, notes.md and tools/ - one call deletes the credentials and
+            # the bot's memory.
+            r"\bdiskpart\b", r"\btakeown\b", r"\bicacls\b", r"\btaskkill\b",
+            r"\bnet\s+user\s+\S+[^\n]*/(?:add|delete)\b", r"\bnew-localuser\b",
+            r"\bschtasks\s+/delete\b", r"\bset-executionpolicy\b",
+            r"\bstop-service\b", r"\bstop-process\b",
+            r"\breg\s+delete\b", r"\bclear-eventlog\b",
+            r"\bwmic\s+shadowcopy\s+delete\b",
+            r"\bgit\s+reset\s+--hard\b", r"\bgit\s+clean\s+-[a-z]*[xdf]",
         ],
         # The CONTENT tier: the same idea over the TEXT of a file the harness is about to
         # write (write_file/edit_file content, create_tool code, a manifest command). Kept
@@ -522,12 +557,33 @@ DEFAULT_CONFIG = {
         # is hard-coded: name your own launchers here and they are covered.
         "endpoint_tools": ["inferctl", "llamasrv", "serve_", "llama", "vllm"],
         "blocked_patterns": [
+            # The POSIX recursive deletes (rm -rf, rm -r -f, --recursive --force, find
+            # -delete) are NOT regexes here on purpose: the verb cannot decide (`rm file`
+            # is ordinary work) and the flags and the TARGET can, so they are read by
+            # destructive_risk() next to _broad_root, which routes a whole-tree target to
+            # this tier and a named directory to confirm (BUGREPORT §S1). A host that
+            # replaces this list cannot lose that coverage.
+            #
             # the lookahead, not "end of line": inside code the command is usually quoted, so
             # `os.system("rm -rf /")` ended on a quote and the old pattern missed it (found by
-            # tests/test_stall.py on 2026-09-18, the day the seatbelt was extended to code)
+            # tests/test_stall.py on 2026-09-18, the day the seatbelt was extended to code).
             r"rm\s+-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*\s+/(?![A-Za-z0-9_./~-])",
             r"rm\s+-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*\s+/(?![A-Za-z0-9_./~-])",
-            r"\bmkfs\b", r"\bdd\s+.*of=/dev/", r":\(\)\s*\{",
+            # mkfs is blocked where it could RUN, not where it is NAMED: `ls /sbin/mkfs*`
+            # and `grep -rn mkfs` are how an operator inspects the tooling, while
+            # `subprocess.run(["mkfs.ext4", "/dev/sda1"])` in code is an invocation - and
+            # anchoring the match to `^|;&|` alone missed exactly that (found by
+            # tests/test_stall.py). A line that mentions a read-only inspection verb
+            # anywhere is exempt; everything else that says mkfs is refused.
+            r"(?im)^(?![^\n]*\b(?:ls|grep|egrep|fgrep|rg|find|which|whereis|type|man|"
+            r"info|cat|head|tail|strings|dpkg|rpm|apk|yum|dnf|apt|apt-get|pacman|"
+            r"modinfo|file|stat|locate)\b)[^\n]*\bmkfs(?:\.\w+)?\b",
+            # of=/dev/... EXCEPT /dev/null, which is the measuring stick, not a disk:
+            # `dd if=/dev/zero of=/dev/null bs=1M count=100` was refused (BUGREPORT §S1).
+            r"\bdd\s+[^\n]*of=/dev/(?!null)",
+            # The fork bomb, with or without the spaces around the parens: `: () { :|:& };:`
+            # is the shape people actually type, and the old pattern required `:(`.
+            r":\s*\(\s*\)\s*\{",
             r">\s*/dev/sd", r"\bformat\s+[a-zA-Z]:",
             # Windows counterparts — this box is Windows, and the POSIX list
             # alone was theatre here. Still a seatbelt, not a boundary: execute_code's
@@ -543,10 +599,76 @@ DEFAULT_CONFIG = {
             # relocated it to the one path a regex cannot see.
             r"\bformat-volume\b", r"\bclear-disk\b", r"\binitialize-disk\b",
             r"\bcipher\s+/w\b", r"\bvssadmin\s+delete\s+shadows\b",
-            r"-encodedcommand\b",
+            # An ENCODED command is opaque by design, so it is refused only where it really
+            # is one: a powershell/pwsh invocation with -e / -ec / -encodedcommand and a
+            # base64-looking argument. The old bare `-encodedcommand\b` matched the word in
+            # a note ("this box blocks -EncodedCommand in text") and refused the write
+            # (BUGREPORT §S2).
+            r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-e(?:c|nc(?:odedcommand)?)?\s+"
+            r"[A-Za-z0-9+/=]{8,}",
         ],
     },
 }
+
+
+# ---- the shipped guard lists, and the version that says which is which ----------
+# BUGREPORT §S18: `load_config` merges section dicts with `cfg[section].update(values)`,
+# so a config.json carrying a `confirm_patterns` list REPLACES the shipped one wholesale.
+# A config written against an older build therefore silently dropped five shipped confirm
+# patterns (the Windows machine-verb class) and both tiers were quietly weaker than this
+# build believes - the report's in-harness model dodged its own box that way. A host that
+# wants to EXTEND a list uses `<list>_extra` (below) and never has to replace it.
+GUARD_LIST_VERSION = 3
+SHIPPED_GUARD_LISTS = {
+    "blocked_patterns": tuple(DEFAULT_CONFIG["agent"]["blocked_patterns"]),
+    "confirm_patterns": tuple(DEFAULT_CONFIG["agent"]["confirm_patterns"]),
+    "confirm_content_patterns": tuple(
+        DEFAULT_CONFIG["agent"]["confirm_content_patterns"]),
+}
+
+
+def _merge_guard_extras(agent):
+    """Fold `<list>_extra` into its list, so adding a guard never means replacing one."""
+    for key, shipped in SHIPPED_GUARD_LISTS.items():
+        extra = agent.pop(key + "_extra", None)
+        if not extra:
+            continue
+        base = list(agent.get(key) or shipped)
+        for pat in (extra if isinstance(extra, (list, tuple)) else [extra]):
+            if str(pat) not in base:
+                base.append(str(pat))
+        agent[key] = base
+
+
+def guard_list_drift():
+    """[(list, missing, extra)] for every guard list missing a shipped pattern.
+
+    A config that replaced a list keeps working - this is a WARNING, not a refusal - but
+    it can no longer be silent: `doctor` exits non-zero and the log names every pattern
+    the box is not enforcing.
+    """
+    drift = []
+    for key, shipped in SHIPPED_GUARD_LISTS.items():
+        have = [str(p) for p in ((CONFIG.get("agent") or {}).get(key) or [])]
+        missing = [p for p in shipped if p not in have]
+        if missing:
+            extra = [p for p in have if p not in shipped]
+            drift.append((key, missing, extra))
+    return drift
+
+
+def guard_drift_note(drift):
+    """One operator-facing sentence per drifted list, naming what is missing."""
+    parts = []
+    for key, missing, _extra in drift:
+        shown = "; ".join(repr(p) for p in missing[:6])
+        more = "" if len(missing) <= 6 else " (+%d more)" % (len(missing) - 6)
+        parts.append("%s is missing %d shipped pattern(s) from guard list v%d: %s%s"
+                     % (key, len(missing), GUARD_LIST_VERSION, shown, more))
+    return ("config.json replaced a shipped guard list, so this box is less protected "
+            "than this build intends - " + " | ".join(parts)
+            + ". Add patterns with %s_extra instead of replacing the list."
+            % "/".join(k for k, _m, _e in drift))
 
 
 ENV_FILE = BASE_DIR / ".env"
@@ -639,6 +761,8 @@ def load_config():
         env_name = fb.get("api_key_env")
         if env_name and os.environ.get(env_name):
             fb["api_key"] = os.environ[env_name]
+    # `<list>_extra` extends a shipped guard list instead of replacing it (§S18).
+    _merge_guard_extras(cfg.setdefault("agent", {}))
     return cfg
 
 
@@ -682,7 +806,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.23"
+VERSION = "1.0.24"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -788,18 +912,67 @@ def fmt_usage(u):
     return s
 
 
+_LOCAL_URL_CACHE = {}
+
+
 def _is_local_url(url):
-    """True for loopback/RFC1918 endpoints — i.e. the LAN boxes."""
+    """True for loopback/private endpoints - i.e. the LAN boxes. Cached per host.
+
+    Classified by RESOLUTION, not only by spelling (BUGREPORT §M8): `127.1`, `[::1]`,
+    `0.0.0.0`, a `.local` name and a bare LAN hostname (`llama-box`) are all local, and
+    the old spelling test called the last three remote - which silently disabled
+    failover AND `stream_options` on exactly the boxes this build targets. A name that
+    cannot be resolved is treated as REMOTE (pessimistic: no off-LAN send is ever
+    invented out of a failure to answer).
+    """
     try:
-        host = url.split("//", 1)[-1].split("/", 1)[0].split(":")[0].lower()
+        host = url.split("//", 1)[-1].split("/", 1)[0]
+        host = host.rsplit("@", 1)[-1]              # strip user:pass@
+        if host.startswith("["):                    # an IPv6 literal: [::1]:8080
+            host = host[1:].split("]", 1)[0]
+        else:
+            host = host.split(":", 1)[0]
+        host = host.strip().lower()
     except Exception:
         return False
-    if host in ("localhost", "127.0.0.1", "::1") or host.endswith(".local"):
+    if not host:
+        return False
+    hit = _LOCAL_URL_CACHE.get(host)
+    if hit is None:
+        hit = _host_is_local(host)
+        _LOCAL_URL_CACHE[host] = hit
+    return hit
+
+
+def _host_is_local(host):
+    """One hostname: is it this machine or this LAN?"""
+    if host in ("localhost", "::1", "127.0.0.1", "0.0.0.0") or host.endswith(".local"):
         return True
     parts = host.split(".")
-    if len(parts) == 4 and all(x.isdigit() for x in parts):
-        a, b = int(parts[0]), int(parts[1])
-        return a in (10, 127) or (a == 192 and b == 168) or (a == 172 and 16 <= b <= 31)
+    if all(p.isdigit() for p in parts) and len(parts) in (2, 4):
+        if parts[0] == "127":                       # all of 127/8, and the "127.1" form
+            return True
+        if len(parts) == 4:
+            a, b = int(parts[0]), int(parts[1])
+            return (a == 10 or (a == 192 and b == 168)
+                    or (a == 172 and 16 <= b <= 31))
+        return False
+    if ":" in host:                                  # IPv6: loopback handled above
+        return host.startswith(("fc", "fd", "fe80"))
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return False                                 # unresolvable -> remote
+    for info in infos:
+        addr = str(info[4][0])
+        if addr.startswith("127.") or addr == "::1":
+            return True
+        if addr.startswith(("10.", "192.168.", "fc", "fd", "fe80")):
+            return True
+        if addr.startswith("172."):
+            octets = addr.split(".")
+            if len(octets) == 4 and octets[1].isdigit() and 16 <= int(octets[1]) <= 31:
+                return True
     return False
 
 
@@ -827,12 +1000,112 @@ _CONTEXT_OVERFLOW_RE = re.compile(
     r"too many tokens|exceeds? .{0,20}(context|token)|prompt is too long|"
     r"max_model_len|n_ctx|reduce the length|input is too long)", re.I)
 
-# What a request spends OUTSIDE the messages payload: the system block, the tool
-# schemas, the reply itself, and the estimator's known optimism. A configured
-# llm.max_context_tokens is clamped by what the endpoint actually serves minus
-# this, so a budget written for a bigger window cannot send a prompt that leaves
-# no room to answer (2026-09-21).
-REPLY_HEADROOM = 7000
+# ---- the envelope: the arithmetic a request is allowed to spend -----------------
+# Measured 2026-09-26 (audit FEATURE D1/D2, BUGREPORT §M9): the old budget was
+# max(4000, window - 7000 - max_tokens) with the static half - system prompt plus
+# tool schemas, measured at 5,322 tokens - subtracted from nothing, and max_tokens
+# (16,384) sent unclamped. An 8,192-token endpoint was handed a 9,275-token payload
+# and a 16,384-token completion request. The three constants below replace that
+# guess with a measurement: `static` is counted from the prompt the box will
+# actually send, the reply is clamped to a quarter of the window, and the messages
+# budget is what is left. A window below the minimum REFUSES the run; below the
+# warning line it runs and says so.
+ENVELOPE_MIN_WINDOW = 8192        # below this the static prompt crowds out the reply
+ENVELOPE_WARN_WINDOW = 16384      # below this say so, above it run quietly
+ENVELOPE_MIN_BUDGET = 1024        # never trim the conversation away entirely
+_ENVELOPE_ASSUMED_WINDOW = 16384  # endpoint silent and nothing configured to say
+_STATIC_CACHE = {}                # session_key -> (at, frozenset(names), tokens)
+
+
+def _context_ceiling():
+    """llm.max_context_tokens as an int ceiling, or None for "believe the endpoint".
+
+    "auto" (any casing/spacing), blank, zero, and anything that is not a number all
+    mean the same thing - the old comment's contract, kept: a bad value used to reach
+    int() and kill the run with a ValueError out of a hand-edited config, and is now
+    named in the log and read as auto.
+    """
+    val = CONFIG["llm"].get("max_context_tokens")
+    if isinstance(val, str) and val.strip().lower() == "auto":
+        return None
+    if isinstance(val, bool) or (val not in (None, "", 0)
+                                 and not isinstance(val, (int, float))):
+        log.warning("llm.max_context_tokens is %r, which is neither a number nor "
+                    "\"auto\" - asking the endpoint instead", val)
+        return None
+    if val in (None, "", 0):
+        return None
+    try:
+        num = int(val)
+    except (TypeError, ValueError):
+        return None
+    return num if num > 0 else None
+
+
+def static_prompt_tokens(session_key=None):
+    """Tokens the STATIC half of every request costs: system prompt + sent schemas.
+
+    Measured, not a constant - the growth of the prompt and the tool schemas had
+    already outrun the 7,000-token headroom this replaces. Cached per session for
+    WINDOW_TTL and invalidated the moment the visible tool set changes, so a reveal
+    (or a tool built mid-run) is counted on the very next call. That is also the
+    prefix-cache-stable number, which is why A5 can assert on it.
+    """
+    schemas = select_tool_schemas(session_key)
+    names = frozenset(str((s.get("function") or {}).get("name") or "")
+                      for s in schemas)
+    hit = _STATIC_CACHE.get(session_key)
+    now = time.time()
+    if hit and now - hit[0] <= WINDOW_TTL and hit[1] == names:
+        return hit[2]
+    total = est_tokens(build_system_prompt()) + est_tokens(json.dumps(schemas))
+    _STATIC_CACHE[session_key] = (now, names, total)
+    return total
+
+
+def envelope_line(env, raw=False):
+    """The five numbers an operator needs to see, in one line.
+
+    window / static / clamped reply / messages budget / remaining, where remaining
+    is the budget left once the trailing state block is counted (the same deduction
+    _compact makes). `raw` is for the script-facing `health` verb: plain integers.
+    """
+    fmt = (lambda n: str(int(n))) if raw else fmt_tokens
+    rem = max(0, int(env.get("budget") or 0) - est_tokens(volatile_context()))
+    return ("window %s · static %s · reply %s · budget %s · remaining %s"
+            % (fmt(env.get("window")), fmt(env.get("static")),
+               fmt(env.get("reply")), fmt(env.get("budget")), fmt(rem)))
+
+
+def mem_limit_chars(key, default):
+    """A character cap that scales with the WINDOW, not with the model NAME.
+
+    apply_model_profile raises these caps for a capable model, which is right on a
+    200k endpoint and wrong for the same model served at 16k: the measured case is
+    an 8,000-char notes block on a 16,384-token window, where the trailing state
+    block alone was most of the budget. The effective limit is the tighter of the
+    configured value and window // 8 characters (audit FEATURE D5), never below 512.
+    """
+    try:
+        configured = int(CONFIG["agent"].get(key) or default)
+    except (TypeError, ValueError):
+        configured = int(default)
+    window = int(getattr(AGENT, "_envelope_cache", {}).get("window") or 0)
+    if window <= 0:
+        return configured
+    return max(512, min(configured, window // 8))
+
+
+def mem_limit_exchanges(key, default):
+    """Same idea for history_exchanges: ~2,000 tokens of room per exchange kept."""
+    try:
+        configured = int(CONFIG["agent"].get(key) or default)
+    except (TypeError, ValueError):
+        configured = int(default)
+    window = int(getattr(AGENT, "_envelope_cache", {}).get("window") or 0)
+    if window <= 0:
+        return configured
+    return max(2, min(configured, window // 2000))
 
 # How long a detected endpoint window / context budget is trusted (seconds). It is
 # metadata, not a model call, but it MOVES: .47 serves 131,072 per request with -np 2
@@ -868,8 +1141,15 @@ def _http_status(exc):
 
 
 def _http_body(exc, limit=600):
+    """The endpoint's error body, scrubbed before it goes anywhere.
+
+    Measured BUGREPORT §M4: a provider that echoes the request's Authorization header in
+    its 401 body put the API key into the fatal notes, the run's return value, the log and
+    the chat - every exit this function feeds. `scrub()` is the one place that knows the
+    secrets this process was handed, so it runs HERE, at the boundary, not at each caller.
+    """
     try:
-        return " ".join((exc.response.text or "").split())[:limit]
+        return scrub(" ".join((exc.response.text or "").split())[:limit])
     except Exception:
         return ""
 
@@ -969,12 +1249,19 @@ def _post_watchdog(url, headers, payload, timeout, grace, cancel_event=None,
     return box.get("resp")
 
 
-def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
+def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
+                 first_byte_seconds=None):
     """Consume an SSE chat completion into the same shape the JSON path returns.
 
     Returns (data, stats) where `data` is `{"choices": [{...}], "usage": {...}}`, so
     every downstream decision (usage accounting, the finish=length escalation, the
     clamp check) is identical to the non-streaming path.
+
+    Two different waits, and they are not the same number (BUGREPORT §M3): the FIRST
+    byte waits on the model's prefill, which on a long prompt is slow but healthy, so it
+    is bounded by `first_byte_seconds` (request_timeout); BETWEEN chunks the stream is
+    wedged if nothing arrives for `idle_seconds`. Applying the idle bound to the prefill
+    declared a healthy long prompt wedged.
 
     The body is read in a daemon thread and drained through a queue. That is not
     decoration: while blocked in `iter_lines` neither a cancel nor an idle gap can be
@@ -984,6 +1271,8 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
     """
     content, reasoning, finish = [], [], ""
     calls = {}
+    frags = {}
+    terminal = False
     suse, timings = {}, {}
     stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
              "tps": 0.0, "server_tps": 0.0, "reasoning_text": ""}
@@ -1054,11 +1343,19 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
         except queue.Empty:
             if done["eof"]:
                 break
-            if idle_seconds and (time.time() - last) > idle_seconds:
+            # Before the first delta the wait is a PREFILL, and the bound is the request
+            # timeout; after it, this is a stalled stream and the idle bound applies.
+            limit = first_byte_seconds if not stats["deltas"] else idle_seconds
+            if limit and (time.time() - last) > limit:
                 _close()
+                waited = int(time.time() - last)
+                if not stats["deltas"]:
+                    raise StreamFailed(
+                        f"no first byte for {waited}s (prefill limit {limit}s) - the "
+                        f"endpoint accepted the request and is still thinking")
                 raise StreamFailed(
-                    f"stream went quiet for {int(time.time() - last)}s "
-                    f"(idle limit {idle_seconds}s) after {stats['deltas']} chunk(s)")
+                    f"stream went quiet for {waited}s "
+                    f"(idle limit {limit}s) after {stats['deltas']} chunk(s)")
             continue
         last = time.time()
         if raw_line is None:
@@ -1071,6 +1368,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
             continue
         blob = text[5:].strip()
         if blob == "[DONE]":
+            terminal = True
             break
         try:
             chunk = json.loads(blob)
@@ -1093,20 +1391,47 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
                 reasoning.append(d["reasoning_content"])
             for tc in (d.get("tool_calls") or []):
                 # OpenAI streams tool calls piecewise: the first fragment carries
-                # the id and the name, later ones append argument fragments.
-                slot = calls.setdefault(
-                    tc.get("index", 0),
-                    {"id": "", "type": "function",
-                     "function": {"name": "", "arguments": ""}})
+                # the id and the name, later ones append argument fragments. The
+                # fragment identifies its call by `index` when the server sends one, by
+                # `id` when it does not, and - only for a fragment that STARTS a call
+                # (a name, no arguments) - by opening a new slot. Keying every
+                # index-less fragment on a constant 0 MERGED two distinct calls into
+                # one (BUGREPORT §M1: a run that asked for `echo A` and `echo B`
+                # executed `echo AB`).
+                _fn = tc.get("function") or {}
+                _name = _fn.get("name") if isinstance(_fn.get("name"), str) else ""
+                _args = (_fn.get("arguments")
+                         if isinstance(_fn.get("arguments"), str) else "")
+                if tc.get("index") is not None:
+                    key = ("i", tc["index"])
+                elif tc.get("id"):
+                    key = ("id", tc["id"])
+                elif _name and not _args:
+                    key = ("new", len(calls))
+                elif calls:
+                    key = next(reversed(calls))     # a bare argument fragment
+                else:
+                    key = ("new", 0)
+                slot = calls.get(key)
+                if slot is None:
+                    slot = calls[key] = {"id": "", "type": "function",
+                                         "function": {"name": "", "arguments": ""}}
                 if tc.get("id"):
                     slot["id"] = tc["id"]
-                fn = tc.get("function") or {}
-                if isinstance(fn.get("name"), str):
-                    slot["function"]["name"] += fn["name"]
-                if isinstance(fn.get("arguments"), str):
-                    slot["function"]["arguments"] += fn["arguments"]
+                # A byte-identical fragment repeated inside one call is a resend, not
+                # more text: appending it twice produced "echo hiecho hi".
+                seen = frags.setdefault(key, set())
+                fragment = (_name, _args)
+                if fragment in seen:
+                    continue
+                seen.add(fragment)
+                if _name:
+                    slot["function"]["name"] += _name
+                if _args:
+                    slot["function"]["arguments"] += _args
             if ch.get("finish_reason"):
                 finish = ch["finish_reason"]
+                terminal = True
             stats["deltas"] += 1
             if isinstance(d.get("content"), str):
                 stats["chars"] += len(d["content"])
@@ -1135,30 +1460,15 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
                     on_delta(stats)
                 except Exception:           # noqa: BLE001 - progress must not kill a call
                     pass
-    if done["err"] is not None and not content and not calls:
+    if done["err"] is not None and not terminal:
+        # A reader error is FATAL unless the stream had already finished properly
+        # (BUGREPORT §M2): a stream that died after the first delta used to be handed
+        # back as the model's complete answer, because the check only fired when
+        # nothing had arrived at all. The caller's same-endpoint retry handles this.
         _close()
-        raise StreamFailed(f"stream broke before any content: {done['err']}")
-    if not stats["deltas"] and not content and not calls:
-        # A server that ignores "stream": true answers with one plain JSON line,
-        # which yields no SSE data at all. Reporting that as an empty answer would
-        # be a silent wrong answer; it is a stream that did not happen, so the
-        # caller retries the same endpoint without streaming.
-        _close()
-        raise StreamFailed("the response carried no SSE data (not a stream?)")
-    if not stats["deltas"] and not content and not calls:
-        # A server that ignores "stream": true answers with one plain JSON line,
-        # which yields no SSE data at all. Reporting that as an empty answer would
-        # be a silent wrong answer; it is a stream that did not happen, so the
-        # caller retries the same endpoint without streaming.
-        _close()
-        raise StreamFailed("the response carried no SSE data (not a stream?)")
-    if not stats["deltas"] and not content and not calls:
-        # A server that ignores "stream": true answers with one plain JSON line,
-        # which yields no SSE data at all. Reporting that as an empty answer would
-        # be a silent wrong answer; it is a stream that did not happen, so the
-        # caller retries the same endpoint without streaming.
-        _close()
-        raise StreamFailed("the response carried no SSE data (not a stream?)")
+        raise StreamFailed(
+            "the stream broke before it finished (%s) after %d chunk(s) - what "
+            "arrived is not the model's answer" % (done["err"], stats["deltas"]))
     if not stats["deltas"] and not content and not calls:
         # A server that ignores "stream": true answers with one plain JSON line,
         # which yields no SSE data at all. Reporting that as an empty answer would
@@ -1187,7 +1497,9 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None):
     if reasoning:
         msg["reasoning_content"] = "".join(reasoning)
     if calls:
-        msg["tool_calls"] = [calls[k] for k in sorted(calls)]
+        # Insertion order, not sorted(): the keys are heterogeneous now (an index, an
+        # id, or a fresh slot), and sorted() would raise comparing them.
+        msg["tool_calls"] = list(calls.values())
     return ({"choices": [{"message": msg, "finish_reason": finish}],
              "usage": suse},
             stats)
@@ -1199,7 +1511,9 @@ def _record_attempt(usage, url, outcome, detail="", secs=0.0):
         return
     usage.setdefault("attempts", []).append({
         "url": url, "outcome": outcome,
-        "detail": " ".join(str(detail).split())[:200],
+        # Scrubbed BEFORE the truncation: a key could straddle the 200-char cut, and the
+        # footer (and any report built from it) must never carry it (BUGREPORT §M4).
+        "detail": scrub(" ".join(str(detail).split()))[:200],
         "secs": round(secs, 1)})
     if outcome in ("retry", "error", "abandoned", "fatal", "clamped"):
         usage["retries"] = usage.get("retries", 0) + 1
@@ -1457,9 +1771,9 @@ def cap_output(name, text, label="output", limit=None, session=None):
     not, and plain truncation when the spill itself fails.
     """
     try:
-        cap = int(limit or CONFIG["agent"].get("tool_output_max_chars") or 10000)
+        cap = int(limit) if limit else mem_limit_chars("tool_output_max_chars", 10000)
     except (TypeError, ValueError):
-        cap = 10000
+        cap = mem_limit_chars("tool_output_max_chars", 10000)
     if len(text) <= cap:
         return text
     if not CONFIG["agent"].get("spill_output", True):
@@ -1468,7 +1782,7 @@ def cap_output(name, text, label="output", limit=None, session=None):
         digest = hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:8]
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(name))[:24] or "output"
         path = _spill_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}-{digest}.txt"
-        path.write_bytes(text.encode("utf-8", "replace"))
+        atomic_write_text(path, text)
         _spill_rotate(int(CONFIG["agent"].get("spill_keep") or 50))
     except Exception as e:
         log.warning("spill write failed (%s) - falling back to truncation", e)
@@ -1571,12 +1885,18 @@ def _call_sig(name, args):
         try:
             parsed = json.loads(parsed or "{}")
         except Exception:
-            return (name, str(args)[:400])
+            return (name, hashlib.sha256(
+                str(args).encode("utf-8", "replace")).hexdigest())
     try:
         norm = json.dumps(parsed, sort_keys=True, ensure_ascii=False, default=str)
     except Exception:
         norm = str(parsed)
-    return (name, norm[:400])
+    # The FULL canonical JSON, hashed. The old `norm[:400]` collapsed distinct calls onto
+    # one signature whenever their first 400 characters agreed, so a mutating call that
+    # differed only in a later argument read as "already ran" for every guard that keys on
+    # this (BUGREPORT §M13). Only dict keys and a repeat counter read it, so the hash costs
+    # nothing else.
+    return (name, hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest())
 
 
 # --------------------------------------------------------------------------
@@ -1624,7 +1944,13 @@ _DIGEST_SHAPES = (
     ("search results", re.compile(
         r"\bgrep\b|\brg\b|\bSelect-String\b|\bfindstr\b", re.I), "matches"),
     ("process list", re.compile(
-        r"\bps\s+-|\bps\b\s*\||\btop\b|\bGet-Process\b|\btasklist\b|"
+        # `ps aux` is the spelling that matters most and the old shape missed it: it
+        # required a dash or a pipe after `ps`, so a full process listing rode into the
+        # context whole (measured 2026-09-26: `ps aux` = 191,556 chars / 56,340 est-tokens,
+        # undigested, which is the `ps aux = 53,284 tok` row of the audit's metric table).
+        # A bare `ps` counts only at the START of a command or after an operator, so
+        # `grep -i ps file` stays untouched.
+        r"(?:^|[;&|]\s*)ps\b|\bps\s+-|\bps\b\s*\||\btop\b|\bGet-Process\b|\btasklist\b|"
         r"Win32_Process", re.I), "head_tail"),
     ("container list", re.compile(
         r"docker\s+(compose\s+)?(ps|images|stats)\b", re.I), "head_tail"),
@@ -2906,7 +3232,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
 _RECURSIVE_WALK = (
     (re.compile(r"(?i)\b(?:get-childitem|gci|dir|tree)\b[^\n|&;]*(?:-recurse\b|/s\b)"),
      "a recursive directory walk"),
-    (re.compile(r"(?i)\bfind\b[^\n|&;]*(?:-name|-iname|-path|-type)\b"),
+    (re.compile(r"(?i)\bfind\b[^\n|&;]*(?:-name|-iname|-path|-type|-delete|-exec)\b"),
      "a recursive file search"),
     (re.compile(r"(?i)\b(?:grep|rg|findstr|select-string)\b[^\n|&;]*"
                 r"(?:-r\b|-R\b|--recursive\b|-recurse\b)"),
@@ -3089,10 +3415,12 @@ def _census_load():
 def _census_save(data):
     try:
         PROC_CENSUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp = PROC_CENSUS_FILE.with_name(PROC_CENSUS_FILE.name + ".tmp")
-        tmp.write_text(json.dumps(data, indent=1, sort_keys=True), encoding="utf-8")
-        os.replace(tmp, PROC_CENSUS_FILE)
-    except OSError as e:
+        # The temp name used to be a fixed `<file>.tmp`, so two writers (a batch's tool
+        # calls run in a thread pool) collided on it and one save was lost - the same
+        # defect atomic_write_text had already been fixed for elsewhere (audit §D8).
+        atomic_write_text(PROC_CENSUS_FILE,
+                          json.dumps(data, indent=1, sort_keys=True))
+    except Exception as e:
         log.warning("procedure census not saved: %s", e)
 
 
@@ -3723,14 +4051,12 @@ def tool_shell(args, ctx):
                                 (ctx or {}).get("confirm_cb"))
         if refusal:
             return refusal
+    refusal = _destructive_refusal(command, "shell: " + command, ctx)
+    if refusal:
+        return refusal
     blocked = is_blocked(command)
     if blocked:
-        return (f"BLOCKED: this command matches safety pattern '{blocked}', which "
-                f"cannot be approved in-band - no confirmation unlocks this tier. Ask "
-                f"the operator to run it by hand, or to take '{blocked}' out of "
-                f"agent.blocked_patterns in config.json if this box genuinely needs "
-                f"it, and then work from the result they give you. Do not look for a "
-                f"way around it.")
+        return _blocked_answer(blocked)
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
     if IS_WINDOWS and CONFIG["agent"].get("shell_strict_mode"):
         # Opt-in (agent.shell_strict_mode): makes a property that does not exist an error
@@ -3841,14 +4167,12 @@ def tool_execute_code(args, ctx):
                                 (ctx or {}).get("confirm_cb"))
         if refusal:
             return refusal
+    refusal = _destructive_refusal(code, "execute_code: " + code[:200], ctx)
+    if refusal:
+        return refusal
     blocked = is_blocked(code)
     if blocked:
-        return (f"BLOCKED: this code matches safety pattern '{blocked}', which cannot "
-                f"be approved in-band - no confirmation unlocks this tier. Ask the "
-                f"operator to run it by hand, or to take '{blocked}' out of "
-                f"agent.blocked_patterns in config.json if this box genuinely needs it, "
-                f"and then work from the result they give you. Do not look for a way "
-                f"around it.")
+        return _blocked_answer(blocked)
     try:
         scan_t0 = time.time()
         rc, stdout, stderr, timeout_hit = run_capture(
@@ -4006,6 +4330,131 @@ def _prompt_surface_write(command):
             % name)
 
 
+_DELETE_VERBS = ("rm", "unlink", "shred", "rmdir", "rd", "del", "erase",
+                 "ri", "remove-item")
+_SHELL_LAUNCHERS = ("bash", "sh", "zsh", "dash", "ksh", "powershell", "pwsh",
+                    "cmd", "cmd.exe", "env", "nohup", "time", "xargs", "sudo",
+                    "doas")
+_SEGMENT_RX = re.compile(r"(?:&&|\|\||[;&|\n])")
+
+
+def _shlex_words(segment):
+    """The words of one shell segment, quote-aware where it can be, .split() where not."""
+    import shlex
+    try:
+        return shlex.split(segment, comments=False, posix=True)
+    except ValueError:
+        return segment.split()
+
+
+def destructive_risk(command, _depth=0):
+    """('block'|'confirm', why) for a recursive delete aimed at a TREE, else None.
+
+    BUGREPORT §S1, measured: the POSIX spellings had no coverage in either tier, because
+    the only patterns required `r` and `f` in ONE flag word immediately before a bare
+    `/` - so `rm -rf /etc`, `rm -rf ~/Documents`, `rm -r -f /`, `rm --recursive --force /`,
+    `find / -delete` and `find / -exec rm -rf {} +` all ran ungated. The verb cannot decide
+    (`rm file` is ordinary work, and refusing it pace-limits real ops), so this reads the
+    FLAGS in any order and spelling, then the TARGET: a whole tree (`_broad_root`) goes to
+    the absolute tier, a named directory to confirm. `find` recurses without saying so, and
+    a shell launcher (`bash -c ...`) is unwrapped so the same rule reaches one level in.
+    """
+    if _depth > 3:
+        return None
+    for segment in _SEGMENT_RX.split(str(command or "")):
+        argv = _shlex_words(segment)
+        if not argv:
+            continue
+        launched = False
+        while argv and os.path.basename(argv[0].lower()) in _SHELL_LAUNCHERS:
+            argv = argv[1:]
+            launched = True
+        if launched:
+            # `bash -c 'rm -rf /'`, `nohup rm -rf /x`: the flag belongs to the launcher and
+            # the command is what is left, so recurse into THAT rather than reading the
+            # launcher's own argv as the verb (this is how a command hidden one level down
+            # reaches the same rule).
+            while argv and argv[0].startswith("-"):
+                argv = argv[1:]
+            if not argv:
+                continue
+            sub = destructive_risk(" ".join(argv), _depth + 1)
+            if sub:
+                return sub
+            continue
+        if not argv:
+            continue
+        verb = os.path.basename(argv[0].lower())
+        if verb == "find":
+            # `-delete` recurses; `-exec rm ...` runs the delete itself. The tree is the
+            # first argument that is not an option.
+            if not any(w in ("-delete", "-exec", "-execdir") for w in argv[1:]):
+                continue
+            roots = [w for w in argv[1:] if not w.startswith("-")]
+            broad = [r for r in roots if _broad_root(r)]
+            if broad or not roots:
+                return ("block", "a find sweep that deletes from %s"
+                        % (broad[0] if broad else "no named directory"))
+            return ("confirm", "a find sweep that deletes under %s" % roots[0])
+        if verb not in _DELETE_VERBS:
+            # cmd spells the recursive flag /s, and it can sit before the target with no
+            # dash at all (`rd /s /q C:\x`): check the words for it.
+            continue
+        recursive = False
+        targets = []
+        for w in argv[1:]:
+            if w == "--":
+                continue
+            low = w.lower()
+            if low in ("/s", "/q", "/f", "/r", "/y", "/p"):
+                # cmd's recursive flag, with no dash: `rd /s /q C:\x`.
+                recursive = recursive or low == "/s"
+                continue
+            if w.startswith("--"):
+                # GNU long form: --recursive recurses, --force does not (its 'r' is a
+                # red herring that a substring test would fall for). The stem is
+                # "recurs": "recurse" is NOT a substring of "recursive".
+                recursive = recursive or "recurs" in low
+                continue
+            if w.startswith("-"):
+                # Bundled short flags, any position and order: -rf, -fr, -Rvf, -recurse.
+                recursive = recursive or "r" in low.lstrip("-")
+                continue
+            targets.append(w)
+        if not recursive:
+            continue
+        broad = [t for t in targets if _broad_root(t)]
+        if broad:
+            return ("block", "a recursive delete of %s" % broad[0])
+        if not targets:
+            # `gci C:\x | ri -Recurse`: the target is piped in from the previous segment,
+            # so there is nothing here to measure - ask (BUGREPORT §S2).
+            return ("confirm", "a recursive delete of a piped-in target")
+        return ("confirm", "a recursive delete (%s)" % ", ".join(targets[:3]))
+    return None
+
+
+def _blocked_answer(pattern):
+    """One refusal sentence for both absolute-tier entry points."""
+    return (f"BLOCKED: this command matches safety pattern '{pattern}', which "
+            f"cannot be approved in-band - no confirmation unlocks this tier. Ask "
+            f"the operator to run it by hand, or to take '{pattern}' out of "
+            f"agent.blocked_patterns in config.json if this box genuinely needs "
+            f"it, and then work from the result they give you. Do not look for a "
+            f"way around it.")
+
+
+def _destructive_refusal(text, subject, ctx):
+    """The target-aware delete rule, asked by every path that runs a command."""
+    risk = destructive_risk(text)
+    if not risk:
+        return None
+    kind, why = risk
+    if kind == "block":
+        return _blocked_answer(why)
+    return endpoint_gate(subject, why, (ctx or {}).get("confirm_cb"))
+
+
 def _endpoint_touching_tool(name, description=""):
     """The marker this custom tool matches, or None.
 
@@ -4096,7 +4545,7 @@ def _missing_argument_answer(name, missing, params):
               f"Nothing was written - call it again with {missing!r} set.")
 
 
-def shell_guard(text, ctx):
+def shell_guard(text, ctx, subject="process: "):
     """The shell tool's own tier, exposed to a drop-in tool that spawns its own process.
 
     Measured 2026-09-25 driving the fleet box: `process start` launched a .ps1 whose body did
@@ -4104,24 +4553,23 @@ def shell_guard(text, ctx):
     bypassed - the same shape execute_code had before 2026-09-18. A tool that starts a
     process asks here first: the string goes through the confirm tier (quoted back to the
     operator when a door exists) and then the absolute tier. Returns None to proceed, or
-    the refusal text.
+    the refusal text. `subject` names the caller, so a manifest tool's refusal says whose
+    command it was.
     """
     text = str(text or "")
     hit = (_confirm_hit(text) or _endpoint_self_harm(text)
            or _endpoint_load_request(text) or _prompt_surface_write(text))
     if hit:
-        refusal = endpoint_gate("process: " + text[:110], hit,
+        refusal = endpoint_gate(subject + text[:110], hit,
                                 (ctx or {}).get("confirm_cb"))
         if refusal:
             return refusal
+    refusal = _destructive_refusal(text, subject + text[:110], ctx)
+    if refusal:
+        return refusal
     blocked = is_blocked(text)
     if blocked:
-        return (f"BLOCKED: this command matches safety pattern '{blocked}', which "
-                f"cannot be approved in-band - no confirmation unlocks this tier. Ask "
-                f"the operator to run it by hand, or to take '{blocked}' out of "
-                f"agent.blocked_patterns in config.json if this box genuinely needs "
-                f"it, and then work from the result they give you. Do not look for a "
-                f"way around it.")
+        return _blocked_answer(blocked)
     return None
 
 
@@ -4217,6 +4665,23 @@ def serialized_on(path):
     return deco
 
 
+def _surface_write_gate(path, subject, ctx):
+    """The same decision the SHELL door gets, asked of a file PATH (BUGREPORT §S3).
+
+    Measured: `printf 'notes cleared by cleanup' > notes.md` was stopped by
+    _prompt_surface_write while `tool_write_file({"path": ".../notes.md"})` replaced the
+    file with no gate at all - the fastest route past the guard was a TOOL, not a command.
+    The shell door and the file door now answer with the same question.
+    """
+    name = os.path.basename(str(path or ""))
+    if name not in _SURFACE_FILES:
+        return None
+    return endpoint_gate("%s: %s" % (subject, name),
+                         "a write to this bot's own %s (its memory/ledger, not a "
+                         "scratch file)" % name,
+                         (ctx or {}).get("confirm_cb"))
+
+
 @serialized_by_path
 def tool_edit_file(args, ctx):
     """Surgical string replacement in a file (Hermes patch equivalent).
@@ -4231,6 +4696,9 @@ def tool_edit_file(args, ctx):
         return f"ERROR: {path} does not exist"
     refusal = confirm_gate(args.get("new_string") or "",
                            "edit_file %s" % path, ctx)
+    if refusal:
+        return refusal
+    refusal = _surface_write_gate(path, "edit_file", ctx)
     if refusal:
         return refusal
     try:
@@ -4535,6 +5003,9 @@ def tool_write_file(args, ctx):
     refusal = confirm_gate(_content, "write_file %s" % path, ctx)
     if refusal:
         return refusal
+    refusal = _surface_write_gate(path, "write_file", ctx)
+    if refusal:
+        return refusal
     # A write that reached here through the confirm tier was APPROVED by the operator: say
     # so, because the model cannot see the question and the operator wants to read that it
     # was asked (drive, 2026-09-23: a `.cmd` payload matched confirm_patterns and the run
@@ -4657,7 +5128,7 @@ def tool_fetch_url(args, ctx):
     if not urls:
         return "ERROR: url is empty"
     try:
-        ceil = int(CONFIG["agent"].get("fetch_max_chars") or 12000)
+        ceil = mem_limit_chars("fetch_max_chars", 12000)
     except (TypeError, ValueError):
         ceil = 12000
     # The model may ask for more than the 8k default, but not for 30 KB: the largest page
@@ -4871,7 +5342,7 @@ def _curate_notes_impl(reason="curator"):
         return ""
     raw = NOTES_FILE.read_text(encoding="utf-8", errors="replace")
     cfg = CONFIG["agent"]
-    cap = int(cfg.get("notes_max_chars") or 4000)
+    cap = mem_limit_chars("notes_max_chars", 8000)
     keep = int(cfg.get("notes_keep_entries") or 60)
     days = int(cfg.get("notes_archive_days") or 45)
     doc = _parse_notes(raw)
@@ -4975,7 +5446,7 @@ def tool_remember(args, ctx):
         return (f"ERROR: {action} needs `old` - the words already in the entry you mean "
                 f"(matched case-insensitively against the note text).")
     cap = int(CONFIG["agent"].get("notes_max_note_chars") or 1200)
-    budget = int(CONFIG["agent"].get("notes_max_chars") or 8000)
+    budget = mem_limit_chars("notes_max_chars", 8000)
     if action != "forget" and len(note) > cap * 4:
         # NEVER truncate. A mutilated fact is worse than a missing one: the clipped
         # text rides in every future prompt, so the model reasons from half a sentence
@@ -5014,7 +5485,7 @@ def tool_remember(args, ctx):
         for e in keep:
             lines.append("- [%s] %s" % (e["ts"], e["text"]))
             lines.extend(e.get("extra") or [])
-        NOTES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        atomic_write_text(NOTES_FILE, "\n".join(lines) + "\n")
         if action == "replace":
             record_authored_note(note)
         msg = (f"OK: {'replaced' if action == 'replace' else 'forgot'} the entry from "
@@ -5059,7 +5530,7 @@ def tool_remember(args, ctx):
                 else:
                     lines.append("- [%s] %s" % (x["ts"], x["text"]))
                     lines.extend(x.get("extra") or [])
-            NOTES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            atomic_write_text(NOTES_FILE, "\n".join(lines) + "\n")
             record_authored_note(note)
             msg = (f"OK: superseded the entry from {e['ts']} ({share:.0%} of the same "
                    f"words - one fact, one entry).")
@@ -5112,7 +5583,7 @@ def tool_remember(args, ctx):
 def tool_notes(args, ctx):
     """Inspect or curate notes.md (the memory carried in every prompt)."""
     action = str(args.get("action") or "view").strip().lower()
-    cap = int(CONFIG["agent"].get("notes_max_chars") or 4000)
+    cap = mem_limit_chars("notes_max_chars", 8000)
     if action in ("view", "show", ""):
         raw = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
                if NOTES_FILE.exists() else "")
@@ -5140,7 +5611,7 @@ TASK_MARKS = {"open": " ", "doing": "~", "blocked": "!", "done": "x",
               "dropped": "-"}
 
 
-def atomic_write_text(path, text, encoding="utf-8"):
+def atomic_write_text(path, text, encoding="utf-8", mode=None):
     """Replace a state file in one step, so a reader never sees a spliced one.
 
     Measured failure this exists for: the durable ledger was found holding a
@@ -5149,9 +5620,19 @@ def atomic_write_text(path, text, encoding="utf-8"):
     were silently gone. A plain write_text is one crash, one full disk or one
     interleaved writer away from exactly that. Write a sibling temp file, flush
     it to disk, and os.replace() it - atomic on NTFS and POSIX, so a reader gets
-    the old file or the new one and never a mixture. Falls back to the plain
-    write when the rename is impossible (read-only directory, exotic filesystem)
-    rather than failing a save that used to work.
+    the old file or the new one and never a mixture.
+
+    The failure path NEVER opens the destination for writing (BUGREPORT §D1): the
+    old handler "fell back to a plain write", so a denied rename, a full disk or a
+    locked file turned the surviving file into a zero-byte or half-written one -
+    the exact loss this function exists to prevent, committed by its own error
+    handler. It now retries once under a second sibling temp name and then RAISES,
+    leaving the previous file byte-identical and telling the caller it failed.
+
+    Mode (§D4): the temp is created 0600 and chmod'd to the destination's existing
+    mode before the replace, so a 0600 file stays 0600 and a temp that will become
+    .env is never briefly world-readable. A new file keeps the 0600 it was created
+    with. Callers may force a mode explicitly (the installers' 0644 config.json).
     """
     p = Path(path)
     # The temp name is per WRITER, not per process: one assistant turn runs its tool
@@ -5164,30 +5645,45 @@ def atomic_write_text(path, text, encoding="utf-8"):
     # instead of collide. The lock covers the RENAME too, not only the write, which
     # is the half Windows enforces.
     with _path_lock(str(p)):
-        tmp = p.with_name("%s.tmp-%d-%d" % (p.name, os.getpid(),
-                                            threading.get_ident()))
-        try:
-            # newline="" is load-bearing, not style. The default translates every
-            # newline to os.linesep on Windows, so text that already carried CRLF
-            # landed as CR CR LF: measured 2026-09-22, edit_file doubled every CR on
-            # this box and wrote its own .bak doubled too. Every caller here has
-            # already chosen a convention (tool_edit_file expands to the file's own),
-            # so the platform must not translate a second time.
-            with tmp.open("w", encoding=encoding, newline="") as f:
-                f.write(text)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, p)
-        except Exception as e:
+        if mode is not None:
+            keep_mode = mode
+        else:
             try:
-                if tmp.exists():
-                    tmp.unlink()
+                keep_mode = p.stat().st_mode & 0o7777
             except OSError:
-                pass
-            log.warning("atomic write of %s failed (%s) - falling back to a plain "
-                        "write", p.name, e)
-            with p.open("w", encoding=encoding, newline="") as f:
-                f.write(text)
+                keep_mode = 0o600   # a brand-new state file: private by default
+        last = None
+        # Two attempts, two DIFFERENT sibling names: a stale temp from a killed
+        # writer (or a filesystem that rejects the first name) must not cost the
+        # save. The second failure is the caller's to see.
+        for attempt in (0, 1):
+            tmp = p.with_name("%s.tmp-%d-%d-%d" % (
+                p.name, os.getpid(), threading.get_ident(), attempt))
+            try:
+                # newline="" is load-bearing, not style. The default translates every
+                # newline to os.linesep on Windows, so text that already carried CRLF
+                # landed as CR CR LF: measured 2026-09-22, edit_file doubled every CR on
+                # this box and wrote its own .bak doubled too. Every caller here has
+                # already chosen a convention (tool_edit_file expands to the file's own),
+                # so the platform must not translate a second time.
+                fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
+                    f.write(text)
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.chmod(tmp, keep_mode)
+                os.replace(tmp, p)
+                return
+            except Exception as e:
+                last = e
+                try:
+                    if tmp.exists():
+                        tmp.unlink()
+                except OSError:
+                    pass
+        log.error("atomic write of %s failed (%s) - the previous file is left "
+                  "untouched", p.name, last)
+        raise last
 
 
 def salvage_ledger(err):
@@ -5252,7 +5748,7 @@ def journal_tasks(t):
     question with an answer instead of a mystery.
     """
     try:
-        with open(TASKS_JOURNAL, "a", encoding="utf-8") as fh:
+        with open(_journal_path(), "a", encoding="utf-8") as fh:
             fh.write(json.dumps(
                 {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "rev": int(t.get("revision") or 0),
@@ -5828,8 +6324,10 @@ def tool_create_tool(args, ctx):
                            "create_tool %s" % name, ctx)
     if refusal:
         return refusal
-    path.write_text(_code, encoding="utf-8")
+    atomic_write_text(path, _code)
     # Validate: can we import it and does it satisfy the contract?
+    # A file that calls sys.exit() at import is a BaseException the loader now catches
+    # and reports (BUGREPORT §I2), so this no longer takes the whole process down.
     ok, err = REGISTRY.reload_tool(name)
     if not ok:
         path.unlink()  # don't leave a broken file blocking a retry
@@ -7459,7 +7957,19 @@ def _load_python_tools(path):
     _prev_dwb = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
-        spec.loader.exec_module(module)
+        try:
+            spec.loader.exec_module(module)
+        except OperatorStop:
+            raise                  # a stop is a stop, never "a bad tool file"
+        except SystemExit as e:
+            raise ValueError("the file exited at load: SystemExit: %s" % (e.code,))
+        except BaseException as e:
+            # A drop-in tool is arbitrary code, and Python's exits are BaseExceptions:
+            # `sys.exit(3)` at import used to end the process instead of being reported
+            # (BUGREPORT §I2). Convert to ValueError so the registry records a refused
+            # file and the install still starts.
+            raise ValueError("the file raised at load: %s: %s"
+                             % (type(e).__name__, str(e)[:200]))
     finally:
         sys.dont_write_bytecode = _prev_dwb
     if all(hasattr(module, a) for a in ("NAME", "DESCRIPTION", "SCHEMA", "run")):
@@ -7534,6 +8044,20 @@ def _load_manifest_tool(path):
     entry = {"command": list(command),
              "timeout": float(spec.get("timeout") or 120),
              "cwd": str(spec.get("cwd") or path.parent)}
+    # An absolute-tier command in a dropped-in manifest is refused at LOAD, not left to
+    # fail at call time: the file arrives from outside the bot (a download, a copy, a
+    # manufactured manifest) and the operator never sees the command unless it is reported
+    # (BUGREPORT §S6). The confirm tier still runs at call time, where a door can answer.
+    _joined = " ".join(entry["command"])
+    _blocked = is_blocked(_joined)
+    if _blocked:
+        raise ValueError("the manifest's command matches safety pattern %r, which cannot "
+                         "be approved in-band - a dropped-in tool must not carry one"
+                         % _blocked)
+    _risk = destructive_risk(_joined)
+    if _risk and _risk[0] == "block":
+        raise ValueError("the manifest's command is %s, which cannot be approved "
+                         "in-band" % _risk[1])
     return [(name, str(spec.get("description") or ""), params,
              (lambda args, ctx, _e=entry, _n=name: _run_manifest_tool(
                  _n, _e, args, (ctx or {}).get("cancel_event"), ctx)),
@@ -7544,10 +8068,12 @@ def _run_manifest_tool(name, entry, args, cancel=None, ctx=None):
     """One manifest call: args in on stdin (fed from a FILE, not a pipe - a
     grandchild holding a pipe is what froze a channel for 21 minutes, see
     run_capture), stdout out, exit_code= shaped like the shell tool's results."""
-    # a manifest command IS a shell string (sh -c / cmd /c), so it walks the
-    # same confirm tier as one (security review, 2026-09-23)
-    refusal = confirm_gate(" ".join(entry["command"]),
-                           "manifest tool %s" % name, ctx)
+    # a manifest command IS a shell string (sh -c / cmd /c), so it walks the WHOLE shell
+    # tier, not only the content tier: the absolute list, the target-aware recursive-delete
+    # rule and the endpoint gates are the same decision the shell tool gets - measured: a
+    # manifest whose command was `rm -rf /` ran with no gate at all (BUGREPORT §S6).
+    refusal = shell_guard(" ".join(entry["command"]), ctx,
+                          subject="manifest tool %s: " % name)
     if refusal:
         return refusal
     rc, out, err, timed_out = run_capture(
@@ -7669,8 +8195,15 @@ class ToolRegistry:
                 self.custom.pop(tname, None)
         try:
             defs = load_tool_defs(path)
-        except Exception as e:
-            return False, str(e)
+        except OperatorStop:
+            raise                      # the operator's stop is a stop, not a bad tool
+        except BaseException as e:
+            # SystemExit and KeyboardInterrupt are BaseExceptions, so `except Exception`
+            # never saw them: one `sys.exit(3)` in a tools/*.py killed the whole process at
+            # the next start and the install was bricked until the file was found by hand
+            # (BUGREPORT §I2). The type is named explicitly - "exited at load: SystemExit:
+            # 3" is the line that makes the refused file findable.
+            return False, "%s: %s" % (type(e).__name__, str(e)[:200])
         for tname, desc, params, fn, mutates in defs:
             self.custom[tname] = {
                 "fn": fn,
@@ -8921,7 +9454,7 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     """
     notes = ""
     if NOTES_FILE.exists():
-        cap = int(CONFIG["agent"].get("notes_max_chars") or 4000)
+        cap = mem_limit_chars("notes_max_chars", 8000)
         notes = NOTES_FILE.read_text(encoding="utf-8", errors="replace")
         if len(notes) > cap:
             # Bounded at write time, so this is the abnormal path (hand-edited
@@ -9668,7 +10201,7 @@ class Agent:
         to half once the limit is passed pays it once per ~10 exchanges.
         """
         hist = self._history(key)
-        keep = max(4, int(CONFIG["agent"]["history_exchanges"]) * 2)
+        keep = max(4, mem_limit_exchanges("history_exchanges", 20) * 2)
         if len(hist) <= keep:
             return
         target = max(4, keep // 2)
@@ -9766,6 +10299,26 @@ class Agent:
             return out
         return messages + [{"role": "user", "content": v}]
 
+    def _conversation_token_est(self, messages):
+        """Tokens the CONVERSATION costs: every message the budget may shrink.
+
+        The budget is window - static - reply, and `static` already counts the system
+        prompt + tool schemas, so messages[0] MUST NOT be counted again here. The old
+        `_messages_token_est(messages)` summed it, which over-counted every payload by
+        the whole system prompt (3,012 tokens measured) and made the budget mean
+        something other than what `static` described. Each message is counted as the
+        JSON the wire carries - the roles, keys and separators are real prompt tokens -
+        so this total is what the endpoint reads for this part of the request. The
+        system prompt is never dropped (compaction and force-shrink both refuse to
+        touch messages[0]), which is exactly why it belongs in `static` and not here.
+        """
+        total = 0
+        for i, m in enumerate(messages):
+            if i == 0 and m.get("role") == "system":
+                continue
+            total += est_tokens(json.dumps(m))
+        return total
+
     def _messages_token_est(self, messages):
         total = 0
         for m in messages:
@@ -9794,63 +10347,106 @@ class Agent:
             self._window_at = now
         return self._window_cache
 
-    def _context_budget(self):
-        """Resolve the token budget for the messages payload.
+    def _envelope(self, session_key=None):
+        """Window, static, clamped reply and messages budget for one request.
 
-        The endpoint is asked what it serves, and the tighter of that (less
-        REPLY_HEADROOM and the configured reply) and the configured number wins.
-        A budget is only as good as the box it was written for: measured
-        2026-09-21, .47 was restarted serving 131,072 per request while its host
-        still said 200000, so nothing ever compacted, the payload grew to 126,261
-        tokens, and the next turn had 4,808 tokens of room to answer in - cut off
-        mid-think with no answer at all. 'auto' (or blank/zero) means the same
-        thing the old comment meant: use what the server says. A server that does
-        not answer keeps the configured value; with nothing configured and nothing
-        detected, fall back to a conservative 8000.
+        Cached for WINDOW_TTL like the window itself: it is the same metadata read.
+        `static` is MEASURED from the prompt this session will actually send;
+        `reply` is the completion cap actually SENT, min(configured max_tokens,
+        window // 4); `budget` is what is left for the messages after both, never
+        below ENVELOPE_MIN_BUDGET. Refusal is NOT raised here - _chat refuses - so a
+        status verb or the banner can still print the arithmetic on a box that would
+        refuse to run.
+
+        Sources, in order: what the server says; llm.max_context_tokens when the
+        server says nothing (a NUMBER there is a ceiling on the messages budget, the
+        old contract, and the window is back-computed so the arithmetic stays true);
+        otherwise an assumed window, named in the log.
         """
         now = time.time()
-        at = getattr(self, "_budget_at", 0.0)
-        if hasattr(self, "_budget_cache") and not at:
-            self._budget_at = now          # adopted from outside: fresh, then TTL
-            return self._budget_cache
-        if hasattr(self, "_budget_cache") and now - at <= WINDOW_TTL:
-            return self._budget_cache
-        val = CONFIG["llm"].get("max_context_tokens")
-        detected = self._endpoint_window()
-        room = REPLY_HEADROOM + int(CONFIG["llm"].get("max_tokens") or 0)
-        fits = max(4000, int(detected) - room) if detected else 0
-        # "auto" in any casing or spacing, and anything that is not a number, means "believe
-        # the endpoint". A bad value used to reach int() below and kill the run with a
-        # ValueError out of a hand-edited config; now it is named in the log and read as auto.
-        if isinstance(val, str) and val.strip().lower() == "auto":
-            val = None
-        elif isinstance(val, bool) or (val not in (None, "", 0)
-                                       and not isinstance(val, (int, float))):
-            log.warning("llm.max_context_tokens is %r, which is neither a number nor "
-                        "\"auto\" - asking the endpoint instead", val)
-            val = None
-        if val in (None, 0):
-            if fits:
-                budget = fits
-                log.info("context: server reports %s per request, using messages "
-                         "budget %s", detected, budget)
+        cached = getattr(self, "_envelope_cache", None)
+        if (cached and cached.get("key") == session_key
+                and now - cached.get("at", 0.0) <= WINDOW_TTL):
+            return cached
+        static = static_prompt_tokens(session_key)
+        detected = int(self._endpoint_window() or 0)
+        cfg_max = int(CONFIG["llm"].get("max_tokens") or 0)
+        explicit = _context_ceiling()
+        refused = warned = False
+        refusal = ""
+        if detected:
+            window, source = detected, "server"
+            reply = min(cfg_max or window // 4, max(1, window // 4))
+            budget = max(ENVELOPE_MIN_BUDGET, window - static - reply)
+            if explicit and explicit < budget:
+                # A NUMBER in llm.max_context_tokens is a CEILING on the messages budget,
+                # which is the contract the config comment states: the tighter of it and
+                # what the server serves wins. Dropping that let a box restarted into a
+                # bigger window raise a limit the operator had set (found by
+                # tests/test_ledger.py, 2026-09-26).
+                log.info("llm.max_context_tokens (%d) is tighter than this endpoint's "
+                         "window allows (%d) - using messages budget %d",
+                         explicit, budget, max(ENVELOPE_MIN_BUDGET, explicit))
+                budget = max(ENVELOPE_MIN_BUDGET, explicit)
+            if window < ENVELOPE_MIN_WINDOW:
+                refused = True
+                refusal = (
+                    "the endpoint at %s serves %d tokens per request, below the %d "
+                    "this build will run with: static prompt %d + clamped reply %d "
+                    "leaves %d for the conversation (window=%d static=%d reply=%d "
+                    "budget=%d). Raise the server's context slot (--ctx-size / n_ctx), "
+                    "point llm.base_url at a larger endpoint, or set "
+                    "llm.max_context_tokens explicitly to accept a small box."
+                    % (CONFIG["llm"]["base_url"], window, ENVELOPE_MIN_WINDOW,
+                       static, reply, budget, window, static, reply, budget))
+            elif window < ENVELOPE_WARN_WINDOW:
+                warned = True
+                log.warning("small context window: %d tokens per request, static "
+                            "prompt %d + reply %d, using messages budget %d "
+                            "(window=%d static=%d reply=%d budget=%d). This build "
+                            "warns below %d and refuses below %d.", window, static,
+                            reply, budget, window, static, reply, budget,
+                            ENVELOPE_WARN_WINDOW, ENVELOPE_MIN_WINDOW)
             else:
-                budget = 8000
-                log.warning("could not detect the endpoint's context length — "
-                            "using a conservative %s. Set llm.max_context_tokens "
-                            "explicitly in config.json.", budget)
+                log.info("context: server reports %s per request, static %s + reply "
+                         "%s, using messages budget %s (window=%s static=%s "
+                         "reply=%s budget=%s)", window, static, reply, budget,
+                         window, static, reply, budget)
+        elif explicit:
+            budget, source = explicit, "config"
+            reply = min(cfg_max or max(ENVELOPE_MIN_BUDGET, budget // 4),
+                        max(ENVELOPE_MIN_BUDGET, budget // 4))
+            window = budget + static + reply
+            log.info("context: llm.max_context_tokens is %s, using messages budget "
+                     "%s (static %s + reply %s)", explicit, budget, static, reply)
         else:
-            budget = int(val)
-            if fits and budget > fits:
-                log.warning("llm.max_context_tokens is %d but %s serves %s per "
-                            "request (less %d for the reply and tool schemas) - "
-                            "using %d for this run",
-                            budget, CONFIG["llm"]["base_url"], detected, room,
-                            fits)
-                budget = fits
-        self._budget_cache = budget
-        self._budget_at = time.time()
-        return budget
+            budget, source = 8000, "assumed"
+            reply = min(cfg_max or 2048, 2048)
+            window = budget + static + reply
+            log.warning("could not detect the endpoint's context length — assuming "
+                        "a %s-token window. Set llm.max_context_tokens in "
+                        "config.json to say otherwise.", window)
+        env = {"key": session_key, "at": now, "window": window, "static": static,
+               "reply": reply, "budget": budget, "source": source,
+               "refused": refused, "warned": warned, "refusal": refusal}
+        self._envelope_cache = env
+        self._window_at = now      # the same metadata read: one TTL, not two
+        return env
+
+    def cached_envelope(self):
+        """The envelope already computed, or None. Never probes the network, so the
+        script-facing `health` verb can print the numbers without breaking its
+        no-network contract."""
+        return getattr(self, "_envelope_cache", None)
+
+    def _context_budget(self, session_key=None):
+        """Messages budget for the payload, from the measured envelope.
+
+        Kept as the name every caller already uses; the arithmetic lives in
+        _envelope. A window below ENVELOPE_MIN_WINDOW still returns a budget so a
+        status verb can report it - _chat is what refuses to send.
+        """
+        return int(self._envelope(session_key)["budget"])
 
     def _drop_oldest_block(self, messages, marker):
         """Delete the oldest whole exchange, leaving `marker` as its stand-in.
@@ -9928,8 +10524,8 @@ class Agent:
         headroom for one cache miss. The trailing volatile block is counted
         here too — it is part of the payload even though it is not in the list.
         """
-        budget = self._context_budget() - est_tokens(volatile_context())
-        if self._messages_token_est(messages) <= budget:
+        budget = self._context_budget(key) - est_tokens(volatile_context())
+        if self._conversation_token_est(messages) <= budget:
             return messages
         # Before anything is shrunk or dropped: the full text goes to the transcript.
         self._save_transcript(key, messages, "compact")
@@ -9947,7 +10543,7 @@ class Agent:
         # again and re-prefills the whole conversation (the cost this whole
         # design exists to avoid). `_drop_oldest_block` refuses once only
         # the newest exchange is left.
-        while self._messages_token_est(messages) > low:
+        while self._conversation_token_est(messages) > low:
             if not self._drop_oldest_block(messages, MARK_COMPACT):
                 break
         return messages
@@ -9959,8 +10555,8 @@ class Agent:
         the oldest whole blocks until the payload is well under half of it, then
         clip any remaining tool output. Never leaves an orphan tool message: the
         cut always lands on a user-message boundary."""
-        target = max(2000, int(self._context_budget() * 0.5))
-        while len(messages) > 4 and self._messages_token_est(messages) > target:
+        target = max(2000, int(self._context_budget(key) * 0.5))
+        while len(messages) > 4 and self._conversation_token_est(messages) > target:
             if not self._drop_oldest_block(messages, MARK_SHRINK):
                 break
         for m in messages[1:-2]:
@@ -9970,6 +10566,13 @@ class Agent:
 
     def _chat(self, messages, model=None, use_tools=True, usage=None,
               max_tokens=None, cancel_event=None, on_delta=None, session_key=None):
+        # The premise check, before a token is spent: a window this small cannot
+        # carry the static prompt and a reply, so the run stops with the arithmetic
+        # instead of sending a request the endpoint must reject or truncate.
+        env = self._envelope(session_key)
+        if env.get("refused"):
+            log.error("[%s] %s", session_key, env["refusal"])
+            raise InfraError(env["refusal"])
         model = model or CONFIG["llm"]["model"]
         primary = (self.llm_url, model, self.headers)
         # Route by model name OR alias: a name an endpoint advertises sends the
@@ -10007,19 +10610,6 @@ class Agent:
         routed = [ep for ep in fallbacks if want in ep[3]]
         tail = ([ep[:3] for ep in routed]
                 + [ep[:3] for ep in fallbacks if want not in ep[3]])
-        if not CONFIG["llm"].get("allow_cloud_fallback", False):
-            # An explicit /model choice (the head) may be a cloud endpoint, but
-            # a FAILOVER must not silently ship the conversation off-LAN.
-            local = [ep for ep in tail if _is_local_url(ep[0])]
-            if len(local) != len(tail):
-                global _cloud_skip_warned
-                if not _cloud_skip_warned:
-                    _cloud_skip_warned = True
-                    log.warning("llm.allow_cloud_fallback=false: %d non-LAN "
-                                "endpoint(s) excluded from failover (an "
-                                "explicit /model choice still routes there)",
-                                len(tail) - len(local))
-            tail = local
         ordered = head + [primary] + tail
         endpoints, seen = [], set()
         for ep in ordered:
@@ -10027,6 +10617,31 @@ class Agent:
                 continue
             seen.add((ep[0], ep[1]))
             endpoints.append(ep)
+        if not CONFIG["llm"].get("allow_cloud_fallback", False) and len(endpoints) > 1:
+            # The privacy pin covers the WHOLE failover chain, the primary included
+            # (BUGREPORT §M7): a documented hosted `llm.base_url` used to be reached as
+            # the failover for a privacy-pinned local choice, so the conversation left
+            # the LAN with the flag off. The FIRST endpoint is the explicit choice - the
+            # config primary, or the model /model pinned - and stays; everything after
+            # it must be local to be used.
+            first, rest = endpoints[0], endpoints[1:]
+            local = [ep for ep in rest if _is_local_url(ep[0])]
+            if len(local) != len(rest):
+                global _cloud_skip_warned
+                if not _cloud_skip_warned:
+                    _cloud_skip_warned = True
+                    log.warning("llm.allow_cloud_fallback=false: %d non-LAN "
+                                "endpoint(s) excluded from failover (the chosen "
+                                "endpoint still routes there)", len(rest) - len(local))
+            endpoints = [first] + local
+            if not _is_local_url(first[0]):
+                # Say it once: the operator's CHOSEN endpoint is off-LAN, which is the
+                # documented hosted setup - but they should know the flag does not
+                # cover it, and where that matters.
+                log.info("llm.allow_cloud_fallback=false: the chosen endpoint %s is "
+                         "not on this LAN; only its fallbacks are filtered. Set "
+                         "allow_cloud_fallback=true to fail over to cloud endpoints.",
+                         first[0])
         last_err = None
         fatal_notes = []
         stream_on = bool(CONFIG["llm"].get("stream", True))
@@ -10035,7 +10650,12 @@ class Agent:
                 # Visible in the log so "did that model switch take effect?"
                 # is answerable without guessing.
                 log.info("routing model %s to %s", ep_model, url)
-            cap = int(max_tokens or CONFIG["llm"].get("max_tokens") or 0)
+            # The output cap is the ENVELOPE's clamped reply (min(configured
+            # max_tokens, window // 4)) unless a caller names one deliberately: the
+            # forced wrap-up (final_max_tokens) and the cut-off-mid-think escalation
+            # (max_tokens_ceiling) are recovery paths that only fire on a server that
+            # already answered, and clamping those would make them no-ops.
+            cap = int(max_tokens) if max_tokens else int(env.get("reply") or 0)
             payload = {
                 "model": ep_model,
                 "messages": messages,
@@ -10061,6 +10681,7 @@ class Agent:
                     payload["stream_options"] = {"include_usage": True}
             escalated = False
             waited_after_429 = False
+            dropped_optional = False
             while True:
                 if cap:
                     payload["max_tokens"] = cap
@@ -10080,7 +10701,10 @@ class Agent:
                         data, sstats = _stream_chat(
                             resp, cancel_event=cancel_event,
                             idle_seconds=CONFIG["llm"].get("stream_idle_seconds", 120),
-                            on_delta=on_delta)
+                            on_delta=on_delta,
+                            # The prefill wait is bounded by the request timeout, NOT by
+                            # the idle gap (BUGREPORT §M3).
+                            first_byte_seconds=CONFIG["llm"].get("request_timeout", 600))
                         if usage is not None:
                             usage["streamed"] = usage.get("streamed", 0) + 1
                             if sstats.get("ttft"):
@@ -10112,6 +10736,33 @@ class Agent:
                     status = _http_status(e)
                     body = _http_body(e)
                     secs = time.time() - t0
+                    if status == 400 and not dropped_optional:
+                        # A 400 that NAMES one of the optional fields we added is the
+                        # provider saying "unknown argument", not "your request is
+                        # wrong": `stream_options` and `chat_template_kwargs` are
+                        # sent where they are known to help, and a provider that
+                        # rejects them used to be classified FATAL, so the run died on
+                        # a cosmetic difference (BUGREPORT §M5). Drop what it named and
+                        # retry the SAME endpoint once.
+                        # `\b` so "stream" does not match inside "stream_options": the
+                        # provider complained about ONE field, and dropping both would
+                        # turn a stream request into a blocking one.
+                        named = [k for k in ("stream_options", "chat_template_kwargs",
+                                             "stream")
+                                 if k in payload
+                                 and re.search(r"\b%s\b" % re.escape(k), body)]
+                        if named:
+                            for k in named:
+                                payload.pop(k, None)
+                            dropped_optional = True
+                            _record_attempt(usage, url, "retry",
+                                            f"400 named {', '.join(named)}: {body}",
+                                            secs)
+                            log.warning("LLM %s rejected %s with a 400 - retrying the "
+                                        "same endpoint without it", url,
+                                        ", ".join(named))
+                            last_err = e
+                            continue
                     if status == 429 and not waited_after_429:
                         # A rate limit means "come back later", not "this model
                         # is broken" — demoting to the next endpoint here throws
@@ -11560,6 +12211,20 @@ class Agent:
                         "Send 'continue' and I'll pick up where I left off.")
                 hist.append({"role": "assistant", "content": _limit})
                 return _limit
+            except OperatorStop as e:
+                # A stop can surface from ANY call inside the turn: the model call, a tool
+                # that spawns its own process, the overflow retry, the forced final report.
+                # Only the model call had a handler, so a stop raised during TOOL execution
+                # escaped run() - and every lane but Telegram and the CLI catches Exception,
+                # not BaseException, so the answer was never posted, the progress line stayed
+                # open and the queued message was dropped (BUGREPORT §M11; an ask_user
+                # timeout is the default path, not an edge case).
+                status = "cancelled"
+                log.info("[%s] stopped by the operator: %s", session_key, e)
+                hist.append({"role": "assistant",
+                             "content": "🛑 Stopped by operator."})
+                return ("🛑 Stopped. The run was abandoned where it stood; nothing "
+                        "further was executed.")
             finally:
                 usage["steps"] = steps
                 usage["secs"] = time.time() - t0
@@ -12602,20 +13267,34 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
     subsets, which is exactly how the browser ended up without the exit codes,
     the failure reasons, the check-ins or the confirm door.
     """
-    answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
-                       channel_id=channel_id, source=source,
-                       say_cb=reporter.say,
-                     progress_cb=reporter.progress,
-                     interim_cb=reporter.note,
-                     narration_cb=reporter.narration,
-                     narration_drop_cb=reporter.narration_drop,
-                     reasoning_cb=reporter.reasoning,
-                     progress_done_cb=reporter.tool_done,
-                       confirm_cb=reporter.confirm,
-                       cancel_event=cancel_event,
-                       steer_cb=steer_cb,
-                       ask_door=ask_door,
-                       send_file_cb=reporter.attach)
+    try:
+        answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
+                           channel_id=channel_id, source=source,
+                           say_cb=reporter.say,
+                         progress_cb=reporter.progress,
+                         interim_cb=reporter.note,
+                         narration_cb=reporter.narration,
+                         narration_drop_cb=reporter.narration_drop,
+                         reasoning_cb=reporter.reasoning,
+                         progress_done_cb=reporter.tool_done,
+                           confirm_cb=reporter.confirm,
+                           cancel_event=cancel_event,
+                           steer_cb=steer_cb,
+                           ask_door=ask_door,
+                           send_file_cb=reporter.attach)
+    except OperatorStop as e:
+        # The lane boundary: a stop must become an ANSWER, never a dead lane. run() now
+        # catches its own turn-level stop, and this catches one raised around it (a cancel
+        # seen between turns); every lane ever written catches Exception, so a
+        # BaseException used to escape with no answer posted at all (BUGREPORT §M11).
+        log.info("[%s] stopped by the operator at the lane", session_key)
+        answer = ("🛑 Stopped. The run was abandoned where it stood; nothing further "
+                  "was executed.")
+    except (KeyboardInterrupt, SystemExit):
+        raise                      # a shutdown is not a failed run
+    except BaseException as e:     # noqa: BLE001
+        log.exception("[%s] run failed at the lane", session_key)
+        answer = f"⚠️ Something broke on my side: {e}"
     # One offer per run, after the answer, from the harness: the operator is the only party
     # who knows whether a by-hand routine recurs (see mint_offer).
     try:
@@ -15986,6 +16665,10 @@ def web_inventory():
 # the largest legitimate post is a long paste into /api/chat, and 1 MiB is
 # already several times the model's whole context window.
 WEB_BODY_MAX = 1048576
+# How long a request body may take to arrive. The handler socket timeout (60 s) bounds a
+# client that never finishes its headers; this bounds the BODY, so a caller that announces
+# a length and then trickles bytes cannot hold a worker for the whole minute (BUGREPORT §S8).
+WEB_BODY_DEADLINE = 15
 
 
 def run_webui():
@@ -16005,14 +16688,13 @@ def run_webui():
         is normal; log it as one line and keep serving."""
 
         daemon_threads = True
-        # Two tinycmdr processes must not both answer on one port. HTTPServer sets
-        # allow_reuse_address, and on Windows SO_REUSEADDR lets a SECOND process bind a
-        # port that is already being served: measured 2026-09-22, `tinycmdr web` bound
-        # 8787 beside the running bot's page and served it (so the operator saw the banner
-        # of a page that was already up, and two servers shared one port). Off, so a taken
-        # port raises and web_busy_note() names the holder instead. The 6x retry below
-        # still covers the second or two after a restart while the old handler drains.
-        allow_reuse_address = False
+        # SO_REUSEADDR means two DIFFERENT things: on POSIX it only relaxes the TIME_WAIT
+        # rebind a restart needs, while on Windows it lets a SECOND process bind a port
+        # that is already served - measured 2026-09-22, `tinycmdr web` shared 8787 with the
+        # running bot's page, so the operator saw a banner for a page that was already up
+        # and two servers shared one port. On where it only helps, off where it bit, and
+        # the retry loop below still covers the second or two after a restart (BUGREPORT §S9).
+        allow_reuse_address = os.name != "nt"
 
         # One thread per connection with no ceiling means a LAN peer can stack
         # threads up to the box's limit (security review, 2026-09-23). Count the
@@ -16111,6 +16793,42 @@ def run_webui():
                 (self.headers.get("X-Tinycmdr-Token") or "").encode("utf-8", "replace"),
                 token.encode("utf-8"))
 
+        def _origin_ok(self):
+            """Same-origin/Host check for EVERY route (BUGREPORT §S7).
+
+            This lane is loopback-only by default and carries NO token then, so any page
+            on any site could `fetch("http://127.0.0.1:8787/api/run", {method: "POST",
+            body: ...})` and the browser would deliver it: CSRF against shell access.
+            Two rules: Host must be a loopback name (or the configured bind host), and an
+            Origin header, when the browser sends one, must match that host. curl, the
+            installer's probe and the supervisor send no Origin and keep working; an
+            opaque "null" origin (a file:// page, a sandboxed iframe) is refused.
+            """
+            host_hdr = (self.headers.get("Host") or "").strip().lower()
+            name = host_hdr.rsplit(":", 1)[0].strip("[]")
+            allowed = {"127.0.0.1", "localhost", "::1"}
+            configured = str((CONFIG.get("web") or {}).get("host") or "").strip().lower()
+            if configured and configured not in ("0.0.0.0", "::"):
+                allowed.add(configured.rsplit(":", 1)[0].strip("[]"))
+            if name not in allowed:
+                log.warning("web: refused a request with Host %r (not a loopback/"
+                            "configured name)", host_hdr)
+                return False
+            origin = (self.headers.get("Origin") or "").strip()
+            if not origin:
+                return True                     # curl, the installer, the supervisor
+            ohost = origin.split("://", 1)[-1].split("/", 1)[0].lower()
+            ohost = ohost.rsplit(":", 1)[0].strip("[]")
+            if ohost == name:
+                return True
+            log.warning("web: refused a cross-origin request (Origin %r, Host %r)",
+                        origin, host_hdr)
+            return False
+
+        def _forbidden(self):
+            self._drain()
+            self._json({"error": "forbidden: cross-origin or unexpected Host"}, 403)
+
         # -- routing ------------------------------------------------------
 
         def _query(self):
@@ -16127,6 +16845,9 @@ def run_webui():
             return out
 
         def do_GET(self):
+            if not self._origin_ok():
+                self._forbidden()
+                return
             if self.path.startswith("/api/health"):
                 self._json({"ok": True, "version": VERSION})
             elif self.path.startswith("/api/events"):
@@ -16240,6 +16961,9 @@ def run_webui():
                     # claim allocates or blocks, and read(-n) runs to EOF.
                     self.close_connection = True
                     return None
+                # An absolute deadline for THIS read: a client that announces a length and
+                # trickles bytes must not hold a worker for the whole socket timeout.
+                self.connection.settimeout(WEB_BODY_DEADLINE)
                 return json.loads(self.rfile.read(length) or b"{}")
             except Exception:
                 return None
@@ -16257,6 +16981,7 @@ def run_webui():
                     self.close_connection = True
                     return
                 if length > 0:
+                    self.connection.settimeout(WEB_BODY_DEADLINE)
                     self.rfile.read(length)
             except Exception:
                 pass
@@ -16288,6 +17013,9 @@ def run_webui():
             self._json({"run_id": run.id, "busy": False})
 
         def do_POST(self):
+            if not self._origin_ok():
+                self._forbidden()
+                return
             if self.path.startswith("/api/run"):
                 if not self._auth_ok():
                     self._drain()
@@ -16424,7 +17152,11 @@ def run_webui():
             if kind == "task":
                 try:
                     payload = AGENT.run("web", payload)
-                except Exception as e:
+                except (KeyboardInterrupt, SystemExit):
+                    raise
+                except BaseException as e:      # noqa: BLE001 - a lane must not die
+                    # BaseException, not Exception: a stop raised from inside the run used
+                    # to escape here and the browser got nothing at all (BUGREPORT §M11).
                     log.exception("web run failed")
                     payload = f"⚠️ Something broke on my side: {e}"
             self._json({"reply": payload})
@@ -17147,7 +17879,10 @@ def cli_banner():
     # 2026-09-22).
     visible_schemas = select_tool_schemas(None)
     _hidden_tools = len(REGISTRY.openai_schemas()) - len(visible_schemas)
-    static = est_tokens(build_system_prompt() + json.dumps(visible_schemas))
+    # One envelope for the process: the same measured static the request path and
+    # _compact use, so this line cannot drift from what is sent (audit FEATURE D10).
+    env = AGENT._envelope()
+    static = env["static"]
     live = est_tokens(volatile_context())
     overhead = ("prompt overhead ~%s tokens (static %s: system prompt + %d tool schemas%s, "
                 "cache-stable; live %s: notes + task ledger, sent trailing)"
@@ -17156,19 +17891,22 @@ def cli_banner():
                    (", +%d hidden, revealed on demand" % _hidden_tools)
                    if _hidden_tools > 0 else "",
                    fmt_tokens(live)))
+    envelope = envelope_line(env)
     screen = tui_screen()
     if screen is not None:
         screen.banner(name, [
             ("model", "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])),
             ("folder", str(BASE_DIR)),
-            ("context", "%s usable per turn" % fmt_tokens(AGENT._context_budget())),
+            ("context", "%s usable per turn" % fmt_tokens(env["budget"])),
+            ("envelope", envelope),
             ("prompt", overhead),
         ], hint="type /help for the commands, /exit to quit")
         return
     box = _cli_render_box(name, [
         "Model:    %s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"]),
         "Folder:   %s" % BASE_DIR,
-        "Context:  ~%s usable per turn" % fmt_tokens(AGENT._context_budget()),
+        "Context:  ~%s usable per turn" % fmt_tokens(env["budget"]),
+        "Envelope: %s" % envelope,
         "Prompt:   %s" % overhead,
         "---",
         "Type /tinycmdr help for commands, /tinycmdr exit to quit",
@@ -18311,7 +19049,14 @@ def restart_owner():
         return "systemd"
     if os.environ.get("TINYCMDR_SUPERVISED") == "1":
         return "supervisor"
-    if "com.tinycmdr" in os.environ.get("XPC_SERVICE_NAME", "") or sys.platform == "darwin":
+    # Measured 2026-09-26 on macOS 27/arm64 with throwaway launchd labels: a process that
+    # IS the job's process (ProgramArguments = [python, tinycmdr.py], exactly the installer's
+    # plist) sees XPC_SERVICE_NAME=<label>, while a hand-run python sees "0". So the label
+    # test IS the launchd test, and the old `or sys.platform == "darwin"` catch-all
+    # misclassified every hand-started mac bot (Terminal, launch-tight... launch-tinycmdr.sh):
+    # /restart then released the lock and exited 75, launchd was never there to relaunch it,
+    # and the bot stayed DEAD (tests/test_ledger.py). Linux/Windows keep the spawn path.
+    if "com.tinycmdr" in os.environ.get("XPC_SERVICE_NAME", ""):
         return "launchd"
     return "self"
 
@@ -18599,17 +19344,6 @@ def _verb_running():
         return None
 
 
-def _verb_endpoint(url=None):
-    """(url, served_window) for one endpoint. Metadata only: one /props or
-    /v1/models GET, never a completion."""
-    url = url or CONFIG["llm"]["base_url"]
-    try:
-        return url, _detect_window(url, None)
-    except Exception as e:
-        log.debug("verb: endpoint probe failed: %s", e)
-        return url, 0
-
-
 def _verb_log_lines(count):
     text = ""
     try:
@@ -18626,11 +19360,14 @@ def _verb_status():
     print("tinycmdr %s — %s" % (VERSION, BASE_DIR))
     print("  python    : %s" % sys.version.split()[0])
     print("  model     : %s" % CONFIG["llm"]["model"])
-    url, win = _verb_endpoint()
-    if win:
-        budget = AGENT._context_budget()
-        print("  endpoint  : %s — %s per request, %s usable"
-              % (url, fmt_tokens(int(win)), fmt_tokens(budget)))
+    env = AGENT._envelope()
+    url = CONFIG["llm"]["base_url"]
+    if env["source"] == "server":
+        print("  endpoint  : %s — %s per request" % (url, fmt_tokens(int(env["window"]))))
+        print("  envelope  : %s" % envelope_line(env))
+        if env.get("refused"):
+            print("  envelope  : REFUSED — below the %s minimum this build needs"
+                  % fmt_tokens(ENVELOPE_MIN_WINDOW), file=sys.stderr)
     else:
         print("  endpoint  : %s — no answer (metadata probe only)"
               % url, file=sys.stderr)
@@ -18651,7 +19388,7 @@ def _verb_status():
         pass
     print("  config    : %s" % (CONFIG_PATH if CONFIG_PATH.exists() else
                                 "MISSING (copy config.example.json)"))
-    if not win:
+    if env["source"] != "server":
         print("status: the endpoint did not answer its metadata probe", file=sys.stderr)
         return 1
     return 0
@@ -18674,6 +19411,15 @@ def _verb_doctor():
     if sys.version_info < (3, 9):
         problems.append("python %s is older than this build supports"
                         % sys.version.split()[0])
+
+    drift = guard_list_drift()
+    if drift:
+        missing = sum(len(m) for _k, m, _e in drift)
+        print("  guards    : %d shipped pattern(s) missing from config.json's lists"
+              % missing)
+        problems.append(guard_drift_note(drift))
+    else:
+        print("  guards    : shipped lists intact (v%d)" % GUARD_LIST_VERSION)
 
     try:
         probe = BASE_DIR / ".tinycmdr-write-probe"
@@ -18710,9 +19456,13 @@ def _verb_doctor():
         else:
             print("  dep %-6s: ok" % mod)
 
-    url, win = _verb_endpoint()
-    if win:
-        print("  endpoint  : %s — %s per request" % (url, fmt_tokens(int(win))))
+    env = AGENT._envelope()
+    url = CONFIG["llm"]["base_url"]
+    if env["source"] == "server":
+        print("  endpoint  : %s — %s per request" % (url, fmt_tokens(int(env["window"]))))
+        print("  envelope  : %s" % envelope_line(env))
+        if env.get("refused"):
+            problems.append(env["refusal"])
     else:
         print("  endpoint  : %s — NO ANSWER" % url)
         problems.append("the model endpoint at %s did not answer" % url)
@@ -18846,10 +19596,15 @@ def _verb_health():
     if (CONFIG.get("web") or {}).get("enabled"):
         lanes.append("web:%s" % ((CONFIG.get("web") or {}).get("port") or 8787))
     state = {True: "up", False: "not running", None: "unknown"}[running]
-    print("%s v%s %s · lane %s · model %s at %s"
+    # The envelope rides this line only when it was already computed: `health` keeps
+    # its no-network contract (a script calls it every minute), so a cold process
+    # prints no numbers rather than paying a metadata probe for them (audit D10).
+    env = AGENT.cached_envelope()
+    tail = (" · " + envelope_line(env, raw=True)) if env else ""
+    print("%s v%s %s · lane %s · model %s at %s%s"
           % (os.path.basename(sys.argv[0] or "tinycmdr"), VERSION, state,
              ",".join(lanes) or "none", CONFIG["llm"].get("model"),
-             CONFIG["llm"].get("base_url")))
+             CONFIG["llm"].get("base_url"), tail))
     if running is not True:
         print("the single-instance lock is not held: nothing is listening for messages",
               file=sys.stderr)
@@ -19177,7 +19932,10 @@ def _verb_update(rest):
                 continue
             if old:
                 shutil.copy2(target, str(target) + ".bak-update-" + stamp)
-            target.write_bytes(new)
+            # The live build is replaced through the atomic writer for the same reason
+            # the ledger is: a torn write here bricks the install. The candidate was
+            # already read and run as text, so decoding it is safe (audit §D8).
+            atomic_write_text(target, new.decode("utf-8"))
             changed.append("%s (%d -> %d bytes)" % (name, len(old), len(new)))
         if not changed:
             print("already the same bytes: nothing to do")
@@ -19501,6 +20259,29 @@ def _is_elevated():
         return False
 
 
+def _scheduled_task_owned():
+    """True when a Windows scheduled task supervises THIS install.
+
+    Elevation is only needed for the S4U lane, where the bot runs as a task account and
+    a normal shell gets Access denied. The installer also offers a Startup-shortcut
+    lane, and there the restart helper is an ordinary start: demanding an elevated
+    shell for it is a dead end the operator can never satisfy (BUGREPORT §W6). The
+    probe is `schtasks` (present on every supported Windows, no PowerShell module
+    needed), with a fallback that looks for this folder in the full task list for a
+    task registered under another name.
+    """
+    name = str(CONFIG["agent"].get("windows_task_name") or "Tinycmdr")
+    try:
+        rc, out, _err, _ = run_capture(
+            ["schtasks", "/Query", "/TN", name, "/FO", "LIST"], 30)
+        if rc == 0:
+            return True
+        rc, out, _err, _ = run_capture(["schtasks", "/Query", "/FO", "LIST", "/V"], 60)
+        return rc == 0 and str(BASE_DIR).lower() in (out or "").lower()
+    except Exception:
+        return False
+
+
 def _verb_restart():
     """Restart through this host's own door, by calling the SHIPPED helper.
 
@@ -19525,7 +20306,9 @@ def _verb_restart():
               "this install was not built by the installer, so restart it the way you "
               "started it" % helper, file=sys.stderr)
         return 1
-    if os.name == "nt" and not _is_elevated():
+    # Elevation is a TASK-lane requirement, not a Windows one: on the Startup-shortcut
+    # lane there is no task to fight and the helper runs as this user (BUGREPORT §W6).
+    if os.name == "nt" and _scheduled_task_owned() and not _is_elevated():
         print("restart needs an elevated shell (the bot runs as a task account):\n"
               "  Start-Process powershell -Verb RunAs -ArgumentList "
               "'-File \"%s\"'" % helper, file=sys.stderr)
@@ -19736,6 +20519,12 @@ def validate_startup_config():
                 "Mattermost bot token, LLM endpoint, and allowed_users.")
     if CONFIG_ERROR:
         return CONFIG_ERROR
+    # A config.json that REPLACED a shipped guard list is not fatal - it is the operator's
+    # file - but it must not be silent (BUGREPORT §S18). `doctor` turns this into a
+    # non-zero exit; the log names every pattern the box is not enforcing.
+    _drift = guard_list_drift()
+    if _drift:
+        log.warning("%s", guard_drift_note(_drift))
     tg_users = [u for u in ((CONFIG.get("telegram") or {}).get("allowed_users") or [])
                 if str(u).strip()]
     tg_token = str((CONFIG.get("telegram") or {}).get("token") or "").strip()
@@ -19814,8 +20603,10 @@ def web_busy_note(host, port):
                 "  If a page answers at %s it is already usable: open that instead. Otherwise "
                 "set web.port in config.json." % url]
     return ["Could not start the web UI on %s." % url,
-            "  Nothing is listening on that port right now - see tinycmdr.log, or set "
-            "web.port in config.json."]
+            "  No process answered a look-up on that port, which does not mean it is "
+            "free: a socket in the kernel's TIME_WAIT window (a restart seconds ago) "
+            "or a holder this verb cannot see (another user) both look like this. Wait "
+            "a few seconds and retry, or set web.port in config.json."]
 
 
 def run_web_mode():

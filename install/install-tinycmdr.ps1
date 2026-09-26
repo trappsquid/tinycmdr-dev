@@ -287,20 +287,63 @@ function Invoke-Probe {
 
 function Stop-TinycmdrProcesses {
     <#
-        Kill python processes started from $Dir. Needed before a -Force copy and
-        before an uninstall: the running bot holds tinycmdr.log and tinycmdr.lock,
+        Kill the bot AND its supervisor for this install. Needed before a -Force copy
+        and before an uninstall: the running bot holds tinycmdr.log and tinycmdr.lock,
         so overwriting in place either fails or leaves a stale process alive.
+
+        The bot and the supervisor are two processes. In the documented no-venv
+        fallback the supervisor's command line is "<machine python>
+        tinycmdr-supervise.py" - no install dir anywhere - so the old
+        "python% AND the install dir" filter killed only the bot child, and the
+        surviving supervisor respawned it straight into the folder being overwritten
+        or removed (audit W7; that is what left -Uninstall saying "being used by
+        another process"). wscript.exe hosts the hidden launcher, so it is in scope too.
     #>
     param([string] $Dir)
     $killed = 0
     try {
-        Get-CimInstance Win32_Process -Filter "Name like 'python%'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Dir*" } |
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object {
+                if (-not $_.CommandLine) { return $false }
+                if ($_.Name -like 'python*') {
+                    return ($_.CommandLine -like "*$Dir*") -or
+                           ($_.CommandLine -like "*tinycmdr-supervise.py*")
+                }
+                if ($_.Name -eq 'wscript.exe') {
+                    return ($_.CommandLine -like "*tinycmdr-service.vbs*")
+                }
+                return $false
+            } |
             ForEach-Object {
                 try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $killed++ } catch { }
             }
     } catch { }
     return $killed
+}
+
+function Remove-TinycmdrFolder {
+    <#
+        Remove $Dir, retrying instead of giving up on the first "being used by another
+        process". Windows releases a killed process's file handles asynchronously, and
+        the supervisor may not have been visible to the first sweep, so a one-shot
+        Remove-Item leaves the folder - and a half-removed install - behind (audit W7).
+    #>
+    param([string] $Dir)
+    for ($i = 1; $i -le 5; $i++) {
+        try {
+            Remove-Item $Dir -Recurse -Force -ErrorAction Stop
+            return $true
+        } catch {
+            if ($i -eq 5) {
+                Say "NOTE    : could not remove ${Dir}: $($_.Exception.Message)"
+                Say "          close anything using it, then remove the folder by hand"
+                return $false
+            }
+            $null = Stop-TinycmdrProcesses -Dir $Dir
+            Start-Sleep -Seconds 2
+        }
+    }
+    return $false
 }
 
 function Say  ($m) { Write-Host "  $m" }
@@ -311,6 +354,43 @@ function Fail ($m) {
     try { Stop-TranscriptRedacted } catch { }
     if (-not $NoPause) { Read-Host "Press Enter to close" }
     exit 1
+}
+
+# --------------------------------------------------------------- user PATH
+# The user PATH is a REG_EXPAND_SZ value under HKCU\Environment, and it is FULL of
+# other installers' entries - many written as "%JAVA_HOME%\bin". Reading it with
+# [Environment]::GetEnvironmentVariable expands those; SetEnvironmentVariable then
+# writes the EXPANDED text back as a plain REG_SZ, so every unrelated %VAR% entry on
+# the machine is frozen at whatever it resolved to that day (audit W2 - and the
+# uninstaller repeated it). Edit the registry value itself instead: read with
+# DoNotExpandEnvironmentNames so the "%VAR%" text survives, write ExpandString, and
+# only ever append or remove OUR one entry.
+function Get-UserPathRaw {
+    $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey("Environment")
+    if (-not $key) { return "" }
+    try {
+        return [string]$key.GetValue("Path", "",
+            [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    } finally { $key.Close() }
+}
+
+function Set-UserPathRaw {
+    param([string] $Value)
+    $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+    try { $key.SetValue("Path", $Value, [Microsoft.Win32.RegistryValueKind]::ExpandString) }
+    finally { $key.Close() }
+}
+
+function Get-UserPathParts {
+    # Non-empty entries only, in order, with any %VAR% text kept verbatim.
+    return @((Get-UserPathRaw) -split ';' | Where-Object { $_ -and $_.Trim() })
+}
+
+function Test-UserPathHas {
+    param([string] $Entry)
+    $want = $Entry.TrimEnd('\')
+    foreach ($p in (Get-UserPathParts)) { if ($p.TrimEnd('\') -eq $want) { return $true } }
+    return $false
 }
 
 function Resolve-Python {
@@ -381,6 +461,18 @@ if ($fleet) {
     if ($fleet.as_service -eq $true) { $AsService = $true }
 }
 
+# The guard at the top of this file ran before the defaults above could set
+# $AsService, and the fleet kit exists precisely to ship as_service: true - so an
+# unelevated fleet push sailed past the guard and died inside Register-ScheduledTask,
+# after the files, the venv, config.json and .env had already been written (audit W1).
+# Re-check now that fleet-defaults.json has had its say.
+if ($AsService -and -not $elevated -and -not $VerifyOnly -and -not $Uninstall) {
+    Write-Host "This needs an elevated PowerShell to register the scheduled task." -ForegroundColor Red
+    Write-Host "Re-run as Administrator, or drop -AsService to install and start at logon"
+    Write-Host "(no administrator rights needed for that)."
+    exit 1
+}
+
 # ------------------------------------------------- where this install goes
 # Your own profile. Nothing outside it is written by a default install - no
 # C:\ root folder, no machine-wide PATH entry, no service registration - so no
@@ -397,7 +489,11 @@ $StartupLink = Join-Path $env:APPDATA ("Microsoft\Windows\Start Menu\Programs\St
 if ($Uninstall) {
     Head "uninstalling $AppName"
     $taskExists = $null -ne (Get-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue)
-    if (-not $taskExists -and -not (Test-Path $InstallDir) -and -not (Test-Path $StartupLink)) {
+    # The user PATH counts too (audit W11): a folder someone deleted by hand still has a
+    # dead PATH entry pointing at it, and the old early-exit walked away without saying so.
+    $pathHasEntry = Test-UserPathHas $InstallDir
+    if (-not $taskExists -and -not (Test-Path $InstallDir) -and -not (Test-Path $StartupLink) -and
+        -not $pathHasEntry) {
         Say "nothing to remove (no task '$AppName', no $InstallDir)"
         try { Stop-TranscriptRedacted } catch { }
         exit 0
@@ -415,26 +511,29 @@ if ($Uninstall) {
     }
     $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n process(es)" }
-    # undo the user-Path entry the install added (the verb surface, audit F12)
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $keep = @(($userPath -split ';') | Where-Object {
-        $_ -and $_.TrimEnd('\') -ne $InstallDir.TrimEnd('\') })
-    if ($keep.Count -ne @(($userPath -split ';') | Where-Object { $_ }).Count) {
-        [Environment]::SetEnvironmentVariable("Path", ($keep -join ';'), "User")
-        Say "path    : $InstallDir removed from the user Path"
-    }
+    # The PATH entry is removed AFTER the folder question, deliberately (audit W11): it
+    # used to go first, so answering "n" to "Delete ...?" left a working install whose
+    # `tinycmdr` verb had been silently cut off its PATH. Keeping the folder keeps the
+    # verb. And an entry only goes once its folder is really gone, so a removal that
+    # failed (still held by a process) does not orphan the verb either.
     if (Test-Path $InstallDir) {
         if (-not $Force) {
             if ($NoPause) { Fail "refusing to delete $InstallDir without -Force (or run interactively to confirm)" }
             $ans = Read-Host "Delete $InstallDir and everything in it? (y/N)"
             if ($ans -notmatch '^(y|yes)$') {
                 Say "kept $InstallDir"
+                Say "path    : $InstallDir stays on your user PATH (its folder is still there)"
                 try { Stop-TranscriptRedacted } catch { }
                 exit 0
             }
         }
-        Remove-Item $InstallDir -Recurse -Force
-        Say "removed : $InstallDir"
+        if (Remove-TinycmdrFolder -Dir $InstallDir) { Say "removed : $InstallDir" }
+    }
+    # undo the user-Path entry the install added (the verb surface, audit F12)
+    if ((-not (Test-Path $InstallDir)) -and (Test-UserPathHas $InstallDir)) {
+        $keep = @(Get-UserPathParts | Where-Object { $_.TrimEnd('\') -ne $InstallDir.TrimEnd('\') })
+        Set-UserPathRaw ($keep -join ';')
+        Say "path    : $InstallDir removed from the user Path"
     }
     Say "done"
     try { Stop-TranscriptRedacted } catch { }
@@ -448,6 +547,47 @@ Head "tinycmdr installer"
 Say "package : $Source"
 Say "target  : $InstallDir"
 if ($fromFleet.Count) { Say "fleet   : $($fromFleet -join ', ') (from fleet-defaults.json)" }
+
+# ---------------------------------------------------------------- verify only
+# BEFORE the interpreter step, deliberately: -VerifyOnly is documented as "report on an
+# existing install, change nothing", yet it used to fall into the Python
+# discovery/auto-install block below - a winget install, then a python.org download -
+# before it verified a single thing (audit W3). A verify run must not fetch a runtime.
+if ($VerifyOnly) {
+    if (-not (Test-Path (Join-Path $InstallDir "tinycmdr.py"))) {
+        Write-Host "no tinycmdr.py in $InstallDir" -ForegroundColor Red
+        try { Stop-TranscriptRedacted } catch { }
+        exit 1
+    }
+    Head "verifying $InstallDir"
+    # An install carries its own interpreter; probe that one, or the check grades a
+    # different python than the bot actually runs under. Only when the venv is missing do
+    # we look for a machine python - and never install one from here.
+    $venvProbe = Join-Path $InstallDir "venv\Scripts\python.exe"
+    $probePy = $null
+    if (Test-Path $venvProbe) {
+        $probePy = $venvProbe
+    } else {
+        $found = Resolve-Python -Explicit $Python
+        if ($found) { $probePy = $found.Path }
+    }
+    if (-not $probePy) {
+        Write-Host "no python to probe with - is $InstallDir complete?" -ForegroundColor Red
+        try { Stop-TranscriptRedacted } catch { }
+        exit 1
+    }
+    $p = Invoke-Probe -Dir $InstallDir -Python $probePy
+    Write-Host (($p.Trim() -split "`n" | Select-Object -Last 6) -join "`n")
+    try { Stop-TranscriptRedacted } catch { }
+    if ($p -match "READY") {
+        Write-Host "OK: the agent answered" -ForegroundColor Green
+        if (-not $NoPause) { Read-Host "Press Enter to close" }
+        exit 0
+    }
+    Write-Host "NOT VERIFIED: no answer from the model endpoint - check llm.base_url / llm.model" -ForegroundColor Yellow
+    if (-not $NoPause) { Read-Host "Press Enter to close" }
+    exit 3
+}
 
 # ------------------------------------------------------------- 1. python 3.12
 Head "finding Python"
@@ -470,8 +610,18 @@ if (-not $py) {
     }
     if (-not $installed) {
         Say "downloading official installer from python.org..."
-        $installerUrl = "https://www.python.org/ftp/python/3.12.8/python-3.12.8-amd64.exe"
-        $installerPath = Join-Path $env:TEMP "python-3.12.8-amd64.exe"
+        # python.org publishes one installer per architecture, and the URL used to be
+        # amd64 on every host - an ARM64 box downloaded something it could not run while
+        # the winget path right above picked the right one (audit W10).
+        $pyArch = switch ($env:PROCESSOR_ARCHITECTURE) {
+            "AMD64" { "amd64" }
+            "ARM64" { "arm64" }
+            "x86"   { "win32" }
+            default { "amd64" }
+        }
+        $installerName = "python-3.12.8-$pyArch.exe"
+        $installerUrl = "https://www.python.org/ftp/python/3.12.8/$installerName"
+        $installerPath = Join-Path $env:TEMP $installerName
         try {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -Uri $installerUrl -OutFile $installerPath -UseBasicParsing
@@ -486,6 +636,14 @@ if (-not $py) {
 }
 if (-not $py) { Fail "could not automatically install Python 3.12. Please install from https://python.org and re-run." }
 Say "python  : $($py.Path)  (v$($py.Version))"
+# Prove the interpreter's word size matches the host (audit W10): the fallback download
+# used to be amd64 on every machine, and a 32-bit python on a 64-bit host starts fine,
+# then dies during the dependency install with a DLL error that names nothing useful.
+if ([Environment]::Is64BitOperatingSystem -and
+    (Invoke-Py $py.Path -c "import struct; print(struct.calcsize('P') * 8)").Trim() -eq "32") {
+    Say "WARNING : python at $($py.Path) is 32-BIT on a 64-bit host"
+    Say "          install the 64-bit Python from python.org, then re-run this installer"
+}
 
 # The dependency set is the one the code declares in its own header:
 #   pip install requests mmpy_bot croniter
@@ -494,32 +652,6 @@ Say "python  : $($py.Path)  (v$($py.Version))"
 # They are installed further down, into this install's OWN virtual environment:
 # that folder does not exist yet here, and the reader has not agreed to the
 # install. What matters now is only that an interpreter exists at all.
-
-# ---------------------------------------------------------------- verify only
-
-if ($VerifyOnly) {
-    if (-not (Test-Path (Join-Path $InstallDir "tinycmdr.py"))) {
-        Write-Host "no tinycmdr.py in $InstallDir" -ForegroundColor Red
-        try { Stop-TranscriptRedacted } catch { }
-        exit 1
-    }
-    Head "verifying $InstallDir"
-    # An install carries its own interpreter; probe that one, or the check grades a
-    # different python than the bot actually runs under.
-    $venvProbe = Join-Path $InstallDir "venv\Scripts\python.exe"
-    if (Test-Path $venvProbe) { $py = @{ Path = $venvProbe; Version = $py.Version } }
-    $p = Invoke-Probe -Dir $InstallDir -Python $py.Path
-    Write-Host (($p.Trim() -split "`n" | Select-Object -Last 6) -join "`n")
-    try { Stop-TranscriptRedacted } catch { }
-    if ($p -match "READY") {
-        Write-Host "OK: the agent answered" -ForegroundColor Green
-        if (-not $NoPause) { Read-Host "Press Enter to close" }
-        exit 0
-    }
-    Write-Host "NOT VERIFIED: no answer from the model endpoint - check llm.base_url / llm.model" -ForegroundColor Yellow
-    if (-not $NoPause) { Read-Host "Press Enter to close" }
-    exit 3
-}
 
 # ------------------------------------------------------ identity of this install
 # $AppName is ONE name per user, not per folder: -Uninstall removes $AppName.lnk and that
@@ -913,17 +1045,18 @@ $py = @{ Path = $venvPy; Version = $py.Version }
 # ------------------------------------------------------ the verb surface on PATH
 # audit F12: an install left no command behind, so day-two work meant hand-editing
 # .env and config.json. tinycmdr.cmd is the shim; the folder goes on the USER path
-# (never the machine path), and a probe (-SkipTask) touches nothing.
-if ($NoPath -or $SkipTask) {
-    Say "path    : left alone ($(if ($NoPath) { '-NoPath' } else { '-SkipTask' }))"
+# (never the machine path), written straight into HKCU\Environment so nobody else's
+# %VAR% entries are frozen (W2). Only -NoPath withholds it: -SkipTask is documented as
+# "files only: no autostart, no service", and it used to swallow the PATH entry too
+# (audit W9), leaving an install with no `tinycmdr` verb attached.
+if ($NoPath) {
+    Say "path    : left alone (-NoPath)"
 } else {
-    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-    $parts = @($userPath -split ';' | Where-Object { $_ -and $_.Trim() })
-    if ($parts -notcontains $InstallDir) {
-        [Environment]::SetEnvironmentVariable("Path", (($parts + $InstallDir) -join ';'), "User")
-        Say "path    : added to your user PATH - open a NEW window and run: tinycmdr status"
-    } else {
+    if (Test-UserPathHas $InstallDir) {
         Say "path    : already on your user PATH: tinycmdr status"
+    } else {
+        Set-UserPathRaw (((Get-UserPathParts) + $InstallDir) -join ';')
+        Say "path    : added to your user PATH - open a NEW window and run: tinycmdr status"
     }
 }
 
@@ -1147,9 +1280,12 @@ foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TAVILY_API_KEY", "
         $refused += $key
         continue
     }
-    # write into the commented template line, or append if there is none
+    # write into the commented template line, or append if there is none. The value is
+    # substituted LITERALLY (audit W11): `-replace` reads its replacement as a regex
+    # template, so a token containing $$/$&/$'/` mangled itself on the way into .env -
+    # and the summary then printed a token the page rejected.
     if ($envText -match "(?m)^#?\s*$key=") {
-        $envText = $envText -replace "(?m)^#?\s*$key=.*$", "$key=$val"
+        $envText = [regex]::Replace($envText, "(?m)^#?\s*$key=.*$", { param($m) "$key=$val" })
     } else {
         $envText = $envText.TrimEnd() + "`n$key=$val`n"
     }
@@ -1159,7 +1295,7 @@ foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TAVILY_API_KEY", "
 foreach ($k in @($ownKeys.Keys)) {
     $v = $ownKeys[$k]
     if ($envText -match "(?m)^#?\s*$k=") {
-        $envText = $envText -replace "(?m)^#?\s*$k=.*$", "$k=$v"
+        $envText = [regex]::Replace($envText, "(?m)^#?\s*$k=.*$", { param($m) "$k=$v" })
     } else {
         $envText = $envText.TrimEnd() + "`n$k=$v`n"
     }
@@ -1171,7 +1307,7 @@ foreach ($fb in $script:Fallbacks) {
     if (-not $fb.Key) { continue }
     $k = $fb.Env
     if ($envText -match "(?m)^#?\s*$k=") {
-        $envText = $envText -replace "(?m)^#?\s*$k=.*$", "$k=$($fb.Key)"
+        $envText = [regex]::Replace($envText, "(?m)^#?\s*$k=.*$", { param($m) "$k=$($fb.Key)" })
     } else {
         $envText = $envText.TrimEnd() + "`n$k=$($fb.Key)`n"
     }
@@ -1229,11 +1365,26 @@ if ($EnableWeb) {
 
 # --------------------------------------------------------- 6. launcher + service
 Head "writing launcher"
+# pythonw keeps a window from appearing; fall back to python.exe if pythonw is absent
+$pywPath = Join-Path (Split-Path $py.Path) "pythonw.exe"
+if (-not (Test-Path $pywPath)) { $pywPath = $py.Path }
+# This file is kept PURE ASCII by construction: its folder comes from
+# WScript.ScriptFullName and the only absolute path left is the interpreter fallback.
+# When that path itself is not ASCII - a python under a profile whose name is not ASCII -
+# the ASCII encoder below would mangle it exactly the way it used to mangle the install
+# folder, so let WSH resolve the bare name through PATH instead: that is where the
+# installer's own python.org install puts it (audit W4).
+$vbsPyFallback = $pywPath
+if ($vbsPyFallback -notmatch '^[\x20-\x7e]+$') {
+    $vbsPyFallback = Split-Path -Leaf $pywPath
+    Say "NOTE    : the interpreter path is not ASCII - the hidden launcher will find"
+    Say "          $vbsPyFallback on PATH instead of baking the path into the script"
+}
 $vbs = @"
 ' Launches the tinycmdr SUPERVISOR hidden (no console window) and WAITS for it.
 ' Started by the logon shortcut (or by the scheduled task when -AsService was
 ' used). Run by hand:
-'   wscript //B //Nologo "$InstallDir\tinycmdr-service.vbs"
+'   wscript //B //Nologo tinycmdr-service.vbs
 '
 ' The wait is load-bearing, and so is running the supervisor rather than the bot:
 '   * running tinycmdr.py directly exits at once, so the task always looked
@@ -1242,22 +1393,60 @@ $vbs = @"
 '     propagates, so that policy does fire.
 ' The supervisor is what keeps the bot alive (relaunch on exit 75 or a crash, a
 ' readiness check, status JSON in logs/); this task is the outer safety net.
-Dim sh
-Set sh = CreateObject("WScript.Shell")
-sh.CurrentDirectory = "$InstallDir"
-sh.Run """$($py.Path)"" tinycmdr-supervise.py $SuperviseArgs", 0, True
+'
+' The folder comes from WScript.ScriptFullName, not from an absolute path pasted in
+' (audit W4): the install folder used to be written through an ASCII encoder, so a
+' folder whose path holds a non-ASCII name came out with that name replaced by ? and
+' the autostart was dead on the next reboot while the installer still reported success.
+' Nothing but the interpreter fallback is absolute now, so the file stays ASCII wherever
+' it lands.
+Dim fso, sh, here, py
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set sh  = CreateObject("WScript.Shell")
+here = fso.GetParentFolderName(WScript.ScriptFullName)
+sh.CurrentDirectory = here
+py = here & "\venv\Scripts\pythonw.exe"
+If Not fso.FileExists(py) Then py = "$vbsPyFallback"
+sh.Run """" & py & """ """ & here & "\tinycmdr-supervise.py"" $SuperviseArgs", 0, True
 "@
-# pythonw keeps a window from appearing; fall back to python.exe if pythonw is absent
-$pyw = Join-Path (Split-Path $py.Path) "pythonw.exe"
-if (Test-Path $pyw) { $vbs = $vbs -replace [regex]::Escape($py.Path), $pyw }
+# ASCII on purpose: the text above is path-free by construction, so a non-ASCII profile
+# name cannot reach the encoder to be destroyed (audit W4).
 Set-Content (Join-Path $InstallDir "tinycmdr-service.vbs") $vbs -Encoding ASCII
 
 $bat = @"
 @echo off
 rem tinycmdr launcher - double-click to start with a console window you can watch.
-rem Auto-start is handled by scheduled task "$AppName"; this is for manual runs.
-cd /d "$InstallDir"
-"$($py.Path)" tinycmdr.py
+rem Auto-start is handled by the Startup shortcut (or the scheduled task "$AppName" on
+rem an -AsService install); this file is for manual runs.
+rem
+rem %~dp0 is THIS file's own folder, so no absolute path is baked into the text. The
+rem installer used to interpolate the install folder and write it through an ASCII
+rem encoder, so a folder whose path holds a non-ASCII name came out with that name
+rem replaced by ? - a launcher pointing at a folder that never existed (audit W4).
+setlocal
+cd /d "%~dp0"
+set "PY=%~dp0venv\Scripts\python.exe"
+if exist "%PY%" goto :run
+rem No venv (the documented fallback install): the dependencies went into a machine
+rem python, so look that one up - skipping the Microsoft Store stub on PATH, the same
+rem trap tinycmdr.cmd skips.
+set "PY="
+call :findpy python.exe
+if not defined PY call :findpy py.exe
+if not defined PY (
+    echo tinycmdr: no python on PATH - re-run the installer. 1>&2
+    exit /b 127
+)
+:run
+"%PY%" "%~dp0tinycmdr.py" %*
+exit /b %ERRORLEVEL%
+
+:findpy
+for /f "delims=" %%I in ('where %~1 2^>nul') do (
+    echo(%%I| findstr /i /c:"WindowsApps" >nul
+    if errorlevel 1 if not defined PY set "PY=%%I"
+)
+exit /b 0
 "@
 Set-Content (Join-Path $InstallDir "launch_tinycmdr.bat") $bat -Encoding ASCII
 Say "wrote   : tinycmdr-service.vbs, launch_tinycmdr.bat"
@@ -1367,10 +1556,21 @@ if ($RegisterTask -and $AsService) {
     } catch {
         Say "S4U registration failed ($($_.Exception.Message)) - falling back to interactive logon"
         $principal = New-ScheduledTaskPrincipal -UserId $acct -LogonType Interactive
-        Register-ScheduledTask -TaskName $AppName -Action $action -Trigger @($tLogon, $tBoot) `
-            -Settings $set -Principal $principal -Force `
-            -Description "tinycmdr: Mattermost ops agent (@$BotName)" | Out-Null
-        Say "task    : $AppName registered (interactive - starts at your logon only)"
+        # The fallback used to be bare, so with $ErrorActionPreference = Stop an
+        # unelevated run (a fleet kit's as_service: true, a wrong account) hit the trap
+        # and printed "INSTALL FAILED", exit 2 - after the files, the venv, config.json
+        # and .env were already written (audit W1). Catch it and say what to do instead.
+        try {
+            Register-ScheduledTask -TaskName $AppName -Action $action -Trigger @($tLogon, $tBoot) `
+                -Settings $set -Principal $principal -Force `
+                -Description "tinycmdr: Mattermost ops agent (@$BotName)" | Out-Null
+            Say "task    : $AppName registered (interactive - starts at your logon only)"
+        } catch {
+            Fail ("could not register the scheduled task '$AppName': $($_.Exception.Message)`n" +
+                  "Run this installer again from an elevated PowerShell (Run as Administrator)," +
+                  " or drop -AsService - a logon install needs no administrator rights.`n" +
+                  "The files are in $InstallDir; start it with launch_tinycmdr.bat.")
+        }
     }
 }
 
@@ -1508,8 +1708,14 @@ if ($EnableWeb) {
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"
-Say ('uninstall: powershell -File "' + $InstallDir + '\install\uninstall-tinycmdr.ps1" -Force')
-Say "           (the same 'INSTALL-WINDOWS.cmd -Uninstall' works from the package)"
+# The wrapper is the line to give a reader (audit W5): a stock Restricted execution
+# policy refuses the -File form, and the -File form used to hardcode the default folder
+# so a -InstallDir install could not be removed with it at all. Both wrappers pass
+# -InstallDir through, and both are in the install folder / the package.
+Say ("uninstall: {0}\install\install-tinycmdr.cmd -Uninstall -Force" -f $InstallDir)
+Say "           (from an extracted package: INSTALL-WINDOWS.cmd -Uninstall -Force)"
+Say ('           (or: powershell -ExecutionPolicy Bypass -File "' + $InstallDir +
+     '\install\uninstall-tinycmdr.ps1" -InstallDir "' + $InstallDir + '" -Force)')
 try { Stop-TranscriptRedacted } catch { }
 if (-not $NoPause) { Read-Host "`nPress Enter to close" }
 # 0 = installed and verified - 3 = installed, model endpoint not answering yet

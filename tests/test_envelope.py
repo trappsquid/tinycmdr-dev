@@ -1,0 +1,255 @@
+"""The envelope: window, measured static, clamped reply, leftover messages budget.
+
+Pins the arithmetic that replaces the old guess (audit FEATURE D1/D2/D5, BUGREPORT
+§M9). Measured at HEAD before this change: an 8,192-token endpoint was sent a
+9,275-token payload and a 16,384-token completion request, because the budget was
+max(4000, window - 7000 - max_tokens) with the 5,322-token static half subtracted
+from nothing. The checks here are the five numbers and the relations between them
+at the windows the audit swept, the refusal below 8,192, and the two things that
+must scale with the window rather than with the model name: the memory caps and
+the schemas the payload actually carries.
+
+Hermetic: no network, no model. `_endpoint_window` is stubbed to each served
+window, which is exactly what the detection probe returns on a real box.
+
+    python tests/test_envelope.py
+"""
+import importlib.util
+import json
+import os
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+# TINYCMDR_SRC lets a reverted copy be graded (falsification: revert one fix, watch this go red).
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+FAILS = []
+
+
+def check(cond, what):
+    if not cond:
+        FAILS.append(what)
+        print(f"FAIL {what}")
+    else:
+        print(f"ok   {what}")
+
+
+def stage(workdir, llm=None):
+    shutil.copy2(SRC, workdir / "tinycmdr.py")
+    fixture = json.loads((BASE / "tests" / "fixture-config.json")
+                         .read_text(encoding="utf-8-sig"))
+    cfg = {k: v for k, v in fixture.items() if not k.startswith("_")}
+    cfg["llm"].update(llm or {})
+    cfg["web"] = {"enabled": False}
+    (workdir / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+    return cfg
+
+
+def load(workdir, name="envelope_build"):
+    spec = importlib.util.spec_from_file_location(name, workdir / "tinycmdr.py")
+    fb = importlib.util.module_from_spec(spec)
+    sys.modules[name] = fb
+    spec.loader.exec_module(fb)
+    return fb
+
+
+def at_window(fb, window):
+    """The envelope as a box that serves `window` produces it, cache cleared."""
+    fb.AGENT._window_cache = window
+    fb.AGENT._window_at = 0.0
+    fb.AGENT._envelope_cache = None
+    fb._STATIC_CACHE.clear()
+    return fb.AGENT._envelope("envtest")
+
+
+class FakeResp:
+    def __init__(self, status=500, text="nope"):
+        self.status_code = status
+        self.text = text
+
+    def json(self):
+        return {}
+
+
+def capture_request(fb, session_key="envtest"):
+    """Send one _chat with the transport stubbed; return the payload it tried to send.
+
+    The stub raises a plain 500, so _chat walks off the end and raises InfraError -
+    what matters is the payload it had already assembled.
+    """
+    import requests
+    seen = []
+
+    def fake_post(url, headers, payload, timeout, grace, cancel_event=None,
+                  stream=False):
+        seen.append(payload)
+        raise requests.HTTPError("stub", response=FakeResp())
+
+    real = fb._post_watchdog
+    fb._post_watchdog = fake_post
+    try:
+        fb.AGENT._chat([{"role": "system", "content": "s"},
+                        {"role": "user", "content": "hi"}], session_key=session_key)
+        sent = "no error raised"
+    except fb.InfraError as e:
+        sent = str(e)
+    finally:
+        fb._post_watchdog = real
+    return seen, sent
+
+
+def main():
+    workdir = Path(tempfile.mkdtemp(prefix="tc-envelope-"))
+    try:
+        stage(workdir)
+        fb = load(workdir)
+        reply_cfg = int(fb.CONFIG["llm"]["max_tokens"])
+        soft = fb.ENVELOPE_MIN_WINDOW
+        floor = fb.ENVELOPE_MIN_BUDGET
+
+        # --- the five numbers, and the relations between them -----------------
+        env0 = at_window(fb, 32768)
+        static = env0["static"]
+        check(static > 1000, f"static is MEASURED from the prompt (got {static} tokens)")
+        # G5's ratchet: the audit measured 5,322 tokens of static overhead on the installed
+        # box and set the ceiling at 5,400 (that + margin). This asserts against the
+        # staged fixture, so it fails the moment a change makes the static prompt or the
+        # disclosed schema set grow past the ceiling.
+        check(static <= 5400,
+              f"static overhead is within the 5,400-token ceiling (got {static})")
+        check(static < soft,
+              f"static {static} is below the {soft}-token minimum window, so a legal "
+              f"request exists at the floor")
+
+        for window in (8192, 16384, 32768, 131072):
+            env = at_window(fb, window)
+            reply = min(reply_cfg, window // 4)
+            budget = max(floor, window - static - reply)
+            line = fb.envelope_line(env)
+            check(env["window"] == window and env["static"] == static,
+                  f"w={window}: window and static named in the envelope")
+            check(env["reply"] == reply,
+                  f"w={window}: reply clamped to min(max_tokens, window//4) = {reply}")
+            check(env["budget"] == budget,
+                  f"w={window}: budget = window - static - reply = {budget}")
+            check(static + env["budget"] <= window,
+                  f"w={window}: static + messages fits in the window "
+                  f"({static} + {env['budget']} <= {window})")
+            raw_line = fb.envelope_line(env, raw=True)
+            check(all(str(n) in raw_line for n in (window, static, reply, budget)),
+                  f"w={window}: envelope_line names all five numbers: {line}")
+
+        # 32,768 is the audit's worked example: the old 4,000 floor became 19,254.
+        env32 = at_window(fb, 32768)
+        check(32768 - static - min(reply_cfg, 32768 // 4) > 19000,
+              f"w=32768: the budget is a measurement, not the old 4,000 floor "
+              f"({env32['budget']})")
+
+        # --- 4,096 refuses, with the arithmetic, before any request -----------
+        env4 = at_window(fb, 4096)
+        check(env4["refused"], "w=4096: the envelope refuses")
+        for token in ("window=4096", f"static={static}", "reply=", "budget="):
+            check(token in env4["refusal"], f"w=4096: refusal names {token}")
+        seen, sent = capture_request(fb, "envtest")
+        check(not seen, "w=4096: _chat sends NOTHING (refused before the POST)")
+        check("serves 4096 tokens per request" in sent,
+              f"w=4096: _chat raises InfraError with the refusal ({sent[:60]}...)")
+
+        # --- 8,192 runs, and the wire carries the clamped reply ---------------
+        env8 = at_window(fb, 8192)
+        check(not env8["refused"], "w=8192: the envelope runs (with a warning)")
+        seen, sent = capture_request(fb, "envtest")
+        check(len(seen) == 1, "w=8192: exactly one request was assembled")
+        if seen:
+            payload = seen[0]
+            conv = fb.AGENT._conversation_token_est(payload["messages"])
+            check(payload["max_tokens"] == env8["reply"] == min(reply_cfg, 2048),
+                  f"w=8192: max_tokens sent is the clamped reply "
+                  f"({payload['max_tokens']}, was {reply_cfg})")
+            check(conv <= env8["budget"],
+                  f"w=8192: the conversation fits the budget ({conv} <= "
+                  f"{env8['budget']}) - the system prompt is counted in static, "
+                  f"not again here")
+            check(env8["static"] + conv <= 8192,
+                  f"w=8192: the real payload (system + schemas + conversation) fits "
+                  f"the window ({env8['static']} + {conv} <= 8192)")
+
+        # --- an explicit llm.max_context_tokens is still a CEILING -------------
+        saved_ceiling = fb.CONFIG["llm"].get("max_context_tokens")
+        try:
+            fb.CONFIG["llm"]["max_context_tokens"] = 12000
+            env_c = at_window(fb, 32768)
+            check(env_c["budget"] == 12000,
+                  f"an explicit ceiling wins over a roomier window "
+                  f"({env_c['budget']} == 12000)")
+            env_c2 = at_window(fb, 8192)
+            check(env_c2["budget"] == 1024,
+                  f"a tighter window still wins over a looser ceiling "
+                  f"({env_c2['budget']} == 1024)")
+        finally:
+            fb.CONFIG["llm"]["max_context_tokens"] = saved_ceiling
+
+        # --- 16,384: the warn line, and the payload still fits -----------------
+        env16 = at_window(fb, 16384)
+        seen16, _ = capture_request(fb, "envtest")
+        if seen16:
+            conv16 = fb.AGENT._conversation_token_est(seen16[0]["messages"])
+            check(env16["static"] + conv16 <= 16384,
+                  f"w=16384: the real payload fits the window "
+                  f"({env16['static']} + {conv16} <= 16384)")
+
+        # --- memory limits scale with the window, not the model name ----------
+        at_window(fb, 16384)
+        notes = fb.mem_limit_chars("notes_max_chars", 8000)
+        tools = fb.mem_limit_chars("tool_output_max_chars", 10000)
+        fetch = fb.mem_limit_chars("fetch_max_chars", 12000)
+        hist = fb.mem_limit_exchanges("history_exchanges", 20)
+        check(notes < 8000,
+              f"w=16384: an 8,000-char notes block is impossible ({notes})")
+        check(tools == fetch == notes == 16384 // 8,
+              f"w=16384: tool output, fetch and notes all read {notes} "
+              f"(window // 8)")
+        check(hist < 20, f"w=16384: history_exchanges scales down to {hist}")
+        at_window(fb, 131072)
+        check(fb.mem_limit_chars("notes_max_chars", 8000) == 8000
+              and fb.mem_limit_exchanges("history_exchanges", 20) == 20,
+              "w=131072: a big window keeps the configured caps")
+
+        # --- a bigger tool surface is COUNTED, not ignored --------------------
+        at_window(fb, 32768)
+        fb.CONFIG["agent"]["tool_disclosure"] = False   # send the whole registry
+        fb.AGENT._envelope_cache = None
+        fb._STATIC_CACHE.clear()
+        before = fb.AGENT._envelope("envtest")
+        for i in range(100):
+            fb.REGISTRY.custom["probe_tool_%03d" % i] = {"schema": {
+                "type": "function", "function": {
+                    "name": "probe_tool_%03d" % i,
+                    "description": "a probe tool with a sentence of description" * 2,
+                    "parameters": {"type": "object", "properties": {
+                        "path": {"type": "string", "description": "a path"}},
+                        "required": ["path"]}}}}
+        fb.AGENT._envelope_cache = None
+        fb._STATIC_CACHE.clear()
+        after = fb.AGENT._envelope("envtest")
+        delta = after["static"] - before["static"]
+        check(delta > 100 * 20,
+              f"+100 sent schemas raise static by {delta} tokens (counted, not "
+              f"ignored)")
+        check(after["budget"] == before["budget"] - delta,
+              f"the budget falls by exactly the schema cost ({before['budget']} - "
+              f"{delta} = {after['budget']}) - the outcome is named, not silent")
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    print()
+    if FAILS:
+        print(f"{len(FAILS)} check(s) failed")
+        sys.exit(1)
+    print("all envelope checks passed")
+
+
+if __name__ == "__main__":
+    main()

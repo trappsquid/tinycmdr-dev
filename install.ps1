@@ -57,7 +57,10 @@ try {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "`n    the unpacked folder was temporary. The installed copy carries its own installer and"
     Write-Host "    uninstaller (%USERPROFILE%\tinycmdr by default), so later:"
-    Write-Host "      powershell -File `"$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1`""
+    Write-Host "      `"$env:USERPROFILE\tinycmdr\install\install-tinycmdr.cmd`" -Uninstall -Force"
+    Write-Host "      (or: powershell -ExecutionPolicy Bypass -File `"$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1`" -Force)"
+    Write-Host "    A -InstallDir install needs -InstallDir <that folder> on either form - the .ps1"
+    Write-Host "    defaults to %USERPROFILE%\tinycmdr and cannot find a custom folder on its own."
 } catch {
     Write-Host "`n*** $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "    (what was unpacked is still in $tmp)" -ForegroundColor Yellow

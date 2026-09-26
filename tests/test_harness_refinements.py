@@ -3,10 +3,13 @@ import tempfile
 import pathlib
 import sys
 import os
+import atexit
+import shutil
 
 # Ensure repo root is on sys.path
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 
+import tinycmdr as _fb                                                   # noqa: E402
 from tinycmdr import (
     AGENT,
     _carry_reset,
@@ -19,6 +22,18 @@ from tinycmdr import (
     tool_edit_file,
     tool_execute_code
 )
+
+# --- this suite owns the files it grades ----------------------------------------------
+# Importing the app sets BASE_DIR to the checkout, so save_tasks() wrote tasks.json +
+# tasks.journal.jsonl into the repo and the session carry file created sessions/ beside it
+# (both named by run_all.py's leak report). Point every repo-root data file at a temp dir
+# this suite removes on the way out.
+sys.path.insert(0, str(pathlib.Path(__file__).parent))
+import hermetic                                                          # noqa: E402
+
+_SANDBOX = pathlib.Path(tempfile.mkdtemp(prefix="fbharness-"))
+atexit.register(lambda: shutil.rmtree(_SANDBOX, ignore_errors=True))
+hermetic.redirect_repo_files(_fb, _SANDBOX)
 
 class TestHarnessRefinements(unittest.TestCase):
 

@@ -50,10 +50,14 @@ cd "$src"
 # Mattermost server, the bot token, your user id, the model endpoint and its key.
 # Borrow the terminal back when there is one - note that /dev/tty can exist and still
 # refuse to open (a command run over ssh has no controlling terminal), so OPEN it
-# rather than testing whether the node is readable.
+# rather than testing whether the node is readable, and do it inside a group whose
+# stderr is already /dev/null: in `exec 3</dev/tty 2>/dev/null` the failed open is
+# reported to the CURRENT stderr, because redirections are applied left to right - every
+# headless run printed "bash: line 55: /dev/tty: Device not configured" (I16).
 set +e   # the installer's own exit code is mine to report, not to die on
-if [ ! -t 0 ] && exec 3</dev/tty 2>/dev/null; then
+if [ ! -t 0 ] && { exec 3</dev/tty; } 2>/dev/null; then
     bash "$installer" "$@" <&3
+    exec 3<&-
 elif [ ! -t 0 ]; then
     printf '    (no terminal here to ask questions on: the installer takes its defaults)\n'
     bash "$installer" "$@"
@@ -71,6 +75,16 @@ fi
 # name the durable one: what it installs keeps its own installer beside the build.
 rm -rf "$tmp"; trap - EXIT
 printf '\n    the unpacked folder was temporary. The installed copy carries its own installer and\n'
+# The PLATFORM's installer, not this script's name: the footer used to print the Linux
+# one on macOS too, and on a Mac that path exists (it is in the package) but dies at its
+# first `getent` under `set -e`+`pipefail` - exit 127, no output, "so later:" followed by
+# nothing that works (I6). $installer is the same name this run handed over to.
 printf '    uninstaller (~/tinycmdr by default), so later:\n'
-printf '      bash ~/tinycmdr/install/install-tinycmdr.sh --verify-only\n'
-printf '      bash ~/tinycmdr/install/install-tinycmdr.sh --uninstall\n'
+printf '      bash ~/tinycmdr/%s --verify-only\n' "$installer"
+printf '      bash ~/tinycmdr/%s --uninstall\n' "$installer"
+case "$installer" in
+    *macos*)
+        printf '      (or double-click ~/tinycmdr/UNINSTALL-MACOS.command)\n' ;;
+    *)
+        printf '      (a system install needs it as root: sudo bash ~/tinycmdr/%s --uninstall)\n' "$installer" ;;
+esac

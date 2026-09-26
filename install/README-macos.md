@@ -4,14 +4,18 @@ tinycmdr is one Python file plus three dependencies. On macOS it runs as a per-u
 launchd agent, so it starts when you log in and comes back if it dies. Nothing here
 needs `sudo`.
 
-## 1. Python 3.12
+## 1. Python 3.10-3.12
 
     brew install python@3.12
 
-Use 3.12 (or 3.10/3.11). Do **not** build the venv from 3.13 or newer: on those
-versions pip resolves an ancient, broken `mmpy_bot`, and the bot starts without ever
-connecting to Mattermost, which looks like a config problem and is not one. The
-installer refuses 3.13+ and tells you this.
+tinycmdr runs on **3.10, 3.11 or 3.12** - the band is the band, in both directions:
+
+  * 3.13 or newer: pip resolves an ancient, broken `mmpy_bot`, and the bot starts
+    without ever connecting to Mattermost, which looks like a config problem and is not
+    one. The installer refuses these and says so (`--force-python` tries anyway).
+  * 3.9 or older: the config writer calls `Path.write_text(newline=...)`, a 3.10
+    keyword, so the install ends in a `TypeError` deep inside the writer. The installer
+    refuses 3.9 by name too.
 
 No Homebrew? Install Python 3.12 from python.org instead; the installer finds it.
 
@@ -19,6 +23,11 @@ Nothing at all, and no Homebrew either? The installer OFFERS to fetch a private
 Python 3.12 for you when it cannot find one (or run it with `--install-python` to
 skip the question). It uses `uv`, needs no password, and puts the interpreter
 inside the install folder, so removing that folder removes it too.
+
+The offer is reachable with no terminal: `--install-python` fetches unconditionally
+(it beats a `--python` that points somewhere unusable), and `-y` consents to the fetch
+when there is no interpreter at all. `-y` on a box with only python 3.9 still refuses -
+that version cannot be made to work, and the message names the band and the switch.
 
 ## 2. A Mattermost bot account for this Mac
 
@@ -80,7 +89,16 @@ Options worth knowing:
     --use-fleet-model                     use the LAN model endpoint in
                                           fleet-defaults.json instead of the cloud one
     --model-base-url <url> --model <name> point it anywhere else
-    --secrets-file <file>                 extra KEY=VALUE lines for .env (search API keys)
+    --secrets-file <file>                 extra KEY=VALUE lines for .env (search API
+                                          keys, and the bot token: TINYCMDR_MM_TOKEN
+                                          from it chooses the chat lane)
+    --python <path> / --install-python    build the venv from this interpreter / fetch
+                                          a private 3.12 with uv
+    --force-python                        accept a 3.13+ interpreter (mmpy_bot will not
+                                          connect: you are on your own)
+    --label <name>                        launchd label (default com.tinycmdr.agent);
+                                          recorded in the install folder for --uninstall
+    --no-path                             do not put the `tinycmdr` verb on PATH
     --verify-only                         report on an install, change nothing
     --uninstall                           stop the agent, remove the agent and the folder
 
@@ -99,10 +117,18 @@ right-click it and choose Open.)
 
 That stops the agent and removes the launchd job, the install folder and the PATH
 wrapper. Use `sudo` when you installed with it: `/usr/local/bin` is root-owned, so a
-user-mode uninstall cannot unlink the `tinycmdr` wrapper there - it now says so and
-prints the one line to run by hand instead of stopping half-way through. A user-mode
-install created no wrapper, so plain `bash install/uninstall-tinycmdr-macos.sh` is
-enough. The Mattermost bot account and its token are yours to revoke separately.
+user-mode uninstall cannot unlink the `tinycmdr` wrapper there - it says so and prints
+the one line to run by hand instead of stopping half-way through. A user-mode install
+created no wrapper, so plain `bash install/uninstall-tinycmdr-macos.sh` is enough.
+
+Under `sudo` the uninstaller resolves **you** (the `SUDO_USER`), not root's `$HOME`:
+before 1.0.22 it derived every path from `$HOME`, which `sudo` resets to `/var/root` -
+so the `sudo` line above found nothing, printed `done.` and exited 0 while the agent
+kept running. It also reads the launchd label out of the install folder, so an install
+made with `--label <something>` is removable without passing that label again. When
+there is nothing to remove (wrong `--install-dir`, already uninstalled) it says so and
+names the paths it checked, instead of reporting success. The Mattermost bot account and
+its token are yours to revoke separately.
 
 ## 5. Day to day
 

@@ -7,11 +7,15 @@ that matter are: a pipe or TINYCMDR_PLAIN still gets plain lines, every tone lan
 the card it should, the run's done line is not mistaken for the answer, and what
 reaches the terminal is ANSI that prompt_toolkit can render (raw ESC bytes get
 sanitized into visible "[1;33m" garbage).
+
+Without rich/prompt_toolkit it exits 77 (SKIP, never a green 0) after the two checks
+that do not need them.
 """
 import importlib.util
 import io
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -23,6 +27,11 @@ spec.loader.exec_module(fb)
 
 PASSES = []
 FAILS = []
+
+# rich/prompt_toolkit absent: the screen cannot be graded here, which is a SKIP for the
+# gate and not a green 0. This branch used to sys.exit(0) with two checks run out of 39
+# (BUGREPORT T4); tests/run_all.py counts 77 as red.
+SKIP_EXIT = 77
 
 
 def check(name, cond, detail=""):
@@ -45,7 +54,7 @@ del os.environ["TINYCMDR_PLAIN"]
 if not HAVE:
     print("\nrich/prompt_toolkit are absent: the screen itself cannot be graded here")
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
-    sys.exit(1 if FAILS else 0)
+    sys.exit(1 if FAILS else SKIP_EXIT)
 
 screen = fb.TuiScreen(out=io.StringIO(), width=100)
 screen.banner("tinycmdr 1.0.0", [("model", "main at http://127.0.0.1:8081"),
@@ -136,8 +145,7 @@ scr5.status_line("working · 1s")
 check("a screen with a toolbar hands the text over instead of printing",
       seen == ["working · 1s"] and not scr5.shown, str(scr5.shown))
 
-svg = BASE / "tests" / "eval-runs" / "tui-preview.svg"
-svg.parent.mkdir(parents=True, exist_ok=True)
+svg = Path(tempfile.mkdtemp(prefix="fbtui-svg-")) / "tui-preview.svg"
 written = screen.export_svg(svg)
 body = written.read_text(encoding="utf-8")
 check("export_svg writes the whole screen", "<svg" in body[:400])

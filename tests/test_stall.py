@@ -1270,8 +1270,16 @@ def test_payload_dump_is_off_unless_configured(tmp=None):
                   body)
             check("dump: session key is filename-safe", ":" not in files[0].name,
                   files[0].name)
-        # a bad path must not take the run down with it
-        fb.CONFIG["agent"]["debug_dump_dir"] = r"Z:\nope\<bad>|path"
+        # a bad path must not take the run down with it. The path is a FILE used as a
+        # directory (ENOTDIR everywhere) rather than r"Z:\nope\<bad>|path": on POSIX that
+        # is a RELATIVE name, so the dump created `Z:\nope\<bad>|path/` inside the checkout
+        # (measured 2026-09-26 in run_all.py's leak report) and the check passed for the
+        # wrong reason - the write succeeded.
+        blocker = pathlib.Path(tempfile.mkdtemp(prefix="fb-dump-blocker-"))
+        atexit.register(lambda: shutil.rmtree(blocker, ignore_errors=True))
+        not_a_dir = blocker / "a-file"
+        not_a_dir.write_text("not a directory\n", encoding="utf-8")
+        fb.CONFIG["agent"]["debug_dump_dir"] = str(not_a_dir / "<bad>|path")
         try:
             fb.dump_payload({"model": "main"}, "mm-test")
             check("dump: bad path is swallowed", True)

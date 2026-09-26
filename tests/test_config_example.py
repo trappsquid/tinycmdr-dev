@@ -31,7 +31,16 @@ def check(what, cond, detail=""):
         print(f"FAIL {what}: {detail}")
 
 
-sys.path.insert(0, str(BASE / "maintenance"))   # build-package.py imports private_rules
+sys.path.insert(0, str(BASE / "tests"))
+import hermetic  # noqa: E402  (the shared "stage what a clean clone lacks" helper)
+
+# maintenance/build-package.py imports the fleet's private inventory (host names, ids,
+# secret labels) at module level and raises SystemExit without it - and that file is
+# gitignored on purpose. A clean clone has no such thing, so stage the example the repo
+# DOES ship as private_rules.py on sys.path; the checks below then grade the real safety
+# tiers, which is the only part of the private file this suite needs.
+hermetic.private_rules_on_path()
+
 spec = importlib.util.spec_from_file_location(
     "build_package_under_test", BASE / "maintenance" / "build-package.py")
 bp = importlib.util.module_from_spec(spec)
