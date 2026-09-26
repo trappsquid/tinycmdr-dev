@@ -11,7 +11,7 @@ whether it did - run it before the tag and again after the release.
 
 Exit 0 when every name resolves, 1 with one line per name that does not.
 """
-import argparse, json, pathlib, re, subprocess, sys
+import argparse, json, os, pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
@@ -22,6 +22,16 @@ ALIASES = {
     "tinycmdr-linux.tar.gz": "tinycmdr-{v}-linux.tar.gz",
     "tinycmdr-macos.zip": "tinycmdr-{v}-macos.zip",
 }
+
+
+def _sha(path):
+    pulled = subprocess.run(["sha256sum" if os.name != "nt" else "sha256sum", str(path)],
+                            capture_output=True, text=True)
+    return pulled.stdout.split()[0] if pulled.returncode == 0 else ""
+
+
+def target_of(dist_dir, name):
+    return pathlib.Path(dist_dir) / name
 
 
 def version():
@@ -66,16 +76,29 @@ def main():
     bad = []
     print("README names %d download(s); version in the tree is %s" % (len(names), ver))
     for name in names:
-        wanted = ALIASES.get(name, name)
-        if "{v}" in wanted:
-            if name in have:
-                print("  ok    %-26s (alias for %s)" % (name, wanted.format(v=ver)))
+        versioned = ALIASES.get(name, name)
+        if "{v}" in versioned:
+            versioned = versioned.format(v=ver)
+            # A stable NAME is its own asset on the release: a GitHub latest URL resolves
+            # an asset whose name matches and nothing else, so falling back to the
+            # versioned file would report a broken download as fine (it did, 2026-09-26).
+            if name not in have:
+                print("  FAIL  %-26s no asset named %s (only the versioned %s is there)"
+                      % (name, name, versioned))
+                bad.append(name)
                 continue
-            wanted = wanted.format(v=ver)
-        if wanted in have:
-            print("  ok    %-26s -> %s" % (name, wanted))
+            if versioned in have and args.dist:
+                same = _sha(target_of(args.dist, name)) == _sha(target_of(args.dist, versioned))
+                if not same:
+                    print("  FAIL  %-26s is not the same bytes as %s" % (name, versioned))
+                    bad.append(name)
+                    continue
+            print("  ok    %-26s (stable name for %s)" % (name, versioned))
+            continue
+        if name in have:
+            print("  ok    %-26s" % name)
         else:
-            print("  FAIL  %-26s -> %s is not in %s" % (name, wanted, where))
+            print("  FAIL  %-26s is not in %s" % (name, where))
             bad.append(name)
     if bad:
         sys.exit("%d README download name(s) do not resolve" % len(bad))

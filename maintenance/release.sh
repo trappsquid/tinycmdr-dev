@@ -37,9 +37,13 @@ python maintenance/build-package.py --public --macos
 ls -1 dist/ | sed -n '1,12p'
 
 say "the README's download names must exist in dist/ before anything is pushed"
-# install.sh is a download the README names, so it belongs in dist/ and on the release.
+# Every name the README uses must exist as a FILE here first: install.sh/install.ps1 ride
+# as themselves, and each archive gets a copy under its stable name.
 cp install.sh dist/install.sh
 cp install.ps1 dist/install.ps1
+cp "dist/tinycmdr-$VER-win.zip" dist/tinycmdr-win.zip
+cp "dist/tinycmdr-$VER-linux.tar.gz" dist/tinycmdr-linux.tar.gz
+cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
 python maintenance/check-readme-assets.py --dist dist
 
 say "push main, then publish"
@@ -53,10 +57,11 @@ gh release create "$TAG" \
     --title "$TAG" --notes-file "$NOTES"
 
 say "attach the stable names the README uses (the versioned files stay)"
+# `gh release upload <tag> <file>#<label>` sets a LABEL, not the asset NAME: the asset
+# would keep the versioned name and the README link would stay 404 (measured 2026-09-26,
+# v1.0.19 published without its aliases). Upload the copies as plain files.
 gh release upload "$TAG" --clobber \
-    "dist/tinycmdr-$VER-win.zip#tinycmdr-win.zip" \
-    "dist/tinycmdr-$VER-linux.tar.gz#tinycmdr-linux.tar.gz" \
-    "dist/tinycmdr-$VER-macos.zip#tinycmdr-macos.zip"
+    dist/tinycmdr-win.zip dist/tinycmdr-linux.tar.gz dist/tinycmdr-macos.zip
 
 say "read the release back"
 gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
