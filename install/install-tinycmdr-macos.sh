@@ -84,7 +84,7 @@ DEFAULT_MODEL="main"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
 TG_TOKEN=""; TG_IDS=""
-MM_URL_ARG=""; SECRETS_FILE=""
+MM_URL_ARG=""; MM_PORT_ARG=""; SECRETS_FILE=""
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
 # Generated later (in the config section), but READ earlier by the no-token branch: under
 # `set -u` an unset name there is a crash.
@@ -150,6 +150,33 @@ app_version() {   # the version in the app file, for telling OUR bot from anothe
 # hands its own over - see install.sh) and not --yes. A scripted or headless run
 # takes the defaults and prints them instead, so a fleet push can never hang on a
 # question. TINYCMDR_ASK=1 forces the asks on a redirected stdin.
+mm_port_only() {   # mm_port_only <what a reader typed> -> the port, or ""
+    # A reader pastes what their browser shows. mattermost.url is the HOST alone (the
+    # scheme and port are separate keys in config.json), so split what they gave instead
+    # of writing a url no client can build a request from (measured 2026-09-26: a Mac
+    # ended up with "https://chat.example.com" in the host field).
+    local h="$1"
+    h="${h#http://}"; h="${h#https://}"; h="${h%%/*}"
+    h="${h#*@}"
+    case "$h" in
+        *:*:*) printf '%s' "" ;;          # IPv6 literal, not host:port
+        *:*) printf '%s' "${h##*:}" ;;
+        *) printf '%s' "" ;;
+    esac
+}
+
+mm_take_url() {   # mm_take_url <raw> -> sets MM_URL_ARG (host) and MM_PORT_ARG (port)
+    local raw="$1" pt=""
+    pt="$(mm_port_only "$raw")"
+    if [ -n "$pt" ]; then MM_PORT_ARG="$pt"; fi
+    raw="${raw#http://}"; raw="${raw#https://}"; raw="${raw%%/*}"; raw="${raw#*@}"
+    case "$raw" in
+        *:*:*) ;;                          # IPv6 literal: leave it whole
+        *:*) raw="${raw%:*}" ;;
+    esac
+    MM_URL_ARG="$raw"
+}
+
 trim() {   # trim() <string> -> the same string without leading/trailing spaces
     local s="$1"
     s="${s#"${s%%[![:space:]]*}"}"
@@ -490,6 +517,11 @@ ASK=1
 { [ -t 0 ] && [ "$YES" != 1 ]; } || ASK=0
 [ -n "${TINYCMDR_ASK:-}" ] && ASK=1
 
+# Whatever came in on a switch goes through the splitter once (the helper is defined
+# above, next to the other ask plumbing - calling it next to the arg loop was a
+# "command not found" that stopped the run, measured 2026-09-26).
+if [ -n "$MM_URL_ARG" ]; then mm_take_url "$MM_URL_ARG"; fi
+
 # The bot token: --token, --token-file and the .env this install already has all
 # win, and a run with none of them is the local-page lane (below), not an error.
 if [ -z "$TOKEN" ] && [ -n "$TOKEN_FILE" ]; then
@@ -518,7 +550,7 @@ ALLOWED_DFLT="$(jget "$DEFAULTS" allowed_user)"
 if [ -z "$ALLOWED_DFLT" ]; then ALLOWED_DFLT="$(cfgval_mac mattermost.allowed_users)"; fi
 if [ "$ASK" = 1 ]; then
     if [ -n "$TOKEN" ]; then
-        MM_URL_ARG="$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")"
+        mm_take_url "$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")"
         ALLOWED_ARG="$(ask_text "Your Mattermost user id (optional, but without it the bot ignores your DMs)" "$ALLOWED_DFLT")"
     elif [ -z "$TG_TOKEN" ]; then
         info "no chat token: this install serves the local page only (a token can be"
@@ -529,6 +561,7 @@ fi
 # fatal when Mattermost cannot be reached - so refuse HERE, with the switch to
 # pass, instead of installing something that cannot run (the Linux installer has
 # refused this shape all along).
+if [ -n "$MM_URL_ARG" ]; then mm_take_url "$MM_URL_ARG"; fi
 if [ -n "$TOKEN" ] && [ -z "$MM_URL_ARG" ]; then
     die "a Mattermost bot token with no server address.
 Pass --mattermost-url chat.example.com (no scheme), or re-run at a terminal and
@@ -654,6 +687,37 @@ if [ "$ASK" = 1 ]; then
     if ! ask_yes "Install now?"; then
         info "nothing was changed"
         exit 0
+    fi
+fi
+
+# ------------------------------------------------------------------- identity ---
+# A launchd LABEL belongs to the USER, not to a folder. An install that keeps the
+# default label boots out whatever is already registered under it, so a second install
+# (a probe, or a run from another folder) silently takes the first one's autostart -
+# and the agent it displaced stays unloaded, which looks exactly like "the bot is gone
+# and its page answers nothing" (measured 2026-09-26 on a fleet macOS host: the real
+# install was left unregistered by test installs sharing the default label).
+if [ "$IS_MAC" = 1 ]; then
+    _foreign=""
+    if [ -f "$PLIST" ] && ! grep -qF "$INSTALL_DIR" "$PLIST" 2>/dev/null; then
+        _foreign="$PLIST (it names another folder)"
+    else
+        # `launchctl print` EXITS NON-ZERO for a label that is not loaded, and under
+        # `set -e` with pipefail that killed the whole run at the assignment (measured
+        # 2026-09-26: the installer died silently right after the python check).
+        _loaded="$( { launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null || true; } \
+            | sed -n 's/^[[:space:]]*path = //p' | head -1)"
+        if [ -n "$_loaded" ] && [ "$_loaded" != "$PLIST" ]; then
+            _foreign="$_loaded"
+        fi
+    fi
+    if [ -n "$_foreign" ]; then
+        die "the launchd label $LABEL already belongs to another install:
+    $_foreign
+This run would boot that agent out. Give this install its own label (a probe or a
+second install always should):
+    bash $0 --label com.tinycmdr.$(hostname -s | tr 'A-Z' 'a-z') <your switches>
+or remove the other install first:  bash $0 --uninstall"
     fi
 fi
 
@@ -825,6 +889,7 @@ MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" WEB_ON="$WEB_ON" WEB_PORT="$WEB_
 MODEL_BASE_GIVEN="$MODEL_BASE_GIVEN" MODEL_GIVEN="$MODEL_GIVEN" \
 WEB_CLI_GIVEN="$WEB_CLI_GIVEN" MODEL_KEY="$MODEL_KEY" \
 FALLBACK_SPECS="$FALLBACK_SPECS" FB_ENV_LINES="$FB_ENV_LINES" PAGE_HOST="$PAGE_HOST" \
+MM_PORT_ARG="$MM_PORT_ARG" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -837,6 +902,9 @@ mm = cfg.setdefault("mattermost", {})
 mm["token"] = ""                       # the token belongs in .env, never here
 if os.environ.get("MM_URL_ARG"):
     mm["url"] = os.environ["MM_URL_ARG"]
+_mm_port = os.environ.get("MM_PORT_ARG", "").strip()
+if _mm_port.isdigit():
+    mm["port"] = int(_mm_port)
 au = os.environ.get("ALLOWED_ARG", "").strip()
 if au:
     mm["allowed_users"] = [u.strip() for u in au.split(",") if u.strip()]
@@ -895,6 +963,11 @@ if _specs:
         _fbs.append(_entry)
     if _fbs:
         llm["fallbacks"] = _fbs
+elif fresh:
+    # config.example.json carries a placeholder fallback (api.example.com, with a key
+    # variable nobody has): a fresh install must not inherit an endpoint that does not
+    # exist. An update keeps whatever the host already had.
+    llm["fallbacks"] = []
 web = cfg.setdefault("web", {})
 if os.environ.get("WEB_CLI_GIVEN") == "1" or fresh:
     web["enabled"] = os.environ["WEB_ON"] == "1"

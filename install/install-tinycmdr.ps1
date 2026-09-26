@@ -521,6 +521,43 @@ if ($VerifyOnly) {
     exit 3
 }
 
+# ------------------------------------------------------ identity of this install
+# $AppName is ONE name per user, not per folder: -Uninstall removes $AppName.lnk and that
+# task by name, and a run that keeps the default name writes over whatever is already
+# registered under it - so a probe or a second install silently takes the first one's
+# autostart away. Measured on the macOS side (2026-09-26), where test installs sharing the
+# default label left the real agent unregistered: no bot, and its page answered nothing.
+$foreign = ""
+if (Test-Path $StartupLink) {
+    $lnkText = ""
+    try {
+        $sh = New-Object -ComObject WScript.Shell
+        $lnk = $sh.CreateShortcut($StartupLink)
+        $lnkText = ("$($lnk.TargetPath) $($lnk.Arguments) $($lnk.WorkingDirectory)").Trim()
+    } catch { }
+    if ($lnkText -and ($lnkText -notlike "*$InstallDir*")) {
+        $foreign = "$StartupLink -> $lnkText"
+    }
+}
+if (-not $foreign -and -not $SkipTask) {
+    $t = Get-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue
+    if ($t) {
+        $act = @($t.Actions)[0]
+        $actText = ("$($act.Execute) $($act.Arguments)").Trim()
+        if ($actText -and ($actText -notlike "*$InstallDir*")) {
+            $foreign = "scheduled task $AppName -> $actText"
+        }
+    }
+}
+if ($foreign) {
+    Fail "the name $AppName already belongs to another install:
+    $foreign
+This run would take that autostart entry away. Give this install its own name:
+    INSTALL-WINDOWS.cmd -TaskName Tinycmdr-$(hostname) <your switches>
+(a probe or a second install always should), or remove the other install first:
+    INSTALL-WINDOWS.cmd -Uninstall"
+}
+
 # ----------------------------------------------------------------- 2. the app
 # What the install cannot work without. Every name here must also be in the package: this
 # check is the one place where a file that stopped shipping is fatal instead of silent, and
@@ -890,6 +927,23 @@ if ($NoPath -or $SkipTask) {
     }
 }
 
+# The host field is the HOST alone: a reader pastes what their browser shows
+# ("https://chat.example.com/"), while the scheme and the port are their own keys. Split
+# what came in rather than writing a url no client can build a request from (measured
+# 2026-09-26 on a fleet macOS host, where the host field came out holding a full URL).
+if ($MattermostUrl) {
+    $raw = $MattermostUrl
+    $h = ($raw -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', '')
+    if ($h -match '/') { $h = ($h -split '/')[0] }
+    if ($h -match '@') { $h = $h.Substring($h.LastIndexOf('@') + 1) }
+    if ($h -match '^(?<host>\[[^\]]+\]|[^:]+):(?<port>\d+)$') {
+        $h = $Matches['host']
+        $MattermostPort = [int]$Matches['port']
+    }
+    if ($h -ne $raw) { Say "mm url  : $raw -> $h (host field, port $MattermostPort)" }
+    $MattermostUrl = $h
+}
+
 # --------------------------------------------------------------- 4. config.json
 Head "writing config.json"
 $cfgPath = Join-Path $InstallDir "config.json"
@@ -980,6 +1034,11 @@ if ($script:Fallbacks.Count) {
     }
     $fbJson = ($list | ConvertTo-Json -Depth 6)
     if ($list.Count -eq 1) { $fbJson = "[`n$fbJson`n]" }
+} elseif ($cfgFresh) {
+    # config.example.json carries a placeholder fallback (api.example.com, with a key
+    # variable nobody has): a fresh install must not inherit an endpoint that does not
+    # exist. An update keeps whatever the host already had.
+    $cfg.llm.fallbacks = @()
 }
 # The third door. The TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a copy
 # in config.json is ignored with a warning), so only the numeric allowlist goes in here.

@@ -356,6 +356,25 @@ fi
 command -v systemctl >/dev/null || die "systemd not found - this installer is for Debian/Ubuntu hosts"
 id -u "$RUN_USER" >/dev/null 2>&1 || die "no such user: $RUN_USER"
 
+# ------------------------------------------------------------------- identity ---
+# A systemd unit name belongs to the HOST, not to a folder: a run that keeps the default
+# name stops and re-registers whatever service already carries it, so a probe or a second
+# install silently takes the first one's service away. Same class as the launchd label
+# (measured there, 2026-09-26): the displaced agent was left unregistered and its page
+# answered nothing.
+# `systemctl show` exits non-zero for a unit that does not exist, and with pipefail that
+# is fatal at the assignment under set -e: keep the probe's failure out of the pipeline.
+_unit_exec="$( { sctl show -p ExecStart --value "$SERVICE_NAME" 2>/dev/null || true; } | head -1)"
+case "$_unit_exec" in
+    "") : ;;
+    *"$INSTALL_DIR"*) : ;;
+    *) die "the service name $SERVICE_NAME already belongs to another install:
+    $_unit_exec
+Give this install its own unit and it will leave that one alone:
+    TINYCMDR_SERVICE=tinycmdr-$(hostname -s) bash $0 <your switches>
+or remove the other install first:  bash $0 --uninstall" ;;
+esac
+
 say "pre-flight"
 info "package      : $SRC"
 info "version      : $(version_of "$SRC/tinycmdr.py")"
@@ -406,6 +425,29 @@ fi
 # takes the defaults and prints them, so a fleet push can never hang on a question.
 # TINYCMDR_ASK=1 forces the asks on a redirected stdin.
 # Prompts go to STDERR: the caller reads the answer from stdout.
+mm_port_only() {   # mm_port_only <what a reader typed> -> the port, or ""
+    # A reader pastes what their browser shows, and mattermost.url is the HOST alone
+    # (the scheme and port are separate keys in config.json): split what they gave
+    # instead of writing a url no client can build a request from.
+    local h="$1"
+    h="${h#http://}"; h="${h#https://}"; h="${h%%/*}"; h="${h#*@}"
+    case "$h" in
+        *:*:*) printf '%s' "" ;;          # IPv6 literal, not host:port
+        *:*) printf '%s' "${h##*:}" ;;
+        *) printf '%s' "" ;;
+    esac
+}
+
+mm_host_only() {   # mm_host_only <what a reader typed> -> prints the bare host
+    local h="$1"
+    h="${h#http://}"; h="${h#https://}"; h="${h%%/*}"; h="${h#*@}"
+    case "$h" in
+        *:*:*) printf '%s' "$h" ;;         # IPv6 literal: leave it whole
+        *:*) printf '%s' "${h%:*}" ;;
+        *) printf '%s' "$h" ;;
+    esac
+}
+
 trim() {
     local s="$1"
     s="${s#"${s%%[![:space:]]*}"}"
@@ -503,7 +545,7 @@ ALLOWED_DFLT="$ALLOWED_ARG"
 case "$ALLOWED_DFLT" in "[]"|*REPLACE_WITH*) ALLOWED_DFLT="" ;; esac
 if [ "$ASK_Q" = 1 ]; then
     if [ -n "$TOKEN" ]; then
-        MM_URL_ARG="$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")"
+        MM_URL_ARG="$(mm_host_only "$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")")"
         ALLOWED_ARG="$(ask_text "Your Mattermost user id (optional, but without it the bot ignores your DMs)" "$ALLOWED_DFLT")"
     elif [ -z "$TG_TOKEN" ]; then
         info "no chat token: this install serves the local page only (a token can be"
@@ -691,6 +733,13 @@ MM_PORT="$(jget "$DEFAULTS" mattermost_port)"
 if [ -z "$MM_PORT" ]; then MM_PORT=443; fi
 if [ -z "$MM_HOST" ]; then MM_HOST="$MM_URL_ARG"; fi
 if [ -z "$MM_HOST" ]; then MM_HOST="$(cfgval mattermost.url)"; fi
+# Every source (a switch, the answer, fleet-defaults, this host's own config.json) goes
+# through the splitter: a pasted scheme or a ":8443" must not end up inside the host.
+if [ -n "$MM_HOST" ]; then
+    _mm_pt="$(mm_port_only "$MM_HOST")"
+    if [ -n "$_mm_pt" ]; then MM_PORT="$_mm_pt"; fi
+    MM_HOST="$(mm_host_only "$MM_HOST")"
+fi
 if [ -z "$MM_HOST" ]; then
     if [ "$CHAT_LANE" = 0 ]; then
         # No lane here reads mattermost.url (Telegram-only or the local page), so
@@ -930,6 +979,11 @@ if _specs:
         _fbs.append(_entry)
     if _fbs:
         llm["fallbacks"] = _fbs
+elif fresh:
+    # config.example.json carries a placeholder fallback (api.example.com, with a key
+    # variable nobody has): a fresh install must not inherit an endpoint that does not
+    # exist. An update keeps whatever the host already had.
+    llm["fallbacks"] = []
 web = cfg.setdefault("web", {})
 if web_given or fresh:
     # The token is a SECRET, so it goes to .env (TINYCMDR_WEB_TOKEN) with the bot

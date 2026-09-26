@@ -217,6 +217,8 @@ sudo bash install/install-tinycmdr.sh
 
 Run it at a terminal with no switch and it asks; `--mode system|user` decides without a prompt, and `--yes` takes the default for who you are.
 
+A **second** install on one host needs its own unit name: `TINYCMDR_SERVICE=tinycmdr-<something> bash install/install-tinycmdr.sh ...`. One systemd unit name belongs to the host, not to a folder, so a run that keeps the default would take the other install's service away; the installer refuses and says so when it sees that.
+
 ### macOS (launchd)
 
 ```bash
@@ -250,6 +252,8 @@ cd tinycmdr-*          # the folder inside carries the version
 bash install/install-tinycmdr-macos.sh
 ```
 
+A **second** install on one Mac needs its own label: `--label com.tinycmdr.myserver`. A launchd label belongs to your user, not to a folder, so a run that keeps the default would take the other install's autostart away (the installer refuses and tells you when it sees that, rather than doing it).
+
 The `tinycmdr` verb lands in `/usr/local/bin` when that folder is writable (a Homebrew machine), and in `~/.local/bin` otherwise - one `export PATH` line is added to `~/.zshrc` for it, so open a new terminal before typing `tinycmdr`. Until then: `~/tinycmdr/tinycmdr status`. `--no-path` writes neither.
 
 Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder (macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it, double-click **`UNINSTALL-MACOS.command`**, or run `bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if the install left a root-owned launcher in `/usr/local/bin`; the uninstaller removes the `~/.local/bin` one by itself, and reports what it could not remove instead of stopping part-way.
@@ -260,6 +264,9 @@ The local web/API page listens on port **8787** on every platform, and the insta
 
 ```text
 -InstallDir <folder>   install somewhere other than %USERPROFILE%\tinycmdr
+-TaskName <name>       the autostart name this install owns (default Tinycmdr).
+                       A SECOND install on one machine must pass its own,
+                       or it would take the first one's autostart entry
 -NoPath                leave your user PATH alone
 -SkipTask              files only: no autostart entry
 -VerifyOnly            report on an existing install, change nothing

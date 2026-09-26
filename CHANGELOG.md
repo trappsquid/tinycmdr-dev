@@ -5,6 +5,27 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.23] - 2026-09-26
+
+One install can no longer take another one's autostart, and a fresh config no longer inherits an
+endpoint that does not exist.
+
+Fixed
+- A second install silently took the first one's autostart. A launchd label, a systemd unit name
+  and a Windows task/Startup name all belong to the USER, not to a folder, so a run that kept the
+  default name booted out whatever was already registered under it - and the agent it displaced
+  stayed unloaded, which reads exactly like "the bot is gone and its page answers nothing"
+  (measured on a fleet macOS host, where test installs sharing the default label left the real
+  agent unregistered). All three installers now detect a foreign registration under the name they
+  are about to use and refuse, naming the switch to give this install its own: `--label`,
+  `TINYCMDR_SERVICE`, `-TaskName`.
+- A fresh install kept `config.example.json`'s placeholder fallback (`https://api.example.com/v1`
+  with `MY_PROVIDER_API_KEY`, a variable nobody has). It now writes `llm.fallbacks: []` unless
+  this run was given endpoints, and an update still keeps the host's own.
+- The Mattermost host field accepted anything: a pasted `https://chat.example.com/` was stored
+  verbatim in a field documented as the host alone. All three installers split a pasted scheme,
+  `user@`, path and `:port` into the host and port keys.
+
 ## [1.0.22] - 2026-09-26
 
 Every installer asks the same questions, and every install reports what can reach its page.
