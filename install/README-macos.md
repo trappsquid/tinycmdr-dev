@@ -56,7 +56,24 @@ Options worth knowing:
 The token is read from a prompt if you do not pass one, so it never has to appear in
 your shell history.
 
-## 4. Day to day
+**Not a terminal person?** Double-click `INSTALL-MACOS.command` in the package, and
+`UNINSTALL-MACOS.command` to remove it. Finder runs a `.command` in Terminal; it opens
+a `.sh` in TextEdit, which is where most people get stuck. (If the file came from a
+browser rather than the `curl` line above, macOS quarantines it: the first time,
+right-click it and choose Open.)
+
+## 4. Removing it
+
+    sudo bash install/uninstall-tinycmdr-macos.sh     # or double-click UNINSTALL-MACOS.command
+
+That stops the agent and removes the launchd job, the install folder and the PATH
+wrapper. Use `sudo` when you installed with it: `/usr/local/bin` is root-owned, so a
+user-mode uninstall cannot unlink the `tinycmdr` wrapper there - it now says so and
+prints the one line to run by hand instead of stopping half-way through. A user-mode
+install created no wrapper, so plain `bash install/uninstall-tinycmdr-macos.sh` is
+enough. The Mattermost bot account and its token are yours to revoke separately.
+
+## 5. Day to day
 
     bash ~/tinycmdr/maintenance/restart-tinycmdr-macos.sh            # restart
     bash ~/tinycmdr/maintenance/restart-tinycmdr-macos.sh status     # loaded? answering?
@@ -71,14 +88,14 @@ Logs: `~/tinycmdr/tinycmdr.log`, plus `~/tinycmdr/logs/launchd.out.log` and
 and the agent is set to restart only on a **non-zero** exit, so the two do not race.
 For a process wedged inside a system call, use the restart script above.
 
-## 5. Why the model defaults to cloud
+## 6. Why the model defaults to cloud
 
 A laptop leaves the LAN, so the installer defaults `llm.base_url` to the cloud
 endpoint rather than an address that only resolves at home. To run against a model on
 your own network, re-run the installer with `--use-fleet-model` (it reads the endpoint
 from `install/fleet-defaults.json`), or pass `--model-base-url` and `--model` directly.
 
-## 6. What this does NOT do
+## 7. What this does NOT do
 
 - It does not install search API keys. Without them `web_search` returns an error; pass
   `--secrets-file` pointing at a file holding `TAVILY_API_KEY=...` / `ANYSEARCH_API_KEY=...`.

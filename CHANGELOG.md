@@ -5,6 +5,29 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.18] - 2026-09-25
+
+The macOS doors. A reader who is not a terminal user could not install and could not remove
+tinycmdr on a Mac, and the removal could die half-way on exactly the installs that had asked for
+a PATH wrapper.
+
+### Fixed
+- **The macOS uninstall aborted at the PATH wrapper.** The uninstaller removes
+  `/usr/local/bin/tinycmdr` with `rm -f` under `set -euo pipefail`. That directory is
+  `root:wheel` and not user-writable, so whenever the install ran with sudo (the only way that
+  wrapper gets written) the `rm` fails and the shell exits THERE - `rm -rf $INSTALL_DIR` below it
+  never runs, and the reader gets no explanation. Measured 2026-09-25 on a fleet macOS host with a
+  reproduction of the exact block: `rm: /usr/local/bin/tinycmdr: Permission denied`, exit 1, the
+  next step never printed. It is now `2>/dev/null || true` followed by a plain statement of what
+  is left and the one line to finish it by hand, so the folder and the launchd job still go.
+- **macOS had no double-clickable door.** Windows has shipped `INSTALL-WINDOWS.cmd` from the
+  start; macOS shipped `.sh` files only, and Finder opens a `.sh` in TextEdit - so a GUI reader
+  had nothing to double-click, for install OR for removal. Added `INSTALL-MACOS.command` and
+  `UNINSTALL-MACOS.command` (Finder runs a `.command` in Terminal; both keep the window open and
+  print the exit status), added `.command` to the packager's `wants_exec_bit()` predicate and to
+  `lf_only()` so the pair ships executable and LF, and documented both in `README.md` and
+  `install/README-macos.md` including the quarantine note for a browser download.
+
 ## [1.0.17] - 2026-09-25
 
 The launcher nobody could run, and the screen three writers were painting. Every item below was

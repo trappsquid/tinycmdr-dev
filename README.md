@@ -171,12 +171,12 @@ Download the archive for your platform from the [latest release](https://github.
 
 ### Windows
 
-Download [`tinycmdr-1.0.17-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.17-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
+Download [`tinycmdr-1.0.18-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
 
 ```powershell
-curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.17-win.zip
-Expand-Archive tinycmdr-1.0.17-win.zip
-cd tinycmdr-1.0.17
+curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-win.zip
+Expand-Archive tinycmdr-1.0.18-win.zip
+cd tinycmdr-1.0.18
 .\INSTALL-WINDOWS.cmd
 ```
 
@@ -188,9 +188,9 @@ It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment ins
 passwordless sudo):
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.17-linux.tar.gz
-tar -xzf tinycmdr-1.0.17-linux.tar.gz
-cd tinycmdr-1.0.17
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-linux.tar.gz
+tar -xzf tinycmdr-1.0.18-linux.tar.gz
+cd tinycmdr-1.0.18
 sudo bash install/install-tinycmdr.sh
 ```
 
@@ -208,11 +208,19 @@ without a prompt, and `--yes` takes the default for who you are.
 ### macOS (launchd)
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.17-macos.zip
-unzip tinycmdr-1.0.17-macos.zip
-cd tinycmdr-1.0.17
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-macos.zip
+unzip tinycmdr-1.0.18-macos.zip
+cd tinycmdr-1.0.18
 bash install/install-tinycmdr-macos.sh
 ```
+
+Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder
+(macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it,
+double-click **`UNINSTALL-MACOS.command`**, or run
+`bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if you
+installed with it - the PATH wrapper lives in root-owned `/usr/local/bin`, and the
+uninstaller now reports that instead of stopping part-way.
+
 
 ### Installer switches (Windows)
 

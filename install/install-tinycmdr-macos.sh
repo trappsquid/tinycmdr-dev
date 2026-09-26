@@ -158,7 +158,17 @@ if [ "$UNINSTALL" = 1 ]; then
     # at THIS install (a probe uninstall must not take the real one's wrapper)
     if [ -f /usr/local/bin/tinycmdr ] \
             && grep -qF "$INSTALL_DIR" /usr/local/bin/tinycmdr 2>/dev/null; then
-        rm -f /usr/local/bin/tinycmdr
+        # A wrapper written by a sudo install is root-owned inside a root-owned directory,
+        # so a user-mode uninstall cannot unlink it. Under `set -e` the bare `rm -f` that
+        # used to sit here aborted the WHOLE script at this line - measured 2026-09-25 on a
+        # fleet macOS host: the rm printed "Permission denied", the shell exited 1, and the
+        # `rm -rf $INSTALL_DIR` below never ran, so the uninstall left the install folder
+        # behind and told the reader nothing. Never fatal now: try, then say what is left.
+        rm -f /usr/local/bin/tinycmdr 2>/dev/null || true
+        if [ -f /usr/local/bin/tinycmdr ]; then
+            warn "/usr/local/bin/tinycmdr is owned by root and could not be removed here."
+            warn "finish that one line by hand:  sudo rm -f /usr/local/bin/tinycmdr"
+        fi
     fi
     if [ -d "$INSTALL_DIR" ]; then
         info "removing $INSTALL_DIR"

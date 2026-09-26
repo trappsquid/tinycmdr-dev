@@ -51,7 +51,7 @@ def wants_exec_bit(path):
     and the zips were not, from the same predicate).
     """
     p = pathlib.PurePosixPath(str(path).replace("\\", "/"))
-    return p.name in EXEC_NAMES or p.suffix == ".sh"
+    return p.name in EXEC_NAMES or p.suffix in (".sh", ".command")
 
 
 # files/dirs that ship, in package-relative form
@@ -75,6 +75,11 @@ SHIP = [
     # script execution policy is Restricted there, so that window closes before it can be
     # read). A root-level .cmd is what a person double-clicks.
     "INSTALL-WINDOWS.cmd",
+    # The macOS equivalents, and why they exist: Finder RUNS a .command on double-click
+    # and opens a .sh in TextEdit, so the Windows door had no Mac counterpart until
+    # 2026-09-25 (the question that produced these two lines came from the operator).
+    "INSTALL-MACOS.command",
+    "UNINSTALL-MACOS.command",
     "install/install-tinycmdr.ps1",
     "install/install-tinycmdr.cmd",
     "install/install-tinycmdr.sh",
@@ -150,7 +155,8 @@ ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
 ENV_PREFIX = "env "
 # Ships-as-code files must be neutral too: a host value here would be baked into
 # every install, which is exactly how this box's endpoint ended up in the code.
-APP_FILES = ("INSTALL-WINDOWS.cmd", "tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
+APP_FILES = ("INSTALL-WINDOWS.cmd", "INSTALL-MACOS.command", "UNINSTALL-MACOS.command",
+             "tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
              "soul.md",
              ".env.example", "README.md",
              "CHANGELOG.md", "install/install-tinycmdr.ps1",
@@ -349,7 +355,7 @@ def lf_only(path):
     "#!/usr/bin/env bash\r" and dies with "syntax error near '$\'in\r\''".
     The Windows working tree can carry CRLF even though the shipped kit must be
     LF, so normalise here instead of trusting the checkout."""
-    if path.suffix != ".sh":
+    if path.suffix not in (".sh", ".command"):
         return False
     raw = path.read_bytes()
     if b"\r\n" not in raw:

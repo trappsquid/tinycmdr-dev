@@ -1,0 +1,15 @@
+# Shell scripts must be LF, and this file is the reason the fleet kept finding CRLF ones.
+#
+# A CRLF .sh is not runnable: `set -euo pipefail` arrives as `set -euo pipefail\r`, and the
+# shell reports it as an invalid option named "pipe" (measured 2026-09-25 on a fleet macOS
+# host: the installer died at line 48 with `set: pipe: invalid option name`). Two installers
+# were COMMITTED with CRLF, so every clone and every `update` - which is a git pull, and now
+# the only update door - landed unrunnable scripts on Unix hosts. The packaged copies were
+# always fine because build-package.py normalises .sh with lf_only(), which is precisely what
+# hid this for as long as it lasted: the installers a reader downloads worked, and the scripts
+# a host pulls did not.
+#
+# Deliberately NOT *.py: tinycmdr.py is a CRLF file on purpose and carries bare CRs that a
+# renormalise would strip. Same for tinycmdr.cmd (CRLF is what cmd.exe wants).
+*.sh      text eol=lf
+*.command text eol=lf
