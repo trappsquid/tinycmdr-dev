@@ -262,16 +262,16 @@ def test_task_ledger_lifecycle():
 
 
 def test_done_with_two_open_items_names_both():
-    """Measured 2026-09-25 driving HOST-A (work order 2): two items were open, the model called
+    """Measured 2026-09-25 driving the manager box (work order 2): two items were open, the model called
     done with no id, got a one-liner listing the IDS only, and stopped using the ledger for
     the rest of the run. The refusal now names each open item so the choice is obvious."""
     fb.tool_task({"action": "clear"}, {})
-    fb.tool_task({"action": "add", "task": "restart the bot-a tower"}, {})
+    fb.tool_task({"action": "add", "task": "restart the tower computer"}, {})
     fb.tool_task({"action": "add", "task": "check the disk space"}, {})
     out = fb.tool_task({"action": "done", "note": "ran it"}, {})
     check("an ambiguous done is refused", out.startswith("ERROR"), out[:120])
     check("...and it names every open item with its id and text",
-          "#1" in out and "restart the bot-a tower" in out
+          "#1" in out and "restart the tower computer" in out
           and "#2" in out and "check the disk space" in out, out[:300])
     check("...and it says to pass id=<n>, one call per task",
           "id=<n>" in out and "one call per task" in out, out[:300])

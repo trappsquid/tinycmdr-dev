@@ -296,7 +296,7 @@ def main():
                   fb._endpoint_load_request(shape) is None,
                   str(fb._endpoint_load_request(shape)))
         check("a generation request to a DIFFERENT host is not ours to gate",
-              fb._endpoint_load_request("curl http://10.0.0.9:11434/v1/completions") is None)
+              fb._endpoint_load_request("curl http://192.0.2.9:11434/v1/completions") is None)
 
         _probe_code = (f"import urllib.request\n"
                        f"urllib.request.urlopen('http://{host}/v1/chat/completions')\n")

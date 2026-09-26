@@ -73,7 +73,7 @@ finally:
     os.environ.pop("TINYCMDR_ENV_TOKEN", None)
 
 # ---- a SHORT secret is still a secret -------------------------------------------------
-# Measured 2026-09-25 driving HOST-A: asked where the web UI token lived, the run read
+# Measured 2026-09-25 driving the manager box: asked where the web UI token lived, the run read
 # config.json and quoted the 10-char token into chat - the sweep's 12-char floor had
 # skipped it, so neither the answer nor the log was masked.
 SAVED_SECRETS2 = fb._SECRETS

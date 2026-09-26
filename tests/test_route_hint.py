@@ -120,7 +120,7 @@ out3 = fb.tool_shell({"command": "echo hi"}, {"session_key": "r-shell-echo", "co
 check("a plain command's result carries nothing", "[HARNESS:" not in out3, out3[-120:])
 
 # ---- the mint census: one line when a by-hand SHAPE has run in several runs ----------
-# Measured 2026-09-25 driving HOST-A: the run does a routine by hand every time and never
+# Measured 2026-09-25 driving the manager box: the run does a routine by hand every time and never
 # offers to keep it, and the whole six-day log held ONE `remember` call. The model sees one
 # run at a time; the harness keeps the census and asks the operator (see mint_offer).
 import json as _json
@@ -150,12 +150,12 @@ _st5["order_repeats"] = 3
 _line5 = fb.mint_offer("offer-6", _rep2, source="main")
 
 # ---- memory: a lookup that answered a durable-fact question gets ONE nudge ------------
-# Measured 2026-09-25 driving HOST-A: asked which port the web UI listens on and where its
+# Measured 2026-09-25 driving the manager box: asked which port the web UI listens on and where its
 # token file lives, the run found both and saved nothing - the whole six-day log holds ONE
 # `remember` call, because nothing anywhere points at the moment the fact appears.
 check("an order asking WHERE a fact lives is spotted as a lookup",
       fb.lookup_question("which port does your web UI listen on?") is True
-      and fb.lookup_question("restart the bot-a tower over ssh") is False
+      and fb.lookup_question("restart the tower computer over ssh") is False
       and fb.lookup_question("where is the token file") is True)
 fb.run_state("nudge-1", create=True)["order_is_lookup"] = 1
 _nudge = fb.remember_nudge("read_file", {"path": "config.json"}, {"session_key": "nudge-1"})

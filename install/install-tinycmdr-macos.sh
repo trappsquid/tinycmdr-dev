@@ -154,7 +154,7 @@ mm_port_only() {   # mm_port_only <what a reader typed> -> the port, or ""
     # A reader pastes what their browser shows. mattermost.url is the HOST alone (the
     # scheme and port are separate keys in config.json), so split what they gave instead
     # of writing a url no client can build a request from (measured 2026-09-26: a Mac
-    # ended up with "https://chat.example.com" in the host field).
+    # ended up with a full https:// URL in the host field).
     local h="$1"
     h="${h#http://}"; h="${h#https://}"; h="${h%%/*}"
     h="${h#*@}"

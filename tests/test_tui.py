@@ -223,7 +223,7 @@ check("without a screen the text still goes to stdout",
 
 scr9 = fb.TuiScreen(out=io.StringIO(), width=90)
 dest10 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr9)
-ref10 = dest10.line("narration", "mac-host-b.local")
+ref10 = dest10.line("narration", "host.lan")
 dest10.drop(ref10)
 _titles = [str(getattr(r, "title", "")).strip() for r in scr9.shown]
 check("a dropped draft that WAS the answer still gets the answer card",

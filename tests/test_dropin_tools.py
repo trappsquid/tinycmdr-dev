@@ -302,7 +302,7 @@ def test_process_lifecycle():
     out = tool({"action": "wait", "id": "b2", "timeout": 30}, None)
     check("process: wait returns on completion", "exit 0" in out, out)
     # the argv list sent as a JSON STRING: a session that never held this schema guesses
-    # the shape (measured 2026-09-25 on HOST-A, where the call died inside cmd.exe)
+    # the shape (measured 2026-09-25 on the manager box, where the call died inside cmd.exe)
     tool({"action": "start",
           "command": json.dumps([sys.executable, "-c", "print(7)"])}, None)
     out = tool({"action": "wait", "id": "b3", "timeout": 30}, None)
@@ -314,7 +314,7 @@ def test_process_lifecycle():
     check("process: an unknown id says so", out.startswith("ERROR"), out)
 
     # The harness hands a drop-in tool its own shell and its safety tier (measured
-    # 2026-09-25 on HOST-A: string commands went to cmd.exe while the prompt says the shell
+    # 2026-09-25 on the manager box: string commands went to cmd.exe while the prompt says the shell
     # is PowerShell, and a .ps1 launched through this tool did what the shell tier refuses).
     ps_ctx = {"shell_argv": lambda c: ["powershell", "-NoProfile", "-Command", c],
               "shell_guard": lambda text: None}

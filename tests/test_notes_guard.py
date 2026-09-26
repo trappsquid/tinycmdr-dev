@@ -233,7 +233,7 @@ def main():
               "a long but sane note is stored WHOLE")
 
         # ---- the reply says WHAT was written, and stale facts can be CORRECTED --------
-        # Measured 2026-09-25 driving HOST-A: `remember` answered "OK: noted." (no entry
+        # Measured 2026-09-25 driving the manager box: `remember` answered "OK: noted." (no entry
         # count, no text), and the schema promised "replace stale facts instead of stacking
         # contradictions" while the tool could only append - the run that had saved a
         # workaround as a fact had no way to take it back.

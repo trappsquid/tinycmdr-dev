@@ -1,6 +1,6 @@
 """The tool doors: one miss, one answer, wherever it is attempted.
 
-Four measured misses (drive, 2026-09-24, macOS + win-host-a + linux-host-a) that each got a
+Four measured misses (drive, 2026-09-24, on macOS, Windows and Linux hosts) that each got a
 runtime answer instead of a prompt line:
 
   * a tool FILE run from inside Python (`execute_code`) walked past the shell door's
@@ -222,7 +222,7 @@ check("reset: /new drops the previous run's plan", fb.plan_render(key) == "",
       fb.plan_render(key))
 
 # ---- a call that leaves out a declared argument is told WHICH one --------------------
-# Measured 2026-09-25 driving HOST-A (work order 3): `create_tool` sent `code` alone with the
+# Measured 2026-09-25 driving the manager box (work order 3): `create_tool` sent `code` alone with the
 # name in the file's own `# NAME: big_files` header, answered a bare KeyError('name'), and
 # the run retried the identical call before going at the tools folder with three shell
 # commands. Both halves are answered at runtime now.

@@ -2216,7 +2216,7 @@ def test_the_safety_seatbelt_covers_execute_code_too():
                         {"session_key": "belt-s"}).startswith("BLOCKED:"))
 
     # The host-restart verbs moved from the absolute tier to the CONFIRM tier (measured
-    # 2026-09-25 on HOST-A): the operator ordered "Restart the bot-a tower computer over
+    # 2026-09-25 on the manager box): the operator ordered "Restart the tower computer over
     # ssh", the absolute tier refused it, and the run spent 40+ steps writing a .ps1 and
     # launching it through the process tool - the restart reached the remote box with the
     # pattern never in sight. The block did not stop the restart, it cost the yes.
@@ -2624,7 +2624,7 @@ def test_the_facts_line_marks_the_harness_as_the_last_speaker_when_it_nudged():
 # --------------------------------------------------------------------------
 # a promise that ends a run which already did work (2026-09-24)
 # --------------------------------------------------------------------------
-# Measured, from the fleet's own transcripts: win-host-b's conversation ends two runs
+# Measured, from the fleet's own transcripts: one fleet bot's conversation ends two runs
 # on "Let me find where." / "Let me dig deeper for actual downloadable TAK map
 # files." AFTER real tool work, and the operator's next message is "wait why didnt
 # you download anything". The guard that existed fires only when the run has made

@@ -381,7 +381,7 @@ check("prompt: and mining files for it is named as the slow way",
       "the slowest way to answer" in sp2)
 
 # ---- search_files: the shape the prompt teaches must actually grep -------------------
-# Measured 2026-09-25 driving HOST-A: the route hint and the routing bullet both teach
+# Measured 2026-09-25 driving the manager box: the route hint and the routing bullet both teach
 # `search_files {"pattern": "<regex>", "path": "<file or directory>"}`, while the tool read
 # `pattern` as a NAME glob and the grep as `content`. The run followed the taught shape and
 # got a confident "No matches." for a string the file holds ten times - a silent wrong
@@ -411,7 +411,7 @@ out = fb.tool_search_files({"path": str(srch / "missing.txt")}, {})
 check("search_files: a missing path still errors", out.startswith("ERROR"), out[:120])
 
 # ---- the disclosure answer cannot be misread as "nothing is hidden" -------------------
-# Measured 2026-09-25 driving HOST-A (work order 5): asked which tools were NOT in its list,
+# Measured 2026-09-25 driving the manager box (work order 5): asked which tools were NOT in its list,
 # the run called list_tools and find_tools(all=true) in ONE batch, read "22 of 22", and
 # answered "None are hidden" - the sibling call had already revealed them all.
 fresh = "wp5-fresh"

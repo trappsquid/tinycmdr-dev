@@ -478,7 +478,7 @@ DEFAULT_CONFIG = {
             # risk visible, which an unappealable refusal does not.
             #
             # The MACHINE ITSELF takes the same route (measured 2026-09-25): the operator
-            # ordered "Restart the bot-a tower computer over ssh", the absolute tier refused
+            # ordered "Restart the tower computer over ssh", the absolute tier refused
             # it, and the run spent 40+ steps writing a .ps1 and launching it through the
             # process tool - a restart that reached the remote box with the pattern never in
             # sight. The block did not stop the restart, it only cost the yes. A machine

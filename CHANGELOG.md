@@ -205,7 +205,7 @@ the capability existed and the hand-off to the human did not.
   answer - "Looking at your disk, 63GB is free..." - out of the class.
 - **`remember` glued a new entry onto the previous line** when `notes.md`'s last line carried no
   terminator, so two facts read as one in every later prompt. The append checks the last byte now.
-- The MacBook's `web.port` is 8787 again: the Hermes web UI that claimed 8787 there no longer
+- The macOS host's `web.port` is 8787 again: the Hermes web UI that claimed 8787 there no longer
   exists, so the exception outlived its cause and the operator, reading the fleet's habit, tried
   8787 and found a dead door.
 
