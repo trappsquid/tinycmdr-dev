@@ -59,6 +59,16 @@ param(
     [string] $Model           = "main",
     [int]    $WebPort         = 8787,            # only used with -EnableWeb
     [switch] $EnableWeb,                         # legacy local chat page (off by default)
+    [string] $WebHost         = "",              # the page's bind address. "" keeps this
+                                                 # host's own value (a fresh install uses
+                                                 # 127.0.0.1); 0.0.0.0 opens it to your
+                                                 # network, which always needs the token
+    [string[]] $AddEndpoint   = @(),             # more model endpoints, repeatable:
+                                                 # "<base_url>;<model>;<alias>;<key>" -
+                                                 # tried in order when the primary fails,
+                                                 # and the key lands in .env. (';' and
+                                                 # not '|': a cmd.exe wrapper reads '|'
+                                                 # as a pipe and splits the argument)
     [string] $Python          = "",              # full path to python.exe if auto-detect fails
     [switch] $InstallPython,                     # kept for compatibility: installing a
                                                  # missing Python is now the DEFAULT
@@ -90,7 +100,7 @@ $Source = Split-Path -Parent $PSScriptRoot       # package root (one level above
 $Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:TINYCMDR_ASK)
 
 function Ask-Text {
-    param([string] $Prompt, [string] $Default = "", [switch] $Secret)
+    param([string] $Prompt, [string] $Default = "", [switch] $Secret, [switch] $AllowBlank)
     # ${Prompt} - a bare "$Prompt:" reads as a scoped variable to PowerShell
     $shown = if ($Default) { "${Prompt} [$Default]: " } else { "${Prompt}: " }
     if ($Secret -and -not $Default) { $shown = "${Prompt}: " }
@@ -104,6 +114,7 @@ function Ask-Text {
         }
         if ($val -and $val.Trim()) { return $val.Trim() }
         if ($Default) { return $Default }
+        if ($AllowBlank) { return "" }
         Write-Host "  (this one is needed - please type something)"
     }
 }
@@ -564,6 +575,25 @@ if ($SecretsFile) {
     Say "secrets : $($secrets.Count) key(s) from $SecretsFile"
 }
 
+# Extra endpoints, either as switches (repeatable - this is also how a script adds one)
+# or answered at the prompt below. "<base_url>;<model>;<alias>;<key>", the last two
+# optional; the key goes to .env under a generated name, never into config.json.
+# A '|' is accepted too, but it CANNOT be used through INSTALL-WINDOWS.cmd: cmd.exe
+# reads it as a pipe and hands the pieces to different processes (measured 2026-09-26).
+$script:Fallbacks = @()
+$fbGiven = 0
+foreach ($spec in $AddEndpoint) {
+    if (-not $spec -or -not $spec.Trim()) { continue }
+    $parts = @(($spec -split '[;|]') + @("", "", "", ""))
+    $u = "$($parts[0])".Trim(); $m = "$($parts[1])".Trim()
+    $a = "$($parts[2])".Trim(); $k = "$($parts[3])".Trim()
+    if (-not $u) { continue }
+    $fbGiven++
+    $script:Fallbacks += [pscustomobject]@{ Url = $u; Model = $m; Alias = $a; Key = $k
+                                            Env = "TINYCMDR_ENDPOINT${fbGiven}_API_KEY" }
+    Say "endpoint added: $m at $u"
+}
+
 if ($Ask) {
     Head "three ways to talk to it"
     Write-Host ""
@@ -638,6 +668,24 @@ if ($Ask) {
         $ModelKey = Ask-Text "API key for it (blank if it needs none)" -Secret
     }
 
+    # Extra endpoints: llm.fallbacks, tried in order when the primary fails. Each one is
+    # base_url + model (+ an optional /model alias), and its key goes to .env under a
+    # generated name the entry's api_key_env points at - the shape the build resolves for
+    # a fallback endpoint, and it keeps the key out of config.json.
+    while ($true) {
+        if (-not (Ask-Yes "Add another endpoint?" $false)) { break }
+        $n = $script:Fallbacks.Count + 1
+        $fbUrl = Ask-Text "Endpoint #$n (OpenAI-compatible /v1 root)"
+        if (-not $fbUrl) { Write-Host "  (no address given - nothing added)"; continue }
+        $fbModel = Ask-Text "Model id for it" -AllowBlank
+        $fbAlias = Ask-Text "Alias, so /model <alias> switches to it (blank = none)" -AllowBlank
+        $fbKey   = Ask-Text "API key for it (blank if it needs none)" -Secret
+        $script:Fallbacks += [pscustomobject]@{ Url = $fbUrl; Model = $fbModel
+                                                Alias = $fbAlias; Key = $fbKey
+                                                Env = "TINYCMDR_ENDPOINT${n}_API_KEY" }
+        Write-Host "  endpoint #$n added: $fbModel at $fbUrl"
+    }
+
     if ($EnableWeb) {
         # Generated, but typeable: Enter accepts this one. Asked here, before the confirmation, so
         # the summary can show it and nobody agrees to something they have not seen.
@@ -646,6 +694,12 @@ if ($Ask) {
         Write-Host "The page is protected by a token, so nothing else on this machine can drive the agent."
         Write-Host "Press Enter to accept the generated one, or type your own password."
         $script:WebTokenChoice = Ask-Text "Page token" $suggested
+        Write-Host ""
+        # The bind address, asked because only the reader knows whether another machine
+        # needs the page - and a page nobody can reach reads as a broken install.
+        if (Ask-Yes "Should the page be reachable from other machines on your network?" $true) {
+            $WebHost = "0.0.0.0"
+        } else { $WebHost = "127.0.0.1" }
     }
 
     Write-Host ""
@@ -902,7 +956,30 @@ if ($EnableWeb) {
     # per install, one place to look, and nothing loose in the folder.
     $cfg.web.token   = ""
     $cfg.web.port    = $WebPort
-    $cfg.web.host    = "127.0.0.1"
+    # The bind address: what the reader chose (-WebHost or the question), never a
+    # silent move of a working host's page - and a fresh install keeps the loopback
+    # default it has always had. An empty host means 0.0.0.0 to the build, which is
+    # why it is written out when it is chosen.
+    if ($WebHost) { $cfg.web.host = $WebHost }
+    elseif ($cfgFresh) { $cfg.web.host = "127.0.0.1" }
+}
+# Extra endpoints: llm.fallbacks, in order, tried when the primary fails. The list is
+# injected into the JSON below rather than serialized here, because ConvertTo-Json
+# renders a ONE-element array as a bare object - and the code iterates it as a list
+# (a lone object would iterate its keys instead).
+$fbJson = ""
+if ($script:Fallbacks.Count) {
+    $cfg.llm.fallbacks = @()
+    $list = @()
+    foreach ($fb in $script:Fallbacks) {
+        $e = [ordered]@{ base_url = $fb.Url }
+        if ($fb.Model) { $e["model"] = $fb.Model }
+        if ($fb.Alias) { $e["alias"] = $fb.Alias }
+        if ($fb.Key)   { $e["api_key_env"] = $fb.Env }
+        $list += [pscustomobject]$e
+    }
+    $fbJson = ($list | ConvertTo-Json -Depth 6)
+    if ($list.Count -eq 1) { $fbJson = "[`n$fbJson`n]" }
 }
 # The third door. The TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a copy
 # in config.json is ignored with a warning), so only the numeric allowlist goes in here.
@@ -936,6 +1013,10 @@ $json = $cfg | ConvertTo-Json -Depth 20
 # `uid not in None` raises). Unconditional, so it covers the Telegram list too.
 $json = $json -replace '"allowed_users":\s*"(.*?)"', '"allowed_users": [ "$1" ]'
 $json = $json -replace '"allowed_users":\s*null', '"allowed_users": []'
+if ($fbJson) {
+    $json = [regex]::Replace($json, '(?s)("fallbacks"\s*:\s*)\[\s*\]',
+                             { param($m) $m.Groups[1].Value + $fbJson })
+}
 Write-Utf8NoBom $cfgPath $json
 $verify = Get-Content $cfgPath -Raw | ConvertFrom-Json
 if ($verify.mattermost.allowed_users -is [string] -or $verify.telegram.allowed_users -is [string]) {
@@ -1024,6 +1105,18 @@ foreach ($k in @($ownKeys.Keys)) {
         $envText = $envText.TrimEnd() + "`n$k=$v`n"
     }
     $written += "$k (this host's own)"
+}
+# The extra endpoints' keys. The carry-over above already put any older line in place,
+# so this REPLACES it rather than writing a second one for the same name.
+foreach ($fb in $script:Fallbacks) {
+    if (-not $fb.Key) { continue }
+    $k = $fb.Env
+    if ($envText -match "(?m)^#?\s*$k=") {
+        $envText = $envText -replace "(?m)^#?\s*$k=.*$", "$k=$($fb.Key)"
+    } else {
+        $envText = $envText.TrimEnd() + "`n$k=$($fb.Key)`n"
+    }
+    $written += "$k (extra endpoint)"
 }
 # And say what was NOT copied, without naming any provider: a model key belongs to
 # one host, and silently sharing it is how one box's usage appeared on another.
@@ -1323,6 +1416,35 @@ if ($Ask) {
 }
 if ($EnableWeb) {
     Say "web page : $webLink   (it asks for its token on first open)"
+    # Loopback answering says nothing about the address a reader will actually type: a
+    # page bound to 127.0.0.1 and one behind the host firewall look the same from here
+    # (measured 2026-09-26 on a fleet macOS host: "nothing reachable at <lan-ip>:8787"
+    # was both at once, and the installer had said nothing about either).
+    $lanIp = ""
+    try {
+        $lanIp = (Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+                  Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+                  Select-Object -First 1).IPAddress
+    } catch { }
+    if (-not $lanIp) {
+        Say "web page : no LAN address on this machine yet (wifi off?)"
+    } else {
+        $pageHost = ""
+        try { $pageHost = (Get-Content $cfgPath -Raw | ConvertFrom-Json).web.host } catch { }
+        $pageUp = ""
+        try { $pageUp = (Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 "http://$lanIp`:$WebPort/api/health").Content } catch { }
+        if ($pageUp) {
+            Say "web page : http://$lanIp`:$WebPort   (open that from any machine here)"
+        } elseif ($pageHost -eq "127.0.0.1") {
+            Say "web page : LOOPBACK only (web.host 127.0.0.1) - only this machine can"
+            Say "           reach it. Set web.host to 0.0.0.0 in config.json to open it."
+        } else {
+            Say "web page : answers on 127.0.0.1 but not on http://$lanIp`:$WebPort."
+            Say "           Windows Firewall is the usual reason; allow the port in an"
+            Say "           ELEVATED shell:"
+            Say "  New-NetFirewallRule -DisplayName `"tinycmdr web`" -Direction Inbound -LocalPort $WebPort -Protocol TCP -Action Allow"
+        }
+    }
     Say "  token: the 'page token' line printed above, and TINYCMDR_WEB_TOKEN in .env"
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"

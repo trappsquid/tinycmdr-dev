@@ -5,6 +5,36 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.22] - 2026-09-26
+
+Every installer asks the same questions, and every install reports what can reach its page.
+
+Added
+- `Add another endpoint?` in all three interactive setups. Each answer becomes an
+  `llm.fallbacks` entry (`base_url`, `model`, and an optional `/model` alias) and its key
+  goes to `.env` under a generated name that entry's `api_key_env` points at, so a
+  fallback's key never lands in config.json. The Windows installer also takes them as
+  switches: `-AddEndpoint "<base_url>|<model>|<alias>|<key>"`, repeatable.
+- Telegram in the macOS and Linux installers, asked the way the Windows one asks it: the
+  token (hidden), your numeric id, and the note that Mattermost wins when both tokens are
+  set so the Telegram lane is a second process.
+- `Should the page be reachable from other machines on your network?` on all three, and
+  the answer is WRITTEN into `web.host` (`0.0.0.0` or `127.0.0.1`) instead of being left
+  empty for the build to interpret. Scripted runs set it with `--web-host` / `-WebHost`.
+- The installer now reports the address a browser would actually use: after the agent
+  starts it probes this machine's own LAN address, not just loopback, and names the reason
+  when only loopback answers - `web.host` is `127.0.0.1`, or the host firewall (printing
+  the macOS `socketfilterfw` commands or the Windows `New-NetFirewallRule` line).
+
+Fixed
+- A fresh Linux install wrote `web.host` as `""`, which the build reads as `0.0.0.0`, while
+  the installer's own summary said `127.0.0.1`: the bind address is now explicit, reported,
+  and the same on all three platforms.
+- The Windows installer overwrote `web.host` with `127.0.0.1` on every run, including an
+  update of a host whose page was reachable on purpose. It now only sets what it was told.
+- The macOS page report was reachable-loopback-only in appearance: `--no-start` and a page
+  bound to every interface looked identical in the output.
+
 ## [1.0.21] - 2026-09-26
 
 The installers ask for what a bot cannot run without, and the launcher stops shipping with

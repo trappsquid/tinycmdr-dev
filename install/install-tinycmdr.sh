@@ -8,7 +8,9 @@
 #
 # On your own machine, with no switches, it ASKS for what the bot cannot work without
 # - the Mattermost server, your user id, the model endpoint, the model id and that
-# endpoint's key - and writes nothing until you say yes. Every answer has a switch.
+# endpoint's key - then offers a Telegram lane, "Add another endpoint?" for as many
+# fallbacks as you want, and whether the page should be reachable from your network.
+# It writes nothing until you answer "Install now?". Every answer has a switch.
 #
 # It reads install/fleet-defaults.json (Mattermost host, model endpoint, allowed
 # user), keeps the bot token out of config.json (it goes to .env), and registers
@@ -27,6 +29,8 @@
 #                         the default without asking
 #   --yes                 ask nothing at all: take the switches and the defaults
 #                         (any run with no terminal asks nothing either)
+#   --web-host <addr>     the page's bind address: 0.0.0.0 (your network) or
+#                         127.0.0.1 (this host only); "" keeps this host's own
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first token-looking line)
 #   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
@@ -81,6 +85,11 @@ TG_TOKEN=""; TG_IDS=""
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
 YES=0                     # -y/--yes: ask nothing, take the switches and the defaults
 MODEL_KEY=""              # the model endpoint's key, when the reader gives one
+FALLBACK_SPECS=""         # extra endpoints, one "url|model|alias|env-name" per line
+FB_ENV_LINES=""           # their keys, as KEY=VALUE lines for .env
+PAGE_HOST=""              # web.host the reader chose ("" = leave the host's own)
+WEB_HOST_ARG=""           # --web-host: set it without being asked
+LAN_IP=""                 # this host's first LAN address, for the reachability check
 # What the questions propose when the package says nothing: the usual local
 # llama.cpp shape. Any OpenAI-compatible /v1 root works.
 DEFAULT_MODEL_BASE="http://127.0.0.1:8081/v1"
@@ -93,7 +102,7 @@ INSTALL_MODE="${TINYCMDR_MODE:-}"; ASK_MODE=1; DIR_GIVEN=0; RUN_UID=""
 WEB_TOKEN=""
 PORT_BUSY_BEFORE=""
 
-usage() { sed -n '3,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,56p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -107,6 +116,7 @@ while [ $# -gt 0 ]; do
         --system)           INSTALL_MODE=system; shift ;;
         --no-root)          INSTALL_MODE=user; shift ;;
         -y|--yes)           ASK_MODE=0; YES=1; shift ;;
+        --web-host)         WEB_HOST_ARG="$2"; shift 2 ;;
         --bot-name)         BOT_NAME="$2"; shift 2 ;;
         --allowed-user)     ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)   MM_URL_ARG="$2"; shift 2 ;;
@@ -508,6 +518,29 @@ Pass --mattermost-url chat.example.com (no scheme), or re-run at a terminal and
 answer the questions."
 fi
 
+# ---- the third door: Telegram ----
+# A Telegram bot needs nothing hosted and works from anywhere, so it is offered here
+# rather than only as a switch. Its TOKEN is .env-only (TINYCMDR_TG_TOKEN) and the lane
+# is deny-by-default: a token with no numeric id ignores every DM.
+if [ "$ASK_Q" = 1 ] && [ -z "$TG_TOKEN" ]; then
+    if ask_yes "Also install a Telegram bot lane (a token from @BotFather)?" n; then
+        TG_TOKEN="$(ask_secret "Telegram bot token (input hidden)")"
+    fi
+fi
+if [ "$ASK_Q" = 1 ] && [ -n "$TG_TOKEN" ] && [ -z "$TG_IDS" ]; then
+    TG_IDS="$(ask_text "Your numeric Telegram id (message @userinfobot for it)" "")"
+    TG_IDS_CLEAN="$(printf '%s' "$TG_IDS" | tr ',;' '  ' | tr -s ' ' '\n' \
+        | grep -E '^[0-9]+$' | tr '\n' ' ' | sed 's/ *$//' || true)"
+    if [ -z "$TG_IDS_CLEAN" ]; then
+        die "a Telegram token with no numeric id: that lane would ignore every DM.
+Message @userinfobot for your id and pass --telegram-ids 123456789"
+    fi
+    if [ -n "$TOKEN" ]; then
+        info "with both tokens set, Mattermost wins in this service: the Telegram lane"
+        info "is a second process - $INSTALL_DIR/venv/bin/python $INSTALL_DIR/tinycmdr.py --telegram"
+    fi
+fi
+
 # Which model answers. Any OpenAI-compatible /v1 root: a llama.cpp on this host, a box
 # on the LAN, or a hosted provider.
 MODEL_BASE_DFLT="$MODEL_BASE_URL"
@@ -539,6 +572,50 @@ if [ "$ASK_Q" = 1 ]; then
     MODEL_GIVEN="$MODEL"
 fi
 
+# ---- more endpoints: llm.fallbacks, tried in order when the primary fails ----
+# Each entry is base_url + model (+ an optional /model alias) and its key goes to .env
+# under a generated name the entry's api_key_env points at - the shape the build
+# resolves for a fallback, and it keeps the key out of config.json.
+if [ "$ASK_Q" = 1 ]; then
+    _fb_n=0
+    while :; do
+        _fb_n=$((_fb_n + 1))
+        if ! ask_yes "Add another endpoint?" n; then break; fi
+        _fb_url="$(ask_text "Endpoint #$_fb_n (OpenAI-compatible /v1 root)" "")"
+        if [ -z "$_fb_url" ]; then
+            warn "no address given - nothing added"
+            _fb_n=$((_fb_n - 1))
+            continue
+        fi
+        _fb_model="$(ask_text "Model id for it" "")"
+        _fb_alias="$(ask_text "Alias, so /model <alias> switches to it (blank = none)" "")"
+        _fb_name="TINYCMDR_ENDPOINT${_fb_n}_API_KEY"
+        _fb_key="$(ask_secret "API key for it (blank if it needs none)")"
+        FALLBACK_SPECS="${FALLBACK_SPECS}${_fb_url}|${_fb_model}|${_fb_alias}|${_fb_name}
+"
+        if [ -n "$_fb_key" ]; then
+            FB_ENV_LINES="${FB_ENV_LINES}${_fb_name}=${_fb_key}
+"
+        fi
+        info "endpoint #$_fb_n added: ${_fb_model:-?} at $_fb_url"
+    done
+fi
+
+# ---- the local page: loopback, or reachable from your network? ----
+# web.host decides it; an empty value binds every interface, and the page always needs
+# its token (in .env). A page nobody can reach reads as a broken install.
+if [ "$ASK_Q" = 1 ]; then
+    if ask_yes "Should the page be reachable from other machines on your network?" y; then
+        PAGE_HOST="0.0.0.0"
+    else
+        PAGE_HOST="127.0.0.1"
+    fi
+fi
+# The switch wins over the question, and an empty value is "leave this host's own".
+if [ -n "$WEB_HOST_ARG" ]; then
+    PAGE_HOST="$WEB_HOST_ARG"
+fi
+
 if [ "$ASK_Q" = 1 ]; then
     say "about to install"
     info "folder       : $INSTALL_DIR"
@@ -553,6 +630,17 @@ if [ "$ASK_Q" = 1 ]; then
     info "model        : $MODEL at $MODEL_BASE_URL"
     if [ -n "$MODEL_KEY" ]; then
         info "model key    : given (config.json, llm.api_key)"
+    fi
+    _fb_count=0
+    for _s in $FALLBACK_SPECS; do _fb_count=$((_fb_count + 1)); done
+    if [ "$_fb_count" -gt 0 ]; then
+        info "more endpoints: $_fb_count (tried in order when the primary fails)"
+    fi
+    if [ -n "$TG_TOKEN" ]; then
+        info "telegram     : on, DMs from $TG_IDS_CLEAN"
+    fi
+    if [ "$WEB_ON" = 1 ]; then
+        info "local page   : port $WEB_PORT, ${PAGE_HOST:-all interfaces}"
     fi
     if ! ask_yes "Install now?"; then
         info "nothing was changed"
@@ -644,6 +732,17 @@ if [ -n "$EFF_ALLOWED" ] && [ "$EFF_ALLOWED" != "[]" ]; then
     info "allowed user : ${EFF_ALLOWED}"
 else
     info "allowed user : NONE - the bot will ignore everybody until you add one"
+fi
+_fb_n=0
+for _s in $FALLBACK_SPECS; do _fb_n=$((_fb_n + 1)); done
+if [ "$_fb_n" -gt 0 ]; then
+    info "more endpoints: $_fb_n (llm.fallbacks, tried in order when the primary fails)"
+fi
+if [ "$TG_TOKEN" != "" ]; then
+    info "telegram     : on, DMs from ${TG_IDS_CLEAN:-none - add an id}"
+fi
+if [ "$WEB_ON" = 1 ]; then
+    info "local page   : port ${WEB_PORT} (web.host: ${PAGE_HOST:-as this host has it})"
 fi
 info "bot name     : ${BOT_NAME}"
 if [ "$WEB_ON" = 1 ]; then
@@ -759,11 +858,13 @@ fi
 "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$WEB_PORT" "$WEB_ON" "$FORCE" \
         "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" \
-        "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$WEB_CLI_GIVEN" "$MODEL_KEY" <<'PY'
+        "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$WEB_CLI_GIVEN" "$MODEL_KEY" \
+        "$FALLBACK_SPECS" "$FB_ENV_LINES" "$PAGE_HOST" <<'PY'
 import json, os, sys
 (inst, example, bot, base, model, webport, webon,
  force, mm_host, mm_port, allowed, tg_ids,
- base_given, model_given, web_given, model_key) = sys.argv[1:17]
+ base_given, model_given, web_given, model_key,
+ fallback_specs, fb_env, page_host) = sys.argv[1:20]
 cfg_path = os.path.join(inst, "config.json")
 # The HOST's own config is the base whenever there is one, --force included: an
 # update carries the host's settings forward and changes only what this run was
@@ -803,6 +904,32 @@ _ids = [i for i in (tg_ids or "").split() if i]
 if _ids or fresh:
     tg["allowed_users"] = _ids
 cfg.setdefault("agent", {})["bot_name"] = bot
+# Extra endpoints, only when this run was told about them: a scripted update keeps the
+# host's own llm.fallbacks. Each entry's key lives in .env under the name its
+# api_key_env points at - the shape the build resolves for a fallback endpoint.
+_specs = [s for s in (fallback_specs or "").splitlines() if s.strip()]
+if _specs:
+    _keys = {}
+    for _line in (fb_env or "").splitlines():
+        if "=" in _line:
+            _k, _, _v = _line.partition("=")
+            if _v.strip():
+                _keys[_k.strip()] = _v.strip()
+    _fbs = []
+    for _spec in _specs:
+        _url, _mid, _alias, _ename = [x.strip() for x in (_spec.split("|") + ["", "", "", ""])[:4]]
+        if not _url:
+            continue
+        _entry = {"base_url": _url}
+        if _mid:
+            _entry["model"] = _mid
+        if _alias:
+            _entry["alias"] = _alias
+        if _keys.get(_ename):
+            _entry["api_key_env"] = _ename
+        _fbs.append(_entry)
+    if _fbs:
+        llm["fallbacks"] = _fbs
 web = cfg.setdefault("web", {})
 if web_given or fresh:
     # The token is a SECRET, so it goes to .env (TINYCMDR_WEB_TOKEN) with the bot
@@ -810,7 +937,14 @@ if web_given or fresh:
     web["enabled"] = webon == "1"
     if webon == "1":
         web["port"] = int(webport or 8787)
-        web.setdefault("host", "127.0.0.1")
+        # The bind address, WRITTEN OUT: the build reads an empty value as 0.0.0.0
+        # ("every interface"), and a reader opening config.json should not have to
+        # know that. The reader's answer wins when there was one, else the host's own
+        # value stands (an update must not move a working page onto the network).
+        if page_host:
+            web["host"] = page_host
+        elif not str(web.get("host") or "").strip():
+            web["host"] = "0.0.0.0"
 web["token"] = ""
 with open(cfg_path, "w", encoding="utf-8", newline="\n") as fh:
     json.dump(cfg, fh, indent=2)
@@ -818,15 +952,24 @@ with open(cfg_path, "w", encoding="utf-8", newline="\n") as fh:
 print("    config.json: %s (bot_name=%s, web=%s)"
       % ("kept this host's settings" if not fresh else "written",
          bot, "on" if webon == "1" else "off"))
+if _specs:
+    print("    fallbacks  : %d extra endpoint(s), keys in .env" % len(llm.get("fallbacks") or []))
+if page_host:
+    print("    web page   : bound to %s:%s" % (page_host, web.get("port")))
 PY
 chown "$RUN_USER:$RUN_USER" "$INSTALL_DIR/config.json"
 chmod 644 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
-"$PY" - "$INSTALL_DIR/.env" "$TOKEN" "$SRC/install/fleet-secrets.env" "$WEB_TOKEN" "$TG_TOKEN" <<'PY'
+"$PY" - "$INSTALL_DIR/.env" "$TOKEN" "$SRC/install/fleet-secrets.env" "$WEB_TOKEN" "$TG_TOKEN" \
+        "$FB_ENV_LINES" <<'PY'
 import os, pathlib, re, sys
 envp, tok, secrets, webtok, tgtok = (pathlib.Path(sys.argv[1]), sys.argv[2],
                                      sys.argv[3], sys.argv[4], sys.argv[5])
+fb_env = sys.argv[6] if len(sys.argv) > 6 else ""
+# The extra-endpoint keys are managed only when THIS run wrote them: a scripted update
+# must carry the host's own lines over, or it drops keys its config.json points at.
+_managed = ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN")
 lines, have, refused, per_bot = [], set(), [], []
 
 
@@ -843,9 +986,10 @@ if envp.exists():
         if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
             continue
         key = line.split("=", 1)[0].strip()
-        if key in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
-                   "TINYCMDR_WEB_TOKEN") or key in have:
+        if key in _managed or key in have:
             continue          # installer-managed: written below, never carried over
+        if fb_env.strip() and re.match(r"^TINYCMDR_ENDPOINT[0-9]+_API_KEY$", key):
+            continue          # this run's own extra-endpoint key: written below
         if placeholder(line.split("=", 1)[1]):
             refused.append(key)
             continue
@@ -880,6 +1024,7 @@ out = ["# tinycmdr secrets - per-host tokens + fleet-wide search keys.",
        f"TINYCMDR_MM_TOKEN={tok}"] \
       + ([f"TINYCMDR_TG_TOKEN={tgtok}"] if tgtok else []) \
       + ([f"TINYCMDR_WEB_TOKEN={webtok}"] if webtok else []) \
+      + [l for l in (fb_env or "").splitlines() if "=" in l] \
       + lines + [""]
 envp.write_text("\n".join(out), encoding="utf-8")
 os.chmod(envp, 0o600)
@@ -1049,6 +1194,31 @@ if [ "$WEB_ON" = 1 ]; then
     health="$(curl -sf --max-time 5 "http://127.0.0.1:$port/api/health" || true)"
     if [ -n "$health" ]; then
         info "web /api/health : $health"
+        # Loopback answering says nothing about the address a reader will actually
+        # type: a page bound to 127.0.0.1 and one behind a host firewall look the
+        # same from here, and both read as "the installer did not set up the page"
+        # (measured 2026-09-26 on a fleet macOS host: "nothing reachable at <lan-ip>:8787").
+        LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        LAN_IP="${LAN_IP:-}"
+        if [ -z "$LAN_IP" ]; then
+            info "no LAN address on this host, so the page is reachable here only"
+        elif curl -sf --max-time 5 "http://$LAN_IP:$port/api/health" >/dev/null 2>&1; then
+            info "page            : http://$LAN_IP:$port  (paste the token from .env)"
+        else
+            info "page            : answers on 127.0.0.1 but NOT on http://$LAN_IP:$port"
+            if [ "$(cfgval web.host)" = "127.0.0.1" ]; then
+                info "                  web.host is 127.0.0.1 (loopback only) by design:"
+                info "                  set it to 0.0.0.0 in $INSTALL_DIR/config.json and restart"
+                info "                  the service to open the page to your network."
+            elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet ufw; then
+                info "                  ufw is active:  sudo ufw allow $port/tcp"
+            elif command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+                info "                  firewalld is active:  sudo firewall-cmd --add-port=$port/tcp --permanent"
+                info "                                        sudo firewall-cmd --reload"
+            else
+                info "                  check this host's firewall and any router between you."
+            fi
+        fi
     else
         info "web port $port did not answer yet (the bot runs anyway; the page is a fallback)"
     fi
@@ -1099,7 +1269,8 @@ tinycmdr is installed.
   restart  : ${SCTL_HINT} restart $SERVICE_NAME
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
   session  : $VENV_PY $INSTALL_DIR/tinycmdr.py --cli
-  page     : $VENV_PY $INSTALL_DIR/tinycmdr.py --web   -> http://127.0.0.1:$WEB_PORT
+  page     : http://${LAN_IP:-127.0.0.1}:$WEB_PORT   (token in .env: TINYCMDR_WEB_TOKEN)
+             by hand: $VENV_PY $INSTALL_DIR/tinycmdr.py --web
   verify   : bash $INSTALL_DIR/install/install-tinycmdr.sh --verify-only --mode $INSTALL_MODE
   remove   : ${SUDO_IF_ROOT}bash $INSTALL_DIR/install/install-tinycmdr.sh --uninstall --mode $INSTALL_MODE
 EOF

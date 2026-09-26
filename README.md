@@ -199,7 +199,7 @@ It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment ins
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
 ```
 
-That fetches the newest archive, unpacks it and runs the installer inside it. With no switch it asks, at a terminal, which kind you want: **system** (boots with the machine, needs root, the agent gets passwordless sudo) or **user** (starts when you log in, no root anywhere, the agent cannot use sudo). Then it asks for what the bot cannot work without - the Mattermost server, your user id, the model endpoint and that endpoint's key - and writes nothing until you answer `Install now?`. Every answer has a switch, and `--yes` (or a run with no terminal at all) asks nothing. Decide without being asked by passing the installer's own switches through:
+That fetches the newest archive, unpacks it and runs the installer inside it. With no switch it asks, at a terminal, which kind you want: **system** (boots with the machine, needs root, the agent gets passwordless sudo) or **user** (starts when you log in, no root anywhere, the agent cannot use sudo). Then it asks for what the bot cannot work without - the Mattermost server, your user id, the model endpoint and that endpoint's key - offers a Telegram lane, offers `Add another endpoint?` for as many fallbacks as you want, and asks whether the page should be reachable from your network. It writes nothing until you answer `Install now?`. Every answer has a switch, and `--yes` (or a run with no terminal at all) asks nothing. Decide without being asked by passing the installer's own switches through:
 
 ```bash
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash -s -- --mode user
@@ -229,12 +229,17 @@ With no switch it asks for what the bot cannot work without, and writes nothing 
 Mattermost bot token (input hidden, Enter to skip for the local page):
 Mattermost server, no https:// (e.g. chat.example.com):
 Your Mattermost user id (optional, but without it the bot ignores your DMs):
+Also install a Telegram bot lane (a token from @BotFather)? [y/N]
 Model endpoint [http://127.0.0.1:8081/v1]:
 Model id [main]:
 API key for it (blank if it needs none):     <- only when the endpoint is not on this machine
+Add another endpoint? [y/N]                  <- repeatable: each one becomes
+                                               an llm.fallbacks entry, tried in order
+Should the page be reachable from other machines on your network? [Y/n]
+Install now? [Y/n]
 ```
 
-Every answer has a switch (`--mattermost-url`, `--allowed-user`, `--model-base-url`, `--model`), so a scripted install asks nothing: `--yes` takes the defaults, and a run with no terminal at all (a pipe, a fleet push) never prompts.
+Every answer has a switch (`--mattermost-url`, `--allowed-user`, `--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--web-host`), so a scripted install asks nothing: `--yes` takes the defaults, and a run with no terminal at all (a pipe, a fleet push) never prompts. After the agent starts, the installer probes the address a browser would use - this machine's own LAN address - and tells you what answered, plus the one line to fix it when only loopback does.
 
 Or do it by hand:
 
@@ -249,7 +254,7 @@ The `tinycmdr` verb lands in `/usr/local/bin` when that folder is writable (a Ho
 
 Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder (macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it, double-click **`UNINSTALL-MACOS.command`**, or run `bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if the install left a root-owned launcher in `/usr/local/bin`; the uninstaller removes the `~/.local/bin` one by itself, and reports what it could not remove instead of stopping part-way.
 
-The local web/API page listens on port **8787** on every platform (loopback unless you set a token). `--web-port <p>` moves it and `--no-web` closes it.
+The local web/API page listens on port **8787** on every platform, and the installer asks whether other machines on your network should be able to reach it (`0.0.0.0`) or only this one (`127.0.0.1`). The page always needs its token, which lives in `.env`. `--web-port <p>` moves the port, `--no-web` closes it, and `--web-host <addr>` answers the reachability question without being asked.
 
 ### Installer switches (Windows)
 
@@ -263,7 +268,19 @@ The local web/API page listens on port **8787** on every platform (loopback unle
                        logon shortcut (this one needs an elevated shell,
                        because Windows reserves boot-start tasks for
                        administrators)
+-EnableWeb             also serve the local page while the bot runs
+-WebPort <p>           which port that page listens on (default 8787)
+-WebHost <addr>        0.0.0.0 to reach the page from your network, 127.0.0.1 for
+                       this machine only (default: this host's own setting)
+-TelegramToken <t>     a Telegram bot token, asked for in the interactive setup
+-TelegramIds <ids>     your numeric Telegram id(s), comma or space separated
+-AddEndpoint <spec>    another model endpoint, repeatable:
+                       "<base_url>;<model>;<alias>;<key>" - tried in order when
+                       the primary fails; the key goes to .env
+-NonInteractive        ask nothing: take the switches and the defaults
 ```
+
+The same questions the Unix installers ask are asked here when you run `INSTALL-WINDOWS.cmd` with no switches, including `Add another endpoint?`, the Telegram lane and whether the page should be reachable from your network.
 
 ## Removing it
 

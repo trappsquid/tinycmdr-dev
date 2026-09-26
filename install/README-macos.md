@@ -42,10 +42,17 @@ answer `Install now?`:
     Mattermost bot token (input hidden, Enter to skip for the local page)
     Mattermost server, no https:// (e.g. chat.example.com)
     Your Mattermost user id (optional, but without it the bot ignores your DMs)
+    Also install a Telegram bot lane (a token from @BotFather)? [y/N]
     Model endpoint [http://127.0.0.1:8081/v1]
     Model id [main]
     API key for it (blank if it needs none)     only asked when the endpoint is not
                                                 on this machine
+    Add another endpoint? [y/N]                 repeatable. Each one is an
+                                                llm.fallbacks entry, tried in order
+                                                when the primary fails; its key goes
+                                                to .env (api_key_env), never config.json
+    Should the page be reachable from other machines on your network? [Y/n]
+    Install now? [Y/n]
 
 Press Enter to take the value in brackets, and skip the token to install the local
 page instead of a chat lane. Then it builds `~/tinycmdr`, writes `config.json` and
