@@ -2523,6 +2523,20 @@ def test_a_turn_is_classified_the_way_the_operator_reads_it():
           fb._turn_shape({"content": "Port 8065 is open."}, []) == "answer")
     check("a filled-in report with no call is a claim",
           fb._turn_shape({"content": "Done: the file holds ok."}, []) == "claim")
+    # The fourth shape, measured on two fleet boxes in one afternoon (2026-09-25): the whole
+    # reply is an action phrase and nothing else. Both of these closed a run at 0 tool calls
+    # with a green done line, because neither existing class claimed them.
+    check("a bare action phrase is a fragment, not an answer",
+          fb._turn_shape({"content": "Checking where loft boxes is located on this machine."},
+                         []) == "fragment")
+    check("and a bare action label is one too",
+          fb._turn_shape({"content": 'Finding "test junk" folder:'}, []) == "fragment")
+    # The other half of that rule, and the reason it is fenced by a DIGIT: a capable model
+    # answers a chat question in exactly this shape, and nudging it would cost a call for
+    # nothing. This one must stay an answer.
+    check("a real answer that opens with the same participle stays an answer",
+          fb._turn_shape({"content": "Looking at your disk, 63GB is free and the volume "
+                                     "is 93% full."}, []) == "answer")
     check("nothing at all is empty", fb._turn_shape({"content": "  "}, []) == "empty")
     check("a question is not a promise",
           fb._turn_shape({"content": "Which file did you mean?"}, []) == "answer")
@@ -2532,6 +2546,29 @@ def test_a_turn_is_classified_the_way_the_operator_reads_it():
           fb._harness_spoke_last(msgs) is True)
     check("the operator is not",
           fb._harness_spoke_last([{"role": "user", "content": "check the logs"}]) is False)
+
+
+def test_a_bare_action_phrase_never_ends_a_run_as_an_answer():
+    """Measured 2026-09-25 on two fleet boxes, one afternoon each way: the model's whole
+    reply was an action phrase ("Checking where loft boxes is located on this machine.",
+    "Finding <folder> folder:"), the harness read it as an ANSWER, and the run closed at
+    0 tool calls behind a green done line. Twice. The fences are the promise guard's own:
+    the run has made no tool call, and it happens once per run.
+    """
+    cap, done = _capture_turns()
+    try:
+        scripted = [{"role": "assistant",
+                     "content": "Checking where loft boxes is located on this machine."},
+                    {"role": "assistant", "content": "It is not there any more."}]
+        fb.CONFIG["agent"]["max_steps"] = 10
+        fb.CONFIG["agent"]["max_minutes"] = 5
+        out, calls, payloads = _scripted_run(scripted)
+    finally:
+        done()
+    check("the zero-call fragment is nudged to act",
+          any("described the work as under way with no tool call" in m for m in cap), cap[-4:])
+    check("the run took the nudge's turn rather than ending", calls == 2, calls)
+    check("and the delivery says the work has not run", "stopped short" in (out or ""), out)
 
 
 def test_every_model_turn_is_logged_with_its_facts():

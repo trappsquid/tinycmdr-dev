@@ -31,6 +31,29 @@ import zipfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIST = ROOT / "dist"
 
+# Which files in a package must carry the execute bit on Unix. ONE list, because three
+# places set modes (the fleet zip, the tarball, the macOS zip) and a predicate written out
+# three times is how `tinycmdr` shipped non-executable in the published macOS package
+# (measured 2026-09-25 on the v1.0.16 release asset: the entry is mode 0644, and a reader
+# who installs it gets "Permission denied" from the door - for the user AND for sudo,
+# because execve wants one execute bit for every user). The launcher has no extension, so
+# a `.sh` test can never catch it; and it is the ONE file the /usr/local/bin shim execs.
+EXEC_NAMES = ("tinycmdr", "tinycmdr.py")
+
+
+def wants_exec_bit(path):
+    """True for the launcher, the app and every shell script in a package.
+
+    Callers hand this three shapes: a Windows Path (the staging tree), a POSIX
+    archive name, and a str with either separator. Normalise first - with
+    backslashes left in, "C:\\...\\tinycmdr" is ONE component to PurePosixPath and
+    the launcher silently kept its 0644 (measured 2026-09-25: the tarball was right
+    and the zips were not, from the same predicate).
+    """
+    p = pathlib.PurePosixPath(str(path).replace("\\", "/"))
+    return p.name in EXEC_NAMES or p.suffix == ".sh"
+
+
 # files/dirs that ship, in package-relative form
 SHIP = [
     "tinycmdr.py",
@@ -756,8 +779,14 @@ def main():
         zip_path = DIST / f"tinycmdr-{ver}-win{suffix}.zip"
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             for f in sorted(stage_dir.rglob("*")):
-                if f.is_file():
-                    z.write(f, f.relative_to(stage_dir.parent))
+                if not f.is_file():
+                    continue
+                arc = f.relative_to(stage_dir.parent).as_posix()
+                mode = 0o755 if wants_exec_bit(f) else 0o644
+                zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
+                zi.external_attr = mode << 16
+                zi.compress_type = zipfile.ZIP_DEFLATED
+                z.writestr(zi, f.read_bytes())
 
         # verify the zip itself, not just the staging dir
         with zipfile.ZipFile(zip_path) as z:
@@ -787,13 +816,18 @@ def main():
             # installs a host whose task points at a missing file, so the package is
             # refused here rather than shipping a dead watchdog.
             guarded = [n for n in names if n.endswith("/tinycmdr-supervise.py")]
+            zlaunch = next(((z.getinfo(n).external_attr >> 16) & 0o777 for n in names
+                            if n.endswith("/tinycmdr")), 0)
 
         live_inner = hashlib.sha256((ROOT / "tinycmdr.py").read_bytes()).hexdigest()
-        ok = (not bad and not leak and inner == live_inner and bool(guarded))
+        ok = (not bad and not leak and inner == live_inner and bool(guarded)
+              and bool(zlaunch & 0o111))
         print(f"\nzip: {zip_path}")
         print(f"  {len(names)} entries, {zip_path.stat().st_size / 1024:.0f} KB")
         print(f"  tinycmdr.py in zip matches the live file: {inner == live_inner}")
         print(f"  the watchdog rides in the package: {bool(guarded)}")
+        print(f"  the launcher itself (what the shim execs): {oct(zlaunch)} "
+              f"(executable: {bool(zlaunch & 0o111)})")
         print(f"  no forbidden filenames: {not bad}")
         print(f"  no secrets/ids anywhere: {not leak}")
         print(f"  fleet hostnames in skills (informational): {len(soft)}")
@@ -810,7 +844,7 @@ def main():
         def _modes(ti):
             if ti.isdir():
                 ti.mode = 0o755
-            elif ti.name.endswith(".sh") or ti.name == "tinycmdr.py":
+            elif wants_exec_bit(ti.name):
                 ti.mode = 0o755
             else:
                 ti.mode = 0o644
@@ -827,11 +861,16 @@ def main():
                 t.extractfile(f"{stage_dir.name}/tinycmdr.py").read()).hexdigest()
             tmode = next((m.mode for m in tfiles
                           if m.name.endswith("install/install-tinycmdr.sh")), 0)
-        tar_ok = (not tbad and tinner == live_inner and tmode & 0o111)
+            tlaunch = next((m.mode for m in tfiles
+                            if m.name.endswith("/tinycmdr")), 0)
+        tar_ok = (not tbad and tinner == live_inner and tmode & 0o111
+                  and tlaunch & 0o111)
         print(f"\ntarball: {tar_path}")
         print(f"  {len(tfiles)} files, {tar_path.stat().st_size / 1024:.0f} KB")
         print(f"  tinycmdr.py matches the live file: {tinner == live_inner}")
         print(f"  install-tinycmdr.sh mode: {oct(tmode)} (executable: {bool(tmode & 0o111)})")
+        print(f"  the launcher itself (what the shim execs): {oct(tlaunch)} "
+              f"(executable: {bool(tlaunch & 0o111)})")
         print(f"  no forbidden filenames: {not tbad}")
         # macOS: the same staged tree as a zip (Finder extracts it), with the exec bits
         # written explicitly because the build host has no exec bit to copy. The launchd
@@ -863,7 +902,7 @@ def main():
                     if not f.is_file():
                         continue
                     arc = f.relative_to(stage_dir.parent).as_posix()
-                    mode = 0o755 if (f.suffix == ".sh" or f.name == "tinycmdr.py") else 0o644
+                    mode = 0o755 if wants_exec_bit(f) else 0o644
                     zi = zipfile.ZipInfo(arc, date_time=time.localtime()[:6])
                     zi.external_attr = mode << 16
                     zi.compress_type = zipfile.ZIP_DEFLATED
@@ -890,6 +929,8 @@ def main():
                     print(f"    ! plist did not parse: {e}")
                 inst = f"tinycmdr-{ver}/install/install-tinycmdr-macos.sh"
                 macmode = (z.getinfo(inst).external_attr >> 16) & 0o777
+                maclaunch = (z.getinfo(f"tinycmdr-{ver}/tinycmdr")
+                             .external_attr >> 16) & 0o777
                 mleak, msoft = [], []
                 for n in mac_names:
                     if n.endswith("/"):
@@ -909,12 +950,15 @@ def main():
                         hard = (label in SECRET_LABELS or rel in APP_FILES)
                         (mleak if hard else msoft).append(f"{label} in {rel}")
             mac_ok = (not macbad and not mleak and macinner == live_inner
-                      and plist_ok and bool(macmode & 0o111))
+                      and plist_ok and bool(macmode & 0o111)
+                      and bool(maclaunch & 0o111))
             print(f"\nmacos zip: {mac_path}")
             print(f"  {len(mac_names)} entries, {mac_path.stat().st_size / 1024:.0f} KB")
             print(f"  tinycmdr.py matches the live file: {macinner == live_inner}")
             print(f"  install-tinycmdr-macos.sh mode: {oct(macmode)} "
                   f"(executable: {bool(macmode & 0o111)})")
+            print(f"  the launcher itself (what the shim execs): {oct(maclaunch)} "
+                  f"(executable: {bool(maclaunch & 0o111)})")
             print(f"  launchd plist parses and is complete: {plist_ok}")
             print(f"  no forbidden filenames: {not macbad}")
             print(f"  no secrets/ids anywhere: {not mleak}")

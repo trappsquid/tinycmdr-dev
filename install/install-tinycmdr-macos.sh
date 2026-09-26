@@ -401,6 +401,12 @@ for f in restart-tinycmdr-macos.sh restart-tinycmdr.sh; do
     [ -f "$SRC/maintenance/$f" ] && cp -f "$SRC/maintenance/$f" "$INSTALL_DIR/maintenance/$f"
 done
 info "files copied"
+# The launcher needs its execute bit: the shim in /usr/local/bin execs THAT file, and
+# the package carries it as 0644 (git cannot hold the bit out of a Windows checkout),
+# so the `cp -f` above lands a door that answers "Permission denied" for the user and
+# for sudo alike - measured 2026-09-25 on a fleet macOS host. The Linux installer
+# already chmods it; this one did not.
+chmod +x "$INSTALL_DIR/tinycmdr" 2>/dev/null || true
 
 say "python environment"
 if [ ! -x "$INSTALL_DIR/venv/bin/python" ]; then

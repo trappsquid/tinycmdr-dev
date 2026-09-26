@@ -184,5 +184,50 @@ check("/resume switches the key without destroying the editing surface",
 fb._CLI.pop("prompt", None)
 fb._CLI.pop("session", None)
 
+# --- one writer per terminal (measured 2026-09-25, a live render on a fleet macOS box:
+# raw INFO lines landed inside the cards, the toolbar was redrawn over them, the run's
+# line was left stranded mid-screen and the answer never got its card) ----------------
+import logging.handlers  # noqa: E402
+
+_saved_wanted = fb.tui_wanted
+fb._CLI.pop("screen", None)
+try:
+    fb.tui_wanted = lambda: True
+    fb.tui_screen()
+    _console = getattr(fb, "_log_console", None)
+    check("the console log handler is named, so a screen can detach it",
+          _console is not None)
+    check("a console that takes the screen stops writing the log into it",
+          _console is not None and _console not in fb._log_listener.handlers,
+          getattr(fb._log_listener, "handlers", None))
+    check("the file handler stays (the log is still the record)",
+          any(isinstance(h, logging.handlers.RotatingFileHandler)
+              for h in fb._log_listener.handlers), fb._log_listener.handlers)
+finally:
+    fb.tui_wanted = _saved_wanted
+    fb._CLI.pop("screen", None)
+
+scr8 = fb.TuiScreen(out=io.StringIO(), width=90)
+out8 = io.StringIO()
+dest8 = fb.CliDestination(colour=False, out=out8, screen=scr8)
+dest8._write("a painted streamed line")
+check("with a screen, a painted line goes through the screen",
+      "a painted streamed line" in scr8.out.getvalue(), scr8.out.getvalue()[:80])
+check("...and nothing is printed straight at the terminal",
+      out8.getvalue() == "", out8.getvalue()[:80])
+
+dest9 = fb.CliDestination(colour=False, out=io.StringIO())
+dest9._write("a painted streamed line")
+check("without a screen the text still goes to stdout",
+      "a painted streamed line" in dest9.out.getvalue(), dest9.out.getvalue()[:80])
+
+scr9 = fb.TuiScreen(out=io.StringIO(), width=90)
+dest10 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr9)
+ref10 = dest10.line("narration", "mac-host-b.local")
+dest10.drop(ref10)
+_titles = [str(getattr(r, "title", "")).strip() for r in scr9.shown]
+check("a dropped draft that WAS the answer still gets the answer card",
+      "answer" in _titles, _titles)
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

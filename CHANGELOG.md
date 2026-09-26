@@ -5,6 +5,57 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.17] - 2026-09-25
+
+The launcher nobody could run, and the screen three writers were painting. Every item below was
+measured on the fleet reading a live host, not inferred, and every one of them is the same shape:
+the capability existed and the hand-off to the human did not.
+
+### Fixed
+- **The `tinycmdr` launcher shipped without its execute bit.** The door a reader types first
+  answered `.../tinycmdr: Permission denied` - for the user AND for sudo, because execve wants one
+  execute bit set for every user. The tree tracked it as 100644 (a Windows checkout cannot record
+  the bit and ignores fileMode), the macOS installer landed it with `cp -f` and never chmodded it
+  (the Linux installer does), and every git-based update - now the only update door - wrote the bit
+  back off. Fixed at four points: the git index mode, the macOS installer, a shared
+  `wants_exec_bit()` in the packager (the old `.sh`-only predicate could never match a file called
+  `tinycmdr`), and `ensure_launcher_executable()` after every pull and adoption. All three archives
+  now print the launcher's mode and the build REFUSES when it is not executable - a live defect the
+  new gate caught in the packager itself while this release was being cut.
+- **The console screen had three writers.** The logging setup attached a console StreamHandler
+  unconditionally, so every INFO line printed into the middle of prompt_toolkit's render;
+  `CliDestination._write` used a plain `print()` while the screen owned the terminal, so the
+  toolbar smeared into the transcript and the done line was left stranded; and a streamed draft
+  that WAS the answer stayed the dim "..." narration line while the answer card was skipped.
+  `TuiScreen.raw_ansi()` was written for exactly that text and nothing in the program ever called
+  it. One writer per terminal now: a console that takes the screen detaches the log handler, and
+  every console line goes through the screen.
+- **A run that made no tool call reported `Done - 0 step(s)`** while its reply only described work
+  that had not started (measured on two fleet hosts in one afternoon). The done line now says the
+  run used no tool, and any run that was nudged to act and still ended on an intention carries the
+  truth in the delivery.
+- **A bare action phrase ended a run as an answer.** "Checking where loft boxes is located on this
+  machine." (53 chars) and "Finding <folder> folder:" (27 chars) matched neither `_INTENT_RX` nor
+  `_RESULT_CLAIM_RX`, so the classifier called them answers, no guard fired, and the run closed at
+  0 tool calls behind a green line. They are a `fragment` now: same fences as the promise guard (no
+  tool call yet, once per run), a 300-char cap, and a DIGIT test that keeps a capable model's real
+  answer - "Looking at your disk, 63GB is free..." - out of the class.
+- **`remember` glued a new entry onto the previous line** when `notes.md`'s last line carried no
+  terminator, so two facts read as one in every later prompt. The append checks the last byte now.
+- The MacBook's `web.port` is 8787 again: the Hermes web UI that claimed 8787 there no longer
+  exists, so the exception outlived its cause and the operator, reading the fleet's habit, tried
+  8787 and found a dead door.
+
+### Notes
+- Every guard in this release is runtime-only: zero prompt bytes, no schema change, no new rent.
+- Falsifiers: the new checks fail precisely on the pre-fix build. `test_verbs` prints
+  `FAIL the update path ships a launcher fix-up`; `test_tui` prints the rogue
+  `<StreamHandler <stderr>>` in its own failure output; `test_stall` fails exactly the five
+  fragment checks and passes the false-positive control; `test_ledger_race` reproduces the glued
+  line verbatim.
+- Suites at this cut: `test_stall` 316, `test_checkin` 196, `test_ledger_race` 41, `test_tui` 39,
+  `test_verbs` all green; full sweep 45/45, SWEEP_FAIL=0.
+
 ## [1.0.16] - 2026-09-25
 
 The tool index: a growing `tools/` folder no longer buys prompt tokens. The always-on schemas

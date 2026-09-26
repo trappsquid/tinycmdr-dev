@@ -82,6 +82,25 @@ def main():
         check("an unknown verb exits 2 and shows the help", rc == 2 and "unknown verb" in err,
               (rc, err[:120]))
 
+        # ---- the door has to be executable (measured 2026-09-25) -------------
+        # A fleet macOS host answered "/usr/local/bin/tinycmdr: line 2: ... Permission
+        # denied" for the user and for sudo: the shim was right, the file it execs was
+        # 0644, because git cannot carry the execute bit out of a Windows checkout and
+        # the update path trusted the checkout. A reader meets this door first.
+        launcher = Path(fb.BASE_DIR) / "tinycmdr"
+        launcher.write_text("#!/bin/sh\nexec \"$0.py\" \"$@\"\n", encoding="utf-8")
+        os.chmod(launcher, 0o644)
+        fix = getattr(fb, "ensure_launcher_executable", None)
+        check("the update path ships a launcher fix-up", callable(fix))
+        if callable(fix):
+            fix()
+            if os.name == "posix":
+                check("the launcher is executable after the fix-up",
+                      os.access(launcher, os.X_OK), oct(launcher.stat().st_mode))
+            else:
+                check("the fix-up is a no-op where the execute bit does not exist",
+                      launcher.read_text(encoding="utf-8").startswith("#!"))
+
         # ---- status: an endpoint that says nothing, then one that answers ----
         saved_detect = fb._detect_window
         fb._detect_window = lambda url, headers=None: 0

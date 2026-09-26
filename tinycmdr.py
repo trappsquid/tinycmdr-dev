@@ -99,11 +99,17 @@ if os.name == "nt":
 
 import logging.handlers
 _log_queue = queue.Queue(-1)
+# The console handler is NAMED so a screen can detach it. While prompt_toolkit owns
+# the terminal a raw log line is printed into the middle of its render, the toolbar
+# is redrawn over it, and the run's own line is left stranded elsewhere on the
+# screen (measured 2026-09-25 on a fleet macOS host: the carry/stream/turn lines all
+# landed inside the cards). The file handler is the record; the screen is the view.
 # Rotating so a long-running bot can't fill the disk (the log grows ~370 KB/day
 # and nothing else prunes it).
+_log_console = logging.StreamHandler()
 _log_listener = logging.handlers.QueueListener(
     _log_queue,
-    logging.StreamHandler(),
+    _log_console,
     logging.handlers.RotatingFileHandler(
         BASE_DIR / "tinycmdr.log", maxBytes=5 * 1024 * 1024,
         backupCount=3, encoding="utf-8"))
@@ -114,6 +120,20 @@ logging.basicConfig(
     handlers=[logging.handlers.QueueHandler(_log_queue)],
 )
 log = logging.getLogger("tinycmdr")
+
+
+def log_console_off():
+    """Stop writing the log to this terminal: a screen owns it now.
+
+    Only ever called by a console that is about to draw - a bot, a scheduled job, a
+    pipe and the suites keep the console handler, which is how a redirected log line
+    is still visible when something goes wrong.
+    """
+    try:
+        _log_listener.handlers = [h for h in _log_listener.handlers
+                                  if h is not _log_console]
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -662,7 +682,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.16"
+VERSION = "1.0.17"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -5044,8 +5064,20 @@ def tool_remember(args, ctx):
             msg = (f"OK: superseded the entry from {e['ts']} ({share:.0%} of the same "
                    f"words - one fact, one entry).")
         else:
+            # A file whose last line carries no terminator would have this entry glued
+            # into it (measured 2026-09-25 on a fleet macOS box). Check the last byte
+            # and separate when it is not a newline.
+            _sep = ""
+            try:
+                if NOTES_FILE.exists() and NOTES_FILE.stat().st_size:
+                    with NOTES_FILE.open("rb") as f:
+                        f.seek(-1, os.SEEK_END)
+                        if f.read(1) not in (b"\n", b"\r"):
+                            _sep = "\n"
+            except OSError:
+                _sep = ""
             with NOTES_FILE.open("a", encoding="utf-8") as f:
-                f.write(f"- [{timestamp}] {note}\n")
+                f.write(f"{_sep}- [{timestamp}] {note}\n")
             record_authored_note(note)     # the guard knows this entry is the bot's own
             msg = f"OK: noted at {timestamp}."
     after = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
@@ -9197,6 +9229,48 @@ _RESULT_CLAIM_RX = re.compile(
     r"|exit(?:ed)? (?:code|status)\b|ran in parallel)\b",
     re.IGNORECASE | re.MULTILINE)
 
+# The FOURTH shape, and the one a 9B produced twice on two fleet boxes in one afternoon
+# (measured 2026-09-25 driving a fleet macOS box and a fleet Windows box): the whole reply
+# is an ACTION PHRASE and nothing else - "Checking where loft boxes is located on this
+# machine." (53 chars), "Finding \"test junk\" folder:" (27 chars). _INTENT_RX wants a
+# stated intention and there is none ("I'll" never appears); _RESULT_CLAIM_RX wants a
+# measured value and there is none either. Both classified it as an ANSWER, so the run
+# closed at 0 tool calls with a green done line and the operator read a sentence about
+# work that had not started as a finished task, twice, on two hosts.
+#
+# The fences are what keep this out of a capable model's way, and they are the same
+# fences the promise guard already uses: it fires only when the run has made NO tool
+# call, and only once per run.
+#   * the participle has to OPEN the reply, so "Let me check ..." stays _INTENT_RX's and
+#     a sentence that merely mentions checking stays an answer;
+#   * a DIGIT anywhere disqualifies it - "Looking at your disk, 63GB is free, the
+#     volume is 93% full." is a real answer, and it is exactly the shape a strong model
+#     produces, so the price of a false positive is one extra model call and no action.
+_ACTION_ONLY_MAX_CHARS = 300
+_ACTION_ONLY_RX = re.compile(
+    r"^\s*(?:ok(?:ay)?|right|sure|so|now)?[\s,.!:;-]{0,4}"
+    r"(?:i(?:'?m| am)\s+)?"
+    r"(checking|finding|looking|searching|scanning|gathering|reading|listing|locating|"
+    r"inspecting|reviewing|running|building|collecting|verifying|confirming|clearing|"
+    r"cleaning|tidying|deleting|removing|sorting|digging|starting|preparing|getting|"
+    r"investigating|examining|pulling|fetching|compiling|creating|writing|"
+    r"updating|fixing|trying|working)\b",
+    re.IGNORECASE)
+
+
+def _action_only(text):
+    """True when the WHOLE reply is an action phrase and nothing else (see _ACTION_ONLY_RX).
+
+    Deliberately narrow: an action word at the start, nothing measured anywhere in it, no
+    question mark, and short. The cost of a false positive is one model call; the cost of a
+    miss is a done line over a task that never ran (measured twice, 2026-09-25).
+    """
+    t = (text or "").strip()
+    return bool(t) and len(t) <= _ACTION_ONLY_MAX_CHARS \
+        and not t.endswith("?") and not re.search(r"\d", t) \
+        and bool(_ACTION_ONLY_RX.match(t))
+
+
 # --------------------------------------------------------------------------
 # What one turn WAS, as data (added 2026-09-24, logging only)
 # --------------------------------------------------------------------------
@@ -9218,6 +9292,8 @@ def _turn_shape(reply, tool_calls):
         return "empty"
     if _INTENT_RX.search(text):
         return "promise"
+    if _action_only(text):
+        return "fragment"
     if _RESULT_CLAIM_RX.search(text):
         return "claim"
     return "answer"
@@ -10725,16 +10801,20 @@ class Agent:
                         # touched, and only once - see _INTENT_RX.
                         _promise = (reply.get("content") or "").strip()
                         _promised = bool(_INTENT_RX.search(_promise))
+                        # The sibling a 9B produced twice in one afternoon: the whole
+                        # reply is an action phrase with nothing behind it.
+                        _fragmented = (not _promised and calls == 0
+                                       and _action_only(_promise))
                         # The sibling failure: a filled-in report of results the run
                         # never fetched. No promise, no change claim - just measured
                         # values with nothing behind them (see _RESULT_CLAIM_RX).
-                        _claimed = (not _promised and calls == 0
+                        _claimed = (not _promised and not _fragmented and calls == 0
                                     and bool(_RESULT_CLAIM_RX.search(_promise)))
                         if (not _no_call_nudge and calls == 0 and not spun
                                 and len(_promise) <= (_INTENT_MAX_CHARS if _promised
                                                       else _RESULT_CLAIM_MAX_CHARS)
                                 and not _promise.endswith("?")
-                                and (_promised or _claimed)
+                                and (_promised or _fragmented or _claimed)
                                 and steps < max_steps
                                 and (time.time() - t0) < max_seconds):
                             _no_call_nudge = True
@@ -10750,14 +10830,17 @@ class Agent:
                                 "in this reply - do not describe it instead of doing it. "
                                 "If the task genuinely needs no tool, write the final "
                                 "answer with what you already have."
-                                if _promised else
+                                if _promised or _fragmented else
                                 "SYSTEM: your last reply reported results - values, "
                                 "contents, counts - but this run has made NO tool call at "
                                 "all, so nothing above was read from this box. Make the "
                                 "call NOW and report only what it actually returns. If "
                                 "those values did not come from this run, say so in one "
                                 "line instead.")})
-                            _note = ("the model promised the work with no tool call - "
+                            _note = ("the model described the work as under way with "
+                                     "no tool call - asking it to act once"
+                                     if _fragmented else
+                                     "the model promised the work with no tool call - "
                                      "asking it to act once" if _promised else
                                      "the model reported results with no tool call - "
                                      "asking it to check once")
@@ -10918,7 +11001,9 @@ class Agent:
                         # Asked to act once already and still ending on an intention: say
                         # so. A run that COMPLIED after the ask (wrote its report with what
                         # it had) is delivered exactly as written.
-                        if _promise_asked and _promised:
+                        if ((_promise_asked and _promised)
+                                or (calls == 0 and (_no_call_nudge
+                                                    or _promise_asked))):
                             answer = _annotate_promise(answer, calls)
                         answer = _annotate_evidence(answer, muts, calls)
                         if _dropped_answers:
@@ -12478,6 +12563,11 @@ class RunReporter:
         if fell:
             # never let a silent fallback look like the chosen model ran
             extra += f" · ⚠️ fell back from {len(fell)} endpoint(s)"
+        if not self.steps:
+            # A run that made no tool call did no work, and the done line has to say
+            # so: measured 2026-09-25, a 0-step run's green done line read as a
+            # finished task while its reply only described work that never started.
+            extra += " · no tool was used - nothing was read from this box"
         self.dest.update(ref, "final" if ok else "error",
                          f"{'✅' if ok else '⚠️'} Done — {self.steps} step(s) in "
                          f"{elapsed}s · model `{model}`{extra}")
@@ -12776,6 +12866,16 @@ class CliDestination(Destination):
         return f"\033[{code}m{text}\033[0m" if self.colour else text
 
     def _write(self, text):
+        # A screen owns the cursor: a plain print() here fights prompt_toolkit for the
+        # terminal and both lose (measured 2026-09-25: the toolbar string smeared into
+        # the transcript). raw_ansi exists for exactly this text - painted already,
+        # straight through - and until now nothing called it.
+        if self.screen is not None:
+            try:
+                self.screen.raw_ansi(text)
+                return
+            except Exception:
+                pass
         try:
             print(text, file=self.out, end="", flush=True)
         except Exception:
@@ -12843,6 +12943,13 @@ class CliDestination(Destination):
         body = self._refs.get(ref, "")
         if body.startswith("💬 "):
             body = body[2:]
+        if self.screen is not None and body.strip():
+            # A draft is dropped only when it WAS the answer, and the streamed line
+            # is dim narration - so the one thing the reader must see never got its
+            # card (measured 2026-09-25: a one-line answer stayed a dim "..." line
+            # and the bright answer card never came). A screen cannot take the dim
+            # line back, so it gets the card it should have been.
+            self.screen.card("final", self._plain(body))
         if self.on_drop:
             try:
                 self.on_drop(body)
@@ -17130,6 +17237,8 @@ def tui_screen():
     the banner, the cards and the done line all come from the same one."""
     if "screen" not in _CLI:
         _CLI["screen"] = TuiScreen() if tui_wanted() else None
+        if _CLI["screen"] is not None:
+            log_console_off()      # one writer per terminal: see log_console_off()
     return _CLI["screen"]
 
 
@@ -17210,6 +17319,20 @@ def _cli_resume(rest):
     print(dim("  /tinycmdr new clears it; /tinycmdr sessions lists the others"))
 
 
+def cli_out(text):
+    """One place for a console line, so a screen can be the only writer.
+
+    Anything printed while prompt_toolkit owns the terminal has to go through it;
+    everything else in the console (the banner, the command answers) prints before
+    or between prompts, where prompt_toolkit handles it.
+    """
+    screen = tui_screen()
+    if screen is not None:
+        screen.raw_ansi(str(text))
+        return
+    print(text)
+
+
 def _cli_usage_line():
     u = AGENT.last_usage.get(_cli_key())
     if not u or not u.get("calls"):
@@ -17217,9 +17340,9 @@ def _cli_usage_line():
     s = AGENT.stats(_cli_key())
     budget = AGENT._context_budget()
     pct = 100 * s["est_tokens"] // max(1, budget)
-    print(dim("  %s - %s step(s) in %ss - context ~%s/%s (%d%%)"
-              % (fmt_usage(u), u["steps"], int(u["secs"]), fmt_tokens(s["est_tokens"]),
-                 fmt_tokens(budget), pct)))
+    cli_out(dim("  %s - %s step(s) in %ss - context ~%s/%s (%d%%)"
+                % (fmt_usage(u), u["steps"], int(u["secs"]), fmt_tokens(s["est_tokens"]),
+                   fmt_tokens(budget), pct)))
 
 
 def _cli_notes():
@@ -17928,9 +18051,11 @@ def run_cli(once=None):
 
     def say(text):
         """A line from the harness itself (not the model): a run that continued past its
-        budget, for instance. The console has no chat to post into, so it prints."""
+        budget, for instance. The console has no chat to post into, so it prints -
+        through the screen when there is one, or the line lands on top of the
+        toolbar."""
         try:
-            print(amber("  %s" % text))
+            cli_out(amber("  %s" % text))
         except Exception:
             pass
 
@@ -18023,13 +18148,13 @@ def run_cli(once=None):
                                steer_cb=steer, ask_door=reporter.dest)
         except KeyboardInterrupt:
             cancel.set()
-            print(red("\n  (stopped)"))
+            cli_out(red("\n  (stopped)"))
         except OperatorStop as e:
             failed = True
-            print(red("\n  (stopped: %s)" % e))
+            cli_out(red("\n  (stopped: %s)" % e))
         except Exception as e:
             failed = True
-            print(red("\n  run failed: %s: %s" % (type(e).__name__, e)))
+            cli_out(red("\n  run failed: %s: %s" % (type(e).__name__, e)))
         finally:
             _CLI["stop"] = None
             reporter.finish(ok=not failed)
@@ -18337,6 +18462,29 @@ def _build_hash():
         return "unreadable"
 
 
+def ensure_launcher_executable():
+    """Give the folder's launcher its execute bit back after a pull or an adoption.
+
+    Measured 2026-09-25: `tinycmdr` on a fleet macOS host answered
+    ".../tinycmdr: Permission denied" - and the same under sudo, because execve wants at
+    least one execute bit set for EVERY user, root included. The two-line shim in
+    /usr/local/bin was correct; the file it execs was mode 0644. The tree tracks
+    `tinycmdr` as 100644 (a Windows checkout cannot record the bit, and fileMode ignores
+    it there), the macOS installer lands it with `cp -f` and never chmods it, so EVERY
+    git-based update wrote a door nobody could open on every Unix host. A door that
+    cannot be executed is the first thing a reader meets, so the update path re-asserts
+    the bit instead of trusting the checkout.
+    """
+    if os.name != "posix":
+        return
+    try:
+        p = BASE_DIR / "tinycmdr"
+        if p.exists() and not os.access(p, os.X_OK):
+            os.chmod(p, os.stat(p).st_mode | 0o111)
+    except OSError:
+        log.debug("could not restore the launcher's execute bit", exc_info=True)
+
+
 def update_adopt_git(git, repo):
     """Make this install a git checkout, then check out the published branch.
 
@@ -18370,6 +18518,7 @@ def update_adopt_git(git, repo):
             print("git %s failed: %s" % (args[0], (err or out).strip()[:400]), file=sys.stderr)
             return 1
     _run_git(git, ["-C", str(BASE_DIR), "branch", "--set-upstream-to=origin/main", "main"], 60)
+    ensure_launcher_executable()
     print("adopted %s: this install is a checkout of main now (tinycmdr.py %s -> %s)"
           % (repo, before, _build_hash()))
     print("Restart tinycmdr to run it: `tinycmdr restart`")
@@ -18952,6 +19101,7 @@ def _verb_update(rest):
         if rc != 0:
             print("git pull failed: %s" % ((err or out).strip()[:600]), file=sys.stderr)
             return 1
+        ensure_launcher_executable()
         print(out.strip())
         head_after, file_after = head_of()
         if (head_before, file_before) != (head_after, file_after):

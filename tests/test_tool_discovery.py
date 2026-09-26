@@ -44,18 +44,30 @@ revealed = lambda out: "now callable" in out or "every remaining tool is now" in
 TAIL = "Everything else on this machine"
 
 # ---- the three measured queries are the regression this suite exists for ---------
+# What was measured (a fleet Windows bed, 2026-09-23): these three revealed a WRONG tool -
+# `schedule` (the word "channel"), `blog` ("post"), `delegate_task` ("agent") - and the box then
+# spent 35 minutes rebuilding a capability it already had. The REGRESSION is the wrong answer,
+# not the existence of an answer: on a box that owns a mattermost tool (the fleet manager's own
+# tree grew `tools/mattermost_ops.py` at 18:34 on 2026-09-25) revealing it for "send Mattermost
+# message to channel" is correct, and a suite that called that a failure would be red on the very
+# box the tool was written for.
+WRONG = ("`schedule`", "`blog`", "`delegate_task`")
 for i, q in enumerate(["send Mattermost message to channel",
                        "send Mattermost post message channel thread",
                        "send mattermost message to agent channel via API"]):
     out = asked("regress%d" % i, query=q)
-    check("no reveal for %r" % q[:44], not revealed(out), out[:120])
-    check("  ...and it says nothing matched %r" % q[:38],
-          "No tool matched" in out, out[:120])
-    check("  ...and nothing was put in the payload",
-          fb.hidden_tools("regress%d" % i) == fb.hidden_tools(None))
-check("the score itself returns nothing for the worst of them",
-      fb._match_tools("send Mattermost message to channel", 4, None) == [],
-      fb._match_tools("send Mattermost message to channel", 4, None))
+    check("never the old wrong tool for %r" % q[:38],
+          not any(w in out for w in WRONG), out[:160])
+    if revealed(out):
+        check("  ...a reveal names a tool that MATCHES the ask %r" % q[:30],
+              "mattermost" in out.lower(), out[:200])
+    else:
+        check("  ...a miss says so for %r" % q[:38], "No tool matched" in out, out[:120])
+        check("  ...and nothing was put in the payload",
+              fb.hidden_tools("regress%d" % i) == fb.hidden_tools(None))
+_m = fb._match_tools("send Mattermost message to channel", 4, None)
+check("the score itself never returns one of the old wrong tools",
+      not [t for t in _m if t in ("schedule", "blog", "delegate_task")], _m)
 
 # ---- a query that names a capability still reveals the right tool ----------------
 CAPS = [("keep noisy log digging out of my own context", "delegate_task"),

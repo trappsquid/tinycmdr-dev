@@ -311,6 +311,26 @@ def test_parallel_remembers_all_land():
         fb.log.removeHandler(cap)
 
 
+def test_a_note_never_glues_onto_the_previous_line():
+    """Measured 2026-09-25 on a fleet macOS box: notes.md's last line carried no
+    terminator, so the next remember landed INSIDE that line and two entries read as one
+    fact in every later prompt. The append has to look at the last byte.
+    """
+    redirect()
+    redirect_notes()
+    Path(fb.NOTES_FILE).write_text(
+        "- [2026-09-22 20:49] first fact, written without a trailing newline",
+        encoding="utf-8")
+    out = remember({"note": "second fact"})
+    text = Path(fb.NOTES_FILE).read_text(encoding="utf-8")
+    lines = [l for l in text.splitlines() if l.strip()]
+    check("the new entry is its own line", len(lines) == 2, repr(text))
+    check("and the fact before it was not swallowed",
+          lines and "first fact" in lines[0] and lines[0].endswith("a trailing newline"),
+          lines)
+    check("remember still answered OK", str(out).startswith("OK"), out)
+
+
 def test_tool_remember_runs_under_the_notes_lock():
     """The lock has to cover the READ side too (the ledger's lesson): a
     `remember` must wait while another writer holds the notes.md lock, or its

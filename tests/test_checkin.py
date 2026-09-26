@@ -410,6 +410,22 @@ def test_run_announces_narration_before_tools():
     check("the run still returns its answer", out == "Nothing holds it.", out)
 
 
+def test_a_zero_step_run_never_reads_as_work_done():
+    """Measured 2026-09-25: a run that made 0 tool calls rendered a green
+    "Done - 0 step(s)" line while its reply only described work that had not started, on
+    two hosts. The line has to carry the fact, so a report can never be read as work.
+    """
+    d, rep = reporter()
+    rep.finish()
+    check("a 0-step done line says the run used no tool",
+          "no tool was used" in str(d.edits[-1][2]), d.edits[-3:])
+    d2, rep2 = reporter()
+    rep2.progress("shell", {"command": "ls"})
+    rep2.finish()
+    check("a run that did work keeps its plain done line",
+          "no tool was used" not in str(d2.edits[-1][2]), d2.edits[-3:])
+
+
 def test_run_silent_without_narration():
     out, events = scripted_run([
         {"role": "assistant", "content": "",
