@@ -47,6 +47,13 @@ cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
 python maintenance/check-readme-assets.py --dist dist
 
 say "push main, then publish"
+# gh is a NATIVE binary and a path in MSYS form (/c/Users/...) is not translated for
+# it, so `--notes-file "$NOTES"` fails with "The system cannot find the path
+# specified" AFTER the push has gone out - a half-cut release, and the tag has no
+# assets (measured 2026-09-26, v1.0.21). Convert once, here, where it is cheap.
+if command -v cygpath >/dev/null 2>&1; then
+    NOTES="$(cygpath -m "$NOTES" 2>/dev/null || printf '%s' "$NOTES")"
+fi
 git push origin main
 gh release create "$TAG" \
     "dist/tinycmdr-$VER-win.zip" \
