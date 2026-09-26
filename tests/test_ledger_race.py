@@ -402,9 +402,17 @@ def test_two_spellings_of_one_path_share_one_lock():
     target = tmp / "big.txt"
     target.write_text("x\n")
     pairs = [(str(target), str(target).replace(os.sep, "/")),
-             (str(target), "./" + os.path.relpath(target, os.getcwd())),
              (str(target), str(target).upper() if os.name == "nt" else str(target)),
              (str(target), str(target) + os.sep + ".")]
+    try:
+        # A "./"-relative spelling exists only within ONE drive. On a checkout that lives on
+        # a share (Z:) while the fixture's temp dir is on C:, relpath raises "path is on
+        # mount 'C:', start on mount 'Z:'" and takes the whole suite down with it (measured
+        # 2026-09-26, the first sweep run from share-a). The spellings above cover the
+        # same normalisation, so the pair is simply skipped when it cannot be formed.
+        pairs.insert(1, (str(target), "./" + os.path.relpath(target, os.getcwd())))
+    except ValueError:
+        pass
     for a, b in pairs:
         key_a, key_b = fb._lock_key(a), fb._lock_key(b)
         same_file = os.path.samefile(a, b) if os.path.exists(a) and os.path.exists(b) else True
