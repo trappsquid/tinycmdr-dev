@@ -4,12 +4,15 @@
 # logic has ONE home. Shipped in every package and copied into the install with
 # the installer, so day-two removal never needs the original package.
 #
-#   install\uninstall-tinycmdr.ps1 [-InstallDir C:\tinycmdr] [-TaskName Tinycmdr]
+# The default folder is the installer's own default (%USERPROFILE%\tinycmdr). A
+# -AsService install put it in C:\tinycmdr, so pass -InstallDir C:\tinycmdr for one.
+#
+#   install\uninstall-tinycmdr.ps1 [-InstallDir <folder>] [-TaskName Tinycmdr]
 #                                  [-Force] [-NoPause]
 #
 # -Force deletes the folder without asking; without it you are asked first.
 param(
-    [string] $InstallDir = "C:\tinycmdr",
+    [string] $InstallDir = (Join-Path $env:USERPROFILE "tinycmdr"),
     [string] $TaskName = "Tinycmdr",
     [switch] $Force,
     [switch] $NoPause

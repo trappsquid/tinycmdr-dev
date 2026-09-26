@@ -164,19 +164,30 @@ Most agent frameworks were designed for cloud LLMs with dedicated remote infrast
 tinycmdr addresses these bottlenecks with an auditable single-process runtime built around token efficiency and execution guards.
 
 ---
+## Quick Install
 
-## Quick Install
+Linux and macOS: one line, below. Windows: download [`tinycmdr-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-win.zip) from the [latest release](https://github.com/trappsquid/tinycmdr/releases/latest) and double-click **`INSTALL-WINDOWS.cmd`** inside it. Windows needs no administrator rights at all, a Linux *user* install needs none either, and only the Linux *system* install and a macOS install with `sudo` ask for root.
 
-Download the archive for your platform from the [latest release](https://github.com/trappsquid/tinycmdr/releases/latest), unpack it, and run the installer inside. No administrator rights are needed, and the installer downloads Python 3.12 for you if the machine has none.
+The links below are stable names that always point at the newest build, so they never need re-pinning to a version.
 
 ### Windows
 
-Download [`tinycmdr-1.0.18-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder. Or from PowerShell:
+```powershell
+irm https://github.com/trappsquid/tinycmdr/releases/latest/download/install.ps1 | iex
+```
+
+That fetches the newest archive, expands it and runs the installer inside it. Pass the installer's own switches through when you want to decide without being asked:
 
 ```powershell
-curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-win.zip
-Expand-Archive tinycmdr-1.0.18-win.zip
-cd tinycmdr-1.0.18
+iex "& { $(irm https://github.com/trappsquid/tinycmdr/releases/latest/download/install.ps1) } -InstallDir D:\tinycmdr"
+```
+
+Or do it by hand: download [`tinycmdr-win.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-win.zip), extract it, and double-click **`INSTALL-WINDOWS.cmd`** in the extracted folder, or from PowerShell:
+
+```powershell
+curl.exe -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-win.zip
+Expand-Archive tinycmdr-win.zip
+cd tinycmdr-*          # the folder inside carries the version
 .\INSTALL-WINDOWS.cmd
 ```
 
@@ -184,43 +195,46 @@ It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment ins
 
 ### Linux (Ubuntu / Debian / systemd)
 
-**System install** (boots with the machine, needs root, the agent gets
-passwordless sudo):
+```bash
+curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
+```
+
+That fetches the newest archive, unpacks it and runs the installer inside it. With no switch it asks which kind you want at a terminal: **system** (boots with the machine, needs root, the agent gets passwordless sudo) or **user** (starts when you log in, no root anywhere, the agent cannot use sudo). Decide without being asked by passing the installer's own switches through:
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-linux.tar.gz
-tar -xzf tinycmdr-1.0.18-linux.tar.gz
-cd tinycmdr-1.0.18
+curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash -s -- --mode user
+curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash -s -- --mode system --yes
+```
+
+Or do it by hand:
+
+```bash
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-linux.tar.gz
+tar -xzf tinycmdr-linux.tar.gz
+cd tinycmdr-*          # the folder inside carries the version
 sudo bash install/install-tinycmdr.sh
 ```
 
-**User install** (starts when you log in, no root anywhere, the agent cannot
-use sudo):
-
-```bash
-bash install/install-tinycmdr.sh                # asks which one, at a terminal
-bash install/install-tinycmdr.sh --mode user    # no prompt, no root
-```
-
-Run it at a terminal with no switch and it asks; `--mode system|user` decides
-without a prompt, and `--yes` takes the default for who you are.
+Run it at a terminal with no switch and it asks; `--mode system|user` decides without a prompt, and `--yes` takes the default for who you are.
 
 ### macOS (launchd)
 
 ```bash
-curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-1.0.18-macos.zip
-unzip tinycmdr-1.0.18-macos.zip
-cd tinycmdr-1.0.18
+curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
+```
+
+Or do it by hand:
+
+```bash
+curl -LO https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-macos.zip
+unzip tinycmdr-macos.zip
+cd tinycmdr-*          # the folder inside carries the version
 bash install/install-tinycmdr-macos.sh
 ```
 
-Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder
-(macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it,
-double-click **`UNINSTALL-MACOS.command`**, or run
-`bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if you
-installed with it - the PATH wrapper lives in root-owned `/usr/local/bin`, and the
-uninstaller now reports that instead of stopping part-way.
+Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder (macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it, double-click **`UNINSTALL-MACOS.command`**, or run `bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if you installed with it - the PATH wrapper lives in root-owned `/usr/local/bin`, and the uninstaller now reports that instead of stopping part-way.
 
+The local web/API page listens on port **8787** on every platform (loopback unless you set a token). `--web-port <p>` moves it and `--no-web` closes it.
 
 ### Installer switches (Windows)
 

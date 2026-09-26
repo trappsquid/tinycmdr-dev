@@ -16,7 +16,7 @@
 set -euo pipefail
 
 INSTALL_DIR="${TINYCMDR_DIR:-$HOME/tinycmdr}"
-LABEL="${TINYCMDR_LABEL:-com.trapp.tinycmdr}"
+LABEL="${TINYCMDR_LABEL:-com.tinycmdr.agent}"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 UID_NUM="$(id -u)"
 TARGET="gui/$UID_NUM/$LABEL"
@@ -28,6 +28,17 @@ die()  { printf '\n*** %s\n' "$*" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || die "launchd is macOS-only (this is $(uname -s))"
 
+# The page port comes from the host's own config.json; the fallback is the fleet default.
+config_port() {
+    python3 - "$INSTALL_DIR/config.json" <<'PY' 2>/dev/null || echo 8787
+import json, sys
+try:
+    print(json.load(open(sys.argv[1], encoding="utf-8-sig")).get("web", {}).get("port", 8787))
+except Exception:
+    print(8787)
+PY
+}
+
 case "$ACTION" in
     status)
         say "status: $LABEL"
@@ -37,14 +48,7 @@ case "$ACTION" in
         else
             info "NOT loaded (agent file present: $([ -f "$PLIST" ] && echo yes || echo no))"
         fi
-        port="$(python3 - "$INSTALL_DIR/config.json" <<'PY' 2>/dev/null || echo 8788
-import json, sys
-try:
-    print(json.load(open(sys.argv[1], encoding="utf-8-sig")).get("web", {}).get("port", 8788))
-except Exception:
-    print(8788)
-PY
-)"
+        port="$(config_port)"
         if curl -fsS --max-time 4 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
             info "health on port $port:"
             curl -fsS --max-time 4 "http://127.0.0.1:$port/api/health" | head -c 400
@@ -70,8 +74,9 @@ PY
                      launchctl bootstrap "gui/$UID_NUM" "$PLIST"; }
             info "asked launchd to restart it"
             sleep 4
-            if curl -fsS --max-time 4 "http://127.0.0.1:8788/api/health" >/dev/null 2>&1; then
-                info "answering: $(curl -fsS --max-time 4 http://127.0.0.1:8788/api/health | head -c 200)"
+            port="$(config_port)"
+            if curl -fsS --max-time 4 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+                info "answering: $(curl -fsS --max-time 4 http://127.0.0.1:$port/api/health | head -c 200)"
             else
                 info "not answering yet - check $INSTALL_DIR/logs/launchd.err.log"
             fi

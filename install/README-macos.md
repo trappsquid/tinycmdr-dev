@@ -44,7 +44,7 @@ Options worth knowing:
 
     --allowed-user <mattermost-user-id>   who may command the bot (deny-by-default)
     --install-dir <path>                  default ~/tinycmdr
-    --web-port <p> / --no-web             local API + health endpoint (default 8788)
+    --web-port <p> / --no-web             local API + health endpoint (default 8787)
     --token-file <file>                   read the token from a file instead of argv
     --use-fleet-model                     use the LAN model endpoint in
                                           fleet-defaults.json instead of the cloud one

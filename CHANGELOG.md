@@ -5,6 +5,39 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.19] - 2026-09-26
+
+The download page stops carrying a version, the Mac stops defaulting to a port of its own, and the
+shipped Windows uninstaller stops looking in a folder that no longer exists.
+
+Fixed
+- `install\uninstall-tinycmdr.ps1` defaulted `-InstallDir` to `C:\tinycmdr`, the old machine-wide
+  default, while the installer it wraps installs to `%USERPROFILE%\tinycmdr`: run with no arguments
+  against a default install it found nothing to remove. The default now matches the installer, and
+  the header says to pass `-InstallDir C:\tinycmdr` for a `-AsService` install.
+- The macOS installer defaulted its web/API port to 8788 while every other platform and
+  `config.example.json` use 8787, so a fresh Mac following the README landed on a port the page never
+  named. The default is 8787 and the README names the port.
+- `maintenance/restart-tinycmdr-macos.sh` still read the pre-rename launchd label
+  (`com.trapp.tinycmdr`) and hardcoded 8788 in its restart health check, so `status` and `restart`
+  reported "no agent" and "not answering" against a healthy install.
+
+Changed
+- `install.sh` is the one-line door for Linux and macOS:
+  `curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash`.
+  It fetches the newest archive, unpacks it, hands the terminal back to the real installer so its
+  questions still work, and names the installed copy for later verify/uninstall. Windows keeps
+- `install.ps1` is the same door on Windows: `irm .../install.ps1 | iex` (no execution-policy
+  change, because `iex` runs the fetched text, not a file). It expands the archive in a temp
+  folder, runs `INSTALL-WINDOWS.cmd` there, and names the installed copy for later removal.
+
+  `INSTALL-WINDOWS.cmd`.
+- The README's download links are stable names (`tinycmdr-win.zip`, `tinycmdr-linux.tar.gz`,
+  `tinycmdr-macos.zip`) that always resolve to the newest release, so the page no longer has to be
+  re-pinned at every cut; the versioned names still ship alongside them.
+- `maintenance/check-readme-assets.py` fails if a README download name is not in the build or on the
+  release, and `maintenance/release.sh` runs a cut (build, publish, aliases, that check).
+
 ## [1.0.18] - 2026-09-25
 
 The macOS doors. A reader who is not a terminal user could not install and could not remove

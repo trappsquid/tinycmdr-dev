@@ -17,7 +17,7 @@ code                5,847 lines / 286 KB in ONE file, no package, no framework
 dependencies        requests, croniter, mmpy_bot (3)
 processes           one; no daemon, no gateway, no database
 interfaces          Mattermost bot (DMs + @mentions), --cli, --once "task",
-                    small web UI (:8788: chat + /api/health + token header)
+                    small web UI (:8787: chat + /api/health + token header)
 core tools          22, of which 14 are always-on; the rest answer by name (section 2)
 custom tools        three file shapes load from ./tools/ (native .py, register-style .py,
                     <name>.tool.json); 9 on the manager box, and the agent writes its own

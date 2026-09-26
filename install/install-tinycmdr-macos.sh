@@ -27,7 +27,7 @@
 #   --model <m>           llm.model (default: the cloud model)
 #   --use-fleet-model     take llm.base_url/model from fleet-defaults.json instead
 #                         (i.e. the LAN model endpoint)
-#   --web-port <p>        local web/API port (default 8788, loopback only)
+#   --web-port <p>        local web/API port (default 8787, loopback only)
 #   --no-web              leave the local web port closed
 #   --python <path>       interpreter to build the venv from (default: 3.12, else 3.11/3.10)
 #   --install-python      fetch a private python 3.12 with uv when none is here
@@ -65,7 +65,7 @@ DEFAULT_MODEL="main"
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
 TG_TOKEN=""; TG_IDS=""
 MM_URL_ARG=""; SECRETS_FILE=""
-WEB_PORT="8788"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
+WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
 # Generated later (in the config section), but READ earlier by the no-token branch: under
 # `set -u` an unset name there is a crash.
 WEB_TOKEN=""
@@ -337,7 +337,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     fi
     if command -v curl >/dev/null 2>&1; then
         want="$(app_version "$INSTALL_DIR/tinycmdr.py")"
-        for p in 8788 "$WEB_PORT"; do
+        for p in "$WEB_PORT" 8788; do
             body="$(curl -fsS --max-time 3 "http://127.0.0.1:$p/api/health" 2>/dev/null || true)"
             [ -n "$body" ] || continue
             case "$body" in
