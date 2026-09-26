@@ -1,17 +1,28 @@
 #!/bin/bash
 # Double-click me to remove tinycmdr from this Mac.
 #
-# Why this asks for a password: the PATH wrapper it removes lives at
-# /usr/local/bin/tinycmdr, which is root-owned whenever the install was run with sudo, and
-# a normal user cannot unlink a file there. Asking once, up front, beats the uninstaller
-# stopping part-way through the removal. If your install was user-mode there is no wrapper
-# and sudo is simply not needed - it is harmless either way.
+# This asks for a password only when it has to. The PATH wrapper at /usr/local/bin/tinycmdr
+# is root-owned whenever the install was run with sudo, and no normal user can unlink a file
+# there - so a system install needs sudo once, while a user-mode install needs no password at
+# all. Asking unconditionally made a harmless removal look dangerous, and asking on the way
+# is why an uninstall could stop half-way through.
 set -u
 cd "$(dirname "$0")" || exit 1
-if [ "$(id -u)" = "0" ]; then
-    bash install/uninstall-tinycmdr-macos.sh "$@"
+
+SUDO=""
+if [ -e /usr/local/bin/tinycmdr ] && [ ! -w /usr/local/bin ]; then
+    SUDO="sudo"
+fi
+
+# --install-dir "$(pwd)" is load-bearing: without it the uninstaller falls back to its
+# default (~/tinycmdr) and removes NOTHING when the install lives anywhere else - measured
+# 2026-09-26, where a door in an --install-dir folder reported success and left the folder
+# standing. The door removes the folder it sits in.
+if [ -z "$SUDO" ]; then
+    bash install/uninstall-tinycmdr-macos.sh --install-dir "$(pwd)" "$@"
 else
-    sudo bash install/uninstall-tinycmdr-macos.sh "$@"
+    echo "A tinycmdr launcher in /usr/local/bin is owned by root, so this needs sudo once."
+    $SUDO bash install/uninstall-tinycmdr-macos.sh --install-dir "$(pwd)" "$@"
 fi
 status=$?
 echo

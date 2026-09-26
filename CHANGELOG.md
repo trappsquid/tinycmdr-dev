@@ -5,6 +5,25 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.20] - 2026-09-26
+
+Removing it is now as visible as installing it.
+
+Fixed
+- The installed folder carried no removal door. The macOS installer copied the package into the
+  install dir but not the two double-clickable `.command` files, so after an install the only way
+  out was a script path inside the folder a reader is told to delete. Both doors now ride in the
+  install dir.
+- Every installer's closing summary named the SOURCE copy's uninstaller - the folder a reader
+  unpacks and then deletes - instead of the installed one, and the Windows summary never
+  mentioned removal at all.
+- `UNINSTALL-MACOS.command` asked for a password on every run, including a user-mode install
+  that owns nothing root. It now asks only when a root-owned launcher in `/usr/local/bin` makes
+  it necessary.
+
+Changed
+- README: a "Removing it" section, one line per platform.
+
 ## [1.0.19] - 2026-09-26
 
 The download page stops carrying a version, the Mac stops defaulting to a port of its own, and the

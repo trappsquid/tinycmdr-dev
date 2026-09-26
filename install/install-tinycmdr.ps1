@@ -1327,6 +1327,8 @@ if ($EnableWeb) {
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"
+Say ('uninstall: powershell -File "' + $InstallDir + '\install\uninstall-tinycmdr.ps1" -Force')
+Say "           (the same 'INSTALL-WINDOWS.cmd -Uninstall' works from the package)"
 try { Stop-TranscriptRedacted } catch { }
 if (-not $NoPause) { Read-Host "`nPress Enter to close" }
 # 0 = installed and verified - 3 = installed, model endpoint not answering yet

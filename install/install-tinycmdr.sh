@@ -940,6 +940,6 @@ tinycmdr is installed.
   local    : $VENV_PY $INSTALL_DIR/tinycmdr.py --once "/status"
   session  : $VENV_PY $INSTALL_DIR/tinycmdr.py --cli
   page     : $VENV_PY $INSTALL_DIR/tinycmdr.py --web   -> http://127.0.0.1:$WEB_PORT
-  verify   : bash $HERE/$(basename "${BASH_SOURCE[0]}") --verify-only --mode $INSTALL_MODE
-  remove   : ${SUDO_IF_ROOT}bash $HERE/$(basename "${BASH_SOURCE[0]}") --uninstall --mode $INSTALL_MODE
+  verify   : bash $INSTALL_DIR/install/install-tinycmdr.sh --verify-only --mode $INSTALL_MODE
+  remove   : ${SUDO_IF_ROOT}bash $INSTALL_DIR/install/install-tinycmdr.sh --uninstall --mode $INSTALL_MODE
 EOF

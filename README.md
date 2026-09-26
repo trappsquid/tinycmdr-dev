@@ -250,6 +250,31 @@ The local web/API page listens on port **8787** on every platform (loopback unle
                        administrators)
 ```
 
+## Removing it
+
+Whatever installed it can remove it, from the folder it installed into:
+
+**Windows** - the package door, or the copy that ships inside the install:
+
+```powershell
+INSTALL-WINDOWS.cmd -Uninstall
+powershell -File "$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1" -Force
+```
+
+**Linux** - the uninstaller inside the install (`--mode user` for a user install, which needs no sudo):
+
+```bash
+sudo bash ~/tinycmdr/install/install-tinycmdr.sh --uninstall
+```
+
+**macOS** - double-click **`UNINSTALL-MACOS.command`** in the install folder (`~/tinycmdr`); it asks for a password only when the install left a root-owned launcher in `/usr/local/bin`. Or from a terminal:
+
+```bash
+bash ~/tinycmdr/install/uninstall-tinycmdr-macos.sh --uninstall
+```
+
+None of these touch your Mattermost bot account. Its token is dead to you once the agent is gone - revoke it in **Profile > Security > Personal Access Tokens**.
+
 ---
 
 ## License

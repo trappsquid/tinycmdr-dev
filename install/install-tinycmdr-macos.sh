@@ -405,6 +405,11 @@ fi
 if [ -d "$SRC/install" ]; then
     mkdir -p "$INSTALL_DIR/install"
     cp -f "$SRC/install/"* "$INSTALL_DIR/install/" 2>/dev/null || true
+# The two double-clickable doors ride in the install dir as well, so someone who wants
+# tinycmdr GONE later is looking at a folder that shows them how, without the original
+# package (measured 2026-09-26: the install dir carried no door at all).
+cp -f "$SRC/INSTALL-MACOS.command" "$INSTALL_DIR/" 2>/dev/null || true
+cp -f "$SRC/UNINSTALL-MACOS.command" "$INSTALL_DIR/" 2>/dev/null || true
 fi
 mkdir -p "$INSTALL_DIR/maintenance"
 for f in restart-tinycmdr-macos.sh restart-tinycmdr.sh; do
@@ -740,5 +745,6 @@ info "install dir : $INSTALL_DIR"
 info "agent       : $LABEL  ($PLIST)"
 info "logs        : $INSTALL_DIR/tinycmdr.log, $LOGDIR/launchd.err.log"
 info "restart     : bash $INSTALL_DIR/maintenance/restart-tinycmdr-macos.sh"
-info "uninstall   : bash $SRC/install/install-tinycmdr-macos.sh --uninstall"
+info "uninstall   : double-click $INSTALL_DIR/UNINSTALL-MACOS.command"
+    info "              (or: bash $INSTALL_DIR/install/install-tinycmdr-macos.sh --uninstall)"
 info "the bot answers DMs from the users in mattermost.allowed_users only"
