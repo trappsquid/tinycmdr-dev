@@ -6,6 +6,10 @@
 #
 #   sudo bash install-tinycmdr.sh --token <mattermost-bot-token>
 #
+# On your own machine, with no switches, it ASKS for what the bot cannot work without
+# - the Mattermost server, your user id, the model endpoint, the model id and that
+# endpoint's key - and writes nothing until you say yes. Every answer has a switch.
+#
 # It reads install/fleet-defaults.json (Mattermost host, model endpoint, allowed
 # user), keeps the bot token out of config.json (it goes to .env), and registers
 # a systemd unit.
@@ -21,6 +25,8 @@
 #
 #   --mode system|user    which one (aliases: --system, --no-root); --yes takes
 #                         the default without asking
+#   --yes                 ask nothing at all: take the switches and the defaults
+#                         (any run with no terminal asks nothing either)
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first token-looking line)
 #   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
@@ -73,6 +79,12 @@ TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG="
 MODEL_BASE_GIVEN=""; MODEL_GIVEN=""; WEB_CLI_GIVEN=0
 TG_TOKEN=""; TG_IDS=""
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
+YES=0                     # -y/--yes: ask nothing, take the switches and the defaults
+MODEL_KEY=""              # the model endpoint's key, when the reader gives one
+# What the questions propose when the package says nothing: the usual local
+# llama.cpp shape. Any OpenAI-compatible /v1 root works.
+DEFAULT_MODEL_BASE="http://127.0.0.1:8081/v1"
+DEFAULT_MODEL="main"
 # system | user | "" (decide from who you are). TINYCMDR_MODE is the env door, the
 # --mode flag the CLI door: a fleet push sets the env one and never prompts.
 INSTALL_MODE="${TINYCMDR_MODE:-}"; ASK_MODE=1; DIR_GIVEN=0; RUN_UID=""
@@ -81,7 +93,7 @@ INSTALL_MODE="${TINYCMDR_MODE:-}"; ASK_MODE=1; DIR_GIVEN=0; RUN_UID=""
 WEB_TOKEN=""
 PORT_BUSY_BEFORE=""
 
-usage() { sed -n '3,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -94,7 +106,7 @@ while [ $# -gt 0 ]; do
         --mode)             INSTALL_MODE="$2"; shift 2 ;;
         --system)           INSTALL_MODE=system; shift ;;
         --no-root)          INSTALL_MODE=user; shift ;;
-        -y|--yes)           ASK_MODE=0; shift ;;
+        -y|--yes)           ASK_MODE=0; YES=1; shift ;;
         --bot-name)         BOT_NAME="$2"; shift 2 ;;
         --allowed-user)     ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)   MM_URL_ARG="$2"; shift 2 ;;
@@ -378,6 +390,47 @@ if [ "$UNINSTALL" = 1 ]; then
     exit 0
 fi
 
+# ----------------------------------------------------------- asking a person ---
+# Asked ONLY when a person is there to answer: a real terminal (the one-line door
+# hands its own over - see install.sh) and not --yes. A scripted or headless run
+# takes the defaults and prints them, so a fleet push can never hang on a question.
+# TINYCMDR_ASK=1 forces the asks on a redirected stdin.
+# Prompts go to STDERR: the caller reads the answer from stdout.
+trim() {
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+ask_text() {   # ask_text <prompt> [default] -> prints the answer
+    local p="$1" dflt="${2:-}" a=""
+    if [ -n "$dflt" ]; then printf '    %s [%s]: ' "$p" "$dflt" >&2
+    else printf '    %s: ' "$p" >&2; fi
+    read -r a || a=""
+    a="$(trim "$a")"
+    if [ -z "$a" ]; then printf '%s' "$dflt"; else printf '%s' "$a"; fi
+}
+
+ask_secret() {   # ask_secret <prompt> -> prints what was typed, hidden, may be empty
+    local a=""
+    printf '    %s: ' "$1" >&2
+    read -rs a || a=""
+    echo >&2
+    printf '%s' "$a"
+}
+
+ask_yes() {   # ask_yes <question> [y|n] -> 0 = yes
+    local a="" dflt="${2:-y}"
+    case "$dflt" in y|Y) printf '    %s [Y/n] ' "$1" >&2 ;; *) printf '    %s [y/N] ' "$1" >&2 ;; esac
+    read -r a || a=""
+    a="$(trim "$a")"
+    case "$a" in
+        "") case "$dflt" in y|Y) return 0 ;; *) return 1 ;; esac ;;
+        y|Y|yes|YES|Yes) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 # ------------------------------------------------------------------ token ---
 if [ -z "$TOKEN" ] && [ -n "$TOKEN_FILE" ]; then
     [ -f "$TOKEN_FILE" ] || die "no such token file: $TOKEN_FILE"
@@ -405,6 +458,108 @@ fi
 if [ -n "$TG_IDS" ] && [ -z "$TG_IDS_CLEAN" ]; then
     die "--telegram-ids needs numeric ids (message @userinfobot for yours): got '$TG_IDS'"
 fi
+# ---------------------------------------------------------------- questions ---
+# A reader who downloaded this and ran it knows two things at most: the server their
+# Mattermost lives on and a bot token. Everything else the bot cannot work without -
+# where the server is, who may command it, which model answers and that model's key -
+# was a switch they had to know about, and an install with none of them came out with
+# the example's documentation endpoint (192.0.2.10, TEST-NET-1) as its model and no
+# chat lane at all. Ask here, before anything is written: answering is then all a
+# reader has to do, and a refusal leaves the disk untouched. This runs BEFORE the lane
+# decision below, because the token decides which lane the service runs.
+ASK_Q=1
+[ -t 0 ] || ASK_Q=0
+[ "$YES" = 1 ] && ASK_Q=0
+[ -n "${TINYCMDR_ASK:-}" ] && ASK_Q=1
+if [ "$ASK_Q" = 1 ]; then
+    say "a few questions"
+    info "press Enter with no answer to take the value in brackets"
+    if [ -z "$TOKEN" ] && [ -z "$TG_TOKEN" ]; then
+        TOKEN="$(ask_secret "Mattermost bot token (input hidden, Enter to skip for the local page)")"
+    fi
+fi
+
+# Where the bot lives and who may command it: fleet-defaults.json (a fleet package),
+# then this install's own config.json, then the reader.
+if [ -z "$MM_URL_ARG" ]; then MM_URL_ARG="$(jget "$DEFAULTS" mattermost_url)"; fi
+if [ -z "$MM_URL_ARG" ]; then MM_URL_ARG="$(cfgval mattermost.url)"; fi
+case "$MM_URL_ARG" in chat.example.com|CHANGE-ME.example.com|"[]") MM_URL_ARG="" ;; esac
+ALLOWED_DFLT="$ALLOWED_ARG"
+[ -n "$ALLOWED_DFLT" ] || ALLOWED_DFLT="$(jget "$DEFAULTS" allowed_user)"
+[ -n "$ALLOWED_DFLT" ] || ALLOWED_DFLT="$(cfgval mattermost.allowed_users)"
+# The example ships a placeholder user id and an empty list prints as []: neither is
+# an answer, and proposing one is how a fresh install ends up with a bot that ignores
+# every DM while looking configured.
+case "$ALLOWED_DFLT" in "[]"|*REPLACE_WITH*) ALLOWED_DFLT="" ;; esac
+if [ "$ASK_Q" = 1 ]; then
+    if [ -n "$TOKEN" ]; then
+        MM_URL_ARG="$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")"
+        ALLOWED_ARG="$(ask_text "Your Mattermost user id (optional, but without it the bot ignores your DMs)" "$ALLOWED_DFLT")"
+    elif [ -z "$TG_TOKEN" ]; then
+        info "no chat token: this install serves the local page only (a token can be"
+        info "added later with --token-file, no reinstall of the app itself)"
+    fi
+fi
+# A token with no server is a bot that exits at its first start - the chat lane is
+# fatal when Mattermost cannot be reached - so refuse HERE, with the switch to pass.
+if [ -n "$TOKEN" ] && [ -z "$MM_URL_ARG" ]; then
+    die "a Mattermost bot token with no server address.
+Pass --mattermost-url chat.example.com (no scheme), or re-run at a terminal and
+answer the questions."
+fi
+
+# Which model answers. Any OpenAI-compatible /v1 root: a llama.cpp on this host, a box
+# on the LAN, or a hosted provider.
+MODEL_BASE_DFLT="$MODEL_BASE_URL"
+[ -n "$MODEL_BASE_DFLT" ] || MODEL_BASE_DFLT="$(jget "$DEFAULTS" model_base_url)"
+[ -n "$MODEL_BASE_DFLT" ] || MODEL_BASE_DFLT="$(cfgval llm.base_url)"
+# 192.0.2.10 is TEST-NET-1: the example's placeholder is not an endpoint.
+case "$MODEL_BASE_DFLT" in http://192.0.2.10:8081/v1) MODEL_BASE_DFLT="" ;; esac
+[ -n "$MODEL_BASE_DFLT" ] || MODEL_BASE_DFLT="$DEFAULT_MODEL_BASE"
+MODEL_DFLT="$MODEL"
+[ -n "$MODEL_DFLT" ] || MODEL_DFLT="$(jget "$DEFAULTS" model)"
+[ -n "$MODEL_DFLT" ] || MODEL_DFLT="$(cfgval llm.model)"
+case "$MODEL_DFLT" in my-model-name) MODEL_DFLT="" ;; esac
+[ -n "$MODEL_DFLT" ] || MODEL_DFLT="$DEFAULT_MODEL"
+if [ "$ASK_Q" = 1 ]; then
+    info "the endpoint is any OpenAI-compatible /v1 root: llama.cpp, Ollama, vLLM,"
+    info "or a hosted provider. Enter takes a llama.cpp on this machine."
+    MODEL_BASE_URL="$(ask_text "Model endpoint" "$MODEL_BASE_DFLT")"
+    MODEL="$(ask_text "Model id" "$MODEL_DFLT")"
+    # A hosted endpoint wants a key. The primary's key is not env-resolved (only
+    # fallback entries have api_key_env), so it lives in llm.api_key - the same home
+    # the Windows installer gives it. Loopback is never asked about.
+    case "$MODEL_BASE_URL" in
+        *//127.0.0.1:*|*//localhost:*|*"::1"*) ;;
+        *) MODEL_KEY="$(ask_secret "API key for it (blank if it needs none)")" ;;
+    esac
+    # The answer is THIS run's choice, so it must be written even over an existing
+    # config.json (an empty "was it given" marker means "keep what the host has").
+    MODEL_BASE_GIVEN="$MODEL_BASE_URL"
+    MODEL_GIVEN="$MODEL"
+fi
+
+if [ "$ASK_Q" = 1 ]; then
+    say "about to install"
+    info "folder       : $INSTALL_DIR"
+    if [ -n "$TOKEN" ]; then
+        info "how you talk : Mattermost at $MM_URL_ARG"
+        info "allowed user : ${ALLOWED_ARG:-NONE - the bot ignores every DM until one is set}"
+    elif [ -n "$TG_TOKEN" ]; then
+        info "how you talk : Telegram DMs ($TG_IDS_CLEAN)"
+    else
+        info "how you talk : the local page on http://127.0.0.1:$WEB_PORT only"
+    fi
+    info "model        : $MODEL at $MODEL_BASE_URL"
+    if [ -n "$MODEL_KEY" ]; then
+        info "model key    : given (config.json, llm.api_key)"
+    fi
+    if ! ask_yes "Install now?"; then
+        info "nothing was changed"
+        exit 0
+    fi
+fi
+
 # The venv python path, known before the venv exists: the hint lines below print it
 # and set -u kills an unset expansion (measured 2026-09-23: every token-less and
 # both-tokens install died here). Set once here, reused where the venv is made.
@@ -480,7 +635,7 @@ else
     info "               or pass --model <id>"
 fi
 case "$EFF_BASE" in
-    ""|http://192.0.2.10:8081/v1|http://127.0.0.1:8081/v1)
+    ""|http://192.0.2.10:8081/v1)
         info "WARNING      : llm.base_url is still a template default - point it at"
         info "               your own OpenAI-compatible endpoint (llama.cpp, vLLM,"
         info "               Ollama, any OpenAI-compatible server)" ;;
@@ -604,11 +759,11 @@ fi
 "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$WEB_PORT" "$WEB_ON" "$FORCE" \
         "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" \
-        "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$WEB_CLI_GIVEN" <<'PY'
+        "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$WEB_CLI_GIVEN" "$MODEL_KEY" <<'PY'
 import json, os, sys
 (inst, example, bot, base, model, webport, webon,
  force, mm_host, mm_port, allowed, tg_ids,
- base_given, model_given, web_given) = sys.argv[1:16]
+ base_given, model_given, web_given, model_key) = sys.argv[1:17]
 cfg_path = os.path.join(inst, "config.json")
 # The HOST's own config is the base whenever there is one, --force included: an
 # update carries the host's settings forward and changes only what this run was
@@ -635,6 +790,11 @@ if base and (base_given or fresh):
     llm["base_url"] = base
 if model and (model_given or fresh):
     llm["model"] = model
+if model_key:
+    # Only when one was given: an update with no switch keeps whatever this host
+    # already has, and a model key is per host. A hosted PRIMARY has no api_key_env
+    # of its own, so config.json is where the build looks for it.
+    llm["api_key"] = model_key
 # The third door: the TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a
 # copy in here is ignored with a warning), so only the numeric allowlist lands here.
 tg = cfg.setdefault("telegram", {})

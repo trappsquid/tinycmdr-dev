@@ -34,11 +34,35 @@ in your DM list.
 
 Unzip the package, open Terminal in that folder, and run:
 
-    bash install/install-tinycmdr-macos.sh --token <the-bot-token>
+    bash install/install-tinycmdr-macos.sh
 
-That builds `~/tinycmdr`, writes `config.json` and `.env` (mode 600), and loads the
-launchd agent. With `install/fleet-defaults.json` in the package it also picks up the
-Mattermost host and the allowed user, so the token may be the only thing you pass.
+It asks, at the terminal, for everything the bot needs and writes nothing until you
+answer `Install now?`:
+
+    Mattermost bot token (input hidden, Enter to skip for the local page)
+    Mattermost server, no https:// (e.g. chat.example.com)
+    Your Mattermost user id (optional, but without it the bot ignores your DMs)
+    Model endpoint [http://127.0.0.1:8081/v1]
+    Model id [main]
+    API key for it (blank if it needs none)     only asked when the endpoint is not
+                                                on this machine
+
+Press Enter to take the value in brackets, and skip the token to install the local
+page instead of a chat lane. Then it builds `~/tinycmdr`, writes `config.json` and
+`.env` (mode 600), and loads the launchd agent.
+
+Nothing is asked in a script or a pipe: every answer has a switch, and a run with no
+terminal takes the switches and the defaults. With `install/fleet-defaults.json` in
+the package the Mattermost host and the allowed user come from it, and `--yes` never
+prompts at all:
+
+    bash install/install-tinycmdr-macos.sh --token-file ~/bot-token --yes
+
+The `tinycmdr` command is written to `/usr/local/bin` when that folder is writable
+(a Homebrew machine), and to `~/.local/bin` otherwise. `~/.local/bin` is not on a
+stock Mac's PATH, so the installer adds one marked line to `~/.zshrc`; open a new
+terminal before typing `tinycmdr`, or run `~/tinycmdr/tinycmdr status` right away.
+`--no-path` writes neither.
 
 Options worth knowing:
 
@@ -88,17 +112,26 @@ Logs: `~/tinycmdr/tinycmdr.log`, plus `~/tinycmdr/logs/launchd.out.log` and
 and the agent is set to restart only on a **non-zero** exit, so the two do not race.
 For a process wedged inside a system call, use the restart script above.
 
-## 6. Why the model defaults to cloud
+## 6. Which model answers
 
-A laptop leaves the LAN, so the installer defaults `llm.base_url` to the cloud
-endpoint rather than an address that only resolves at home. To run against a model on
-your own network, re-run the installer with `--use-fleet-model` (it reads the endpoint
-from `install/fleet-defaults.json`), or pass `--model-base-url` and `--model` directly.
+The installer asks, because only you know: a llama.cpp on this Mac, a box on your LAN,
+or a hosted provider. Any OpenAI-compatible `/v1` root works. Enter takes
+`http://127.0.0.1:8081/v1` with model `main` (the usual local llama.cpp shape).
+
+Point it at a hosted endpoint and it asks for that endpoint's key, which is kept in
+`config.json`'s `llm.api_key` - a hosted PRIMARY has no env var of its own, so that is
+where the build looks. A key in `.env` is the tidier shape when the endpoint is a
+FALLBACK entry instead (see `llm.fallbacks[].api_key_env` in `config.example.json`).
+
+To skip the question on a machine that knows the answer: `--model-base-url` and
+`--model`, or `--use-fleet-model` to take both from `install/fleet-defaults.json`.
 
 ## 7. What this does NOT do
 
 - It does not install search API keys. Without them `web_search` returns an error; pass
   `--secrets-file` pointing at a file holding `TAVILY_API_KEY=...` / `ANYSEARCH_API_KEY=...`.
+- It asks for the model endpoint's key but not for search keys: one is required for the
+  bot to answer, the other only for the search tool.
 - It does not create the bot account or the token (step 2).
 - It does not touch anything outside `~/tinycmdr`, `~/Library/LaunchAgents` and the
   logs. `--uninstall` removes exactly those.

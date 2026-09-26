@@ -199,7 +199,7 @@ It installs into `%USERPROFILE%\tinycmdr`, builds its own Python environment ins
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
 ```
 
-That fetches the newest archive, unpacks it and runs the installer inside it. With no switch it asks which kind you want at a terminal: **system** (boots with the machine, needs root, the agent gets passwordless sudo) or **user** (starts when you log in, no root anywhere, the agent cannot use sudo). Decide without being asked by passing the installer's own switches through:
+That fetches the newest archive, unpacks it and runs the installer inside it. With no switch it asks, at a terminal, which kind you want: **system** (boots with the machine, needs root, the agent gets passwordless sudo) or **user** (starts when you log in, no root anywhere, the agent cannot use sudo). Then it asks for what the bot cannot work without - the Mattermost server, your user id, the model endpoint and that endpoint's key - and writes nothing until you answer `Install now?`. Every answer has a switch, and `--yes` (or a run with no terminal at all) asks nothing. Decide without being asked by passing the installer's own switches through:
 
 ```bash
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash -s -- --mode user
@@ -223,6 +223,19 @@ Run it at a terminal with no switch and it asks; `--mode system|user` decides wi
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
 ```
 
+With no switch it asks for what the bot cannot work without, and writes nothing until you answer `Install now?`:
+
+```text
+Mattermost bot token (input hidden, Enter to skip for the local page):
+Mattermost server, no https:// (e.g. chat.example.com):
+Your Mattermost user id (optional, but without it the bot ignores your DMs):
+Model endpoint [http://127.0.0.1:8081/v1]:
+Model id [main]:
+API key for it (blank if it needs none):     <- only when the endpoint is not on this machine
+```
+
+Every answer has a switch (`--mattermost-url`, `--allowed-user`, `--model-base-url`, `--model`), so a scripted install asks nothing: `--yes` takes the defaults, and a run with no terminal at all (a pipe, a fleet push) never prompts.
+
 Or do it by hand:
 
 ```bash
@@ -232,7 +245,9 @@ cd tinycmdr-*          # the folder inside carries the version
 bash install/install-tinycmdr-macos.sh
 ```
 
-Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder (macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it, double-click **`UNINSTALL-MACOS.command`**, or run `bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if you installed with it - the PATH wrapper lives in root-owned `/usr/local/bin`, and the uninstaller now reports that instead of stopping part-way.
+The `tinycmdr` verb lands in `/usr/local/bin` when that folder is writable (a Homebrew machine), and in `~/.local/bin` otherwise - one `export PATH` line is added to `~/.zshrc` for it, so open a new terminal before typing `tinycmdr`. Until then: `~/tinycmdr/tinycmdr status`. `--no-path` writes neither.
+
+Or skip the terminal: double-click **`INSTALL-MACOS.command`** in the extracted folder (macOS runs a `.command`; it opens a `.sh` in TextEdit). To remove it, double-click **`UNINSTALL-MACOS.command`**, or run `bash install/uninstall-tinycmdr-macos.sh`. Use `sudo` for the uninstall if the install left a root-owned launcher in `/usr/local/bin`; the uninstaller removes the `~/.local/bin` one by itself, and reports what it could not remove instead of stopping part-way.
 
 The local web/API page listens on port **8787** on every platform (loopback unless you set a token). `--web-port <p>` moves it and `--no-web` closes it.
 

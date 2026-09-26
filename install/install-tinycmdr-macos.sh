@@ -4,7 +4,12 @@
 #
 # On a Mac this is the whole job:
 #
-#   bash install-tinycmdr-macos.sh --token <mattermost-bot-token>
+#   bash install-tinycmdr-macos.sh
+#
+# With no switches it ASKS for what the bot cannot work without - the Mattermost
+# server, your user id, the model endpoint and its key - and writes nothing until
+# you say yes. Every answer has a switch; pass them (or -y) and it asks nothing.
+# The token is read at a hidden prompt, so it never has to enter your shell history.
 #
 # It builds a venv, writes config.json from config.example.json (plus
 # install/fleet-defaults.json when it is present), keeps the bot token out of
@@ -23,8 +28,9 @@
 #   --mattermost-url <h>  Mattermost host, no scheme (default: fleet-defaults.json)
 #   --install-dir <d>     default ~/tinycmdr
 #   --bot-name <n>        agent.bot_name (default: this Mac's hostname)
-#   --model-base-url <u>  llm.base_url (default: the cloud endpoint - a laptop roams)
-#   --model <m>           llm.model (default: the cloud model)
+#   --model-base-url <u>  llm.base_url (default: a llama.cpp on this machine, or
+#                         answered at the prompt; --use-fleet-model for the LAN box)
+#   --model <m>           llm.model (default: main)
 #   --use-fleet-model     take llm.base_url/model from fleet-defaults.json instead
 #                         (i.e. the LAN model endpoint)
 #   --web-port <p>        local web/API port (default 8787, loopback only)
@@ -36,6 +42,9 @@
 #   --secrets-file <f>    extra KEY=VALUE lines for .env (search keys etc)
 #   --no-launchd          install the files only; do not register the agent
 #                         (also the way to dry-run this installer off macOS)
+#   -y | --yes            ask nothing: take the switches above and the defaults
+#                         (the questions are asked only at a terminal, and a
+#                          piped or scripted run takes the defaults instead)
 #   --force               reinstall in place (boots out the agent first)
 #   --no-start            register the agent, do not start it now
 #   --verify-only         report on an existing install, change nothing
@@ -69,9 +78,11 @@ WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
 # Generated later (in the config section), but READ earlier by the no-token branch: under
 # `set -u` an unset name there is a crash.
 WEB_TOKEN=""
-NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0; INSTALL_PYTHON=0
+NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0; INSTALL_PYTHON=0; YES=0
+# Filled by the questions (or the switches) and written into config.json.
+MODEL_KEY=""; VERB_PATH=""; PATH_ADDED=""
 
-usage() { sed -n '3,45p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '3,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -93,6 +104,7 @@ while [ $# -gt 0 ]; do
         --secrets-file)    SECRETS_FILE="$2"; shift 2 ;;
         --no-launchd)      NO_LAUNCHD=1; shift ;;
         --force)           FORCE=1; shift ;;
+        -y|--yes)          YES=1; shift ;;
         --no-start)        NO_START=1; shift ;;
         --no-path)         NO_PATH=1; shift ;;
         --verify-only)     VERIFY_ONLY=1; shift ;;
@@ -116,6 +128,50 @@ file_mode() {   # permission bits: BSD stat on macOS, GNU stat elsewhere
 app_version() {   # the version in the app file, for telling OUR bot from another one
     [ -f "$1" ] || return 0
     grep -m1 '^VERSION = ' "$1" 2>/dev/null | cut -d'"' -f2
+}
+
+# ----------------------------------------------------------- asking a person ---
+# Asked ONLY when a person is there to answer: a real terminal (the one-line door
+# hands its own over - see install.sh) and not --yes. A scripted or headless run
+# takes the defaults and prints them instead, so a fleet push can never hang on a
+# question. TINYCMDR_ASK=1 forces the asks on a redirected stdin.
+trim() {   # trim() <string> -> the same string without leading/trailing spaces
+    local s="$1"
+    s="${s#"${s%%[![:space:]]*}"}"
+    printf '%s' "${s%"${s##*[![:space:]]}"}"
+}
+
+# EVERY question goes to STDERR. The caller reads the answer from stdout
+# (X="$(ask_text ...)"), so a prompt printed to stdout is captured as the answer
+# itself - measured on the first probe: mattermost.url came back as the literal
+# string "    Mattermost server, no https:// (e.g. chat.example.com): mm.probe.local".
+ask_text() {   # ask_text <prompt> [default] -> prints the answer
+    local p="$1" dflt="${2:-}" a=""
+    if [ -n "$dflt" ]; then printf '    %s [%s]: ' "$p" "$dflt" >&2
+    else printf '    %s: ' "$p" >&2; fi
+    read -r a || a=""
+    a="$(trim "$a")"
+    if [ -z "$a" ]; then printf '%s' "$dflt"; else printf '%s' "$a"; fi
+}
+
+ask_secret() {   # ask_secret <prompt> -> prints what was typed, hidden, may be empty
+    local a=""
+    printf '    %s: ' "$1" >&2
+    read -rs a || a=""
+    echo >&2
+    printf '%s' "$a"
+}
+
+ask_yes() {   # ask_yes <question> [y|n] -> 0 = yes
+    local a="" dflt="${2:-y}"
+    case "$dflt" in y|Y) printf '    %s [Y/n] ' "$1" >&2 ;; *) printf '    %s [y/N] ' "$1" >&2 ;; esac
+    read -r a || a=""
+    a="$(trim "$a")"
+    case "$a" in
+        "") case "$dflt" in y|Y) return 0 ;; *) return 1 ;; esac ;;
+        y|Y|yes|YES|Yes) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 IS_MAC=0
@@ -154,22 +210,39 @@ if [ "$UNINSTALL" = 1 ]; then
             info "kept $PLIST - it belongs to another install (not $INSTALL_DIR)"
         fi
     fi
-    # the PATH wrapper the install wrote outside its folder - only when it points
-    # at THIS install (a probe uninstall must not take the real one's wrapper)
-    if [ -f /usr/local/bin/tinycmdr ] \
-            && grep -qF "$INSTALL_DIR" /usr/local/bin/tinycmdr 2>/dev/null; then
+    # the PATH wrappers the install wrote outside its folder - /usr/local/bin when it
+    # was writable, else ~/.local/bin. Only the one that points at THIS install goes
+    # (a probe uninstall must not take the real one's wrapper).
+    for _wrap in /usr/local/bin/tinycmdr "$HOME/.local/bin/tinycmdr"; do
+        [ -f "$_wrap" ] || continue
+        grep -qF "$INSTALL_DIR" "$_wrap" 2>/dev/null || continue
         # A wrapper written by a sudo install is root-owned inside a root-owned directory,
         # so a user-mode uninstall cannot unlink it. Under `set -e` the bare `rm -f` that
         # used to sit here aborted the WHOLE script at this line - measured 2026-09-25 on a
         # fleet macOS host: the rm printed "Permission denied", the shell exited 1, and the
         # `rm -rf $INSTALL_DIR` below never ran, so the uninstall left the install folder
         # behind and told the reader nothing. Never fatal now: try, then say what is left.
-        rm -f /usr/local/bin/tinycmdr 2>/dev/null || true
-        if [ -f /usr/local/bin/tinycmdr ]; then
-            warn "/usr/local/bin/tinycmdr is owned by root and could not be removed here."
-            warn "finish that one line by hand:  sudo rm -f /usr/local/bin/tinycmdr"
+        rm -f "$_wrap" 2>/dev/null || true
+        if [ -f "$_wrap" ]; then
+            warn "$_wrap is owned by root and could not be removed here."
+            warn "finish that one line by hand:  sudo rm -f $_wrap"
+        else
+            info "removed $_wrap"
         fi
-    fi
+    done
+    # the PATH line this installer added to a shell profile, and only that line
+    for _pf in "$HOME/.zshrc" "$HOME/.bash_profile"; do
+        [ -f "$_pf" ] || continue
+        grep -q '^# tinycmdr$' "$_pf" 2>/dev/null || continue
+        _tmp="$_pf.tinycmdr-tmp"
+        if grep -v -e '^# tinycmdr$' -e '^export PATH="\$HOME/\.local/bin:\$PATH"$' "$_pf" > "$_tmp" 2>/dev/null \
+                && mv "$_tmp" "$_pf" 2>/dev/null; then
+            info "removed the ~/.local/bin PATH line from $_pf"
+        else
+            rm -f "$_tmp" 2>/dev/null || true
+            warn "could not edit $_pf - remove the '# tinycmdr' line from it by hand"
+        fi
+    done
     if [ -d "$INSTALL_DIR" ]; then
         info "removing $INSTALL_DIR"
         rm -rf "$INSTALL_DIR"
@@ -308,6 +381,28 @@ print("" if v is None else v)
 PY
 }
 
+cfgval_mac() {   # cfgval_mac <section>.<key> -> the value in THIS install's config.json
+    # The DEFAULTS the questions propose on an update are the host's own values, so
+    # an update that is answered with Enter changes nothing. The example's
+    # placeholders are never proposed, and a placeholder user id is nobody.
+    [ -f "$INSTALL_DIR/config.json" ] || return 0
+    "$PY" - "$INSTALL_DIR/config.json" "$1" <<'PY'
+import json, sys
+sec, key = sys.argv[2].split(".", 1)
+try:
+    d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+except Exception:
+    sys.exit(0)
+v = (d.get(sec) or {}).get(key)
+if isinstance(v, list):
+    v = [x for x in v if x and not str(x).startswith("REPLACE_WITH")]
+    v = ", ".join(str(x) for x in v)
+if v in (None, "", "chat.example.com", "CHANGE-ME.example.com"):
+    sys.exit(0)
+print(v)
+PY
+}
+
 # ---------------------------------------------------------------- verify only ---
 if [ "$VERIFY_ONLY" = 1 ]; then
     say "verify-only: $INSTALL_DIR"
@@ -321,6 +416,11 @@ if [ "$VERIFY_ONLY" = 1 ]; then
         warn "no venv at $INSTALL_DIR/venv"
     fi
     [ -f "$INSTALL_DIR/config.json" ] && info "config.json: present" || warn "no config.json"
+    if [ -x /usr/local/bin/tinycmdr ] || [ -x "$HOME/.local/bin/tinycmdr" ]; then
+        info "verb: tinycmdr is on PATH"
+    else
+        warn "no tinycmdr command on PATH (use $INSTALL_DIR/tinycmdr, or re-install without --no-path)"
+    fi
     if [ -f "$INSTALL_DIR/.env" ]; then
         info ".env: present ($(file_mode "$INSTALL_DIR/.env") permissions)"
         grep -q '^TINYCMDR_MM_TOKEN=..' "$INSTALL_DIR/.env" && info ".env: bot token is set" \
@@ -359,6 +459,107 @@ fi
 # ---------------------------------------------------------------- install ---
 if [ -e "$INSTALL_DIR/tinycmdr.py" ] && [ "$FORCE" != 1 ]; then
     die "$INSTALL_DIR already holds a tinycmdr. Re-run with --force to reinstall in place."
+fi
+
+# ---------------------------------------------------------------- questions ---
+# A reader who downloaded this and ran it knows two things at most: the server
+# their Mattermost lives on and a bot token. Everything else the bot cannot work
+# without - where the server is, who may command it, which model answers and that
+# model's key - used to be a switch they had to know about, and the installs that
+# came out of the one-line door were dead on arrival (measured 2026-09-26 on a
+# fleet macOS host: the page token printed, no host, no endpoint, no key, and the
+# agent exited at its first start because chat.example.com does not resolve).
+# So ask, HERE, before a single file is written: answering is then all a reader
+# has to do, and "no" leaves the disk untouched.
+ASK=1
+{ [ -t 0 ] && [ "$YES" != 1 ]; } || ASK=0
+[ -n "${TINYCMDR_ASK:-}" ] && ASK=1
+
+# The bot token: --token, --token-file and the .env this install already has all
+# win, and a run with none of them is the local-page lane (below), not an error.
+if [ -z "$TOKEN" ] && [ -n "$TOKEN_FILE" ]; then
+    [ -f "$TOKEN_FILE" ] || die "--token-file $TOKEN_FILE does not exist"
+    TOKEN="$(grep -m1 -E '[A-Za-z0-9]{20,}' "$TOKEN_FILE" | tr -d ' \r\n' || true)"
+fi
+if [ -z "$TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
+    if [ -n "$TOKEN" ]; then info "reusing the bot token already in .env"; fi
+fi
+if [ -z "$TG_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
+    TG_TOKEN="$(grep -m1 '^TINYCMDR_TG_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
+    if [ -n "$TG_TOKEN" ]; then info "reusing the Telegram token already in .env"; fi
+fi
+if [ "$ASK" = 1 ]; then say "a few questions"; fi
+if [ "$ASK" = 1 ] && [ -z "$TOKEN" ] && [ -z "$TG_TOKEN" ]; then
+    info "press Enter with no answer to take the value in brackets"
+    TOKEN="$(ask_secret "Mattermost bot token (input hidden, Enter to skip for the local page)")"
+fi
+
+# Where the bot lives and who may command it: fleet-defaults.json (a fleet
+# package), then this install's own config.json, then the reader.
+if [ -z "$MM_URL_ARG" ]; then MM_URL_ARG="$(jget "$DEFAULTS" mattermost_url)"; fi
+if [ -z "$MM_URL_ARG" ]; then MM_URL_ARG="$(cfgval_mac mattermost.url)"; fi
+ALLOWED_DFLT="$(jget "$DEFAULTS" allowed_user)"
+if [ -z "$ALLOWED_DFLT" ]; then ALLOWED_DFLT="$(cfgval_mac mattermost.allowed_users)"; fi
+if [ "$ASK" = 1 ]; then
+    if [ -n "$TOKEN" ]; then
+        MM_URL_ARG="$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")"
+        ALLOWED_ARG="$(ask_text "Your Mattermost user id (optional, but without it the bot ignores your DMs)" "$ALLOWED_DFLT")"
+    elif [ -z "$TG_TOKEN" ]; then
+        info "no chat token: this install serves the local page only (a token can be"
+        info "added later with --token-file, no reinstall of the app itself)"
+    fi
+fi
+# A token with no server is a bot that exits at its first start - the chat lane is
+# fatal when Mattermost cannot be reached - so refuse HERE, with the switch to
+# pass, instead of installing something that cannot run (the Linux installer has
+# refused this shape all along).
+if [ -n "$TOKEN" ] && [ -z "$MM_URL_ARG" ]; then
+    die "a Mattermost bot token with no server address.
+Pass --mattermost-url chat.example.com (no scheme), or re-run at a terminal and
+answer the questions."
+fi
+
+# Which model answers. Any OpenAI-compatible /v1 root: a llama.cpp on this Mac,
+# a box on the LAN, or a hosted provider.
+if [ "$USE_FLEET_MODEL" = 1 ]; then
+    [ -n "$MODEL_BASE_URL" ] || MODEL_BASE_URL="$(jget "$DEFAULTS" model_base_url)"
+    [ -n "$MODEL" ] || MODEL="$(jget "$DEFAULTS" model)"
+fi
+if [ "$ASK" = 1 ]; then
+    info "the endpoint is any OpenAI-compatible /v1 root: llama.cpp, Ollama, vLLM,"
+    info "or a hosted provider. Enter takes a llama.cpp on this machine."
+    MODEL_BASE_URL="$(ask_text "Model endpoint" "${MODEL_BASE_URL:-$DEFAULT_MODEL_BASE}")"
+    MODEL="$(ask_text "Model id" "${MODEL:-$DEFAULT_MODEL}")"
+    # A hosted endpoint wants a key. It has no env var of its own (only fallback
+    # entries have api_key_env), so it lives in llm.api_key - the same home the
+    # Windows installer gives it, and the one the build looks at for a hosted
+    # PRIMARY. Loopback and untrusted names are never asked about.
+    case "$MODEL_BASE_URL" in
+        *//127.0.0.1:*|*//localhost:*|*"::1"*) ;;
+        *) MODEL_KEY="$(ask_secret "API key for it (blank if it needs none)")" ;;
+    esac
+fi
+
+if [ "$ASK" = 1 ]; then
+    say "about to install"
+    info "folder       : $INSTALL_DIR"
+    if [ -n "$TOKEN" ]; then
+        info "how you talk : Mattermost at $MM_URL_ARG, as this Mac's own bot"
+        info "allowed user : ${ALLOWED_ARG:-NONE - the bot ignores every DM until one is set}"
+    elif [ -n "$TG_TOKEN" ]; then
+        info "how you talk : Telegram DMs"
+    else
+        info "how you talk : the local page on http://127.0.0.1:$WEB_PORT only"
+    fi
+    info "model        : $MODEL at $MODEL_BASE_URL"
+    if [ -n "$MODEL_KEY" ]; then
+        info "model key    : given (config.json, llm.api_key)"
+    fi
+    if ! ask_yes "Install now?"; then
+        info "nothing was changed"
+        exit 0
+    fi
 fi
 
 say "install tinycmdr into $INSTALL_DIR"
@@ -441,18 +642,8 @@ info "requests : $("$VPY" -c 'import importlib.metadata as m; print(m.version("r
 
 # ---------------------------------------------------------------- token ---
 say "credentials"
-if [ -z "$TOKEN" ] && [ -n "$TOKEN_FILE" ]; then
-    [ -f "$TOKEN_FILE" ] || die "--token-file $TOKEN_FILE does not exist"
-    TOKEN="$(grep -m1 -E '[A-Za-z0-9]{20,}' "$TOKEN_FILE" | tr -d ' \r\n' || true)"
-fi
-if [ -z "$TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
-    [ -n "$TOKEN" ] && info "reusing the token already in .env"
-fi
-if [ -z "$TG_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
-    TG_TOKEN="$(grep -m1 '^TINYCMDR_TG_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
-    [ -n "$TG_TOKEN" ] && info "reusing the Telegram token already in .env"
-fi
+# The token itself was resolved (or asked for) in the questions above; what is
+# left here is the validation that must not run on an unanswered prompt.
 # The lane is deny-by-default, so a token with no id is a bot that ignores every DM.
 # Refuse here, with the reason, rather than at 03:00 in a log nobody is reading.
 TG_IDS_CLEAN="$(printf '%s' "$TG_IDS" | tr ',;' '  ' | tr -s ' ' '\n' \
@@ -464,17 +655,10 @@ fi
 if [ -n "$TG_IDS" ] && [ -z "$TG_IDS_CLEAN" ]; then
     die "--telegram-ids needs numeric ids (message @userinfobot for yours): got '$TG_IDS'"
 fi
-# Ask ONLY at a terminal. `read` returns non-zero at EOF, and under `set -euo
-# pipefail` that killed the whole installer the moment stdin was not a keyboard -
-# silently, right after printing the prompt, leaving a half-copied folder that then
-# refused a retry (measured on the macOS bed 2026-09-24, installing over ssh). A
-# token-less run is a supported install: it serves the local page, which is what
-# the branch below already does.
-if [ -z "$TOKEN" ] && [ -t 0 ]; then
-    printf '    Mattermost bot token (input hidden, Enter to skip): '
-    read -rs TOKEN || true
-    echo
-fi
+# (The token is asked for in the questions above, where the answer can still change
+# what gets installed. This prompt used to live here, after the files and the venv:
+# a second `read` that blocked forever on a terminal with nothing left to type, and
+# an answer that arrived too late to keep the run from writing a dead config.)
 # A chat account is OPTIONAL: the harness also runs as a session (--cli) and as a local page
 # (--web, 127.0.0.1:8787). No token means no chat lane, so the agent runs the PAGE instead -
 # running the chat lane would exit at once (tinycmdr.py refuses to start without a token, on
@@ -544,7 +728,7 @@ TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BO
 TG_IDS_CLEAN="$TG_IDS_CLEAN" \
 MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" WEB_ON="$WEB_ON" WEB_PORT="$WEB_PORT" \
 MODEL_BASE_GIVEN="$MODEL_BASE_GIVEN" MODEL_GIVEN="$MODEL_GIVEN" \
-WEB_CLI_GIVEN="$WEB_CLI_GIVEN" \
+WEB_CLI_GIVEN="$WEB_CLI_GIVEN" MODEL_KEY="$MODEL_KEY" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -560,6 +744,12 @@ if os.environ.get("MM_URL_ARG"):
 au = os.environ.get("ALLOWED_ARG", "").strip()
 if au:
     mm["allowed_users"] = [u.strip() for u in au.split(",") if u.strip()]
+elif fresh:
+    # The example carries REPLACE_WITH_YOUR_MATTERMOST_USER_ID. Leaving it in place
+    # made a fresh install look configured while the bot ignored every DM, and the
+    # warning printed beside it claimed the list was empty (measured 2026-09-26, a
+# fleet macOS host, from the reader's own terminal log).
+    mm["allowed_users"] = []
 # The third door: the TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a
 # copy in here is ignored with a warning), so only the numeric allowlist lands here.
 tg = cfg.setdefault("telegram", {})
@@ -576,6 +766,12 @@ if os.environ.get("MODEL_BASE_GIVEN") or fresh:
     llm["base_url"] = os.environ["MODEL_BASE_URL"]
 if os.environ.get("MODEL_GIVEN") or fresh:
     llm["model"] = os.environ["MODEL"]
+_key = os.environ.get("MODEL_KEY", "")
+if _key:
+    # Only when one was given: an update with no switch keeps whatever this host
+    # already has (a model key is per host, and it is the only way to reach a
+    # hosted endpoint whose key config.json has to carry).
+    llm["api_key"] = _key
 web = cfg.setdefault("web", {})
 if os.environ.get("WEB_CLI_GIVEN") == "1" or fresh:
     web["enabled"] = os.environ["WEB_ON"] == "1"
@@ -640,6 +836,11 @@ fi
 
 if [ "$WEB_ON" != 1 ]; then
     info "web UI disabled (--no-web)"
+elif [ -z "$TOKEN" ]; then
+    # Nothing on a page-only or Telegram-only install reads mattermost.url, so a
+    # missing host is not a problem to report (the Linux installer states the
+    # same rule).
+    info "no Mattermost account: the local page is this install's only door"
 elif [ -z "$MM_URL_ARG" ]; then
     # Read the file that was just written: on an UPDATE the host already has its own
     # mattermost.url, and warning about a missing one there is a false alarm on the
@@ -655,7 +856,20 @@ PY
             warn "$INSTALL_DIR/config.json (or re-run with --mattermost-url)" ;;
     esac
 fi
-if [ -z "$ALLOWED_ARG" ]; then
+# Read the allowlist back OUT OF THE FILE: on an update this run's switches are
+# empty while the host's list is fine, and a warning about a value the install
+# just kept is the line a reader is most likely to act on.
+EFF_ALLOWED="$("$VPY" - "$INSTALL_DIR/config.json" <<'PY' 2>/dev/null || true
+import json, sys
+au = (json.load(open(sys.argv[1], encoding="utf-8-sig")).get("mattermost") or {}).get("allowed_users") or []
+print(", ".join(str(u) for u in au))
+PY
+)"
+if [ -n "$EFF_ALLOWED" ]; then
+    info "allowed user : $EFF_ALLOWED"
+elif [ -n "$TOKEN" ]; then
+    # Only a CHAT lane has anybody to ignore: on the page lane this warning named a
+    # list no process reads.
     warn "mattermost.allowed_users is empty, and this bot is deny-by-default: it will ignore"
     warn "every DM until you add your Mattermost user id (--allowed-user <id>)."
 fi
@@ -671,10 +885,48 @@ fi
 say "launchd agent"
 # The verb surface on PATH (audit F12): a two-line wrapper with the install dir
 # written into it, so nothing has to resolve and uninstalling is one file.
-if [ "${NO_PATH:-0}" != "1" ] && [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-    printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > /usr/local/bin/tinycmdr
-    chmod 0755 /usr/local/bin/tinycmdr
-    info "verbs      : tinycmdr status | doctor | model | logs | restart | token"
+# /usr/local/bin belongs to the reader only where something (Homebrew, a previous
+# sudo install) made it writable. On a stock Mac it exists and is root-owned, so the
+# old check silently did nothing and the install ended with NO `tinycmdr` command at
+# all - the reader is told to run `tinycmdr status` and their shell has never heard
+# of it (measured 2026-09-26 on a fleet macOS host). Fall back to ~/.local/bin, and
+# a new terminal can see the folder.
+VERB_PATH=""
+if [ "${NO_PATH:-0}" != "1" ]; then
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        VERB_PATH=/usr/local/bin
+    elif mkdir -p "$HOME/.local/bin" 2>/dev/null; then
+        VERB_PATH="$HOME/.local/bin"
+    fi
+fi
+path_line() {   # path_line <profile-file> <create?> - one marked line, added once
+    local pf="$1" create="$2"
+    if [ ! -f "$pf" ] && [ "$create" != 1 ]; then return 0; fi
+    if grep -q 'tinycmdr' "$pf" 2>/dev/null && grep -q '\.local/bin' "$pf" 2>/dev/null; then
+        return 0
+    fi
+    if printf '\n# tinycmdr\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$pf" 2>/dev/null; then
+        info "PATH       : added ~/.local/bin to $pf (open a NEW terminal for it)"
+        PATH_ADDED=1
+    else
+        warn "could not write $pf - add this line to it by hand:"
+        warn '    export PATH="$HOME/.local/bin:$PATH"'
+    fi
+}
+if [ -n "$VERB_PATH" ]; then
+    printf '#!/bin/sh\nexec "%s/tinycmdr" "$@"\n' "$INSTALL_DIR" > "$VERB_PATH/tinycmdr"
+    chmod 0755 "$VERB_PATH/tinycmdr"
+    info "verbs      : $VERB_PATH/tinycmdr"
+    info "             tinycmdr status | doctor | model | config | logs | restart | token"
+    if [ "$VERB_PATH" = "$HOME/.local/bin" ]; then
+        case ":$PATH:" in
+            *":$HOME/.local/bin:"*) ;;
+            *) if [ "$IS_MAC" = 1 ]; then
+                   path_line "$HOME/.zshrc" 1                 # macOS default shell
+                   [ -f "$HOME/.bash_profile" ] && path_line "$HOME/.bash_profile" 0
+               fi ;;
+        esac
+    fi
 else
     info "verbs      : not on PATH - run $INSTALL_DIR/tinycmdr (or re-run without --no-path)"
 fi
@@ -747,4 +999,12 @@ info "logs        : $INSTALL_DIR/tinycmdr.log, $LOGDIR/launchd.err.log"
 info "restart     : bash $INSTALL_DIR/maintenance/restart-tinycmdr-macos.sh"
 info "uninstall   : double-click $INSTALL_DIR/UNINSTALL-MACOS.command"
     info "              (or: bash $INSTALL_DIR/install/install-tinycmdr-macos.sh --uninstall)"
+if [ -n "$VERB_PATH" ]; then
+    info "verb        : $VERB_PATH/tinycmdr"
+else
+    info "verb        : not on PATH - run $INSTALL_DIR/tinycmdr"
+fi
+if [ -n "$PATH_ADDED" ]; then
+    info "              (a new terminal is needed before plain \`tinycmdr\` resolves)"
+fi
 info "the bot answers DMs from the users in mattermost.allowed_users only"

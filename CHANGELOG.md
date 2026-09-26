@@ -5,6 +5,43 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.21] - 2026-09-26
+
+The installers ask for what a bot cannot run without, and the launcher stops shipping with
+Windows line endings.
+
+Fixed
+- The macOS installer asked for the Mattermost token and nothing else, so an install from the
+  one-line door came out dead: `mattermost.url` left at `chat.example.com`, an allowlist holding the
+  example's `REPLACE_WITH_YOUR_MATTERMOST_USER_ID`, `llm.base_url` on loopback and no model key.
+  It now asks - before it writes anything - for the Mattermost server, your user id, the model
+  endpoint, the model id and, when the endpoint is not on this machine, that endpoint's API key,
+  shows a summary, and installs only on `Install now?`. A token with no server address is a refusal
+  naming the switch to pass, not an install that exits at its first start.
+- The Linux installer asked nothing and installed with the example's documentation endpoint
+  (`192.0.2.10`, TEST-NET-1) as its model, so the agent it left behind could not answer a single
+  turn. It asks the same five questions before the lane is chosen, refuses a Mattermost token with
+  no server, never proposes a placeholder as a default, and the "template default" warning no longer
+  fires on `127.0.0.1:8081` - a llama.cpp on the box is a choice, not a leftover.
+- The verb was never put on PATH on a Mac: the wrapper was written only when `/usr/local/bin` was
+  writable, which on a stock Mac it is not. It now falls back to `~/.local/bin`, adds one marked
+  `export PATH` line to `~/.zshrc` when that folder is not already on the path, and the summary and
+  the uninstaller both name the real location. The uninstaller removes that wrapper and that line.
+- The extensionless `tinycmdr` launcher shipped with CRLF endings in every shape. It is the file
+  the PATH wrapper execs, so the verb died on a Mac or Linux with
+  `set: -: invalid option` as soon as it resolved. `build-package.py` normalised `.sh` and
+  `.command` only; it now normalises any shipped script with a shebang, whatever its name, and
+  `.gitattributes` pins the launcher to LF so a Windows checkout cannot put it back.
+- A fresh install kept the example's `REPLACE_WITH_YOUR_MATTERMOST_USER_ID` in
+  `mattermost.allowed_users` while warning that the list was empty. The placeholder is gone, the
+  warning reads the installed file, and neither fires on an install with no chat lane.
+
+Changed
+- `-y`/`--yes` and `TINYCMDR_ASK` for both Unix installers: a scripted run asks nothing, and a run
+  with no terminal takes the switches and the defaults.
+- README and `install/README-macos.md`: the questions, where the verb lands, and a model section
+  that no longer claims a cloud default the installer never had.
+
 ## [1.0.20] - 2026-09-26
 
 Removing it is now as visible as installing it.

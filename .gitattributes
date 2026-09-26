@@ -13,3 +13,8 @@
 # renormalise would strip. Same for tinycmdr.cmd (CRLF is what cmd.exe wants).
 *.sh      text eol=lf
 *.command text eol=lf
+# The extensionless launcher, the same rule for the same reason: it is a /bin/sh
+# script and the one file the PATH wrapper execs. core.autocrlf=true on the
+# Windows box gave it CRLF despite the LF blob, so every package built from that
+# worktree shipped a launcher no Mac or Linux would run (measured 2026-09-26).
+/tinycmdr text eol=lf

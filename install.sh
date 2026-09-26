@@ -46,10 +46,11 @@ src="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -name 'tinycmdr-*' | head -1)
 say "handing over to $installer"
 cd "$src"
 # Piping into bash leaves stdin as the script itself, so the installer would see no
-# terminal and skip its questions (which kind of install, the bot token). Borrow the
-# terminal back when there is one - note that /dev/tty can exist and still refuse to
-# open (a command run over ssh has no controlling terminal), so OPEN it rather than
-# testing whether the node is readable.
+# terminal and skip its questions - the install mode on Linux, and on macOS the
+# Mattermost server, the bot token, your user id, the model endpoint and its key.
+# Borrow the terminal back when there is one - note that /dev/tty can exist and still
+# refuse to open (a command run over ssh has no controlling terminal), so OPEN it
+# rather than testing whether the node is readable.
 set +e   # the installer's own exit code is mine to report, not to die on
 if [ ! -t 0 ] && exec 3</dev/tty 2>/dev/null; then
     bash "$installer" "$@" <&3

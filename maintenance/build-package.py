@@ -354,11 +354,20 @@ def lf_only(path):
     """A .sh with CRLF endings is not runnable: bash reads the shebang as
     "#!/usr/bin/env bash\r" and dies with "syntax error near '$\'in\r\''".
     The Windows working tree can carry CRLF even though the shipped kit must be
-    LF, so normalise here instead of trusting the checkout."""
-    if path.suffix not in (".sh", ".command"):
+    LF, so normalise here instead of trusting the checkout.
+
+    A SHELL SCRIPT IS NOT ALWAYS NAMED *.sh. The extensionless `tinycmdr` launcher
+    is the file the PATH wrapper execs, and it shipped CRLF in every shape
+    (measured 2026-09-26: a Mac read "tinycmdr: line 11: set: -^M: invalid option"
+    the moment the verb resolved). Judge by the shebang, and leave the files that
+    WANT their endings alone: tinycmdr.py is CRLF on purpose and carries bare CRs,
+    and cmd.exe wants CRLF."""
+    if path.suffix in (".py", ".cmd", ".bat", ".ps1"):
         return False
     raw = path.read_bytes()
     if b"\r\n" not in raw:
+        return False
+    if path.suffix not in (".sh", ".command") and not raw.startswith(b"#!"):
         return False
     path.write_bytes(raw.replace(b"\r\n", b"\n"))
     return True
