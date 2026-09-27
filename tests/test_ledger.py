@@ -1403,7 +1403,10 @@ def test_the_loop_guard_nudge_waits_for_the_whole_tool_batch():
     check("and it is flushed after the per-call loop",
           "for _nudge in nudges:" in src)
     check("_payload repairs pairing at the one choke point",
-          "messages = _repair_tool_pairing(messages)" in src)
+          "messages = _repair_tool_arguments(_repair_tool_pairing(messages))" in src
+          or "messages = _repair_tool_pairing(messages)" in src)
+    check("...and repairs malformed tool-call arguments on the way out",
+          "_repair_tool_arguments(_repair_tool_pairing(" in src)
     check("a tool call that produced no result is answered, never skipped",
           "this call did not\n" in src or "this call did not " in src)
 

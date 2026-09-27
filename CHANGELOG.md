@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Fixed
+- A tool call whose `arguments` were not valid JSON was replayed to the endpoint as-is, and
+  llama.cpp answers HTTP 500 for the WHOLE request ("Failed to parse tool call arguments as
+  JSON ... parse error at line 1, column 34"), so every later turn in that session died as "no
+  LLM endpoint answered" - measured on the live install, then reproduced against the live
+  endpoint (malformed: 500; the same call with valid JSON: 200; repaired to `{}`: 200). The
+  malformed blob is replaced with `{}` at the same choke point as the tool-pairing repair, named
+  in the log with the tool and the offending text, so a history written by an older build heals
+  on its next send instead of needing the session dropped.
 - The README contradicted itself about the fixed prompt overhead: the banner and the caching
   bullet said ~4,150 tokens, the comparison table said ~5,300 measured. Both read ~5.3K now, which
   is what the shipped static half actually costs (system prompt + the schemas a request sends), and

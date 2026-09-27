@@ -10151,6 +10151,48 @@ def _repair_tool_pairing(messages):
                     "repair", len(before), len(after))
     return out
 
+def _repair_tool_arguments(messages):
+    """Make every REPLAYED tool_call's `arguments` valid JSON, and say when it was not.
+
+    A server parses each tool_call's arguments as JSON, and llama.cpp answers HTTP 500 for
+    the WHOLE request when one does not parse - measured against a live endpoint
+    2026-09-26: the malformed blob 500'd at "parse error at line 1, column 34" and the
+    same call with valid JSON returned 200. A local model emits that sloppiness often
+    (`{"name":"web,"topic":"x"}` is one quote away from valid), and the turn it happens in
+    is fine: the NEXT one dies, because the blob is replayed as the assistant's own call.
+
+    Runs at the same choke point as the pairing repair, so a history written by an older
+    build heals on its first send instead of needing the session dropped.
+    """
+    bad = 0
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") != "assistant":
+            continue
+        for tc in (m.get("tool_calls") or []):
+            fn = tc.get("function") if isinstance(tc, dict) else None
+            if not isinstance(fn, dict):
+                continue
+            args = fn.get("arguments")
+            if isinstance(args, dict):          # a server that hands back an object
+                fn["arguments"] = json.dumps(args)
+                continue
+            if not isinstance(args, str) or not args.strip():
+                fn["arguments"] = "{}"
+                bad += 1
+                continue
+            try:
+                json.loads(args)
+            except Exception:
+                log.warning("tool call %s had arguments that are not JSON (%s) - "
+                            "replaying them as {} so the endpoint can parse the "
+                            "request",
+                            fn.get("name") or "?", scrub(args[:60]))
+                fn["arguments"] = "{}"
+                bad += 1
+    if bad:
+        log.warning("repaired %d tool-call argument(s) that were not valid JSON", bad)
+    return messages
+
 
 class Agent:
     def __init__(self):
@@ -10284,7 +10326,7 @@ class Agent:
         `state` is False for the forced wrap-up, which already ends with an
         explicit instruction.
         """
-        messages = _repair_tool_pairing(messages)
+        messages = _repair_tool_arguments(_repair_tool_pairing(messages))
         if not state:
             return messages
         v = volatile_context(session_key=session_key, atlas=atlas, shell=shell,
