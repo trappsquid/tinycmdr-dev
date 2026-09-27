@@ -37,6 +37,9 @@
 #                         TINYCMDR_MM_TOKEN from it chooses the chat lane), read BEFORE
 #                         the lane decision - the same door the package's own
 #                         install/fleet-secrets.env uses
+#   --search-egress <b>   true|false: may web search send queries OFF this machine?
+#                         default false - both built-in providers are third parties,
+#                         and a provider on this LAN (a searxng entry) never needs it
 #   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
 #                         only; with no Mattermost token the bot runs THIS lane
 #   --telegram-ids <i>    numeric Telegram id(s), comma or space separated
@@ -110,6 +113,8 @@ FALLBACK_SPECS=""         # extra endpoints, one "url|model|alias|env-name" per 
 FB_ENV_LINES=""           # their keys, as KEY=VALUE lines for .env
 PAGE_HOST=""              # web.host the reader chose ("" = leave the host's own)
 WEB_HOST_ARG=""           # --web-host: set it without being asked
+SEARCH_EGRESS=""          # --search-egress true|false ("" = leave the host's own); an
+                          # off-LAN search provider is refused, not called, while false
 LAN_IP=""                 # this host's first LAN address, for the reachability check
 # What the questions propose when the package says nothing: the usual local
 # llama.cpp shape. Any OpenAI-compatible /v1 root works.
@@ -147,6 +152,7 @@ while [ $# -gt 0 ]; do
         --no-root)          INSTALL_MODE=user; shift ;;
         -y|--yes)           ASK_MODE=0; YES=1; shift ;;
         --web-host)         WEB_HOST_ARG="$2"; shift 2 ;;
+        --search-egress)    SEARCH_EGRESS="$2"; shift 2 ;;
         --bot-name)         BOT_NAME="$2"; shift 2 ;;
         --allowed-user)     ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)   MM_URL_ARG="$2"; shift 2 ;;
@@ -768,6 +774,19 @@ if [ "$ASK_Q" = 1 ]; then
         PAGE_HOST="127.0.0.1"
     fi
 fi
+
+# ---- web search: may it leave this machine? ----
+# Off unless asked. Both built-in providers are third parties, and the keyless anonymous
+# tier used to send the model's query with nobody asked and nothing on screen saying so
+# (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
+# "no" here still leaves a working search if one is configured.
+if [ "$ASK_Q" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
+    if ask_yes "May the bot's web search send queries off this machine?" n; then
+        SEARCH_EGRESS="true"
+    else
+        SEARCH_EGRESS="false"
+    fi
+fi
 # The switch wins over the question, and an empty value is "leave this host's own".
 if [ -n "$WEB_HOST_ARG" ]; then
     PAGE_HOST="$WEB_HOST_ARG"
@@ -798,6 +817,11 @@ if [ "$ASK_Q" = 1 ]; then
     fi
     if [ "$WEB_ON" = 1 ]; then
         info "local page   : port $WEB_PORT, ${PAGE_HOST:-all interfaces}"
+    fi
+    if [ "${SEARCH_EGRESS:-false}" = "true" ]; then
+        info "web search   : on, and may leave this machine"
+    else
+        info "web search   : LAN only (an off-LAN provider is refused until allowed)"
     fi
     if ! ask_yes "Install now?"; then
         info "nothing was changed"
@@ -1146,11 +1170,12 @@ chmod 600 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
 "$PY" - "$INSTALL_DIR/.env" "$TOKEN" "${SECRETS_FILE:-$SRC/install/fleet-secrets.env}" "$WEB_TOKEN" "$TG_TOKEN" \
-        "$FB_ENV_LINES" <<'PY'
+        "$FB_ENV_LINES" "${SEARCH_EGRESS:-}" <<'PY'
 import os, pathlib, re, sys
 envp, tok, secrets, webtok, tgtok = (pathlib.Path(sys.argv[1]), sys.argv[2],
                                      sys.argv[3], sys.argv[4], sys.argv[5])
 fb_env = sys.argv[6] if len(sys.argv) > 6 else ""
+egress = sys.argv[7] if len(sys.argv) > 7 else ""
 # The extra-endpoint keys are managed only when THIS run wrote them: a scripted update
 # must carry the host's own lines over, or it drops keys its config.json points at.
 _managed = ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN")
@@ -1214,6 +1239,7 @@ out = ["# tinycmdr secrets - per-host tokens + fleet-wide search keys.",
       + ([f"TINYCMDR_TG_TOKEN={tgtok}"] if tgtok else []) \
       + ([f"TINYCMDR_WEB_TOKEN={webtok}"] if webtok else []) \
       + [l for l in (fb_env or "").splitlines() if "=" in l] \
+      + ([f"TINYCMDR_SEARCH_EGRESS={egress}"] if egress else []) \
       + lines + [""]
 envp.write_text("\n".join(out), encoding="utf-8")
 os.chmod(envp, 0o600)
@@ -1486,6 +1512,13 @@ elif [ -n "$TG_TOKEN" ]; then
     info "                  allowlist: $TG_IDS_CLEAN"
 else
     info "chat            : none (no token given) - the page is the door"
+fi
+if [ "${SEARCH_EGRESS:-false}" = "true" ]; then
+    info "web search      : off-LAN allowed (search.allow_cloud_egress=true)"
+else
+    info "web search      : LAN only - an off-LAN provider is refused until"
+    info "                  search.allow_cloud_egress=true. A provider on this LAN never"
+    info "                  needs it: tinycmdr config set search.providers '<json>'"
 fi
 
 # spelling it out here: nesting $( ) inside a quoted echo confused bash badly enough

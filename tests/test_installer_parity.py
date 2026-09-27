@@ -62,6 +62,9 @@ PORTABLE = {
     "no start": ("--no-start", "--no-start", "NoStart"),
     "no PATH edit": ("--no-path", "--no-path", "NoPath"),
     "secrets file": ("--secrets-file", "--secrets-file", "SecretsFile"),
+    # The consent flag for web search leaving the machine. It exists because a keyless
+    # install used to reach a third-party search API with nobody asked (audit, 2026-09-27).
+    "search egress": ("--search-egress", "--search-egress", "SearchEgress"),
     "force": ("--force", "--force", "Force"),
     "verify only": ("--verify-only", "--verify-only", "VerifyOnly"),
     "uninstall": ("--uninstall", "--uninstall", "Uninstall"),

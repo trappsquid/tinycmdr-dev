@@ -188,8 +188,17 @@ Local Network.
 
 ## 7. What this does NOT do
 
-- It does not install search API keys. Without them `web_search` returns an error; pass
-  `--secrets-file` pointing at a file holding `TAVILY_API_KEY=...` / `ANYSEARCH_API_KEY=...`.
+- Web search is OFF unless you allow it to leave this machine. The installer asks (and
+  `--search-egress true` answers without a prompt); the answer lands in `.env` as
+  `TINYCMDR_SEARCH_EGRESS`. While it is off, an off-LAN provider is refused with a `BLOCKED`
+  line naming the setting rather than being called - a provider on your own LAN never needs it.
+- It does not install search API keys. Put `TAVILY_API_KEY=...` / `ANYSEARCH_API_KEY=...` in a
+  file passed as `--secrets-file`, or add them to `~/.tinycmdr/.env` later. With no key at all
+  anysearch still answers on its anonymous tier - off this machine, rate-limited, which is why
+  the flag above exists.
+- Provider order and endpoints are `search.providers` in `config.json`; a `searxng` entry keeps
+  search on your network. Add or change one later with
+  `tinycmdr config set search.providers '<json array>'`.
 - It asks for the model endpoint's key but not for search keys: one is required for the
   bot to answer, the other only for the search tool.
 - It does not create the bot account or the token (step 2).

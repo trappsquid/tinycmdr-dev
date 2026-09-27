@@ -5,6 +5,45 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Added
+- **Web search providers are configured, and leaving the machine is opt-in.** `web_search`
+  used to iterate a hardcoded pair and read one fixed key each, so the only two providers that
+  could ever run were the two compiled in. `search.providers` is now an ordered list of
+  `{kind, url, api_key_env, label}`, tried until one answers: `anysearch` and `tavily` as
+  before, plus `searxng` - a SearxNG, or anything serving `/search?q=&format=json`, on your
+  own LAN, which is the one shape whose traffic never leaves the wire. A key is read from
+  `.env` under the name the entry gives (`api_key_env`), so a host inserts a paid key or its
+  own provider with no code change. `tests/test_search_providers.py` grades the chain
+  resolution, the order, the fallbacks and the gate, hermetically, against a stub provider.
+- **`search.allow_cloud_egress` is the consent, and it defaults to false.** Both built-in
+  providers are third parties, and the anonymous tier means a keyless install used to send the
+  model's query off the machine with nobody asked and nothing on screen saying so. While the
+  flag is false an off-LAN provider is REFUSED, not called, with a `BLOCKED:` line naming the
+  setting (and naming any unusable `search.providers` entry, so a typo reads as a typo).
+  `fetch_url` answers to the same flag. This is the rule `llm.allow_cloud_fallback` has always
+  applied to model endpoints, one lane over - a privacy gate, not a preference.
+- The installers ask for it - "May the bot's web search send queries off this machine?",
+  default **No** - and take `--search-egress true|false` (`-SearchEgress` on Windows) for a
+  fleet push. `.env` carries the answer as `TINYCMDR_SEARCH_EGRESS`, and a whole chain as
+  `TINYCMDR_SEARCH_PROVIDERS` (JSON). Later: `tinycmdr config set search.providers '<json>'`,
+  with the key through `tinycmdr token set <NAME>`.
+
+Fixed
+- **Two surfaces claimed keyless web search was dead, and it was not.**
+  `install/README-macos.md` said "Without them `web_search` returns an error", and the Windows
+  installer printed "search keys not set: web search will be unavailable on this host". With
+  no key the anysearch anonymous tier answers - measured 2026-09-27 from a clean box:
+  `python Path.write_text newline argument` returned the StackOverflow question and
+  `bugs.python.org/issue23706`, and `llama.cpp /props endpoint context window` returned the
+  server README. The docs now describe the flag that actually governs it instead of claiming a
+  working feature is broken.
+- A search key left in `config.json` is now ignored with a warning naming its `.env` variable,
+  and dropped from the loaded config - the provider reads `api_key_env`, and a secret in
+  `config.json` is a copy the agent can read into a prompt and quote (the rule the Telegram
+  token already follows). `search.anysearch_api_key` / `search.tavily_api_key` are gone.
+
 ## [1.0.34] - 2026-09-27
 
 The web lane gets the instruments its case drive left behind, the ledger stops speaking for an

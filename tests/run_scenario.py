@@ -118,7 +118,12 @@ def stage_install(workdir, budget):
                                           cfg["llm"].get("api_key") or "none")
     cfg["llm"]["max_context_tokens"] = int(budget)
     cfg["web"] = {"enabled": False}
-    cfg["search"] = {"anysearch_api_key": "", "tavily_api_key": "", "max_results": 5}
+    cfg["search"] = {
+        "providers": [{"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",
+                       "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"}],
+        "allow_cloud_egress": False,
+        "max_results": 5,
+    }
     (workdir / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return cfg
 

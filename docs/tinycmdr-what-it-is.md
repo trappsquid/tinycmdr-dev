@@ -18,7 +18,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                21,726 lines / 1.01 MB in ONE file, no package, no framework
+code                21,917 lines / 1.02 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -33,7 +33,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       17 CLI verbs, 9 page commands, 11 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               59 suites / 22,893 lines / 2,789 checks that need no model, plus a graded
+tests               60 suites / 23,190 lines / 2,825 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 6 blocks: llm 18, telegram 2, mattermost 6, search 3, web 6, agent 89
@@ -52,8 +52,8 @@ read_file       read text, including UTF-16 and null-padded files
 write_file      create/overwrite a file
 edit_file       exact-string replacement, automatic .bak
 search_files    ripgrep-backed content and filename search
-fetch_url       fetch and strip a page to text
-web_search      pluggable search backends (AnySearch, Tavily) with fallback
+fetch_url       fetch and strip a page to text (off-LAN gated like search)
+web_search      configured provider chain (anysearch, tavily, searxng), off-LAN gated
 create_tool     the agent writes a new tool; hot-loaded, live on the next call
 list_tools      list what exists, core and custom
 schedule        cron entries (croniter) for recurring jobs
@@ -146,6 +146,11 @@ infrastructure      endpoint unreachable/rejecting files a red Done line instead
                     failure is not silently converted into prose
 failover            primary plus ordered fallbacks; a local failure does not fall through to the
                     internet unless allow_cloud_fallback says so (a privacy gate, not a preference)
+search              a configured provider chain (search.providers: anysearch, tavily, searxng);
+                    while search.allow_cloud_egress is false every off-LAN provider is REFUSED -
+                    the same gate as failover, one lane over - so a search never leaves this
+                    network unless the operator said it may. A searxng entry on the LAN is the
+                    shape that never needs the flag, and fetch_url answers to it too
 streaming           streamed model calls, with an idle bound so a trickling endpoint is bounded;
                     against a llama.cpp endpoint (confirmed by its own /props reply) it also asks
                     for prompt-progress events, so a long prefill reads "reading prompt · 42%"
@@ -425,7 +430,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 ```
 fixed prompt overhead     ~3.6K real tokens as sent, measured with the endpoint's own
                           tokenizer - section 4.1 has both legs and the command
-readability               21,726 lines, one file, no dependency tree to audit
+readability               21,917 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

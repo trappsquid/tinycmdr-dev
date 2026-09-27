@@ -432,6 +432,10 @@ def test_fetch_url_takes_one_or_five():
         print("  (skipped: this build cuts the web tools by design)")
         return
     real = fb.requests
+    # `http://a/1` cannot resolve, so the egress gate refuses it while the default
+    # (search.allow_cloud_egress=false) holds. This check is about url parsing and the
+    # section headers; the gate is graded in tests/test_search_providers.py.
+    fb.CONFIG["search"]["allow_cloud_egress"] = True
     try:
         fb.requests = _FakeRequests()
         out = fb.tool_fetch_url({"url": "http://a/1"}, None)

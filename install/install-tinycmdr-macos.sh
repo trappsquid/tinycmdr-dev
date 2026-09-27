@@ -23,6 +23,9 @@
 #
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first non-empty line)
+#   --search-egress <b>   true|false: may web search send queries OFF this machine?
+#                         default false - both built-in providers are third parties,
+#                         and a provider on this LAN (a searxng entry) never needs it
 #   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
 #                         only; with no Mattermost token the agent runs THIS lane
 #   --telegram-ids <i>    numeric Telegram id(s), comma or space separated
@@ -132,6 +135,8 @@ NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0; INSTALL_PYTHON=0; YES=0
 # Filled by the questions (or the switches) and written into config.json.
 MODEL_KEY=""; VERB_PATH=""; PATH_ADDED=""
 WEB_HOST_ARG=""        # --web-host: the page's bind address, without being asked
+SEARCH_EGRESS=""       # --search-egress true|false ("" = leave the host's own); an
+                       # off-LAN search provider is refused, not called, while false
 # Extra endpoints (llm.fallbacks) and where the page may be reached from.
 FALLBACK_SPECS=""; FB_ENV_LINES=""; PAGE_HOST=""; LAN_IP=""
 
@@ -161,6 +166,7 @@ while [ $# -gt 0 ]; do
         --force)           FORCE=1; shift ;;
         -y|--yes)          YES=1; shift ;;
         --web-host)        WEB_HOST_ARG="$2"; shift 2 ;;
+        --search-egress)   SEARCH_EGRESS="$2"; shift 2 ;;
         --no-start)        NO_START=1; shift ;;
         --no-path)         NO_PATH=1; shift ;;
         --verify-only)     VERIFY_ONLY=1; shift ;;
@@ -754,6 +760,19 @@ if [ "$ASK" = 1 ]; then
         PAGE_HOST="127.0.0.1"
     fi
 fi
+
+# ---- web search: may it leave this machine? ----
+# Off unless asked. Both built-in providers are third parties, and the keyless anonymous
+# tier used to send the model's query with nobody asked and nothing on screen saying so
+# (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
+# "no" here still leaves a working search if one is configured.
+if [ "$ASK" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
+    if ask_yes "May the bot's web search send queries off this machine?" n; then
+        SEARCH_EGRESS="true"
+    else
+        SEARCH_EGRESS="false"
+    fi
+fi
 # The switch wins over the question, and an empty value is "leave this host's own".
 if [ -n "$WEB_HOST_ARG" ]; then
     PAGE_HOST="$WEB_HOST_ARG"
@@ -784,6 +803,11 @@ if [ "$ASK" = 1 ]; then
     fi
     if [ "$WEB_ON" = 1 ]; then
         info "local page   : port $WEB_PORT, ${PAGE_HOST:-all interfaces}"
+    fi
+    if [ "${SEARCH_EGRESS:-false}" = "true" ]; then
+        info "web search   : on, and may leave this machine"
+    else
+        info "web search   : LAN only (an off-LAN provider is refused until allowed)"
     fi
     if ! ask_yes "Install now?"; then
         info "nothing was changed"
@@ -1180,6 +1204,13 @@ SKIPPED_KEYS="$SECRET_SKIPPED"
     if [ -n "$FB_ENV_LINES" ]; then
         printf '%s' "$FB_ENV_LINES"
     fi
+    # Only when this run set it (the switch, or the answer): an empty value is "leave
+    # this host's own", and KEEP_ENV below already carries that line over. It goes
+    # BEFORE the carried lines, because the loader keeps the FIRST occurrence - a stale
+    # line underneath must never win over the value this run just resolved.
+    if [ -n "$SEARCH_EGRESS" ]; then
+        printf 'TINYCMDR_SEARCH_EGRESS=%s\n' "$SEARCH_EGRESS"
+    fi
     if [ -n "$KEEP_ENV" ]; then
         printf '%s\n' "$KEEP_ENV"
     fi
@@ -1477,3 +1508,10 @@ if [ "$WEB_ON" = 1 ]; then
     info "              TINYCMDR_WEB_TOKEN - the page asks for it once)"
 fi
 info "the bot answers DMs from the users in mattermost.allowed_users only"
+if [ "${SEARCH_EGRESS:-false}" = "true" ]; then
+    info "web search  : off-LAN allowed (search.allow_cloud_egress=true)"
+else
+    info "web search  : LAN only - an off-LAN provider is refused until"
+    info "              search.allow_cloud_egress=true. A provider on this LAN never"
+    info "              needs it: tinycmdr config set search.providers '<json>'"
+fi

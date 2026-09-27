@@ -28,6 +28,9 @@
                            elevated shell, because Windows reserves boot-start
                            tasks for administrators)
         -InstallDir <d>    install somewhere else
+        -SearchEgress <b>  true|false: may web search send queries OFF this machine?
+                           default false - both built-in providers are third parties,
+                           and a provider on this LAN (a searxng entry) never needs it
         -VerifyOnly        is this install working? (no reinstall)
         -Uninstall [-Force] stop it, remove the folder and the autostart entry
 
@@ -63,6 +66,10 @@ param(
                                                  # host's own value (a fresh install uses
                                                  # 127.0.0.1); 0.0.0.0 opens it to your
                                                  # network, which always needs the token
+    [string] $SearchEgress    = "",              # -SearchEgress true|false: may web search
+                                                 # send queries OFF this machine? "" leaves
+                                                 # this host's own; an off-LAN provider is
+                                                 # refused, not called, while false
     [string[]] $AddEndpoint   = @(),             # more model endpoints, repeatable:
                                                  # "<base_url>;<model>;<alias>;<key>" -
                                                  # tried in order when the primary fails,
@@ -763,6 +770,14 @@ foreach ($spec in $AddEndpoint) {
     Say "endpoint added: $m at $u"
 }
 
+# -SearchEgress takes true or false; "" is "leave this host's own". Anything else
+# would be read as false, so an off-LAN search stayed refused with nothing on screen
+# saying why. Lowercased here so the switch and the question agree on one spelling.
+if ($SearchEgress -and $SearchEgress.ToLower() -notin @("true", "false")) {
+    Fail "-SearchEgress takes true or false (got '$SearchEgress')"
+}
+if ($SearchEgress) { $SearchEgress = $SearchEgress.ToLower() }
+
 if ($Ask) {
     Head "three ways to talk to it"
     Write-Host ""
@@ -872,6 +887,20 @@ if ($Ask) {
         } else { $WebHost = "127.0.0.1" }
     }
 
+    # ---- web search: may it leave this machine? ----
+    # Off unless asked. Both built-in providers are third parties, and the keyless anonymous
+    # tier used to send the model's query with nobody asked and nothing on screen saying so
+    # (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
+    # "no" here still leaves a working search if one is configured. The switch wins: it skips
+    # the question entirely, and the answer written to .env is what the build reads.
+    if (-not $SearchEgress) {
+        if (Ask-Yes "May the bot's web search send queries off this machine?" $false) {
+            $SearchEgress = "true"
+        } else {
+            $SearchEgress = "false"
+        }
+    }
+
     Write-Host ""
     Write-Host "  ---- about to install ----"
     Write-Host ("  folder       : {0}" -f $InstallDir)
@@ -888,6 +917,11 @@ if ($Ask) {
     Write-Host ("  how you talk : {0}" -f ($ways -join " and "))
     Write-Host ("  model        : {0} at {1}" -f $Model, $ModelBaseUrl)
     if ($ModelKey) { Write-Host "  model key    : given (stored in config.json's llm.api_key)" }
+    if ($SearchEgress -eq "true") {
+        Write-Host "  web search   : on, and may leave this machine"
+    } else {
+        Write-Host "  web search   : LAN only (an off-LAN provider is refused until allowed)"
+    }
     Write-Host ""
     if (-not (Ask-Yes "Install now?" $true)) {
         Say "nothing was changed"
@@ -1314,6 +1348,20 @@ foreach ($fb in $script:Fallbacks) {
     }
     $written += "$k (extra endpoint)"
 }
+# The web-search consent, when this run has an opinion: "" is "leave this host's own",
+# and the carry-over above has already put a host's own line back. Written AFTER that
+# carry-over on purpose - the host's older line must not replace this run's answer, or an
+# install told "yes" still comes out refusing an off-LAN provider. The value is the
+# true|false text the build reads into search.allow_cloud_egress.
+if ($SearchEgress) {
+    $k = "TINYCMDR_SEARCH_EGRESS"
+    if ($envText -match "(?m)^#?\s*$k=") {
+        $envText = [regex]::Replace($envText, "(?m)^#?\s*$k=.*$", { param($m) "$k=$SearchEgress" })
+    } else {
+        $envText = $envText.TrimEnd() + "`n$k=$SearchEgress`n"
+    }
+    $written += $k
+}
 # And say what was NOT copied, without naming any provider: a model key belongs to
 # one host, and silently sharing it is how one box's usage appeared on another.
 $notCopied = @($secrets.Keys | Where-Object {
@@ -1339,9 +1387,14 @@ if ($refused.Count) {
     Say "          that file carried no real key - edit $envPath with the real values"
 }
 if (-not $secrets["TAVILY_API_KEY"] -and -not $secrets["ANYSEARCH_API_KEY"]) {
-    Say "          search keys not set: web search will be unavailable on this host"
-} elseif ($refused.Count) {
-    Say "          search keys not set: web search will be unavailable on this host"
+    # Not a failure, and it used to be described as one: with no key anysearch still
+    # answers on its anonymous tier - off this machine and rate-limited, which is the
+    # reason search.allow_cloud_egress exists and defaults to false. The old line said
+    # "web search will be unavailable on this host", which is not what the code does.
+    Say "          no search key set: web_search uses anysearch's anonymous tier"
+    Say "          (off this machine, rate-limited) whenever search.allow_cloud_egress"
+    Say "          allows off-LAN search. A key, or a provider on this LAN, makes it"
+    Say "          reliable - see -SearchEgress above."
 }
 if ($EnableWeb) {
     # The token is a secret like the bot token, and .env is where secrets live: one file
@@ -1708,6 +1761,16 @@ if ($EnableWeb) {
         }
     }
     Say "  token: in .env (TINYCMDR_WEB_TOKEN) - not printed here"
+}
+# The consent, restated where it matters: a reader who answered "no" (or said nothing)
+# must know an off-LAN provider is refused rather than broken, and how to change that
+# without a reinstall.
+if ($SearchEgress -eq "true") {
+    Say "web search: off-LAN allowed (search.allow_cloud_egress=true)"
+} else {
+    Say "web search: LAN only - an off-LAN provider is refused until"
+    Say "            search.allow_cloud_egress=true. A provider on this LAN never"
+    Say "            needs it: tinycmdr config set search.providers '<json>'"
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"

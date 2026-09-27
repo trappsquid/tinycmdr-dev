@@ -43,8 +43,11 @@
     "host": "127.0.0.1"
   },
   "search": {
-    "anysearch_api_key": "",
-    "tavily_api_key": "",
+    "providers": [
+      {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",
+       "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"}
+    ],
+    "allow_cloud_egress": false,
     "max_results": 5
   },
   "agent": {

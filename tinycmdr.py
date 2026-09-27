@@ -250,8 +250,23 @@ DEFAULT_CONFIG = {
         "ssl_verify": True,
     },
     "search": {
-        "anysearch_api_key": "",   # optional; anonymous tier works without
-        "tavily_api_key": "",      # fallback provider
+        # PROVIDERS, in order: the first that answers wins. `kind` picks the adapter,
+        # `url` its endpoint, `api_key_env` the .env variable holding that provider's
+        # key (a key belongs in .env, never here - this file is read into a prompt).
+        # A `searxng` entry on this LAN is the one provider whose traffic stays inside
+        # the wire; the two below are both third parties.
+        "providers": [
+            {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",
+             "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"},
+            {"kind": "tavily", "url": "https://api.tavily.com/search",
+             "api_key_env": "TAVILY_API_KEY", "label": "tavily"},
+        ],
+        # Off by default: every provider above is off this machine, so a search sends
+        # the model's query - words from this conversation - to a third party, and the
+        # anonymous tier does it with no key and nobody asked. llm.allow_cloud_fallback
+        # is the same rule one lane over; this flag is the consent, and the installers
+        # ask for it.
+        "allow_cloud_egress": False,
         "max_results": 5,
     },
     "web": {
@@ -739,8 +754,20 @@ def parse_config_text(text, path="config.json"):
 CONFIG_ERROR = None          # set when config.json cannot be parsed
 
 
+def _env_bool(text):
+    """true/1/yes/on -> True; false/0/no/off -> False; anything else RAISES, so a typo in
+    .env is reported instead of being read as False and quietly disabling a provider."""
+    t = str(text).strip().lower()
+    if t in ("1", "true", "yes", "on"):
+        return True
+    if t in ("0", "false", "no", "off"):
+        return False
+    raise ValueError("not a boolean: %r" % text)
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
+    user = {}                                     # the file's own contents, for warnings
     if CONFIG_PATH.exists():
         # utf-8-sig: PowerShell's Set-Content and Notepad both write a BOM, and
         # a BOM makes plain json.loads fail on a perfectly good config file
@@ -763,12 +790,25 @@ def load_config():
         "TINYCMDR_LLM_API_KEY": ("llm", "api_key"),
         "TINYCMDR_MODEL": ("llm", "model"),
         "TINYCMDR_BASE_URL": ("llm", "base_url"),
-        "ANYSEARCH_API_KEY": ("search", "anysearch_api_key"),
-        "TAVILY_API_KEY": ("search", "tavily_api_key"),
+        # A third element is a parser, for names whose value is not a plain string: an
+        # env value arrives as text and the search chain is a list, the egress flag a
+        # boolean. TINYCMDR_SEARCH_PROVIDERS is the install-time door to both.
+        "TINYCMDR_SEARCH_PROVIDERS": ("search", "providers", json.loads),
+        "TINYCMDR_SEARCH_EGRESS": ("search", "allow_cloud_egress", _env_bool),
     }
-    for env, (section, key) in env_map.items():
-        if os.environ.get(env):
-            cfg[section][key] = os.environ[env]
+    for env, spec in env_map.items():
+        raw = os.environ.get(env)
+        if not raw:
+            continue
+        section, key = spec[0], spec[1]
+        parse = spec[2] if len(spec) > 2 else None
+        if parse is None:
+            cfg[section][key] = raw
+            continue
+        try:
+            cfg[section][key] = parse(raw)
+        except Exception:                                        # noqa: BLE001
+            log.warning("%s could not be parsed as %s; left at its default", env, key)
     # The Telegram token is .env-ONLY (audit, 2026-09-22). Every other secret here
     # has one home; a token sitting in config.json is a second copy the agent can
     # read into a prompt and quote, which is the rule this package states about
@@ -777,6 +817,18 @@ def load_config():
         log.warning("telegram.token in config.json is IGNORED - the Telegram token "
                     "lives in .env as TINYCMDR_TG_TOKEN. Delete the config.json copy.")
         cfg["telegram"]["token"] = ""
+    # Same rule for the search providers, which name their key's .env variable now
+    # (api_key_env). A key left in config.json is a copy the agent can read into a prompt
+    # and quote, so it is ignored with a warning rather than honoured silently.
+    for old_key, env_name in (("anysearch_api_key", "ANYSEARCH_API_KEY"),
+                              ("tavily_api_key", "TAVILY_API_KEY")):
+        if str((user.get("search") or {}).get(old_key) or "").strip():
+            log.warning("search.%s in config.json is IGNORED - the key belongs in %s as "
+                        "%s, which the provider named api_key_env reads. Delete the "
+                        "config.json copy.", old_key, ENV_FILE.name, env_name)
+            # Drop it too: "ignored" has to mean gone from the loaded config, or the
+            # value survives into anything that writes this config back out.
+            cfg["search"].pop(old_key, None)
     # fallback endpoints can name their own env var (api_key_env) so provider
     # keys live in .env instead of config.json
     for fb in cfg["llm"].get("fallbacks", []):
@@ -5657,37 +5709,121 @@ def tool_write_file(args, ctx):
         return f"ERROR writing {path}: {e}"
 
 
-def _anysearch(query, max_results):
+# ------------------------------------------------------------------ web search
+# Providers are CONFIGURED, not compiled in: `search.providers` is an ordered list and the
+# first entry that answers wins. A new provider SHAPE is a new `_provider_<kind>` function
+# returning [{title, url, snippet}]; a per-host one-off is what create_tool is for, so this
+# list stays short on purpose.
+_SEARCH_DEFAULT_URL = {
+    "anysearch": "https://api.anysearch.com/v1/search",
+    "tavily": "https://api.tavily.com/search",
+    "searxng": "",          # a searxng entry carries its own url - it is the LAN one
+}
+_SEARCH_DEFAULT_KEY_ENV = {"anysearch": "ANYSEARCH_API_KEY",
+                           "tavily": "TAVILY_API_KEY", "searxng": ""}
+
+
+def _search_providers():
+    """The configured chain, normalised. Returns (chain, problems): an entry that cannot
+    be used at all is a PROBLEM, reported rather than silently dropped, so a typo in the
+    list reads as a typo instead of as a shorter chain."""
+    raw = CONFIG["search"].get("providers")
+    if not isinstance(raw, list):
+        raw = DEFAULT_CONFIG["search"]["providers"]
+    chain, problems = [], []
+    for i, entry in enumerate(raw):
+        if isinstance(entry, str):        # "anysearch" is enough for the common case
+            entry = {"kind": entry}
+        if not isinstance(entry, dict):
+            problems.append("entry %d is not an object" % (i + 1))
+            continue
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind not in _SEARCH_DEFAULT_URL:
+            problems.append("entry %d: unknown kind %r" % (i + 1, entry.get("kind")))
+            continue
+        url = str(entry.get("url") or "").strip() or _SEARCH_DEFAULT_URL[kind]
+        if not url:
+            problems.append("entry %d: a %s entry needs its own url" % (i + 1, kind))
+            continue
+        chain.append({
+            "kind": kind, "url": url,
+            "api_key_env": str(entry.get("api_key_env") or
+                               _SEARCH_DEFAULT_KEY_ENV[kind]).strip(),
+            "label": str(entry.get("label") or kind).strip(),
+        })
+    return chain, problems
+
+
+def _search_key(entry):
+    """The provider's key, from .env under the name the entry gives. Empty is legitimate:
+    anysearch's anonymous tier answers without one."""
+    env = entry.get("api_key_env") or ""
+    return (os.environ.get(env) or "").strip() if env else ""
+
+
+def _provider_anysearch(entry, query, max_results):
     headers = {"Content-Type": "application/json"}
-    key = CONFIG["search"].get("anysearch_api_key")
+    key = _search_key(entry)
     if key:
-        headers["Authorization"] = f"Bearer {key}"
-    resp = requests.post(
-        "https://api.anysearch.com/v1/search",
-        headers=headers,
-        json={"query": query, "max_results": max_results},
-        timeout=30)
+        headers["Authorization"] = "Bearer %s" % key
+    resp = requests.post(entry["url"], headers=headers,
+                         json={"query": query, "max_results": max_results},
+                         timeout=30)
     data = resp.json()
     if data.get("code") != 0:
-        raise RuntimeError(f"anysearch error: {data.get('message')}")
+        raise RuntimeError("anysearch error: %s" % data.get("message"))
     results = data.get("data", {}).get("results", [])
     return [{"title": r.get("title", ""), "url": r.get("url", ""),
              "snippet": r.get("snippet") or r.get("content", "")[:400]}
             for r in results]
 
 
-def _tavily(query, max_results):
-    key = CONFIG["search"].get("tavily_api_key")
+def _provider_tavily(entry, query, max_results):
+    key = _search_key(entry)
     if not key:
-        raise RuntimeError("no tavily_api_key configured")
-    resp = requests.post(
-        "https://api.tavily.com/search",
-        json={"api_key": key, "query": query,
-              "max_results": max_results},
-        timeout=30)
+        raise RuntimeError("no %s set" % (entry.get("api_key_env") or "api key"))
+    resp = requests.post(entry["url"],
+                         json={"api_key": key, "query": query,
+                               "max_results": max_results},
+                         timeout=30)
     results = resp.json().get("results", [])
     return [{"title": r.get("title", ""), "url": r.get("url", ""),
              "snippet": r.get("content", "")[:400]} for r in results]
+
+
+def _provider_searxng(entry, query, max_results):
+    """A SearxNG - or any /search?q=&format=json instance - normally on this LAN. No key:
+    a self-hosted instance sits behind its own door. This is the provider shape whose
+    traffic never leaves the wire, so it is the one search.allow_cloud_egress never has
+    to be turned on for."""
+    resp = requests.get(entry["url"].rstrip("/") + "/search",
+                        params={"q": query, "format": "json"}, timeout=30)
+    results = resp.json().get("results", [])[:max_results]
+    return [{"title": r.get("title", ""), "url": r.get("url", ""),
+             "snippet": (r.get("content") or r.get("snippet") or "")[:400]}
+            for r in results]
+
+
+_SEARCH_PROVIDERS_BY_KIND = {"anysearch": _provider_anysearch,
+                             "tavily": _provider_tavily,
+                             "searxng": _provider_searxng}
+
+
+def _search_egress_allowed():
+    return bool(CONFIG["search"].get("allow_cloud_egress"))
+
+
+def _search_chain_in_use():
+    """(usable, withheld, problems) - `withheld` are the off-LAN entries this machine is
+    not allowed to call. One function for the tool, `status` and `doctor`, so the three
+    cannot disagree about what search would do."""
+    chain, problems = _search_providers()
+    if _search_egress_allowed():
+        return chain, [], problems
+    usable, withheld = [], []
+    for entry in chain:
+        (usable if _is_local_url(entry["url"]) else withheld).append(entry)
+    return usable, withheld, problems
 
 
 def tool_send_file(args, ctx):
@@ -5715,19 +5851,41 @@ def tool_web_search(args, ctx):
     query = args["query"]
     max_results = int(args.get("max_results")
                       or CONFIG["search"]["max_results"])
+    usable, withheld, problems = _search_chain_in_use()
+    if not usable:
+        if withheld:
+            why = ("every provider this machine is configured with is off this LAN: %s"
+                   % ", ".join(e["label"] for e in withheld))
+        else:
+            why = "no provider is configured"
+        if problems:
+            why += ("; %d unusable entr%s in search.providers: %s"
+                    % (len(problems), "y" if len(problems) == 1 else "ies",
+                       "; ".join(problems)))
+        return ("BLOCKED: web search is off here - %s. A search would send this "
+                "conversation's words to a third party, and search.allow_cloud_egress "
+                "is false. The operator can allow it, or add a provider on this LAN "
+                "(a searxng entry), which never leaves the wire." % why)
     errors = []
-    for provider in (_anysearch, _tavily):
+    for entry in usable:
         try:
-            results = provider(query, max_results)
+            results = _SEARCH_PROVIDERS_BY_KIND[entry["kind"]](entry, query, max_results)
             if not results:
-                return f"No results for: {query}"
+                return "No results for: %s" % query
             lines = []
             for i, r in enumerate(results, 1):
-                lines.append(f"{i}. {r['title']}\n   {r['url']}\n   {r['snippet']}")
+                lines.append("%d. %s\n   %s\n   %s"
+                             % (i, r["title"], r["url"], r["snippet"]))
+            if withheld:
+                # Say it once, on the answer: this search did NOT leave the machine.
+                lines.append("(answered by %s on this LAN; %s withheld - "
+                             "search.allow_cloud_egress is false)"
+                             % (entry["label"],
+                                ", ".join(e["label"] for e in withheld)))
             return "\n\n".join(lines)
-        except Exception as e:
-            errors.append(f"{provider.__name__}: {e}")
-    return "ERROR: all search providers failed — " + "; ".join(errors)
+        except Exception as e:                                       # noqa: BLE001
+            errors.append("%s: %s" % (entry["label"], e))
+    return "ERROR: all search providers failed - " + "; ".join(errors)
 
 
 def tool_fetch_url(args, ctx):
@@ -5739,6 +5897,18 @@ def tool_fetch_url(args, ctx):
     urls = [str(u).strip() for u in urls if str(u).strip()][:5]
     if not urls:
         return "ERROR: url is empty"
+    if not _search_egress_allowed():
+        # The same consent flag as search, and NOT an address filter: this agent has a
+        # shell, so a fetch it is not allowed to make is one it could make anyway - the
+        # flag is about the operator knowing, which is why the refusal is loud.
+        off = [u for u in urls if not _is_local_url(u)]
+        if off:
+            which = (", ".join(off[:3]) if len(off) <= 3
+                     else "%d of the %d urls" % (len(off), len(urls)))
+            return ("BLOCKED: fetching %s would leave this LAN and "
+                    "search.allow_cloud_egress is false, so nothing was fetched. A URL "
+                    "on this LAN is always allowed; for the rest the operator decides. "
+                    "Ask them, or answer from what is already here." % which)
     try:
         ceil = mem_limit_chars("fetch_max_chars", 12000)
     except (TypeError, ValueError):
@@ -5760,6 +5930,9 @@ def _fetch_page(url, max_chars, session=None):
         # could take the process down - the same failure class the file-read cap fixed
         # after four recorded kills (audit, 2026-09-22). No address filtering, by the
         # operator's decision: on a box with a shell that is a speed bump, not a wall.
+        # Two rules are easy to conflate here: THIS function still does not filter
+        # addresses; what tool_fetch_url does is refuse to START an off-LAN fetch the
+        # operator has not allowed - disclosure, not containment.
         resp = requests.get(url, timeout=30, stream=True, headers={
             "User-Agent": "Mozilla/5.0 (tinycmdr; ops agent)"})
         resp.raise_for_status()
@@ -8170,8 +8343,9 @@ CORE_TOOLS = {
     "web_search": {
         "fn": tool_web_search,
         "schema": _schema(
-                                                    "Search the web (AnySearch, falls back to Tavily) for error "
-            "messages, known issues, docs, community reports. Several "
+                                                    "Search the web through this machine's configured providers for error "
+            "messages, known issues, docs, community reports - and only where the "
+            "operator has allowed it (a refusal says why). Several "
             "searches can run in parallel.",
             {"query": {"type": "string"},
              "max_results": {"type": "integer"}},
@@ -8182,7 +8356,8 @@ CORE_TOOLS = {
         "schema": _schema(
             "Fetch one or more web pages as plain text: url takes one "
             "address or a JSON array of up to five. Use after a web "
-            "search to read the best results.",
+            "search to read the best results. Addresses off this LAN need the "
+            "operator's egress allowance, like search.",
             {"url": {"type": "string",
                      "description": "The URL, or a JSON array of up "
                                     "to 5 URLs"},
@@ -20337,6 +20512,19 @@ def _verb_doctor():
     else:
         print("  guards    : shipped lists intact (v%d)" % GUARD_LIST_VERSION)
 
+    # What web search would actually DO, so a BLOCKED line in a run has somewhere to be
+    # read from: the chain, and whether off-LAN providers are allowed on this host.
+    usable, withheld, s_problems = _search_chain_in_use()
+    if withheld:
+        print("  search    : off-LAN providers REFUSED (%s); on this LAN: %s"
+              % (", ".join(e["label"] for e in withheld),
+                 ", ".join(e["label"] for e in usable) or "none configured"))
+    else:
+        print("  search    : %s" % (", ".join(e["label"] for e in usable)
+                                    or "no provider configured"))
+    if s_problems:
+        notes.append("search.providers: " + "; ".join(s_problems))
+
     try:
         probe = BASE_DIR / ".tinycmdr-write-probe"
         probe.write_text("x", encoding="utf-8")
@@ -20675,9 +20863,12 @@ def _verb_config(rest):
               file=sys.stderr)
         return 2
     section, _, key = path.rpartition(".")
-    if key in ("token", "api_key") and not section.startswith("llm"):
+    if not section.startswith("llm") and (key in ("token", "api_key")
+                                          or key.endswith("_api_key")):
         # Secrets have exactly one home (.env), and config.json is a file the agent reads
-        # into a prompt and can quote into chat.
+        # into a prompt and can quote into chat. The *_api_key arm is for a provider key
+        # written by hand (`search.anysearch_api_key`): the old test only knew the two
+        # exact names and accepted that one, which nothing reads and the loader drops.
         print("%s is a secret: put it in %s instead (tinycmdr token set <NAME>)"
               % (path, ENV_FILE.name), file=sys.stderr)
         return 2

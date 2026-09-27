@@ -182,7 +182,10 @@ tokenizer (the harness's estimator, which the 5,400-token gate uses, reads 4,069
 deliberately conservative; `tinycmdr status` prints this box's own), and 3,586 on this install,
 volatile context sits at the tail so
 the prefix stays cacheable, and the runtime guards the slot. Local failures never fall through to
-a public API unless you set `allow_cloud_fallback`.
+a public API unless you set `allow_cloud_fallback`. The same rule covers web search:
+`web_search` and `fetch_url` ride in every prompt, and with `search.allow_cloud_egress`
+off - the default - an off-LAN provider is refused rather than called. A SearxNG on
+your own LAN never needs the flag, and neither does a fetch from it.
 
 The long version — measured surface, budgets, failure handling, what it deliberately does not
 have, and how it compares with other harnesses — is
