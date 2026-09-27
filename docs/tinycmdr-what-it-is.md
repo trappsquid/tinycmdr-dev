@@ -18,7 +18,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                21,676 lines / 1.01 MB in ONE file, no package, no framework
+code                21,678 lines / 1.01 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -425,7 +425,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 ```
 fixed prompt overhead     ~3.6K real tokens as sent, measured with the endpoint's own
                           tokenizer - section 4.1 has both legs and the command
-readability               21,676 lines, one file, no dependency tree to audit
+readability               21,678 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

@@ -6366,8 +6366,10 @@ def render_task_prompt():
         # note) reads like an instruction — "read X, confirm Y" — and this block
         # is re-sent as a trailing user message on EVERY call, so a done item
         # kept its verb as a standing order and the model re-ran it (that is
-        # exactly what task #4 did on 2026-09-10). Open items keep their text:
-        # those really are the to-do list.
+        # exactly what task #4 did on 2026-09-10). Open items keep their text,
+        # because the operator needs to see what is outstanding - but the header
+        # above now says inherited work is not this session's plan, which is the
+        # other half of the same fix (2026-09-27).
         row = f"- #{i['id']} [done, no action] {i.get('desc', '')[:90]}"
         rows.append(row)
     open_n = len(active)
