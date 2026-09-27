@@ -17,6 +17,24 @@ Fixed
   (`TINYCMDR_LLM_API_KEY` -> `llm.api_key`, so the key can live in the one secrets file instead
   of `config.json`, which is what `doctor` advises); `.env.example` documents both, and
   `test_env_names.py` pins the rule - every name the app WRITES must be a name it READS.
+- `install-tinycmdr.sh` (Linux) died as exit 127 with NO output on a host without `getent`,
+  before it parsed an argument - so it could not print `--help` or its own "this installer is for
+  Debian/Ubuntu hosts" message (audit I6; the macOS installer got the guarded fallback, this file
+  kept the bare pipeline). It resolves the home with the same getent/dscl/`$HOME` chain now, and a
+  check runs `--help` against a `getent` that fails.
+- The Linux installer had no `--secrets-file`, so a reader handing over a KEY=VALUE file by path
+  got a different answer per platform - macOS and Windows both accept one. It reads the named file
+  before the lane decision, refuses a path that does not exist by name, and the package's own
+  `install/fleet-secrets.env` stays the default.
+- The Windows installer asked for the page token with the generated value as the prompt's default
+  and printed it in the summary, so the token landed in the install transcript
+  (`%TEMP%\tinycmdr-install.log`) - the leak both Unix installers closed in 1.0.24. It is minted
+  silently, written to `.env` (0600), and the summary says where to read it. Verified on a real
+  Windows 11 host: exit 0, `config.json` and `.env` written, one `TINYCMDR_MM_TOKEN` line, and the
+  page token absent from stdout, stderr, the transcript and `config.json` while all of them name
+  `TINYCMDR_WEB_TOKEN`. `-SkipTask -NoPath` withheld the task and the PATH entry, and the
+  `config.json` ACL was the user + Administrators + SYSTEM.
+
 - `doctor` reported `llm.api_key is set in config.json - .env is the safer home` when that value
   was the shipped placeholder `"none"`, so every install that never set a key was warned about a
   secret it does not have. The placeholder no longer counts; a real key still gets the note.

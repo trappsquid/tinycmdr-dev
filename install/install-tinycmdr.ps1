@@ -856,13 +856,14 @@ if ($Ask) {
     }
 
     if ($EnableWeb) {
-        # Generated, but typeable: Enter accepts this one. Asked here, before the confirmation, so
-        # the summary can show it and nobody agrees to something they have not seen.
-        $suggested = -join ((48..57) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
+        # Minted here and NEVER shown. Asking with the generated value as the prompt's default
+        # printed it into the install transcript and into tinycmdr.log, which is the leak the
+        # Unix installers stopped doing - a page token drives shell on this box. The operator
+        # reads it from .env, and can replace it there.
+        $script:WebTokenChoice = -join ((48..57) + (97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ })
         Write-Host ""
         Write-Host "The page is protected by a token, so nothing else on this machine can drive the agent."
-        Write-Host "Press Enter to accept the generated one, or type your own password."
-        $script:WebTokenChoice = Ask-Text "Page token" $suggested
+        Write-Host "It is generated here and written to .env (TINYCMDR_WEB_TOKEN) - read it there."
         Write-Host ""
         # The bind address, asked because only the reader knows whether another machine
         # needs the page - and a page nobody can reach reads as a broken install.
@@ -1357,8 +1358,10 @@ if ($EnableWeb) {
         Say "note    : removed web-token.txt - the page token lives in .env now"
     }
     Say "web page: http://127.0.0.1:$WebPort"
-    Say "          page token: $webToken   (paste it when the page asks)"
-    Say "          also in .env: TINYCMDR_WEB_TOKEN"
+    # The value is not printed: this console is transcribed to tinycmdr.log, and a page
+    # token drives shell on this box.
+    Say "          page token: in .env (TINYCMDR_WEB_TOKEN, mode 600) - not shown here;"
+    Say "          read it with:   Get-Content `"$envPath`" | Select-String TINYCMDR_WEB_TOKEN"
 } else {
     Say "web page: off - local checks need no port:  tinycmdr.py --once ""<task>"""
 }
@@ -1652,7 +1655,7 @@ if ($Ask) {
     if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
     if ($WantWeb) {
         Say "the page: $webLink"
-        Say "  it asks for its token on first open - paste the 'page token' line above"
+        Say "  it asks for its token on first open - it is in .env (TINYCMDR_WEB_TOKEN)"
         if (Ask-Yes "Open it now?" $true) {
             Start-Process $webLink | Out-Null
         }
@@ -1704,7 +1707,7 @@ if ($EnableWeb) {
             Say "  New-NetFirewallRule -DisplayName `"tinycmdr web`" -Direction Inbound -LocalPort $WebPort -Protocol TCP -Action Allow"
         }
     }
-    Say "  token: the 'page token' line printed above, and TINYCMDR_WEB_TOKEN in .env"
+    Say "  token: in .env (TINYCMDR_WEB_TOKEN) - not printed here"
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"
 Say "redo   : install-tinycmdr.cmd -Force"

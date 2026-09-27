@@ -33,6 +33,10 @@
 #                         127.0.0.1 (this host only); "" keeps this host's own
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
 #   --token-file <f>      read the token from a file (first token-looking line)
+#   --secrets-file <f>    KEY=VALUE lines for .env (search keys, and the bot token:
+#                         TINYCMDR_MM_TOKEN from it chooses the chat lane), read BEFORE
+#                         the lane decision - the same door the package's own
+#                         install/fleet-secrets.env uses
 #   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
 #                         only; with no Mattermost token the bot runs THIS lane
 #   --telegram-ids <i>    numeric Telegram id(s), comma or space separated
@@ -65,7 +69,20 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC="$(cd "$HERE/.." && pwd)"
 SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
 RUN_USER="${TINYCMDR_USER:-${SUDO_USER:-$(id -un)}}"
-USER_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
+# `getent` does not exist on every host, and with `set -e`+`pipefail` the bare pipeline
+# above died as exit 127 with NO output, before a single argument was parsed - so this
+# installer could not even print --help there, let alone its own "this installer is for
+# Debian/Ubuntu hosts" message (audit I6, measured on macOS 2026-09-26: `bash
+# install/install-tinycmdr.sh --help` printed nothing and exited 127). Never fatal now:
+# try getent, try dscl, then $HOME.
+user_home() {   # user_home <name> -> that user's home directory, or empty
+    local u="$1" h=""
+    h="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)" || true            # Linux
+    [ -n "$h" ] || h="$(dscl . -read "/Users/$u" NFSHomeDirectory 2>/dev/null \
+        | awk '{print $2}')" || true                                       # macOS
+    printf '%s' "$h"
+}
+USER_HOME="$(user_home "$RUN_USER")"
 USER_HOME="${USER_HOME:-${HOME:-/home/$RUN_USER}}"
 INSTALL_DIR="${TINYCMDR_DIR:-$USER_HOME/tinycmdr}"
 # the default, remembered BEFORE flags parse: the box-level removals in
@@ -86,6 +103,7 @@ TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG="
 MODEL_BASE_GIVEN=""; MODEL_GIVEN=""; WEB_CLI_GIVEN=0
 TG_TOKEN=""; TG_IDS=""
 WEB_PORT="8787"; WEB_ON=1; FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
+SECRETS_FILE=""          # --secrets-file: KEY=VALUE lines, read BEFORE the lane is chosen
 YES=0                     # -y/--yes: ask nothing, take the switches and the defaults
 MODEL_KEY=""              # the model endpoint's key, when the reader gives one
 FALLBACK_SPECS=""         # extra endpoints, one "url|model|alias|env-name" per line
@@ -119,6 +137,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --token)            TOKEN="$2"; shift 2 ;;
         --token-file)       TOKEN_FILE="$2"; shift 2 ;;
+        --secrets-file)     SECRETS_FILE="$2"; shift 2 ;;
         --telegram-token)   TG_TOKEN="$2"; shift 2 ;;
         --telegram-ids)     TG_IDS="$2"; shift 2 ;;
         --install-dir)      INSTALL_DIR="$2"; DIR_GIVEN=1; shift 2 ;;
@@ -581,11 +600,18 @@ fi
 # account", an empty `TINYCMDR_MM_TOKEN=` as the FIRST line of .env with the file's real
 # one below it - and _load_env_file keeps the FIRST occurrence - so the bot answered no
 # DMs while config.json and .env both looked configured.
-if [ -z "$TOKEN" ] && [ -f "$SRC/install/fleet-secrets.env" ]; then
-    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$SRC/install/fleet-secrets.env" \
+if [ -n "$SECRETS_FILE" ] && [ ! -f "$SECRETS_FILE" ]; then
+    die "--secrets-file $SECRETS_FILE does not exist"
+fi
+# One path, chosen once: --secrets-file when the caller named one, else the package copy.
+# (An apostrophe inside ${VAR:-word} makes bash hunt for a closing quote - found by
+# syntax-checking this line, not by reading it.)
+ENV_SOURCE="${SECRETS_FILE:-$SRC/install/fleet-secrets.env}"
+if [ -z "$TOKEN" ] && [ -f "$ENV_SOURCE" ]; then
+    TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$ENV_SOURCE" \
         | cut -d= -f2- | tr -d ' \r' || true)"
     if [ -n "$TOKEN" ]; then
-        info "bot token   : TINYCMDR_MM_TOKEN from the package's fleet-secrets.env"
+        info "bot token   : TINYCMDR_MM_TOKEN from $ENV_SOURCE"
     fi
 fi
 # The lane is deny-by-default, so a token with no id is a bot that ignores every DM.
@@ -1119,7 +1145,7 @@ chown_to "$INSTALL_DIR/config.json"
 chmod 600 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
-"$PY" - "$INSTALL_DIR/.env" "$TOKEN" "$SRC/install/fleet-secrets.env" "$WEB_TOKEN" "$TG_TOKEN" \
+"$PY" - "$INSTALL_DIR/.env" "$TOKEN" "${SECRETS_FILE:-$SRC/install/fleet-secrets.env}" "$WEB_TOKEN" "$TG_TOKEN" \
         "$FB_ENV_LINES" <<'PY'
 import os, pathlib, re, sys
 envp, tok, secrets, webtok, tgtok = (pathlib.Path(sys.argv[1]), sys.argv[2],

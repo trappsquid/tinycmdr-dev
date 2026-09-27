@@ -282,6 +282,22 @@ def main():
           '-replace "(?m)^#?\\s*$k=.*$"' not in install,
           "%d literal site(s), %d -replace site(s): %r" % (len(env_lit), len(env_repl), env_repl[:1]))
 
+    print("\n== the page token is generated, written to .env, and never displayed ==")
+    # A page token drives shell on this box, and this installer transcribes its console to
+    # tinycmdr.log: the value must not appear in any line it prints. The Unix installers were
+    # fixed for the same leak in 1.0.24; Windows asked for the token with the generated value
+    # as the prompt's default and printed it in the summary (measured 2026-09-26).
+    printed = [l.strip() for l in install.splitlines()
+               if re.search(r"\b(Say|Write-Host)\b", l) and "webToken" in l]
+    check("no console line interpolates the page token", not printed, printed[:2])
+    check("the generated token is not offered as a prompt default",
+          "Ask-Text \"Page token\"" not in install and "$suggested" not in install,
+          "the ask still puts the value on screen")
+    check("the token is written to .env and the summary says where to read it",
+          "TINYCMDR_WEB_TOKEN=$webToken" in install
+          and "Select-String TINYCMDR_WEB_TOKEN" in install,
+          "no .env write or no pointer to it")
+
     print("\n== the emitted install is still the repo's own shape ==")
     check("the uninstall branch still comes before the installer preamble",
           install.index("if ($Uninstall) {") < install.index("Head \"tinycmdr installer\""))
@@ -292,7 +308,8 @@ def main():
         for f in FAILED:
             print("  - " + f)
         return 1
-    print("all checks passed (Windows runtime verification still outstanding)")
+    print("all checks passed (this installer has also been run on a real Windows 11 "
+          "host - see CHANGELOG [1.0.25] for what that pass covered)")
     return 0
 
 

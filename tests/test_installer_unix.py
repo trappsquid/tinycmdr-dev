@@ -360,7 +360,8 @@ def case_linux_secrets_lane(sb, pkg, bindir, user, py):
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
     check("D8 the lane is chosen from the secrets file's token",
           "installing WITHOUT a chat account" not in got.stdout
-          and "TINYCMDR_MM_TOKEN from the package's fleet-secrets.env" in got.stdout,
+          and "TINYCMDR_MM_TOKEN from" in got.stdout
+          and "fleet-secrets.env" in got.stdout,
           f"the run still took the page lane, or never read the token: {got.stdout[-300:]}")
     check("D8 the token is written once, with the file's value",
           env_text.count("TINYCMDR_MM_TOKEN=") == 1
@@ -369,6 +370,46 @@ def case_linux_secrets_lane(sb, pkg, bindir, user, py):
     check("D8 the shared search key rides along",
           "TAVILY_API_KEY=tvly-planted-by-the-test" in env_text,
           "the fleet key never reached .env")
+
+
+def case_linux_secrets_file(sb, pkg, bindir, user, py):
+    """D8 (Linux half), the switch: --secrets-file names the file, wherever it lives.
+
+    Parity with the macOS installer, which has always taken the path; Linux could only read
+    the package's own install/fleet-secrets.env, so a reader feeding a file by path got a
+    different answer per platform (measured 2026-09-26).
+    """
+    inst = sb / "lin-secrets"
+    fake_venv(inst, py)
+    planted = fleet_env(sb / "somewhere-else.env")
+    log = sb / "logs" / "lin-secrets.log"
+    env = sandbox_home_env(sb, bindir, log, user)
+    got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+               "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+               "--secrets-file", planted,
+               "--mattermost-url", "chat.invalid", "--allowed-user", "u1",
+               "--install-dir", inst], env, pkg)
+    out = got.stdout + got.stderr
+    env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
+    check("D8 --secrets-file chooses the lane from the file it was given",
+          "installing WITHOUT a chat account" not in got.stdout
+          and str(planted) in got.stdout,
+          f"rc={got.returncode}; {out[-300:]}")
+    check("D8 the token is written once, from that file",
+          env_text.count("TINYCMDR_MM_TOKEN=") == 1
+          and "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789" in env_text,
+          f"lines: {[l for l in env_text.splitlines() if 'MM_TOKEN' in l]}")
+    # A path that is not there is a typed mistake, and saying so beats installing without the
+    # lane the reader meant to configure.
+    missing = sb / "not-here.env"
+    got2 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+                "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+                "--secrets-file", missing,
+                "--install-dir", sb / "lin-missing"], sandbox_home_env(sb, bindir, log, user),
+               pkg)
+    check("D8 a --secrets-file that does not exist is refused by name",
+          got2.returncode != 0 and "does not exist" in (got2.stdout + got2.stderr),
+          f"rc={got2.returncode}; {(got2.stdout + got2.stderr)[-200:]}")
 
 
 # --------------------------------------------------------------------------- D2/D5 ---
@@ -511,6 +552,22 @@ def case_help_and_footer(sb, pkg, bindir, user, py):
           "nobody thinks to delete" in lin_help.stdout,
           "the usage range still stops early: " + repr(lin_help.stdout[-120:]))
 
+    # The head of this installer used to be `USER_HOME="$(getent passwd ...)"` with no guard:
+    # on a host without getent it exited 127 with NO output, before parsing an argument - so
+    # --help printed nothing and the script's own "this installer is for Debian/Ubuntu hosts"
+    # never ran (audit I6 for this file). A getent that fails stands in for such a host here,
+    # on any platform, so the check has teeth on the Linux runner too.
+    nogetent = sb / "bin-nogetent"
+    nogetent.mkdir(parents=True, exist_ok=True)
+    (nogetent / "getent").write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+    (nogetent / "getent").chmod(0o755)
+    env2 = sandbox_home_env(sb, bindir, sb / "logs" / "help2.log", user)
+    env2["PATH"] = f"{nogetent}:{env2['PATH']}"
+    bare = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--help"], env2, pkg)
+    check("D10 Linux --help still works where getent fails (no silent exit 127)",
+          bare.returncode == 0 and "install-tinycmdr.sh - install tinycmdr" in bare.stdout,
+          f"rc={bare.returncode}; out={bare.stdout[:80]!r} err={bare.stderr[:120]!r}")
+
     # install.sh, headlessly, against a local archive: the footer must name THIS
     # platform's installer, and the /dev/tty probe must not print an error.
     dist = sb / "dist"
@@ -628,6 +685,7 @@ def main():
         lin_web = case_linux_web_on(sb, pkg, bindir, user, py)
         case_linux_uninstall(sb, pkg, bindir, user, py, lin_web)
         case_linux_secrets_lane(sb, package_tree(sb / "pkg-lane"), bindir, user, py)
+        case_linux_secrets_file(sb, pkg, bindir, user, py)
         mac_inst = case_macos_install(sb, pkg, bindir, user, py)
         case_macos_uninstall(sb, pkg, bindir, user, py, mac_inst)
         case_macos_secrets_lane(sb, pkg, bindir, user, py)
