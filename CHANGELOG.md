@@ -5,6 +5,62 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.27] - 2026-09-26
+
+Every lane - `--web`, `--cli`, `--once`, each verb - is a separate PROCESS over the same state
+files, and the write path was built for threads. This release folds in the durability batch that
+was still only in a scratch tree, so the published build is one line again.
+
+Fixed
+- **Concurrent writers lost each other's work.** The per-path lock was a `threading.RLock`, so
+  three processes each running `task add` all answered "OK: task #1 added" and the ledger held
+  ONE item; a stale web lane's save also clobbered the bot lane's model switches and the
+  in-memory state, and `state.json` counted one bump where three were asked for. The lock is now
+  an OS lock (`flock` / `msvcrt`, one file per path in the temp dir, bounded and never fatal)
+  taken inside the same `_path_lock`, and read-modify-write cycles on `tasks.json`, `notes.md`,
+  `state.json`, `config.json` and a user's own files serialize across processes. Overrides merge
+  instead of replacing the file, and the journal is written AFTER the save it describes (before,
+  a failed save left a revision that never landed and the next save reused the number).
+- **A failed save could shrink the file it was saving.** The handler used to fall back to a plain
+  write, so a denied rename, a full disk or a locked file turned a healthy ledger into a
+  truncated one - measured: a failed save of a 20-item ledger left 0 bytes and the next load
+  said "starting a fresh ledger", with no `.damaged-*` copy anywhere. The destination is never
+  opened for writing now: a sibling temp is written, fsynced and chmod'd to the destination's own
+  mode, renamed over it, and the rename is fsynced into the directory; on failure the old file is
+  byte-identical and the caller is TOLD. The temp name is per WRITER, not per process, so two
+  threads in one turn no longer collide on `<name>.tmp-<pid>`.
+- **The single-instance lock was a file beside the install**, which `rm` defeats: a second bot
+  could be started on the same token right after. On POSIX the lock is the install FOLDER's own
+  handle (a directory cannot be unlinked while it has contents); Windows keeps the file.
+- **Spill rotation deleted live data**: it pruned by age, so a file a current index row still
+  named could vanish, and a row whose file was gone stayed in the index as a dangling pointer.
+  Rotation now keeps every file a live row names, and dead rows drop off the index.
+- **An unknown word after the program name STARTED THE BOT.** `tinycmdr taks` fell through the
+  verb check into `run_webui`/`run_bot`: the agent came up, the terminal looked fine, and nobody
+  was answered. It now goes to the verb dispatcher, which names the word, prints the verb list
+  and exits 2.
+- **A page-only install could not survive its own startup.** `main` called `run_bot()`
+  unconditionally and that exits 2 on a missing token, so the page lane bound and was then killed
+  by the lane it never had; `doctor`/`validate_startup_config` also demanded `mattermost.url` and
+  `mattermost.allowed_users` for an install with no chat lane at all, so `doctor` exited 1. A chat
+  lane is optional now: the page lane holds its own process open and serves, a Telegram-only box
+  is not asked about Mattermost, and the "missing token" diagnostic still fires when the config
+  actually intends to run Mattermost. Measured: page-only install -> `doctor: no problems found`
+  (exit 0), `GET /api/health` -> `{"ok": true}`, process stays up.
+- The README promised commands the binary rejects: `tinycmdr steer <text>` (steering is a message
+  sent while a run is live - the run folds it in at its next step), `tinycmdr stop` (the live-run
+  cancel is `/stop`, in the CLI and in chat) and two `model` forms (`model list` and
+  `model <name>`; the real ones are `model` and `model use <name>`). The table says what the
+  binary accepts.
+
+Added
+- `tinycmdr tasks [--all] [--json]` - the task ledger as an operator reads it: counts, every
+  open/in-progress/blocked item with its note, and the last few finished ones. Never a model call.
+- `maintenance/check-tree-clean.py` - one command that proves a full gate run leaves the tree
+  byte-identical (snapshot, run, snapshot, report).
+- `tests/test_cross_process.py` - the lock proven across real processes, not threads - plus
+  stronger atomic-write, spill and journal suites.
+
 ## [1.0.26] - 2026-09-26
 
 Fixed

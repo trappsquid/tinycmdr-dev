@@ -76,12 +76,20 @@ def main():
         check("truncated" in out3, "a failed spill degrades to truncation, no exception")
 
         # ---- rotation keeps the folder bounded ----------------------------------------
+        # It prunes the files NO live index row names (audit D6): a row is a pointer the
+        # prompt tells the model to follow, so rotating by file count alone is what made
+        # session A's spill stop resolving. The bound is therefore the index (12 rows)
+        # plus `spill_keep` spares.
         fb.CONFIG["agent"]["spill_keep"] = 3
         for i in range(6):
             fb.cap_output("shell", f"{i}" + "x" * (cap + 200), "command output")
             time.sleep(0.02)
         left = list((fb.BASE_DIR / "spill").glob("*.txt"))
-        check(len(left) <= 3, f"rotation keeps the folder bounded ({len(left)} files)")
+        indexed = [str(e.get("path") or "") for e in fb._spill_rows()]
+        check(all((fb.BASE_DIR / p).exists() for p in indexed),
+              "every file a live index row names is still on disk")
+        check(len(left) <= fb._SPILLS_MAX + 3,
+              f"rotation keeps the folder bounded ({len(left)} files)")
         fb.CONFIG["agent"]["spill_keep"] = 50
 
         # ---- a REAL call site spills, on the exact route the analysis lost data on -----
@@ -161,6 +169,39 @@ def main():
               "  and does not touch another session's")
         check(on_disk and (fb.BASE_DIR / mine[-1]["path"]).exists(),
               "  the spilled FILE stays on disk - nothing was dropped")
+
+        # ---- a live row's file survives another session's spills (audit D6) ------------
+        # Measured with spill_keep=3: session A's indexed spill stopped resolving as soon
+        # as session B wrote four more, and the block's own promise is "The FULL text is
+        # on disk - nothing was dropped".
+        with fb._SPILLS_LOCK:
+            fb._SPILLS[:] = []
+        fb.CONFIG["agent"]["spill_keep"] = 3
+        a_out = fb.cap_output("shell", "A" * (cap + 200) + " tail-A", "command output",
+                              session="sess-A")
+        m_a = re.search(r"spill/([A-Za-z0-9_.-]+\.txt)", a_out)
+        for i in range(5):
+            fb.cap_output("shell", "B" * (cap + 200) + f" tail-B{i}", "command output",
+                          session="sess-B")
+        ids_a = re.findall(r"spill#(\d+)", fb.spill_index_block("sess-A"))
+        check(bool(m_a) and bool(ids_a), f"session A has an indexed spill ({ids_a})")
+        check((fb.BASE_DIR / "spill" / m_a.group(1)).exists(),
+              "the file session A's index still points at was NOT rotated away")
+        got_a = fb.tool_read_file({"path": "spill#" + ids_a[-1]},
+                                  {"session_key": "sess-A"})
+        check(not got_a.startswith("ERROR"),
+              f"and session A still reads it back ({got_a[:60]!r})")
+
+        # ---- a row whose file is gone drops off the index ------------------------------
+        # (the read-back above spilled its own copy, so this checks the DELETED row's id
+        # and its file, not "the index is empty")
+        (fb.BASE_DIR / "spill" / m_a.group(1)).unlink()
+        block_a2 = fb.spill_index_block("sess-A")
+        ids_a2 = re.findall(r"spill#(\d+)", block_a2)
+        check(m_a.group(1) not in block_a2 and ids_a[-1] not in ids_a2,
+              f"a spill whose file was deleted drops off the index instead of dangling "
+              f"(was {ids_a[-1]}, now {ids_a2})")
+        fb.CONFIG["agent"]["spill_keep"] = 50
 
         print()
         if FAILS:

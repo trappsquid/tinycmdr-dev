@@ -14,6 +14,7 @@ import io
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -581,6 +582,33 @@ def main():
     check("update without .git adopts the git path instead of printing usage",
           "adopting" in out, (rc, out[:160]))
     fb._git_exe = saved_git_exe
+
+    # H1: the word after the program name is a VERB, never a reason to start the bot.
+    # `tinycmdr taks` used to fall through to run_webui/run_bot and bring up the agent,
+    # which then answered nobody while the terminal looked fine. Staged fresh: the install
+    # above is gone by this point, and the run must happen in a COPY or a verb writes its
+    # log into the repo.
+    stage = Path(tempfile.mkdtemp(prefix="fbtest-verbs-cli-"))
+    try:
+        shutil.copy2(BASE / "tinycmdr.py", stage / "tinycmdr.py")
+        shutil.copy2(BASE / "tests" / "fixture-config.json", stage / "config.json")
+        proc = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "taks"],
+                              cwd=str(stage), capture_output=True, text=True, timeout=120,
+                              env=dict(os.environ, TINYCMDR_PLAIN="1"))
+        blob = proc.stdout + proc.stderr
+        check("H1: an unknown verb exits 2", proc.returncode == 2, proc.returncode)
+        check("H1: it NAMES the word it did not know",
+              "unknown verb" in blob and "taks" in blob, blob[-200:])
+        check("H1: and prints the verb list instead of starting the agent",
+              "tinycmdr <verb>" in blob, blob[-300:])
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
+
+    rc, out, err = call(fb, ["tasks"])
+    check("H1: `tasks` is a real verb", rc == 0 and "task ledger" in out, (rc, out[:120]))
+    rc, out, err = call(fb, ["tasks", "--json"])
+    check("H1: `tasks --json` prints the ledger file itself",
+          rc == 0 and "items" in out, (rc, out[:120]))
 
     print()
     _tail()

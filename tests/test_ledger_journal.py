@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -31,17 +32,12 @@ def stage():
         shutil.rmtree(STAGE, ignore_errors=True)
     STAGE.mkdir(parents=True, exist_ok=True)
     shutil.copy2(SRC, STAGE / "tinycmdr.py")
-    # An empty config: the build merges its defaults. The old one carried an
-    # `agent.tasks_file` key that nothing in tinycmdr.py reads - the ledger's paths are
-    # module globals - so this suite pins them directly instead of relying on a dead key.
-    (STAGE / "config.json").write_text("{}", encoding="utf-8")
+    (STAGE / "config.json").write_text(
+        json.dumps({"agent": {"tasks_file": str(STAGE / "tasks.json")}}), encoding="utf-8")
     spec = importlib.util.spec_from_file_location("tinycmdr_journal", STAGE / "tinycmdr.py")
     fb = importlib.util.module_from_spec(spec)
     sys.modules["tinycmdr_journal"] = fb
     spec.loader.exec_module(fb)
-    fb.TASKS_FILE = STAGE / "tasks.json"
-    fb.TASKS_DOC = STAGE / "tasks.md"
-    fb.TASKS_JOURNAL = STAGE / "tasks.journal.jsonl"
     return fb
 
 
@@ -89,6 +85,48 @@ def main():
     got = fb.load_tasks()
     check(len(got["items"]) == 1, "a damaged ledger is still salvaged, not thrown away")
     check(len(lines(fb)) == 3, "and salvaging does not rewrite history")
+
+    # ---- D9: a journal line describes a save that LANDED, and the rename is durable ---
+    # The line used to be appended BEFORE the write it describes, so a failed save left a
+    # revision in the history that never happened (and the next save reused the number).
+    # And the durability story was incomplete: fsync on the temp makes its CONTENTS
+    # durable, but the rename is a change to the parent directory.
+    (STAGE / "tasks.json").write_text('{"items": [], "next_id": 1}', encoding="utf-8")
+    before = len(lines(fb))
+    real_fsync = fb.os.fsync
+    dir_fsynced = []
+
+    def spy(fd):
+        try:
+            dir_fsynced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        except OSError:
+            pass
+        return real_fsync(fd)
+
+    fb.os.fsync = spy
+    raised = None
+    try:
+        fb.save_tasks({"items": [{"id": 1, "status": "open", "desc": "lands"}],
+                       "next_id": 2})
+        landed = len(lines(fb))
+        fb.os.fsync = lambda _fd: (_ for _ in ()).throw(
+            OSError(28, "No space left on device"))
+        try:
+            fb.save_tasks({"items": [], "next_id": 1})
+        except OSError as e:
+            raised = e
+        fb.os.fsync = spy
+    finally:
+        fb.os.fsync = real_fsync
+    check(landed == before + 1, "a save that lands adds exactly one journal line")
+    check(len(lines(fb)) == landed,
+          f"a save that FAILED writes no journal line at all ({lines(fb)[-3:]})")
+    check(raised is not None, f"and the failure reaches the caller ({raised})")
+    on_disk = json.loads((STAGE / "tasks.json").read_text(encoding="utf-8"))
+    check(json.loads(lines(fb)[-1])["rev"] == on_disk["revision"],
+          f"the last line's revision is the revision actually on disk ({on_disk})")
+    check(any(dir_fsynced),
+          f"the rename is made durable with a directory fsync ({dir_fsynced})")
 
     print()
     if FAILS:

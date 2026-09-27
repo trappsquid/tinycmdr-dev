@@ -32,14 +32,17 @@ Most agent harnesses were built for cloud API endpoints with remote server infra
 - **Autonomous Ops Runtime:**
   - **Loop Guard:** Detects repetitive tool-call cycles. Refuses identical calls after 2 repeats and halts runaway spins after 6, resetting automatically when a disk mutation (file write, edit) occurs.
   - **Stall Watchdog and Self-Healing:** Monitors execution progress, flags stalled turns, and frees stuck inference slots. Listener watchdogs automatically reconnect dropped websockets and recover without losing session state.
-  - **Truthful Stop and Mid-Run Steering:** `/tinycmdr stop` has three verified truthful states (`stopping`, `already flagged`, `nothing running`) and disconnects generation immediately to release GPU slots. Use `steer` to inject corrections into an active run without aborting.
+  - **Truthful Stop and Mid-Run Steering:** `/tinycmdr stop` has three verified truthful states (`stopping`, `already flagged`, `nothing running`) and disconnects generation immediately to release GPU slots. Send a message while a run is active to steer it - the run folds the correction in at its next step (steering is a message, not a verb to type).
   - **Persistent Task Ledger (`tasks.json`):** Tracks open, in-progress, completed, and abandoned items on disk. Multi-step work survives network drops and process restarts.
   - **Spill Indexing (`spill/`):** Outputs exceeding character limits spill to indexed disk files (`spill#N`) with clean pointers rather than overflowing the context window or silently dropping data.
 - **Three Unified Interfaces, One Vocabulary:**
   - **Terminal CLI:** Interactive TUI cards, live streaming output, and command history.
   - **Web Dashboard:** LAN browser dashboard on port 8787 for monitoring tool execution, inspecting state, and reviewing diffs.
   - **Chat Bot:** Background service integration with Mattermost and Telegram for remote administration.
-  - The exact same verbs (`status`, `model`, `steer`, `stop`, `tasks`, `logs`, `restart`) work identically across shell, web, and chat.
+  - The same management verbs (`status`, `model`, `tasks`, `logs`, `restart`, `health`,
+    `doctor`) work across shell, web, and chat. The live-run pair - cancelling a run and
+    steering one with a message - lives in the interactive CLI and in chat, where a run
+    is actually attached.
 - **Zero Infrastructure, Single-File Architecture:**
   - Runs as a single Python file with 3 standard dependencies (`requests`, `croniter`, `mmpy_bot`).
   - No Docker containers, no background databases, no Node.js runtime. Inspectable and auditable in a single file.
@@ -112,12 +115,12 @@ The same verbs work across every interface: in your OS shell (`tinycmdr <verb>`)
 | :--- | :--- |
 | `tinycmdr status` | System overview: active model, endpoint, context budget, and task counts |
 | `tinycmdr model` | View active model status, context window, and routes |
-| `tinycmdr model list` | Live query of available models across all configured endpoints |
-| `tinycmdr model <name>` | Switch the active model for your session |
+| `tinycmdr model` | Live query of the models every configured endpoint serves |
+| `tinycmdr model use <name>` | Switch the default model in config.json, catalog-checked |
 | `tinycmdr model add <url>` | Add a new model endpoint or fallback route |
-| `tinycmdr steer <text>` | Inject live instructions or corrections into an active run |
-| `tinycmdr stop` | Truthfully cancel an in-flight run and immediately free GPU slots |
-| `tinycmdr tasks` | Inspect open, in-progress, and completed items in the task ledger |
+| `/stop` (CLI and chat) | Truthfully cancel an in-flight run and free the GPU slot now |
+| (a message mid-run) | Steer it: the run folds your correction in at its next step |
+| `tinycmdr tasks` | Inspect open, in-progress and recently done items (`--all`, `--json`) |
 | `tinycmdr setup` | Launch the guided configuration wizard |
 | `tinycmdr logs [n]` | View the last *n* lines of the execution log |
 | `tinycmdr restart` | Cleanly recycle the background service and catch up on missed events |

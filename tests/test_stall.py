@@ -1459,6 +1459,29 @@ def test_startup_validation_catches_an_unconfigured_host():
         check("startup: a missing token names .env", "TINYCMDR_MM_TOKEN" in msg
               and ".env" in msg, msg)
 
+        # H2: a chat-less install is VALID - the page lane is a lane, and so is Telegram
+        # alone. Before this, a page-only install was told mattermost.url was a problem
+        # (doctor exited 1) and `main` started run_bot anyway, which exits 2 on a missing
+        # token and took the page down with it.
+        saved_mm = dict(fb.CONFIG["mattermost"])
+        saved_tg = dict(fb.CONFIG.get("telegram") or {})
+        try:
+            fb.CONFIG["mattermost"].update({"token": "", "url": "", "allowed_users": []})
+            fb.CONFIG["telegram"] = {"token": "", "allowed_users": []}
+            check("H2: no chat lane at all validates",
+                  fb.validate_startup_config() is None, fb.validate_startup_config())
+            check("H2: and the lane predicate says so",
+                  fb._chat_lane_configured() is False)
+            fb.CONFIG["telegram"] = {"token": "123:abc", "allowed_users": ["1"]}
+            check("H2: a Telegram-only box needs no Mattermost token",
+                  fb.validate_startup_config() is None, fb.validate_startup_config())
+            check("H2: and the lane predicate sees the Telegram lane",
+                  fb._chat_lane_configured() is True)
+        finally:
+            fb.CONFIG["mattermost"].clear()
+            fb.CONFIG["mattermost"].update(saved_mm)
+            fb.CONFIG["telegram"] = saved_tg
+
         # placeholder allowlist
         fb.CONFIG["mattermost"]["token"] = "abc123"
         fb.CONFIG["mattermost"]["allowed_users"] = ["your-mattermost-user-id"]

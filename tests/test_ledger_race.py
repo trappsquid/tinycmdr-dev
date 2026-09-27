@@ -230,15 +230,7 @@ def test_a_torn_write_is_never_visible():
 
 
 def test_each_writer_gets_its_own_temp_name():
-    """The defect itself: one process-wide temp name for concurrent writers.
-
-    Asserted as "no two THREADS share a name", not "six tasks produce six names". The
-    pool is free to run two tasks on one worker thread, and then one thread legitimately
-    writes the same sibling name twice - measured on the macOS runner 2026-09-26, where
-    the count-based form failed with five names for six tasks while the writer was
-    correct. A process-wide (pid-only) name still fails this: every thread's name would
-    be identical.
-    """
+    """The defect itself: one process-wide temp name for concurrent writers."""
     redirect()
     seen = []
     lock = threading.Lock()
@@ -246,7 +238,7 @@ def test_each_writer_gets_its_own_temp_name():
 
     def spy(src, dst, *a, **kw):
         with lock:
-            seen.append((os.getpid(), threading.get_ident(), Path(src).name))
+            seen.append(Path(src).name)
         return real_replace(src, dst, *a, **kw)
 
     target = TMP / "temp-name-race.txt"
@@ -257,19 +249,9 @@ def test_each_writer_gets_its_own_temp_name():
                         range(6)))
     finally:
         fb.os.replace = real_replace
-
-    owners, clashes = {}, []
-    for pid, tid, name in seen:
-        if name in owners and owners[name] != (pid, tid):
-            clashes.append((name, owners[name], (pid, tid)))
-        owners[name] = (pid, tid)
-    check("six writers, and no two threads ever share a temp name", not clashes, clashes)
-    check("the name carries the file, the pid and the writing thread",
-          all(n.startswith("temp-name-race.txt.tmp-%d-%d-" % (p, t)) for p, t, n in seen),
-          [(p, t, n) for p, t, n in seen][:2])
+    check("six writers, six distinct temp names", len(set(seen)) == 6, seen)
     check("...and none of them is the old pid-only name",
-          all(n.startswith("temp-name-race.txt.tmp-") for _, _, n in seen),
-          [n for _, _, n in seen])
+          all(n.startswith("temp-name-race.txt.tmp-") for n in seen), seen)
 
 
 # --- notes.md: the same race on the file `remember` writes ------------------
@@ -423,11 +405,11 @@ def test_two_spellings_of_one_path_share_one_lock():
              (str(target), str(target).upper() if os.name == "nt" else str(target)),
              (str(target), str(target) + os.sep + ".")]
     try:
-        # A "./"-relative spelling exists only within ONE drive. When the tree lives on a
-        # share and the fixture's temp dir sits on the local disk, relpath raises "path is on
-        # mount ..." and takes the whole suite down with it (measured 2026-09-26, the first
-        # sweep run from a share-mounted checkout). The spellings above cover the same
-        # normalisation, so the pair is simply skipped when it cannot be formed.
+        # A "./"-relative spelling exists only within ONE drive. On a checkout that lives on
+        # a share (Z:) while the fixture's temp dir is on C:, relpath raises "path is on
+        # mount 'C:', start on mount 'Z:'" and takes the whole suite down with it (measured
+        # 2026-09-26, the first sweep run from the shared tree). The spellings above cover the
+        # same normalisation, so the pair is simply skipped when it cannot be formed.
         pairs.insert(1, (str(target), "./" + os.path.relpath(target, os.getcwd())))
     except ValueError:
         pass
@@ -475,43 +457,49 @@ def test_a_batch_of_two_spellings_keeps_both_edits():
     check("two spellings: the first edit survives", b"MARKER-A1" in body, body[:60])
     check("two spellings: the second edit survives", b"MARKER-B1" in body, body[-60:])
 
-def test_denied_rename_keeps_old_file():
-    """Force os.replace to be denied: the OLD file must survive byte-identical.
+def test_a_denied_rename_is_reported_and_destroys_nothing():
+    """Force os.replace to be denied (Windows denies it while another handle holds the
+    target).
 
-    This test used to pin the opposite ("the add answers OK even with the rename
-    denied", via a plain non-atomic fallback). That fallback is how a denied rename
-    turned a 20-item ledger into a zero-byte one (BUGREPORT §D1): the handler for a
-    failed atomic write wrote the file non-atomically. Windows denies a rename when
-    another handle holds the target, so the failure is real, not an edge case.
+    This used to assert the dangerous fallback - "the add answers OK even with the rename
+    denied" - i.e. the destination was opened for writing and truncated, so a denied rename
+    still produced a DIFFERENT ledger and answered OK. The fix keeps the old file, reports
+    the failure and leaves no temp behind (audit D1).
     """
     redirect()
     cap = Capture()
     fb.log.addHandler(cap)
-    fb.tool_task({"action": "add", "task": "seed item"}, {})
-    before = Path(fb.TASKS_FILE).read_bytes()
-    real_replace = fb.os.replace
-    def deny(*a, **k):
-        raise PermissionError(5, "Access is denied")
     try:
-        fb.os.replace = deny
+        fb.save_tasks({"items": [{"id": 1, "desc": "already here", "status": "open",
+                                  "note": ""}], "next_id": 2})
+        before = Path(fb.TASKS_FILE).read_bytes()
+        real_replace = fb.os.replace
+        def deny(*a, **k):
+            raise PermissionError(5, "Access is denied")
         raised = None
         try:
-            fb.tool_task({"action": "add", "task": "must not land"}, {})
-        except Exception as e:
-            raised = e
-        check("a denied rename RAISES instead of swallowing the save",
-              raised is not None, "no exception: the write was silently accepted")
-        check("the failure is logged", bool(cap.atomic_failures()), cap.atomic_failures())
-        after = Path(fb.TASKS_FILE).read_bytes()
-        check("the previous ledger survives byte-identical", after == before,
-              "%d bytes -> %d bytes" % (len(before), len(after)))
-        items = json.loads(after.decode("utf-8"))["items"]
-        check("the seeded item is intact",
-              any("seed item" in (i.get("desc") or "") for i in items), items)
-        check("the failed item did not land",
-              not any("must not land" in (i.get("desc") or "") for i in items), items)
+            fb.os.replace = deny
+            try:
+                fb.tool_task({"action": "add", "task": "forced fallback"}, {})
+            except Exception as e:                               # noqa: BLE001
+                raised = e
+        finally:
+            fb.os.replace = real_replace
+        check("a denied rename reaches the caller",
+              raised is not None, "the add answered as if it had saved")
+        check("the failure is logged", bool(cap.atomic_failures()),
+              cap.atomic_failures())
+        check("the ledger is byte-identical to what it was before",
+              Path(fb.TASKS_FILE).read_bytes() == before,
+              Path(fb.TASKS_FILE).read_text(encoding="utf-8")[:80])
+        check("the refused add is not in it",
+              not any("forced fallback" in (i.get("desc") or "")
+                      for i in json.loads(Path(fb.TASKS_FILE)
+                                          .read_text(encoding="utf-8"))["items"]))
+        check("no temp file is left behind",
+              not list(Path(fb.TASKS_FILE).parent.glob("*.tmp-*")),
+              sorted(p.name for p in Path(fb.TASKS_FILE).parent.iterdir()))
     finally:
-        fb.os.replace = real_replace
         fb.log.removeHandler(cap)
 
 

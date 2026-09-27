@@ -33,6 +33,7 @@ import re
 import socket
 import subprocess
 import sys
+import stat
 import tempfile
 import threading
 import functools
@@ -807,7 +808,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.26"
+VERSION = "1.0.27"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -1667,23 +1668,53 @@ def truncate_middle(text, limit, label="output"):
 # happen the old truncation is used, because a disk problem must never break a run (the same
 # rule as the verifiers: something that can break a run is worse than no something).
 
-def _spill_dir():
-    d = BASE_DIR / "spill"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+def _spill_rows(session=None):
+    """The spill-index rows for one session, oldest first. `None` = every row.
 
+    A caller with no session key (a fixture, a sub-agent) keeps the old whole-index
+    behaviour; a real conversation sees only its own spills.
+
+    Rows whose file no longer resolves are DROPPED here, at the one place every reader
+    goes through: after the fix that keeps a live row's file from being rotated away
+    (audit D6), the mirror case is a file deleted by something else - a hand `rm`, a
+    restart that pruned spares - and a row pointing at a path that is gone is worse than
+    no row at all: the prompt tells the model to read it.
+    """
+    with _SPILLS_LOCK:
+        alive = [e for e in _SPILLS
+                 if (BASE_DIR / str(e.get("path") or "")).exists()]
+        if len(alive) != len(_SPILLS):
+            _SPILLS[:] = alive
+        return [e for e in alive if session is None or e.get("session") == session]
 
 def _spill_rotate(keep):
+    """Trim spill/ down to `keep` files that NO LIVE INDEX ROW points at.
+
+    The index and the files are two halves of one promise - "The FULL text is on disk -
+    nothing was dropped" - and rotating by file count alone broke it: measured with
+    spill_keep=3, session A's indexed spill stopped resolving as soon as session B wrote
+    four more (audit D6). A row is a pointer the prompt tells the model to follow, so a
+    file a live row names is never deleted; the count applies to the spares.
+    """
     try:
+        live = {str(e.get("path") or "") for e in _spill_rows()}
         files = sorted(_spill_dir().glob("*.txt"),
                        key=lambda p: p.stat().st_mtime, reverse=True)
-        for old in files[max(1, keep):]:
+        spare = [p for p in files if f"spill/{p.name}" not in live]
+        for old in spare[max(1, int(keep)):]:
             try:
                 old.unlink()
             except OSError:
                 pass
     except Exception as e:
         log.debug("spill rotation skipped: %s", e)
+
+def _spill_dir():
+    d = BASE_DIR / "spill"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 
 
 # ... and the other half of the deal: an over-cap result is POINTERED, not lost, so the
@@ -1697,14 +1728,6 @@ _SPILLS_MAX = 12
 _SPILL_SEQ = {"n": 0}
 
 
-def _spill_rows(session=None):
-    """The spill-index rows for one session, oldest first. `None` = every row.
-
-    A caller with no session key (a fixture, a sub-agent) keeps the old whole-index
-    behaviour; a real conversation sees only its own spills.
-    """
-    with _SPILLS_LOCK:
-        return [e for e in _SPILLS if session is None or e.get("session") == session]
 
 
 def _spill_record(name, rel, text, session=None):
@@ -4618,18 +4641,235 @@ def _lock_key(path):
         return text
 
 
+LOCK_DIR = Path(tempfile.gettempdir()) / ("tinycmdr-locks-%s"
+                                          % getattr(os, "getuid", lambda: "w")())
+_IP_TIMEOUT = 20.0        # bounded, and never fatal (see _ip_take)
+_IP_POLL = 0.05
+_IP_FDS = {}              # key -> fd we hold the OS lock on
+_IP_FDS_GUARD = threading.Lock()
+
+
+def _ip_lock_file(key):
+    """The lock file for one path: one per (user, realpath), in the temp dir.
+
+    Not a sibling of the target on purpose: _path_lock() also guards a user's own files
+    (edit_file, write_file), and dotfile litter beside somebody's source is not ours to
+    leave. The temp dir is also the one place no `clean` glob and no uninstaller touches.
+    """
+    digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
+    return LOCK_DIR / ("%s.lock" % digest)
+
+
+def _ip_try(fd):
+    """One non-blocking attempt at the OS lock on `fd`."""
+    try:
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, 0)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError:
+        return False
+
+
+def _ip_take(key):
+    """Take the OS lock for `key`, waiting up to _IP_TIMEOUT for another process.
+
+    Never fatal and never permanent. A guard that protects a file must not be able to
+    freeze the bot that writes it (the rule _path_lock() was built on): on a platform
+    without flock, an unusable lock dir, or a holder that never lets go, this says so and
+    lets the write proceed - the destination is still replaced atomically, which is the
+    property that keeps a reader from ever seeing a spliced file.
+    """
+    if not key:
+        return
+    try:
+        LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(str(_ip_lock_file(key)), os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError as e:
+        log.debug("inter-process lock unavailable for %s: %s", key, e)
+        return
+    deadline = time.time() + _IP_TIMEOUT
+    while True:
+        if _ip_try(fd):
+            break
+        if time.time() >= deadline:
+            log.error("waited %ds for the lock on %s: another process is holding it "
+                      "(or the lock file is on a filesystem without flock). Writing "
+                      "anyway; the file itself is still replaced atomically.",
+                      int(_IP_TIMEOUT), Path(key).name)
+            break
+        time.sleep(_IP_POLL)
+    with _IP_FDS_GUARD:
+        _IP_FDS[key] = fd
+
+
+def _ip_drop(key):
+    with _IP_FDS_GUARD:
+        fd = _IP_FDS.pop(key, None)
+    if fd is None:
+        return
+    try:
+        if os.name == "nt":
+            import msvcrt
+            try:
+                os.lseek(fd, 0, 0)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+            except OSError:
+                pass
+        else:
+            import fcntl
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+class _FileLock:
+    """The lock _path_lock() hands out: threads here, every process on the box there.
+
+    Reentrant per THREAD, and that is load-bearing twice over. The decorator was
+    stacked twice on one tool and a non-reentrant lock froze the run for 20 minutes
+    (2026-09-21); and a whole read-modify-write (serialized_on) wraps an atomic write
+    that takes the same path again. The RLock serializes threads, so `depth` is only
+    ever touched by the thread that owns it, and the OS lock is taken once per
+    outermost entry - flock() treats a second fd on the same file as a DIFFERENT
+    lock, so re-entering it inside one thread would deadlock against itself.
+    """
+    __slots__ = ("key", "rlock", "depth")
+
+    def __init__(self, key):
+        self.key = key
+        self.rlock = threading.RLock()
+        self.depth = 0
+
+    def __enter__(self):
+        self.rlock.acquire()
+        if self.depth == 0:
+            try:
+                _ip_take(self.key)
+            except Exception:                                    # noqa: BLE001
+                # The RLock accounting must stay balanced whatever happens here: a lock
+                # that wedges the process is the failure mode this file keeps paying for.
+                log.warning("inter-process lock failed for %s", self.key, exc_info=True)
+        self.depth += 1
+        return self
+
+    def __exit__(self, *exc):
+        self.depth -= 1
+        if self.depth == 0:
+            _ip_drop(self.key)
+        self.rlock.release()
+        return False
+
+
+_ATOMIC_RENAME_RETRY_DELAYS = (0.05, 0.2)
+def atomic_write_bytes(path, data):
+    """Replace a file's bytes in one step. NEVER truncates the destination.
+
+    The core both writers share. A sibling temp file is written, flushed, fsync'd
+    and renamed over the destination - atomic on NTFS and POSIX, so a reader gets
+    the old file or the new one and never a mixture. The temp carries the
+    DESTINATION's own mode (0600 when the file is new), so replacing a 0600 .env or
+    a 0755 script neither widens it nor loses a bit: the previous version created
+    the temp with the umask's default and renamed that over a 0600 file.
+
+    The destination is never opened for writing. If the write or the rename fails,
+    the old file is left exactly as it was and the error is RAISED, so the caller
+    learns the save did not happen instead of losing the file to a truncating
+    fallback (audit D1: a failed save of a 20-item ledger left 0 bytes on disk and
+    the next load died on JSONDecodeError, with no .damaged-* copy anywhere).
+    """
+    p = Path(path)
+    # The temp name is per WRITER, not per process: one assistant turn runs its tool
+    # calls in a ThreadPoolExecutor (up to 4), so two writers of the same state file
+    # shared `<name>.tmp-<pid>`. The second rename then raised WinError 32 and BOTH
+    # writes fell back to the plain non-atomic path this function exists to avoid -
+    # the ledger lost one `add` and one `done` (drive, 2026-09-23: tasks.json and
+    # tasks.md both warned, and the journal wrote revision 15 twice). A per-writer
+    # temp name plus the per-path lock below makes concurrent writers serialize
+    # instead of collide. The lock covers the RENAME too, not only the write, which
+    # is the half Windows enforces.
+    with _path_lock(str(p)):
+        try:
+            mode = stat.S_IMODE(p.stat().st_mode)
+        except OSError:
+            # New file: narrow by default. The installers already write config.json
+            # and .env 0600, and state files carry tokens and session text.
+            mode = 0o600
+        tmp = p.with_name("%s.tmp-%d-%d" % (p.name, os.getpid(),
+                                            threading.get_ident()))
+        try:
+            fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+            # Binary, no newline translation: the default text mode rewrites every
+            # newline to os.linesep on Windows, so text that already carried CRLF
+            # landed as CR CR LF (measured 2026-09-22: edit_file doubled every CR and
+            # wrote its own .bak doubled too). Every caller has already chosen a
+            # convention, so the platform must not translate a second time.
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
+                if hasattr(os, "fchmod"):
+                    # os.open's mode is filtered through the umask; fchmod makes the
+                    # temp exactly the destination's mode, so a .env temp is never
+                    # briefly 0644 and an executable keeps its bit.
+                    try:
+                        os.fchmod(f.fileno(), mode)
+                    except OSError:
+                        pass
+                f.flush()
+                os.fsync(f.fileno())
+            last = None
+            for delay in (0,) + _ATOMIC_RENAME_RETRY_DELAYS:
+                if delay:
+                    time.sleep(delay)
+                try:
+                    os.replace(str(tmp), str(p))
+                    _fsync_dir(p.parent)
+                    return
+                except OSError as e:
+                    last = e
+            raise last
+        except BaseException as e:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
+            if isinstance(e, Exception):
+                log.warning("atomic write of %s failed (%s) - the old file is "
+                            "unchanged and the save did not happen", p.name, e)
+            raise
+def atomic_write_text(path, text, encoding="utf-8"):
+    """Replace a state file with `text` in one step; see atomic_write_bytes.
+
+    Measured failure this exists for: the durable ledger was found holding a
+    complete JSON document followed by a duplicated fragment, so every load
+    raised "Extra data", the bot logged "starting a fresh ledger" and 20 items
+    were silently gone. A plain write_text is one crash, one full disk or one
+    interleaved writer away from exactly that.
+    """
+    atomic_write_bytes(path, text.encode(encoding))
+
 def _path_lock(path):
     """One lock per PATH, not per tool: a batch that edits two files in parallel is
-    fine, two calls to the same file are not.
-
-    RLock, not Lock, and that is not style: the decorator was stacked TWICE on
-    tool_write_file, so the same thread took the same non-reentrant lock twice and
-    the call never returned - three suites hung on it for 20 minutes each before a
-    faulthandler stack named it (2026-09-21). A guard that protects a file must not
-    be able to freeze the run that writes it.
+    fine, two calls to the same file are not - and since D2, two PROCESSES are not
+    either. One stable object per normalized key (callers compare identity), holding a
+    thread RLock and an OS lock on a file in LOCK_DIR.
     """
+    key = _lock_key(path)
     with _PATH_LOCKS_GUARD:
-        return _PATH_LOCKS.setdefault(_lock_key(path), threading.RLock())
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = _PATH_LOCKS[key] = _FileLock(key)
+        return lock
 
 
 def serialized_by_path(fn):
@@ -5612,79 +5852,29 @@ TASK_MARKS = {"open": " ", "doing": "~", "blocked": "!", "done": "x",
               "dropped": "-"}
 
 
-def atomic_write_text(path, text, encoding="utf-8", mode=None):
-    """Replace a state file in one step, so a reader never sees a spliced one.
+def _fsync_dir(d):
+    """Flush the DIRECTORY entry, not just the file (audit D9).
 
-    Measured failure this exists for: the durable ledger was found holding a
-    complete JSON document followed by a duplicated fragment, so every load
-    raised "Extra data", the bot logged "starting a fresh ledger" and 20 items
-    were silently gone. A plain write_text is one crash, one full disk or one
-    interleaved writer away from exactly that. Write a sibling temp file, flush
-    it to disk, and os.replace() it - atomic on NTFS and POSIX, so a reader gets
-    the old file or the new one and never a mixture.
-
-    The failure path NEVER opens the destination for writing (BUGREPORT §D1): the
-    old handler "fell back to a plain write", so a denied rename, a full disk or a
-    locked file turned the surviving file into a zero-byte or half-written one -
-    the exact loss this function exists to prevent, committed by its own error
-    handler. It now retries once under a second sibling temp name and then RAISES,
-    leaving the previous file byte-identical and telling the caller it failed.
-
-    Mode (§D4): the temp is created 0600 and chmod'd to the destination's existing
-    mode before the replace, so a 0600 file stays 0600 and a temp that will become
-    .env is never briefly world-readable. A new file keeps the 0600 it was created
-    with. Callers may force a mode explicitly (the installers' 0644 config.json).
+    fsync on the temp makes its CONTENTS durable; the rename that puts it in place is a
+    change to the parent directory, and that is a separate durability step. Without it a
+    power loss can lose a save that already reported success on POSIX. Windows has no
+    directory handles to fsync, so this is POSIX-only.
     """
-    p = Path(path)
-    # The temp name is per WRITER, not per process: one assistant turn runs its tool
-    # calls in a ThreadPoolExecutor (up to 4), so two writers of the same state file
-    # shared `<name>.tmp-<pid>`. The second rename then raised WinError 32 and BOTH
-    # writes fell back to the plain non-atomic path this function exists to avoid -
-    # the ledger lost one `add` and one `done` (drive, 2026-09-23: tasks.json and
-    # tasks.md both warned, and the journal wrote revision 15 twice). A per-writer
-    # temp name plus the per-path lock below makes concurrent writers serialize
-    # instead of collide. The lock covers the RENAME too, not only the write, which
-    # is the half Windows enforces.
-    with _path_lock(str(p)):
-        if mode is not None:
-            keep_mode = mode
-        else:
-            try:
-                keep_mode = p.stat().st_mode & 0o7777
-            except OSError:
-                keep_mode = 0o600   # a brand-new state file: private by default
-        last = None
-        # Two attempts, two DIFFERENT sibling names: a stale temp from a killed
-        # writer (or a filesystem that rejects the first name) must not cost the
-        # save. The second failure is the caller's to see.
-        for attempt in (0, 1):
-            tmp = p.with_name("%s.tmp-%d-%d-%d" % (
-                p.name, os.getpid(), threading.get_ident(), attempt))
-            try:
-                # newline="" is load-bearing, not style. The default translates every
-                # newline to os.linesep on Windows, so text that already carried CRLF
-                # landed as CR CR LF: measured 2026-09-22, edit_file doubled every CR on
-                # this box and wrote its own .bak doubled too. Every caller here has
-                # already chosen a convention (tool_edit_file expands to the file's own),
-                # so the platform must not translate a second time.
-                fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
-                    f.write(text)
-                    f.flush()
-                    os.fsync(f.fileno())
-                os.chmod(tmp, keep_mode)
-                os.replace(tmp, p)
-                return
-            except Exception as e:
-                last = e
-                try:
-                    if tmp.exists():
-                        tmp.unlink()
-                except OSError:
-                    pass
-        log.error("atomic write of %s failed (%s) - the previous file is left "
-                  "untouched", p.name, last)
-        raise last
+    if os.name == "nt":
+        return
+    try:
+        fd = os.open(str(d), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
 
 
 def salvage_ledger(err):
@@ -5749,7 +5939,7 @@ def journal_tasks(t):
     question with an answer instead of a mystery.
     """
     try:
-        with open(_journal_path(), "a", encoding="utf-8") as fh:
+        with open(TASKS_JOURNAL, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(
                 {"at": time.strftime("%Y-%m-%d %H:%M:%S"),
                  "rev": int(t.get("revision") or 0),
@@ -5782,9 +5972,12 @@ def ledger_check(t):
 
 def save_tasks(t):
     t["revision"] = int(t.get("revision") or 0) + 1
-    journal_tasks(t)
     atomic_write_text(TASKS_FILE,
                       json.dumps(t, indent=2, ensure_ascii=False))
+    # Journalled AFTER the write that it describes (audit D9). Before the fix the line
+    # was appended first, so a failed save left a revision in the history that never
+    # landed - and the next save reused the number.
+    journal_tasks(t)
     # Human-readable mirror: "what is this box in the middle of?" should be
     # answerable by reading a file, not by asking the agent.
     lines = ["# Task ledger", ""]
@@ -9663,14 +9856,21 @@ _STATE_LOCK = threading.RLock()
 def _state(mutate=None):
     """Tiny persisted state file: durable model choices (and the config
     default remembered by '/model default --global')."""
-    with _STATE_LOCK:
+    with _path_lock(str(GLOBAL_STATE_FILE)):
         try:
             st = json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             st = {}
         if mutate:
             mutate(st)
-            atomic_write_text(GLOBAL_STATE_FILE, json.dumps(st, indent=2))
+            try:
+                atomic_write_text(GLOBAL_STATE_FILE, json.dumps(st, indent=2))
+            except Exception as e:
+                # atomic_write_text raises now and never truncates, so the file still
+                # holds the previous state; the change applies to this process and is
+                # said out loud instead of being lost silently.
+                log.warning("state.json not saved (%s) - the file is unchanged and "
+                            "this change applies to this session only", e)
         return st
 
 
@@ -12499,13 +12699,63 @@ def restore_global_model():
     return prev, err
 
 
-def _save_overrides():
+class _OverrideMap(dict):
+    """Per-conversation model choices, remembering which keys THIS process set.
+
+    A save must not replace the file's whole map from this process's snapshot: measured
+    across two lanes, the web process's save dropped the bot's `/model` choice
+    (`{mattermost:chan-1: model-from-bot}` -> `{web:tab-2: model-from-web}`) - audit D7.
+    Only the keys in `touched` are written over the file; every other lane's key is left
+    alone. Loading goes through dict.update(), which is the C fast path and does NOT call
+    __setitem__, so a freshly loaded map is correctly "untouched".
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.touched = set()
+
+    def __setitem__(self, key, value):
+        self.touched.add(key)
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        self.touched.add(key)
+        super().__delitem__(key)
+
+    def pop(self, key, *default):
+        self.touched.add(key)
+        return super().pop(key, *default)
+
+    def clear(self):
+        self.touched.update(self.keys())
+        super().clear()
+def _save_overrides(replace=False):
     """Persist per-conversation model choices so a restart doesn't silently
-    drop them. Derived sub/bg/sched keys are transient and skipped."""
+    drop them. Derived sub/bg/sched keys are transient and skipped.
+
+    The save MERGES: only the keys this process has actually set (see
+    _OverrideMap.touched) are written over the file, and every other lane's choice is
+    left alone - replacing the whole map from this process's snapshot is how the web
+    process dropped the bot's `/model` choice (audit D7). `replace=True` is the
+    deliberate "every conversation inherits the new default" call from a global switch.
+    """
+    derived = ("sub-", "bg-", "sched-")
+    mine = {k: v for k, v in AGENT.model_overrides.items()
+            if not k.startswith(derived)}
+    touched = set(getattr(AGENT.model_overrides, "touched", None) or ())
+
+    def merge(st):
+        if replace:
+            st["model_overrides"] = {}
+            return
+        disk = {k: v for k, v in (st.get("model_overrides") or {}).items()
+                if not k.startswith(derived)}
+        merged = {k: v for k, v in disk.items() if k not in touched}
+        merged.update(mine)          # this process's own keys win
+        st["model_overrides"] = merged
+
     try:
-        _state(lambda st: st.update(model_overrides={
-            k: v for k, v in AGENT.model_overrides.items()
-            if not k.startswith(("sub-", "bg-", "sched-"))}))
+        _state(merge)
     except Exception as e:
         log.warning("could not persist model overrides: %s", e)
 
@@ -18995,48 +19245,18 @@ def _cli_sigint(signum, frame):
     raise KeyboardInterrupt
 
 
-_LOCK_FH = None
 
 
-def acquire_single_instance_lock():
-    """Bot mode only: refuse a second tinycmdr from the same folder.
-    (Logon shortcut + manual double-click = two bots on one Mattermost
-    token = duplicate replies.) Lock is released on process exit, and on
-    os.execv (/restart) thanks to PEP 446 non-inheritable fds."""
-    global _LOCK_FH
-    try:
-        if os.name == "nt":
-            import msvcrt
-            _LOCK_FH = open(BASE_DIR / "tinycmdr.lock", "a+b")
-            _LOCK_FH.seek(0)
-            msvcrt.locking(_LOCK_FH.fileno(), msvcrt.LK_NBLCK, 1)
-        else:
-            import fcntl
-            _LOCK_FH = open(BASE_DIR / "tinycmdr.lock", "a")
-            fcntl.flock(_LOCK_FH, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        return False
-    except Exception:
-        return True   # lock mechanics failed — never block startup on that
-    return True
 
 
-def _release_lock():
-    """Drop the single-instance lock so a replacement process can take it."""
-    global _LOCK_FH
-    try:
-        if _LOCK_FH:
-            if os.name == "nt":
-                import msvcrt
-                try:
-                    _LOCK_FH.seek(0)
-                    msvcrt.locking(_LOCK_FH.fileno(), msvcrt.LK_UNLCK, 1)
-                except Exception:
-                    pass
-            _LOCK_FH.close()
-    except Exception:
-        pass
-    _LOCK_FH = None
+
+
+
+
+
+
+
+
 
 
 def _note_restart(channel_id, root_id, by):
@@ -19228,8 +19448,8 @@ def user_is_allowed(sender, user_id):
 #     re-implementing the kill/launch dance, because that dance is where two bots
 #     on one token came from.
 
-VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc", "ports",
-         "restart", "update", "clean", "token", "version", "run", "help")
+VERBS = ("status", "doctor", "health", "tasks", "model", "config", "setup", "logs", "proc",
+         "ports", "restart", "update", "clean", "token", "version", "run", "help")
 
 # Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
 # (Windows installs by default, and a fleet Windows box had no git at all on 2026-09-24).
@@ -19298,6 +19518,144 @@ def ensure_launcher_executable():
         log.debug("could not restore the launcher's execute bit", exc_info=True)
 
 
+_LOCK_FH = None
+
+
+def _lock_target():
+    """(kind, handle) for this folder's single-instance lock.
+
+    POSIX locks the INSTALL FOLDER itself, not a file beside it. flock lives on the
+    inode, so a lock FILE is defeated by `rm`: measured, a second instance was refused,
+    the file was deleted, and the very next instance acquired a fresh lock and ran
+    against the same bot token (audit D5). A directory cannot be unlinked while it has
+    contents, so that foot-gun is gone - and so is the abort message that used to tell
+    the operator to delete the file. Windows has no directory handle msvcrt can lock, so
+    it keeps the file.
+    """
+    if os.name == "nt":
+        return "file", open(BASE_DIR / "tinycmdr.lock", "a+b")
+    try:
+        return "dir", os.open(str(BASE_DIR), os.O_RDONLY)
+    except OSError:
+        # No handle on the folder (exotic filesystem, odd permissions): the file is the
+        # old fallback. Weaker, but a lock that refuses to start is worse.
+        return "file", open(BASE_DIR / "tinycmdr.lock", "a")
+
+def _lock_release_fd(fh):
+    if isinstance(fh, int):
+        try:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            os.close(fh)
+        except OSError:
+            pass
+        return
+    if os.name == "nt":
+        try:
+            import msvcrt
+            try:
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            except Exception:                                    # noqa: BLE001
+                pass
+        except Exception:                                        # noqa: BLE001
+            pass
+    try:
+        fh.close()
+    except Exception:                                            # noqa: BLE001
+        pass
+
+def acquire_single_instance_lock():
+    """Bot mode only: refuse a second tinycmdr from the same folder.
+    (Logon shortcut + manual double-click = two bots on one Mattermost
+    token = duplicate replies.) Lock is released on process exit, and on
+    os.execv (/restart) thanks to PEP 446 non-inheritable fds."""
+    global _LOCK_FH
+    fh = None
+    try:
+        _kind, fh = _lock_target()
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        if fh is not None:
+            _lock_release_fd(fh)     # close what we opened before refusing
+        return False
+    except Exception:
+        if fh is not None:
+            _lock_release_fd(fh)
+        return True   # lock mechanics failed — never block startup on that
+    _LOCK_FH = fh
+    return True
+
+def _release_lock():
+    """Drop the single-instance lock so a replacement process can take it."""
+    global _LOCK_FH
+    try:
+        if _LOCK_FH:
+            _lock_release_fd(_LOCK_FH)
+    except Exception:                                            # noqa: BLE001
+        pass
+    _LOCK_FH = None
+
+def _instance_lock_free():
+    """True when no process holds this folder's instance lock.
+
+    One probe, one target, so the bot and `tinycmdr status` can never disagree about
+    which inode is the instance lock (audit D5: the probe used to look for a FILE while
+    the fix now locks the FOLDER on POSIX). Raises OSError when the target cannot be
+    opened; callers turn that into "unknown".
+    """
+    _kind, fh = _lock_target()
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return False
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            return True
+        import fcntl
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return False
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return True
+    finally:
+        _lock_release_fd(fh)
+
+def instance_busy_note():
+    """What the operator is told when a second bot is refused.
+
+    Names the door to LOOK through, and never tells anyone to delete the lock file: the
+    old wording did, and on POSIX flock lives on the inode, so deleting it handed the
+    next instance a fresh lock and a second bot on the same token (audit D5).
+    """
+    return ("One bot per folder - a second instance double-answers every message.\n"
+            "See what is running with `tinycmdr status`, then stop it the way this\n"
+            "install starts it (launchd, systemd, or the Windows Startup shortcut).")
+
+def _verb_running():
+    """True / False / None: does another live process hold this folder's lock?
+
+    A probe, not a claim: it takes the same lock and gives it straight back, so a
+    lock file left behind by a crash reads as NOT running.
+    """
+    try:
+        return not _instance_lock_free()
+    except Exception:                                            # noqa: BLE001
+        return None
+
 def update_adopt_git(git, repo):
     """Make this install a git checkout, then check out the published branch.
 
@@ -19353,6 +19711,8 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   config get|set|unset <dotted.key> [value]
                      read or edit config.json (a read-back is printed; secrets refused)
   health             one line + exit code: up, lane, model (no network, for scripts)
+  tasks [--all]      the task ledger: what is open, in progress and recently done
+                     (--json prints the file itself; never a model call)
   version            the version alone
   proc               the processes running from THIS folder, and the web port's holder
   ports              what this install listens on + the LAN firewall rule it needs
@@ -19378,38 +19738,6 @@ With no verb this file is the agent itself, exactly as it has always been.
 """
 
 
-def _verb_running():
-    """True / False / None: does another live process hold this folder's lock?
-
-    A probe, not a claim: it takes the same lock and gives it straight back, so a
-    lock file left behind by a crash reads as NOT running.
-    """
-    lock = BASE_DIR / "tinycmdr.lock"
-    try:
-        if os.name == "nt":
-            import msvcrt
-            fh = open(lock, "a+b")
-            try:
-                fh.seek(0)
-                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-            except OSError:
-                fh.close()
-                return True
-            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-            fh.close()
-            return False
-        import fcntl
-        fh = open(lock, "a")
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            fh.close()
-            return True
-        fcntl.flock(fh, fcntl.LOCK_UN)
-        fh.close()
-        return False
-    except Exception:
-        return None
 
 
 def _verb_log_lines(count):
@@ -19422,6 +19750,42 @@ def _verb_log_lines(count):
         return [], 0
     lines = text.splitlines()
     return lines[-count:], len(lines)
+
+
+def _verb_tasks(rest):
+    """The task ledger, as an operator reads it - never a model call.
+
+    The README promised `tinycmdr tasks` while the only door was the model's `task`
+    tool and the `tasks.md` mirror, so the verb did not exist and the word fell
+    through to starting the agent (H1). `--all` prints every item, `--json` the file
+    itself.
+    """
+    if "--json" in rest:
+        print(json.dumps(load_tasks(), indent=2, ensure_ascii=False))
+        return 0
+    show_all = any(a in ("--all", "-a") for a in rest)
+    t = load_tasks()
+    items = t["items"]
+    active = [i for i in items if i.get("status") in TASK_ACTIVE]
+    done = [i for i in items if i.get("status") == "done"]
+    other = [i for i in items if i.get("status") not in TASK_ACTIVE
+             and i.get("status") != "done"]
+    print("tinycmdr %s — task ledger (%s)" % (VERSION, TASKS_FILE))
+    print("  %d item(s): %d open/in progress, %d done%s"
+          % (len(items), len(active), len(done),
+             (", %d other" % len(other)) if other else ""))
+    if not items:
+        print("  (empty: the agent adds items with the `task` tool)")
+        return 0
+    rows = items if show_all else (active + done[-8:])
+    for i in rows:
+        print("  #%-3s [%s] %s" % (i.get("id"), i.get("status"), i.get("desc", "")))
+        if i.get("note"):
+            print("        note: %s" % i["note"])
+    if not show_all and len(rows) < len(items):
+        print("  (%d more - `tinycmdr tasks --all`, or --json for the file)"
+              % (len(items) - len(rows)))
+    return 0
 
 
 def _verb_status():
@@ -19467,7 +19831,7 @@ def _verb_doctor():
     print("tinycmdr %s doctor — %s" % (VERSION, BASE_DIR))
 
     err = validate_startup_config()
-    if err and "no Mattermost bot token" in err:
+    if not _chat_lane_configured():
         # A page-only install is legitimate: the installer offers exactly that lane.
         notes.append("no chat lane configured (fine for a local-page install)")
         err = None
@@ -20554,6 +20918,8 @@ def run_verb(argv):
         return _verb_doctor()
     if verb == "health":
         return _verb_health()
+    if verb == "tasks":
+        return _verb_tasks(rest)
     if verb == "version":
         return _verb_version()
     if verb == "proc":
@@ -20581,6 +20947,23 @@ def run_verb(argv):
     return 2
 
 
+def _chat_lane_configured():
+    """Is any chat lane configured at all - a Mattermost or Telegram token, from .env
+    (loaded into the environment), the environment itself, or config.json?
+
+    A page-only install has none, and that is a supported install: the installer offers
+    exactly that lane, `main` starts the page when there is no chat token, and every
+    requirement in validate_startup_config below is a CHAT-LANE requirement, so none of
+    them apply (H2). Measured 2026-09-26: a page-only install was told
+    "mattermost.url ... is empty/placeholder" and `doctor` exited 1.
+    """
+    mm = str(CONFIG["mattermost"].get("token")
+             or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
+    tg = str((CONFIG.get("telegram") or {}).get("token")
+             or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
+    return bool(mm or tg)
+
+
 def validate_startup_config():
     """Catch the classic first-run mistakes before they die as an unreadable
     traceback inside the Mattermost driver. Returns an error string, or None."""
@@ -20596,6 +20979,27 @@ def validate_startup_config():
     _drift = guard_list_drift()
     if _drift:
         log.warning("%s", guard_drift_note(_drift))
+    # No chat lane is not a mistake (H2): the page lane is a lane. Everything below
+    # exists because a CHAT driver would misbehave, so with no chat token it is simply
+    # not asked - and a box that is only a Telegram bot is not asked about Mattermost
+    # either (its own lane's requirements are gated the same way).
+    _mm_token = str(CONFIG["mattermost"].get("token")
+                    or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
+    _tg_token = str((CONFIG.get("telegram") or {}).get("token")
+                    or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
+    # "Intends to run Mattermost" = a real host or a non-empty allowlist. The example
+    # file's placeholders do not count, or every fresh page-only install would be told
+    # to fill in a lane it never wanted.
+    _mm_url = str(CONFIG["mattermost"].get("url") or "").strip().lower()
+    _mm_users = [u for u in (CONFIG["mattermost"].get("allowed_users") or [])
+                 if str(u).strip()]
+    _mm_intent = bool(_mm_users or (_mm_url and "example.com" not in _mm_url
+                                    and "change-me" not in _mm_url))
+    if not _mm_token and not _tg_token and not _mm_intent:
+        log.info("no chat lane configured (no Mattermost/Telegram token, no Mattermost "
+                 "host or allowlist): the page lane is the lane, which is a supported "
+                 "install")
+        return None
     tg_users = [u for u in ((CONFIG.get("telegram") or {}).get("allowed_users") or [])
                 if str(u).strip()]
     tg_token = str((CONFIG.get("telegram") or {}).get("token") or "").strip()
@@ -20605,7 +21009,7 @@ def validate_startup_config():
                 "Put your numeric Telegram id there (or TELEGRAM_ALLOWED_USERS "
                 "in .env).")
     users = CONFIG["mattermost"].get("allowed_users")
-    if (not tg_token and (users is None
+    if (_mm_token and (users is None
                           or (isinstance(users, (list, tuple)) and not users)
                           or users == "")):
         return ("mattermost.allowed_users is empty, and this bot is "
@@ -20613,7 +21017,7 @@ def validate_startup_config():
                 'Add your Mattermost user id, e.g. "allowed_users": ["abc123"], '
                 "or ship it in install/fleet-defaults.json so installs fill it in.")
     url = str(CONFIG["mattermost"].get("url", "") or "").strip()
-    if not url or "change-me" in url.lower():
+    if _mm_token and (not url or "change-me" in url.lower()):
         return ("mattermost.url in config.json is empty/placeholder.\n"
                 "Set it to your Mattermost host, e.g. chat.example.com "
                 "(scheme and port are separate keys).")
@@ -20638,10 +21042,18 @@ def validate_startup_config():
     except ImportError:
         log.warning("croniter is not installed: the schedule tool will be "
                     "disabled (pip install croniter)")
-    tok = str(CONFIG["mattermost"].get("token", ""))
-    if not tok or tok == "PASTE_BOT_TOKEN_HERE":
+    # A missing Mattermost token is a MISTAKE only when this box intends to run that
+    # lane; "no chat token at all" already returned above.
+    if not _mm_token:
+        if _tg_token or not _mm_intent:
+            return None
         return ("no Mattermost bot token.\n"
                 "Put it in .env as TINYCMDR_MM_TOKEN=... (preferred, keeps it "
+                "out of config.json), or paste it into mattermost.token. "
+                "Get it from System Console -> Integrations -> Bot Accounts.")
+    if _mm_token == "PASTE_BOT_TOKEN_HERE":
+        return ("mattermost.token still has the placeholder from config.example.json.\n"
+                "Put the real token in .env as TINYCMDR_MM_TOKEN=... (preferred, keeps it "
                 "out of config.json), or paste it into mattermost.token. "
                 "Get it from System Console -> Integrations -> Bot Accounts.")
     if CONFIG["mattermost"].get("allowed_users") == ["your-mattermost-user-id"]:
@@ -20748,6 +21160,13 @@ def main():
     # `tinycmdr status` asks the endpoint for metadata and answers a question.
     if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:
         sys.exit(run_verb(sys.argv[1:]))
+    # A first argument that is not a flag and not a verb is a verb the operator MEANT
+    # (a typo, or a name from an older README): it used to fall through to the start
+    # of the bot, which then sat there answering nobody while the terminal looked
+    # fine. It goes to the same dispatcher, which names it and prints the list.
+    if (len(sys.argv) > 1 and sys.argv[1] and not sys.argv[1].startswith("-")
+            and sys.argv[1].lower() not in VERBS):
+        sys.exit(run_verb([sys.argv[1]]))
     if "--version" in sys.argv:
         print("tinycmdr %s" % VERSION)
         sys.exit(0)
@@ -20795,14 +21214,27 @@ def main():
             run_telegram()
         else:
             run_webui()
-        try:
-            run_bot()
-        except Exception as e:
-            log.critical("Mattermost connection failed: %s — check "
-                         "mattermost.url/port and that the bot token in "
-                         "config.json is valid (System Console -> "
-                         "Integrations -> Bot Accounts).", e)
-            raise
+        if str(CONFIG["mattermost"].get("token") or "").strip():
+            try:
+                run_bot()
+            except Exception as e:
+                log.critical("Mattermost connection failed: %s — check "
+                             "mattermost.url/port and that the bot token in "
+                             "config.json is valid (System Console -> "
+                             "Integrations -> Bot Accounts).", e)
+                raise
+        else:
+            log.info("no Mattermost token: running without the chat lane "
+                     "(the page lane is up)")
+            # And hold the process open: `run_webui` serves in a daemon thread and
+            # returns, so with no chat lane to block on, the page came up and the
+            # process exited on the spot - a page-only install could not outlive its
+            # own startup (H2, measured 2026-09-26: "listening" then a clean exit 0).
+            try:
+                while True:
+                    time.sleep(3600)
+            except KeyboardInterrupt:
+                log.info("page lane stopped")
 
 
 if __name__ == "__main__":

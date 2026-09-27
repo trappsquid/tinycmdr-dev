@@ -49,7 +49,14 @@ SKIP_EXIT = 77
 # playwright's bundled chromium and sets the variable empty, which drops the channel
 # kwarg (a channel named "" is not a browser). A channel that is not installed is caught
 # below and lands on SKIP_EXIT, never a silent pass.
-CHANNEL = os.environ.get("TINYCMDR_TEST_BROWSER_CHANNEL", "msedge")
+# Which browser to drive. DEFAULT = playwright's bundled chromium, because that is
+# what `playwright install chromium` (and so requirements-test.txt, and CI) provides;
+# the system Edge/Chrome channels are fallbacks for a box that has one of those and no
+# bundled build. Setting TINYCMDR_TEST_BROWSER_CHANNEL pins exactly one (empty = the
+# bundled build, which is what the CI recipe passes). Measured 2026-09-26: with the
+# old msedge-only default this suite SKIPPED on a box that had chromium installed, so
+# the page was never graded and `--allow-skips` was the only way to call the gate green.
+CHANNEL = os.environ.get("TINYCMDR_TEST_BROWSER_CHANNEL")
 
 DUMP = r"""
 (() => {
@@ -246,11 +253,17 @@ def main():
               "...through the document, because the LAN page is plain http")
 
         pw = sync_playwright().start()
-        try:
-            browser = pw.chromium.launch(
-                **({"channel": CHANNEL} if CHANNEL else {}), headless=True)
-        except Exception as e:  # noqa: BLE001
-            print(f"skipped: no {CHANNEL or 'chromium'} to drive ({str(e)[:120]})")
+        tried, why = [], ""
+        for chan in ([CHANNEL] if CHANNEL is not None else ["", "msedge", "chrome"]):
+            try:
+                browser = pw.chromium.launch(
+                    **({"channel": chan} if chan else {}), headless=True)
+                break
+            except Exception as e:                              # noqa: BLE001
+                tried.append(chan or "bundled chromium")
+                why = str(e)
+        if browser is None:
+            print(f"skipped: no browser to drive ({', '.join(tried)}): {why[:160]}")
             return SKIP_EXIT
 
         ctx = browser.new_context(viewport={"width": 900, "height": 800})
