@@ -5,6 +5,22 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.25] - 2026-09-26
+
+Fixed
+- `tinycmdr setup` wrote `MATTERMOST_BOT_TOKEN`, `TELEGRAM_TOKEN` and `LLM_API_KEY` into `.env`;
+  the loader reads none of them, so an install configured through the wizard ran with a token
+  nothing consumed and reported "the bot never connects" - the symptom the code already warns
+  about for a missing token. Measured on a live install: `.env` carried `MATTERMOST_BOT_TOKEN`
+  beside the `TINYCMDR_MM_TOKEN` that was doing the work. The wizard writes `TINYCMDR_MM_TOKEN`
+  and `TINYCMDR_TG_TOKEN`; the model key gets the door it never had
+  (`TINYCMDR_LLM_API_KEY` -> `llm.api_key`, so the key can live in the one secrets file instead
+  of `config.json`, which is what `doctor` advises); `.env.example` documents both, and
+  `test_env_names.py` pins the rule - every name the app WRITES must be a name it READS.
+- `doctor` reported `llm.api_key is set in config.json - .env is the safer home` when that value
+  was the shipped placeholder `"none"`, so every install that never set a key was warned about a
+  secret it does not have. The placeholder no longer counts; a real key still gets the note.
+
 ## [1.0.24] - 2026-09-26
 
 The 2026-09-26 audit's Phase 1 items. The installers keep 1.0.22/1.0.23's behaviour (the page
