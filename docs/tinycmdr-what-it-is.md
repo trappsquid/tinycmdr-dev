@@ -174,9 +174,9 @@ because it is the real threat model.
 
 ```
 no framework        the framework it replaced cost 16K+ tokens before the first tool call; this one
-                    measures 4,545 tokens of fixed overhead AS SENT on a clean unpack of the
+                    measures 3,403 tokens of fixed overhead AS SENT on a clean unpack of the
                     tree (system prompt + the 12 tool schemas a request really carries
-                    + the skills index; 2,556 of it is the prompt). Each prose runbook costs
+                    + the skills index; 1,744 of it is the prompt). Each prose runbook costs
                     about 23 tokens of index, and each custom tool costs its NAME on its shelf's
                     line - 5.9 chars per tool measured at 80 tools - with its schema riding along
                     only while a session has revealed it. A tool fleet no longer competes with
@@ -198,13 +198,16 @@ The bot computes it at startup and prints it, from the same expression used here
 ```
 python -c "import sys,json; sys.path.insert(0,'.'); import tinycmdr as fb; \
   print(fb.est_tokens(fb.build_system_prompt() + json.dumps(fb.select_tool_schemas(None))))"
-# clean unpack of tinycmdr-1.0.30-linux.tar.gz -> 4545   (the 12 schemas a request SENDS)
+# clean unpack of tinycmdr-1.0.31-linux.tar.gz -> 3403   (the 12 schemas a request SENDS)
+#   the same string through est_tokens (chars/4) -> 4069  (what the gate asserts on)
 # 1.0.16, before the 2026-09-27 trims           -> 5333   (the 14 schemas then)
 # the same tree counting EVERY schema held      -> 7912   (25 schemas: openai_schemas())
 ```
 
-Measured 2026-09-27 on a clean unpack of the tree: **4,545** as sent - 4,802 on the author's own
-install, which carries one skill and five drop-in tools, and 5,399 on that install counting every
+Measured 2026-09-27 on a clean unpack of the tree with the ENDPOINT'S tokenizer: **3,403** as sent -
+3,586 on the author's own install, which carries one skill and five drop-in tools. est_tokens
+(chars/4) reads 17% higher on the same strings, 4,069 and 4,301: it is the conservative side of a
+window check, and it is what the 5,400-token gate asserts, so the gate keeps a healthy margin.
 schema the registry holds. The 2026-09-25 figure was 5,333 for the same expression; the
 2026-09-13 figure was 3,469 on
 1.9.32, before the tool set and the guard prose grew, and every later number since has been a

@@ -165,9 +165,10 @@ Most harnesses assume a cloud endpoint behind a fat server. Against a self-hoste
 are concrete: 15,000–30,000 tokens of boilerplate re-prefilled on every uncached turn, a volatile
 prefix that invalidates the KV cache each request, and generation slots left running when an agent
 loops. tinycmdr is one Python file with three dependencies (`requests`, `croniter`, `mmpy_bot`):
-its fixed prompt is **~4.5K tokens on a clean unpack** (`tinycmdr status` prints this box's own
-as `static` — it grows with the skills and tools you add; 4,802 on this install, measured
-2026-09-27), volatile context sits at the tail so
+its fixed prompt is **~3.4K tokens on a clean unpack**, measured with the endpoint's own
+tokenizer (the harness's estimator, which the 5,400-token gate uses, reads 4,069 - it is
+deliberately conservative; `tinycmdr status` prints this box's own), and 3,586 on this install,
+volatile context sits at the tail so
 the prefix stays cacheable, and the runtime guards the slot. Local failures never fall through to
 a public API unless you set `allow_cloud_fallback`.
 

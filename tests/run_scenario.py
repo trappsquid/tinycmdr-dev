@@ -154,13 +154,17 @@ def instrument(fb, metrics):
                                      for m in messages)})
         return real_chat(self, messages, *a, **kw)
 
-    def compact(self, messages):
+    def compact(self, messages, *a, **kw):
         # Record the decision point: an over-budget turn that only shrinks tool output
         # never reaches a block drop, and "compactions: 0" alone cannot tell those apart.
+        # Tolerant on purpose: _compact() gained the session key and this wrapper was left
+        # behind at (self, messages), which killed every graded task on its FIRST turn
+        # (2026-09-27) - the measuring stick read as "broken", and nobody noticed because
+        # the run had to be started by hand.
         est = self._messages_token_est(messages)
         budget = self._context_budget() - fb.est_tokens(fb.volatile_context())
         n_before = len(messages)
-        out = real_compact(self, messages)
+        out = real_compact(self, messages, *a, **kw)
         metrics["compact_calls"] = metrics.get("compact_calls", 0) + 1
         metrics.setdefault("compact_probes", [])
         if len(metrics["compact_probes"]) < 80:
