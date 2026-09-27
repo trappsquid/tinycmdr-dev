@@ -19,12 +19,15 @@ BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-journal"
 FAILS = []
+PASSES = []
 
 
 def check(cond, what):
     print(("ok   " if cond else "FAIL ") + what)
     if not cond:
         FAILS.append(what)
+    else:
+        PASSES.append(what)
 
 
 def stage():
@@ -109,12 +112,17 @@ def main():
         fb.save_tasks({"items": [{"id": 1, "status": "open", "desc": "lands"}],
                        "next_id": 2})
         landed = len(lines(fb))
-        fb.os.fsync = lambda _fd: (_ for _ in ()).throw(
+        # Inject the failure at the RENAME, which every platform takes. Throwing from
+        # os.fsync only failed the save where the writer also fsyncs the directory (POSIX),
+        # so on Windows the "failed" save SUCCEEDED and this suite graded the wrong thing.
+        real_replace = fb.os.replace
+        fb.os.replace = lambda *a, **k: (_ for _ in ()).throw(
             OSError(28, "No space left on device"))
         try:
             fb.save_tasks({"items": [], "next_id": 1})
         except OSError as e:
             raised = e
+        fb.os.replace = real_replace
         fb.os.fsync = spy
     finally:
         fb.os.fsync = real_fsync
@@ -125,12 +133,17 @@ def main():
     on_disk = json.loads((STAGE / "tasks.json").read_text(encoding="utf-8"))
     check(json.loads(lines(fb)[-1])["rev"] == on_disk["revision"],
           f"the last line's revision is the revision actually on disk ({on_disk})")
-    check(any(dir_fsynced),
-          f"the rename is made durable with a directory fsync ({dir_fsynced})")
+    if os.name != "nt":
+        check(any(dir_fsynced),
+              f"the rename is made durable with a directory fsync ({dir_fsynced})")
+    else:
+        print("skip a directory fsync on Windows: there is no directory handle to "
+              "fsync there - the rename IS the durability step")
 
     print()
+    print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
     if FAILS:
-        print("%d failed: %s" % (len(FAILS), FAILS))
+        print("failed: %s" % (FAILS,))
         sys.exit(1)
     print("all ledger-journal checks passed")
 

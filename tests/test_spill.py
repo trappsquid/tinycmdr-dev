@@ -21,14 +21,16 @@ sys.path.insert(0, str(TESTS))
 import run_scenario  # noqa: E402
 
 FAILS = []
+PASSES = []
 
 
 def check(cond, what):
-    if not cond:
+    if cond:
+        PASSES.append(what)
+        print(f"ok   {what}")
+    else:
         FAILS.append(what)
         print(f"FAIL {what}")
-    else:
-        print(f"ok   {what}")
 
 
 def main():
@@ -204,6 +206,7 @@ def main():
         fb.CONFIG["agent"]["spill_keep"] = 50
 
         print()
+        print(f"{len(PASSES)} passed, {len(FAILS)} failed")
         if FAILS:
             print(f"{len(FAILS)} check(s) FAILED")
             return 1

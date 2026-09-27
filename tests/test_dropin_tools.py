@@ -580,7 +580,7 @@ def main():
         except Exception as e:
             FAILURES.append(f"{t.__name__} raised: {type(e).__name__}: {e}")
             print(f"FAIL {t.__name__} raised: {type(e).__name__}: {e}")
-    print(f"\n{len(PASSES)} checks passed, {len(FAILURES)} failed")
+    print(f"\n{len(PASSES)} passed, {len(FAILURES)} failed")
     return 1 if FAILURES else 0
 
 

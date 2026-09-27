@@ -32,6 +32,7 @@ SRC = Path(os.environ.get("TINYCMDR_TEST_APP")
 if not SRC.is_absolute():
     SRC = BASE / SRC
 FAILS = []
+PASSES = []
 
 STAGE = Path(tempfile.mkdtemp(prefix="fbtest-crossproc-"))
 
@@ -40,6 +41,8 @@ def check(cond, what, detail=""):
     print(("ok   " if cond else "FAIL ") + what + ("" if cond else " :: %r" % (detail,)))
     if not cond:
         FAILS.append(what)
+    else:
+        PASSES.append(what)
 
 
 def stage():
@@ -314,6 +317,7 @@ def main():
             print(f"FAIL {t.__name__} raised: {type(e).__name__}: {e}")
     shutil.rmtree(STAGE, ignore_errors=True)
     print()
+    print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
     if FAILS:
         print("%d failed: %s" % (len(FAILS), FAILS))
         return 1
