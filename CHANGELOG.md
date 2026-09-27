@@ -5,6 +5,51 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.33] - 2026-09-27
+
+Housekeeping with teeth: the numbers in the credibility doc are rendered from the tree and a
+gate fails when they drift, the eval set became a repeatable baseline, the three installers got
+a parity contract, and releases carry checksums.
+
+Added
+- **The doc-drift gate.** `docs/tinycmdr-what-it-is.md` claimed 5,847 lines / 286 KB in one file
+  (the file is 21,635 lines / 1.03 MB), "no benchmark or eval harness" (`tests/eval_tasks.py` has
+  18 machine-graded tasks), "no release process" (`ci.yml` + `maintenance/release.sh`), and its
+  section-3.2 budget defaults were 2-6x off (40/10/180/6000 where the tree says
+  250/75/300/10000). A document whose pitch is measured numbers cannot carry stale ones, so the
+  numbers now come from `maintenance/measured-block.py` between markers, and
+  `tests/test_measured_doc.py` fails when the committed doc disagrees - and falsifies itself on
+  a doctored copy, because a gate that cannot fail grades nothing.
+- **`maintenance/measure-prompt.py`** prints both legs of the overhead figure (this install and
+  a clean unpack) with both instruments (the chars/4 estimator and the endpoint's own
+  `/tokenize`), which is the command the doc's section 4.1 now points at.
+- **Eval as a repeatable measurement, not a one-off:** `run_eval.py --save-baseline` and
+  `--baseline [--fail-on-regression]` against a committed `tests/eval_baseline.json`, and a new
+  task - `T19_midrun_steer` - covering mid-run steering, a headline feature that had no eval
+  coverage at all. Two grader rules were missing for it: `files: {"x": {"absent": true}}` (until
+  now, absence was NOT assertable: `{"exists": false}` silently passed when the file was there)
+  and `steered: true`, which separates "the steer never reached the run" (a harness bug) from
+  "the model ignored it" (a prompt bug).
+- **`tests/test_installer_parity.py`:** the portable switch contract for the three installers,
+  written down once (19 capabilities, three spellings each, with the deliberate
+  `--no-web` / `-EnableWeb` inversion pinned), every platform-only switch declared with its
+  reason, and a stray-detector so a NEW flag on one platform fails until it is ported or
+  declared. It found a real one on its first run - see Fixed.
+- **Every release now carries `SHA256SUMS`** over all eight published files
+  (`maintenance/release.sh` writes it, the release uploads it), and the README says how to
+  verify a download. Releases are still NOT signed; the README says that plainly too.
+
+Fixed
+- **The README promised `--mode user|system` to macOS.** The macOS installer has one kind of
+  install (a per-user launchd agent) and exits 2 on that flag, so a macOS user following the
+  README hit "unknown switch". The switch paragraph is now split per platform, and the parity
+  suite pins the sentence.
+- **The doc's every-schema figure and the pre-1.0 naming.** Counting every schema the registry
+  holds reads 7,711 est on this install (27 schemas), not 7,912 (25 - the tool set moved); and
+  the document now says plainly that the 1.9.x names are the pre-release dev tree, that nothing
+  before v1.0.0 was ever tagged or published, and therefore that no released artifact was ever
+  numbered out of order.
+
 ## [1.0.32] - 2026-09-27
 
 Long prompts stop looking dead, and llama.cpp's own stream extensions are requested - from

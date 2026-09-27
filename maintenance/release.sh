@@ -71,6 +71,17 @@ cp "dist/tinycmdr-$VER-linux.tar.gz" dist/tinycmdr-linux.tar.gz
 cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
 "$PY" maintenance/check-readme-assets.py --dist dist
 
+say "SHA256SUMS over the published files"
+# Everything a downloader can fetch, listed once, so `sha256sum -c SHA256SUMS` works in
+# the folder they downloaded into. The versioned file and its stable alias are the same
+# bytes, and both are listed: the sum a reader checks is the one for the name they took.
+if command -v sha256sum >/dev/null 2>&1; then SUM="sha256sum"; else SUM="shasum -a 256"; fi
+( cd dist && rm -f SHA256SUMS && $SUM \
+    "tinycmdr-$VER-win.zip" "tinycmdr-$VER-linux.tar.gz" "tinycmdr-$VER-macos.zip" \
+    tinycmdr-win.zip tinycmdr-linux.tar.gz tinycmdr-macos.zip \
+    install.sh install.ps1 > SHA256SUMS )
+cat dist/SHA256SUMS
+
 say "push main, then publish"
 # gh is a NATIVE binary and a path in MSYS form (/c/Users/...) is not translated for
 # it, so `--notes-file "$NOTES"` fails with "The system cannot find the path
@@ -93,7 +104,8 @@ say "attach the stable names the README uses (the versioned files stay)"
 # would keep the versioned name and the README link would stay 404 (measured 2026-09-26,
 # v1.0.19 published without its aliases). Upload the copies as plain files.
 gh release upload "$TAG" --clobber \
-    dist/tinycmdr-win.zip dist/tinycmdr-linux.tar.gz dist/tinycmdr-macos.zip
+    dist/tinycmdr-win.zip dist/tinycmdr-linux.tar.gz dist/tinycmdr-macos.zip \
+    dist/SHA256SUMS
 
 say "read the release back"
 gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'

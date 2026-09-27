@@ -55,13 +55,27 @@ By hand, if you prefer — download, unpack, run the installer inside:
 
 Those names always point at the newest build, so a link never needs re-pinning to a version.
 
+Every release carries a `SHA256SUMS` asset covering all eight published files. Verify what you
+downloaded before running it:
+
+```bash
+base=https://github.com/trappsquid/tinycmdr/releases/latest/download
+curl -fsSLO $base/tinycmdr-linux.tar.gz && curl -fsSLO $base/SHA256SUMS
+sha256sum -c SHA256SUMS --ignore-missing     # macOS: shasum -a 256 -c SHA256SUMS
+```
+
+Releases are checksummed but **not signed** — there is no project key, so the sums protect
+against a corrupted or truncated download, not against the release itself being replaced.
+
 <details>
 <summary><b>Unattended installs, every switch, and a second install on one host</b></summary>
 
-**Linux and macOS.** `--mode user|system` decides without a prompt and `--yes` takes the defaults
-for your platform; a run with no terminal at all never asks. Every question has a switch:
-`--mattermost-url`, `--allowed-user`, `--telegram-token`, `--telegram-ids`, `--model-base-url`,
-`--model`, `--web-host <addr>`, `--web-port <p>`, `--no-web`, `--no-path`.
+**Linux.** `--mode user|system` decides without a prompt and `--yes` takes the defaults for your
+platform; a run with no terminal at all never asks. **macOS** has one kind of install — a
+per-user launchd agent, `--no-launchd` to skip it — so it takes `--yes` and everything below,
+and has no `--mode`. Every question has a switch: `--mattermost-url`, `--allowed-user`,
+`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--web-host <addr>`,
+`--web-port <p>`, `--no-web`, `--no-path`.
 
 A **second** install on one host needs its own identity: `TINYCMDR_SERVICE=tinycmdr-work bash
 install/install-tinycmdr.sh …` on Linux, `--label com.tinycmdr.work` on macOS. A service name

@@ -426,6 +426,26 @@ TASKS = [
                   "answer_contains_any": ["loader", "reject", "import", "fail",
                                           "error", "broken"]},
     },
+    {
+        "id": "T19_midrun_steer", "category": "steering", "difficulty": "medium",
+        # Mid-run steering is a headline feature with no eval coverage until now
+        # (2026-09-27). It is only measurable if the correction CHANGES the outcome, so
+        # the task asks for three files and the steer cancels one and rewrites another:
+        # b.txt must not exist at all, c.txt must contain CHANGED, not ready. A model
+        # that finishes the original order fails on both rules, and grading separates
+        # "the steer never arrived" (harness) from "the model ignored it" (prompt) via
+        # the `steered` rule in run_eval.grade.
+        "prompt": ("Write three files in the working directory, one at a time, and tell me "
+                   "after each one: a.txt containing ready, b.txt containing ready, and "
+                   "c.txt containing ready."),
+        "steer": ("Change of plan - this overrides the earlier instruction: do NOT create "
+                  "b.txt at all, and make c.txt contain exactly CHANGED instead of ready."),
+        "setup": {},
+        "check": {"files": {"a.txt": {"exists": True, "contains": "ready"},
+                            "b.txt": {"absent": True},
+                            "c.txt": {"contains": "CHANGED"}},
+                  "steered": True},
+    },
 ]
 
 BY_ID = {t["id"]: t for t in TASKS}

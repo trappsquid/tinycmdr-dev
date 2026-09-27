@@ -68,6 +68,14 @@ def check_files(workdir, spec):
     out = []
     for rel, rules in (spec or {}).items():
         path = workdir / rel
+        if rules.get("absent"):
+            # "must NOT exist". There was no such rule until the steering task needed one:
+            # {"exists": False} silently PASSES when the file is there (it falls through to
+            # the content rules, of which it has none), so absence was unassertable.
+            out.append((not path.exists(),
+                        f"{rel}: absent as the steer required" if not path.exists()
+                        else f"{rel}: exists, and the instruction was to skip it"))
+            continue
         if rules.get("exists") and not path.exists():
             out.append((False, f"{rel}: missing"))
             continue
@@ -131,6 +139,14 @@ def grade(task, metrics):
     reasons = []
 
     reasons.extend(check_files(Path(metrics["_workdir"]), spec.get("files")))
+
+    if spec.get("steered"):
+        # A steering task has two failure modes and they are not the same: the steer never
+        # reached the run (a harness bug) or the model ignored it (a prompt bug). This rule
+        # separates them, so a red T19 says which one happened.
+        reasons.append((bool(metrics.get("steered")),
+                        "the mid-run steer was delivered" if metrics.get("steered")
+                        else "the mid-run steer was NEVER delivered (harness)"))
 
     if spec.get("answer_contains"):
         missing = [s for s in spec["answer_contains"] if s.lower() not in answer]
@@ -286,6 +302,21 @@ def run_task(task, budget, label, artifacts_dir=None, overrides=None):
 
         narration = []
         session = f"eval-{task['id']}-{int(time.time())}"
+        # Mid-run steering. The live lanes hand the agent a steer_cb that returns
+        # (who, message) pairs at a turn boundary; a task that declares `steer` gets the
+        # same treatment, delivered once the run has actually started working (after its
+        # first tool call) so it lands mid-flight rather than before anything happened.
+        _steer = {"sent": False}
+
+        def steer_cb():
+            if not task.get("steer") or _steer["sent"]:
+                return []
+            if not metrics.get("tool_calls"):
+                return []
+            _steer["sent"] = True
+            metrics["steered"] = True
+            return [("eval", task["steer"])]
+
         t0 = time.time()
         os.chdir(workdir)
         try:
@@ -295,6 +326,7 @@ def run_task(task, budget, label, artifacts_dir=None, overrides=None):
                     "narration", metrics["narration"] + 1), narration.append(text)),
                 progress_done_cb=lambda *a: metrics.__setitem__(
                     "progress_lines", metrics["progress_lines"] + 1),
+                steer_cb=steer_cb,
             )
         finally:
             os.chdir(cwd)
@@ -403,6 +435,74 @@ def summarize(all_metrics):
     return lines, totals
 
 
+def baseline_from(results, label, budget, runs):
+    """The committed baseline file: one row per task plus how it was taken."""
+    return {
+        "label": label,
+        "date": time.strftime("%Y-%m-%d"),
+        "budget": budget,
+        "endpoint": os.environ.get("TINYCMDR_TEST_BASE_URL", "http://127.0.0.1:8081/v1"),
+        "model": os.environ.get("TINYCMDR_TEST_MODEL", "main"),
+        "runs": runs,
+        "note": ("Sampling is inherited from the endpoint (no temperature is pinned), so a "
+                 "single task flip is a signal, not a verdict: two arms of the SAME build "
+                 "differed by 36% of steps and 14% of tokens on 2026-09-27. Treat 'no "
+                 "category regressed' as the reading, not 'the score is equal'."),
+        "tasks": {r["task"]: {"pass": bool(r["pass"]),
+                              "category": r.get("category"),
+                              "steps": r.get("steps_seen"),
+                              "llm_calls": r.get("llm_calls")}
+                  for r in results},
+    }
+
+
+def baseline_compare(results, baseline, fail_on_regression=False):
+    """Print per-task and per-category deltas against a committed baseline.
+
+    Returns the number of tasks that passed in the baseline and fail now.
+    """
+    b = json.loads(Path(baseline).read_text(encoding="utf-8"))
+    bt = b.get("tasks") or {}
+    print("\n--- against baseline %s (%s, %s)" % (b.get("label"), b.get("date"),
+                                                  b.get("model")))
+    print("%-24s %-10s %-10s %7s %7s" % ("task", "baseline", "now", "steps", "steps"))
+    regressed, improved = [], []
+    cats = {}
+    for r in results:
+        old = bt.get(r["task"])
+        if old is None:
+            print("%-24s %-10s %-10s   (not in the baseline)" % (r["task"], "?", 
+                                                                 "PASS" if r["pass"] else "fail"))
+            continue
+        now = bool(r["pass"])
+        if old["pass"] and not now:
+            regressed.append(r["task"])
+        if now and not old["pass"]:
+            improved.append(r["task"])
+        cat = r.get("category") or "?"
+        c = cats.setdefault(cat, [0, 0, 0, 0])
+        c[0] += 1 if old["pass"] else 0
+        c[1] += 1 if now else 0
+        c[2] += 1
+        marker = "  <-- REGRESSED" if (old["pass"] and not now) else (
+            "  <-- now passes" if now and not old["pass"] else "")
+        print("%-24s %-10s %-10s %7s %7s%s"
+              % (r["task"], "PASS" if old["pass"] else "fail", "PASS" if now else "fail",
+                 old.get("steps"), r.get("steps_seen"), marker))
+    print("\nper category (baseline -> now):")
+    for cat, (bp, np_, n, _) in sorted(cats.items()):
+        flag = "  <-- REGRESSED" if np_ < bp else ""
+        print("  %-20s %d/%d -> %d/%d%s" % (cat, bp, n, np_, n, flag))
+    print("baseline %d pass, now %d pass; %d regressed, %d improved"
+          % (sum(1 for v in bt.values() if v.get("pass")),
+             sum(1 for r in results if r["pass"]), len(regressed), len(improved)))
+    if regressed:
+        print("REGRESSED: %s" % ", ".join(regressed))
+    if fail_on_regression and regressed:
+        return len(regressed)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("tasks", nargs="*", help="task ids (default: --all)")
@@ -411,6 +511,12 @@ def main():
     ap.add_argument("--budget", default=os.environ.get("TINYCMDR_TEST_BUDGET", "24000"))
     ap.add_argument("--label", default="baseline")
     ap.add_argument("--out", default="")
+    ap.add_argument("--baseline", default="",
+                    help="compare this run against a committed baseline JSON")
+    ap.add_argument("--save-baseline", default="", metavar="PATH",
+                    help="write this run's per-task result as the baseline to PATH")
+    ap.add_argument("--fail-on-regression", action="store_true",
+                    help="with --baseline: exit 2 when a task that passed now fails")
     # Feature flags for measurement: --config digest_enabled=false runs the SAME
     # build with the feature switched off, which isolates the feature instead of
     # comparing two different files.
@@ -468,6 +574,17 @@ def main():
     for line in lines:
         print(line)
     print(f"\njsonl: {out}")
+
+    if args.save_baseline:
+        dest = Path(args.save_baseline)
+        dest.write_text(json.dumps(
+            baseline_from(results, args.label, args.budget, [out.name]), indent=1)
+            + "\n", encoding="utf-8")
+        print(f"baseline: {dest} ({sum(1 for r in results if r['pass'])}/{len(results)} pass)")
+    if args.baseline:
+        regressed = baseline_compare(results, args.baseline, args.fail_on_regression)
+        if regressed:
+            sys.exit(2)
 
 
 if __name__ == "__main__":

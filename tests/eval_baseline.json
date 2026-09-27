@@ -1,0 +1,173 @@
+{
+ "label": "baseline-1032",
+ "date": "2026-09-27",
+ "budget": 24000,
+ "endpoint": "http://127.0.0.1:8081/v1",
+ "model": "main",
+ "runs": [
+  "20260927-092747-baseline-1032.jsonl"
+ ],
+ "note": "Sampling is inherited from the endpoint (no temperature is pinned), so a single task flip is a signal, not a verdict: two arms of the SAME build differed by 36% of steps and 14% of tokens on 2026-09-27. Treat 'no category regressed' as the reading, not 'the score is equal'.",
+ "tasks": {
+  "T01_write_count": {
+   "pass": true,
+   "category": "file_ops",
+   "steps": 2,
+   "llm_calls": 3
+  },
+  "T02_fix_config": {
+   "pass": true,
+   "category": "config",
+   "steps": 3,
+   "llm_calls": 4
+  },
+  "T03_log_cause": {
+   "pass": true,
+   "category": "log_triage",
+   "steps": 2,
+   "llm_calls": 3
+  },
+  "T04_no_tools_needed": {
+   "pass": true,
+   "category": "tool_discipline",
+   "steps": 0,
+   "llm_calls": 1
+  },
+  "T05_already_correct": {
+   "pass": true,
+   "category": "honesty",
+   "steps": 2,
+   "llm_calls": 3
+  },
+  "T06_wrong_path": {
+   "pass": true,
+   "category": "recovery",
+   "steps": 6,
+   "llm_calls": 6
+  },
+  "T07_six_steps": {
+   "pass": true,
+   "category": "long_horizon",
+   "steps": 13,
+   "llm_calls": 7
+  },
+  "T08_fixture_triage": {
+   "pass": true,
+   "category": "signal_extraction",
+   "steps": 2,
+   "llm_calls": 2
+  },
+  "T09_code_grounding": {
+   "pass": false,
+   "category": "grounding",
+   "steps": 3,
+   "llm_calls": 4
+  },
+  "T10_unknown_tool": {
+   "pass": true,
+   "category": "hallucination",
+   "steps": 4,
+   "llm_calls": 3
+  },
+  "T11_precision": {
+   "pass": true,
+   "category": "precision",
+   "steps": 2,
+   "llm_calls": 3
+  },
+  "T12_budget_landing": {
+   "pass": false,
+   "category": "landing",
+   "steps": 3,
+   "llm_calls": 4
+  },
+  "T13_buried_error": {
+   "pass": true,
+   "category": "signal_extraction",
+   "steps": 4,
+   "llm_calls": 5
+  },
+  "T14_field_note": {
+   "pass": false,
+   "category": "field_notes",
+   "steps": 6,
+   "llm_calls": 6
+  },
+  "T15_verify_ok": {
+   "pass": true,
+   "category": "verify",
+   "steps": 2,
+   "llm_calls": 3
+  },
+  "T16_verify_failure": {
+   "pass": true,
+   "category": "verify",
+   "steps": 3,
+   "llm_calls": 4
+  },
+  "T17_write_custom_tool": {
+   "pass": true,
+   "category": "verify",
+   "steps": 3,
+   "llm_calls": 3
+  },
+  "T18_broken_custom_tool": {
+   "pass": true,
+   "category": "verify",
+   "steps": 3,
+   "llm_calls": 4
+  },
+  "T19_midrun_steer": {
+   "pass": true,
+   "category": "steering",
+   "steps": 3,
+   "llm_calls": 4
+  }
+ },
+ "variance": {
+  "note": "Five arms of the same 18 tasks on the same endpoint and model. Sampling is inherited from the server, so steps and tokens swing widely between runs of THE SAME build: read a regression as a signal to look, not a verdict. T19_midrun_steer was measured in its own run 20 minutes earlier (it was added to the set after the arm above) and merged here; a `--baseline` run that reports it missing is reading a baseline older than this line.",
+  "arms": [
+   {
+    "label": "baseline-1030",
+    "version": "1.0.30",
+    "pass": 15,
+    "steps": 61,
+    "llm_calls": 63,
+    "prompt_tokens": 346533
+   },
+   {
+    "label": "partial-4360",
+    "version": "1.0.31",
+    "pass": 15,
+    "steps": 83,
+    "llm_calls": 72,
+    "prompt_tokens": 396191
+   },
+   {
+    "label": "after2-4381",
+    "version": "1.0.31",
+    "pass": 15,
+    "steps": 61,
+    "llm_calls": 62,
+    "prompt_tokens": 308549
+   },
+   {
+    "label": "anecdotes-4183",
+    "version": "1.0.32 prompt with the six (measured: ...) parentheticals removed",
+    "pass": 14,
+    "steps": 71,
+    "llm_calls": 76,
+    "prompt_tokens": 384487,
+    "outcome": "NOT shipped: the one flipped task was T10_unknown_tool, whose rule those parentheticals illustrate; see ~/whats-live/ISSUES.md"
+   },
+   {
+    "label": "baseline-1032",
+    "version": "1.0.32",
+    "pass": 15,
+    "steps": 63,
+    "llm_calls": 68,
+    "prompt_tokens": 341345
+   }
+  ]
+ }
+}

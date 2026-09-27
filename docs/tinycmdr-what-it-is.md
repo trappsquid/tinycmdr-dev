@@ -1,9 +1,13 @@
 # tinycmdr: what it actually is
 
-Working definition, extracted from this tree on 2026-09-13 (v1.9.32, `tinycmdr.py` sha256
-`b91917a6095d9817`). Everything in sections 1 to 3 was read out of the code, config, and tests in this
-repo. Section 6 is a comparison against projects other people maintain, and every claim about those
+<!-- measured:header:start -->
+Working definition of v1.0.33, the tree this document ships with. Every number in
+section 1 and section 3.2 is rendered from the code by
+`maintenance/measured-block.py` - `tests/test_measured_doc.py` fails when the
+committed numbers disagree with the tree, so they cannot rot. Section 6 is a
+comparison against projects other people maintain, and every claim about those
 projects is labelled with where it came from.
+<!-- measured:header:end -->
 
 Short version: tinycmdr is a single-file, single-process agent that lives on each machine and is driven
 from self-hosted Mattermost. It is an operator's agent, not a coding agent. Its distinguishing work is
@@ -12,27 +16,34 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 ## 1. Measured surface
 
+<!-- measured:surface:start -->
 ```
-code                5,847 lines / 286 KB in ONE file, no package, no framework
-dependencies        requests, croniter, mmpy_bot (3)
+code                21,635 lines / 1.01 MB in ONE file, no package, no framework
+dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
+                    (croniter for `schedule`; rich + prompt_toolkit for the console)
+                    - 6 lines in requirements.txt, none of them a framework
 processes           one; no daemon, no gateway, no database
-interfaces          Mattermost bot (DMs + @mentions), --cli, --once "task",
-                    small web UI (:8787: chat + /api/health + token header)
-core tools          22, of which 14 are always-on; the rest answer by name (section 2)
-custom tools        three file shapes load from ./tools/ (native .py, register-style .py,
-                    <name>.tool.json); 9 on the manager box, and the agent writes its own
-                    with create_tool. The prompt lists them by SHELF, descriptions on demand
-chat commands       31 (section 3.1)
-prose skills        43 runbook folders on the manager box (SKILL.md, read on demand)
-tests               4,345 lines across three suites + 2 harness scripts;
-                    474 assertions green on a clean unpack of the shipped archive
-config              config.json, 5 blocks: llm (18 keys), mattermost, search, web,
-                    agent (50 keys, all of section 3 is configurable)
+interfaces          Mattermost bot (DMs + @mentions), Telegram DM, a browser page
+                    (:8787: chat, /api/health, token header), `--once "task"` and a
+                    terminal CLI
+core tools          22, of which 12 are always-on; the rest answer by name (section 2)
+custom tools        3 example tools ship in ./tools/ (native .py, register-style .py,
+                    <name>.tool.json); a working box's own drop-ins load from the same
+                    folder, and the agent writes its own with create_tool
+chat commands       17 CLI verbs, 9 page commands, 11 chat verbs (section 3.1)
+prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
+                    read on demand when a box has any
+tests               59 suites / 22,805 lines / 2,776 checks that need no model, plus a graded
+                    set of 19 tasks against a real endpoint (9 support scripts;
+                    run_all.py is the gate)
+config              config.json, 6 blocks: llm 18, telegram 2, mattermost 6, search 3, web 6, agent 88
+                    (all of section 3 is configurable)
 state on disk       sessions/*.json (per channel), notes.md, tasks.json (ledger),
                     jobs.json (cron), uploads/, logs
 ```
+<!-- measured:surface:end -->
 
-## 2. Tool surface (22 core, 14 always-on)
+## 2. Tool surface
 
 ```
 shell           run a command on this machine (bash / PowerShell), per-call timeout
@@ -71,7 +82,7 @@ writes tools.
 
 ## 3. The runtime around the model call (the distinctive half)
 
-This is where the project actually spent its 5,800 lines and its 474 assertions. All of it is
+This is where most of the code and most of the tests are. All of it is
 config-driven, and each item below exists because something went wrong in the field first.
 
 ### 3.1 Commands: `/tinycmdr <verb>` in chat, `tinycmdr <verb>` in a shell
@@ -108,16 +119,18 @@ usage / update / version / whoami / sethome / help (h)
 
 ### 3.2 Budgets and limits (defaults from `config.example.json`)
 
+<!-- measured:budgets:start -->
 ```
-max_steps 40                hard stop on tool calls per run
-max_minutes 10              wall clock per run
-shell_timeout 180           per command
-tool_output_max_chars 6000  what a tool may hand back into context
+max_steps 250                 hard stop on tool calls per run
+max_minutes 75                wall clock per run
+shell_timeout 300             per command
+tool_output_max_chars 10000 what a tool may hand back into context
 max_context_tokens          context budget, with `context` reporting the fill
 history_exchanges           session depth kept in the prompt
 notes_max_chars / per-note / keep / archive_days   memory caps and rotation
 tasks_max_open / done_keep  ledger caps
 ```
+<!-- measured:budgets:end -->
 
 ### 3.3 Failure handling (the part most harnesses do not have)
 
@@ -179,14 +192,14 @@ because it is the real threat model.
 
 ```
 no framework        the framework it replaced cost 16K+ tokens before the first tool call; this one
-                    measures 3,403 tokens of fixed overhead AS SENT on a clean unpack of the
-                    tree (system prompt + the 12 tool schemas a request really carries
-                    + the skills index; 1,744 of it is the prompt). Each prose runbook costs
-                    about 23 tokens of index, and each custom tool costs its NAME on its shelf's
-                    line - 5.9 chars per tool measured at 80 tools - with its schema riding along
-                    only while a session has revealed it. A tool fleet no longer competes with
-                    the runbooks for the prompt. On a prefill-bound local model that difference
-                    is minutes before the first action.
+                    measures 4,070 of fixed overhead by est_tokens (3,406 tokens by the
+                    endpoint's own tokenizer) AS SENT on a clean unpack of the tree: the
+                    system prompt plus the 12 tool schemas a request really carries. Each
+                    prose runbook costs about 23 tokens of index, and each custom tool costs
+                    its NAME on its shelf's line - 5.9 chars per tool measured at 80 tools -
+                    with its schema riding along only while a session has revealed it. A tool
+                    fleet no longer competes with the runbooks for the prompt. On a
+                    prefill-bound local model that difference is minutes before the first action.
 one file            auditable end to end by one person; you can read the whole agent
 no database         sessions/jobs/notes/tasks are JSON/text next to the bot
 no daemon           the bot IS the process; systemd / launchd / a scheduled task supervises it
@@ -198,32 +211,51 @@ self-written tools  the agent extends itself, and the new tool is live on the ne
 
 ### 4.1 How the overhead figure is produced
 
-The bot computes it at startup and prints it, from the same expression used here:
+`maintenance/measure-prompt.py` prints both legs - the estimator and the endpoint's own
+tokenizer - and it is the command to re-run after any prompt change:
 
 ```
-python -c "import sys,json; sys.path.insert(0,'.'); import tinycmdr as fb; \
-  print(fb.est_tokens(fb.build_system_prompt() + json.dumps(fb.select_tool_schemas(None))))"
-# clean unpack of tinycmdr-1.0.31-linux.tar.gz -> 3403   (the 12 schemas a request SENDS)
-#   the same string through est_tokens (chars/4) -> 4069  (what the gate asserts on)
-# 1.0.16, before the 2026-09-27 trims           -> 5333   (the 14 schemas then)
-# the same tree counting EVERY schema held      -> 7912   (25 schemas: openai_schemas())
+python maintenance/measure-prompt.py                  # this box's endpoint
+python maintenance/measure-prompt.py --tokenize URL   # any OpenAI-compatible /v1 root
+python maintenance/measure-prompt.py --tokenize ""    # no endpoint: est_tokens only
 ```
 
-Measured 2026-09-27 on a clean unpack of the tree with the ENDPOINT'S tokenizer: **3,403** as sent -
-3,586 on the author's own install, which carries one skill and five drop-in tools. est_tokens
-(chars/4) reads 17% higher on the same strings, 4,069 and 4,301: it is the conservative side of a
-window check, and it is what the 5,400-token gate asserts, so the gate keeps a healthy margin.
-schema the registry holds. The 2026-09-25 figure was 5,333 for the same expression; the
-2026-09-13 figure was 3,469 on
-1.9.32, before the tool set and the guard prose grew, and every later number since has been a
-measurement of a different tree. What a request SENDS is the two-line expression above: the
-system prompt plus the always-on schemas. The registry holds eleven more schemas that only a
-session which asked for them carries, which is why the old expression (every schema the registry
-holds) reads 7,912 here and the sent floor is 5,333. The deltas are the interesting part: about
-23 tokens per runbook of index, and a custom tool now costs its NAME on its shelf's line (5.9
-chars per tool at 80 tools, measured with `tests/tool_index_scale.py`) instead of a schema or a
-description line on every call. The figure moves with the number of skills and custom tools
-installed, which is why the post should quote the unpack number and say what it was measured on.
+    live    this install: ./tinycmdr.py with ./config.json - skills, drop-in tools,
+            notes and all, i.e. what a request from this box pays
+    clean   a staged unpack: tinycmdr.py with tests/fixture-config.json - no skills, no
+            drop-in tools, i.e. what a stranger's first request pays
+
+Measured 2026-09-27 against a llama.cpp endpoint's own `/tokenize`, from the same expression
+the bot prints at startup (`est_tokens(build_system_prompt() + json.dumps(select_tool_schemas(None)))`):
+
+```
+                       est_tokens (chars/4)        endpoint tokenizer
+live install           4,301  (2,430 + 1,871)       3,586  (1,927 + 1,659)
+clean unpack           4,070  (2,199 + 1,871)       3,406  (1,747 + 1,659)
+earlier trees         1.0.16 -> 5,333 est   1.0.30 -> 4,802 est   1.0.31 -> 4,301 est
+```
+
+The estimator is chars/4, and it over-reports by about 17% on this material (4.29 chars per
+token on the prompt, 3.85 on the schemas). It is what the 5,400-token gate in
+`tests/test_envelope.py` asserts against, on purpose: it is the conservative side of a window
+check. The endpoint's number is what the model actually pays, and both are printed precisely
+because quoting one of them without saying which is how this figure went wrong for four
+releases.
+
+What a request SENDS is the expression above: the system prompt plus the always-on schemas.
+The registry holds 22 core tools and 12 of them are always-on, so the other 10 cost nothing
+until a session reveals one - counting every schema the registry holds reads 7,711 est on this
+install (27 schemas: 22 core + 5 drop-in), which is the number a naive harness would pay every
+turn. The deltas are the interesting part: about 23 tokens per runbook of index, and a custom
+tool now costs its NAME on its shelf's line (5.9 chars per tool at 80 tools, measured with
+`tests/tool_index_scale.py`) instead of a schema or a description line on every call. The
+figure moves with the number of skills and drop-in tools installed, which is why both legs are
+printed and the public number quoted is the clean one.
+
+One naming note for anyone reading old figures: the pre-1.0 dev tree called itself 1.9.x
+(1.9.32 is the last of those, 2026-09-13). Nothing before v1.0.0 was ever tagged or published,
+so no released artifact was ever numbered out of order - the first published version is
+v1.0.0, and every release since is in the 1.0 line.
 
 ## 5. What it does NOT have
 
@@ -253,12 +285,23 @@ Agent architecture
   no voice input/output; vision is a config flag with limited use
 
 Engineering maturity
-  no benchmark or eval harness (no SWE-bench-style numbers, no scoreboard)
+  no benchmark against public suites (no SWE-bench-style scores, no leaderboard position);
+  what exists is its OWN graded set - machine-graded tasks with named failure categories
+  (tests/eval_tasks.py, run_eval.py, compare_eval.py; section 1 counts them) - which needs a
+  live endpoint, so it is run by hand rather than in CI. A committed scoreboard lives at
+  tests/eval_baseline.json; `python tests/run_eval.py --all --baseline tests/eval_baseline.json`
+  prints the per-task and per-category delta, and the file records the run-to-run variance that
+  makes a single flip a signal rather than a verdict
   no telemetry, no tracing, no structured run records beyond the log and the optional payload dump
-  no packaging or upgrade path beyond the archive: version drift is detected by file hash
-  no docs site, no contributor guide, no release process (no signed releases, no changelog automation)
+  no packaging or upgrade path beyond the archive and the git checkout: version drift is
+  detected by file hash
+  no docs site, no contributor guide. Releases are scripted (maintenance/release.sh builds
+  three shapes and attaches SHA256SUMS; .github/workflows/ci.yml gates macOS, Linux and
+  Windows) but NOT signed - no minisign or GPG key, so the checksums catch corruption, not
+  a replaced release
   no multi-user model: one operator, one allowlist, no per-user permissions or quotas
-  tests are unit-level (474 assertions); there is no end-to-end suite against a real model
+  the suites (section 1) all run WITHOUT a model by design - that is what keeps them fast and
+  deterministic; the end-to-end instrument is the graded set above, run by hand
 ```
 
 ## 6. Where this sits in the 2026 harness landscape
@@ -378,9 +421,11 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 
 ## 8. Where it is genuinely ahead, honestly stated
 
+<!-- measured:readability:start -->
 ```
-fixed prompt overhead     ~4,150 tokens measured, against 16K+ on the framework it replaced
-readability               5,847 lines, one file, no dependency tree to audit
+fixed prompt overhead     ~3.6K real tokens as sent, measured with the endpoint's own
+                          tokenizer - section 4.1 has both legs and the command
+readability               21,635 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
@@ -389,6 +434,7 @@ deployment surface        three dependencies, no daemon, no database, works offl
                           local model server, and the chat server is self-hosted
 per-host identity         one bot account per machine, so "which box am I talking to" is never a guess
 ```
+<!-- measured:readability:end -->
 
 ## 9. How to say what it is
 
