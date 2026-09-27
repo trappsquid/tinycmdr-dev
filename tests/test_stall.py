@@ -918,8 +918,11 @@ def test_done_ledger_items_are_not_re_issued_as_instructions():
           "confirm containers are up" not in rendered, rendered)
     check("ledger: a done item's evidence note is not re-sent",
           "verified at 12:49" not in rendered, rendered)
+    # "to-do list" was the marker here; that phrase is what let a fresh session adopt an
+    # ended one's thread (2026-09-27). The requirement is that the block says what it is -
+    # history that takes no action, and inherited work that needs a yes.
     check("ledger: it says what the block is for",
-          "no action" in rendered and "to-do list" in rendered, rendered)
+          "no action" in rendered and "earlier run" in rendered, rendered)
 
 
 def test_no_run_ever_sends_sampling_parameters():

@@ -5,6 +5,17 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Fixed
+- The ledger block called its open items "the to-do list", so a fresh session adopted an ended
+  session's thread: a day-old "boot Linux on the iPhone" item plus two hours-old entries drove a
+  26-step run nobody asked for (measured on a live install, 2026-09-27). Every open item now shows
+  its age from its own timestamps, `agent.ledger_stale_hours` (default 12) marks an untouched one
+  `stale`, and the block says what the list is - work an earlier run left open, to be confirmed
+  with the operator before it is resumed. Same incident class as the done-item fix, one status
+  over.
+
 ## [1.0.33] - 2026-09-27
 
 Housekeeping with teeth: the numbers in the credibility doc are rendered from the tree and a

@@ -413,6 +413,12 @@ DEFAULT_CONFIG = {
         "notes_archive_days": 45,   # older than this -> notes-archive.md
         "tasks_max_open": 15,       # refuse new tasks past this many open ones
         "tasks_done_keep": 3,       # finished tasks still shown in the prompt
+        # An open item untouched this long renders `stale`, and the block says an inherited
+        # open item needs the operator's yes before it is resumed: the ledger is
+        # durable, so an ended session's thread used to read as this session's plan
+        # (measured 2026-09-27: an iPhone/Linux item from the day before drove a
+        # 26-step run nobody asked for).
+        "ledger_stale_hours": 12,
         "checkin_minutes": 5,     # post a NEW progress message this often (0 = off)
         "checkin_steps": 30,      # ...or every N tool steps, whichever comes first
         "scope_note_steps": 40,   # one line, once per run, past this many tool calls: the
@@ -6325,9 +6331,33 @@ def render_task_prompt():
     keep_done = int(CONFIG["agent"].get("tasks_done_keep") or 3)
     if not active and not done:
         return ""
+    stale_after = float(CONFIG["agent"].get("ledger_stale_hours") or 12) * 3600.0
+    now = time.time()
+
+    def _age(item):
+        """(human age, is_stale) from the item's own timestamps.
+
+        The ledger is durable by design, so age is the whole difference between "the
+        operator asked an hour ago" and "a session that ended yesterday left this lying
+        around" - and the second one is what a fresh session must not adopt silently.
+        """
+        ts = str(item.get("updated") or item.get("created") or "")
+        try:
+            t = time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M"))
+        except Exception:
+            return "", False
+        secs = max(0.0, now - t)
+        if secs < 3600:
+            return "%dm" % int(secs // 60), False
+        if secs < 86400:
+            return "%dh" % int(secs // 3600), secs > stale_after
+        return "%dd" % int(secs // 86400), secs > stale_after
+
     rows = []
     for i in active:
-        row = f"- #{i['id']} [{i.get('status')}] {i.get('desc', '')}"
+        human, stale = _age(i)
+        age = (" (%s%s)" % (human, ", stale" if stale else "")) if human else ""
+        row = f"- #{i['id']} [{i.get('status')}]{age} {i.get('desc', '')}"
         if i.get("note"):
             row += f" (note: {i['note']})"
         rows.append(row[:260])
@@ -6341,9 +6371,18 @@ def render_task_prompt():
         row = f"- #{i['id']} [done, no action] {i.get('desc', '')[:90]}"
         rows.append(row)
     open_n = len(active)
-    return (f"ledger: {open_n} open, {len(done)} done. Open items are the "
-            f"to-do list; `[done, no action]` rows are history. Curate with the "
-            f"`task` tool — mark, don't append.\n" + "\n".join(rows))
+    # Open items are NOT automatically the current conversation's work. The ledger is
+    # durable, so a fresh session inherits whatever the last one left - and calling that
+    # "the to-do list" here made a new session adopt an ended session's thread and act on
+    # it unasked (measured on a live install 2026-09-27: an iPhone/Linux item from the day
+    # before plus two hours-old entries drove a 26-step run nobody asked for). Same
+    # incident class as the done-item fix below, one status over.
+    return (f"ledger: {open_n} open, {len(done)} done. Open items were left by an "
+            f"earlier run (or this one) - they are NOT a plan for the current "
+            f"conversation: ask the operator before resuming one, and close what they "
+            f"do not want. `stale` marks an item untouched for over "
+            f"{int(stale_after // 3600)}h. `[done, no action]` rows are history. Curate "
+            f"with the `task` tool - mark, don't append.\n" + "\n".join(rows))
 
 
 @serialized_on(TASKS_FILE)
@@ -10127,7 +10166,9 @@ How you work:
 - Keep going until solved, or until you can state precisely what is broken and what is needed.
 - Your tool list is deliberately short: anything else is one call away - find_tools by name or by what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it and the harness keeps it for the session. find_tools with no query lists everything this box has: never claim a capability is missing without checking, never rebuild a route from the filesystem up, and never re-implement a hidden tool instead of calling it (measured: 40s replicating one call). A NEW tool is built with a tool - `toolsmith action=new name description argspec` or `create_tool`, live on the next call - not by hand-writing `tools/<name>.py` and self-importing it (measured: 11 calls wasted while the tool sat named in its prompt).
 {inventory}- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files {{pattern, path}} (regex, line numbers, ONE call - it replaces grep, rg, findstr, Select-String), edit_file. Searching file CONTENT through the shell is the miss this box pays most for (measured: 6 shell calls where one search_files does it). Shell is for what the file tools cannot do: services, processes, OS state, one-off commands.
-- Keep the task ledger current: add a `task` for anything multi-step; it survives restarts and tells your next session where this box is.
+- Keep the task ledger current: add a `task` for anything multi-step; it survives restarts and tells your next session where this box is - and an item
+  an earlier session left open is not your instruction: ask the operator before you
+  resume one.
 - Checking the work is the last ledger item: re-run the command, re-read the change, open the page, and make the check test the claim itself — a file existing proves nothing about what is in it or who wrote it. High-stakes checks go to delegate_task so the work is not grading itself.
 
 - If an approach fails twice, change approach. The harness refuses a repeat only while nothing has changed: after two identical runs it returns the cached result, labelled `[HARNESS: ... execution #N]`, and **any write or edit clears it immediately** - so after a fix, re-run the SAME command that showed the problem and it really executes. Do not switch commands to dodge the guard: changed world + original command is the only combination that proves anything. A refused repeat means nothing has changed yet: change something, or use the result you have.

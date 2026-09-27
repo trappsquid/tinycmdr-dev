@@ -312,8 +312,13 @@ def test_task_prompt_render():
     rendered = fb.render_task_prompt()
     check("render shows the open task", "fix the poster pipeline" in rendered,
           rendered)
+    # "to-do list" used to be the marker here, and that phrase is what made a fresh session
+    # adopt an ended one's thread (2026-09-27): the requirement is that the block says how to
+    # keep the ledger AND that inherited items need the operator's yes, not that it calls them
+    # a plan.
     check("render is a plan not a log",
-          "mark, don't append" in rendered and "to-do list" in rendered,
+          "mark, don't append" in rendered
+          and "ask the operator before resuming" in rendered,
           rendered)
     check("a done row is marked as history, not an order",
           "[done, no action]" in rendered or "0 done" in rendered, rendered)
@@ -2234,6 +2239,35 @@ def test_a_length_cut_that_fills_the_window_is_an_overflow_not_a_cap():
         fb.AGENT.__dict__.pop("_window_cache", None)
         _budget_clear()
         fb.CONFIG = saved_cfg
+def test_inherited_open_items_are_not_a_plan():
+    """The ledger is durable, so a fresh session inherits the last one's thread.
+
+    Measured on a live install 2026-09-27: a day-old "boot Linux on the iPhone" item plus two
+    hours-old entries drove a 26-step run nobody asked for, because the block called open items
+    "the to-do list" and never showed how old any of them was. An inherited item needs a yes
+    from the operator, and its age is what makes that checkable.
+    """
+    redirect_files()
+    fb.tool_task({"action": "add", "task": "an item the operator asked for a minute ago"}, None)
+    fb.tool_task({"action": "add", "task": "an item a session that ended a day ago left open"}, None)
+    t = fb.load_tasks()
+    stamp = fb.time.strftime("%Y-%m-%d %H:%M", fb.time.localtime(fb.time.time() - 30 * 3600))
+    t["items"][-1]["created"] = t["items"][-1]["updated"] = stamp
+    fb.save_tasks(t)
+
+    block = fb.render_task_prompt()
+    check("an inherited item shows its age", "(1d" in block, block)
+    check("and an item past ledger_stale_hours is marked stale", "stale" in block, block)
+    check("a fresh item is not marked stale",
+          "(0m" in block or "(1m" in block, block)
+    check("the block no longer calls open items \"the to-do list\"",
+          "to-do list" not in block, block)
+    check("it says an inherited item is not a plan for this conversation",
+          "NOT a plan for the current conversation" in block, block)
+    check("and says to ask before resuming one",
+          "ask the operator before resuming" in block, block)
+
+
 def main():
     # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")
