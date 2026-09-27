@@ -19,13 +19,15 @@ Fixed
   When the arguments are merely WRAPPED - a ```json fence, prose around the object - the object
   inside them is kept instead of discarded, so the call still runs with what it meant. Valid JSON
   that is not an object is passed through: the tool rejects it, not the server.
-- The browser suite's whole-run waits shared no budget, so one slow section could eat the next
-  section's time and a crash after a failed wait took the suite's report with it. They share a
-  180s deadline now (each call capped by what is left), and the crash guard prints its reason on
-  stdout as well as stderr - the runner surfaces stdout as the failure detail and folds stderr
-  into a log it does not upload. Measured on the macOS runner: this suite takes 9.7s here and
-  took 47.8s, 76.9s and 137.8s on three CI runs, so a fixed 30s and then a fixed 90s per wait
-  both expired.
+- The browser suite neither printed the "N passed, M failed" line `run_all.py` reads to tell a
+  graded run from a crash, nor had a budget that fits the macOS runner - so a run that COMPLETED
+  with one red check was reported as "died before its own summary", and three CI cycles went into
+  a check whose real story was invisible. It prints its counts now, waits 240s per whole run
+  inside a 600s suite deadline, and `run_all.py` carries a per-suite override
+  (`SLOW_SUITES = {"tests/test_webui_browser.py": 900.0}`): that suite takes 9.7s here and took
+  47.8s, 76.9s, 137.8s then 167.5s on four CI runs with identical inputs. A crash also reports on
+  stdout now, which is the stream the runner surfaces; the traceback alone goes to a log CI does
+  not upload.
 - The README contradicted itself about the fixed prompt overhead: the banner and the caching
   bullet said ~4,150 tokens, the comparison table said ~5,300 measured. Both read ~5.3K now, which
   is what the shipped static half actually costs (system prompt + the schemas a request sends), and
