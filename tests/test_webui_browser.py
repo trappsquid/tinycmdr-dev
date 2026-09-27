@@ -165,6 +165,14 @@ def compare(base, page, run_id, label):
               f"{label}: the answer is the last thing the run produced")
 
 
+# A whole RUN (model stub + tool call + the page's polling) is waited for with this budget, not
+# the 30s default: the slowest host that runs this suite is the macOS CI runner, measured
+# 2026-09-27 at ~8x this box (this suite 9.7s here, 76.9s there), where the default expired on
+# the last section's "the run finished" and - because the code after it assumes the payload -
+# took the whole suite's report with it.
+RUN_DONE_TIMEOUT = 90.0
+
+
 def wait_for(fn, timeout=30.0, interval=0.05):
     end = time.time() + timeout
     while time.time() < end:
@@ -259,7 +267,7 @@ def main():
         run_a = live["run_id"]
         ev["go1"].set()
         check(wait_for(lambda: http(f"{base}/api/events?run_id={run_a}&since=0")[1]
-                       .get("done")), "the run finished")
+                       .get("done"), timeout=RUN_DONE_TIMEOUT), "the run finished")
         time.sleep(1.0)                      # let the page take the last poll
         compare(base, page, run_a, "A: simple run")
         st = page.evaluate(DUMP)
@@ -316,7 +324,7 @@ def main():
         check(any("free space" in tw.blob(p) for p in seen),
               "B: the steering message reached the model in the next request")
         ev["go2"].set()
-        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_b}&since=0")[1].get("done")),
+        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_b}&since=0")[1].get("done"), timeout=RUN_DONE_TIMEOUT),
               "B: the run finished")
         time.sleep(1.0)
         compare(base, page, run_b, "B: steer mid-run")
@@ -345,7 +353,7 @@ def main():
         check(st["noteShown"] and "queued" not in st["note"],
               f"C: no phantom 'queued into it' notice ({st['note'][:60]!r})")
         ev["go1"].set()
-        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_c}&since=0")[1].get("done")),
+        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_c}&since=0")[1].get("done"), timeout=RUN_DONE_TIMEOUT),
               "C: the run finished after the reload")
         time.sleep(1.0)
         compare(base, page, run_c, "C: after a reload")
@@ -372,7 +380,7 @@ def main():
         run_d = live["run_id"]
         page.click("#stop")
         ev["go1"].set()
-        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_d}&since=0")[1].get("done")),
+        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_d}&since=0")[1].get("done"), timeout=RUN_DONE_TIMEOUT),
               "D: stop ended the run")
         time.sleep(1.0)
         ks = [l["kind"] for l in server_lines(base, run_d)[1]]
@@ -435,7 +443,7 @@ def main():
         run_g = page.evaluate("() => { const n = [...document.querySelectorAll('[data-run]')].pop();"
                               " return n ? n.dataset.run : null; }")
         check(bool(run_g), f"G: the answer has its own run in the transcript ({run_g})")
-        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_g}&since=0")[1].get("done")),
+        check(wait_for(lambda: http(f"{base}/api/events?run_id={run_g}&since=0")[1].get("done"), timeout=RUN_DONE_TIMEOUT),
               "G: the run finished")
         time.sleep(0.8)
         compare(base, page, run_g, "G: the answer the button copies from")
@@ -507,4 +515,16 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # A suite that raises still has to say what it managed to check. The runner folds this
+    # suite's output into a log it does not upload, so "died before its own summary" left
+    # nothing to read but the check that failed first (measured 2026-09-27).
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        print("\nthe suite raised before its own summary; the checks printed above are the "
+              "ones that ran", file=sys.stderr)
+        sys.exit(1)
