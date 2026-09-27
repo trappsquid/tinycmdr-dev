@@ -5,6 +5,46 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.28] - 2026-09-27
+
+A tool call is what the model asked for, character for character. This release removes the last
+piece of the stream that could rewrite one, and makes the paths that hid the damage say what they
+saw instead of reading as the model's own mistake.
+
+Fixed
+- **Tool-call arguments were corrupted between the model and the tool.** The stream kept a per-call
+  SET of every argument fragment and skipped any repeat. llama.cpp streams arguments one token at a
+  time, so `-`, `" "`, `,`, `":` and `\"` repeat inside a single call, and every second copy was
+  deleted before parsing, execution or display: `grep -nE` arrived as `grepnE`, `head -5` as
+  `head5`, `/tmp/alpha, /tmp/beta` as `/tmp/alpha,/beta`, `a, b, c` as `a, b c`. Measured: a raw-SSE
+  capture of six realistic shell commands was correct 6/6 and only 1/6 survived the harness; in one
+  production session 54 of 188 tool results failed and every `search_files` call (8/8) arrived as
+  invalid JSON.
+- **The first repair of that was wrong in the same way.** Dropping a fragment only when it matched
+  the one immediately before it is still content-based: `seq 1 2000` reached the tool as `seq 1 20`,
+  because 2-0-0-0 arrives as four fragments and two of them are the same character. The live cost
+  was a run that re-issued its command six times while the loop guard refused the repeats - 261s
+  and 143K tokens without ever seeing the output it asked for. Nothing is dropped now: every
+  fragment is appended, and the one shape that IS a resend (an endpoint that finished a call and
+  emitted it again from the top - the 1.0.24 `echo hiecho hi` case) is repaired after the stream
+  ends, by JSON structure alone.
+- **An unparseable tool call read as the model's own mistake.** `ERROR: invalid JSON arguments:
+  <text>` showed the text that ARRIVED with no marker that the harness could not parse it, and the
+  log kept only 60 characters - so "the model sent junk" and "the arguments were damaged on the way
+  in" looked identical, and a run re-issued the same call rather than looking at what had come
+  through. The model is now told the text arrived that way before any tool ran, and the whole
+  payload goes to the log.
+- **The suite runner blamed suites for the live bot's writes.** Its leak report fingerprints ignored
+  files, and a bot running in the same checkout rewrites `tinycmdr.log`, `sessions/` and
+  `web-sessions.json` by itself every minute: with the live bot up the report read "23 path(s),
+  written by 9 suite(s)" and every one of them was the bot's. It now probes the checkout's instance
+  lock - the same lock `tinycmdr status` reports - and labels the suite names as unreliable while a
+  bot is live.
+
+Added
+- Regression checks for both halves of the argument bug: repeated punctuation inside one call, a
+  repeated character inside one number, and a re-emitted call that must not double.
+
 ## [1.0.27] - 2026-09-26
 
 Every lane - `--web`, `--cli`, `--once`, each verb - is a separate PROCESS over the same state
