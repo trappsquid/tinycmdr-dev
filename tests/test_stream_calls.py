@@ -267,6 +267,88 @@ def test_repeated_characters_inside_one_argument_survive():
         check("...2000 is not clipped to 20", got == cmd, got)
 
 
+def test_other_openai_compatible_server_shapes():
+    """llama.cpp streams one string fragment per token. Other OpenAI-compatible servers -
+    vLLM/SGLang-class, and the proxies in front of them - also send the arguments as an
+    OBJECT, the legacy `function_call` delta, and `content` as a list of parts. Measured
+    2026-09-27 against the shipped accumulator: the first ran the tool with EMPTY
+    arguments, the second lost the call entirely, and the third lost the whole answer.
+    None of the three raised anything."""
+    # (a) arguments as a JSON object, then a trailing empty object
+    script = sse(
+        delta(tool_calls=[{"index": 0, "id": "c1", "type": "function",
+                           "function": {"name": "shell",
+                                        "arguments": {"command": "echo OBJECT-ARGS"}}}]),
+        delta(tool_calls=[{"index": 0, "function": {"arguments": {}}}]),
+        delta(finish="tool_calls")) + [SSE_END]
+    data, _ = run_stream(script, idle_seconds=5, first_byte_seconds=5)
+    calls = data["choices"][0]["message"].get("tool_calls") or []
+    check("object-form arguments keep the call", len(calls) == 1, calls)
+    if calls:
+        got = calls[0]["function"]["arguments"]
+        try:
+            parsed = json.loads(got)
+        except Exception as e:                      # an empty/again-empty argument string
+            parsed = {"__unparseable__": str(e)}
+        check("...and are not emptied, nor beaten by a trailing {}",
+              parsed.get("command") == "echo OBJECT-ARGS", got)
+
+    # (b) the legacy single-call shape
+    legacy = {"choices": [{"index": 0, "finish_reason": None,
+                           "delta": {"function_call": {"name": "shell",
+                                                       "arguments": '{"command": "echo LEGACY"}'}}}]}
+    data, _ = run_stream(sse(legacy, delta(finish="function_call")) + [SSE_END],
+                         idle_seconds=5, first_byte_seconds=5)
+    calls = data["choices"][0]["message"].get("tool_calls") or []
+    check("a legacy function_call delta is not dropped", len(calls) == 1, calls)
+    if calls:
+        try:
+            parsed = json.loads(calls[0]["function"]["arguments"])
+        except Exception as e:
+            parsed = {"__unparseable__": str(e)}
+        check("...and carries its arguments", parsed.get("command") == "echo LEGACY",
+              calls[0]["function"]["arguments"])
+
+    # (c) content as a list of parts
+    data, _ = run_stream(sse(delta(content=[{"type": "text", "text": "Hello "},
+                                            {"type": "text", "text": "world"}]),
+                             delta(content=[{"type": "text", "text": "!"}]),
+                             delta(finish="stop")) + [SSE_END],
+                         idle_seconds=5, first_byte_seconds=5)
+    check("list-form content is not thrown away",
+          data["choices"][0]["message"]["content"] == "Hello world!",
+          data["choices"][0]["message"]["content"])
+
+
+def test_non_streaming_message_shapes_are_normalized():
+    """A non-streamed response arrives whole and can carry the same two shapes a delta can:
+    `content` as parts, and the legacy `function_call`. It is normalized at the door, so the
+    rest of the harness - and the replayed history - only ever sees one shape."""
+    m = fb._normalize_assistant_message(
+        {"role": "assistant",
+         "content": [{"type": "text", "text": "Hi "}, {"type": "text", "text": "there"}]})
+    check("list-form content is joined", m["content"] == "Hi there", m["content"])
+
+    m = fb._normalize_assistant_message(
+        {"role": "assistant", "content": "",
+         "function_call": {"name": "shell", "arguments": {"command": "echo NS"}}})
+    calls = m.get("tool_calls") or []
+    check("a legacy function_call becomes a tool call", len(calls) == 1, m)
+    if calls:
+        check("...with string arguments for the replay",
+              json.loads(calls[0]["function"]["arguments"])["command"] == "echo NS",
+              calls[0]["function"]["arguments"])
+
+    m = fb._normalize_assistant_message(
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "a",
+                         "function": {"name": "shell",
+                                      "arguments": {"command": "echo OBJ"}}}]})
+    check("object arguments are stringified",
+          isinstance(m["tool_calls"][0]["function"]["arguments"], str),
+          m["tool_calls"][0]["function"]["arguments"])
+
+
 def test_indexed_calls_keep_their_index():
     script = sse(
         delta(tool_calls=[{"index": 0, "id": "a", "type": "function",

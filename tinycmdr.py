@@ -1251,6 +1251,75 @@ def _post_watchdog(url, headers, payload, timeout, grace, cancel_event=None,
     return box.get("resp")
 
 
+def _delta_text(value):
+    """A streamed `content` (or `reasoning_content`) chunk as plain text.
+
+    Usually a string. Some servers send the OpenAI multipart shape instead -
+    `[{"type": "text", "text": "..."}]` - and testing `isinstance(value, str)` alone threw
+    a whole answer away without saying so (measured 2026-09-27).
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for part in value:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        return "".join(parts)
+    return ""
+
+
+def _delta_tool_calls(d):
+    """The tool-call fragments in one delta, in any shape a server actually sends.
+
+    `tool_calls` is the modern list. `function_call` is the earlier single-call shape, and
+    servers (and proxies in front of them) still emit it: the fragment was ignored
+    entirely, so the call vanished and the turn looked like an answer with no content.
+    Both shapes come back as the same list of fragments.
+    """
+    calls = d.get("tool_calls")
+    if isinstance(calls, list) and calls:
+        return calls
+    legacy = d.get("function_call")
+    if isinstance(legacy, dict) and (legacy.get("name") or legacy.get("arguments")):
+        return [{"index": 0, "id": "", "type": "function",
+                 "function": {"name": legacy.get("name") or "",
+                              "arguments": legacy.get("arguments", "")}}]
+    return []
+
+
+def _normalize_assistant_message(msg):
+    """One assistant message, in the shapes the rest of the harness expects.
+
+    A streaming delta is normalized as it arrives; a NON-streaming response arrives whole
+    and can carry the same two shapes - `content` as a list of parts, and the legacy
+    `function_call` instead of `tool_calls` (measured 2026-09-27: the first is handed to
+    code that expects text, the second lost the call entirely). Arguments that arrive as a
+    JSON object are stringified, so the replayed history is valid JSON on every server.
+    """
+    if not isinstance(msg, dict):
+        return msg
+    if "content" in msg and not isinstance(msg["content"], str):
+        msg["content"] = _delta_text(msg.get("content"))
+    if msg.get("reasoning_content") and not isinstance(msg["reasoning_content"], str):
+        msg["reasoning_content"] = _delta_text(msg.get("reasoning_content"))
+    calls = msg.get("tool_calls")
+    if not calls:
+        legacy = msg.pop("function_call", None)
+        if isinstance(legacy, dict) and (legacy.get("name") or legacy.get("arguments")):
+            calls = [{"id": "call_legacy_0", "type": "function",
+                      "function": {"name": legacy.get("name") or "",
+                                   "arguments": legacy.get("arguments", "")}}]
+            msg["tool_calls"] = calls
+    for tc in (calls or []):
+        fn = tc.get("function") if isinstance(tc, dict) else None
+        if isinstance(fn, dict) and not isinstance(fn.get("arguments"), str):
+            fn["arguments"] = json.dumps(fn.get("arguments") or {}, ensure_ascii=False)
+    return msg
+
+
 def _one_json_object(text):
     """The LAST complete JSON object in `text`, when more than one was accumulated.
 
@@ -1260,7 +1329,7 @@ def _one_json_object(text):
     object is never returned, however long it is or however much it repeats itself
     inside - so this can only ever collapse a doubled payload, never trim a real one."""
     dec = json.JSONDecoder()
-    last, i, n = None, 0, len(text)
+    last, nonempty, i, n = None, None, 0, len(text)
     while i < n:
         while i < n and text[i] in " \t\r\n":
             i += 1
@@ -1273,10 +1342,15 @@ def _one_json_object(text):
         except ValueError:
             return None
         last = (i, end)
+        if obj:
+            # An EMPTY object is not a better answer than a real one: a server that
+            # re-sends `{}` after the arguments (measured shape) must not win.
+            nonempty = (i, end)
         i = end
-    if last is None or last[1] - last[0] == len(text.rstrip()):
+    keep = nonempty or last
+    if keep is None or keep[1] - keep[0] == len(text.rstrip()):
         return None                          # exactly one object: untouched
-    return text[last[0]:last[1]]
+    return text[keep[0]:keep[1]]
 
 
 def _repair_doubled_calls(calls):
@@ -1439,15 +1513,16 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
             timings = chunk["timings"]
         for ch in (chunk.get("choices") or []):
             d = ch.get("delta") or {}
-            fresh = (d.get("content") or d.get("reasoning_content")
-                     or d.get("tool_calls"))
-            if fresh and stats["ttft"] is None:
+            text = _delta_text(d.get("content"))
+            rtext = _delta_text(d.get("reasoning_content"))
+            fragments = _delta_tool_calls(d)
+            if (text or rtext or fragments) and stats["ttft"] is None:
                 stats["ttft"] = time.time() - t0
-            if isinstance(d.get("content"), str):
-                content.append(d["content"])
-            if isinstance(d.get("reasoning_content"), str):
-                reasoning.append(d["reasoning_content"])
-            for tc in (d.get("tool_calls") or []):
+            if text:
+                content.append(text)
+            if rtext:
+                reasoning.append(rtext)
+            for tc in fragments:
                 # OpenAI streams tool calls piecewise: the first fragment carries
                 # the id and the name, later ones append argument fragments. The
                 # fragment identifies its call by `index` when the server sends one, by
@@ -1458,8 +1533,16 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                 # executed `echo AB`).
                 _fn = tc.get("function") or {}
                 _name = _fn.get("name") if isinstance(_fn.get("name"), str) else ""
-                _args = (_fn.get("arguments")
-                         if isinstance(_fn.get("arguments"), str) else "")
+                _raw_args = _fn.get("arguments")
+                if isinstance(_raw_args, str):
+                    _args = _raw_args
+                elif isinstance(_raw_args, (dict, list)):
+                    # Several OpenAI-compatible servers (and proxies in front of them) send
+                    # the arguments as a JSON OBJECT rather than a string fragment. Testing
+                    # for `str` alone dropped it: the call ran with {} and nothing said why.
+                    _args = json.dumps(_raw_args, ensure_ascii=False)
+                else:
+                    _args = ""
                 if tc.get("index") is not None:
                     key = ("i", tc["index"])
                 elif tc.get("id"):
@@ -1496,13 +1579,13 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                 finish = ch["finish_reason"]
                 terminal = True
             stats["deltas"] += 1
-            if isinstance(d.get("content"), str):
-                stats["chars"] += len(d["content"])
-            if isinstance(d.get("reasoning_content"), str):
+            if text:
+                stats["chars"] += len(text)
+            if rtext:
                 # Counted separately from the answer's text: a MAX-thinking box
                 # spends the first 3-13 seconds here, and with only `chars` in the
                 # heartbeat the status line read "0 chars" through all of it.
-                stats["reasoning_chars"] += len(d["reasoning_content"])
+                stats["reasoning_chars"] += len(rtext)
             elapsed = max(0.001, time.time() - t0)
             stats["tps"] = stats["deltas"] / elapsed
             if on_delta:
@@ -11151,7 +11234,7 @@ class Agent:
                     break
                 secs = time.time() - t0
                 choice = (data.get("choices") or [{}])[0]
-                msg = choice.get("message") or {}
+                msg = _normalize_assistant_message(choice.get("message") or {})
                 finish = choice.get("finish_reason") or ""
                 rc = msg.get("reasoning_content")
                 if usage is not None:
