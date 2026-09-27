@@ -238,6 +238,15 @@ Added
   docstrings, which never worked) are now one command with a real exit code.
 - `requirements-test.txt` and one CI workflow (macOS + Linux running the gate, a Windows job
   running the pure-Python suites).
+- The first CI run (on the commit that landed this release) found three suites that had only
+  ever passed on the author's Mac, none of them a product defect: `test_verbs.py` aborted on
+  Linux as an unprivileged user (`_verb_restart` refuses with "restart needs root" before the
+  helper is called, so the helper read back as `''` and `os.path.samefile('')` threw, dropping
+  every check after it), `test_supervise_ready.py`'s 30-second readiness budget is too short on
+  the macOS runner (measured there: a suite that takes 0.8 s here took 36 s), and
+  `test_installer_unix.py`'s macOS case never passed `--no-launchd` off macOS, where this
+  installer deliberately installs files only. All three are fixed in the tests, and the suite
+  now also passes on a real Ubuntu 22.04 host with Python 3.10.12.
 - Suites added by this phase: `test_envelope.py` (the arithmetic, the refusal, the memory caps,
   the static-overhead ceiling), `test_prefix_stability.py` (prefix reuse ≥ 90 %, exactly one
   trailing state block, disclosure at 80 tools), `test_guard_battery.py` (every destructive
