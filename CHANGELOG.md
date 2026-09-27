@@ -19,6 +19,13 @@ Fixed
   When the arguments are merely WRAPPED - a ```json fence, prose around the object - the object
   inside them is kept instead of discarded, so the call still runs with what it meant. Valid JSON
   that is not an object is passed through: the tool rejects it, not the server.
+- The browser suite's whole-run waits shared no budget, so one slow section could eat the next
+  section's time and a crash after a failed wait took the suite's report with it. They share a
+  180s deadline now (each call capped by what is left), and the crash guard prints its reason on
+  stdout as well as stderr - the runner surfaces stdout as the failure detail and folds stderr
+  into a log it does not upload. Measured on the macOS runner: this suite takes 9.7s here and
+  took 47.8s, 76.9s and 137.8s on three CI runs, so a fixed 30s and then a fixed 90s per wait
+  both expired.
 - The README contradicted itself about the fixed prompt overhead: the banner and the caching
   bullet said ~4,150 tokens, the comparison table said ~5,300 measured. Both read ~5.3K now, which
   is what the shipped static half actually costs (system prompt + the schemas a request sends), and
