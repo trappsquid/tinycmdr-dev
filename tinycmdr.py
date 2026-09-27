@@ -19443,7 +19443,10 @@ def _verb_doctor():
         if os.environ.get(name):
             where.append(".env" if name in env else "environment")
         print("    %-20s %s" % (name, ", ".join(where) if where else "not set"))
-    if CONFIG["llm"].get("api_key"):
+    # "none" is the shipped PLACEHOLDER, not a key: warning about it made every fresh
+    # install report a secret where there was none (measured on a live install).
+    _llm_key = str(CONFIG["llm"].get("api_key") or "").strip()
+    if _llm_key and _llm_key.lower() != "none":
         notes.append("llm.api_key is set in config.json — .env is the safer home")
 
     for mod, why in (("requests", "the HTTP layer"), ("croniter", "scheduling"),
