@@ -16,6 +16,9 @@ Fixed
   malformed blob is replaced with `{}` at the same choke point as the tool-pairing repair, named
   in the log with the tool and the offending text, so a history written by an older build heals
   on its next send instead of needing the session dropped.
+  When the arguments are merely WRAPPED - a ```json fence, prose around the object - the object
+  inside them is kept instead of discarded, so the call still runs with what it meant. Valid JSON
+  that is not an object is passed through: the tool rejects it, not the server.
 - The README contradicted itself about the fixed prompt overhead: the banner and the caching
   bullet said ~4,150 tokens, the comparison table said ~5,300 measured. Both read ~5.3K now, which
   is what the shipped static half actually costs (system prompt + the schemas a request sends), and

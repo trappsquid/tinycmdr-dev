@@ -10151,6 +10151,24 @@ def _repair_tool_pairing(messages):
                     "repair", len(before), len(after))
     return out
 
+def _salvage_tool_args(text):
+    """The JSON object inside `text`, or None.
+
+    A local model wraps its arguments in prose or a ```json fence often enough that the whole
+    call would otherwise be thrown away. The span from the first '{' to the last '}' is the
+    cheapest bounded attempt, and it is the right one for a brace inside a string
+    (`{"cmd": "echo }"}`) because that pair is the outermost one.
+    """
+    lo, hi = text.find("{"), text.rfind("}")
+    if lo == -1 or hi <= lo:
+        return None
+    try:
+        obj = json.loads(text[lo:hi + 1])
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
 def _repair_tool_arguments(messages):
     """Make every REPLAYED tool_call's `arguments` valid JSON, and say when it was not.
 
@@ -10183,11 +10201,18 @@ def _repair_tool_arguments(messages):
             try:
                 json.loads(args)
             except Exception:
-                log.warning("tool call %s had arguments that are not JSON (%s) - "
-                            "replaying them as {} so the endpoint can parse the "
-                            "request",
-                            fn.get("name") or "?", scrub(args[:60]))
-                fn["arguments"] = "{}"
+                salvaged = _salvage_tool_args(args)
+                if salvaged is not None:
+                    fn["arguments"] = json.dumps(salvaged)
+                    log.warning("tool call %s had its arguments wrapped in other text - "
+                                "kept the JSON object inside them (%s)",
+                                fn.get("name") or "?", scrub(args[:60]))
+                else:
+                    log.warning("tool call %s had arguments that are not JSON (%s) - "
+                                "replaying them as {} so the endpoint can parse the "
+                                "request",
+                                fn.get("name") or "?", scrub(args[:60]))
+                    fn["arguments"] = "{}"
                 bad += 1
     if bad:
         log.warning("repaired %d tool-call argument(s) that were not valid JSON", bad)

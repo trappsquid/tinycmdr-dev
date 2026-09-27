@@ -87,6 +87,25 @@ def main():
           isinstance(normalised, str) and json.loads(normalised) == {"action": "search"},
           normalised)
 
+    # ---- what a local model actually emits --------------------------------
+    cases = [
+        ('```json\n{"action":"search","topic":"x"}\n```',
+         {"action": "search", "topic": "x"}, "a fenced block keeps its object"),
+        ('Sure - here you go: {"action":"search","topic":"x"} hope that helps',
+         {"action": "search", "topic": "x"}, "prose around the object keeps the object"),
+        ('{"cmd": "echo }"}', {"cmd": "echo }"}, "a brace inside a string is left alone"),
+    ]
+    for text, want, label in cases:
+        got = args_of(fb._repair_tool_arguments([call(text)])[0])
+        check(label, json.loads(got) == want, got)
+
+    out = fb._repair_tool_arguments([call('[1, 2, 3]')])
+    check("valid JSON that is not an object is passed through (the tool rejects it, not the server)",
+          args_of(out[0]) == "[1, 2, 3]", args_of(out[0]))
+
+    out = fb._repair_tool_arguments([call('here: [1, 2] done')])
+    check("a WRAPPED non-object falls back to {}", args_of(out[0]) == "{}", args_of(out[0]))
+
     for empty in ("", "   ", None):
         out = fb._repair_tool_arguments([call(empty)])
         check(f"empty arguments ({empty!r}) become {{}}", args_of(out[0]) == "{}", args_of(out[0]))
