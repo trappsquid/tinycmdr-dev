@@ -16,6 +16,15 @@ Fixed
   with the operator before it is resumed. Same incident class as the done-item fix, one status
   over.
 
+Removed
+- Eighteen unreferenced images (~4.9 MB) that were never tinycmdr's identity: the
+  `tinycmdr-badge-*` and `tinycmdr-helm-*` families (10 files), the chibi ladder's extra rungs
+  (64/128/256/master), the author's own profile avatar, the unused rimmed mark, and a root
+  `icon.png` that duplicated `tinycmdr-chibi-256.png`. Nothing in the repo - no code, test, doc or
+  installer - named any of them, and the page's icon comes from an embedded copy rather than that
+  file. Kept: the vector mark and the two banners whose redraw `a9a2556` documents, and
+  `assets/brand/avatar.png`, the one image the README actually uses.
+
 ## [1.0.33] - 2026-09-27
 
 Housekeeping with teeth: the numbers in the credibility doc are rendered from the tree and a
