@@ -197,7 +197,7 @@ because it is the real threat model.
 
 ```
 no framework        the framework it replaced cost 16K+ tokens before the first tool call; this one
-                    measures 4,070 of fixed overhead by est_tokens (3,406 tokens by the
+                    measures 4,145 of fixed overhead by est_tokens (3,462 tokens by the
                     endpoint's own tokenizer) AS SENT on a clean unpack of the tree: the
                     system prompt plus the 12 tool schemas a request really carries. Each
                     prose runbook costs about 23 tokens of index, and each custom tool costs
@@ -230,18 +230,21 @@ python maintenance/measure-prompt.py --tokenize ""    # no endpoint: est_tokens 
     clean   a staged unpack: tinycmdr.py with tests/fixture-config.json - no skills, no
             drop-in tools, i.e. what a stranger's first request pays
 
-Measured 2026-09-27 against a llama.cpp endpoint's own `/tokenize`, from the same expression
-the bot prints at startup (`est_tokens(build_system_prompt() + json.dumps(select_tool_schemas(None)))`):
+Measured 2026-09-27 against the endpoint this box talks to (`POST /tokenize`, which answers
+a token list), from the same expression the bot prints at startup
+(`est_tokens(build_system_prompt() + json.dumps(select_tool_schemas(None)))`):
 
 ```
                        est_tokens (chars/4)        endpoint tokenizer
-live install           4,301  (2,430 + 1,871)       3,586  (1,927 + 1,659)
-clean unpack           4,070  (2,199 + 1,871)       3,406  (1,747 + 1,659)
+live install           4,374  (2,459 + 1,915)       3,633  (1,949 + 1,684)
+clean unpack           4,145  (2,230 + 1,915)       3,462  (1,778 + 1,684)
 earlier trees         1.0.16 -> 5,333 est   1.0.30 -> 4,802 est   1.0.31 -> 4,301 est
+                      1.0.34 -> 4,145 est / 3,462 real (clean unpack)
 ```
 
-The estimator is chars/4, and it over-reports by about 17% on this material (4.29 chars per
-token on the prompt, 3.85 on the schemas). It is what the 5,400-token gate in
+The estimator is chars/4, and it over-reports by about 20% on this material (1.20x on both legs:
+4,145 est against 3,462 real on the clean unpack, 4,374 against 3,633 live). It is what the
+5,400-token gate in
 `tests/test_envelope.py` asserts against, on purpose: it is the conservative side of a window
 check. The endpoint's number is what the model actually pays, and both are printed precisely
 because quoting one of them without saying which is how this figure went wrong for four
@@ -249,7 +252,7 @@ releases.
 
 What a request SENDS is the expression above: the system prompt plus the always-on schemas.
 The registry holds 22 core tools and 12 of them are always-on, so the other 10 cost nothing
-until a session reveals one - counting every schema the registry holds reads 7,711 est on this
+until a session reveals one - counting every schema the registry holds reads 7,784 est on this
 install (27 schemas: 22 core + 5 drop-in), which is the number a naive harness would pay every
 turn. The deltas are the interesting part: about 23 tokens per runbook of index, and a custom
 tool now costs its NAME on its shelf's line (5.9 chars per tool at 80 tools, measured with
@@ -428,8 +431,9 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 
 <!-- measured:readability:start -->
 ```
-fixed prompt overhead     ~3.6K real tokens as sent, measured with the endpoint's own
-                          tokenizer - section 4.1 has both legs and the command
+fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
+                          the endpoint's own tokenizer - section 4.1 has both legs and
+                          the command
 readability               21,917 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
