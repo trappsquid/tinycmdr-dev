@@ -25,6 +25,7 @@ import hmac
 import html
 import importlib.util
 import ipaddress
+import itertools
 import json
 import logging
 import os
@@ -5135,6 +5136,12 @@ class _FileLock:
 
 
 _ATOMIC_RENAME_RETRY_DELAYS = (0.05, 0.2)
+# Per-WRITE, not per thread: a thread id is recycled once a thread exits, so six writers
+# can land on five threads (ThreadPoolExecutor is not obliged to give six distinct ones).
+# next() on a count() is atomic, so every call gets its own name.
+_TMP_SEQ = itertools.count()
+
+
 def atomic_write_bytes(path, data):
     """Replace a file's bytes in one step. NEVER truncates the destination.
 
@@ -5168,8 +5175,9 @@ def atomic_write_bytes(path, data):
             # New file: narrow by default. The installers already write config.json
             # and .env 0600, and state files carry tokens and session text.
             mode = 0o600
-        tmp = p.with_name("%s.tmp-%d-%d" % (p.name, os.getpid(),
-                                            threading.get_ident()))
+        tmp = p.with_name("%s.tmp-%d-%d-%d" % (p.name, os.getpid(),
+                                               threading.get_ident(),
+                                               next(_TMP_SEQ)))
         try:
             fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
             # Binary, no newline translation: the default text mode rewrites every
@@ -10832,7 +10840,8 @@ class Agent:
         self.llm_url = CONFIG["llm"]["base_url"].rstrip("/") + "/chat/completions"
         self.headers = {"Content-Type": "application/json",
                         "Authorization": f"Bearer {CONFIG['llm']['api_key']}"}
-        SESSIONS_DIR.mkdir(exist_ok=True)
+        # No mkdir here: opening the agent creates NOTHING (see _ensure_sessions_dir).
+        # glob on a missing directory is empty, so the reload below needs no folder.
         for f in SESSIONS_DIR.glob("*.json"):  # reload persisted sessions
             try:
                 self.histories[f.stem] = json.loads(
@@ -10846,6 +10855,7 @@ class Agent:
 
     def _save(self, key):
         try:
+            _ensure_sessions_dir()
             atomic_write_text(self._session_path(key),
                               json.dumps(self._history(key),
                                          ensure_ascii=False))
@@ -15669,6 +15679,7 @@ class MattermostDispatcher:
                          "system": "**system**"}.get(role, f"**{role}**")
                 lines.append(f"{label}:\n{content}\n")
             ts = time.strftime("%Y%m%d-%H%M%S")
+            _ensure_sessions_dir()
             path = os.path.join(SESSIONS_DIR, f"export-{ts}.md")
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines))

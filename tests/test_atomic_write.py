@@ -25,13 +25,28 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / (os.environ.get("TINYCMDR_TEST_APP")
               or os.environ.get("TINYCMDR_SRC") or "tinycmdr.py")
-spec = importlib.util.spec_from_file_location("tinycmdr_atomic_under_test", SRC)
+# Import a STAGED copy, not the checkout's own file. The module writes into BASE_DIR while
+# it is being imported - it creates sessions/ and its log before a suite gets a chance to
+# rebind anything - so importing the repo's file plants those in the repo. run_all.py's leak
+# report named sessions/ for this suite (CI, ubuntu, 2026-09-27); test_ledger.py stages for
+# the same reason.
+STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-atomic"
+STAGE.mkdir(parents=True, exist_ok=True)
+shutil.copy2(SRC, STAGE / "tinycmdr.py")
+spec = importlib.util.spec_from_file_location("tinycmdr_atomic_under_test",
+                                              STAGE / "tinycmdr.py")
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_atomic_under_test"] = fb
 spec.loader.exec_module(fb)
 
 TMP = Path(tempfile.mkdtemp(prefix="fbatomic-"))
 atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
+sys.path.insert(0, str(BASE / "tests"))
+import hermetic                                                          # noqa: E402
+# Importing the tree's own tinycmdr.py hands it BASE_DIR = this checkout, so its sessions
+# and state files land in the repo unless they are moved first: run_all.py's leak report
+# named sessions/ for this suite (CI, ubuntu, 2026-09-27).
+hermetic.redirect_repo_files(fb, TMP)
 FAILURES = []
 PASSES = []
 

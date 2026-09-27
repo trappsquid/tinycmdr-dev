@@ -2279,24 +2279,29 @@ def test_lan_permission_hint():
     The hint must stay off for loopback and public hosts, where it would be noise that teaches
     the reader to ignore it.
     """
-    check("a LAN endpoint gets the hint",
-          "Local Network" in fb.lan_permission_hint("http://[redacted]:8081/v1"))
-    check("a .local name gets the hint",
-          "Local Network" in fb.lan_permission_hint("http://box.local:8081/v1"))
-    check("credentials and the port are stripped, not read as the host",
-          "Local Network" in fb.lan_permission_hint("http://user:pw@[redacted]:8081"))
-    check("loopback gets nothing",
-          fb.lan_permission_hint("http://127.0.0.1:8080/v1") == "")
-    check("a public host gets nothing",
-          fb.lan_permission_hint("https://api.example.com/v1") == "")
-    check("no url, no hint", fb.lan_permission_hint("") == "")
     saved = fb.sys.platform
     try:
+        # The prompt this names is macOS-only, so pin the platform instead of inheriting the
+        # runner's: on Linux the whole function returns "" and the three checks below that
+        # assert the hint is PRESENT went red (CI, ubuntu, 2026-09-27 - 285 passed, 3 failed).
+        fb.sys.platform = "darwin"
+        check("a LAN endpoint gets the hint",
+              "Local Network" in fb.lan_permission_hint("http://[redacted]:8081/v1"))
+        check("a .local name gets the hint",
+              "Local Network" in fb.lan_permission_hint("http://box.local:8081/v1"))
+        check("credentials and the port are stripped, not read as the host",
+              "Local Network" in fb.lan_permission_hint("http://user:pw@[redacted]:8081"))
+        check("loopback gets nothing",
+              fb.lan_permission_hint("http://127.0.0.1:8080/v1") == "")
+        check("a public host gets nothing",
+              fb.lan_permission_hint("https://api.example.com/v1") == "")
+        check("no url, no hint", fb.lan_permission_hint("") == "")
         fb.sys.platform = "linux"
         check("another OS gets nothing (it is a macOS prompt)",
               fb.lan_permission_hint("http://[redacted]:8081/v1") == "")
     finally:
         fb.sys.platform = saved
+
 
 
 def main():

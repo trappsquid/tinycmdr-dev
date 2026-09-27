@@ -100,6 +100,16 @@ def redirect_repo_files(fb, tmp):
         shutil.copytree(tools_dir, shadow, dirs_exist_ok=True)
         registry.tools_dir = shadow
         moved["REGISTRY.tools_dir"] = shadow
+    # The atlas is named by CONFIG, not by a module global, so it moves by config: plenty of
+    # paths call ensure_atlas(), which writes BASE_DIR/atlas.md when it is missing, and
+    # run_all.py named atlas.md for test_checkin (CI, ubuntu, 2026-09-27).
+    cfg = getattr(fb, "CONFIG", None)
+    cfg = cfg.get("agent") if hasattr(cfg, "get") else None
+    if isinstance(cfg, dict):
+        name = Path(cfg.get("atlas_file") or "atlas.md")
+        if not name.is_absolute():
+            cfg["atlas_file"] = str(tmp / name.name)
+            moved["atlas_file"] = tmp / name.name
     return moved
 
 
