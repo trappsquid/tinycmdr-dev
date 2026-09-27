@@ -109,12 +109,24 @@ def a_file(name="clip.mp4", size=32):
 
 # --------------------------------------------------------------- the tool surface
 
-def test_the_tool_exists_and_is_visible():
+def test_the_tool_exists_and_is_reachable():
+    """send_file is a core tool that is NOT sent by default (2026-09-27: its 127-token
+    schema came off every request). What has to stay true is that it is REACHABLE three
+    ways, because the failure this suite exists for was a run that could not find the door:
+    the inventory line names it, calling it by name reveals it, and an operator order that
+    asks for an attachment reveals it BEFORE the run starts."""
     check("send_file is a core tool", "send_file" in fb.CORE_TOOLS)
     schemas = {s["function"]["name"]: s for s in fb.select_tool_schemas(None)}
-    check("send_file is actually offered to the model", "send_file" in schemas,
-          sorted(schemas)[:8])
-    schema = schemas.get("send_file", {}).get("function", {})
+    check("send_file is not sent by default", "send_file" not in schemas, sorted(schemas))
+    check("...but the inventory line names it",
+          "send_file" in fb.hidden_inventory_line(), fb.hidden_inventory_line()[:160])
+
+    revealed = fb.reveal_tools_named_in(None, "download that clip and attach it here in chat")
+    check("an order that asks for an attachment reveals it",
+          "send_file" in revealed, revealed)
+
+    schema = {s["function"]["name"]: s for s in fb.select_tool_schemas(None)}.get(
+        "send_file", {}).get("function", {})
     check("path is required",
           (schema.get("parameters") or {}).get("required") == ["path"],
           schema.get("parameters", {}).get("required"))

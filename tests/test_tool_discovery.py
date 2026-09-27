@@ -193,7 +193,7 @@ check("and invents none", bool(named) and all(n in fb.CORE_TOOL_NAMES for n in n
 check("it is generated, not typed: the set is what hidden_tools() reports",
       named == sorted(set(named)) and inv_line.count(", ".join(named)) == 1, inv_line[:160])
 check("the bullet follows the find_tools one directly (no blank field left behind)",
-      "filesystem up.\n- Also on this box" in sp)
+      "named in its prompt).\n- Also on this box" in sp)
 check("the line is bounded", len(inv_line) < 320, len(inv_line))
 check("the prompt is still byte-identical across two builds",
       fb.build_system_prompt() == sp)
@@ -496,11 +496,16 @@ try:
           fb.reveal_tools_named_in("disc-capability-none",
                                    "tell me how much disk is left on this box") == [])
     _missing = fb.pinned_core_tools_missing()
+    # derived from _DEFAULT_CORE, not from a name spelled here: the default list is what
+    # the pin is checked against, and it changed on 2026-09-27 (send_file and list_tools
+    # moved behind disclosure), which made a hardcoded "send_file" assertion go stale.
+    _expect = [n for n in fb._DEFAULT_CORE if n != "shell"
+               and n in (set(fb.CORE_TOOLS) | set(fb.REGISTRY.custom))]
     check("a pinned core_tools list is checked against _DEFAULT_CORE",
-          "send_file" in _missing and "read_file" in _missing, _missing)
+          sorted(_missing) == sorted(_expect), (_missing, _expect))
     _line = fb.capability_line("cli")
     check("and the startup line warns about the stale pin",
-          "WARNING" in _line and "send_file" in _line, _line[:400])
+          "WARNING" in _line and any(n in _line for n in _expect), _line[:400])
 finally:
     if _saved_core is None:
         fb.CONFIG["agent"].pop("core_tools", None)

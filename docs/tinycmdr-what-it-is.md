@@ -174,9 +174,9 @@ because it is the real threat model.
 
 ```
 no framework        the framework it replaced cost 16K+ tokens before the first tool call; this one
-                    measures 5,333 tokens of fixed overhead AS SENT on a clean unpack of the
-                    shipped archive (system prompt + the 14 tool schemas a request really carries
-                    + the skills index; 3,022 of it is the prompt). Each prose runbook costs
+                    measures 4,672 tokens of fixed overhead AS SENT on a clean unpack of the
+                    tree (system prompt + the 12 tool schemas a request really carries
+                    + the skills index; 2,683 of it is the prompt). Each prose runbook costs
                     about 23 tokens of index, and each custom tool costs its NAME on its shelf's
                     line - 5.9 chars per tool measured at 80 tools - with its schema riding along
                     only while a session has revealed it. A tool fleet no longer competes with
@@ -198,11 +198,15 @@ The bot computes it at startup and prints it, from the same expression used here
 ```
 python -c "import sys,json; sys.path.insert(0,'.'); import tinycmdr as fb; \
   print(fb.est_tokens(fb.build_system_prompt() + json.dumps(fb.select_tool_schemas(None))))"
-# clean unpack of tinycmdr-1.0.16-linux.tar.gz -> 5333   (the 14 schemas a request SENDS)
+# clean unpack of tinycmdr-1.0.29-linux.tar.gz -> 4672   (the 12 schemas a request SENDS)
+# 1.0.16, before the 2026-09-27 trim            -> 5333   (the 14 schemas then)
 # the same tree counting EVERY schema held      -> 7912   (25 schemas: openai_schemas())
 ```
 
-Measured 2026-09-25 on a clean unpack of the shipped archive; the 2026-09-13 figure was 3,469 on
+Measured 2026-09-27 on a clean unpack of the tree: **4,672** as sent - 4,929 on the author's own
+install, which carries one skill and five drop-in tools, and 5,399 on that install counting every
+schema the registry holds. The 2026-09-25 figure was 5,333 for the same expression; the
+2026-09-13 figure was 3,469 on
 1.9.32, before the tool set and the guard prose grew, and every later number since has been a
 measurement of a different tree. What a request SENDS is the two-line expression above: the
 system prompt plus the always-on schemas. The registry holds eleven more schemas that only a

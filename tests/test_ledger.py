@@ -2162,7 +2162,13 @@ def test_the_budget_is_clamped_by_what_the_endpoint_serves():
         capped = fb.AGENT._envelope()
         check("a configured ceiling below the room is the budget",
               capped["budget"] == 12000, capped)
-        _window_stub(8192)
+        # The window that makes the floor bind is COMPUTED, not fixed at 8,192: with the
+        # prompt at 5,237 that window left under the floor, and with a smaller prompt it
+        # leaves room - the check silently stopped exercising the floor (2026-09-27, after
+        # the prompt was trimmed). reply shrinks with the window too, so the only window
+        # that leaves NOTHING is one no larger than the static prompt itself.
+        _now = fb.AGENT._envelope()
+        _window_stub(_now["static"])
         floored = fb.AGENT._envelope()
         check("...and the floor wins when the window cannot hold it",
               floored["budget"] == fb.ENVELOPE_MIN_BUDGET, floored)

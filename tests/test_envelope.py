@@ -108,6 +108,16 @@ def main():
         reply_cfg = int(fb.CONFIG["llm"]["max_tokens"])
         soft = fb.ENVELOPE_MIN_WINDOW
         floor = fb.ENVELOPE_MIN_BUDGET
+        # The fixture config carries llm.max_context_tokens, which the harness treats as a
+        # CEILING on the messages budget (pinned in test_ledger). The expectation has to
+        # model that: while the prompt was 5,237 tokens the ceiling never bound at 131,072
+        # and this arithmetic passed by luck (2026-09-27, after the prompt was trimmed).
+        ceiling = fb.CONFIG["llm"].get("max_context_tokens")
+        ceiling = ceiling if isinstance(ceiling, int) and ceiling > 0 else None
+
+        def expected_budget(window, static, reply):
+            room = max(floor, window - static - reply)
+            return max(floor, min(room, ceiling)) if ceiling else room
 
         # --- the five numbers, and the relations between them -----------------
         env0 = at_window(fb, 32768)
@@ -126,7 +136,7 @@ def main():
         for window in (8192, 16384, 32768, 131072):
             env = at_window(fb, window)
             reply = min(reply_cfg, window // 4)
-            budget = max(floor, window - static - reply)
+            budget = expected_budget(window, static, reply)
             line = fb.envelope_line(env)
             check(env["window"] == window and env["static"] == static,
                   f"w={window}: window and static named in the envelope")
@@ -185,9 +195,12 @@ def main():
                   f"an explicit ceiling wins over a roomier window "
                   f"({env_c['budget']} == 12000)")
             env_c2 = at_window(fb, 8192)
-            check(env_c2["budget"] == 1024,
+            # computed, not hardcoded: the old 1,024 was the floor winning, which only
+            # happened while the static prompt was big enough to eat the whole window.
+            expect_c2 = max(floor, min(8192 - static - min(reply_cfg, 8192 // 4), 12000))
+            check(env_c2["budget"] == expect_c2,
                   f"a tighter window still wins over a looser ceiling "
-                  f"({env_c2['budget']} == 1024)")
+                  f"({env_c2['budget']} == {expect_c2})")
         finally:
             fb.CONFIG["llm"]["max_context_tokens"] = saved_ceiling
 
