@@ -273,21 +273,49 @@ finally:
 # Measured 2026-09-25 on the macOS box: told to attach a file, the run issued SIX
 # `echo "calling send_file now"` calls and never a tool call - the tool was hidden by that
 # host's stale core_tools pin, and an echo that names it walked past every door.
+# Measured 2026-09-27 (operator report, controlled probes): answering those AT THE DOOR
+# eats real commands - `echo "the notes file is ready"` never printed and `printf "%s"
+# shell` never ran, five of nine probes. So the narration shape no longer replaces the
+# command: the command RUNS, the tool is revealed, and the result carries a one-off hint.
 for label, cmd, want in (
         ("an echo naming a tool", 'echo "calling send_file now"', "send_file"),
         ("an echo naming a hidden core tool", 'echo "now I will use search_files"', "search_files"),
         ("a plain echo", 'echo "hello there"', ""),
         ("a real command naming a path", "ls -la /tmp/send_file.txt", ""),
+        ("prose that happens to contain a tool word", 'echo "the notes file is ready"', "notes"),
+        ("printf with a tool word", 'printf "%s" shell', "shell"),
+        ("a command whose JOB is the name, not narration", "list_tools", ""),
 ):
-    got = fb._bare_tool_name(cmd)
+    got = fb._narration_tool_name(cmd)
     check(f"narration: {label}", got == want, f"{got!r} != {want!r}")
 
 out = fb.tool_shell({"command": 'echo "calling send_file now"'}, dict(CTX))
-check("the shell door answers the echo that names a tool",
-      "is a TOOL on this box" in out, out[:160])
+check("the echo RUNS - its own output is the answer, not the door",
+      "calling send_file now" in out and "is a TOOL on this box" not in out, out[:160])
 check("and the tool is revealed for the session",
       "send_file" in fb.revealed_tools(CTX["session_key"]),
       sorted(fb.revealed_tools(CTX["session_key"])))
+_hint_sess = CTX["session_key"] + "-hint"
+_hint = fb.result_hint("shell", {"command": 'echo "calling send_file now"'}, out, _hint_sess)
+check("and the result says the name is a tool", "is not a call" in _hint, _hint[:160])
+check("...once per session",
+      fb.result_hint("shell", {"command": 'echo "calling send_file now"'}, out, _hint_sess) == "",
+      "the second call answered")
+
+out = fb.tool_shell({"command": 'echo "the notes file is ready"'}, dict(CTX))
+check("prose containing a tool word still just prints",
+      "the notes file is ready" in out and "is a TOOL on this box" not in out, out[:160])
+check("...and the note still rides it once: the matcher cannot tell prose from narration, "
+      "so the price of catching the narration case is one line per session",
+      "is not a call" in fb.result_hint("shell", {"command": 'echo "the notes file is ready"'},
+                                        out, "-prose"), "no hint")
+check("...and it is one line, not one per call",
+      fb.result_hint("shell", {"command": 'echo "the notes file is ready"'}, out, "-prose") == "",
+      "the second call answered")
+
+out = fb.tool_shell({"command": "list_tools"}, dict(CTX))
+check("a bare tool name is STILL answered at the door",
+      "is a TOOL on this box" in out, out[:160])
 
 # ---- a redundant powershell wrapper is unwrapped, not run twice --------------------
 # Measured 2026-09-25 on the fleet's Windows box: `powershell.exe -NoProfile -Command "..."`

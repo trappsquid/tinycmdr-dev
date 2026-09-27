@@ -2553,6 +2553,9 @@ _HINT_TEXTS = {
     "ledger_detail": "Ledger upkeep: `action=doing` as it moves, `done id=<n>` with a one-line "
                      "evidence note, `clear` to drop finished rows. Marking done beats "
                      "appending rows.",
+    "tool_word_in_shell": "A tool name inside a command's TEXT is not a call - a shell, an "
+                          "echo or a printf cannot run it. That tool's schema is in your "
+                          "tool list now; call it directly instead of naming it.",
 }
 
 
@@ -2567,6 +2570,9 @@ def result_hint(name, args, out, session_key=None):
     hint = ""
     if name in ("fetch_url", "web_search"):
         hint = "untrusted"
+    elif name == "shell":
+        if _narration_tool_name(str((args or {}).get("command") or "")):
+            hint = "tool_word_in_shell"
     elif name == "task":
         action = str((args or {}).get("action") or "")
         if action == "add":
@@ -4303,15 +4309,34 @@ def _bare_tool_name(command):
     for cand in (bare, first):
         if _registered_tool(cand):
             return cand
-    # NARRATION is the other shape (measured 2026-09-25 on macOS): six
-    # `echo "calling send_file now"` calls in ONE run, every one of them naming a tool the
-    # session did not have, because the tool's schema was in neither the payload nor any
-    # answer. A tool name inside an echo is never the command's job - it is the model saying
-    # what it is about to do and has no shape for. Answer it at the door, like the bare name.
-    if first.lower() in ("echo", "printf", "write-host", "write-output"):
-        for word in re.findall(r"[a-z][a-z0-9_]{2,}", bare.lower()):
-            if word != first.lower() and _registered_tool(word):
-                return word
+    # A tool name inside an echo/printf is NOT this door - see _narration_tool_name. That
+    # shape used to be answered here, and it swallowed real commands: `echo "the notes file
+    # is ready"` never printed and `printf "%s" shell` never ran (operator report,
+    # 2026-09-27: five of nine controlled probes eaten by the matcher).
+    return ""
+
+
+def _narration_tool_name(command):
+    """The tool an echo/printf NAMES but does not call, or "" - the narration shape.
+
+    Measured 2026-09-25 on macOS: six `echo "calling send_file now"` calls in ONE run and
+    never a tool call, because that host's `core_tools` pin had hidden send_file. The name
+    is the model saying what it is about to do, with no shape for it.
+
+    It is NOT the door, though: `echo` and `printf` are how a run builds text and pipes,
+    and the word `notes` in `echo "the notes file is ready"` is prose. So the caller RUNS
+    the command, reveals the named tool and attaches a one-off hint; replacing the
+    command's own output with the door answer was the bug.
+    """
+    bare = (command or "").strip()
+    if not bare:
+        return ""
+    first = re.split(r"[\s|;&]+", bare, 1)[0].lower()
+    if first not in ("echo", "printf", "write-host", "write-output"):
+        return ""
+    for word in re.findall(r"[a-z][a-z0-9_]{2,}", bare.lower()):
+        if word != first and _registered_tool(word):
+            return word
     return ""
 
 
@@ -4472,6 +4497,12 @@ def tool_shell(args, ctx):
         # because the cost being protected is the operator's wall clock.
         log.info("shell: capped %s rooted at %s to %ds (asked for %ds)",
                  cost_risk["shape"], cost_risk["root"], timeout, requested)
+    _narration = _narration_tool_name(command)
+    if _narration:
+        # Not the door: the command runs below. The name is REVEALED because a hidden tool
+        # is what makes a run narrate instead of calling it (2026-09-25), and the result
+        # carries the one-off hint (result_hint -> "tool_word_in_shell").
+        reveal_tools((ctx or {}).get("session_key"), [_narration])
     _named_tool = _bare_tool_name(command) or _tool_run_as_script(command)
     if _named_tool:
         # The tool is REVEALED as well as named: the measured reason a run keeps reaching

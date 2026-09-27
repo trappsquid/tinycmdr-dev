@@ -31,6 +31,18 @@ Added
   with the key through `tinycmdr token set <NAME>`.
 
 Fixed
+- **A tool name inside an `echo`/`printf` no longer swallows the command.** The shell door's
+  narration matcher - added 2026-09-25 after six `echo "calling send_file now"` calls in one
+  run - scanned *every word* of an echo/printf for a registered tool name and answered the
+  door instead of running it. That ate real commands: controlled probes on a live install
+  (2026-09-27, operator report) got `echo "the notes file is ready"`, `printf "%s" shell`,
+  `printf "read_file\n"` and `echo "search_files *.py"` replaced by the door message - five of
+  nine probes, including the two most common ways to build text or a pipe. The narration shape
+  is now its own matcher (`_narration_tool_name`): the command RUNS, the named tool is revealed
+  (a hidden tool is what makes a run narrate instead of calling it), and the result carries a
+  one-off hint saying that name is a tool and its schema is in the list now. A command whose
+  *job* is a tool name - `list_tools`, `notes`, `python -m toolsmith` - is still answered at
+  the door, which is the case that door was built for.
 - **Two surfaces claimed keyless web search was dead, and it was not.**
   `install/README-macos.md` said "Without them `web_search` returns an error", and the Windows
   installer printed "search keys not set: web search will be unavailable on this host". With
