@@ -200,6 +200,52 @@ def test_two_indexless_calls_stay_two_calls():
               args[1].count("echo B") == 1, args[1])
 
 
+def test_repeated_fragments_inside_one_call_are_kept():
+    """The resend guard used to drop the SECOND and later copy of any fragment ever seen
+    in a call, which deleted real punctuation before JSON was parsed: `grep -nE` ->
+    `grepnE`, `head -5` -> `head5`, `/tmp/x, /tmp/y` -> `/tmp/x,/y`, `a, b, c` -> `a, b c`.
+    Measured live on macOS 2026-09-27: 5 of 6 realistic shell commands arrived damaged
+    while the raw SSE carried them correctly. Every fragment below is one llama.cpp
+    actually sends for this command."""
+    cmd = 'ls -la /tmp/alpha, /tmp/beta | grep -nE "x-y" | head -5'
+    frags = ['{', '"command":"', 'ls', ' -', 'la', ' /', 'tmp', '/alpha', ',', ' /',
+             'tmp', '/beta', ' |', ' grep', ' -', 'n', 'E', ' \\"', 'x', '-', 'y',
+             '\\"', ' |', ' head', ' -', '5', '"', '}']
+    chunks = [delta(tool_calls=[{"index": 0, "id": "c1", "type": "function",
+                                 "function": {"name": "shell", "arguments": ""}}])]
+    chunks += [delta(tool_calls=[{"index": 0, "function": {"arguments": f}}])
+               for f in frags]
+    chunks.append(delta(finish="tool_calls"))
+    data, _ = run_stream(sse(*chunks) + [SSE_END], idle_seconds=5, first_byte_seconds=5)
+    calls = data["choices"][0]["message"].get("tool_calls") or []
+    check("repeated fragments stay in the arguments", len(calls) == 1, calls)
+    if calls:
+        got = calls[0]["function"]["arguments"]
+        check("...and the command arrives byte-for-byte",
+              json.loads(got)["command"] == cmd, got)
+
+
+def test_a_re_emitted_call_replaces_instead_of_doubling():
+    """The resend the guard exists for: the endpoint finishes a tool call and emits the
+    whole call again from the top. Appending that twice produced "echo hiecho hi"; the
+    first copy must be replaced, name and all, not concatenated."""
+    def emission():
+        return [delta(tool_calls=[{"index": 0, "id": "c1", "type": "function",
+                                   "function": {"name": "shell", "arguments": ""}}]),
+                delta(tool_calls=[{"index": 0,
+                                   "function": {"arguments": '{"command": "echo hi"}'}}])]
+    script = sse(*(emission() + emission() + [delta(finish="tool_calls")])) + [SSE_END]
+    data, stats = run_stream(script, idle_seconds=5, first_byte_seconds=5)
+    calls = data["choices"][0]["message"].get("tool_calls") or []
+    check("a re-emitted call is still ONE call", len(calls) == 1, calls)
+    if calls:
+        check("...its name is not doubled",
+              calls[0]["function"]["name"] == "shell", calls[0]["function"]["name"])
+        check("...its arguments are not doubled",
+              calls[0]["function"]["arguments"].count("echo hi") == 1,
+              calls[0]["function"]["arguments"])
+
+
 def test_indexed_calls_keep_their_index():
     script = sse(
         delta(tool_calls=[{"index": 0, "id": "a", "type": "function",
