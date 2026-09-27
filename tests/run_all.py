@@ -122,6 +122,61 @@ def tree_state():
     return lines
 
 
+def live_instance_here():
+    """True/False/None: does a LIVE bot hold this checkout's single-instance lock?
+
+    A probe, not a claim: take the lock and give it straight back, exactly as
+    `tinycmdr status` answers the question. The target mirrors the harness's own
+    _lock_target() contract - on POSIX the INSTALL FOLDER itself is flocked, because a lock
+    FILE is defeated by `rm` (audit D5); on Windows it is tinycmdr.lock beside it - and it
+    is mirrored rather than imported, because this runner imports nothing from the tree it
+    grades.
+
+    Why the leak report needs it: tree_state() fingerprints ignored files, and a bot
+    running in this checkout rewrites tinycmdr.log, sessions/ and web-sessions.json every
+    minute by itself. Measured 2026-09-27: a run with the live bot up reported "6 path(s),
+    written by 3 suite(s)" and every one of them was the bot's own write - the G2 list
+    pointed at innocent suites, and a real leak could hide in that noise.
+    """
+    try:
+        if os.name == "nt":
+            target = REPO / "tinycmdr.lock"
+            if not target.exists():
+                return False
+            fh = open(target, "a+b")
+        else:
+            fh = os.open(str(REPO), os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return True
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            return False
+        import fcntl
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return False
+    except Exception:                                            # noqa: BLE001
+        return None
+    finally:
+        try:
+            if isinstance(fh, int):
+                os.close(fh)
+            else:
+                fh.close()
+        except Exception:                                        # noqa: BLE001
+            pass
+
+
 def _leak_path(line):
     """A status/fingerprint line as a path a reader can act on."""
     if line.startswith("\u007e "):
@@ -330,6 +385,11 @@ def main():
         print("\nrepo-tree writes during the run: %d path(s), written by %d suite(s) "
               "- each suite must own its own temp dir (G2)"
               % (sum(len(v) for v in by_path.values()), len(leaks)))
+        if live_instance_here():
+            print("  NOTE: a live bot is running in this checkout. It rewrites "
+                  "tinycmdr.log, sessions/ and web-sessions.json itself, so the suite "
+                  "names below are NOT reliable - stop the bot (or grade a copy of the "
+                  "tree) to read this as suite isolation.")
         for one in sorted(by_path):
             who = sorted(by_path[one])
             print("  %-38s %2d suite(s): %s"
