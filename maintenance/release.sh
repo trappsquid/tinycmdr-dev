@@ -32,7 +32,18 @@ release adds or changes a file under .github/workflows/." >&2; exit 2; }
 public build refuses to run without this fleet's inventory. Copy private_rules.example.py and
 fill it in." >&2; exit 2; }
 
-VER="$(python -c 'import re, pathlib
+# `python` is not on a stock macOS PATH (it is on the fleet's Windows boxes), and every call
+# below used to say exactly that: the version parse returned nothing, and the build and both
+# asset checks died on "python: command not found" - after the push, which is how a cut goes
+# out half-done. Resolve once, preferring this project's band, and use it everywhere.
+PY=""
+for cand in python3.12 python3.11 python3.10 python3 python; do
+    if command -v "$cand" >/dev/null 2>&1; then PY="$cand"; break; fi
+done
+[ -n "$PY" ] || { echo "no Python 3.10-3.12 on PATH: install one, or pass it in PATH" >&2; exit 2; }
+echo "interpreter: $PY ($($PY -V 2>&1))"
+
+VER="$("$PY" -c 'import re, pathlib
 t = pathlib.Path("tinycmdr.py").read_text(encoding="utf-8", errors="replace")
 print(re.search("^VERSION = \"(.*?)\"", t, re.M).group(1))')"
 TAG="v$VER"
@@ -47,7 +58,7 @@ fi
 say "build the published shapes (win, linux, macos)"
 # A FLEET KIT is a separate build: a plain run writes install/fleet-defaults.json
 # from THIS box's config.json + .env, and is not published to GitHub.
-python maintenance/build-package.py --public --macos
+"$PY" maintenance/build-package.py --public --macos
 ls -1 dist/ | sed -n '1,12p'
 
 say "the README's download names must exist in dist/ before anything is pushed"
@@ -58,7 +69,7 @@ cp install.ps1 dist/install.ps1
 cp "dist/tinycmdr-$VER-win.zip" dist/tinycmdr-win.zip
 cp "dist/tinycmdr-$VER-linux.tar.gz" dist/tinycmdr-linux.tar.gz
 cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
-python maintenance/check-readme-assets.py --dist dist
+"$PY" maintenance/check-readme-assets.py --dist dist
 
 say "push main, then publish"
 # gh is a NATIVE binary and a path in MSYS form (/c/Users/...) is not translated for
@@ -86,5 +97,5 @@ gh release upload "$TAG" --clobber \
 
 say "read the release back"
 gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
-python maintenance/check-readme-assets.py --tag "$TAG"
+"$PY" maintenance/check-readme-assets.py --tag "$TAG"
 say "$TAG is published"
