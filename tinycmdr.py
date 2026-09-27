@@ -739,6 +739,7 @@ def load_config():
         "TINYCMDR_MM_TOKEN": ("mattermost", "token"),
         "TINYCMDR_TG_TOKEN": ("telegram", "token"),
         "TINYCMDR_WEB_TOKEN": ("web", "token"),
+        "TINYCMDR_LLM_API_KEY": ("llm", "api_key"),
         "TINYCMDR_MODEL": ("llm", "model"),
         "TINYCMDR_BASE_URL": ("llm", "base_url"),
         "ANYSEARCH_API_KEY": ("search", "anysearch_api_key"),
@@ -18171,8 +18172,8 @@ def run_setup(rest=None):
 
     ans_key = input("   API key (leave empty if none / local): ").strip()
     if ans_key:
-        _env_set("LLM_API_KEY", ans_key)
-        print(dim("   API key saved to .env as LLM_API_KEY"))
+        _env_set("TINYCMDR_LLM_API_KEY", ans_key)
+        print(dim("   API key saved to .env as TINYCMDR_LLM_API_KEY"))
     print()
 
     print(bold("2. Mattermost Gateway (Chat)"))
@@ -18184,7 +18185,7 @@ def run_setup(rest=None):
             mm["url"] = mm_url
         mm_token = input("   Mattermost bot token (leave empty to keep current): ").strip()
         if mm_token:
-            _env_set("MATTERMOST_BOT_TOKEN", mm_token)
+            _env_set("TINYCMDR_MM_TOKEN", mm_token)
             print(dim("   Mattermost token saved to .env"))
         cur_users = ",".join(mm.get("allowed_users") or [])
         mm_users = input("   Allowed User ID(s) (comma-separated) [%s]: " % cur_users).strip()
@@ -18198,7 +18199,7 @@ def run_setup(rest=None):
     if want_tg in ("y", "yes"):
         tg_token = input("   Telegram bot token (leave empty to keep current): ").strip()
         if tg_token:
-            _env_set("TELEGRAM_TOKEN", tg_token)
+            _env_set("TINYCMDR_TG_TOKEN", tg_token)
             print(dim("   Telegram token saved to .env"))
         tg_users = input("   Allowed numeric User ID(s) (comma-separated) [%s]: " % cur_tg_users).strip()
         if tg_users:
