@@ -5,6 +5,33 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.29] - 2026-09-27
+
+The stream now accepts what other OpenAI-compatible servers actually send, not only what
+llama.cpp sends - and the README says all of it in one page instead of three.
+
+Fixed
+- **Three stream shapes were silently mishandled.** The accumulator assumed one string fragment
+  per token. Measured 2026-09-27: `function.arguments` arriving as a JSON OBJECT (several
+  servers, and the proxies in front of them) was dropped by an `isinstance(..., str)` test, so
+  the tool ran with `{}`; the legacy `function_call` delta was ignored, so the call vanished and
+  the turn looked like an answer with no content; `content` as a list of parts was dropped,
+  taking the whole answer with it. None of the three raised anything. All three are normalized
+  now - on the streamed path and on a whole non-streamed message - and object arguments are
+  stringified so the replayed history is valid JSON on every endpoint.
+- **A doubled call could keep the wrong half.** When an endpoint re-sends its arguments, a
+  trailing empty object is passed over in favour of the real payload.
+
+Changed
+- **README.** 336 lines and 18 fenced blocks down to 181 and 6: one install command per OS, one
+  verb table, switches and uninstall folded into a collapsed section, and the overhead claim
+  stated with its provenance (~5.2K tokens on a clean unpack; `tinycmdr status` prints this
+  host's own as `static`). The comparison prose it used to carry lives in
+  `docs/tinycmdr-what-it-is.md`.
+
+Added
+- Regression checks for the three shapes and for the non-streaming normalizer.
+
 ## [1.0.28] - 2026-09-27
 
 A tool call is what the model asked for, character for character. This release removes the last
