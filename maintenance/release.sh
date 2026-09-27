@@ -18,6 +18,20 @@ NOTES="${1:-}"
 [ -n "$NOTES" ] || { echo "usage: bash maintenance/release.sh <notes-file>" >&2; exit 2; }
 [ -f "$NOTES" ] || { echo "no such notes file: $NOTES" >&2; exit 2; }
 
+# Every prerequisite, checked BEFORE anything is built or pushed. This script's own incident
+# (v1.0.21) was a half-cut release: main was pushed, then the tool it needed was missing, so
+# the tag went out with no assets. Failing here costs nothing; failing after the push cannot
+# be undone.
+command -v gh >/dev/null 2>&1 || { echo "gh is not installed. This script tags, publishes and
+uploads assets with it: install it (brew install gh) and authenticate (gh auth login), or cut
+the release through the API and attach the assets by hand." >&2; exit 2; }
+gh auth status >/dev/null 2>&1 || { echo "gh is installed but not authenticated. Run
+'gh auth login' first: it needs Contents: read/write, plus Workflows: read/write if this
+release adds or changes a file under .github/workflows/." >&2; exit 2; }
+[ -f maintenance/private_rules.py ] || { echo "maintenance/private_rules.py is missing: the
+public build refuses to run without this fleet's inventory. Copy private_rules.example.py and
+fill it in." >&2; exit 2; }
+
 VER="$(python -c 'import re, pathlib
 t = pathlib.Path("tinycmdr.py").read_text(encoding="utf-8", errors="replace")
 print(re.search("^VERSION = \"(.*?)\"", t, re.M).group(1))')"

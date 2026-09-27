@@ -61,8 +61,15 @@ def readme_names():
 
 
 def release_assets(tag):
-    out = subprocess.run(["gh", "release", "view", tag, "--json", "assets"],
-                         capture_output=True, text=True)
+    # gh is what reads a release back. A missing one must say so: this raised
+    # FileNotFoundError out of subprocess, which reads like a bug in this script rather than
+    # "install the tool it needs" (measured 2026-09-26, the first release cut without gh).
+    try:
+        out = subprocess.run(["gh", "release", "view", tag, "--json", "assets"],
+                             capture_output=True, text=True)
+    except FileNotFoundError:
+        sys.exit("reading release %s needs the GitHub CLI: install it (brew install gh) and "
+                 "run 'gh auth login'" % tag)
     if out.returncode != 0:
         sys.exit("gh release view %s failed: %s" % (tag, out.stderr.strip()))
     return {a["name"] for a in json.loads(out.stdout)["assets"]}
