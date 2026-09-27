@@ -5,7 +5,7 @@
   # tinycmdr
 
   ### High-Efficiency Agent Harness for Local and Self-Hosted LLMs
-  *~4.1K token overhead · Stable prefix caching · Built-in ops guards · Zero infrastructure.*
+  *~5.3K token overhead · Stable prefix caching · Built-in ops guards · Zero infrastructure.*
 
   [![GitHub Release](https://img.shields.io/github/v/release/trappsquid/tinycmdr?style=flat-square)](https://github.com/trappsquid/tinycmdr/releases/latest)
   [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-blue?style=flat-square)](#quick-install)
@@ -28,7 +28,7 @@ Most agent harnesses were built for cloud API endpoints with remote server infra
 
 ### Key Advantages and Features
 
-- **Stable Prefix Caching (~4.1K Token Overhead):** Fixed overhead is measured at ~4,150 tokens (static system prompt + core schemas). Volatile context is anchored to the tail of the prompt. Local inference engines (llama.cpp, vLLM) can keep the prefix warm in KV cache across turns, reducing prefill time and preserving VRAM for longer context history.
+- **Stable Prefix Caching (~5.3K Token Overhead):** Fixed overhead is measured at ~5,300 tokens (static system prompt + the schemas a request actually sends - the figure the comparison table below uses, and `tinycmdr doctor` prints this box's own as `static`). Volatile context is anchored to the tail of the prompt. Local inference engines (llama.cpp, vLLM) can keep the prefix warm in KV cache across turns, reducing prefill time and preserving VRAM for longer context history.
 - **Autonomous Ops Runtime:**
   - **Loop Guard:** Detects repetitive tool-call cycles. Refuses identical calls after 2 repeats and halts runaway spins after 6, resetting automatically when a disk mutation (file write, edit) occurs.
   - **Stall Watchdog and Self-Healing:** Monitors execution progress, flags stalled turns, and frees stuck inference slots. Listener watchdogs automatically reconnect dropped websockets and recover without losing session state.

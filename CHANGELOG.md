@@ -5,6 +5,14 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Fixed
+- The README contradicted itself about the fixed prompt overhead: the banner and the caching
+  bullet said ~4,150 tokens, the comparison table said ~5,300 measured. Both read ~5.3K now, which
+  is what the shipped static half actually costs (system prompt + the schemas a request sends), and
+  `tinycmdr doctor` prints the live number on any box.
+
 ## [1.0.25] - 2026-09-26
 
 Fixed
