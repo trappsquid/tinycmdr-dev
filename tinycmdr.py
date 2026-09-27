@@ -10470,10 +10470,14 @@ def _repair_tool_arguments(messages):
                                 "kept the JSON object inside them (%s)",
                                 fn.get("name") or "?", scrub(args[:60]))
                 else:
-                    log.warning("tool call %s had arguments that are not JSON (%s) - "
-                                "replaying them as {} so the endpoint can parse the "
-                                "request",
-                                fn.get("name") or "?", scrub(args[:60]))
+                    # The endpoint 500s the WHOLE request on one unparseable blob, so the
+                    # replayed copy has to become {}. Keep the text that arrived, though:
+                    # without it, "arguments that are not JSON" and "arguments that were
+                    # damaged on the way in" read the same in the log.
+                    log.warning("tool call %s had arguments that are not JSON (%d chars) - "
+                                "replaying them as {} so the endpoint can parse the request. "
+                                "Arrived as: %r",
+                                fn.get("name") or "?", len(args), scrub(args[:2000]))
                     fn["arguments"] = "{}"
                 bad += 1
     if bad:
@@ -11254,8 +11258,23 @@ class Agent:
         if isinstance(raw_args, str):
             try:
                 args = json.loads(raw_args or "{}")
-            except json.JSONDecodeError:
-                return name, raw_args, f"ERROR: invalid JSON arguments: {raw_args[:200]}"
+            except json.JSONDecodeError as exc:
+                # What ARRIVED is what could not be parsed, and the model has to be told
+                # exactly that - not handed a line that reads as its own mistake. Measured
+                # 2026-09-27: a run read this result as "my previous call went out with
+                # empty arguments", blamed itself and re-issued the same call, while the
+                # text it was shown had been altered before anything ran. The whole payload
+                # goes to the log; the model's copy stays bounded.
+                log.warning("%s: arguments did not parse (%s); arrived as %d chars: %r",
+                            name, exc, len(raw_args), scrub(raw_args[:4000]))
+                return name, raw_args, (
+                    "ERROR: invalid JSON arguments - the harness could not parse the text "
+                    f"that arrived for `{name}` ({exc}).\n"
+                    "What arrived, verbatim, first 400 characters:\n"
+                    f"{raw_args[:400]}\n"
+                    "That is the text as it reached the harness, before any tool ran; it is "
+                    "not evidence about what you sent. If it differs from your call, the "
+                    "text was altered in transit - say so, and send the call once more.")
         else:
             args = raw_args
         tool = REGISTRY.get(name)
