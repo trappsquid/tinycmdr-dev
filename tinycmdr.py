@@ -1251,6 +1251,63 @@ def _post_watchdog(url, headers, payload, timeout, grace, cancel_event=None,
     return box.get("resp")
 
 
+def _one_json_object(text):
+    """The LAST complete JSON object in `text`, when more than one was accumulated.
+
+    The 1.0.24 incident: an endpoint that finished a tool call and then emitted the whole
+    call again from the top left `{"command":"echo hi"}{"command":"echo hi"}`. Returns
+    None unless the text really is one object followed by another - a single well-formed
+    object is never returned, however long it is or however much it repeats itself
+    inside - so this can only ever collapse a doubled payload, never trim a real one."""
+    dec = json.JSONDecoder()
+    last, i, n = None, 0, len(text)
+    while i < n:
+        while i < n and text[i] in " \t\r\n":
+            i += 1
+        if i >= n:
+            break
+        if text[i] != "{":
+            return None                     # not a chain of objects: leave it alone
+        try:
+            obj, end = dec.raw_decode(text, i)
+        except ValueError:
+            return None
+        last = (i, end)
+        i = end
+    if last is None or last[1] - last[0] == len(text.rstrip()):
+        return None                          # exactly one object: untouched
+    return text[last[0]:last[1]]
+
+
+def _repair_doubled_calls(calls):
+    """Collapse a tool call the endpoint emitted twice, after the stream has ended.
+
+    Structure only: the accumulated arguments must parse as one JSON object followed by
+    another before anything is rewritten, and a doubled tool name is halved only in that
+    same case. Everything else is left exactly as the endpoint sent it - which is the
+    point, after five releases of a fragment guard that could not tell a resend from a
+    repeated character."""
+    for slot in calls:
+        fn = slot.get("function") or {}
+        raw = fn.get("arguments") or ""
+        if not raw:
+            continue
+        try:
+            json.loads(raw)
+            continue                          # one well-formed object: nothing to do
+        except Exception:
+            pass
+        one = _one_json_object(raw)
+        if one is None:
+            continue
+        log.info("stream: tool call arguments arrived as a re-emitted copy - kept one")
+        fn["arguments"] = one
+        name = fn.get("name") or ""
+        half = name[:len(name) // 2]
+        if half and name == half + half:
+            fn["name"] = half
+
+
 def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                  first_byte_seconds=None):
     """Consume an SSE chat completion into the same shape the JSON path returns.
@@ -1273,8 +1330,6 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     """
     content, reasoning, finish = [], [], ""
     calls = {}
-    last_frag = {}          # per call: the argument fragment streamed right before this one
-    resends = [0]           # fragments dropped as a resent copy (one log line at the end)
     terminal = False
     suse, timings = {}, {}
     stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
@@ -1421,44 +1476,18 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                                          "function": {"name": "", "arguments": ""}}
                 if tc.get("id"):
                     slot["id"] = tc["id"]
-                # A RESEND, not more text - and nothing else is dropped. This guard used to
-                # keep a per-call SET of every fragment ever seen and skip any repeat, which
-                # silently ate the second and later copy of every repeated token. "-", " ",
-                # ",", '":' and '\\"' all repeat inside one command or one file body, so
-                # `grep -nE` arrived as `grepnE`, `head -5` as `head5`, `a, b, c` as
-                # `a, b c` and `/tmp/x, /tmp/y` as `/tmp/x,/y` (measured 2026-09-27 on
-                # macOS: 5 of 6 realistic shell commands and a write_file body arrived
-                # damaged - the raw stream was correct every time; 54 of 188 tool results
-                # in one production session came back failed).
-                #
-                # Only two shapes are a resend:
-                #   1. the fragment is byte-identical to the one RIGHT BEFORE it in this
-                #      call (the server repeated a chunk), and
-                #   2. what we already hold is a COMPLETE JSON object and a fresh name or an
-                #      opening brace arrives: the endpoint finished this call and started
-                #      emitting it again from the top, which is what produced
-                #      "echo hiecho hi" (release 1.0.24). Restart, not append.
-                if _args or _name:
-                    held = slot["function"]["arguments"]
-                    if held:
-                        try:
-                            json.loads(held)
-                        except Exception:
-                            pass
-                        else:
-                            # The call we hold is COMPLETE, so anything that opens a call
-                            # (a name, or a "{") means this is a re-emission: start over.
-                            if _name or _args.startswith("{"):
-                                slot["function"]["arguments"] = ""
-                                slot["function"]["name"] = ""
-                                last_frag.pop(key, None)
-                                resends[0] += 1
-                if _args:
-                    if _args == last_frag.get(key):
-                        # the SAME fragment twice in a row: a chunk the server repeated
-                        resends[0] += 1
-                        continue
-                    last_frag[key] = _args
+                # Append EVERY fragment. There is no content-based dedupe here any more, and
+                # there must not be: llama.cpp streams arguments one token at a time, so
+                # "-", " ", ",", '"', '\"' and repeated DIGITS all repeat inside a single
+                # call. A guard that dropped any repeat ate the second copy of every one of
+                # them - `grep -nE` -> `grepnE`, `head -5` -> `head5`, `a, b, c` -> `a, b c`
+                # (2026-09-27: the raw stream was correct 6/6 and the harness corrupted 5/6;
+                # 54 of 188 tool results failed in one production session). Narrowing it to
+                # "only if it is the fragment right before it" failed the same way one
+                # release later: `seq 1 2000` reached the tool as `seq 1 20`, because
+                # 2-0-0-0 arrives as four fragments and two of them are the same character.
+                # A call the endpoint emitted twice is repaired AFTER the stream ends, by
+                # structure alone - see _repair_doubled_calls - never by guessing here.
                 if _name:
                     slot["function"]["name"] += _name
                 if _args:
@@ -1510,11 +1539,6 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         # caller retries the same endpoint without streaming.
         _close()
         raise StreamFailed("the response carried no SSE data (not a stream?)")
-    if resends[0]:
-        # Rare, and worth a line of its own: a fragment dropped here is a fragment the
-        # endpoint sent twice. Silence is what made the old guard (which dropped far
-        # more than resends) invisible for five releases.
-        log.info("stream: ignored %d resent tool-call fragment(s)", resends[0])
     if timings:
         stats["server_tps"] = float(
             timings.get("predicted_per_second") or 0.0)
@@ -1536,6 +1560,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     if reasoning:
         msg["reasoning_content"] = "".join(reasoning)
     if calls:
+        _repair_doubled_calls(list(calls.values()))
         # Insertion order, not sorted(): the keys are heterogeneous now (an index, an
         # id, or a fresh slot), and sorted() would raise comparing them.
         msg["tool_calls"] = list(calls.values())

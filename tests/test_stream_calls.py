@@ -246,6 +246,27 @@ def test_a_re_emitted_call_replaces_instead_of_doubling():
               calls[0]["function"]["arguments"])
 
 
+def test_repeated_characters_inside_one_argument_survive():
+    """A repeated character is not a resend. `2000` arrives as 2-0-0-0, and a guard that
+    dropped "the same fragment as the one before it" turned the live command
+    `seq 1 2000` into `seq 1 20` (measured 2026-09-27 against the endpoint: raw concat
+    correct, harness output `seq 1 20`)."""
+    cmd = "seq 1 2000 | awk '{print $1, $1*$1}'"
+    frags = ['{', '"command":"', 'seq', ' ', '1', ' ', '2', '0', '0', '0', ' |', ' awk',
+             " '{", 'print', ' $', '1', ',', ' $', '1', '*$', '1', "}'", '"', '}']
+    chunks = [delta(tool_calls=[{"index": 0, "id": "c1", "type": "function",
+                                 "function": {"name": "shell", "arguments": ""}}])]
+    chunks += [delta(tool_calls=[{"index": 0, "function": {"arguments": f}}])
+               for f in frags]
+    chunks.append(delta(finish="tool_calls"))
+    data, _ = run_stream(sse(*chunks) + [SSE_END], idle_seconds=5, first_byte_seconds=5)
+    calls = data["choices"][0]["message"].get("tool_calls") or []
+    check("repeated characters in one argument survive", len(calls) == 1, calls)
+    if calls:
+        got = json.loads(calls[0]["function"]["arguments"])["command"]
+        check("...2000 is not clipped to 20", got == cmd, got)
+
+
 def test_indexed_calls_keep_their_index():
     script = sse(
         delta(tool_calls=[{"index": 0, "id": "a", "type": "function",
