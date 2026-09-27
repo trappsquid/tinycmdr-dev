@@ -230,7 +230,15 @@ def test_a_torn_write_is_never_visible():
 
 
 def test_each_writer_gets_its_own_temp_name():
-    """The defect itself: one process-wide temp name for concurrent writers."""
+    """The defect itself: one process-wide temp name for concurrent writers.
+
+    Asserted as "no two THREADS share a name", not "six tasks produce six names". The
+    pool is free to run two tasks on one worker thread, and then one thread legitimately
+    writes the same sibling name twice - measured on the macOS runner 2026-09-26, where
+    the count-based form failed with five names for six tasks while the writer was
+    correct. A process-wide (pid-only) name still fails this: every thread's name would
+    be identical.
+    """
     redirect()
     seen = []
     lock = threading.Lock()
@@ -238,7 +246,7 @@ def test_each_writer_gets_its_own_temp_name():
 
     def spy(src, dst, *a, **kw):
         with lock:
-            seen.append(Path(src).name)
+            seen.append((os.getpid(), threading.get_ident(), Path(src).name))
         return real_replace(src, dst, *a, **kw)
 
     target = TMP / "temp-name-race.txt"
@@ -249,9 +257,19 @@ def test_each_writer_gets_its_own_temp_name():
                         range(6)))
     finally:
         fb.os.replace = real_replace
-    check("six writers, six distinct temp names", len(set(seen)) == 6, seen)
+
+    owners, clashes = {}, []
+    for pid, tid, name in seen:
+        if name in owners and owners[name] != (pid, tid):
+            clashes.append((name, owners[name], (pid, tid)))
+        owners[name] = (pid, tid)
+    check("six writers, and no two threads ever share a temp name", not clashes, clashes)
+    check("the name carries the file, the pid and the writing thread",
+          all(n.startswith("temp-name-race.txt.tmp-%d-%d-" % (p, t)) for p, t, n in seen),
+          [(p, t, n) for p, t, n in seen][:2])
     check("...and none of them is the old pid-only name",
-          all(n.startswith("temp-name-race.txt.tmp-") for n in seen), seen)
+          all(n.startswith("temp-name-race.txt.tmp-") for _, _, n in seen),
+          [n for _, _, n in seen])
 
 
 # --- notes.md: the same race on the file `remember` writes ------------------
