@@ -5,6 +5,34 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.30] - 2026-09-27
+
+The prompt lost 689 tokens and no rule, tool or capability went with them.
+
+Changed
+- **Static overhead: 5,491 -> 4,802 on this install, 4,545 as sent on a clean unpack** - 12
+  always-on schemas instead of 14. It was over the 5,400 ceiling this repo's own gate asserts,
+  and over it only because that gate stages a fixture config with no skills and no drop-in
+  tools.
+- **Rules are stated once instead of three or four times.** The ask_user doctrine appeared in a
+  130-token schema description, a 156-token prompt bullet AND the tool's result text; tool
+  discovery appeared in two prompt bullets, the hidden-inventory line and find_tools' own
+  description. Each description now states the contract without the essay.
+- **`send_file` (127 tokens) and `list_tools` (66) joined the held-back set.** Both stay callable
+  by name, both are named in the inventory line, `find_tools` with no query lists them, and
+  `send_file` keeps its designed reveal: an order saying "attach ..." / "send me the file" /
+  "don't just paste" reveals its schema BEFORE the run starts.
+- **`soul.md` and its built-in fallback trimmed** (224 -> 116 tokens): the persona, and the two
+  local-model traps worth restating. The research rules it repeated are in the prompt already.
+  `DEFAULT_SOUL` matches the file, so a host that deletes `soul.md` pays the same either way.
+
+Fixed
+- **Four suites pinned consequences of the OLD prompt size instead of the contract**, and went
+  red the moment static got smaller: budget arithmetic that ignored a configured ceiling,
+  hardcoded 1,024-floor values, a hardcoded tool name in a pin-drift assertion, and
+  "send_file is offered" where the guarantee is "reachable". Each now derives what it means
+  from the measured values.
+
 ## [1.0.29] - 2026-09-27
 
 The stream now accepts what other OpenAI-compatible servers actually send, not only what

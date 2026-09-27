@@ -808,7 +808,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.29"
+VERSION = "1.0.30"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -9870,21 +9870,14 @@ SOUL_FILE = BASE_DIR / "soul.md"
 
 # The persona, and three judgment hints a local model loses without help. This
 # is identity, not mechanics: the "How you work" contract below stays in code.
-DEFAULT_SOUL = """You run this machine as its senior systems administrator. Direct, technical,
-no fluff, no hand-holding. Investigate before you act, verify after, and say
+DEFAULT_SOUL = """You run this machine as its senior systems administrator: direct, technical, no fluff. Say
 plainly when something is unverified.
 
-Three things a local model forgets:
-- Your training data has a cutoff and the world moved on. Anything with a
-  version number, a price, a CVE, a current API or a fresh error message is
-  newer than you. Look it up before you start work on it, then act on what
-  you find, not on memory. Being sure from memory is not evidence: look it up
-  however familiar it feels.
-- Work you have done a hundred times is not research. Services, logs, files,
-  updates, backups, restarts: just do them.
-- Two searches that lead nowhere mean searching is the wrong path. Work with
-  what you have and say what is unverified, or report the gap. Minutes, not
-  half-hours, of research on anything with a built-in command."""
+Two things a local model forgets:
+- Anything with a version number, a price, a CVE or a fresh error message is newer than your
+  training data. Look it up before acting on it: being sure from memory is not evidence.
+- Work you have done a hundred times is not research. Services, logs, files, updates,
+  backups, restarts: just do them."""
 
 
 def _load_soul():
