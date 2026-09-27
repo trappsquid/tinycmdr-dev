@@ -5,9 +5,33 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.34] - 2026-09-27
+
+The web lane gets the instruments its case drive left behind, the ledger stops speaking for an
+ended session, and the repo drops the last artwork that was not tinycmdr's.
 
 Fixed
+- **An unanswered macOS Local Network prompt is named, not blamed on the endpoint.**
+  macOS raises that permission the first time a process dials a private address, and it raises
+  it in the process that dials - for this bot, a launchd job at boot where nobody can answer.
+  Unanswered it is silent: the log said the endpoint "did not answer", the run banner blamed
+  the endpoint, and the agent carried on with an assumed 14,349-token window while the model
+  box served everything else (measured on a live install, 2026-09-27). `lan_permission_hint()`
+  now appends one sentence - only on macOS, only for a private address, never loopback - to the
+  window-detect warning, the run banner, `status` and `doctor`; the installers dial the
+  endpoint once from the venv's own python with the operator watching, so the prompt appears in
+  context, and `install/README-macos.md` says what a silent endpoint looks like. The hint's
+  edges (loopback, a public host, another OS) are tested.
+- **Three CI defects, one per job.** Ubuntu and Windows ran `test_ledger`'s LAN-hint checks
+  against their own platform while `lan_permission_hint()` is macOS-only, so the three
+  "hint is present" checks went red; the platform is now pinned the way the suite's own
+  negative check already did it. `test_ledger_race` asserted six distinct temp names but built
+  them from `threading.get_ident()`, and a thread id is recycled once its thread exits; the
+  name now carries a per-write counter. And `Agent()` was built at import with its `__init__`
+  calling `SESSIONS_DIR.mkdir()`, so importing the module created `sessions/` in whatever
+  checkout it ran from - the opposite of the rule two screens above it; the mkdir is gone and
+  the two writers leaning on it (`Agent._save`, the session export) call
+  `_ensure_sessions_dir()` instead.
 - The ledger block called its open items "the to-do list", so a fresh session adopted an ended
   session's thread: a day-old "boot Linux on the iPhone" item plus two hours-old entries drove a
   26-step run nobody asked for (measured on a live install, 2026-09-27). Every open item now shows
@@ -15,6 +39,15 @@ Fixed
   `stale`, and the block says what the list is - work an earlier run left open, to be confirmed
   with the operator before it is resumed. Same incident class as the done-item fix, one status
   over.
+
+Added
+- **The web lane's five instruments, tracked instead of remembered.** `drive-web-cases.py`
+  opens one fresh session per case through the page API, `probe-web-surface.py` checks auth,
+  origin, traversal and headers, `probe-web-sessions.py` covers the conversation lifecycle,
+  `stub-openai-endpoint.py` is a minimal OpenAI-shaped endpoint, and `wait-for-endpoint.py`
+  waits for a box and then runs a pass. They were untracked, so the handoff's references to
+  them resolved to nothing on a clone; they are maintenance-only and do not ship
+  (`build-package.py`'s `SHIP` is an explicit list).
 
 Removed
 - Twenty-six images (~5.6 MB) that were not tinycmdr's: everything under `assets/brand/` and a
