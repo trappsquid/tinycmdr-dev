@@ -379,16 +379,29 @@ def case_macos_install(sb, pkg, bindir, user, py):
     fake_venv(inst, py)
     log = sb / "logs" / "mac-install.log"
     env = sandbox_home_env(sb, bindir, log, user, {"TINYCMDR_PYTHON": py})
-    got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-start",
-               "--no-web", "--no-path", "--python", py, "--label", "com.tinycmdr.insttest",
-               "--install-dir", inst], env, pkg)
+    # Off macOS this installer installs the FILES and refuses to register anything, so it
+    # needs --no-launchd or it stops with "this installer is for macOS" (measured on
+    # Ubuntu CI 2026-09-26: rc=1 and every check below it failed). On a Mac the case runs
+    # the real launchd path, which is what the label/plist checks are about.
+    on_mac = os.uname().sysname == "Darwin"
+    args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-start",
+            "--no-web", "--no-path", "--python", py, "--label", "com.tinycmdr.insttest"]
+    if not on_mac:
+        args.append("--no-launchd")
+    got = run([*args, "--install-dir", inst], env, pkg)
     check("D2 the macOS install exits 0", got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-600:]}{got.stderr[-400:]}")
     label_file = inst / ".tinycmdr-label"
-    check("D2 the launchd label is recorded in the install folder",
-          label_file.exists()
-          and label_file.read_text(encoding="utf-8").strip() == "com.tinycmdr.insttest",
-          f"{label_file}: {label_file.read_text() if label_file.exists() else 'missing'}")
+    if on_mac:
+        check("D2 the launchd label is recorded in the install folder",
+              label_file.exists()
+              and label_file.read_text(encoding="utf-8").strip() == "com.tinycmdr.insttest",
+              f"{label_file}: {label_file.read_text() if label_file.exists() else 'missing'}")
+    else:
+        # No launchd, so no job was registered and nothing recorded a label. The check
+        # itself runs on the macOS runner (and on any Mac); what is asserted here is that
+        # the files landed, below.
+        print("SKIP the label half of D2: this host has no launchd (--no-launchd above)")
     check("D5 config.json is 0600 on macOS", mode_of(inst / "config.json") == 0o600,
           f"mode {oct(mode_of(inst / 'config.json') or 0)}")
     check("D5 .env is 0600 on macOS", mode_of(inst / ".env") == 0o600,

@@ -95,15 +95,23 @@ def main():
             "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "dead"},
             "web": {"enabled": True, "port": port, "host": "127.0.0.1", "token": "tok"},
         })
-        res = run_lane(d, ["--web"])
+        # The one case that has to COME UP gets the supervisor's own READY_TIMEOUT as its
+        # budget: the slowest host that runs this suite is the macOS CI runner, where
+        # suites that take 0.8s and 2.3s here took 36s and 38s (measured 2026-09-26, the
+        # first CI run), and this case hit its old 30s budget at 31.7s with the page still
+        # starting. The assertion below still separates "reported ready" from "scraped the
+        # timeout", which is the bug this case exists for.
+        PAGE_READY_BUDGET = 90
+        res = run_lane(d, ["--web"], timeout=PAGE_READY_BUDGET)
         check(res["port"] == port, f"the supervisor finds the page's port ({res['port']})")
         check(res["chat"] is False, "an install with no chat account is not a chat lane")
         check(res["doors"] == ["the page on 127.0.0.1:%d" % port],
               f"so the only door it waits for is the page ({res['doors']})")
         check(res["ready"] is not None,
               f"a page-only install comes up READY ({res['ready']}s of {res['wall']:.1f}s)")
-        check(res["ready"] is not None and res["ready"] < 20,
-              "and it says so quickly, not after the 90s timeout")
+        check(res["ready"] is not None and res["ready"] < PAGE_READY_BUDGET - 3,
+              "and the supervisor noticed the open door by itself, rather than falling "
+              f"into its own {PAGE_READY_BUDGET}s timeout ({res['ready']}s)")
 
         # -- a chat lane with a dead Mattermost: must NOT report ready --------------
         d = stage(work / "chat", {

@@ -436,7 +436,15 @@ def main():
         fb.run_capture = fake_run
         fb._is_elevated = lambda: True
         fb._verb_running = lambda: True
+        _real_geteuid = os.geteuid
         try:
+            # The checks below are about WHICH helper the verb calls, so the host's own
+            # rights rule has to let the verb through. On Linux that rule is "root,
+            # always" (asserted on its own further down) and CI runs as an ordinary user:
+            # unpatchied, the verb refused, run_capture was never called, the helper read
+            # back as '' and os.path.samefile('') raised FileNotFoundError - aborting the
+            # suite and silently dropping every check after it.
+            os.geteuid = lambda: 0
             rc, out, err = call(fb, ["restart"])
             helper = (seen.get("argv") or [""])[-1]
             check("restart calls the shipped helper for this host",
@@ -454,6 +462,8 @@ def main():
             # neither (launchd owns the process - exiting is the restart). The old check
             # demanded the refusal everywhere and would have aborted here on macOS, where
             # the helper is called instead.
+            # the real rule again, so the checks below assert THIS host's rule
+            os.geteuid = _real_geteuid
             fb._is_elevated = lambda: False
             if os.name == "nt":
                 fb._scheduled_task_owned = lambda: True
@@ -470,6 +480,7 @@ def main():
                 check("with no rights needed on this host, restart still calls the helper",
                       rc == 0 and "back up" in out, (rc, err[:160]))
         finally:
+            os.geteuid = _real_geteuid
             fb.run_capture, fb._is_elevated, fb._verb_running = saved_run, saved_elev, saved_running
             if saved_owned is not None:
                 fb._scheduled_task_owned = saved_owned
