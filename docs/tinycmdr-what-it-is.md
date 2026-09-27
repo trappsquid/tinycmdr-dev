@@ -133,7 +133,12 @@ infrastructure      endpoint unreachable/rejecting files a red Done line instead
                     failure is not silently converted into prose
 failover            primary plus ordered fallbacks; a local failure does not fall through to the
                     internet unless allow_cloud_fallback says so (a privacy gate, not a preference)
-streaming           streamed model calls, with an idle bound so a trickling endpoint is bounded
+streaming           streamed model calls, with an idle bound so a trickling endpoint is bounded;
+                    against a llama.cpp endpoint (confirmed by its own /props reply) it also asks
+                    for prompt-progress events, so a long prefill reads "reading prompt · 42%"
+                    instead of minutes of silence - and those request fields are NEVER sent to a
+                    provider that is not that server. This changes what the WAIT looks like, not
+                    how long it takes: prefill measured the same 425-431 tok/s either way
 catch-up            after a restart, sweep the last 30 minutes of its own channel
 restart             /tinycmdr restart hands the process to the supervisor and announces when it is back
 stop                idempotent; reads on the listener thread even while a wedged worker owns the

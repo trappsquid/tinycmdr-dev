@@ -58,6 +58,10 @@
     "stream": true,
     "stream_idle_seconds": 120,
     "_stream": "Model calls use SSE when true: the first token is visible while it generates, a cancel closes the socket (a local llama.cpp stops generating), and a wedged stream ends on stream_idle_seconds. false = one blocking POST per call, which is what every version before 1.9.28 did.",
+ "_llama_extensions": "true (default) asks a llama.cpp endpoint for its OWN stream extensions: return_progress (a prompt_progress event at ~0.1s and then once per prompt batch, rendered as \"reading prompt · N%\" - a long prompt is otherwise minutes of silence) and, when sse_ping_interval is set, the keep-alive SSE comment. Gated on that endpoint's own /props reply confirming a llama.cpp build, and only ever asked of an on-LAN endpoint: a cloud provider rejects an unknown request field with a 400 and no other local server promises to ignore one. false = never send them. Neither field changes the model's answer.",
+ "llama_extensions": true,
+ "sse_ping_interval": 0,
+ "_sse_ping_interval": "0 = the server's own default (30s on llama.cpp), N = a ping every N seconds, -1 = no pings. Only ever sent to a confirmed llama.cpp endpoint.",
     "profiles": {
       "example-cloud-model": {
         "tool_output_max_chars": 40000,

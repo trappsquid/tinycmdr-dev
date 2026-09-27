@@ -192,8 +192,20 @@ named = named or []
 check("and invents none", bool(named) and all(n in fb.CORE_TOOL_NAMES for n in named), named)
 check("it is generated, not typed: the set is what hidden_tools() reports",
       named == sorted(set(named)) and inv_line.count(", ".join(named)) == 1, inv_line[:160])
-check("the bullet follows the find_tools one directly (no blank field left behind)",
-      "named in its prompt).\n- Also on this box" in sp)
+# The CONTRACT is "the inventory line is spliced directly after the preceding bullet, with
+# no blank line between them" - a blank field of its own would render it as a separate
+# paragraph. It used to be pinned as a byte sequence ending in the text of the bullet that
+# happened to precede it ("named in its prompt).\n- Also on this box"), which went red the
+# moment that bullet's trailing prose was trimmed (2026-09-27) - a change to the prompt,
+# not to the layout. Pinned structurally instead: exactly one inventory line, and the line
+# above it is the tail of a bullet.
+_lines = sp.splitlines()
+_inv_rows = [i for i, l in enumerate(_lines) if l.startswith("- Also on this box")]
+check("the inventory line directly follows the tool bullet (no blank field left behind)",
+      len(_inv_rows) == 1 and _inv_rows[0] > 0
+      and _lines[_inv_rows[0] - 1].startswith("- ")
+      and _lines[_inv_rows[0] - 1].strip() != "",
+      _inv_rows)
 check("the line is bounded", len(inv_line) < 320, len(inv_line))
 check("the prompt is still byte-identical across two builds",
       fb.build_system_prompt() == sp)

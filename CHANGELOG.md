@@ -5,6 +5,56 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.32] - 2026-09-27
+
+Long prompts stop looking dead, and llama.cpp's own stream extensions are requested - from
+llama.cpp, and from nothing else. Measured on the LAN box: a 12.5k-token prompt reported its
+first event at 0.25s where a plain request showed nothing for 29.7s, and a 9k-token prompt with
+a 2s ping interval logged 15 progress events and 43 keep-alive pings across a 131-second prefill.
+
+Added
+- **`return_progress` (llama.cpp extension): the prefill is now visible.** The server sends a
+  normal chat chunk carrying `prompt_progress` at ~0.1s and then once per prompt batch; the
+  harness records it, and the status line says `reading prompt · 42% (5,120/12,502 tok)` while
+  the prompt is being read - on the measured 9k-token prefill that was 15 events, and the log
+  line now reports the count.
+- **`sse_ping_interval` (`llm.sse_ping_interval`, default 0 = the server's own 30s).** The bare
+  `:` keep-alive comment was already parsed and ignored; now it is counted, so the log says
+  `43 keep-alive ping(s)` when a silent stream was provably alive, and an operator can tighten
+  or disable the interval per box.
+- **`llm.llama_extensions` (default true) and the gate behind it.** The two fields are sent
+  ONLY when the endpoint is on this LAN AND its own `/props` reply fingerprints a llama.cpp
+  build (`default_generation_settings`, or `build_info` + `total_slots`). A cloud provider
+  rejects an unknown request field with a 400; a vLLM/SGLang-shaped endpoint gets neither
+  field, and is never probed unless it is on the LAN. A 400 that names either field is
+  dropped and the same endpoint retried, the same way `stream_options` already was.
+- **These are observability, not throughput: nothing is processed faster.** Measured against the
+  same endpoint on four fresh prompts: 431.0 / 425.5 tok/s prefill WITHOUT `return_progress` and
+  431.7 / 431.4 tok/s WITH it - the server's own `prompt_per_second`, i.e. the same work in the
+  same time. What changes is that the wait is visible (first event 0.25s instead of 29.7s) and
+  that a long prompt can no longer be mistaken for a dead connection.
+- **`tinycmdr status` / `/status` says which way the gate went** ("stream: on: prompt progress
+  requested (the server's own ping interval)"), reading the same probe the request does.
+
+Fixed
+- **The stall watchdog no longer shortens a healthy prefill's rope.** The prefill/idle split
+  keyed on "a chunk arrived", and with progress on the server sends chunks during the prefill -
+  a slow box would have been declared wedged at the idle bound instead of being bounded by the
+  request timeout. It now keys on "a chunk carried text or a tool call".
+- **The payload dump was not the payload.** `agent.debug_dump_dir` wrote the body before
+  `tools`, `stream`, `stream_options` and the extensions were added, so the documented "exact
+  request body" was missing exactly the fields a provider-difference bug is about. It is
+  written after them now.
+- **`tests/test_result_hints.py` could never recover from its own 15th run.** It is the one
+  suite whose subject writes something durable (`_exec_tool` adds a task to the ledger beside
+  the staged module), and it reused a fixed stage directory, so the ledger accumulated `probe`
+  tasks until the cap made the tool error and the hint check failed as if the hint had
+  regressed. The stage is wiped per run.
+- **`tests/test_tool_discovery.py` pinned a sentence, not a layout.** Its "the inventory line
+  follows the previous bullet" check was a byte string ending in the trailing text of that
+  bullet, and went red when that trailing prose was trimmed. It now asserts the contract - one
+  inventory line, directly after a bullet, with no blank field between.
+
 ## [1.0.31] - 2026-09-27
 
 The static prompt is 3,586 tokens on this install and 3,403 on a clean unpack, measured with the

@@ -213,6 +213,18 @@ DEFAULT_CONFIG = {
         "stream_idle_seconds": 120,  # a stream this quiet is wedged; the FIRST byte
                                      # is still bounded by request_timeout, because
                                      # prefill on a long prompt is slow but healthy
+        # llama.cpp's OWN stream extensions, for long-prompt liveness. Requested
+        # only from an endpoint whose /props confirms a llama.cpp build (see
+        # _llama_extensions), so a cloud provider - which rejects an unknown
+        # request field with a 400 - and a local vLLM/SGLang box are never sent
+        # one. Off changes nothing about the answer, only the progress signal
+        # read while the prompt is processed.
+        "llama_extensions": True,
+        "sse_ping_interval": 0,      # 0 = the server's own default (30s on
+                                     # llama.cpp; the keep-alive SSE comment the
+                                     # parser already ignores). N = ping every N s,
+                                     # -1 = no pings. Only sent to a confirmed
+                                     # llama.cpp endpoint.
         "no_think": False,   # True for qwen3-style thinking models that
                              # answer empty (sends enable_thinking: false)
         "fallbacks": [],   # [{"base_url": ..., "model": ..., "api_key": ...,
@@ -808,7 +820,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.31"
+VERSION = "1.0.32"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -1407,7 +1419,16 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     terminal = False
     suse, timings = {}, {}
     stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
-             "tps": 0.0, "server_tps": 0.0, "reasoning_text": ""}
+             "tps": 0.0, "server_tps": 0.0, "reasoning_text": "",
+             # Prompt progress (llama.cpp `return_progress`): the last
+             # prompt_progress object the server sent, how many it sent, and
+             # whether any chunk has carried actual output yet. `generating` is
+             # what separates prefill from a stalled generation - a progress
+             # event proves the socket is alive, NOT that the model is writing.
+             "prompt_progress": None, "progress_events": 0, "generating": False,
+             # The other liveness channel a llama.cpp server sends unprompted: the bare
+             # `:` SSE comment. Counted so the log can say a silent stream was alive.
+             "pings": 0}
     snap_at = 0.0
     lines = queue.Queue()
     done = {"eof": False, "err": None}
@@ -1475,13 +1496,17 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         except queue.Empty:
             if done["eof"]:
                 break
-            # Before the first delta the wait is a PREFILL, and the bound is the request
-            # timeout; after it, this is a stalled stream and the idle bound applies.
-            limit = first_byte_seconds if not stats["deltas"] else idle_seconds
+            # Before the first OUTPUT the wait is a PREFILL, and the bound is the
+            # request timeout; after it, this is a stalled stream and the idle bound
+            # applies. The flag is "a chunk carried text/tool fragments", not "a chunk
+            # arrived": with prompt progress on, the server sends chunks during the
+            # prefill, and those must not shorten a healthy prefill's rope from the
+            # request timeout to the idle gap.
+            limit = first_byte_seconds if not stats["generating"] else idle_seconds
             if limit and (time.time() - last) > limit:
                 _close()
                 waited = int(time.time() - last)
-                if not stats["deltas"]:
+                if not stats["generating"]:
                     raise StreamFailed(
                         f"no first byte for {waited}s (prefill limit {limit}s) - the "
                         f"endpoint accepted the request and is still thinking")
@@ -1495,6 +1520,8 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         text = (raw_line.decode("utf-8", "replace")
                 if isinstance(raw_line, bytes) else str(raw_line)).strip()
         if not text or text.startswith(":"):     # SSE comment / keep-alive
+            if text.startswith(":"):
+                stats["pings"] += 1
             continue
         if not text.startswith("data:"):
             continue
@@ -1511,13 +1538,31 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
             suse = chunk["usage"]
         if isinstance(chunk.get("timings"), dict):
             timings = chunk["timings"]
+        pp = chunk.get("prompt_progress")
+        if isinstance(pp, dict):
+            # llama.cpp's own report of the prompt it is reading (return_progress):
+            # a normal chat chunk carrying no content, at ~0.1s and then once per
+            # prompt batch. It is the only channel that says HOW FAR the prefill got,
+            # and its arrival is proof the connection is alive during minutes of
+            # otherwise silent prompt processing.
+            stats["prompt_progress"] = pp
+            stats["progress_events"] += 1
+            if not chunk.get("choices") and on_delta:
+                # A progress-only chunk: the lanes still hear about it (the callers
+                # gate their own refresh rate, so this cannot become a flood).
+                try:
+                    on_delta(stats)
+                except Exception:       # noqa: BLE001 - progress must not kill a call
+                    pass
         for ch in (chunk.get("choices") or []):
             d = ch.get("delta") or {}
             text = _delta_text(d.get("content"))
             rtext = _delta_text(d.get("reasoning_content"))
             fragments = _delta_tool_calls(d)
-            if (text or rtext or fragments) and stats["ttft"] is None:
-                stats["ttft"] = time.time() - t0
+            if text or rtext or fragments:
+                stats["generating"] = True
+                if stats["ttft"] is None:
+                    stats["ttft"] = time.time() - t0
             if text:
                 content.append(text)
             if rtext:
@@ -1705,6 +1750,96 @@ def _detect_window(base_url, headers, timeout=10):
     except (TypeError, ValueError):
         return 0
 
+
+def _endpoint_root(url):
+    """The SERVER root of an endpoint URL, for the metadata it serves there.
+
+    Callers hold three shapes of the same endpoint: the configured `base_url`
+    (`http://box:8081/v1`), the request URL the chat loop builds from it
+    (`.../v1/chat/completions`), and a bare host. llama.cpp's /props lives at the
+    root in all three cases, so strip the OpenAI path first and then /v1.
+    """
+    u = str(url or "").rstrip("/")
+    for suffix in ("/chat/completions", "/completions", "/v1"):
+        if u.endswith(suffix):
+            # No break: the two shapes that matter strip twice
+            # (…/v1/chat/completions -> …/v1 -> the server root).
+            u = u[: -len(suffix)]
+    return u.rstrip("/")
+
+
+# A llama.cpp server is the only OpenAI-compatible one that answers /props at its
+# root (vLLM serves /v1/models + /metrics, SGLang /get_server_info, hosted APIs
+# nothing), so the reply IS the fingerprint. Keyed by the exact base_url: a
+# fallback chain can be two different servers and only one may be llama.cpp.
+# Positive answers are kept for the process's life (a restart of the SERVER is
+# what would change them); a negative is retried after five minutes, so a box that
+# was down when the run started is not written off for ever.
+_LLAMA_PROPS_CACHE = {}
+
+_LLAMA_PROPS_MISS_TTL = 300
+
+
+def _llama_props(base_url, headers=None, timeout=5):
+    """The endpoint's own /props payload when it is a llama.cpp server, else None.
+
+    Read-only metadata, never a model call, so it is safe to ask a box that is
+    busy serving somebody else. `default_generation_settings` (or a build_info +
+    total_slots pair) is what makes the reply llama.cpp's and not some other
+    server's 200 to an unrelated route.
+    """
+    base = str(base_url or "").rstrip("/")
+    if not base:
+        return None
+    hit = _LLAMA_PROPS_CACHE.get(base)
+    if hit is not None:
+        props, at = hit
+        if props is not None or (time.time() - at) < _LLAMA_PROPS_MISS_TTL:
+            return props
+    props = None
+    root = _endpoint_root(base)
+    try:
+        got = requests.get(root + "/props", headers=headers,
+                           timeout=timeout).json()
+        if isinstance(got, dict) and (
+                got.get("default_generation_settings")
+                or (got.get("build_info") and got.get("total_slots"))):
+            props = got
+    except Exception as e:      # noqa: BLE001 - a probe must never break a call
+        log.debug("llama probe: /props on %s did not answer: %s", root, e)
+    _LLAMA_PROPS_CACHE[base] = (props, time.time())
+    return props
+
+
+_LLAMA_EXT_ANNOUNCED = set()
+
+
+def _llama_extensions(url, headers=None):
+    """True when THIS endpoint takes llama.cpp's stream extensions.
+
+    `return_progress` and `sse_ping_interval` are llama.cpp server extensions, not
+    OpenAI ones: a cloud provider rejects an unknown request field with a 400, and
+    no other local server promises to ignore one either. So the gate is the
+    endpoint's own /props reply, asked only for an on-LAN endpoint (an off-LAN
+    metadata GET is not something this harness does), plus the config switch.
+    A False here changes only the liveness signal the harness reads while a prompt
+    is being processed - never the request the model answers.
+    """
+    if not CONFIG["llm"].get("llama_extensions", True):
+        return False
+    if not _is_local_url(url):
+        return False
+    return _llama_props(url, headers) is not None
+
+
+def _llama_ping_interval():
+    """`llm.sse_ping_interval` as an int: 0 (the default) = send nothing and keep
+    the server's own 30s, N = a ping every N seconds, -1 = no pings at all."""
+    raw = CONFIG["llm"].get("sse_ping_interval", 0)
+    try:
+        return int(raw) if raw not in (None, "") else 0
+    except (TypeError, ValueError):
+        return 0
 
 
 # Endpoints that answered the SSE request and then failed to stream. Remembered so
@@ -10380,6 +10515,22 @@ def sampling_summary():
     return line
 
 
+def llama_extensions_summary():
+    """One line for /status: is THIS endpoint being asked for llama.cpp's stream
+    extensions, and why not when it is not. Reads the same gate the request does, so
+    the line cannot claim something the wire does not carry."""
+    if not CONFIG["llm"].get("llama_extensions", True):
+        return "off (llm.llama_extensions=false)"
+    base = CONFIG["llm"]["base_url"]
+    if not _is_local_url(base):
+        return "off (the endpoint is not on this LAN)"
+    if _llama_props(base) is None:
+        return "off (its /props does not fingerprint llama.cpp)"
+    ping = _llama_ping_interval()
+    return ("on: prompt progress requested" + (
+        f", ping every {ping}s" if ping else " (the server's own ping interval)"))
+
+
 def dump_payload(payload, label="chat", note=""):
     """Write the exact request body to agent.debug_dump_dir when that is set.
 
@@ -11102,7 +11253,6 @@ class Agent:
                 "messages": messages,
             }
             apply_sampling(payload)
-            dump_payload(payload, ep_model)
             if use_tools:
                 # Disclosure decides what is SENT, not what exists: the registry still
                 # holds every tool, so a call for a hidden one is executed and revealed.
@@ -11120,6 +11270,32 @@ class Agent:
                     # that does not know the option answers 400, so it is only
                     # requested where it is known to work.
                     payload["stream_options"] = {"include_usage": True}
+                if _llama_extensions(url, headers):
+                    # A long prompt is minutes of SILENCE from a llama.cpp box: the
+                    # first generated token used to be the only proof the connection
+                    # was alive. `return_progress` turns that into a chat chunk
+                    # carrying `prompt_progress`, at ~0.1s and then once per prompt
+                    # batch (verified live 2026-09-27: 3 events in 1.4s on a 16-token
+                    # prompt; a 14k prompt -> the first at t+0.1s then one every ~9s
+                    # until generation starts). The status line renders it as
+                    # "reading prompt · N%"; the answer itself is untouched.
+                    payload["return_progress"] = True
+                    ping = _llama_ping_interval()
+                    if ping:
+                        # The server's own default (30s, verified live) already keeps
+                        # the socket alive; this is only for an operator who wants it
+                        # tighter or off (-1).
+                        payload["sse_ping_interval"] = ping
+                    if url not in _LLAMA_EXT_ANNOUNCED:
+                        _LLAMA_EXT_ANNOUNCED.add(url)
+                        log.info("llama.cpp stream extensions on %s: prompt progress "
+                                 "requested%s (gated on that endpoint's own /props; "
+                                 "never sent to a non-llama.cpp endpoint)",
+                                 url, f", ping every {ping}s" if ping else "")
+            # After every optional field, so the dump is the REQUEST and not most of it:
+            # it is documented as the ground truth about what the model was shown, and
+            # everything below this line (stream, tools, extensions) used to be missing.
+            dump_payload(payload, ep_model)
             escalated = False
             waited_after_429 = False
             dropped_optional = False
@@ -11153,9 +11329,14 @@ class Agent:
                                                       + sstats["ttft"])
                             if sstats.get("server_tps"):
                                 usage["server_tps"] = sstats["server_tps"]
-                        log.info("stream %s: %d chunk(s), first delta %s, "
+                        log.info("stream %s: %d chunk(s)%s%s, first delta %s, "
                                  "%s tok/s (server), %s",
                                  url, sstats.get("deltas", 0),
+                                 (f" ({sstats['progress_events']} prompt-progress "
+                                  f"event(s))" if sstats.get("progress_events")
+                                  else ""),
+                                 (f" ({sstats['pings']} keep-alive ping(s))"
+                                  if sstats.get("pings") else ""),
                                  (f"{sstats['ttft']:.1f}s" if sstats.get("ttft")
                                   else "n/a"),
                                  (f"{sstats['server_tps']:.1f}"
@@ -11166,7 +11347,8 @@ class Agent:
                     # is still a working model, and this is not a failover.
                     _STREAM_UNSUPPORTED.add(url)
                     stream_on = False
-                    for k in ("stream", "stream_options"):
+                    for k in ("stream", "stream_options", "return_progress",
+                              "sse_ping_interval"):
                         payload.pop(k, None)
                     _record_attempt(usage, url, "error", f"stream: {e}",
                                     time.time() - t0)
@@ -11189,6 +11371,7 @@ class Agent:
                         # provider complained about ONE field, and dropping both would
                         # turn a stream request into a blocking one.
                         named = [k for k in ("stream_options", "chat_template_kwargs",
+                                             "return_progress", "sse_ping_interval",
                                              "stream")
                                  if k in payload
                                  and re.search(r"\b%s\b" % re.escape(k), body)]
@@ -13116,6 +13299,11 @@ def stream_heartbeat(st):
     which is exactly why it shipped, and against any server that batches its
     deltas it was simply a wrong number. So: count the reasoning too, and say
     what phase it is in instead of inventing a speed.
+
+    Third phase, added 2026-09-27: a llama.cpp box asked for `return_progress`
+    reports how much of the PROMPT it has read (`prompt_progress`), and on a long
+    prompt that prefill is minutes of what used to be a dead line - so when no
+    output has arrived yet and a progress report has, that is what this says.
     """
     answer = int(st.get("chars") or 0)
     thinking = int(st.get("reasoning_chars") or 0)
@@ -13123,6 +13311,20 @@ def stream_heartbeat(st):
         return f"writing · {answer:,} chars"
     if thinking:
         return f"thinking · {thinking:,} chars"
+    pp = st.get("prompt_progress")
+    if isinstance(pp, dict):
+        total = int(pp.get("total") or 0)
+        processed = int(pp.get("processed") or 0)
+        if total > 0:
+            # `cache` is the prefix the server already had; excluding it is what
+            # makes the percentage move on the SECOND call of a conversation
+            # instead of sitting at (cached total / total).
+            cache = max(0, min(int(pp.get("cache") or 0), total))
+            denom = total - cache
+            done = min(processed, total) - cache
+            pct = 100.0 if denom <= 0 else max(0.0, min(100.0, 100.0 * done / denom))
+            return (f"reading prompt · {pct:.0f}% "
+                    f"({processed:,}/{total:,} tok)")
     return "waiting for the first token"
 
 
@@ -16210,6 +16412,7 @@ def status_text(key, paused=None):
     lines = [f"tinycmdr v{VERSION} on {socket.gethostname()}",
              f"model: {model} → {model_route_for(model)}",
              f"sampling: {sampling_summary()}",
+             f"stream:   {llama_extensions_summary()}",
              f"session: {s['exchanges']} exchanges, ~{s['est_tokens']:,} / "
              f"{budget:,} tokens in context "
              f"({100 * s['est_tokens'] // max(1, budget)}%)"]

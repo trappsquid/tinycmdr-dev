@@ -25,6 +25,14 @@ BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-hints"
+# A FRESH stage, not a reused one. This suite is the only one whose subject WRITES
+# something durable: `_exec_tool` adds a task to the ledger beside the module, so every
+# run left a `probe` task behind in a fixed directory. Measured 2026-09-27: the 15th run
+# hit `_MAX_OPEN_TASKS` and the check failed with "15 tasks are already open" - the suite
+# could never recover, and the failure looked like a regression in the hint. The staged
+# build is a byte copy; nothing in it is worth keeping between runs.
+if STAGE.exists():
+    shutil.rmtree(STAGE, ignore_errors=True)
 STAGE.mkdir(parents=True, exist_ok=True)
 shutil.copy2(SRC, STAGE / "tinycmdr.py")
 shutil.copy2(Path(__file__).resolve().parent / "fixture-config.json", STAGE / "config.json")
