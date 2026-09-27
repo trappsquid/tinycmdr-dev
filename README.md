@@ -1,7 +1,5 @@
 <div align="center">
 
-  <img src="assets/brand/avatar.png" alt="tinycmdr mascot" width="160" />
-
   # tinycmdr
 
   ### An autonomous ops agent for self-hosted models

@@ -17,13 +17,14 @@ Fixed
   over.
 
 Removed
-- Eighteen unreferenced images (~4.9 MB) that were never tinycmdr's identity: the
-  `tinycmdr-badge-*` and `tinycmdr-helm-*` families (10 files), the chibi ladder's extra rungs
-  (64/128/256/master), the author's own profile avatar, the unused rimmed mark, and a root
-  `icon.png` that duplicated `tinycmdr-chibi-256.png`. Nothing in the repo - no code, test, doc or
-  installer - named any of them, and the page's icon comes from an embedded copy rather than that
-  file. Kept: the vector mark and the two banners whose redraw `a9a2556` documents, and
-  `assets/brand/avatar.png`, the one image the README actually uses.
+- Twenty-six images (~5.6 MB) that were not tinycmdr's: everything under `assets/brand/` and a
+  root `icon.png`. That is three whole families (`tinycmdr-badge-*`, `tinycmdr-helm-*`, and the
+  chibi ladder), the author's own profile avatar, the vector mark and its rimmed variant, the two
+  banner ratios, and the six-spoke mark a redraw commit describes. Nothing in the repo - no code,
+  test, doc or installer - referenced any of them, and the page's icon comes from an embedded copy
+  rather than that root file, so no behaviour changes. The README's mascot image went with them:
+  the repo now carries no imagery, and a brand set can be added if and when there is one that is
+  actually tinycmdr's.
 
 ## [1.0.33] - 2026-09-27
 
