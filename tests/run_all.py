@@ -45,6 +45,12 @@ REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
 DEFAULT_SELECT = "tests/test_*.py"
 DEFAULT_TIMEOUT = 300.0
+# Per-suite wall-clock overrides. test_webui_browser.py drives seven real runs through a
+# real browser: on the macOS CI runner that takes 47.8s, 76.9s, 137.8s then 167.5s across
+# four runs with identical inputs, so the default 300s is not enough for it to finish when
+# that box is at its worst. Nothing else needs one.
+SLOW_SUITES = {"tests/test_webui_browser.py": 900.0}
+
 
 # A suite that cannot grade its subject here (playwright/node/rich absent, a console
 # build asked for a web layer) exits this, never 0. Three suites used to print a skip
@@ -285,7 +291,8 @@ def main():
         sys.stdout.write("%-40s ... " % rel)
         sys.stdout.flush()
         before = tree_state()
-        status, seconds, detail = run_one(path, args.timeout, logdir, args.verbose)
+        status, seconds, detail = run_one(path, SLOW_SUITES.get(rel, args.timeout),
+                                             logdir, args.verbose)
         after = tree_state()
         results.append((rel, status, seconds, detail))
         if before is not None and after is not None:

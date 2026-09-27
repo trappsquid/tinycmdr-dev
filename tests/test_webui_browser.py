@@ -83,7 +83,10 @@ DUMP = r"""
 """
 
 
+CHECKS = []                        # every check, pass or fail
+
 def check(cond, what):
+    CHECKS.append(what)
     if not cond:
         FAILS.append(what)
         print(f"FAIL {what}")
@@ -170,14 +173,14 @@ def compare(base, page, run_id, label):
 # 2026-09-27 at ~8x this box (this suite 9.7s here, 76.9s there), where the default expired on
 # the last section's "the run finished" and - because the code after it assumes the payload -
 # took the whole suite's report with it.
-RUN_DONE_TIMEOUT = 120.0
+RUN_DONE_TIMEOUT = 240.0
 
 # Every whole-run wait shares ONE deadline for the suite. The slowest host is the macOS CI
 # runner, and it is brutal: this suite takes 9.7s here, 47.8s when it passed there, 76.9s
 # and 137.8s on the two runs after - a fixed 30s, then 90s, per wait still expired. Sharing
 # a deadline means one pathological section cannot eat the next section's time, and the
 # suite still prints its summary inside run_all's 300s per-file limit.
-SUITE_BUDGET = 180.0
+SUITE_BUDGET = 600.0
 SUITE_DEADLINE = None                 # set once, in main()
 
 
@@ -518,6 +521,10 @@ def main():
             pass
 
     print()
+    # The runner reads THIS line to tell "the suite finished and graded" from "the suite
+    # died before its own summary": without it, a completed run with one red check was
+    # reported as a death (measured 2026-09-27, three CI cycles).
+    print(f"{len(CHECKS) - len(FAILS)} passed, {len(FAILS)} failed")
     if FAILS:
         print(f"{len(FAILS)} FAILED:")
         for f in FAILS:
