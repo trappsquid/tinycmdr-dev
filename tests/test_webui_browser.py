@@ -170,10 +170,21 @@ def compare(base, page, run_id, label):
 # 2026-09-27 at ~8x this box (this suite 9.7s here, 76.9s there), where the default expired on
 # the last section's "the run finished" and - because the code after it assumes the payload -
 # took the whole suite's report with it.
-RUN_DONE_TIMEOUT = 90.0
+RUN_DONE_TIMEOUT = 120.0
+
+# Every whole-run wait shares ONE deadline for the suite. The slowest host is the macOS CI
+# runner, and it is brutal: this suite takes 9.7s here, 47.8s when it passed there, 76.9s
+# and 137.8s on the two runs after - a fixed 30s, then 90s, per wait still expired. Sharing
+# a deadline means one pathological section cannot eat the next section's time, and the
+# suite still prints its summary inside run_all's 300s per-file limit.
+SUITE_BUDGET = 180.0
+SUITE_DEADLINE = None                 # set once, in main()
 
 
 def wait_for(fn, timeout=30.0, interval=0.05):
+    global SUITE_DEADLINE
+    if SUITE_DEADLINE is not None:
+        timeout = max(3.0, min(timeout, SUITE_DEADLINE - time.time()))
     end = time.time() + timeout
     while time.time() < end:
         v = fn()
@@ -184,6 +195,8 @@ def wait_for(fn, timeout=30.0, interval=0.05):
 
 
 def main():
+    global SUITE_DEADLINE
+    SUITE_DEADLINE = time.time() + SUITE_BUDGET
     try:
         from playwright.sync_api import sync_playwright
     except Exception as e:  # noqa: BLE001
@@ -522,9 +535,11 @@ if __name__ == "__main__":
         sys.exit(main())
     except SystemExit:
         raise
-    except BaseException:
+    except BaseException as exc:
         import traceback
-        traceback.print_exc()
-        print("\nthe suite raised before its own summary; the checks printed above are the "
-              "ones that ran", file=sys.stderr)
+        traceback.print_exc()                                  # the folded log
+        # ...and one line on STDOUT, because that is the stream the runner surfaces as the
+        # failure detail. Without it a crash reads as "died before its own summary" and the
+        # reason is only in a log CI does not upload (measured 2026-09-27, twice).
+        print("FAIL the suite raised %s: %s" % (type(exc).__name__, exc))
         sys.exit(1)
