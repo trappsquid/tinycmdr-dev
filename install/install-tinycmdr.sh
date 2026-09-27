@@ -1231,6 +1231,54 @@ if refused:
 PY
 chown_to "$INSTALL_DIR/.env"
 
+# ------------------------------------------------------- model endpoint ---
+# Ask the endpoint for its metadata once, here, with the operator watching, from the venv's
+# own python - the exact binary the agent will use. Two things are learned: whether the box
+# answers at all, and how many tokens it serves per request, which the agent otherwise has to
+# guess from inside a run. Never fatal: a check, not a gate. (macOS has its own installer;
+# there the same probe is also what raises the Local Network permission prompt in context,
+# instead of from a background service where nobody can answer it.)
+if [ -x "$VENV_PY" ] && [ -f "$INSTALL_DIR/config.json" ]; then
+    say "model endpoint"
+    PROBE_OUT="$("$VENV_PY" - "$INSTALL_DIR/config.json" <<'PROBEPY'
+import json, os, re, sys
+
+try:
+    import requests
+except Exception as e:                     # --no-deps: report, never fail the install
+    print("fail|could not import requests: %s" % e)
+    raise SystemExit(0)
+
+llm = (json.load(open(sys.argv[1], encoding="utf-8-sig")).get("llm") or {})
+base = str(llm.get("base_url") or "").rstrip("/")
+if not base:
+    raise SystemExit
+host = base.split("://", 1)[-1].split("/")[0].split("@")[-1].split(":")[0]
+key = str(llm.get("api_key") or "") or os.environ.get(str(llm.get("api_key_env") or ""), "")
+hdr = {"Authorization": "Bearer %s" % key} if key else {}
+root = base[:-3] if base.endswith("/v1") else base
+window, err = 0, ""
+try:
+    data = (requests.get(base + "/models", headers=hdr, timeout=4).json().get("data") or [])
+    want = str(llm.get("model") or "")
+    entry = next((m for m in data if m.get("id") == want), data[0] if data else {})
+    window = int(entry.get("max_model_len")
+                 or (entry.get("meta") or {}).get("n_ctx") or 0)
+    if not window:
+        props = requests.get(root + "/props", headers=hdr, timeout=4).json()
+        window = int((props.get("default_generation_settings") or {}).get("n_ctx")
+                     or props.get("n_ctx") or 0)
+except Exception as e:
+    err = " ".join(str(e).split())[:140]
+print("fail|%s" % err if err else "ok|%s|%s" % (base, window))
+PROBEPY
+)" || true
+    case "$PROBE_OUT" in
+        ok\|*)  info "endpoint      : reachable (${PROBE_OUT#ok|})" ;;
+        fail\|*) warn "endpoint      : did not answer: ${PROBE_OUT#fail|} - the agent retries on its own" ;;
+    esac
+fi
+
 # ------------------------------------------------------------- privileges ---
 # The agent administers the host it lives on, so it gets passwordless sudo by
 # default. Without it the bot probes for root, hits a password prompt, and

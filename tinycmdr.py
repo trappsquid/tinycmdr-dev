@@ -24,6 +24,7 @@ import hashlib
 import hmac
 import html
 import importlib.util
+import ipaddress
 import json
 import logging
 import os
@@ -1717,6 +1718,38 @@ def _record_attempt(usage, url, outcome, detail="", secs=0.0):
         usage["retries"] = usage.get("retries", 0) + 1
     if outcome in ("error", "abandoned"):
         usage["abandoned"] = usage.get("abandoned", 0) + 1
+
+
+def lan_permission_hint(base_url):
+    """Name macOS's Local Network permission where it is the likely cause of a failure.
+
+    macOS asks for Local Network access the first time a process connects to a private
+    address, and it asks the process that dials - which, for this bot, is a background
+    service at boot where nobody can answer. An unanswered permission and a dead server are
+    indistinguishable from in here: both fail to connect, and telling the reader "the
+    endpoint did not answer" then sends them to the wrong machine (measured on a live
+    install 2026-09-27: the model box was serving another process the whole time).
+
+    Empty unless that is the only story left: macOS, a private address, and not loopback.
+    """
+    if sys.platform != "darwin":
+        return ""
+    raw = str(base_url or "")
+    m = re.match(r"[a-zA-Z][a-zA-Z0-9+.-]*://([^/?#]*)", raw)
+    host = (m.group(1) if m else "").rsplit("@", 1)[-1]
+    host = host.split(":")[0].strip("[]")
+    if not host:
+        return ""
+    try:
+        addr = ipaddress.ip_address(host)
+        if not addr.is_private or addr.is_loopback:
+            return ""
+    except ValueError:
+        if not host.endswith(".local"):
+            return ""
+    return (" - on macOS a private-address endpoint is often the Local Network permission "
+            "rather than a dead server: System Settings -> Privacy & Security -> Local "
+            "Network, and allow the python this agent runs")
 
 
 def _detect_window(base_url, headers, timeout=10):
@@ -11060,7 +11093,8 @@ class Agent:
             window = budget + static + reply
             log.warning("could not detect the endpoint's context length — assuming "
                         "a %s-token window. Set llm.max_context_tokens in "
-                        "config.json to say otherwise.", window)
+                        "config.json to say otherwise.%s", window,
+                        lan_permission_hint(CONFIG["llm"].get("base_url")))
         env = {"key": session_key, "at": now, "window": window, "static": static,
                "reply": reply, "budget": budget, "source": source,
                "refused": refused, "warned": warned, "refusal": refusal}
@@ -11582,7 +11616,8 @@ class Agent:
                              + "; ".join(fatal_notes[:4])
                              + " (check the key, model id and base_url in "
                                "config.json)")
-        raise InfraError(f"no LLM endpoint answered: {last_err}")
+        raise InfraError(f"no LLM endpoint answered: {last_err}"
+                         + lan_permission_hint(CONFIG["llm"].get("base_url")))
 
     def _exec_tool(self, tool_call, ctx):
         fn_info = tool_call.get("function", {})
@@ -20258,7 +20293,8 @@ def _verb_status():
     print("  config    : %s" % (CONFIG_PATH if CONFIG_PATH.exists() else
                                 "MISSING (copy config.example.json)"))
     if env["source"] != "server":
-        print("status: the endpoint did not answer its metadata probe", file=sys.stderr)
+        print("status: the endpoint did not answer its metadata probe"
+              + lan_permission_hint(CONFIG["llm"].get("base_url")), file=sys.stderr)
         return 1
     return 0
 
@@ -20337,7 +20373,8 @@ def _verb_doctor():
             problems.append(env["refusal"])
     else:
         print("  endpoint  : %s — NO ANSWER" % url)
-        problems.append("the model endpoint at %s did not answer" % url)
+        problems.append(("the model endpoint at %s did not answer" % url)
+                        + lan_permission_hint(url))
 
     running = _verb_running()
     print("  instance  : %s" % {True: "running (the lock is held)",

@@ -1238,6 +1238,65 @@ elif [ -n "$TOKEN" ]; then
     warn "every DM until you add your Mattermost user id (--allowed-user <id>)."
 fi
 
+# ------------------------------------------------------- model endpoint ---
+# macOS raises its Local Network permission prompt the FIRST time a process connects to a
+# private address, and it raises it in whatever process dials - which, for this install, is
+# the agent, from a background launchd job at boot, where nobody can answer it. Unanswered,
+# that is silent and easy to misread: the log says only that the endpoint "did not answer"
+# and the run carries on with an assumed 14,349-token window, while the model box is fine.
+# So dial once, here, from the venv's own python - the exact binary the agent will use, so
+# the approval lands on the one that matters - with the operator watching. Never fatal: a
+# check, not a gate (measured on a live install, 2026-09-27).
+if [ -x "$VPY" ] && [ -f "$INSTALL_DIR/config.json" ]; then
+    say "model endpoint"
+    PROBE_OUT="$("$VPY" - "$INSTALL_DIR/config.json" <<'PROBEPY'
+import json, os, re, sys
+
+try:
+    import requests
+except Exception as e:                     # --no-deps: report, never fail the install
+    print("fail|could not import requests: %s" % e)
+    raise SystemExit(0)
+
+llm = (json.load(open(sys.argv[1], encoding="utf-8-sig")).get("llm") or {})
+base = str(llm.get("base_url") or "").rstrip("/")
+if not base:
+    raise SystemExit
+host = base.split("://", 1)[-1].split("/")[0].split("@")[-1].split(":")[0]
+key = str(llm.get("api_key") or "") or os.environ.get(str(llm.get("api_key_env") or ""), "")
+hdr = {"Authorization": "Bearer %s" % key} if key else {}
+root = base[:-3] if base.endswith("/v1") else base
+window, err = 0, ""
+try:
+    data = (requests.get(base + "/models", headers=hdr, timeout=4).json().get("data") or [])
+    want = str(llm.get("model") or "")
+    entry = next((m for m in data if m.get("id") == want), data[0] if data else {})
+    window = int(entry.get("max_model_len")
+                 or (entry.get("meta") or {}).get("n_ctx") or 0)
+    if not window:
+        props = requests.get(root + "/props", headers=hdr, timeout=4).json()
+        window = int((props.get("default_generation_settings") or {}).get("n_ctx")
+                     or props.get("n_ctx") or 0)
+except Exception as e:
+    err = " ".join(str(e).split())[:140]
+lan = bool(re.match(r"^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9][0-9]|1[0-2][0-9])\.)", host)) \
+    or host.endswith(".local")
+print("fail|%s|%s" % (err, "lan" if lan else "other") if err
+      else "ok|%s|%s" % (base, window))
+PROBEPY
+)" || true
+    case "$PROBE_OUT" in
+        ok\|*)  info "endpoint      : reachable (${PROBE_OUT#ok|})" ;;
+        fail\|*lan)
+                 warn "endpoint      : did not answer: $(printf '%s' "${PROBE_OUT#fail|}" | cut -d'|' -f1)"
+                 warn "on macOS that is often the Local Network permission, not a dead server:"
+                 warn "System Settings -> Privacy & Security -> Local Network, and allow the"
+                 warn "python this install created ($VPY). The agent retries on its own."
+                 ;;
+        fail\|*) warn "endpoint      : did not answer: $(printf '%s' "${PROBE_OUT#fail|}" | cut -d'|' -f1) - the agent retries on its own" ;;
+    esac
+fi
+
 # ---------------------------------------------------------------- launchd ---
 if [ "$NO_LAUNCHD" = 1 ]; then
     say "no-launchd: files installed, agent not registered"

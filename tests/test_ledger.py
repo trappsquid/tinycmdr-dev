@@ -2268,6 +2268,37 @@ def test_inherited_open_items_are_not_a_plan():
           "ask the operator before resuming" in block, block)
 
 
+def test_lan_permission_hint():
+    """The macOS Local Network prompt is named where it is the likely cause - and only there.
+
+    macOS asks for Local Network access the first time a process connects to a private
+    address, and it asks the process that dials: for this bot that is a background service at
+    boot, where nobody can answer. An unanswered permission and a dead server both fail to
+    connect, so "the endpoint did not answer" used to send the reader to the wrong machine (a
+    live install, 2026-09-27, while the model box was serving another process the whole time).
+    The hint must stay off for loopback and public hosts, where it would be noise that teaches
+    the reader to ignore it.
+    """
+    check("a LAN endpoint gets the hint",
+          "Local Network" in fb.lan_permission_hint("http://[redacted]:8081/v1"))
+    check("a .local name gets the hint",
+          "Local Network" in fb.lan_permission_hint("http://box.local:8081/v1"))
+    check("credentials and the port are stripped, not read as the host",
+          "Local Network" in fb.lan_permission_hint("http://user:pw@[redacted]:8081"))
+    check("loopback gets nothing",
+          fb.lan_permission_hint("http://127.0.0.1:8080/v1") == "")
+    check("a public host gets nothing",
+          fb.lan_permission_hint("https://api.example.com/v1") == "")
+    check("no url, no hint", fb.lan_permission_hint("") == "")
+    saved = fb.sys.platform
+    try:
+        fb.sys.platform = "linux"
+        check("another OS gets nothing (it is a macOS prompt)",
+              fb.lan_permission_hint("http://[redacted]:8081/v1") == "")
+    finally:
+        fb.sys.platform = saved
+
+
 def main():
     # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

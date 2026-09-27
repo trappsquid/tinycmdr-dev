@@ -67,6 +67,12 @@ Press Enter to take the value in brackets, and skip the token to install the loc
 page instead of a chat lane. Then it builds `~/tinycmdr`, writes `config.json` and
 `.env` (mode 600), and loads the launchd agent.
 
+Before it finishes it asks the endpoint you named for its metadata, once, from the venv's
+own python - the same binary the agent runs - and prints how many tokens that endpoint
+serves per request. On macOS that first connection to a LAN address is what raises the
+**Local Network** prompt, so it is deliberately made here, while you are watching, rather
+than from a launchd job at boot where nobody can answer it. It is a check, never fatal.
+
 Nothing is asked in a script or a pipe: every answer has a switch, and a run with no
 terminal takes the switches and the defaults. With `install/fleet-defaults.json` in
 the package the Mattermost host and the allowed user come from it, and `--yes` never
@@ -158,6 +164,27 @@ FALLBACK entry instead (see `llm.fallbacks[].api_key_env` in `config.example.jso
 
 To skip the question on a machine that knows the answer: `--model-base-url` and
 `--model`, or `--use-fleet-model` to take both from `install/fleet-defaults.json`.
+
+### If the endpoint does not answer
+
+The symptom is on this side, not the server's: `tinycmdr status` prints "the endpoint did
+not answer its metadata probe", `tinycmdr doctor` says "the model endpoint at ... did not
+answer", a run fails with `no LLM endpoint answered: ... [Errno 61] Connection refused`,
+and the log warns "could not detect the endpoint's context length - assuming a 14,349-token
+window" while the agent carries on with that small window, compacting hard.
+
+On a Mac, a private address that looks exactly like a dead box is often the **Local Network
+permission**. macOS raises that prompt in whatever process dials, and the agent dials from a
+launchd job at boot, where nobody can answer it - so it can sit denied while the model box
+serves everything else just fine.
+
+    System Settings -> Privacy & Security -> Local Network -> allow the Python this
+    install created (~/tinycmdr/venv/bin/python)
+
+That list collects one entry per Python binary you have ever run; the venv's is the one that
+matters, and approving it also fixes the window detection, so the agent stops assuming 14,349
+tokens. None of this applies to an endpoint on this Mac (`127.0.0.1`): loopback is not the
+Local Network.
 
 ## 7. What this does NOT do
 
