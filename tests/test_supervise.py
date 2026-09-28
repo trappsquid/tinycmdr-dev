@@ -19,7 +19,7 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 SUPERVISOR = BASE / "tinycmdr-supervise.py"
 
-FAILS = []
+PASSES, FAILS = [], []
 
 STUB = '''import json, os, sys, time
 from pathlib import Path
@@ -38,6 +38,7 @@ def check(cond, what):
         FAILS.append(what)
         print(f"FAIL {what}")
     else:
+        PASSES.append(what)
         print(f"ok   {what}")
 
 
@@ -106,14 +107,8 @@ def main():
         os.environ.pop("STUB_EXIT", None)
         shutil.rmtree(work, ignore_errors=True)
 
-    print()
-    if FAILS:
-        print(f"{len(FAILS)} FAILED:")
-        for f in FAILS:
-            print("  -", f)
-        return 1
-    print("all supervisor checks passed")
-    return 0
+    print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
+    return 1 if FAILS else 0
 
 
 if __name__ == "__main__":

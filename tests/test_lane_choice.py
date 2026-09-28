@@ -24,7 +24,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parent.parent / "tinycmdr.py"
 LLM = {"base_url": "http://127.0.0.1:9/v1", "model": "dead"}
 
-FAILS = []
+PASSES, FAILS = [], []
 
 
 def check(cond, what, extra=""):
@@ -32,6 +32,7 @@ def check(cond, what, extra=""):
         FAILS.append(what)
         print(f"FAIL {what}\n     {extra}")
     else:
+        PASSES.append(what)
         print(f"ok   {what}")
 
 
@@ -103,14 +104,8 @@ def main():
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    print()
-    if FAILS:
-        print(f"{len(FAILS)} FAILED:")
-        for f in FAILS:
-            print("  -", f)
-        return 1
-    print("all lane-choice checks passed")
-    return 0
+    print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
+    return 1 if FAILS else 0
 
 
 if __name__ == "__main__":
