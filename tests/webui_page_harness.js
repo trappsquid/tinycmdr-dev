@@ -89,7 +89,7 @@ const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
              // getElementById null and the page dies on its first write
              'rail', 'sessions', 'title', 'model', 'meterfill', 'drawer', 'panel',
              'pal', 'host', 'allclients', 'menu', 'tools', 'newchat', 'tabs',
-             'panelclose'];
+             'panelclose', 'lanewarn'];
 const byId = {};
 function freshDom() {
   for (const id of IDS) { byId[id] = new El(id === 'in' ? 'textarea' : 'div'); }
@@ -98,6 +98,7 @@ function freshDom() {
 
 globalThis.document = {
   addEventListener: () => {},
+  title: '',
   getElementById: (id) => byId[id] || null,
   createElement: (tag) => new El(tag),
   createTextNode: (t) => { const e = new El('#text'); e._text = String(t); return e; },
@@ -211,7 +212,10 @@ function fetchShim(url, opts) {
   const body = opts && opts.body ? JSON.parse(opts.body) : {};
   const hdrs = (opts && opts.headers) || {};
   if ('X-Tinycmdr-Token' in hdrs) { authSeen.push(hdrs['X-Tinycmdr-Token']); }
-  if (url.indexOf('/api/health') === 0) { return jres({ ok: true, version: 'harness' }); }
+  // the scenario may carry a health payload, so the page's lane banner is gradeable
+  if (url.indexOf('/api/health') === 0) {
+    return jres(scenario.health || { ok: true, version: 'harness' });
+  }
   if (url.indexOf('/api/sessions') === 0) {
     if (opts && opts.method === 'POST') {
       if (body.op === 'new') {
@@ -403,6 +407,9 @@ async function main() {
     promptMsg: promptMsg,
     replaced: replaced,
     auth: authSeen,
+    ver: { cls: byId.ver.className, title: byId.ver.title },
+    warn: { cls: byId.lanewarn.className, text: byId.lanewarn.textContent },
+    title: globalThis.document.title,
     errors,
   };
   process.stdout.write(JSON.stringify(out));

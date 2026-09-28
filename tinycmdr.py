@@ -754,6 +754,64 @@ def parse_config_text(text, path="config.json"):
 CONFIG_ERROR = None          # set when config.json cannot be parsed
 
 
+CONFIG_SOURCE = {"mtime": None, "size": None, "loaded": None}   # what THIS process runs
+
+
+def _config_stamp():
+    try:
+        st = CONFIG_PATH.stat()
+        return (st.st_mtime, st.st_size)
+    except OSError:
+        return None
+
+
+def _config_stamp_refresh():
+    """Record the file as what THIS process is running, after this process wrote it.
+
+    Without it an in-process writer - a management verb, or the agent running `config set`
+    inside this process - makes doctor report its OWN write as "changed on disk ... restart
+    to apply", which is the opposite of useful. (The verb suite caught it, 2026-09-28.)
+    """
+    stamp = _config_stamp()
+    if stamp:
+        CONFIG_SOURCE["mtime"], CONFIG_SOURCE["size"] = stamp
+
+
+def _write_config(raw):
+    """The one place this build writes config.json, so the drift stamp follows the write."""
+    atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+    _config_stamp_refresh()
+
+
+def config_drift():
+    """A line when config.json on disk is not what this process is running, else "".
+
+    Reads happen once, at start (`load_config`), so an edit - by a person, or by the agent
+    acting on the operator's own message - changes NOTHING until a restart, and nothing
+    said so. Measured 2026-09-28 on a live install: the operator asked the agent from Mattermost
+    to make the page reachable ("...accessible from LAN so (0.0.0.0)"), the agent wrote
+    config.json, the service was restarted, and the page still refused - because that value
+    is the one the Host check could not honour (a separate defect, fixed above), and because
+    a second stale instance rewrote the file minutes later. `config set` does warn ("a
+    running bot reads config.json at start"), but an agent answering from chat has no way to
+    know whether the value itself works, and the operator only sees "still broken".
+    """
+    stamp = _config_stamp()
+    if not stamp or not CONFIG_SOURCE["mtime"]:
+        return ""
+    if stamp != (CONFIG_SOURCE["mtime"], CONFIG_SOURCE["size"]):
+        return ("config.json changed on disk at %s, but this process loaded it at %s - "
+                "restart to apply the change"
+                % (time.strftime("%Y-%m-%d %H:%M", time.localtime(stamp[0])),
+                   time.strftime("%Y-%m-%d %H:%M", time.localtime(CONFIG_SOURCE["loaded"]))))
+    return ""
+LANE_STATE = {}                  # lane -> {"ok", "detail", "since"} for THIS process
+LANE_FAILS = {}                  # lane -> {"count", "error", "first", "last"}, persisted
+_LANE_LOCK = threading.Lock()
+_LANE_FAILS_LOADED = False
+LANE_STATE_FILE = BASE_DIR / "logs" / "state.json"
+
+
 def _env_bool(text):
     """true/1/yes/on -> True; false/0/no/off -> False; anything else RAISES, so a typo in
     .env is reported instead of being read as False and quietly disabling a provider."""
@@ -767,6 +825,7 @@ def _env_bool(text):
 
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
+    CONFIG_SOURCE["loaded"] = time.time()
     user = {}                                     # the file's own contents, for warnings
     if CONFIG_PATH.exists():
         # utf-8-sig: PowerShell's Set-Content and Notepad both write a BOM, and
@@ -796,6 +855,9 @@ def load_config():
         "TINYCMDR_SEARCH_PROVIDERS": ("search", "providers", json.loads),
         "TINYCMDR_SEARCH_EGRESS": ("search", "allow_cloud_egress", _env_bool),
     }
+    stamp = _config_stamp()
+    if stamp:
+        CONFIG_SOURCE["mtime"], CONFIG_SOURCE["size"] = stamp
     for env, spec in env_map.items():
         raw = os.environ.get(env)
         if not raw:
@@ -13375,7 +13437,7 @@ def set_global_model(model_name):
         _state(lambda st: st.setdefault("model_default", prev))
     raw.setdefault("llm", {})["model"] = model_name
     try:
-        atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+        _write_config(raw)
     except Exception as e:
         return None, f"could not write config.json: {e}"
     CONFIG["llm"]["model"] = model_name          # take effect now
@@ -16036,6 +16098,10 @@ header #stop{display:none;background:#8a3b34;padding:5px 14px;font-size:13px}
 body.busy header #stop{display:inline-block}
 header .icon{background:transparent;color:var(--dim);padding:2px 8px;font-size:16px;border-radius:6px}
 header .icon:hover{background:var(--line);color:var(--fg)}
+header #ver.bad{color:var(--bad);font-weight:600}
+#lanewarn{display:none;padding:7px 12px;background:#3a2323;border-bottom:1px solid var(--line);
+color:var(--bad);font-size:13px}
+#lanewarn.show{display:block}
 #meter{flex:0 0 auto;height:3px;background:#20242b}
 #meterfill{height:100%;width:0;background:var(--accent);transition:width .3s}
 #note{flex:0 0 auto;background:#1d2530;border-bottom:1px solid var(--line);color:#a9b6c6;
@@ -16147,6 +16213,7 @@ button:hover{background:#5585b8}
 <button id=tools class=icon title="tasks, jobs, log, inventory">&#8943;</button>
 </header>
 <div id=meter><div id=meterfill></div></div>
+<div id=lanewarn></div>
 <div id=note><span id=notetext></span><button id=noteact style="display:none"></button></div>
 <main>
 <aside id=rail>
@@ -16184,7 +16251,8 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       sendBtn=document.getElementById('send'),stopBtn=document.getElementById('stop'),
       stateEl=document.getElementById('state'),noteEl=document.getElementById('note'),
       noteText=document.getElementById('notetext'),noteAct=document.getElementById('noteact'),
-      verEl=document.getElementById('ver'),railEl=document.getElementById('rail'),
+      verEl=document.getElementById('ver'),warnEl=document.getElementById('lanewarn'),
+      railEl=document.getElementById('rail'),
       sessEl=document.getElementById('sessions'),titleEl=document.getElementById('title'),
       modelEl=document.getElementById('model'),meterFill=document.getElementById('meterfill'),
       drawerEl=document.getElementById('drawer'),panelEl=document.getElementById('panel'),
@@ -16622,10 +16690,25 @@ async function poll(my){
  }catch(e){fails++;stateEl.textContent='connection trouble, retrying';}
  timer=setTimeout(function(){poll(my);},fails?Math.min(5000,700*fails):700);
 }
+var laneWasDown=false;
 async function versionCheck(){
  try{
   const r=await fetch('/api/health');const j=await r.json();
   verEl.textContent=j.version||'';
+  const dl=Object.keys(j.lanes||{}).filter(function(k){return (j.lanes[k]||{}).state==='failed';});
+  // className, not classList: one class store, and the DOM shim reads this one. The banner
+  // is a persistent element rather than the note slot, because the note is shared with run
+  // events and gets overwritten - a "you cannot be heard" warning must not be transient.
+  verEl.className=dl.length?'bad':'';
+  verEl.title=dl.length?dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; '):'';
+  const msgs=[];
+  if(dl.length){msgs.push('this bot cannot reach its chat lane - '+verEl.title+'. It is running and this page works; the lane is not, so messages sent here may not be answered.');}
+  if(j.config_changed){msgs.push(j.config_changed+'.');}
+  warnEl.className=msgs.length?'show':'';
+  warnEl.textContent=msgs.join(' ');'';
+  document.title=(dl.length?'CHAT LANE DOWN - ':'')+'tinycmdr'+(j.version?' '+j.version:'');
+  if(dl.length&&!laneWasDown){laneWasDown=true;note('chat lane down: '+verEl.title);}
+  else if(!dl.length){laneWasDown=false;}
   if(j.version&&PAGE_VER&&j.version!==PAGE_VER){
    note('this page is '+PAGE_VER+', the server is '+j.version+' - stale client code',
      ['Reload',function(){location.replace('/?v='+j.version);}]);
@@ -17705,6 +17788,184 @@ WEB_BODY_MAX = 1048576
 WEB_BODY_DEADLINE = 15
 
 
+# --------------------------------------------------------------- lane state
+# "Is it up?" had three answers, and all three were true about the wrong question: the
+# process was running, the page answered, a token was configured - while the bot could not
+# hear anybody. Measured on a live install, 2026-09-28: 510 restarts, `/api/health` returning
+# {"ok": true}, `tinycmdr health` naming mattermost because a token EXISTED, and nothing
+# anywhere saying the chat lane was dead.
+#
+# Two consequences shape this section:
+#   * a dying process cannot count its own restarts, so the failure record is MIRRORED TO
+#     DISK (logs/state.json, atomic); the next start reads it back and says "attempt 511";
+#   * the log gets one line per STATE CHANGE, not one per attempt. The incident wrote 419 KB
+#     of the same CRITICAL every ten seconds, which is noise, not a signal.
+_WEB_HOSTS_CACHE = None           # this box's own names, computed once (getfqdn hits DNS)
+def _lane_state_read():
+    try:
+        data = json.loads(LANE_STATE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:                                        # noqa: BLE001
+        return {}
+
+
+def _lane_state_write():
+    """Best-effort and atomic, and never fatal: a bot must not die because a status file
+    could not be written (and a fresh clone has no logs/ until this creates one)."""
+    try:
+        LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _LANE_LOCK:
+            lanes = json.loads(json.dumps(LANE_STATE))
+            fails = json.loads(json.dumps(LANE_FAILS))
+        data = _lane_state_read()
+        data.update({"version": VERSION, "pid": os.getpid(), "updated": time.time(),
+                     "lanes": lanes, "failures": fails})
+        data.setdefault("started", time.time())
+        atomic_write_text(LANE_STATE_FILE,
+                          json.dumps(data, indent=2, sort_keys=True) + "\n")
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("could not write %s: %s", LANE_STATE_FILE, e)
+
+
+def _lane_fails_load():
+    """Bring the persisted failure records in once, so attempt counts survive a restart."""
+    global _LANE_FAILS_LOADED
+    if not _LANE_FAILS_LOADED:
+        _LANE_FAILS_LOADED = True
+        stored = _lane_state_read().get("failures") or {}
+        if isinstance(stored, dict):
+            with _LANE_LOCK:
+                LANE_FAILS.update(stored)
+
+
+def _lane_fails_snapshot():
+    _lane_fails_load()
+    with _LANE_LOCK:
+        return json.loads(json.dumps(LANE_FAILS))
+
+
+def lane_down(lane, error):
+    """Record a lane failing. Returns (count, was_same_error, first_seen) so the caller can
+    decide what to SAY: the full story once, a one-line counter afterwards."""
+    _lane_fails_load()
+    now = time.time()
+    with _LANE_LOCK:
+        prior = LANE_FAILS.get(lane) or {}
+        same = bool(prior) and prior.get("error") == error
+        first = prior.get("first") if same else now
+        count = (prior.get("count") or 0) + 1 if same else 1
+        LANE_FAILS[lane] = {"count": count, "error": error, "first": first, "last": now}
+        LANE_STATE[lane] = {"ok": False, "detail": error, "since": first}
+    _lane_state_write()
+    return count, same, first
+
+
+def lane_up(lane, detail=""):
+    """Record a lane connecting. A recovery is news ONCE (the supervisor's own words: a
+    silently-recovered bot is indistinguishable from a dead one from the outside)."""
+    _lane_fails_load()
+    with _LANE_LOCK:
+        prior = LANE_FAILS.pop(lane, None)
+        LANE_STATE[lane] = {"ok": True, "detail": detail, "since": time.time()}
+    _lane_state_write()
+    if prior and prior.get("count"):
+        log.warning("%s lane recovered after %d failed start(s), the first at %s",
+                    lane, prior["count"],
+                    time.strftime("%Y-%m-%d %H:%M", time.localtime(prior.get("first") or 0)))
+
+
+def _lane_token(lane):
+    if lane == "mattermost":
+        return str(CONFIG["mattermost"].get("token")
+                   or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
+    if lane == "telegram":
+        return str((CONFIG.get("telegram") or {}).get("token")
+                   or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
+    return "web" if (CONFIG.get("web") or {}).get("enabled") else ""
+
+
+def lanes_snapshot():
+    """Every lane this build knows about, with what is actually RECORDED about it.
+
+    A lane with no record is `configured`, not connected - that distinction is the whole
+    point: the incident's `health` said "mattermost" because a token existed. A cold process
+    (a cron job running `tinycmdr health`) still reports the LAST known state from disk, with
+    `as_of` so a reader can see how stale it is.
+    """
+    _lane_fails_load()
+    stored = _lane_state_read()
+    with _LANE_LOCK:
+        state = json.loads(json.dumps(LANE_STATE)) or (stored.get("lanes") or {})
+        fails = json.loads(json.dumps(LANE_FAILS)) or (stored.get("failures") or {})
+    out = {}
+    for lane in ("mattermost", "telegram", "web"):
+        if not _lane_token(lane):
+            continue
+        st = state.get(lane) or {}
+        fail = fails.get(lane) or {}
+        out[lane] = {
+            "state": ("up" if st.get("ok") else "failed") if st else "configured",
+            "detail": st.get("detail") or fail.get("error") or "",
+            "since": st.get("since") or fail.get("first"),
+            "failed_starts": fail.get("count") or 0,
+            "as_of": stored.get("updated"),
+            "from_pid": stored.get("pid"),
+        }
+    return out
+
+
+def health_payload():
+    """What a monitor should read, answering "can it hear me?" rather than "is the HTTP
+    server up".
+
+    HTTP stays 200 even when `ok` is false, on purpose: the installers and the macOS restart
+    door probe this endpoint with `curl -sf`, and turning a dead chat lane into a failing HTTP
+    probe would break the very commands that bring a box back. The door with an exit code is
+    `tinycmdr health`.
+    """
+    lanes = lanes_snapshot()
+    return {
+        "ok": all(v["state"] != "failed" for v in lanes.values()),
+        "version": VERSION,
+        "pid": os.getpid(),
+        "lanes": lanes,
+        # Not folded into `ok`: a pending restart is not a dead lane, but a reader deciding
+        # whether to believe this page needs it.
+        "config_changed": config_drift(),
+    }
+
+
+def _web_local_hosts():
+    """Every name THIS box answers to: loopback, its own host name, its own addresses.
+
+    The page's Host check exists so a hostile site cannot POST into a loopback page
+    (BUGREPORT §S7). It allowed loopback names plus `web.host` when that was a specific
+    name - and NOTHING when it was `0.0.0.0`, which is exactly what all three installers
+    write for "Should the page be reachable from other machines on your network?" (yes).
+    So the installer promised a page you could reach, and the server refused every request
+    to it: `forbidden: cross-origin or unexpected Host` on the box's own LAN address, found by
+    the operator on 2026-09-28, ~11 releases after both halves were written a day apart.
+
+    A Host that names this box is not a threat - the Origin rule below is what carries CSRF
+    protection - it is the door being used the way the installer said it could be.
+    """
+    global _WEB_HOSTS_CACHE
+    if _WEB_HOSTS_CACHE is None:
+        names = {"127.0.0.1", "localhost", "::1"}
+        try:
+            host = socket.gethostname()
+            names.add(host.strip().lower())
+            fq = socket.getfqdn(host)
+            if fq:
+                names.add(fq.strip().lower())
+            for ip in socket.gethostbyname_ex(host)[2]:
+                names.add(str(ip).strip().lower())
+        except Exception:                                    # noqa: BLE001
+            pass
+        _WEB_HOSTS_CACHE = names
+    return set(_WEB_HOSTS_CACHE)
+
+
 def run_webui():
     """Start the local web UI (chat + live run view + /api/health) on a
     daemon thread.  No-op if disabled.  Returns the server so a caller that
@@ -17840,7 +18101,9 @@ def run_webui():
             """
             host_hdr = (self.headers.get("Host") or "").strip().lower()
             name = host_hdr.rsplit(":", 1)[0].strip("[]")
-            allowed = {"127.0.0.1", "localhost", "::1"}
+            # This box's own names answer the question "did you address me?"; `web.host`,
+            # when it names one host, is an extra name the operator chose.
+            allowed = _web_local_hosts()
             configured = str((CONFIG.get("web") or {}).get("host") or "").strip().lower()
             if configured and configured not in ("0.0.0.0", "::"):
                 allowed.add(configured.rsplit(":", 1)[0].strip("[]"))
@@ -17861,7 +18124,17 @@ def run_webui():
 
         def _forbidden(self):
             self._drain()
-            self._json({"error": "forbidden: cross-origin or unexpected Host"}, 403)
+            # Say what WOULD work. The old body was four words of jargon, and the operator
+            # who hit it (2026-09-28, browsing to a live install by IP) had no way to learn
+            # that the page accepts only particular names - or which.
+            self._json({
+                "error": "forbidden: unexpected Host, or a cross-origin request",
+                "host": (self.headers.get("Host") or ""),
+                "accepts": ", ".join(sorted(_web_local_hosts())),
+                "fix": ("browse this box by one of `accepts`, or make the name you use one "
+                        "of them: `tinycmdr config set web.host <name-or-ip>` then restart. "
+                        "A tunnel sidesteps it: ssh -N -L 8787:127.0.0.1:8787 <user>@<box>"),
+            }, 403)
 
         # -- routing ------------------------------------------------------
 
@@ -17883,7 +18156,7 @@ def run_webui():
                 self._forbidden()
                 return
             if self.path.startswith("/api/health"):
-                self._json({"ok": True, "version": VERSION})
+                self._json(health_payload())
             elif self.path.startswith("/api/events"):
                 if not self._auth_ok():
                     self._drain()
@@ -18242,6 +18515,7 @@ def run_webui():
     log.info("web UI listening on %s://%s:%d%s",
              "https" if QuietServer._tls_ctx is not None else "http", host, port,
              "" if token else " (loopback only)")
+    lane_up("web", "port %d" % port)
     return srv
 
 
@@ -18322,6 +18596,7 @@ def run_bot():
     SCHEDULER.dispatcher = dispatcher    # so long jobs can report progress too
     REPORTER = lambda cid, text: dispatcher._post(cid, None, text)
     log.info("tinycmdr connected to Mattermost as @%s", dispatcher.bot_username)
+    lane_up("mattermost", "connected as @%s" % dispatcher.bot_username)
     if CONFIG["agent"].get("announce_restart", True):
         # tell the channel that asked for the restart that we are back
         announce_startup(dispatcher)
@@ -18735,6 +19010,7 @@ def run_telegram():
     except Exception as exc:
         log.critical("telegram: the token was refused (%s)", exc)
         sys.exit(2)
+    lane_up("telegram", "connected as @%s" % me.get("username"))
     log.info("telegram: connected as @%s, %d allowed id(s), DM only",
              me.get("username"), len(allowed))
 
@@ -19243,7 +19519,7 @@ def run_setup(rest=None):
     print()
 
     try:
-        atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+        _write_config(raw)
         CONFIG.update(raw)
         _MODEL_CACHE["at"] = 0.0
     except Exception as e:
@@ -19406,7 +19682,7 @@ def _cli_model(rest):
             CONFIG["llm"]["fallbacks"] = fbs
             line = "added fallback endpoint %s -> %s" % (url, want_model or "(default)")
         try:
-            atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+            _write_config(raw)
         except Exception as e:
             print(red("  could not write config.json: %s" % e))
             return
@@ -19445,7 +19721,7 @@ def _cli_model(rest):
         llm["fallbacks"] = keep
         CONFIG["llm"]["fallbacks"] = keep
         try:
-            atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+            _write_config(raw)
         except Exception as e:
             print(red("  could not read config.json: %s" % e))
             return
@@ -20523,6 +20799,10 @@ def _verb_status():
     print("  instance  : %s" % {True: "running (the lock is held)",
                                 False: "not running (the lock is free)",
                                 None: "unknown"}[running])
+    _lanes = lanes_snapshot()
+    if _lanes:
+        print("  lanes     : %s" % ", ".join("%s=%s" % (n, i["state"])
+                                             for n, i in _lanes.items()))
     lines, total = _verb_log_lines(1)
     if total:
         print("  log       : %s — %d lines" % (BASE_DIR / "tinycmdr.log", total))
@@ -20638,6 +20918,30 @@ def _verb_doctor():
                                 False: "not running (the lock is free)",
                                 None: "unknown"}[running])
 
+    _lanes = lanes_snapshot()
+    if _lanes:
+        print("  lanes     : %s" % ", ".join("%s=%s" % (n, i["state"])
+                                             for n, i in _lanes.items()))
+        for _n, _i in _lanes.items():
+            if _i["state"] == "failed":
+                problems.append("%s lane is DOWN (%d failed start(s)): %s"
+                                % (_n, _i["failed_starts"], _i["detail"] or "no detail"))
+    else:
+        print("  lanes     : none configured")
+
+    _drift = config_drift()
+    if _drift:
+        print("  config    : %s" % _drift)
+        notes.append(_drift)
+
+    _web = CONFIG.get("web") or {}
+    if _web.get("enabled"):
+        print("  page      : http://%s:%s - accepts Host: %s"
+              % (_web.get("host") or "0.0.0.0", _web.get("port") or 8787,
+                 ", ".join(sorted(_web_local_hosts()))))
+    else:
+        print("  page      : off (web.enabled is false)")
+
     for n in notes:
         print("  note      : %s" % n)
     if problems:
@@ -20715,7 +21019,7 @@ def _config_raw():
 def _config_write_raw(raw):
     """Write through the agent's own atomic writer. Error string, or None."""
     try:
-        atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+        _write_config(raw)
     except Exception as e:
         return "could not write config.json: %s" % e
     return None
@@ -20753,14 +21057,21 @@ def _verb_health():
     facts); this answers "is it up, on which lane, on which model" without touching the
     network, so a supervisor or a cron job can call it every minute."""
     running = _verb_running()
-    lanes = []
-    if str(CONFIG["mattermost"].get("token") or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip():
-        lanes.append("mattermost")
-    if str((CONFIG.get("telegram") or {}).get("token") or
-           os.environ.get("TINYCMDR_TG_TOKEN") or "").strip():
-        lanes.append("telegram")
-    if (CONFIG.get("web") or {}).get("enabled"):
-        lanes.append("web:%s" % ((CONFIG.get("web") or {}).get("port") or 8787))
+    # STATES, not names: a configured lane is not a connected lane, and that distinction is
+    # what let 510 failed starts look like a healthy bot (a live install, 2026-09-28).
+    lanes_state = lanes_snapshot()
+    if "web" in lanes_state:
+        lanes_state["web"]["port"] = (CONFIG.get("web") or {}).get("port") or 8787
+    # Built as a list on purpose: a conditional expression as a genexp element swallows the
+    # `for` clause, so `",".join(A if c else B for ...)` joined the STRING's characters -
+    # the health line printed `lane m,a,t,t,e,r,m,o,s,t,...` (caught by the suite, 2026-09-28).
+    _parts = []
+    for _name, _info in lanes_state.items():
+        if _name == "web":
+            _parts.append("web:%s=%s" % (_info["port"], _info["state"]))
+        else:
+            _parts.append("%s=%s" % (_name, _info["state"]))
+    lanes = ",".join(_parts)
     state = {True: "up", False: "not running", None: "unknown"}[running]
     # The envelope rides this line only when it was already computed: `health` keeps
     # its no-network contract (a script calls it every minute), so a cold process
@@ -20769,13 +21080,28 @@ def _verb_health():
     tail = (" · " + envelope_line(env, raw=True)) if env else ""
     print("%s v%s %s · lane %s · model %s at %s%s"
           % (os.path.basename(sys.argv[0] or "tinycmdr"), VERSION, state,
-             ",".join(lanes) or "none", CONFIG["llm"].get("model"),
+             lanes or "none", CONFIG["llm"].get("model"),
              CONFIG["llm"].get("base_url"), tail))
     if running is not True:
         print("the single-instance lock is not held: nothing is listening for messages",
               file=sys.stderr)
         return 1
-    return 0
+    _drift = config_drift()
+    if _drift:
+        # On stderr with the lane lines, so the one readable stdout line keeps its shape.
+        # This is the surface that SURVIVES the page's removal, which is why it is here:
+        # /api/health and the page banner both die with the web UI, and the trap (an edit
+        # that has not applied) is what an operator hits after asking the agent in chat.
+        print(_drift, file=sys.stderr)
+    for _name, _info in lanes_state.items():
+        if _info["state"] == "failed":
+            print("%s lane is DOWN%s: %s"
+                  % (_name,
+                     (" (%d failed start%s)" % (_info["failed_starts"],
+                                                "" if _info["failed_starts"] == 1 else "s"))
+                     if _info["failed_starts"] else "",
+                     _info["detail"] or "no detail"), file=sys.stderr)
+    return 1 if any(i["state"] == "failed" for i in lanes_state.values()) else 0
 
 
 def _install_processes():
@@ -21952,10 +22278,22 @@ def main():
             try:
                 run_bot()
             except Exception as e:
-                log.critical("Mattermost connection failed: %s — check "
-                             "mattermost.url/port and that the bot token in "
-                             "config.json is valid (System Console -> "
-                             "Integrations -> Bot Accounts).", e)
+                _n, _same, _first = lane_down("mattermost", str(e))
+                if _same and _n > 1:
+                    # One line per STATE, not one per attempt: the incident wrote 419 KB of
+                    # the same CRITICAL every ten seconds.
+                    log.error("mattermost lane still down (attempt %d, since %s): %s — "
+                              "`tinycmdr health` prints this state with an exit code, and "
+                              "the token lives in %s as TINYCMDR_MM_TOKEN.",
+                              _n, time.strftime("%Y-%m-%d %H:%M", time.localtime(_first)),
+                              e, ENV_FILE.name)
+                else:
+                    log.critical("Mattermost connection failed: %s — this bot cannot hear "
+                                 "anybody. Check mattermost.url/port in config.json, and the "
+                                 "bot token in %s as TINYCMDR_MM_TOKEN (System Console -> "
+                                 "Integrations -> Bot Accounts). `tinycmdr health` reports "
+                                 "this with exit code 1; the full state is in %s.",
+                                 e, ENV_FILE.name, LANE_STATE_FILE)
                 raise
         else:
             log.info("no Mattermost token: running without the chat lane "

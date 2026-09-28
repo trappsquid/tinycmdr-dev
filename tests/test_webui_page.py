@@ -375,6 +375,38 @@ def main():
     check(res["auth"] and all(t == "test-token" for t in res["auth"]),
           f"...on every call that needs it ({set(res['auth'] or [])})")
 
+    # -- 14. a dead chat lane must be visible ON THE PAGE -----------------------
+    # The incident (a live install, 2026-09-28): the process was up, /api/health said ok, the
+    # page looked like a normal chat box - and the bot could not hear anybody. The page
+    # already fetches /api/health for the version, so the answer it was ignoring is the
+    # one that matters.
+    dead = {"health": {"ok": False, "version": "harness", "pid": 1,
+                       "lanes": {"mattermost": {"state": "failed", "failed_starts": 511,
+                                                "detail": "401 Invalid or expired session"},
+                                 "web": {"state": "up"}}},
+            "runs": [[["final", "still answering on the page"]]],
+            "steps": [{"kind": "message", "text": "hi", "polls": 4}]}
+    res = run_page(dead, script)
+    check("bad" in (res.get("ver") or {}).get("cls", ""),
+          f"a dead lane marks the header ({res.get('ver')})")
+    check((res.get("title") or "").startswith("CHAT LANE DOWN"),
+          f"...and the tab title says it ({res.get('title')!r})")
+    _warn = res.get("warn") or {}
+    check("show" in (_warn.get("cls") or ""),
+          f"...and the banner is actually displayed ({_warn.get('cls')!r})")
+    check("mattermost" in (_warn.get("text") or "") and "401" in (_warn.get("text") or ""),
+          f"...and it names the lane and the reason ({( _warn.get('text') or '')[:80]!r})")
+    check("401" in ((res.get("ver") or {}).get("title") or ""),
+          f"...and the marker explains itself on hover ({(res.get('ver') or {}).get('title')!r})")
+
+    alive = {"runs": [[["final", "hi"]]], "steps": [{"kind": "message", "text": "hi", "polls": 4}]}
+    res = run_page(alive, script)
+    check("bad" not in (res.get("ver") or {}).get("cls", "")
+          and not (res.get("note") or {}).get("text"),
+          f"a healthy bot shows NO banner ({(res.get('ver'), res.get('note'))})")
+    check((res.get("title") or "").startswith("tinycmdr"),
+          f"...and its tab title is just the app ({res.get('title')!r})")
+
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0
 

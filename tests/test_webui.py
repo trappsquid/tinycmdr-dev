@@ -1001,6 +1001,37 @@ def main():
         check(b" 403 " not in head,
               f"a same-origin POST is not refused ({head!r})")
 
+        # -- the installer's own answer has to be USABLE ------------------------
+        # All three installers write web.host=0.0.0.0 when the operator says "the page
+        # should be reachable from other machines on my network". The Host check added
+        # NOTHING for that value (0.0.0.0 is not a Host anyone types), so the promise was
+        # dead: every request to the box's own address got "unexpected Host". Measured
+        # 2026-09-28 by browsing to a live install's own LAN address. This is the
+        # contract between two files, which is why neither file's own suite caught it.
+        own = sorted(h for h in fb._web_local_hosts()
+                     if h not in ("127.0.0.1", "localhost", "::1"))
+        check(bool(own), f"this box has a name of its own ({own})")
+        saved_host = (fb.CONFIG.get("web") or {}).get("host")
+        try:
+            fb.CONFIG.setdefault("web", {})["host"] = "0.0.0.0"
+            for h in own[:2]:
+                head = status_of({"Host": h, "X-Tinycmdr-Token": TOKEN,
+                                  "Content-Type": "application/json"})
+                check(b" 403 " not in head,
+                      f"with web.host=0.0.0.0 (what the installer writes), Host {h!r} is "
+                      f"accepted ({head!r})")
+            head = status_of({"Host": "evil.example", "X-Tinycmdr-Token": TOKEN,
+                              "Content-Type": "application/json"})
+            check(b" 403 " in head,
+                  f"...and a foreign Host is STILL refused ({head!r})")
+            head = status_of({"Host": own[0], "Origin": "http://evil.example",
+                              "X-Tinycmdr-Token": TOKEN,
+                              "Content-Type": "application/json"})
+            check(b" 403 " in head,
+                  f"...and a cross-origin request is still CSRF-refused ({head!r})")
+        finally:
+            fb.CONFIG["web"]["host"] = saved_host
+
         # -- BUGREPORT §S8: 33 half-open sockets must not take the page down. The cap
         # refuses past MAX_CONN, so what is graded is that the refusal is not a hang and
         # that the page comes back the moment the idle peers go away.
