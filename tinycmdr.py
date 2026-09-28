@@ -773,12 +773,22 @@ def _write_config(raw):
     captured before the write and restored after it.
     """
     owner = None
+    mode = None
     try:
         st = CONFIG_PATH.stat()
         owner = (st.st_uid, st.st_gid)
+        mode = st.st_mode & 0o777
     except OSError:
         pass
     atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+    if mode is not None and os.name != "nt":
+        # The replacement is created with the umask, so a 0600 file the installer wrote
+        # would come back 0644 - and config.json can hold llm.api_key. Restore the mode.
+        try:
+            if (CONFIG_PATH.stat().st_mode & 0o777) != mode:
+                os.chmod(CONFIG_PATH, mode)
+        except OSError as e:
+            log.warning("could not restore config.json mode %o: %s", mode, e)
     if owner and os.name != "nt":
         try:
             st = CONFIG_PATH.stat()

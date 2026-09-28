@@ -13,6 +13,7 @@ Measured 2026-09-27 on the Mac, two ways in one evening:
     python tests/test_root_safety.py
 """
 import importlib.util
+import json
 import shutil
 import stat as stat_mod
 import subprocess
@@ -82,6 +83,21 @@ def main():
         check(chowns == [(501, 20)],
               "a config write restores the pre-write owner (so a sudo write cannot "
               "leave it unreadable)", chowns)
+
+        # ---- and it keeps the MODE the installer set instead of widening it --------
+        d2 = work / "mode"
+        d2.mkdir(parents=True)
+        shutil.copy2(SRC, d2 / "tinycmdr.py")
+        (d2 / "config.json").write_text('{"llm": {}}', encoding="utf-8")
+        (d2 / "config.json").chmod(0o600)
+        mod2 = load(d2)
+        mod2._write_config({"llm": {"model": "z"}})
+        got = (d2 / "config.json").stat().st_mode & 0o777
+        check(got == 0o600,
+              "a config write keeps 0600 instead of the umask's 0644 (config.json can "
+              "hold llm.api_key)", oct(got))
+        check(json.loads((d2 / "config.json").read_text())["llm"]["model"] == "z",
+              "and the write itself landed")
 
         # ---- the macOS helper refuses root before touching the agent ---------------
         home = work / "home"
