@@ -5,6 +5,18 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Fixed
+- **Running a verb under sudo now says what it will do.** Every file the process CREATES then
+  belongs to root, and the agent - which runs as the install's own user - can no longer read
+  them. Measured three times on the Mac in one evening (2026-09-27): `sudo tinycmdr config set
+  ...` left config.json root:staff 0600 and the launchd agent exited 1 on every respawn; the
+  same run left tasks.json (the ledger) and sessions/cli.json root-owned, so the ledger and the
+  CLI lane were dead; and a bare `sudo tinycmdr` - which opens a CLI session - re-created the
+  session files as root. A warning, not a refusal: a system-wide install legitimately belongs
+  to root, so this only names the damage and the fix.
+
 ## [1.0.37] - 2026-09-27
 
 Added

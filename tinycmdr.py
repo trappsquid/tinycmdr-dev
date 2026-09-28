@@ -19818,7 +19818,37 @@ def both_doors_note():
     return ""
 
 
+def _root_warning():
+    """One line when something runs as root over an install that belongs to another user.
+
+    Every file this process CREATES then belongs to root, and the agent - which runs as the
+    install's own user - can no longer read them. Measured three times in one evening on the
+    Mac (2026-09-27): `sudo tinycmdr config set ...` left config.json root:staff 0600 and the
+    launchd agent exited 1 on every respawn; the same run left tasks.json (the ledger) and
+    sessions/cli.json root-owned, so the agent could not write its ledger and the CLI lane
+    could not load its session; and a bare `sudo tinycmdr` - which opens a CLI session -
+    re-created the session files as root. Nothing here REFUSES root: a system-wide install
+    legitimately belongs to root. It only says what will happen.
+    """
+    if os.name == "nt" or not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return ""
+    try:
+        owner = BASE_DIR.stat().st_uid
+    except OSError:
+        return ""
+    if owner == 0:
+        return ""
+    return ("running as root, but %s belongs to uid %d: every file this process writes "
+            "(config.json, tasks.json, session files) will be created root-owned, and the "
+            "agent - which runs as uid %d - then cannot read them. Run it as that user, "
+            "without sudo." % (BASE_DIR, owner, owner))
+
+
 def main():
+    _rw = _root_warning()
+    if _rw:
+        log.warning("%s", _rw)
+        print("WARNING: " + _rw, file=sys.stderr)
     # Management verbs, and the two inert flags. Nothing here starts the agent loop:
     # `tinycmdr status` asks the endpoint for metadata and answers a question.
     if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:

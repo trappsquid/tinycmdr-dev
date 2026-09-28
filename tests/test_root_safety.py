@@ -155,11 +155,33 @@ def helper_refuses_root(work):
               (r.stdout + r.stderr)[-200:])
 
 
+def root_warning_names_it(work):
+    """Running as root over another user's install says exactly what will happen."""
+    d = work / "warn"
+    d.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(SRC, d / "tinycmdr.py")
+    (d / "config.json").write_text('{"llm": {}}', encoding="utf-8")
+    m = load(d)
+    if os.name == "nt" or not hasattr(os, "geteuid"):
+        print("     (no POSIX uid here: the root warning is POSIX-only)")
+        return
+    check(m._root_warning() == "", "no root warning when NOT running as root")
+    real = os.geteuid
+    try:
+        os.geteuid = lambda: 0
+        w = m._root_warning()
+    finally:
+        os.geteuid = real
+    check(w.startswith("running as root") and "root-owned" in w and "without sudo" in w,
+          "as root over another user's install it names the damage and the fix", w[:240])
+
+
 def main():
     work = Path(tempfile.mkdtemp(prefix="fbrootsafe-"))
     try:
         owner_is_restored(work)
         mode_is_restored(work)
+        root_warning_names_it(work)
         helper_refuses_root(work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
