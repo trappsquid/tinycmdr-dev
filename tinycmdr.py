@@ -763,8 +763,33 @@ def _config_stamp_refresh():
 
 
 def _write_config(raw):
-    """The one place this build writes config.json, so the drift stamp follows the write."""
+    """The one place this build writes config.json, so the drift stamp follows the write.
+
+    A replacement takes the AUTHOR of the write. Run a verb under sudo and the install's
+    config.json comes back root-owned, and the agent - which runs as the install's own
+    user - then cannot read it. Measured 2026-09-27 on a Mac: `sudo tinycmdr config set
+    search.allow_cloud_egress true` left config.json root:staff 0600, the next launchd
+    respawn died with PermissionError, and KeepAlive sat there failing. So the owner is
+    captured before the write and restored after it.
+    """
+    owner = None
+    try:
+        st = CONFIG_PATH.stat()
+        owner = (st.st_uid, st.st_gid)
+    except OSError:
+        pass
     atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+    if owner and os.name != "nt":
+        try:
+            st = CONFIG_PATH.stat()
+            if (st.st_uid, st.st_gid) != owner:
+                os.chown(CONFIG_PATH, owner[0], owner[1])
+                log.warning("config.json was written by uid %d; owner restored to %d:%d "
+                            "(run tinycmdr as the install's own user, not via sudo)",
+                            os.getuid(), owner[0], owner[1])
+        except OSError as e:
+            log.warning("config.json is now owned by uid %d and could not be restored "
+                        "to %d:%d: %s", os.getuid(), owner[0], owner[1], e)
     _config_stamp_refresh()
 
 
@@ -16854,7 +16879,7 @@ HELP_TEXT = ("\n"
              "  /tinycmdr help            this list\n"
              "  /tinycmdr new             forget the conversation so far and start clean\n"
              "  /tinycmdr model [name|list] show model status, list models, or switch\n"
-             "  /tinycmdr setup           guided setup for model endpoints and chat gateways\n"
+             "  /tinycmdr setup           guided setup: endpoint, chat gateways, web search\n"
              "  /tinycmdr sessions        the conversations saved in this folder\n"
              "  /tinycmdr resume N        continue one of them in this window\n"
              "  /tinycmdr status          version, endpoint, context use, notes, tasks, skills\n"
@@ -17132,7 +17157,7 @@ def _cli_render_box(title, lines, width=74):
 
 
 def run_setup(rest=None):
-    """Guided interactive setup wizard for model endpoints and chat gateways."""
+    """Guided interactive setup wizard: model endpoint, chat gateways, web search."""
     if not sys.stdin.isatty():
         print("tinycmdr setup requires an interactive terminal.\n"
               "For non-interactive: tinycmdr config set <key> <val> and tinycmdr token set <NAME>",
@@ -17140,7 +17165,7 @@ def run_setup(rest=None):
         return 1
 
     print(_cli_render_box("tinycmdr Setup Wizard", [
-        "Configure model endpoints, Mattermost, and Telegram settings.",
+        "Configure model endpoints, Mattermost, Telegram, and web-search consent.",
         "Press Enter to keep current values shown in [brackets].",
     ]))
     print()
@@ -17216,6 +17241,19 @@ def run_setup(rest=None):
                 tg["allowed_users"] = [u.strip() for u in tg_users.split(",") if u.strip()]
     print()
 
+    print(bold("4. Web search (optional)"))
+    search = raw.setdefault("search", {})
+    cur_egress = bool(search.get("allow_cloud_egress"))
+    print(dim("   A provider off this LAN sees the words of the model's query. A provider"))
+    print(dim("   on this LAN (searxng) never leaves the wire and needs no consent."))
+    ans_eg = input("   Allow search providers off this LAN (anysearch/tavily)? [%s]: "
+                   % ("y" if cur_egress else "n")).strip().lower()
+    if ans_eg:
+        search["allow_cloud_egress"] = ans_eg in ("y", "yes", "true", "1")
+    else:
+        search["allow_cloud_egress"] = cur_egress
+    print()
+
     try:
         _write_config(raw)
         CONFIG.update(raw)
@@ -17233,6 +17271,10 @@ def run_setup(rest=None):
         "---",
         "Telegram     : %s" % ("configured" if tg.get("allowed_users") else "(disabled)"),
         "TG Users     : %s" % (", ".join(str(x) for x in (tg.get("allowed_users") or [])) or "(none)"),
+        "---",
+        "Web search   : %s" % ("off-LAN providers allowed"
+                               if search.get("allow_cloud_egress")
+                               else "this LAN only (searxng never needs consent)"),
         "---",
         "✓ Saved to config.json & .env",
         "Run `tinycmdr restart` to apply to background service.",
@@ -18397,7 +18439,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      --primary makes it the one that answers, --model NAME,
                      --alias A, --key-env VAR, --force to add it unverified)
   model remove <x>   drop a fallback entry (by model name, alias or url)
-  setup              interactive wizard to configure model, Mattermost and Telegram
+  setup              interactive wizard: model, Mattermost, Telegram, web search
   config get|set|unset <dotted.key> [value]
                      read or edit config.json (a read-back is printed; secrets refused)
   health             one line + exit code: up, lane, model (no network, for scripts)

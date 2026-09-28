@@ -28,6 +28,17 @@ die()  { printf '\n*** %s\n' "$*" >&2; exit 1; }
 
 [ "$(uname -s)" = "Darwin" ] || die "launchd is macOS-only (this is $(uname -s))"
 
+# The agent is a LaunchAgent in the GUI domain of the user who owns it (gui/$UID). As root,
+# launchctl cannot bootstrap into that domain: `sudo tinycmdr restart` booted the agent OUT and
+# then failed with "Bootstrap failed: 125: Domain does not support specified action", leaving
+# the bot down (measured 2026-09-27 on this Mac). Refuse BEFORE anything is touched.
+if [ "$(id -u)" -eq 0 ]; then
+    die "do not run this with sudo: $LABEL is a LaunchAgent in YOUR session, not the system
+    domain. As root launchctl cannot bootstrap into it, and the agent is left stopped.
+    Run it as the user that owns the install, with no sudo:
+      tinycmdr restart        (or: bash $0 restart)"
+fi
+
 # The truth surface that survived the built-in web UI's removal: `tinycmdr health`, one line and
 # an exit code, run under this install's own interpreter. This used to probe the served page
 # on whatever port config.json named.
@@ -67,9 +78,17 @@ case "$ACTION" in
     restart)
         if [ "$(uname -s)" = "Darwin" ] && [ -f "$PLIST" ]; then
             say "restarting $LABEL"
-            launchctl kickstart -k "$TARGET" 2>/dev/null \
-                || { launchctl bootout "$TARGET" 2>/dev/null || true; sleep 1;
-                     launchctl bootstrap "gui/$UID_NUM" "$PLIST"; }
+            if ! launchctl kickstart -k "$TARGET" 2>/dev/null; then
+                # bootout+bootstrap, but never end up with neither: if the bootstrap fails the
+                # agent is gone, so say what happened instead of reporting a bare 125.
+                launchctl bootout "$TARGET" 2>/dev/null || true
+                sleep 1
+                if ! launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>&1; then
+                    launchctl load -w "$PLIST" 2>/dev/null || true
+                    die "could not bootstrap $LABEL into gui/$UID_NUM - the agent may be
+    stopped; check $INSTALL_DIR/logs/launchd.err.log"
+                fi
+            fi
             info "asked launchd to restart it"
             sleep 4
             health || info "not up yet - check $INSTALL_DIR/logs/launchd.err.log"

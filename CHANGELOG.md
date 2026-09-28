@@ -5,6 +5,31 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Added
+- **`tinycmdr setup` covers web-search consent.** The wizard asked about the model endpoint,
+  Mattermost and Telegram and nothing else, so the egress flag `web_search` and `fetch_url`
+  answer to was reachable only by re-running the installer or by `tinycmdr config set
+  search.allow_cloud_egress true`. It is a fourth section now - "Allow search providers off
+  this LAN (anysearch/tavily)? [y/N]" - Enter keeps the current value, and the summary
+  reports it. A provider on the LAN (searxng) still never needs the consent. Found live: an
+  operator asked the Mac bot for an event's dates, both search paths refused, and the nearest
+  door was a command nobody had been told about.
+
+Fixed
+- **A `sudo` write no longer leaves `config.json` unreadable to the agent.** `_write_config`
+  REPLACES the file, and a replacement takes the author of the write, so on the Mac
+  `sudo tinycmdr config set search.allow_cloud_egress true` came back `root:staff 0600` - the
+  launchd agent runs as the install's own user, could not read it, and exited 1 on every
+  respawn (measured 2026-09-27). The pre-write owner is captured and restored, with a warning
+  naming the mistake.
+- **`sudo tinycmdr restart` on macOS refuses instead of stopping the bot.** The helper's
+  `launchctl bootstrap` cannot enter the console user's GUI domain as root ("Bootstrap failed:
+  125: Domain does not support specified action") - and by then it had already booted the agent
+  OUT, so the bot stayed down until someone noticed. It now refuses before touching anything,
+  says to run it without sudo, and a failed bootstrap no longer leaves the agent stopped.
+
 ## [1.0.36] - 2026-09-27
 
 Added

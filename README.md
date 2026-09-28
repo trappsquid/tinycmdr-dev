@@ -101,7 +101,7 @@ Day-to-day notes for a Mac: [`install/README-macos.md`](install/README-macos.md)
 ## Start it
 
 ```bash
-tinycmdr setup        # once: point it at your model endpoint
+tinycmdr setup        # once: endpoint, chat gateways, search consent
 tinycmdr              # terminal session
 tinycmdr --once "…"   # one task, then exit
 ```
