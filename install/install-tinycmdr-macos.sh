@@ -724,7 +724,7 @@ fi
 # (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
 # "no" here still leaves a working search if one is configured.
 if [ "$ASK" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
-    if ask_yes "May the bot's web search send queries off this machine?" n; then
+    if ask_yes "May the bot's web search send queries off this machine?" y; then
         SEARCH_EGRESS="true"
     else
         SEARCH_EGRESS="false"

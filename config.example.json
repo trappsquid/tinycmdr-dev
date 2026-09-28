@@ -86,12 +86,12 @@
     "ssl_verify": true
   },
   "search": {
-    "_comment": "Optional web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network. `allow_cloud_egress` is the consent: while it is false an off-LAN provider is REFUSED, not called - the rule llm.allow_cloud_fallback already applies to model endpoints. The installers ask for it (--search-egress), and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
+    "_comment": "Web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network. `allow_cloud_egress` is ON by default - a box with providers configured wants to search, and a silent refusal reads as a broken tool; set it false to REFUSE every off-LAN provider, which also refuses fetch_url for a URL off this network. A searxng provider never needs the flag. The installers ask (--search-egress), setup asks, and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
     "providers": [
       {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search", "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"},
       {"kind": "tavily", "url": "https://api.tavily.com/search", "api_key_env": "TAVILY_API_KEY", "label": "tavily"}
     ],
-    "allow_cloud_egress": false,
+    "allow_cloud_egress": true,
     "max_results": 5
   },
   "agent": {

@@ -124,8 +124,9 @@ def capturing(fn):
 check("the shipped chain is the two built-ins, in order",
       [p["kind"] for p in fb.DEFAULT_CONFIG["search"]["providers"]] == ["anysearch", "tavily"],
       fb.DEFAULT_CONFIG["search"]["providers"])
-check("egress is OFF by default - a third party is not called unasked",
-      fb.DEFAULT_CONFIG["search"]["allow_cloud_egress"] is False)
+check("egress is ON by default - a configured chain that refuses every lookup reads as broken",
+      fb.DEFAULT_CONFIG["search"]["allow_cloud_egress"] is True,
+      fb.DEFAULT_CONFIG["search"]["allow_cloud_egress"])
 check("the default chain names each key's .env variable",
       [p.get("api_key_env") for p in fb.DEFAULT_CONFIG["search"]["providers"]]
       == ["ANYSEARCH_API_KEY", "TAVILY_API_KEY"])
@@ -249,8 +250,9 @@ check("TINYCMDR_SEARCH_EGRESS accepts yes/on/true", cfg["search"]["allow_cloud_e
 
 os.environ["TINYCMDR_SEARCH_EGRESS"] = "banana"
 cfg, said = capturing(fb.load_config)
-check("a typo in the egress name is refused, not read as False",
-      cfg["search"]["allow_cloud_egress"] is False and "could not be parsed" in said, said[:200])
+check("a typo in the egress value is refused, not read as False",
+      cfg["search"]["allow_cloud_egress"] is fb.DEFAULT_CONFIG["search"]["allow_cloud_egress"]
+      and "could not be parsed" in said, said[:200])
 for _n in ("TINYCMDR_SEARCH_PROVIDERS", "TINYCMDR_SEARCH_EGRESS"):
     os.environ.pop(_n, None)
 

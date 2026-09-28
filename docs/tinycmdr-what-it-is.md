@@ -18,7 +18,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                19,923 lines / 0.93 MB in ONE file, no package, no framework
+code                19,925 lines / 0.93 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -32,7 +32,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       16 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               62 suites / 21,715 lines / 2,582 checks that need no model, plus a graded
+tests               62 suites / 21,717 lines / 2,582 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 5 blocks: llm 18, telegram 2, mattermost 6, search 3, agent 89
@@ -146,10 +146,11 @@ infrastructure      endpoint unreachable/rejecting files a red Done line instead
 failover            primary plus ordered fallbacks; a local failure does not fall through to the
                     internet unless allow_cloud_fallback says so (a privacy gate, not a preference)
 search              a configured provider chain (search.providers: anysearch, tavily, searxng);
-                    while search.allow_cloud_egress is false every off-LAN provider is REFUSED -
-                    the same gate as failover, one lane over - so a search never leaves this
-                    network unless the operator said it may. A searxng entry on the LAN is the
-                    shape that never needs the flag, and fetch_url answers to it too
+                    ON by default - the installers ask, and setup asks - with
+                    search.allow_cloud_egress as the opt-OUT: set it false and every off-LAN
+                    provider is REFUSED (fetch_url too), the same gate failover uses one lane
+                    over. A searxng entry on the LAN never needs the flag, so a host that
+                    wants search without leaving its network keeps it on either way
 streaming           streamed model calls, with an idle bound so a trickling endpoint is bounded;
                     against a llama.cpp endpoint (confirmed by its own /props reply) it also asks
                     for prompt-progress events, so a long prefill reads "reading prompt · 42%"
@@ -433,7 +434,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               19,923 lines, one file, no dependency tree to audit
+readability               19,925 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

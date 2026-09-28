@@ -261,12 +261,14 @@ DEFAULT_CONFIG = {
             {"kind": "tavily", "url": "https://api.tavily.com/search",
              "api_key_env": "TAVILY_API_KEY", "label": "tavily"},
         ],
-        # Off by default: every provider above is off this machine, so a search sends
-        # the model's query - words from this conversation - to a third party, and the
-        # anonymous tier does it with no key and nobody asked. llm.allow_cloud_fallback
-        # is the same rule one lane over; this flag is the consent, and the installers
-        # ask for it.
-        "allow_cloud_egress": False,
+        # ON by default. Written the other way round first, and that was wrong here: a box
+        # whose providers are configured is a box that wants to search, and defaulting to
+        # "refuse every lookup" turned ordinary questions into memory-based guesses
+        # (measured 2026-09-27: an operator asked for an event's dates, web_search AND
+        # fetch_url were both REFUSED, and the answer invented a month the festival is not
+        # in). Set it false to keep search on this network only - a searxng provider on the
+        # LAN never needs the flag, and neither does fetch_url for a URL on it.
+        "allow_cloud_egress": True,
         "max_results": 5,
     },
     "agent": {

@@ -863,7 +863,7 @@ if ($Ask) {
     # "no" here still leaves a working search if one is configured. The switch wins: it skips
     # the question entirely, and the answer written to .env is what the build reads.
     if (-not $SearchEgress) {
-        if (Ask-Yes "May the bot's web search send queries off this machine?" $false) {
+        if (Ask-Yes "May the bot's web search send queries off this machine?" $true) {
             $SearchEgress = "true"
         } else {
             $SearchEgress = "false"

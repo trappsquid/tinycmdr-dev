@@ -17,6 +17,15 @@ Added
   operator asked the Mac bot for an event's dates, both search paths refused, and the nearest
   door was a command nobody had been told about.
 
+Changed
+- **Web search is ON by default; `search.allow_cloud_egress` is the opt-OUT.** It shipped the
+  other way round in 1.0.35, on the argument that a keyless install should not send words from
+  the conversation to a third party unasked. On a box whose providers are already configured
+  that read as a broken tool: measured 2026-09-27, an operator asked for an event's dates,
+  `web_search` and `fetch_url` were both REFUSED, and the run answered from memory with a month
+  the festival is not in. The installers' question defaults to Yes, `setup` asks it too, and
+  false still keeps search on this network only (a `searxng` provider never needs the flag).
+
 Fixed
 - **A `sudo` write no longer leaves `config.json` unreadable to the agent.** `_write_config`
   REPLACES the file, and a replacement takes the author of the write, so on the Mac
