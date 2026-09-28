@@ -31,6 +31,20 @@ Added
   with the key through `tinycmdr token set <NAME>`.
 
 Fixed
+- **`read_file`'s window tells the truth, and `offset` is a start line.** Three defects on one
+  code path (operator report, 2026-09-27; each reproduced before the fix). A negative `offset`
+  read from the *end* while the header printed `lines -5—-2 of 22096` - line references that say
+  nothing to a reader - and is now refused with the door that does mean it (`tail=N`).
+  `from_end` was set for ANY offset, so `offset=10, limit=2` of a 28.6 MiB file answered with
+  lines 432238-432239 under a header claiming 10-12: silently wrong content, the worse half of
+  the report. And `_read_capped` appended its "only the first 8 MiB is shown" warning *into* the
+  text that is then split into lines, so `tail=2` of a file past the cap returned the warning's
+  own two lines instead of the file's last two. The warning now comes back separately and is
+  appended after slicing; an offset reads from the start and `tail` from the end; a header for a
+  clipped read says `shown, the file is bigger` rather than quoting a total it never read; and an
+  offset past the window says so with the full path, where it used to answer with an empty body.
+  `tests/test_read_window.py` grades all of it, with the cap lowered so the truncation paths cost
+  nothing to run.
 - **A tool name inside an `echo`/`printf` no longer swallows the command.** The shell door's
   narration matcher - added 2026-09-25 after six `echo "calling send_file now"` calls in one
   run - scanned *every word* of an echo/printf for a registered tool name and answered the
