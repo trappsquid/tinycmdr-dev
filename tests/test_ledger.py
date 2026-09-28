@@ -1420,7 +1420,7 @@ def test_the_loop_guard_nudge_waits_for_the_whole_tool_batch():
 # disk while the first is still alive, with the instance lock deciding which
 # survives. On a supervised Windows host the supervisor's child lost that race
 # ("bot exited 3 (lock held elsewhere)") and the supervisor backed off 300 s;
-# under systemd it produced two instances fighting over the web port. The owner
+# under systemd it produced two instances fighting over the same port. The owner
 # now decides.
 
 # restart_owner() reads exactly these three. A suite asserting about the owner must OWN

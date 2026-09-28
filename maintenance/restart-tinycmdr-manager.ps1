@@ -1,4 +1,21 @@
 $ErrorActionPreference = 'Continue'
+
+# The truth surface that survived the built-in web UI's removal: `tinycmdr health`, one line and
+# an exit code, run under this install's own interpreter. This used to poll the served page.
+# Paths come from this script's own location, so it works on any host.
+$install = Split-Path -Parent $PSScriptRoot
+$venvPy  = Join-Path $install 'venv\Scripts\python.exe'
+
+function Get-Health {
+    if (-not (Test-Path $venvPy)) { return "no venv at $venvPy - run the installer first" }
+    Push-Location $install
+    try {
+        $out  = & $venvPy tinycmdr.py health 2>&1
+        $code = $LASTEXITCODE
+        return ("{0} (exit {1})" -f (($out | Out-String).Trim()), $code)
+    } finally { Pop-Location }
+}
+
 Write-Output "=== live tinycmdr instances (before) ==="
 $procs = Get-CimInstance Win32_Process -Filter "Name like 'python%'" |
          Where-Object { $_.CommandLine -like '*tinycmdr.py*' }
@@ -6,8 +23,7 @@ foreach ($p in $procs) { Write-Output ("pid {0}  {1}" -f $p.ProcessId, $p.Comman
 Write-Output ("count: " + @($procs).Count)
 
 Write-Output "=== health before ==="
-try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 8 http://127.0.0.1:8787/api/health).Content }
-catch { Write-Output ("health probe failed: " + $_.Exception.Message) }
+Write-Output (Get-Health)
 
 foreach ($p in $procs) {
   Write-Output ("stopping pid " + $p.ProcessId)
@@ -25,5 +41,4 @@ foreach ($p in $after) { Write-Output ("pid {0}  {1}" -f $p.ProcessId, $p.Comman
 Write-Output ("count: " + @($after).Count)
 
 Write-Output "=== health after ==="
-try { (Invoke-WebRequest -UseBasicParsing -TimeoutSec 10 http://127.0.0.1:8787/api/health).Content }
-catch { Write-Output ("health probe failed: " + $_.Exception.Message) }
+Write-Output (Get-Health)

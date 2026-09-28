@@ -15,8 +15,8 @@ suites advertised, collected nothing but the printouts their check() left behind
 
 Per suite: a fresh subprocess (`sys.executable`, cwd = repo root), its stdout and
 stderr captured, a wall-clock timeout, its own process group so a suite that spawns
-node/a browser dies with it. Nothing is imported from the suites into this process,
-so one suite cannot poison the next.
+a helper (a stub server, a child) dies with it. Nothing is imported from the suites
+into this process, so one suite cannot poison the next.
 
 Exit code: 0 only when every discovered suite PASSed (or SKIPped under --allow-skips);
 1 when anything FAILed, TIMEOUTed, was killed, or when nothing was discovered at all.
@@ -45,16 +45,14 @@ REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
 DEFAULT_SELECT = "tests/test_*.py"
 DEFAULT_TIMEOUT = 300.0
-# Per-suite wall-clock overrides. test_webui_browser.py drives seven real runs through a
-# real browser: on the macOS CI runner that takes 47.8s, 76.9s, 137.8s then 167.5s across
-# four runs with identical inputs, so the default 300s is not enough for it to finish when
-# that box is at its worst. Nothing else needs one.
-SLOW_SUITES = {"tests/test_webui_browser.py": 900.0}
+# Per-suite wall-clock overrides: a suite that legitimately needs longer than the
+# default 300s. None do today.
+SLOW_SUITES = {}
 
 
-# A suite that cannot grade its subject here (playwright/node/rich absent, a console
-# build asked for a web layer) exits this, never 0. Three suites used to print a skip
-# line and return 0, so CI would have called an ungraded run green - and did.
+# A suite that cannot grade its subject here (a missing dependency, a build with no
+# chat lane) exits this, never 0. Three suites used to print a skip line and return 0,
+# so CI would have called an ungraded run green - and did.
 SKIP_EXIT = 77
 
 # G5 hook (see module docstring): the envelope assertions arrive as their own suite.
@@ -133,8 +131,8 @@ def live_instance_here():
     grades.
 
     Why the leak report needs it: tree_state() fingerprints ignored files, and a bot
-    running in this checkout rewrites tinycmdr.log, sessions/ and web-sessions.json every
-    minute by itself. Measured 2026-09-27: a run with the live bot up reported "6 path(s),
+    running in this checkout rewrites tinycmdr.log and sessions/ every minute by
+    itself. Measured 2026-09-27: a run with the live bot up reported "6 path(s),
     written by 3 suite(s)" and every one of them was the bot's own write - the G2 list
     pointed at innocent suites, and a real leak could hide in that noise.
     """
@@ -246,7 +244,7 @@ def run_one(path, timeout, logdir, verbose):
 
 
 def _kill_tree(proc):
-    """Kill the suite and anything it spawned (node, a browser, a server)."""
+    """Kill the suite and anything it spawned (a child process, a stub server)."""
     try:
         if os.name == "posix":
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -387,7 +385,7 @@ def main():
               % (sum(len(v) for v in by_path.values()), len(leaks)))
         if live_instance_here():
             print("  NOTE: a live bot is running in this checkout. It rewrites "
-                  "tinycmdr.log, sessions/ and web-sessions.json itself, so the suite "
+                  "tinycmdr.log and sessions/ itself, so the suite "
                   "names below are NOT reliable - stop the bot (or grade a copy of the "
                   "tree) to read this as suite isolation.")
         for one in sorted(by_path):

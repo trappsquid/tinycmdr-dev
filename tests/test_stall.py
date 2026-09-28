@@ -1224,19 +1224,17 @@ def test_props_parsing_matches_the_live_shape():
 
 def test_status_has_one_implementation():
     """The Mattermost handler and the web UI each had their own /status and had
-    drifted (the web one silently lacked sampling and notes). One renderer, both
-    callers."""
+    drifted (the web one silently lacked sampling and notes). One renderer, and with
+    the web UI gone only the Mattermost caller is left."""
     src = (SRC).read_text(encoding="utf-8", errors="replace")
     check("status: the shared renderer exists", "def status_text(" in src)
-    check("status: the web handler uses it",
-          'return ("reply", status_text(key))' in src, "web not unified")
     check("status: the Mattermost handler uses it",
           "status_text(session_key, paused=self.paused)" in src,
           "mattermost not unified")
     check("status: no second copy of the fields",
           src.count("notes.md: {notes_kb:.1f} KB") == 1,
           "duplicate renderer left behind")
-    reply = fb._web_command("/status")[1]
+    reply = fb.status_text("sx")
     check("status: sampling is reported", "sampling:" in reply, reply[:200])
     check("status: the budget is reported", "tokens in context" in reply,
           reply[:200])
@@ -1462,19 +1460,14 @@ def test_startup_validation_catches_an_unconfigured_host():
         check("startup: a missing token names .env", "TINYCMDR_MM_TOKEN" in msg
               and ".env" in msg, msg)
 
-        # H2: a chat-less install is VALID - the page lane is a lane, and so is Telegram
-        # alone. Before this, a page-only install was told mattermost.url was a problem
-        # (doctor exited 1) and `main` started run_bot anyway, which exits 2 on a missing
-        # token and took the page down with it.
+        # H2: a Telegram-only box is a valid chat install and needs no Mattermost
+        # token. A host with NO chat lane at all is no longer a lane: it has nothing
+        # remote to serve, and validate_startup_config refuses it (test_verbs grades
+        # that at the process boundary).
         saved_mm = dict(fb.CONFIG["mattermost"])
         saved_tg = dict(fb.CONFIG.get("telegram") or {})
         try:
             fb.CONFIG["mattermost"].update({"token": "", "url": "", "allowed_users": []})
-            fb.CONFIG["telegram"] = {"token": "", "allowed_users": []}
-            check("H2: no chat lane at all validates",
-                  fb.validate_startup_config() is None, fb.validate_startup_config())
-            check("H2: and the lane predicate says so",
-                  fb._chat_lane_configured() is False)
             fb.CONFIG["telegram"] = {"token": "123:abc", "allowed_users": ["1"]}
             check("H2: a Telegram-only box needs no Mattermost token",
                   fb.validate_startup_config() is None, fb.validate_startup_config())

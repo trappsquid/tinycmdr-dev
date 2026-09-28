@@ -57,7 +57,7 @@ def _staged_module():
     else:
         (work / "config.json").write_text(json.dumps({
             "llm": {"base_url": "http://127.0.0.1:1/v1", "model": "main"},
-            "agent": {}, "web": {"enabled": False}}), encoding="utf-8")
+            "agent": {}}), encoding="utf-8")
     spec = importlib.util.spec_from_file_location("tc_measured", work / "tinycmdr.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules["tc_measured"] = mod
@@ -118,7 +118,6 @@ def facts():
             "shipped_tools": len(shipped_tools),
             "shipped_skills": len(shipped_skills),
             "cli_verbs": len(T.VERBS),
-            "web_cmds": len(T.WEB_COMMANDS),
             "chat_verbs": len(T._CHAT_VERB_SET),
             "suites": len(suites),
             "test_lines": tlines,
@@ -162,14 +161,13 @@ def render(name, f):
             "                    (croniter for `schedule`; rich + prompt_toolkit for the console)\n"
             "                    - %d lines in requirements.txt, none of them a framework\n"
             "processes           one; no daemon, no gateway, no database\n"
-            "interfaces          Mattermost bot (DMs + @mentions), Telegram DM, a browser page\n"
-            "                    (:8787: chat, /api/health, token header), `--once \"task\"` and a\n"
-            "                    terminal CLI\n"
+            "interfaces          Mattermost bot (DMs + @mentions), Telegram DM, `--once \"task\"`\n"
+            "                    and a terminal CLI; a host with no chat token is CLI-only\n"
             "core tools          %d, of which %d are always-on; the rest answer by name (section 2)\n"
             "custom tools        %d example tools ship in ./tools/ (native .py, register-style .py,\n"
             "                    <name>.tool.json); a working box's own drop-ins load from the same\n"
             "                    folder, and the agent writes its own with create_tool\n"
-            "chat commands       %d CLI verbs, %d page commands, %d chat verbs (section 3.1)\n"
+            "chat commands       %d CLI verbs, %d chat verbs (section 3.1)\n"
             "prose skills        %s\n"
             "tests               %d suites / %s lines / %s checks that need no model, plus a graded\n"
             "                    set of %d tasks against a real endpoint (%d support scripts;\n"
@@ -181,7 +179,7 @@ def render(name, f):
             % (f"{f['lines']:,}", f["mb"],
                len(req), ", ".join(req), len(op), len(f["deps"]),
                f["core"], f["always_on"], f["shipped_tools"],
-               f["cli_verbs"], f["web_cmds"], f["chat_verbs"], skills,
+               f["cli_verbs"], f["chat_verbs"], skills,
                f["suites"], f"{f['test_lines']:,}", f"{f['checks']:,}", f["graded"],
                f["support"], len(f["blocks"]), cfg_keys))
     if name == "budgets":

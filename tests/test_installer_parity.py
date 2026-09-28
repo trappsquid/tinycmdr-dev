@@ -19,9 +19,9 @@ installers, the `param(...)` block for PowerShell - not from the file at large, 
 loose scan picks up the flags of the programs the installer calls (`--disable-pip-version-check`,
 `--no-pager`, `--once`).
 
-The inversion is deliberate and pinned: the shell installers take `--no-web` while PowerShell
-takes `-EnableWeb`, so the same intent has two spellings and the same default (off) is reached
-from opposite directions. A parity test comparing literal strings would call that a bug.
+A capability is only portable when every platform's spelling exists in every installer. The
+built-in local web UI was removed from all three installers (and from the assistant they
+ship), so it is not a capability and is not listed here.
 
     python tests/test_installer_parity.py
 """
@@ -56,9 +56,6 @@ PORTABLE = {
     "telegram ids": ("--telegram-ids", "--telegram-ids", "TelegramIds"),
     "model": ("--model", "--model", "Model"),
     "model base url": ("--model-base-url", "--model-base-url", "ModelBaseUrl"),
-    "web host": ("--web-host", "--web-host", "WebHost"),
-    "web port": ("--web-port", "--web-port", "WebPort"),
-    "web off": ("--no-web", "--no-web", "EnableWeb"),          # inverted spelling, see above
     "no start": ("--no-start", "--no-start", "NoStart"),
     "no PATH edit": ("--no-path", "--no-path", "NoPath"),
     "secrets file": ("--secrets-file", "--secrets-file", "SecretsFile"),

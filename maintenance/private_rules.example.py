@@ -10,4 +10,4 @@ PUBLIC_FORBIDDEN = (
     r"<host-name>", r"<lan-address>", r"<account-id>",
 )
 
-SECRET_LABELS = ("web ui token", "mattermost token", "allowed user id")
+SECRET_LABELS = ("mattermost token", "allowed user id")

@@ -58,13 +58,18 @@ def main():
     try:
         run_scenario.stage_install(workdir, 24000)
         fb = run_scenario.load(workdir)
-        # A page-only install: no chat lane, so a missing Mattermost client is not a
-        # problem for this box (which is also what keeps this suite interpreter-agnostic).
+        # A chat install whose only lane is Telegram: no Mattermost token, so a missing
+        # Mattermost client is not a problem for this box (which is also what keeps this
+        # suite interpreter-agnostic). A host with NO chat lane at all is no longer a lane
+        # of any kind - validate_startup_config refuses it - so Telegram is the stand-in.
         cfg = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         cfg["mattermost"]["token"] = ""
+        cfg["telegram"] = {"token": "fixture-tg-token-not-a-secret",
+                           "allowed_users": ["12345"]}
         (workdir / "config.json").write_text(json.dumps(cfg, indent=2),
                                             encoding="utf-8")
         fb.CONFIG["mattermost"]["token"] = ""
+        fb.CONFIG["telegram"] = dict(cfg["telegram"])
 
         # nothing below may reach the model
         def boom(*a, **kw):
@@ -143,7 +148,7 @@ def main():
 
         # ---- doctor ----------------------------------------------------------
         rc, out, err = call(fb, ["doctor"])
-        check("doctor exits 0 on a healthy page-only install", rc == 0, (rc, err[:300]))
+        check("doctor exits 0 on a healthy chat install", rc == 0, (rc, err[:300]))
         check("doctor says so plainly", "no problems found" in out, out[-200:])
 
         fb._detect_window = lambda url, headers=None: 0
@@ -287,7 +292,7 @@ def main():
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         check("--str keeps it a string", rc == 0 and written["agent"]["bot_name"] == "12",
               written["agent"].get("bot_name"))
-        rc, out, err = call(fb, ["config", "set", "web.port", "nope"])
+        rc, out, err = call(fb, ["config", "set", "agent.probe_port", "nope"])
         check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])
         check("config refuses to put a secret in config.json",
@@ -308,12 +313,6 @@ def main():
         rc, out, err = call(fb, ["proc"])
         check("proc names this install's folder and the instance",
               rc == 0 and "install :" in out and "instance:" in out, out[:200])
-        # web.port holds 'nope' at this point (the check above wrote it): a verb that
-        # reports on a box must name that, not traceback
-        rc, out, err = call(fb, ["ports"])
-        check("ports names the page, its token state, and a junk port",
-              rc == 0 and "web page" in out and "token=" in out
-              and "not a port" in out, out[:300])
 
         (workdir / "tinycmdr.py.bak-900").write_text("old bytes", encoding="utf-8")
         (workdir / ".env").write_text("TINYCMDR_TEST_KEY=keep-me" + chr(10), encoding="utf-8")
@@ -353,7 +352,7 @@ def main():
         check("...and a tinycmdr.py with no VERSION line",
               rc == 1 and "VERSION" in err, (rc, err[:160]))
         check("the new verbs are in the verb list",
-              all(v in fb.VERBS for v in ("health", "config", "proc", "ports",
+              all(v in fb.VERBS for v in ("health", "config", "proc",
                                           "update", "clean", "version")), fb.VERBS)
 
         # ---- logs: bounded, and scrubbed -------------------------------------
@@ -486,70 +485,19 @@ def main():
             if saved_owned is not None:
                 fb._scheduled_task_owned = saved_owned
 
-        # --- `tinycmdr web`: the page lane in one word (2026-09-22) -----------------
-        # The operator: "so what if I want to startup the tinycmdr web-ui? type tinycmdr web
-        # in a cmd window?" The page was a flag (`--web`) and nothing said so; now the word
-        # is translated in main(), and a port that is already served says so usefully.
+        # --- the local web UI is gone: `web` is not a verb, and nothing teaches it ------
+        # It was a page lane reached through `tinycmdr web` / `--web`; the whole surface
+        # (port, token, page) is removed. The word must fall through to the dispatcher that
+        # names it, and the flag must be refused with the removal, both exercised at the
+        # process boundary in the H1 block below.
         check("`web` is not a management verb", "web" not in fb.VERBS, sorted(fb.VERBS)[:6])
-        script = os.path.join(os.path.dirname(fb.__file__), "tinycmdr.py")
-        check("VERB_HELP names the page lane", "tinycmdr web" in fb.VERB_HELP,
+        check("VERB_HELP no longer names a page lane", "tinycmdr web" not in fb.VERB_HELP,
               fb.VERB_HELP[-220:])
         check("VERB_HELP stopped teaching the retired prefix", "/cmdr " not in fb.VERB_HELP,
               fb.VERB_HELP[-220:])
-
-        reached = []
-        saved_mode, saved_argv = fb.run_web_mode, sys.argv
-        try:
-            fb.run_web_mode = lambda: reached.append("web")
-            for argv in (["tinycmdr.py", "web"], ["tinycmdr.py", "webui"],
-                         ["tinycmdr.py", "--web"]):
-                sys.argv = list(argv)
-                fb.main()
-                check("`%s` starts the page lane" % " ".join(argv[1:]), reached == ["web"],
-                      (reached, []))
-                reached.clear()
-            sys.argv = list(saved_argv)
-            sys.argv = ["tinycmdr.py", "status"]
-            try:
-                with contextlib.redirect_stdout(io.StringIO()):
-                    fb.main()
-            except SystemExit:
-                pass
-            check("...and a management verb still does NOT start the page",
-                  reached == [], reached)
-        finally:
-            fb.run_web_mode, sys.argv = saved_mode, list(saved_argv)
-
-        import socket
-        srv = socket.socket()
-        srv.bind(("127.0.0.1", 0))
-        srv.listen(1)
-        held = srv.getsockname()[1]
-        try:
-            note = fb.web_busy_note("127.0.0.1", held)
-            text = "\n".join(note)
-            check("a held port is reported with its URL", ("127.0.0.1:%d" % held) in text, text)
-            if fb._port_holder(held):
-                check("...and names who holds it", "listening there" in text, text)
-            else:
-                print("skip a held port names the holder: this host cannot see the holder")
-
-            free = socket.socket()
-            free.bind(("127.0.0.1", 0))
-            port = free.getsockname()[1]
-            free.close()
-            text = "\n".join(fb.web_busy_note("127.0.0.1", port))
-            # On a FREE port the note must not invent a holder (the held-port case above
-            # names one, and that is the whole discrimination). The old wording asserted the
-            # sentence "Nothing is listening", which a later revision of web_busy_note
-            # dropped - so this asserts the fact, not the phrasing.
-            check("a free port is not reported as someone else's",
-                  ("127.0.0.1:%d" % port) in text and "listening there" not in text
-                  and "already usable" not in text, text)
-            text = "\n".join(fb.web_busy_note("127.0.0.1", "nope"))
-            check("a junk web.port does not crash the note", "Could not start" in text, text)
-        finally:
-            srv.close()
+        check("no page flag survives in the help",
+              not any(f in fb.VERB_HELP for f in ("--web", "--web-port", "--web-host",
+                                                  "--no-web")), fb.VERB_HELP[-220:])
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -584,7 +532,7 @@ def main():
     fb._git_exe = saved_git_exe
 
     # H1: the word after the program name is a VERB, never a reason to start the bot.
-    # `tinycmdr taks` used to fall through to run_webui/run_bot and bring up the agent,
+    # `tinycmdr taks` used to fall through to run_bot and bring up the agent,
     # which then answered nobody while the terminal looked fine. Staged fresh: the install
     # above is gone by this point, and the run must happen in a COPY or a verb writes its
     # log into the repo.
@@ -601,6 +549,18 @@ def main():
               "unknown verb" in blob and "taks" in blob, blob[-200:])
         check("H1: and prints the verb list instead of starting the agent",
               "tinycmdr <verb>" in blob, blob[-300:])
+
+        # The removed page lane: the word is an unknown verb, the flag is refused by name.
+        for argv, want in ((["web"], "unknown verb"),
+                           (["webui"], "unknown verb"),
+                           (["page"], "unknown verb"),
+                           (["--web"], "has been removed")):
+            gone = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), *argv],
+                                  cwd=str(stage), capture_output=True, text=True,
+                                  timeout=120, env=dict(os.environ, TINYCMDR_PLAIN="1"))
+            gblob = gone.stdout + gone.stderr
+            check("H1: `%s` exits 2" % " ".join(argv), gone.returncode == 2, gone.returncode)
+            check("H1: `%s` says %r" % (" ".join(argv), want), want in gblob, gblob[-200:])
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

@@ -77,7 +77,6 @@ def stage(workdir, base_url):
     cfg = {k: v for k, v in fixture.items() if not k.startswith("_")}
     cfg["llm"].update({"base_url": base_url, "model": "main",
                        "max_context_tokens": "auto", "stream": False})
-    cfg["web"] = {"enabled": False}
     (workdir / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
 

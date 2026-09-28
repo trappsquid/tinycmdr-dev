@@ -69,7 +69,7 @@ def main():
           f"not documented: {undocumented}")
 
     # The secrets the installers write must stay in the set (each has exactly one home).
-    for name in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
+    for name in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
                  "TINYCMDR_LLM_API_KEY"):
         check(f"the loader reads {name}", name in reads, "not in env_map")
 

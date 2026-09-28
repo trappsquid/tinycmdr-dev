@@ -5,7 +5,7 @@ matches a REGISTERED custom command, and the server refuses to register its own
 trigger words - so `/help` and `/status` can never reach a bot, and a bare `/model`
 only arrives because the relay has a row for it. `/tinycmdr` is one registered
 trigger that carries anything, and the build accepts it in every lane it serves
-(chat, web page, Telegram DM, console) while the bare words keep working: the
+(chat, Telegram DM, console) while the bare words keep working: the
 relay's per-verb rows post those.
 
 The operator's rule (2026-09-22): ONE word, three places - `tinycmdr status` in a
@@ -19,7 +19,7 @@ What must hold, and what this pins:
     (nothing queued, no model call)
   * the LISTENER thread: `/tinycmdr stop` and `/tinycmdr restart force` are read while a run
     owns the channel - the whole point of that early path
-  * the web lane and the console lane
+  * the console lane
 
     python tests/test_cmdr.py            (all checks)
     python tests/test_cmdr.py <substring>
@@ -107,11 +107,6 @@ def test_the_retired_prefix_gets_a_pointer():
     check("chat answers a /cmdr line with the new prefix",
           "/tinycmdr" in text and "Unknown command" not in text, text[:200])
     check("...and does not send it to the model", not d.queues.get("c1"), d.queues)
-    if hasattr(fb, "_web_command"):
-        kind, reply = fb._web_command("/cmdr status", "web")
-        check("the page answers it the same way",
-              kind == "reply" and "/tinycmdr" in reply and "Unknown" not in reply,
-              reply[:160])
     out = io.StringIO()
     with contextlib.redirect_stdout(out):
         fb._cli_command("/cmdr status")
@@ -209,22 +204,6 @@ def test_listener_thread_reads_a_prefixed_command():
 
 
 # --- the other lanes --------------------------------------------------------
-
-def test_web_lane():
-    if not hasattr(fb, "_web_command"):
-        skip("web lane", "chatless build")
-        return
-    kind, reply = fb._web_command("/tinycmdr status", "web")
-    check("/tinycmdr status is a local reply, not a task", kind == "reply", kind)
-    kind, reply = fb._web_command("/tinycmdr help", "web")
-    check("/tinycmdr help lists the page's commands",
-          kind == "reply" and "/tinycmdr" in reply, reply[:160])
-    kind, reply = fb._web_command("/tinycmdr wibble", "web")
-    check("an unknown web verb is answered locally",
-          kind == "reply" and "Unknown command" in reply, reply[:160])
-    check("the page's command list advertises the prefix",
-          any(c.startswith("/tinycmdr") for c, _h in fb.WEB_COMMANDS), fb.WEB_COMMANDS)
-
 
 def test_console_lane():
     out = io.StringIO()

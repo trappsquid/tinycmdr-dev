@@ -7,8 +7,8 @@ What happened: `_cli_reader` owns stdin for the whole interactive session, and t
 question read the terminal itself (`input()`), so the reader took the typed line, filed
 it as steering, and the run waited for ever - the window looked frozen and accepted
 nothing. The door was not even wired for ask_user there (`drive_run` got no ask_door),
-so the tool answered "nothing in this run can reach a human" while chat and the web page
-could both ask.
+so the tool answered "nothing in this run can reach a human" while a chat lane could
+still ask.
 
 What this pins:
   * the answer reaches the question, and the typed line does NOT become steering

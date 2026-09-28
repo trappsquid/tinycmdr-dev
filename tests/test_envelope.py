@@ -42,7 +42,6 @@ def stage(workdir, llm=None):
                          .read_text(encoding="utf-8-sig"))
     cfg = {k: v for k, v in fixture.items() if not k.startswith("_")}
     cfg["llm"].update(llm or {})
-    cfg["web"] = {"enabled": False}
     (workdir / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
     return cfg
 

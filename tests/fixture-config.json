@@ -36,12 +36,6 @@
     ],
     "ssl_verify": true
   },
-  "web": {
-    "enabled": true,
-    "port": 8788,
-    "token": "fixture-web-token-not-a-secret",
-    "host": "127.0.0.1"
-  },
   "search": {
     "providers": [
       {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",

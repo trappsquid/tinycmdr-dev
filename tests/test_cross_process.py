@@ -3,12 +3,12 @@
 Run:  python tests/test_cross_process.py, or
       python tests/run_all.py --filter cross_process
 
-Every lane is its own process - --web, --cli, --once and each verb all skip the
+Every lane is its own process - --cli, --once and each verb all skip the
 single-instance lock - and the path locks were a dict in ONE interpreter, so two lanes
 that each loaded, mutated and saved lost one of the updates. Measured (audit D2): three
 processes each ran `task add` with a barrier between the read and the save; all three
 answered "OK: task #1 added", all three got id 1, and the ledger held ONE item. The same
-shape on the model overrides is D7 (the web process's save dropped the bot's choice), and
+shape on the model overrides is D7 (one lane's save dropped the other's choice), and
 D5 is the single-instance lock handing a second bot the same token after `rm`.
 
 These checks use REAL subprocesses on purpose: an in-process test cannot see any of it. The
@@ -180,41 +180,41 @@ def test_a_lane_keeps_the_other_lanes_overrides():
     """audit D7: the stale-snapshot save used to drop the other lane's key."""
     reset_state()
     bot_done = STAGE / "bot.done"
-    web_done = STAGE / "web.done"
-    for p in (bot_done, web_done):
+    cli_done = STAGE / "cli.done"
+    for p in (bot_done, cli_done):
         if p.exists():
             p.unlink()
-    # The web lane starts FIRST and loads state.json before the bot has written anything,
+    # The cli lane starts FIRST and loads state.json before the bot has written anything,
     # then sets its own key and waits. The bot lane then sets its key and saves. When the
-    # web lane finally saves, its snapshot is stale - and the bot's key must survive.
-    web = subprocess.Popen(
-        [sys.executable, "-c", WORKER_OVERRIDE, str(STAGE), "web:tab-2",
-         "model-from-web", str(bot_done), str(web_done)],
+    # cli lane finally saves, its snapshot is stale - and the bot's key must survive.
+    cli = subprocess.Popen(
+        [sys.executable, "-c", WORKER_OVERRIDE, str(STAGE), "cli:tab-2",
+         "model-from-cli", str(bot_done), str(cli_done)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     time.sleep(0.6)                      # let it load state.json and park
     rc_bot, out_bot, err_bot = spawn(
         WORKER_OVERRIDE, [STAGE, "mattermost:chan-1", "model-from-bot", "-",
                           str(bot_done)])
-    out_web, err_web = web.communicate(timeout=180)
+    out_cli, err_cli = cli.communicate(timeout=180)
     check(rc_bot == 0, "the bot lane saved its choice", (rc_bot, out_bot, err_bot))
-    check(web.returncode == 0, "the web lane saved too", (web.returncode, out_web, err_web))
+    check(cli.returncode == 0, "the cli lane saved too", (cli.returncode, out_cli, err_cli))
     st = json.loads((STAGE / "state.json").read_text(encoding="utf-8"))
     got = st.get("model_overrides") or {}
     check(got.get("mattermost:chan-1") == "model-from-bot",
-          "the bot lane's /model choice survived the web lane's stale save", got)
-    check(got.get("web:tab-2") == "model-from-web",
-          "and the web lane's own choice was written", got)
+          "the bot lane's /model choice survived the cli lane's stale save", got)
+    check(got.get("cli:tab-2") == "model-from-cli",
+          "and the cli lane's own choice was written", got)
 
 
 def test_the_global_switch_still_clears_the_map():
     """`_save_overrides(replace=True)` is the deliberate 'everyone inherits this' call."""
     fb = load()
-    fb.AGENT.model_overrides["web:tab-9"] = "mine"
+    fb.AGENT.model_overrides["cli:tab-9"] = "mine"
     fb._save_overrides()
-    fb.AGENT.model_overrides["web:tab-9"] = "mine-again"
+    fb.AGENT.model_overrides["cli:tab-9"] = "mine-again"
     fb._save_overrides()
     st = json.loads((STAGE / "state.json").read_text(encoding="utf-8"))
-    check((st.get("model_overrides") or {}).get("web:tab-9") == "mine-again",
+    check((st.get("model_overrides") or {}).get("cli:tab-9") == "mine-again",
           "a normal save writes this process's own key", st)
     fb.AGENT.model_overrides.clear()
     fb._save_overrides(replace=True)

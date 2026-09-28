@@ -7,7 +7,7 @@
 Design rules, in order of importance:
 
 1. NOTHING host-specific ships. No .env, no config.json, no logs, no session
-   history, no notes/ledger, no web token, no Mattermost ids. The build FAILS if
+   history, no notes/ledger, no Mattermost ids. The build FAILS if
    it finds any of them — a leak here is a leak onto every host you install on.
 2. Everything needed to reach a working install ships: the app, the config and
    env templates, the skills, the tests, and the installer.
@@ -152,7 +152,6 @@ BACKUP_RE = re.compile(r"\.bak|\.pre-|(?<![a-z])pre[-_]?\d|\.orig$|\.rej$|~$", r
 FORBIDDEN_NAMES = {
     ".env", "config.json", "state.json", "jobs.json", "tasks.json", "tasks.md",
     "notes.md", "notes-archive.md", "tinycmdr.log", "tinycmdr.lock",
-    "web-token.txt",
     # The machine atlas is generated ON the host it describes (atlas.md: os, paths, ports,
     # and where things live). Shipping this box's map to another box is worse than shipping
     # none: it is wrong in a way that reads as authoritative.
@@ -314,7 +313,6 @@ def host_values():
         for section, key, label in (
                 ("mattermost", "url", "mattermost url"),
                 ("mattermost", "token", "mattermost token"),
-                ("web", "token", "web ui token"),
                 ("llm", "base_url", "llm base url")):
             v = ((cfg.get(section) or {}).get(key) or "")
             if isinstance(v, str) and len(v) >= 6:
@@ -464,7 +462,6 @@ def stage(target):
 # Secrets and personal ids get replaced rather than dropped: the docs stay
 # useful on the new host, without carrying this box's credentials or ids.
 PLACEHOLDER = {
-    "web ui token": "<web-ui-token>",
     "mattermost token": "<mattermost-bot-token>",
     "allowed user id": "<your-mattermost-user-id>",
 }
@@ -533,8 +530,8 @@ def audit(target, host_vals, allow_secrets=False):
         # Windows PowerShell 5.1 decodes a BOM-less file as ANSI, so a UTF-8 em
         # dash inside a string turns into a smart quote and breaks the parse.
         # Shipped scripts must be pure ASCII.
-        # A BOM breaks JSON parsing and HTTP headers (an installer-written
-        # web token with a BOM is a 401 with no visible cause). Notepad and
+        # A BOM breaks JSON parsing and HTTP header values, and a token the
+        # installer wrote with one in .env is a silent 401. Notepad and
         # PowerShell 5.1 both add one, so gate it.
         if f.suffix.lower() in (".json", ".example") or f.name == ".env.example":
             if f.read_bytes()[:3] == b"\xef\xbb\xbf":

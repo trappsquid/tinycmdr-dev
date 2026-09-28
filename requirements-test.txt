@@ -6,20 +6,9 @@
 #     pip install -r requirements.txt -r requirements-test.txt
 #
 # requests / rich / prompt_toolkit come from requirements.txt: the suites import the
-# tree's own tinycmdr.py, so anything it imports has to be there.
-#
-# playwright is what tests/test_webui_browser.py drives. Without it (or without a
-# browser) the suite exits 77 - SKIP - and run_all.py counts SKIP as RED, so install
-# the browser with it:
-#
-#     python -m playwright install chromium
-#     export TINYCMDR_TEST_BROWSER_CHANNEL=     # empty = playwright's own chromium
-#
-# (the suite defaults to the msedge channel, the browser the author's box has; CI
-# installs the bundled chromium and clears the channel with that variable).
-# tests/test_webui_page.py runs the page script under `node`, which a dev box needs
-# on PATH; without it that suite also exits 77.
-playwright>=1.40
+# tree's own tinycmdr.py, so anything it imports has to be there. The only suite that
+# ever needed more of its own was the local web UI's browser suite, and that whole
+# surface is gone, so there are no extra packages to install here any more.
 
 # No pytest. Three suite docstrings used to advertise `python -m pytest -q <file>`;
 # their check() only ever printed, so pytest collected no test and exited 0 with the

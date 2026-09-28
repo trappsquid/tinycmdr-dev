@@ -38,7 +38,7 @@ def staged_config(path):
     else:
         (path / "config.json").write_text(json.dumps({
             "llm": {"base_url": "http://127.0.0.1:1/v1", "model": "main"},
-            "agent": {}, "web": {"enabled": False}}), encoding="utf-8")
+            "agent": {}}), encoding="utf-8")
 
 
 def load(app_dir, name):

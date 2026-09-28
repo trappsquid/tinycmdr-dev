@@ -10,34 +10,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Added
 - **The surfaces answer "can it hear me?", not "is the process up".** Every status surface was
   truthful about the wrong question, which is how a bot stayed dead for hours (a live install,
-  2026-09-28): `systemctl` said `active`, `/api/health` returned `{"ok": true}`, `tinycmdr health`
-  named mattermost because a TOKEN existed - and the Mattermost lane had been failing 401 through
-  **510 restarts**. Lanes now record whether they CONNECTED (`lane_up`/`lane_down`); the failure
+  2026-09-28): `systemctl` said `active`, `tinycmdr health` named mattermost because a TOKEN
+  existed - and the Mattermost lane had been failing 401 through **510 restarts**. Lanes now record whether they CONNECTED (`lane_up`/`lane_down`); the failure
   count lives in `logs/state.json` so it survives the restart loop that produces it; and a repeat
   is one log line with a counter instead of the same CRITICAL every ten seconds (the incident
-  wrote 419 KB of it). `/api/health` reports each lane's state, reason and failed-start count; the
-  page shows a red marker, a banner and a tab title instead of looking like a normal chat box;
-  `tinycmdr health` prints `mattermost=failed,web:8787=up` and exits non-zero; `doctor` lists the
-  lanes, the page's posture and any pending config change as problems.
+  wrote 419 KB of it). `tinycmdr health` prints each lane's state (`mattermost=failed`) and
+  reports a pending config change on stderr; `doctor` lists the lanes and any pending config
+  change as problems.
   `tests/test_lane_health.py` grades all of it, including the count surviving a simulated restart.
 - **A `config.json` edit that has not been applied is now visible.** Config is read once at start,
   so an edit - by a person, or by the agent acting on the operator's own chat message - changes
   nothing until a restart, and nothing said so: the operator asked the agent from Mattermost to
-  make the page reachable, the agent wrote the file correctly, and the page kept refusing.
-  `config_drift()` compares the file's stamp against what the process loaded, and `doctor`,
-  `/api/health` and the page banner report "changed on disk at HH:MM ... restart to apply".
+  change a setting, the agent wrote the file correctly, and nothing took effect.
+  `config_drift()` compares the file's stamp against what the process loaded, and `doctor` and
+  `tinycmdr health` report "changed on disk at HH:MM ... restart to apply".
 
-Fixed
-- **`web.host = 0.0.0.0` - what all three installers write for "Should the page be reachable from
-  other machines on your network?" (yes) - was refused by the page itself.** The installers have
-  asked that question since 1.0.22; the Host/Origin check (1.0.24, the §S7 CSRF fix) excluded
-  `0.0.0.0` and added nothing in its place, so that answer produced a page that refused every LAN
-  request with `forbidden: cross-origin or unexpected Host` - for ~11 releases, until someone
-  browsed a live install by IP. `_web_local_hosts()` now accepts this box's own names and
-  addresses whatever `web.host` says; a foreign Host and a cross-origin request are still refused
-  (the Origin rule carries the CSRF protection, and the suite pins all three cases). The refusal
-  is actionable now - it returns the Host it saw, the names it accepts, the setting to change and
-  the tunnel alternative - and `doctor` prints the page's posture.
+Removed
+- **The built-in local web UI is gone; the doors are Mattermost, Telegram, the CLI and
+  `--once`.** The lane went, not just a switch: `tinycmdr.py` and the supervisor no longer
+  serve a local HTTP page, so there is no `web` block in `config.json`, no `TINYCMDR_WEB_TOKEN`
+  in `.env`, no `/api/*` (chat, health, sessions, events, tasks, log, inventory), and no page
+  token or TLS pair to configure. `--web`, `--web-host`, `--web-port` and `--no-web` are refused
+  by name and `main` exits 2 saying the UI has been removed; the installers no longer ask the
+  page questions, mint a token or give firewall advice for a port that is not opened; the
+  `ports` verb (the local listener report) is gone; and the watchdog is now a Windows-only
+  launch helper - start, wait, relaunch - with no readiness probing, status file or
+  notifications: on Linux and macOS systemd `Restart=always` and the launchd agent's
+  `KeepAlive` already own that job (the Linux installer stopped shipping the file), and
+  the bot's own `lane_up` record plus `tinycmdr health` are the surfaces that answer
+  "can it hear me". A CLI-only install is a supported end state - with no chat token
+  nothing remote is served, no service is registered, `main` says so and returns instead
+  of aborting, and `tinycmdr health` names the lanes it has (`lane mattermost=configured`,
+  or `lane none`). The page-only instruments (`drive-web-cases.py`,
+  `probe-web-sessions.py`, `probe-web-surface.py`, `wait-for-endpoint.py`,
+  `stub-openai-endpoint.py`) and the web-only test suites are deleted with it. Mattermost,
+  Telegram, the interactive CLI and `--once` are unchanged.
+- **Neither chat lane is primary.** With both a Mattermost and a Telegram token set, a
+  plain start used to run Mattermost and leave Telegram down with a warning. Neither
+  lane starts on its own now: the process says so and exits 2, and `--telegram` /
+  `--mattermost` pick one. A single token still just runs, and no token is a supported
+  CLI-only install.
 
 ## [1.0.35] - 2026-09-27
 

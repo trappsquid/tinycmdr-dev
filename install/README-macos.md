@@ -1,8 +1,10 @@
 # tinycmdr on a Mac
 
-tinycmdr is one Python file plus three dependencies. On macOS it runs as a per-user
-launchd agent, so it starts when you log in and comes back if it dies. Nothing here
-needs `sudo`.
+tinycmdr is one Python file plus three dependencies. On macOS, with a chat account
+(a Mattermost or Telegram bot token), it runs as a per-user launchd agent that starts
+when you log in and comes back if it dies. With no chat token there is nothing remote to
+serve: the files are installed but no agent is registered, and you drive it with
+`--cli` / `--once`. Nothing here needs `sudo`.
 
 ## 1. Python 3.10-3.12
 
@@ -48,7 +50,7 @@ Unzip the package, open Terminal in that folder, and run:
 It asks, at the terminal, for everything the bot needs and writes nothing until you
 answer `Install now?`:
 
-    Mattermost bot token (input hidden, Enter to skip for the local page)
+    Mattermost bot token (input hidden, Enter to skip)
     Mattermost server, no https:// (e.g. chat.example.com)
     Your Mattermost user id (optional, but without it the bot ignores your DMs)
     Also install a Telegram bot lane (a token from @BotFather)? [y/N]
@@ -60,12 +62,14 @@ answer `Install now?`:
                                                 llm.fallbacks entry, tried in order
                                                 when the primary fails; its key goes
                                                 to .env (api_key_env), never config.json
-    Should the page be reachable from other machines on your network? [Y/n]
     Install now? [Y/n]
 
-Press Enter to take the value in brackets, and skip the token to install the local
-page instead of a chat lane. Then it builds `~/tinycmdr`, writes `config.json` and
-`.env` (mode 600), and loads the launchd agent.
+Press Enter to take the value in brackets. Skipping the token installs the files with
+**no chat account**: a session (`--cli`) and a one-shot (`--once`) work right away, but
+nothing remote is served and no launchd agent is registered (a lane-less agent would
+exit at once and KeepAlive would loop it). Re-run the installer with a token to
+register the agent. With a chat account it builds `~/tinycmdr`, writes `config.json`
+and `.env` (mode 600), and loads the launchd agent.
 
 Before it finishes it asks the endpoint you named for its metadata, once, from the venv's
 own python - the same binary the agent runs - and prints how many tokens that endpoint
@@ -90,7 +94,6 @@ Options worth knowing:
 
     --allowed-user <mattermost-user-id>   who may command the bot (deny-by-default)
     --install-dir <path>                  default ~/tinycmdr
-    --web-port <p> / --no-web             local API + health endpoint (default 8787)
     --token-file <file>                   read the token from a file instead of argv
     --use-fleet-model                     use the LAN model endpoint in
                                           fleet-defaults.json instead of the cloud one

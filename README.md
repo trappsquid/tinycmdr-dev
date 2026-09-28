@@ -21,8 +21,8 @@ its state in plain files beside itself. It is built for small and local models: 
 stable, cache-friendly prefix, and the runtime is built so a confused model cannot wedge your
 inference slot.
 
-Reach it from a **terminal**, a **browser page**, or **chat** (Mattermost, Telegram) — one
-process, one vocabulary, the same conversations either way.
+Reach it from a **terminal** or **chat** (Mattermost, Telegram) — one process, one
+vocabulary, the same conversations either way.
 
 ## Install
 
@@ -72,8 +72,7 @@ against a corrupted or truncated download, not against the release itself being 
 platform; a run with no terminal at all never asks. **macOS** has one kind of install — a
 per-user launchd agent, `--no-launchd` to skip it — so it takes `--yes` and everything below,
 and has no `--mode`. Every question has a switch: `--mattermost-url`, `--allowed-user`,
-`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--web-host <addr>`,
-`--web-port <p>`, `--no-web`, `--no-path`.
+`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--no-path`.
 
 A **second** install on one host needs its own identity: `TINYCMDR_SERVICE=tinycmdr-work bash
 install/install-tinycmdr.sh …` on Linux, `--label com.tinycmdr.work` on macOS. A service name
@@ -90,9 +89,6 @@ install's autostart away.
 -VerifyOnly            report on an existing install, change nothing
 -Uninstall [-Force]    stop it, remove the folder and the autostart entry
 -AsService             boot-start task instead of a logon shortcut (needs an elevated shell)
--EnableWeb             serve the local page while the bot runs
--WebPort <p>           page port (default 8787)
--WebHost <addr>        0.0.0.0 to reach it from your network, 127.0.0.1 for this machine only
 -TelegramToken <t>     a Telegram bot token
 -TelegramIds <ids>     your numeric Telegram id(s), comma or space separated
 -AddEndpoint <spec>    another endpoint, repeatable: "<base_url>;<model>;<alias>;<key>"
@@ -107,14 +103,18 @@ Day-to-day notes for a Mac: [`install/README-macos.md`](install/README-macos.md)
 ```bash
 tinycmdr setup        # once: point it at your model endpoint
 tinycmdr              # terminal session
-tinycmdr web          # browser page on http://127.0.0.1:8787
 tinycmdr --once "…"   # one task, then exit
 ```
 
-The page is where a working agent is easiest to watch: tool calls stream in as they happen, and a
-message sent mid-run steers the run instead of queueing behind it. The page always needs the
-token from `.env`; the installer asks whether other machines on your network may reach it
-(`0.0.0.0`) or only this one (`127.0.0.1`).
+A chat lane is where a working agent is easiest to watch: tool calls stream in as they happen,
+and a message sent mid-run steers the run instead of queueing behind it. Neither lane is
+primary: whichever token you configure is the lane that runs, and both share the same
+sessions, notes, tasks and skills as the terminal.
+
+A chat account is optional. With **no** Mattermost and no Telegram token the install is a
+**CLI-only** one: `tinycmdr` opens a session and `tinycmdr --once "<task>"` runs one task,
+with nothing remote to serve. With **both** tokens set there is nothing to guess, so a bare
+start refuses and names `--telegram` / `--mattermost`.
 
 ## Use it
 
@@ -129,7 +129,7 @@ and in chat:
 | `model` | the models this install can route to (asks the endpoints) |
 | `model use <name>` · `model add <url>` · `model remove <x>` | switch, add or drop an endpoint |
 | `tasks [--all]` | the task ledger: open, in progress, recently done |
-| `logs [n]` · `version` · `proc` · `ports` | log tail, version, this folder's processes and listeners |
+| `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
 | `update` | pull the published build (`update <file\|zip\|folder>` puts one in place by hand) |
 | `clean` · `token` · `config get\|set <dotted.key>` | junk in this folder, where secrets live, edit config.json |
 | `restart` | restart through this host's own door (launchd, systemd, Task Scheduler) |

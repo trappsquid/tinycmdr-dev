@@ -2,18 +2,16 @@
 
 Two incidents on a live install, 2026-09-28, both invisible until someone went looking:
 
-  * the bot was up, `systemctl` said `active`, `/api/health` said `{"ok": true}`, and
-    `tinycmdr health` named mattermost because a TOKEN existed - while the bot could not
-    hear anybody, 510 restarts deep. Every surface told the truth about the wrong question:
-    "is the process up" instead of "can it hear me";
-  * the operator asked the agent, from Mattermost, to make the page reachable. The agent
-    wrote config.json correctly and the service restarted - and nothing anywhere said that a
-    config edit needs a restart to apply, or that the value written (`0.0.0.0`) is the one
-    the page's Host check cannot honour.
+  * the bot was up, `systemctl` said `active`, `tinycmdr health` named mattermost because a
+    TOKEN existed - while the bot could not hear anybody, 510 restarts deep. Every surface
+    told the truth about the wrong question: "is the process up" instead of "can it hear me";
+  * the operator asked the agent, from Mattermost, to change a setting. The agent wrote
+    config.json correctly and the service restarted - and nothing anywhere said that a config
+    edit needs a restart to apply.
 
-So this grades: a failure count that survives the restart that follows it, the
-configured-vs-connected distinction, the recovery line, the `health` exit code, doctor's
-lane/page/drift lines, and the drift detector. Hermetic: the staged copy is the module, so
+The local web UI is gone, so these facts are graded where they now live: `lanes_snapshot()`,
+`tinycmdr health` (exit code and lane line), the persisted `logs/state.json`, `tinycmdr
+doctor`'s lane lines, and `config_drift()`. Hermetic: the staged copy is the module, so
 `logs/state.json` lands in the stage.
 
     python tests/test_lane_health.py
@@ -72,11 +70,11 @@ lanes = T.lanes_snapshot()
 check("a configured lane with no record reads 'configured', not 'up'",
       lanes["mattermost"]["state"] == "configured"
       and lanes["mattermost"]["failed_starts"] == 0, lanes)
-check("the page lane is listed too (the fixture enables it)",
-      "web" in lanes, list(lanes))
-h = T.health_payload()
-check("health is ok while nothing has failed", h["ok"] is True, h)
-check("...and says nothing about a config change", h["config_changed"] == "", h)
+check("the lanes are the chat lanes, and only those (no page lane)",
+      set(lanes) <= {"mattermost", "telegram"}, list(lanes))
+rc, out, _err = run_verb(T._verb_health)
+check("health names the configured lane and its state on one line",
+      "lane mattermost=configured" in out, out)
 
 # --------------------------------------- a failure counts ACROSS the restarts it causes
 n1, same1, _first = T.lane_down("mattermost", "401 Invalid or expired session")
@@ -96,8 +94,8 @@ check("after a restart the lane still reads 'failed'",
       lanes["mattermost"]["state"] == "failed", lanes)
 check("...with the attempt count intact", lanes["mattermost"]["failed_starts"] == 2, lanes)
 check("...and the reason", "401" in lanes["mattermost"]["detail"], lanes)
-check("health is NOT ok while a configured lane has failed",
-      T.health_payload()["ok"] is False, T.health_payload())
+rc, out, err = run_verb(T._verb_health)
+check("health reports a failed lane on its stdout line", "lane mattermost=failed" in out, out)
 
 n3, same3, _ = T.lane_down("mattermost", "connection refused")
 check("a DIFFERENT error is a fresh failure, not attempt 3",
@@ -109,7 +107,6 @@ check("a recovered lane reads 'up'",
       T.lanes_snapshot()["mattermost"]["state"] == "up", T.lanes_snapshot())
 check("...and its failure record is cleared on disk",
       "mattermost" not in failures_on_disk(), failures_on_disk())
-check("health is ok again", T.health_payload()["ok"] is True, T.health_payload())
 
 # ------------------------------------------------ the config edit that never applied
 check("a freshly loaded config shows no drift", T.config_drift() == "", T.config_drift())
@@ -118,14 +115,19 @@ _cfg.setdefault("agent", {})["max_steps"] = int((_cfg.get("agent") or {}).get("m
 (STAGE / "config.json").write_text(json.dumps(_cfg, indent=2), encoding="utf-8")
 _drift = T.config_drift()
 check("a config.json edited after start IS reported", "restart to apply" in _drift, _drift)
-check("...and rides /api/health for anyone watching",
-      "restart to apply" in T.health_payload()["config_changed"],
-      T.health_payload()["config_changed"])
 
 # ------------------------------------------------------------ the two verbs, on top
 _kind, _fd = T._lock_target()          # (kind, fd): the lock target is a descriptor
 fcntl.flock(_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)      # pretend to be the running bot
 try:
+    # A running install whose lane is up must exit 0, so the non-zero below means the
+    # lane, not the lock.
+    T.lane_up("mattermost", "connected as @the-bot")
+    rc0, out0, err0 = run_verb(T._verb_health)
+    check("health exits 0 while the lock is held and no lane has failed",
+          rc0 == 0, (rc0, out0, err0))
+    check("...and names the up lane", "lane mattermost=up" in out0, out0)
+
     T.lane_down("mattermost", "401 Invalid or expired session")
     rc, out, err = run_verb(T._verb_health)
     check("health names the state, not just the lane", "mattermost=failed" in out, out)
@@ -137,7 +139,6 @@ try:
 
     rc_d, out_d, err_d = run_verb(T._verb_doctor)
     check("doctor prints the lane states", "mattermost=failed" in out_d, out_d[-500:])
-    check("doctor prints where the page stands", "page      :" in out_d, out_d[-500:])
     check("doctor flags the pending config change", "restart to apply" in out_d + err_d,
           (out_d + err_d)[-500:])
     check("...and a down lane is listed as a problem",

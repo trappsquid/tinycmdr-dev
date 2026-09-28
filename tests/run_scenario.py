@@ -117,7 +117,6 @@ def stage_install(workdir, budget):
     cfg["llm"]["api_key"] = os.environ.get("TINYCMDR_TEST_API_KEY",
                                           cfg["llm"].get("api_key") or "none")
     cfg["llm"]["max_context_tokens"] = int(budget)
-    cfg["web"] = {"enabled": False}
     cfg["search"] = {
         "providers": [{"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",
                        "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"}],

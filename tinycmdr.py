@@ -269,21 +269,6 @@ DEFAULT_CONFIG = {
         "allow_cloud_egress": False,
         "max_results": 5,
     },
-    "web": {
-        # Opt-in legacy local chat page (a browser page plus /api/chat on
-        # loopback). tinycmdr is driven from Mattermost, so a fresh host has no
-        # reason to open a port — this box turns it on in its own config.
-        # Local checks need no port at all:  tinycmdr.py --once "<task>"  /  --cli
-        "enabled": False,
-        "port": 8787,
-        "token": "",          # set to reach it from other machines; empty = loopback only
-        "host": "",           # optional explicit bind address
-        # Optional TLS for the page (security review 2026-09-23): PEM paths, both
-        # or neither. A half-configured pair REFUSES to serve - never fall back to
-        # plaintext on a lane the operator believes is https.
-        "tls_cert": "",
-        "tls_key": "",
-    },
     "agent": {
         "bot_name": socket.gethostname(),
         "history_exchanges": 20,
@@ -789,12 +774,11 @@ def config_drift():
     Reads happen once, at start (`load_config`), so an edit - by a person, or by the agent
     acting on the operator's own message - changes NOTHING until a restart, and nothing
     said so. Measured 2026-09-28 on a live install: the operator asked the agent from Mattermost
-    to make the page reachable ("...accessible from LAN so (0.0.0.0)"), the agent wrote
-    config.json, the service was restarted, and the page still refused - because that value
-    is the one the Host check could not honour (a separate defect, fixed above), and because
-    a second stale instance rewrote the file minutes later. `config set` does warn ("a
-    running bot reads config.json at start"), but an agent answering from chat has no way to
-    know whether the value itself works, and the operator only sees "still broken".
+    to change a setting, the agent wrote config.json, the service was restarted, and the
+    change did not take - the answer the operator needed was "the file changed, this
+    process has not", and no surface said it. `config set` does warn ("a running bot reads
+    config.json at start"), but an agent answering from chat has no way to know whether the
+    change actually took effect, and the operator only sees "still broken".
     """
     stamp = _config_stamp()
     if not stamp or not CONFIG_SOURCE["mtime"]:
@@ -845,7 +829,6 @@ def load_config():
     env_map = {
         "TINYCMDR_MM_TOKEN": ("mattermost", "token"),
         "TINYCMDR_TG_TOKEN": ("telegram", "token"),
-        "TINYCMDR_WEB_TOKEN": ("web", "token"),
         "TINYCMDR_LLM_API_KEY": ("llm", "api_key"),
         "TINYCMDR_MODEL": ("llm", "model"),
         "TINYCMDR_BASE_URL": ("llm", "base_url"),
@@ -2996,8 +2979,6 @@ def ensure_atlas(path=None, force=False):
             "install: %s" % root,
             "scratch: %s" % (os.environ.get("TEMP") or os.environ.get("TMPDIR") or "/tmp"),
             "log: %s" % (BASE_DIR / "tinycmdr.log"),
-            "web ui: %s" % (("port %s" % CONFIG.get("web", {}).get("port"))
-                            if CONFIG.get("web", {}).get("enabled") else "off"),
             "model endpoint: %s" % (CONFIG.get("llm", {}).get("base_url") or "unset"),
         ]
         layout = purposes + extras[:16]
@@ -7986,22 +7967,11 @@ class Scheduler:
         key = f"sched-{name}"
         if job.get("model"):
             AGENT.model_overrides[key] = job["model"]
-        # Where this job reports is a DESTINATION, resolved once - a channel, a
-        # web conversation, or nowhere - and the callback list that used to be
-        # repeated here now lives in drive_run, so a job cannot be wired
-        # differently from a chat turn.
+        # Where this job reports is a DESTINATION, resolved once - a channel or
+        # nowhere - and the callback list that used to be repeated here now lives
+        # in drive_run, so a job cannot be wired differently from a chat turn.
         token = job.get("channel_id")
-        web_run = None
-        web_key = web_token_key(token)
-        if web_key:
-            # scheduled from a browser: it reports into that conversation, where
-            # the operator can read it (and the rail shows it working)
-            web_run = web_new_scheduled_run(web_key)
-        if web_run is not None:
-            dest = WebDestination(web_run)
-            door = web_run            # the conversation is the door as well
-            web_run.add("you", job["task"])
-        elif self.dispatcher and token and not web_key:
+        if self.dispatcher and token:
             dest = MattermostDestination(self.dispatcher, token, None)
             door = {"label": "answer in this channel",
                     "opener": lambda q, opts, w, l:
@@ -8024,12 +7994,8 @@ class Scheduler:
             answer = f"⚠️ scheduled job '{name}' failed: {e}"
         finally:
             AGENT.model_overrides.pop(key, None)
-        if web_run is not None:
-            _finish_web_run(web_run, rep, answer, failed=failed)
-        else:
-            rep.finish(ok=not failed)
-            if not web_key:
-                report(token, f"⏰ **{name}**\n\n{answer}")
+        rep.finish(ok=not failed)
+        report(token, f"⏰ **{name}**\n\n{answer}")
 
     dispatcher = None   # set by run_bot so scheduled jobs can report progress
     # sched-<name> -> the row a job is parked on. Only a job WITH a reporting channel
@@ -8062,7 +8028,7 @@ def _schema(description, properties, required):
 # This is the third move, and it has one hard constraint: Mattermost hands messages to
 # the LISTENER thread, so the question is POSTED there and ANSWERED there, while the
 # WAITING happens on the run's own thread. Any door with a human behind it can answer
-# (dispatcher.answer_question, the web UI's /api/steer, the CLI's input()); a door with
+# (dispatcher.answer_question, the CLI's input(), a lane's own opener); a door with
 # nobody behind it - a scheduled job with no channel, a sub-agent - must not wait at all.
 # Whoever cannot answer must leave the row unclaimed, or the run stalls on a question
 # the operator never saw.
@@ -8178,9 +8144,9 @@ def _ask_door(session_key, ctx):
     if isinstance(direct, dict):
         door.update({k: v for k, v in direct.items() if v})
     elif direct is not None:
-        # A door may be an OBJECT (the web run) as well as a dict: duck-typed, because
-        # the shapes live in different corners of this file, and a dict-only check
-        # silently reduced the web UI to "nobody can answer".
+        # A door may be an OBJECT as well as a dict: duck-typed, because the shapes
+        # come from different lanes, and a dict-only check silently reduced such a
+        # lane to "nobody can answer".
         for k in ("opener", "post", "post_done", "close_question", "answer", "label"):
             v = getattr(direct, k, None)
             if v is not None:
@@ -8237,7 +8203,7 @@ def ask_operator(session_key, question, ctx=None, options=None, timeout=None,
                                   else "this run has nobody it can ask")
         row.setdefault("answer", None)
         # Stage two of the door, and the reason `post` stays mandatory even for an
-        # opener door: this is where the web page draws the question and where the
+        # opener door: this is where the lane draws the question and where the
         # dispatcher touches the channel's activity so the stall watchdog can see that
         # a run doing this IS making progress.
         try:
@@ -13330,7 +13296,7 @@ SCHEDULER = Scheduler(JOBS_FILE)
 
 
 # --------------------------------------------------------------------------
-# Model catalog / switching — shared by Mattermost, the web UI and /status
+# Model catalog / switching — shared by Mattermost and /status
 # --------------------------------------------------------------------------
 
 _MODEL_CACHE = {"at": 0.0, "entries": []}
@@ -13523,20 +13489,20 @@ def _save_overrides(replace=False):
 # Every interface shows the same run: the status line while it works, a line per
 # tool call with what it ran and what came back, the model's own narration as it
 # streams, a check-in every so often, the questions, and the answer. That used to
-# be written three times - ProgressReporter for Mattermost, WebRun's callbacks for
-# the browser, and a pile of print() closures inside the console lane - so the
-# three drifted: the browser lost exit codes, failure reasons and check-ins
-# entirely, and the console could not even import the wording (the generator cuts
-# this file between model_command and run_cli, so anything the console needs has
-# to live ABOVE that cut, which is why the helpers below sit here).
+# be written lane by lane - one reporter for Mattermost and a pile of print()
+# closures inside the console lane - so the two drifted: the console lost exit
+# codes, failure reasons and check-ins entirely, and it could not even import the
+# wording (the generator cuts this file between model_command and run_cli, so
+# anything the console needs has to live ABOVE that cut, which is why the helpers
+# below sit here).
 #
 # The split:
 #
 #   RunReporter      what is SAID, once: wording, cadence, caps, scrubbing,
 #                    tool-line merging, the source tag, the done line.
-#   Destination      how a lane LOOKS: four verbs and a cost model. A browser
-#                    line is free, a Mattermost post notifies a phone, a terminal
-#                    line is scrolled away - those are the only real differences.
+#   Destination      how a lane LOOKS: four verbs and a cost model. A Mattermost
+#                    post notifies a phone, a terminal line is scrolled away -
+#                    those are the only real differences.
 #   drive_run()      the one place AGENT.run's callbacks are wired.
 #
 # A lane that implements the four verbs gets the whole vocabulary and can never
@@ -13576,7 +13542,7 @@ class Destination:
     shows_calls = False
     # Does this lane want the model's private REASONING streamed into a line? Off
     # everywhere by default: chat would pay an edit per second on a phone for text
-    # the model never addressed to the operator, and the page's transcript turned
+    # the model never addressed to the operator, and a transcript turned
     # out to read better without it too (operator, 2026-09-21). The machinery stays:
     # a lane that wants it sets this True.
     shows_reasoning = False
@@ -13736,7 +13702,7 @@ def checkin_line(session_key, steps, elapsed, name=None, args=None):
 
 # --- the tones, as Mattermost attachment colours ------------------------------
 # Kept here with the reporter because they are the reporting palette, not a
-# Mattermost detail: the browser maps the same tones to CSS, the terminal to ANSI.
+# Mattermost detail: the terminal maps the same tones to ANSI.
 _MEMORY_LABELS = {"remember": "📝 memory", "notes": "📝 notes"}
 
 COLOR_NARRATION = "#2ecc71"
@@ -14271,8 +14237,8 @@ class RunReporter:
         """A command matched agent.confirm_patterns, so ASK before running it.
 
         The shell tool treats "no confirm_cb" as no consent and returns DECLINED,
-        so a lane that cannot ask cannot run that command at all - which is how
-        the browser went quiet on work the chat lane would have run.
+        so a lane that cannot ask cannot run that command at all - which is how a
+        lane without an ask door went quiet on work the chat lane would have run.
         """
         answer = self.ask(
             "⚠️ This command matches a confirm-pattern. Allow it?\n"
@@ -14357,9 +14323,9 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
               source="main"):
     """Run the agent, wired to ONE reporter. The only place these callbacks live.
 
-    Three lanes used to build this keyword list three times with three different
-    subsets, which is exactly how the browser ended up without the exit codes,
-    the failure reasons, the check-ins or the confirm door.
+    Lanes used to build this keyword list separately with different subsets,
+    which is exactly how one of them ended up without the exit codes, the failure
+    reasons, the check-ins or the confirm door.
     """
     try:
         answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
@@ -14611,7 +14577,7 @@ class CliDestination(Destination):
     TONES = {"note": "2", "narration": "2;37", "say": "37", "tool": "36",
              "tool_done": "32", "tool_fail": "1;31", "checkin": "2",
              "ask": "1;35", "system": "2", "error": "1;31", "final": "2;32"}
-    # The same glyphs the page draws (▸ a call, ✔ its result, ✘ a failure): one
+    # The same glyphs every lane draws (▸ a call, ✔ its result, ✘ a failure): one
     # vocabulary across the lanes, and in a terminal - where colour can be piped
     # away - the glyph is what still says which line is which.
     GLYPHS = {"tool": "▸ ", "tool_done": "✔ ", "tool_fail": "✘ ", "ask": "? ",
@@ -16065,742 +16031,13 @@ class MattermostDispatcher:
         self._post(channel_id, post_root, answer)
 
 
-# --------------------------------------------------------------------------
-# Fallback web UI — same agent, no Mattermost required
-# --------------------------------------------------------------------------
-
-WEB_PAGE = """
-<!doctype html><html><head><meta charset=utf-8>
-<meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name=theme-color content="#1a1d23">
-<meta name=mobile-web-app-capable content=yes>
-<meta name=apple-mobile-web-app-capable content=yes>
-<meta name=apple-mobile-web-app-status-bar-style content=black-translucent>
-<meta name=apple-mobile-web-app-title content=tinycmdr>
-<link rel=manifest href="/manifest.webmanifest">
-<link rel=icon href="/icon.png">
-<link rel=apple-touch-icon href="/icon.png">
-<title>tinycmdr</title><style>
-:root{--bg:#1a1d23;--panel:#14161a;--line:#2b2f36;--fg:#e6e6e6;--dim:#8b939e;
---you:#2b5278;--tool:#7fa8d4;--ok:#5fbf7f;--bad:#e0736a;--say:#c9b47a;--accent:#4a76a8}
-*{box-sizing:border-box}
-body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;
-margin:0;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
-header{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);
-border-bottom:1px solid var(--line);font-size:13px;color:var(--dim);flex:0 0 auto}
-header b{color:var(--fg);font-weight:600}
-header .grow{flex:1}
-header .chip{background:var(--line);border-radius:20px;padding:2px 10px;font-size:12px;
-white-space:nowrap}
-header #title{color:var(--fg);max-width:38vw;overflow:hidden;text-overflow:ellipsis;
-white-space:nowrap;cursor:pointer}
-header #stop{display:none;background:#8a3b34;padding:5px 14px;font-size:13px}
-body.busy header #stop{display:inline-block}
-header .icon{background:transparent;color:var(--dim);padding:2px 8px;font-size:16px;border-radius:6px}
-header .icon:hover{background:var(--line);color:var(--fg)}
-header #ver.bad{color:var(--bad);font-weight:600}
-#lanewarn{display:none;padding:7px 12px;background:#3a2323;border-bottom:1px solid var(--line);
-color:var(--bad);font-size:13px}
-#lanewarn.show{display:block}
-#meter{flex:0 0 auto;height:3px;background:#20242b}
-#meterfill{height:100%;width:0;background:var(--accent);transition:width .3s}
-#note{flex:0 0 auto;background:#1d2530;border-bottom:1px solid var(--line);color:#a9b6c6;
-font-size:12.5px;padding:6px 14px;display:none;gap:10px;align-items:center}
-#note.show{display:flex}
-#note span{flex:1}
-#note button{padding:3px 10px;font-size:12.5px}
-main{flex:1;display:flex;min-height:0;position:relative}
-#rail{width:255px;flex:0 0 auto;background:var(--panel);border-right:1px solid var(--line);
-display:flex;flex-direction:column;min-height:0}
-#rail.hide{display:none}
-#newchat{margin:10px;background:var(--line);color:var(--fg);padding:8px;border-radius:8px;
-text-align:left;font-size:13.5px}
-#newchat:hover{background:#343a44}
-#sessions{flex:1;overflow-y:auto;padding:0 6px 8px}
-.row{padding:7px 9px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:2px}
-.row:hover{background:#20242b}
-.row.on{background:#26313f}
-.row .t{font-size:13.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row .m{font-size:11.5px;color:var(--dim);display:flex;gap:7px;align-items:center}
-.row .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
-.row .dot.work{background:var(--say);animation:pulse 1.4s infinite}
-.row.other .t{color:#9aa3ad}
-@keyframes pulse{50%{opacity:.35}}
-#railfoot{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;color:var(--dim)}
-#railfoot label{display:flex;gap:7px;align-items:center;cursor:pointer}
-#logwrap{flex:1;display:flex;min-width:0;flex-direction:column}
-#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;scroll-behavior:smooth}
-.run{display:contents}
-.msg{max-width:860px;padding:9px 13px;border-radius:10px;white-space:pre-wrap;word-break:break-word;
-font-size:15px}
-.msg.copyable{position:relative;padding-right:58px}
-.copyb{position:absolute;top:4px;right:6px;font:inherit;font-size:11px;line-height:1;padding:3px 7px;
-border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--dim);cursor:pointer;
-opacity:0;transition:opacity .12s}
-.copyable:hover .copyb,.copyb:focus{opacity:.95}
-.copyb.done{color:var(--ok);border-color:var(--ok);opacity:1}
-@media (hover:none){.copyb{opacity:.5}}
-.you{align-self:flex-end;background:var(--you)}
-.say{align-self:flex-start;color:var(--say);background:transparent;padding:2px 13px;font-style:italic}
-.thinking{align-self:flex-start;color:#767f8d;background:transparent;padding:2px 13px;
-font-style:italic;font-size:13.5px}
-/* The tones are CARDS: a 3px accent bar, a tint, and a glyph, the way the chat
-lane's attachments read. The chrome lives in CSS and ::before, never in the DOM,
-so a line's textContent stays exactly what the model or the tool said. */
-.final{align-self:flex-start;background:#242c37;color:#f2f5f9;cursor:copy;
-border-left:3px solid var(--accent);border-radius:0 10px 10px 0;padding-left:12px;
-box-shadow:0 1px 0 #2f3641}
-.ask{align-self:flex-start;background:#2b2a1f;color:#e2cf8a;border:1px solid #4a442b;
-border-left:3px solid #b99a3f}
-.tool,.tool_done,.tool_fail{align-self:flex-start;max-width:860px;white-space:pre-wrap;
-font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:5px 11px;
-border-left:3px solid var(--tool);background:#171b21;border-radius:0 8px 8px 0}
-.tool{color:#9dbde0}
-.tool::before{content:"▸ ";color:var(--tool)}
-/* done and failed carry the reporter's own mark and a tint; only the CALL
-gets a glyph, or every line wears two */
-.tool_done{color:#a9d8b8;border-left-color:var(--ok);background:#151d18}
-.tool_fail{color:#f0b8b2;border-left-color:var(--bad);background:#1f1616}
-.system{align-self:center;color:var(--dim);font-size:12.5px}
-.checkin{align-self:flex-start;color:#98a2ae;background:#161a1f;padding:3px 11px;
-font-size:12.5px;font-family:ui-monospace,Consolas,monospace;
-border-left:3px solid #3a414b;border-radius:0 8px 8px 0}
-.error{align-self:flex-start;color:#f0b8b2;background:#1f1616;padding:5px 11px;
-border-left:3px solid var(--bad);border-radius:0 8px 8px 0}
-.stamp{color:#5c636d;font-size:11px;margin-right:7px}
-#drawer{position:absolute;top:0;right:0;bottom:0;width:370px;max-width:92vw;background:var(--panel);
-border-left:1px solid var(--line);display:none;flex-direction:column}
-#drawer.show{display:flex}
-#tabs{display:flex;gap:4px;padding:8px;border-bottom:1px solid var(--line);flex:0 0 auto}
-#tabs button{background:transparent;color:var(--dim);padding:5px 10px;font-size:13px}
-#tabs button.on{background:var(--line);color:var(--fg)}
-#panel{flex:1;overflow-y:auto;padding:10px 12px;font-size:13px}
-#panel .p{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #23272e;align-items:flex-start}
-#panel .p .g{flex:0 0 auto;font-size:11px;color:var(--dim);min-width:52px}
-#panel .p .b{flex:1;white-space:pre-wrap;word-break:break-word}
-#panel .p.done .b{color:var(--dim)}
-#panel .p .n{color:var(--dim);font-size:11.5px;margin-top:3px}
-#panel .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;white-space:pre-wrap;
-word-break:break-all;color:#c3cad3}
-#panel h4{margin:2px 0 8px;font-size:12px;color:var(--dim);font-weight:600;text-transform:uppercase}
-#bar{position:relative;display:flex;gap:8px;padding:12px;background:var(--panel);
-border-top:1px solid var(--line);flex:0 0 auto}
-#in{flex:1;background:var(--line);border:1px solid #3a3f47;border-radius:8px;color:var(--fg);
-padding:10px 12px;font:inherit;resize:none;max-height:30dvh}
-#in:focus{outline:none;border-color:#4a76a8}
-#pal{position:absolute;left:12px;right:12px;bottom:100%;margin-bottom:6px;background:var(--panel);
-border:1px solid var(--line);border-radius:10px;max-height:40dvh;overflow-y:auto;
-box-shadow:0 10px 30px rgba(0,0,0,.45);z-index:9}
-#pal.hide{display:none}
-#pal div{padding:7px 12px;font-size:13px;cursor:pointer;display:flex;gap:10px}
-#pal div.on{background:#26313f}
-#pal .c{color:var(--fg);font-family:ui-monospace,Consolas,monospace}
-#pal .h{color:var(--dim)}
-button{background:var(--accent);border:0;border-radius:8px;color:#fff;padding:0 18px;font:inherit;cursor:pointer}
-button:hover{background:#5585b8}
-@media(max-width:760px){
- #rail{position:absolute;top:0;bottom:0;left:0;z-index:8;box-shadow:0 0 30px rgba(0,0,0,.5)}
- header #title{max-width:26vw}
-}
-</style></head><body>
-<header>
-<button id=menu class=icon title="conversations">&#9776;</button>
-<b>tinycmdr</b><span id=ver></span>
-<span id=title title="click to rename"></span>
-<span class=grow></span>
-<span id=model class=chip></span><span id=state>idle</span>
-<button id=stop>Stop</button>
-<button id=tools class=icon title="tasks, jobs, log, inventory">&#8943;</button>
-</header>
-<div id=meter><div id=meterfill></div></div>
-<div id=lanewarn></div>
-<div id=note><span id=notetext></span><button id=noteact style="display:none"></button></div>
-<main>
-<aside id=rail>
-<button id=newchat>+ New conversation</button>
-<div id=sessions></div>
-<div id=railfoot>
-<label><input id=allclients type=checkbox> show every conversation on this host</label>
-<div id=host></div>
-</div>
-</aside>
-<div id=logwrap><div id=log></div></div>
-<aside id=drawer>
-<div id=tabs>
-<button data-p=tasks>Tasks</button><button data-p=jobs>Jobs</button>
-<button data-p=log>Log</button><button data-p=inventory>Skills</button>
-<button id=panelclose style="margin-left:auto;background:transparent;color:var(--dim)">&#10005;</button>
-</div>
-<div id=panel></div>
-</aside>
-</main>
-<div id=bar>
-<div id=pal class=hide></div>
-<textarea id=in rows=1 placeholder="Message tinycmdr... ( / for commands )" autofocus></textarea>
-<button id=send>Send</button></div>
-<script>
-// The transcript is a pure function of the server's ordered line lists.
-//
-// Every poll hands over a run's complete, ordered lines, each carrying a stable
-// uid, and the DOM is reconciled to match it: repeats are no-ops, growth repaints
-// in place, order comes from the server. That contract is unchanged - what is new
-// is that a conversation is a thing the server keeps. The page names itself once
-// (X-Tinycmdr-Client), owns the conversations it makes, and paints a reload or a
-// second device from /api/session instead of from this browser's localStorage.
-const log=document.getElementById('log'),inp=document.getElementById('in'),
-      sendBtn=document.getElementById('send'),stopBtn=document.getElementById('stop'),
-      stateEl=document.getElementById('state'),noteEl=document.getElementById('note'),
-      noteText=document.getElementById('notetext'),noteAct=document.getElementById('noteact'),
-      verEl=document.getElementById('ver'),warnEl=document.getElementById('lanewarn'),
-      railEl=document.getElementById('rail'),
-      sessEl=document.getElementById('sessions'),titleEl=document.getElementById('title'),
-      modelEl=document.getElementById('model'),meterFill=document.getElementById('meterfill'),
-      drawerEl=document.getElementById('drawer'),panelEl=document.getElementById('panel'),
-      palEl=document.getElementById('pal'),hostEl=document.getElementById('host'),
-      allEl=document.getElementById('allclients'),menuBtn=document.getElementById('menu'),
-      toolsBtn=document.getElementById('tools'),newBtn=document.getElementById('newchat'),
-      tabsEl=document.getElementById('tabs'),closePanelBtn=document.getElementById('panelclose');
-const PAGE_VER="{{VERSION}}";
-// The token comes from the link first (the installer prints one that contains it), then from
-// last time. The old prompt said "leave empty if loopback", which was wrong the moment an
-// install HAD a token: empty means unauthorized, and nothing said where the token was.
-let token='';
-try{token=new URLSearchParams(location.search).get('token')||'';}catch(e){}
-if(!token){token=localStorage.fb_token||'';}
-function askToken(retry){
- const msg=retry
-   ? 'That token was not accepted.\\n\\nIt is the TINYCMDR_WEB_TOKEN line in .env on that '
-     +'machine (the installer prints the full path, and the link it prints contains the token).'
-   : 'This page needs its access token.\\n\\nIt is the TINYCMDR_WEB_TOKEN line in .env '
-     +'on that machine - or use the link the installer printed, which carries the token.';
- const a=prompt(msg+(!retry?'\\n\\nIf this install has no token, leave this empty.':''))||'';
- if(a){token=a;}
- return a;
-}
-if(!token){askToken(false);}
-if(token){localStorage.fb_token=token;}
-// keep the address bar usable as a bookmark without the token sitting in it
-if(location.search){try{history.replaceState(null,'',location.pathname);}catch(e){}}
-// One id per browser, made once. It is what makes a conversation YOURS on a host
-// that other people also use; it is not a secret, so it stays in localStorage.
-let clientId=localStorage.fb_client||'';
-if(!clientId){clientId='c'+Math.random().toString(36).slice(2,10)+Date.now().toString(36);
- localStorage.fb_client=clientId;}
-function H(extra){
- const h={'Content-Type':'application/json','X-Tinycmdr-Token':token,
-          'X-Tinycmdr-Client':clientId};
- if(extra)for(const k in extra)h[k]=extra[k];
- return h;
-}
-let runId=null, gen=0, timer=null, fails=0, localSeq=0, sessionKey=null,
-    sessions=[], budget=0, panelWhich=null, commands=[], palAt=-1, hist=[], histAt=-1,
-    lastRail=0;
-const runs=new Map();          // run id -> {el, nodes:Map(uid->node), txt:Map(uid->string), data:[]}
-
-function note(text,action){
- noteText.textContent=text||'';
- noteEl.classList.toggle('show',!!text);
- if(action){noteAct.textContent=action[0];noteAct.style.display='inline-block';
-  noteAct.onclick=function(){note('');action[1]();};}
- else{noteAct.style.display='none';noteAct.onclick=null;}
-}
-function ensureRun(id){
- let r=runs.get(id);
- if(!r){const el=document.createElement('div');el.className='run';el.dataset.run=id;
-  log.appendChild(el);r={el:el,nodes:new Map(),txt:new Map(),data:[]};runs.set(id,r);}
- return r;
-}
-function clearLog(){
- log.textContent='';runs.clear();
-}
-function lineStamp(l){return (l.kind==='final'||l.kind==='thinking')?(l.t+'s'):null;}
-function paint(node,l){
- const cls='msg '+l.kind;
- if(node.className!==cls)node.className=cls;
- const stamp=lineStamp(l);
- node.textContent='';          // drops a previous copy button as well
- node._copyb=null;
- if(stamp!==null){const s=document.createElement('span');s.className='stamp';
-  s.textContent=stamp;node.appendChild(s);}
- node.appendChild(document.createTextNode(l.text));
- if(COPYABLE[l.kind]){node.classList.add('copyable');attachCopy(node);}
-}
-function reconcile(id,lines){
- const r=ensureRun(id);
- const near=log.scrollHeight-log.scrollTop-log.clientHeight<90;
- const seen=new Set();
- let pos=0;
- for(const l of lines){
-  if(!l||!l.uid)continue;
-  seen.add(l.uid);
-  let node=r.nodes.get(l.uid);
-  if(!node){node=document.createElement('div');r.nodes.set(l.uid,node);r.el.appendChild(node);}
-  const sig=l.kind+'|'+lineStamp(l)+'|'+l.text;
-  if(r.txt.get(l.uid)!==sig){paint(node,l);r.txt.set(l.uid,sig);}
-   // keep the DOM in the server's order, but only touch it when a line is
-   // actually out of place: re-appending every node on every poll is a
-   // layout storm on a phone and makes the transcript flicker.
-  if(r.el.children[pos]!==node)r.el.insertBefore(node,r.el.children[pos]||null);
-  pos++;
- }
- for(const pair of [...r.nodes])if(!seen.has(pair[0])){pair[1].remove();r.nodes.delete(pair[0]);r.txt.delete(pair[0]);}
- r.data=lines;
- if(near&&runs.size===1)log.scrollTop=log.scrollHeight;
- return r;
-}
-function localRun(kind,text){          // slash-command output: not part of a run
- const id='local-'+(++localSeq);
- reconcile(id,[{uid:id+'#0',kind:kind,text:text,t:null,i:0}]);
- return id;
-}
-function status(j){
- stateEl.textContent=j.done?((j.status&&j.status!=='done')?j.status
-   :('done in '+j.elapsed+'s, '+j.steps+' tool calls'))
-   :((j.status||'working')+' - '+j.elapsed+'s, '+j.steps+' tool calls');
-}
-function busy(on){document.body.classList.toggle('busy',on);inp.placeholder=on
-  ?'Steer it mid-run (/stop to cancel)...':'Message tinycmdr... ( / for commands )';}
-// The LAN page is plain http://, which is NOT a secure context, so
-// navigator.clipboard is undefined there and click-to-copy did nothing at all
-// (measured 2026-09-20). A selection through the document is the path that works
-// everywhere; the async API is only the nicer one when the browser offers it.
-function copyText(text){
- try{
-  const ta=document.createElement('textarea');
-  ta.value=text;ta.style.position='fixed';ta.style.top='-1000px';
-  document.body.appendChild(ta);
-  if(ta.select)ta.select();
-  if(ta.setSelectionRange)ta.setSelectionRange(0,ta.value.length);
-  const ok=!!(document.execCommand&&document.execCommand('copy'));
-  ta.remove();
-  if(ok)return true;
- }catch(e){}
- try{
-  if(typeof navigator!=='undefined'&&navigator.clipboard&&navigator.clipboard.writeText){
-   navigator.clipboard.writeText(text);return true;}
- }catch(e){}
- return false;
-}
-function clip(text){
- const ok=copyText(text);
- note(ok?'answer copied':'could not copy - select the text instead');
- return ok;
-}
-// A copy button on the boxes worth copying: the answer (code and command output
-// live in there) and the tool lines. The stamp is chrome and the button's own
-// label is not content, so both are left out of what lands on the clipboard.
-const COPYABLE={final:1,tool:1,tool_done:1,tool_fail:1};
-function boxText(node){
- let out='';
- const kids=node.childNodes||node.children||[];
- for(const n of kids){
-  if(n.className==='stamp'||n.className==='copyb')continue;
-  out+=n.textContent;
- }
- return out;
-}
-function attachCopy(node){
- if(node._copyb)return;
- const b=document.createElement('button');
- b.type='button';b.className='copyb';b.textContent='copy';b.title='copy this box';
- b.addEventListener('click',function(ev){
-  if(ev&&ev.stopPropagation)ev.stopPropagation();   // the box copies on a click too
-  const ok=copyText(boxText(node));
-  b.textContent=ok?'copied':'failed';
-  if(ok)b.classList.add('done');
-  if(b._t&&typeof clearTimeout==='function')clearTimeout(b._t);
-  b._t=setTimeout(function(){b.textContent='copy';b.classList.remove('done');},1200);
- });
- node._copyb=b;
- node.appendChild(b);
-}
-// ---------------------------------------------------------------- conversations
-function age(ts){
- if(!ts)return '';
- const s=Math.max(0,Math.floor(Date.now()/1000-ts));
- if(s<90)return 'just now';
- if(s<5400)return Math.floor(s/60)+'m ago';
- if(s<172800)return Math.floor(s/3600)+'h ago';
- return Math.floor(s/86400)+'d ago';
-}
-function renderRail(){
- sessEl.textContent='';
- for(const s of sessions){
-  const row=document.createElement('div');
-  row.className='row'+(s.key===sessionKey?' on':'')+(s.owner==='other'?' other':'');
-  row.dataset.key=s.key;
-  const t=document.createElement('div');t.className='t';t.textContent=s.title;row.appendChild(t);
-  const m=document.createElement('div');m.className='m';
-  if(s.live){const d=document.createElement('span');d.className='dot work';m.appendChild(d);}
-  else if(s.owner==='mine'){const d=document.createElement('span');d.className='dot';
-   d.style.background='#3a4048';m.appendChild(d);}
-  const a=document.createElement('span');a.textContent=age(s.last_active);m.appendChild(a);
-  if(s.exchanges){const e=document.createElement('span');
-   e.textContent=s.exchanges+' exchange'+(s.exchanges===1?'':'s');m.appendChild(e);}
-  if(s.live){const l=document.createElement('span');
-   l.textContent='working '+s.live.steps+' steps';m.appendChild(l);}
-  else if(s.model){const mo=document.createElement('span');mo.textContent=s.model;m.appendChild(mo);}
-  row.appendChild(m);
-  row.onclick=function(){openSession(s.key);};
-  sessEl.appendChild(row);
- }
- const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
- titleEl.textContent=cur?cur.title:'';
- const used=cur?cur.tokens:0;
- meterFill.style.width=(budget?Math.min(100,Math.round(100*used/budget)):0)+'%';
- meterFill.style.background=used>budget*0.8?'var(--bad)':'var(--accent)';
- modelEl.textContent=cur?(cur.model||''):'';
-}
-async function loadSessions(){
- const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
- if(!r.ok)return null;
- const j=await r.json();
- sessions=j.sessions||[];budget=j.budget||0;
- hostEl.textContent=(j.host||'')+' · v'+(j.version||'');
- if(!sessionKey)sessionKey=j.open||null;
- renderRail();
- return j;
-}
-async function openSession(key,quiet){
- if(!key)return;
- sessionKey=key;localStorage.fb_session=key;runId=null;busy(false);
- clearLog();renderRail();
- try{await fetch('/api/sessions',{method:'POST',headers:H(),
-   body:JSON.stringify({op:'open',key:key})});}catch(e){}
- try{
-  const r=await fetch('/api/session?key='+encodeURIComponent(key),{headers:H()});
-  if(r.ok){const j=await r.json();
-   for(const run of (j.runs||[]))reconcile(run.run_id,run.lines||[]);}
-  else note('could not load that conversation ('+r.status+')');
- }catch(e){note('could not load that conversation: '+e);}
- if(!quiet)note('');
- await loadSessions();
- await attach();
-}
-async function newConversation(){
- const r=await fetch('/api/sessions',{method:'POST',headers:H(),
-  body:JSON.stringify({op:'new'})});
- const j=await r.json().catch(function(){return {};});
- if(j.key){await loadSessions();await openSession(j.key);}
- else note('could not start a conversation: '+(j.error||r.status));
-}
-function renameSession(){
- const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
- if(!cur)return;
- const name=prompt('name this conversation:',cur.title);
- if(name===null)return;
- fetch('/api/sessions',{method:'POST',headers:H(),
-  body:JSON.stringify({op:'rename',key:sessionKey,title:name})})
-  .then(function(){return loadSessions();});
-}
-function deleteSession(){
- const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
- if(!cur)return;
- note('delete "'+cur.title+'" and everything it said?',['Delete',function(){
-  fetch('/api/sessions',{method:'POST',headers:H(),
-   body:JSON.stringify({op:'delete',key:sessionKey})})
-   .then(function(r){return r.json().then(function(j){return [r.status,j];});})
-   .then(function(pair){
-    const code=pair[0],j=pair[1];
-    if(code!==200){note(j.error||'could not delete that conversation');return;}
-    sessionKey=null;runId=null;clearLog();busy(false);
-    return loadSessions().then(function(){
-     return openSession(sessions[0]?sessions[0].key:'web',true);});
-   });
- }]);
-}
-// ------------------------------------------------------------------- panels
-function panelRow(cls,left,body,meta){
- const d=document.createElement('div');d.className='p'+(cls?' '+cls:'');
- const g=document.createElement('div');g.className='g';g.textContent=left||'';d.appendChild(g);
- const b=document.createElement('div');b.className='b';b.textContent=body||'';d.appendChild(b);
- if(meta){const n=document.createElement('div');n.className='n';n.textContent=meta;
-  b.appendChild(n);}
- return d;
-}
-function renderPanel(which,j){
- panelEl.textContent='';
- if(which==='tasks'){
-  const items=j.items||[];
-  const head=document.createElement('h4');
-  head.textContent=items.length+' in the ledger';
-  panelEl.appendChild(head);
-  for(const t of items)
-   panelEl.appendChild(panelRow(t.status==='done'?'done':'',
-     '#'+t.id+' '+(t.desc||''),null,
-     [t.status,t.updated].filter(function(x){return x;}).join(' · ')));
-  if(!items.length)panelEl.appendChild(panelRow('','nothing in the ledger',''));
- }else if(which==='jobs'){
-  const head=document.createElement('h4');
-  head.textContent=(j.jobs||[]).length+' scheduled'+(j.croniter?'':' — croniter missing, nothing fires');
-  panelEl.appendChild(head);
-  for(const job of (j.jobs||[]))
-   panelEl.appendChild(panelRow('','['+job.cron+'] '+(job.task||''),null,
-     (job.next_iso?('next '+job.next_iso):'no next run')+(job.model?' · '+job.model:'')));
-  if(!(j.jobs||[]).length)
-   panelEl.appendChild(panelRow('','no jobs on this host','anything recurring shows up here'));
- }else if(which==='log'){
-  const head=document.createElement('h4');
-  head.textContent=j.path+' — last '+((j.lines||[]).length)+' lines';
-  panelEl.appendChild(head);
-  const pre=document.createElement('div');pre.className='mono';
-  pre.textContent=(j.lines||[]).join(String.fromCharCode(10));
-  panelEl.appendChild(pre);
- }else if(which==='inventory'){
-  const head=document.createElement('h4');
-  head.textContent=(j.skills||[]).length+' skills · '+((j.tools||[]).length)+' custom tools';
-  panelEl.appendChild(head);
-  panelEl.appendChild(panelRow('','spill: '+(j.spill.files||0)+' files, '+
-   Math.round((j.spill.bytes||0)/1024)+' KB',''));
-  panelEl.appendChild(panelRow('','notes.md: '+(j.notes_kb||0)+' KB',''));
-  for(const t of (j.tools||[]))panelEl.appendChild(panelRow('','tool: '+t,''));
-  for(const s of (j.skills||[]))panelEl.appendChild(panelRow('','skill: '+s,''));
- }
-}
-const PANELS={tasks:'/api/tasks',jobs:'/api/jobs',log:'/api/log',
-              inventory:'/api/inventory'};
-async function refreshPanel(){
- if(!panelWhich)return;
- const r=await fetch(PANELS[panelWhich]||'/api/tasks',{headers:H()});
- if(!r.ok)return;
- const j=await r.json().catch(function(){return {};});
- const at=panelEl.scrollTop;
- renderPanel(panelWhich,j);
- if(panelWhich!=='log')panelEl.scrollTop=at;
-}
-function showPanel(which){
- panelWhich=which;drawerEl.classList.add('show');
- for(const b of tabsEl.children)
-  if(b.dataset&&b.dataset.p)b.className=(b.dataset.p===which?'on':'');
- refreshPanel();
-}
-async function loadCommands(){
- try{const r=await fetch('/api/commands',{headers:H()});
-  if(r.ok)commands=(await r.json()).commands||[];}catch(e){}
-}
-// ------------------------------------------------------------ the composer
-function palette(){
- const v=inp.value;
- palAt=-1;palEl.textContent='';
- if(!v||v[0]!=='/'||v.indexOf(' ')>0){palEl.classList.add('hide');return;}
- const hits=commands.filter(function(c){return c.cmd.indexOf(v)===0;});
- if(!hits.length){palEl.classList.add('hide');return;}
- hits.forEach(function(c,i){
-  const d=document.createElement('div');d.className=(i===0?'on':'');
-  const a=document.createElement('span');a.className='c';a.textContent=c.cmd;
-  const b=document.createElement('span');b.className='h';b.textContent=c.help;
-  d.appendChild(a);d.appendChild(b);
-  d.onclick=function(){inp.value=c.cmd+' ';palEl.classList.add('hide');inp.focus();};
-  palEl.appendChild(d);
- });
- palAt=0;palEl.classList.remove('hide');
-}
-function palMove(dir){
- if(palEl.classList.contains('hide'))return false;
- const kids=[...palEl.children];if(!kids.length)return false;
- palAt=(palAt+dir+kids.length)%kids.length;
- kids.forEach(function(k,i){k.className=(i===palAt?'on':'');});
- return true;
-}
-function palTake(){
- if(palEl.classList.contains('hide'))return false;
- const kid=palEl.children[palAt];if(!kid)return false;
- inp.value=kid.children[0].textContent+' ';
- palEl.classList.add('hide');palAt=-1;
- return true;
-}
-async function stop(){
- if(!runId){note('nothing is running here');return;}
- stateEl.textContent='stopping...';
- try{const r=await fetch('/api/stop',{method:'POST',headers:H(),
-   body:JSON.stringify({run_id:runId})});
-  const j=await r.json().catch(function(){return {};});
-  if(!r.ok)note('could not stop: '+(j.error||r.status));else note('');
- }catch(e){note('stop failed: '+e);}
-}
-async function post(path,payload){
- const r=await fetch(path,{method:'POST',headers:H(),body:JSON.stringify(payload)});
- const j=await r.json().catch(function(){return {};});
- return {status:r.status,j:j};
-}
-async function send(){
- const t=inp.value.trim();if(!t)return;
- palEl.classList.add('hide');
- inp.value='';inp.style.height='auto';
- hist.unshift(t);histAt=-1;
- localStorage.fb_draft='';
- if(t==='/clear'){clearLog();note('transcript cleared (the conversation is still on the server)');return;}
- if(t==='/sessions'||t==='/conversations'){railEl.classList.remove('hide');renderRail();note('');return;}
- if(t==='/new chat'||t==='/new'){return newConversation();}
- if(t==='/stop'||t==='stop'){return stop();}
- if(t.startsWith('/')){                       // agent command, answered inline
-  const {status:code,j}=await post('/api/run',{message:t,session:sessionKey});
-  localRun(code===200?'say':'error',j.reply||j.error||'(no reply)');
-  return;
- }
- if(runId){                                   // mid-run: this is a steering message
-  const {status:code,j}=await post('/api/steer',{run_id:runId,message:t});
-  if(code===409||code===404){                 // it finished while you were typing
-   note('the run had just finished - sent as a new message');
-   runId=null;busy(false);return start(t);
-  }
-  if(code!==200){note('could not steer: '+(j.error||code));return;}
-  note('');                                   // the server echoes it; never locally
-  return;
- }
- return start(t);
-}
-async function start(t){
- const {status:code,j}=await post('/api/run',{message:t,session:sessionKey});
- if(code===401){
-   // The server wants a token and this browser does not have the right one: ask again, once,
-   // instead of printing "unauthorized" at somebody who was never told what to type.
-   delete localStorage.fb_token;token='';
-   if(askToken(true)){localStorage.fb_token=token;note('token saved - try that again');}
-   else{note('no token given - this install needs one (.env: TINYCMDR_WEB_TOKEN)');}
-   return;
- }
- if(code!==200||j.error){note('could not send: '+(j.error||code));return;}
- if(j.immediate){localRun('say',j.reply);return;}
- runId=j.run_id;fails=0;busy(true);stateEl.textContent='starting';
- note(j.steered?'a run was already going - that message went into it as a steer':'');
- poll(++gen);
-}
-async function poll(my){
- if(my!==gen||!runId)return;
- const id=runId;
- try{
-  // from zero every time: the whole (small) ordered buffer, reconciled by uid.
-  // A cursor cannot lose a line that grew in place, or re-create one it has
-  // already drawn, and a reload cannot end up with two copies of anything.
-  const r=await fetch('/api/events?run_id='+id+'&since=0',{headers:H()});
-  if(r.ok){
-   const j=await r.json();fails=0;
-   reconcile(id,j.lines||[]);
-   status(j);
-   // the rail and the open panel refresh on a slower clock than the run itself:
-   // rebuilding them on every poll is a layout storm that buys nothing.
-   if(Date.now()-lastRail>3000){lastRail=Date.now();loadSessions();
-    if(panelWhich)refreshPanel();}
-   if(j.done){if(runId===id)runId=null;busy(false);
-    loadSessions();if(panelWhich)refreshPanel();return;}
-  }else if(r.status===404){
-   note('that run is no longer on the server');if(runId===id)runId=null;busy(false);return;
-  }else{fails++;stateEl.textContent='connection trouble, retrying';}
- }catch(e){fails++;stateEl.textContent='connection trouble, retrying';}
- timer=setTimeout(function(){poll(my);},fails?Math.min(5000,700*fails):700);
-}
-var laneWasDown=false;
-async function versionCheck(){
- try{
-  const r=await fetch('/api/health');const j=await r.json();
-  verEl.textContent=j.version||'';
-  const dl=Object.keys(j.lanes||{}).filter(function(k){return (j.lanes[k]||{}).state==='failed';});
-  // className, not classList: one class store, and the DOM shim reads this one. The banner
-  // is a persistent element rather than the note slot, because the note is shared with run
-  // events and gets overwritten - a "you cannot be heard" warning must not be transient.
-  verEl.className=dl.length?'bad':'';
-  verEl.title=dl.length?dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; '):'';
-  const msgs=[];
-  if(dl.length){msgs.push('this bot cannot reach its chat lane - '+verEl.title+'. It is running and this page works; the lane is not, so messages sent here may not be answered.');}
-  if(j.config_changed){msgs.push(j.config_changed+'.');}
-  warnEl.className=msgs.length?'show':'';
-  warnEl.textContent=msgs.join(' ');'';
-  document.title=(dl.length?'CHAT LANE DOWN - ':'')+'tinycmdr'+(j.version?' '+j.version:'');
-  if(dl.length&&!laneWasDown){laneWasDown=true;note('chat lane down: '+verEl.title);}
-  else if(!dl.length){laneWasDown=false;}
-  if(j.version&&PAGE_VER&&j.version!==PAGE_VER){
-   note('this page is '+PAGE_VER+', the server is '+j.version+' - stale client code',
-     ['Reload',function(){location.replace('/?v='+j.version);}]);
-  }
- }catch(e){}
-}
-sendBtn.onclick=send;stopBtn.onclick=stop;
-titleEl.onclick=renameSession;
-menuBtn.onclick=function(){railEl.classList.toggle('hide');};
-toolsBtn.onclick=function(){if(panelWhich&&drawerEl.classList.contains('show')){
-  drawerEl.classList.remove('show');panelWhich=null;}else showPanel('tasks');};
-closePanelBtn.onclick=function(){drawerEl.classList.remove('show');panelWhich=null;};
-newBtn.onclick=newConversation;
-allEl.onchange=function(){loadSessions();};
-for(const b of tabsEl.children)if(b.dataset&&b.dataset.p)
- b.onclick=function(){showPanel(b.dataset.p);};
-inp.addEventListener('input',function(){
- inp.style.height='auto';inp.style.height=Math.min(inp.scrollHeight,240)+'px';
- palette();
- localStorage.fb_draft=inp.value;
-});
-inp.addEventListener('keydown',function(e){
- if(e.key==='Escape'){palEl.classList.add('hide');if(runId)e.preventDefault(),stop();return;}
- if(e.key==='ArrowDown'&&palMove(1)){e.preventDefault();return;}
- if(e.key==='ArrowUp'){
-  if(palMove(-1)){e.preventDefault();return;}
-  if(!inp.value&&hist.length){histAt=Math.min(histAt+1,hist.length-1);
-   inp.value=hist[histAt];e.preventDefault();return;}
- }
- if(e.key==='Tab'&&palTake()){e.preventDefault();return;}
- if(e.key==='Enter'&&!e.shiftKey){
-  if(!palEl.classList.contains('hide')&&!inp.value.includes(' ')){palTake();e.preventDefault();return;}
-  e.preventDefault();send();}
-});
-document.addEventListener('keydown',function(e){      // ctrl/cmd+K: the conversation rail
- if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K'))
-  {e.preventDefault();railEl.classList.toggle('hide');}
-});
-log.addEventListener('click',function(e){             // tap the answer to copy it
- const n=e.target;
- if(n&&n.className&&n.className.indexOf('final')>=0)clip(boxText(n));
-});
-async function attach(){
- try{
-  const r=await fetch('/api/live?session='+encodeURIComponent(sessionKey||''),
-    {headers:H()});
-  if(!r.ok)return;
-  const j=await r.json();
-  if(j.run_id&&j.run_id!==runId){runId=j.run_id;fails=0;busy(true);poll(++gen);}
- }catch(e){}
-}
-(async function(){
- localStorage.fb_draft=localStorage.fb_draft||'';
- inp.value=localStorage.fb_draft;
- note('no chat server needed: this page drives the same agent. / for commands, '+
-  'the rail on the left is every conversation this browser has had');
- await versionCheck();
- await loadCommands();
- await loadSessions();
- const want=localStorage.fb_session;
- const have=sessions.some(function(s){return s.key===want;});
- if(want&&have){await openSession(want,true);}
- else{await openSession(sessionKey||'web',true);}
- setInterval(versionCheck,20000);
- setInterval(loadSessions,5000);
- window.addEventListener('focus',function(){versionCheck();loadSessions();});
-})();
-</script></body></html>
-"""
-
-WEB_ICON_PNG_B64 = ("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")
-
-WEB_MANIFEST = json.dumps({
-    "name": "tinycmdr",
-    "short_name": "tinycmdr",
-    "start_url": "/",
-    "display": "standalone",
-    "background_color": "#1a1d23",
-    "theme_color": "#1a1d23",
-    "icons": [{"src": "/icon.png", "sizes": "512x512", "type": "image/png"}],
-})
-
-
-
 def status_text(key, paused=None):
-    """The one /status renderer, shared by the Mattermost handler and the web UI.
+    """The one /status renderer, used by the Mattermost handler.
 
-    These had drifted into two copies with different fields (the web one was
-    missing sampling and notes, so 'check /status' meant different things
-    depending on where you typed it). Plain-text formatting on purpose: the web
-    UI renders it un-escaped, Mattermost renders markdown, and plain lines read
-    correctly in both.
+    These had drifted into two copies with different fields (one was missing
+    sampling and notes, so 'check /status' meant different things depending on
+    where you typed it). Plain text on purpose: Mattermost renders markdown and
+    plain lines read correctly there too.
     """
     s = AGENT.stats(key)
     uptime = int(time.time() - START_TIME)
@@ -16857,941 +16094,10 @@ def status_text(key, paused=None):
     return "\n".join(lines)
 
 
-def _web_command(text, key="web"):
-    """Slash commands for the web UI / gateway. Returns ('reply', msg) when
-    handled locally, or ('task', text) to hand to the agent."""
-    text = cmdr_strip(text)          # `/tinycmdr <cmd>`: the commands, namespaced
-    low = text.strip().lower()
-    if low in ("/new", "/reset"):
-        AGENT.reset(key)
-        return ("reply", "🔄 Session cleared. Fresh context.")
-    if low == "/model" or low.startswith("/model "):
-        parts = text.strip().split(maxsplit=1)
-        return ("reply", model_command(key, parts[1] if len(parts) > 1 else ""))
-    if low == "/restart" or low.startswith("/restart "):
-        # no channel to announce into, so a web restart is logged only
-        threading.Thread(target=perform_restart, args=(None, None, "web-ui"),
-                         daemon=True).start()
-        return ("reply", "♻️ Restarting — the bot replaces itself in a few "
-                         "seconds; reload this page after that.")
-    if low == "/version":
-        return ("reply", f"tinycmdr v{VERSION}")
-    if low == "/status":
-        return ("reply", status_text(key))
-    if low == "/undo" or low.startswith("/undo "):
-        parts = low.split()
-        try:
-            n = int(parts[1]) if len(parts) > 1 else 1
-        except ValueError:
-            n = 1
-        removed = AGENT.undo(key, max(1, min(n, 50)))
-        return ("reply", f"↩️ Removed {removed} exchange(s)." if removed
-                else "Nothing to undo.")
-    if low == "/retry":
-        last = AGENT.pop_last_user(key)
-        if last is None:
-            return ("reply", "Nothing to retry.")
-        if not isinstance(last, str):
-            last = "\n".join(p.get("text", "") for p in last
-                             if isinstance(p, dict))
-        return ("task", last)
-    if low == "/stop":
-        # The page's Stop button only works while that tab still knows its run
-        # id; after a reload (or from a second tab) there was no way to stop a
-        # live run at all. /stop cancels whatever is running in this session.
-        run = _web_active_run(key)
-        if run is None:
-            return ("reply", "Nothing is running.")
-        run.cancel.set()
-        run.add("system", "stop requested")
-        return ("reply", "🛑 Stop requested — the current step finishes first.")
-    if low == "/help":
-        return ("reply",
-                "Commands:\n"
-                + "\n".join(f"{c} — {h}" for c, h in WEB_COMMANDS)
-                + "\nEverything else is a task for the agent.")
-    if cmdr_legacy_prefix(text):
-        return ("reply", CMDR_MOVED)
-    if low.startswith("/"):
-        return ("reply", "Unknown command — try %s help." % CMDR)
-    return ("task", text)
-
-
-# -- web conversations: one host, many conversations, a browser owns its own --
-# The web lane used to hardcode the session key "web": every browser, on every
-# device, talked into one conversation, and nothing could list or reopen one.
-# A conversation is now an ordinary agent session - its history, carry, transcript
-# and event files follow the key exactly like a Mattermost channel's do - plus one
-# file of its own, sessions/<key>.web.jsonl: the ordered line list of each finished
-# run. That file is what lets a reload, a second browser or the same browser
-# tomorrow repaint the conversation instead of starting from a blank page.
-#
-# Ownership, because this build ships to other people: a conversation belongs to
-# the browser that created it (X-Tinycmdr-Client, an id the page makes once and
-# keeps in localStorage), so two people pointed at one host never see each other's
-# chats. An empty owner means the shared conversation - what /api/chat and any
-# script without a client header drive, and what a pre-existing sessions/web.json
-# is adopted as. The token holder can ask for every conversation on the host.
-WEB_STATE_FILE = BASE_DIR / "web-sessions.json"
-WEB_STATE_LOCK = threading.Lock()
-WEB_SESSION_MAX = 50            # conversations kept per client
-WEB_RUNLOG_KEEP = 60            # finished runs kept per conversation
-WEB_RUNLOG_MAX_CHARS = 500_000  # ...and a ceiling on the file itself
-WEB_RUNLOG_LOCK = threading.Lock()
-WEB_KEY_RX = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
-
-
-def _web_key_ok(key):
-    """A session key becomes a filename, so it is checked, never trusted."""
-    return bool(key) and bool(WEB_KEY_RX.match(key)) and not key.startswith(".")
-
-
-def _web_client(headers):
-    """The browser's own id. Scripts send none and get the shared conversation."""
-    raw = (headers.get("X-Tinycmdr-Client") or "").strip()
-    return re.sub(r"[^A-Za-z0-9]", "", raw)[:32]
-
-
-def _web_state(mutate=None):
-    """The conversation registry: {sessions: [...], open: {client: key}}.
-
-    Reads and writes both go through here, and a mutation holds ONE lock for the
-    whole load-modify-save. Nothing inside a mutate callback may call back into
-    _web_state - a plain Lock taken twice in one thread is a deadlock, which is
-    exactly how the notes guard froze a bot once."""
-    with WEB_STATE_LOCK:
-        try:
-            st = json.loads(WEB_STATE_FILE.read_text(encoding="utf-8"))
-            if not isinstance(st, dict):
-                st = {}
-        except Exception:
-            st = {}
-        if not isinstance(st.get("sessions"), list):
-            st["sessions"] = []
-        if not isinstance(st.get("open"), dict):
-            st["open"] = {}
-        if mutate is None:
-            return st
-        out = mutate(st)
-        try:
-            atomic_write_text(WEB_STATE_FILE, json.dumps(st, indent=1))
-        except Exception as e:
-            log.error("could not save %s: %s", WEB_STATE_FILE.name, e)
-        return out
-
-
-def web_adopt_legacy():
-    """A conversation that predates the registry (sessions/web.json) is adopted
-    once, as the shared conversation, so it stays reachable in the rail."""
-    if WEB_STATE_FILE.exists():
-        return
-    path = AGENT._session_path("web")
-    if not path.exists():
-        return
-
-    def fn(st):
-        st["sessions"].append({"key": "web", "client": "", "title": "",
-                               "created": path.stat().st_mtime,
-                               "last_active": path.stat().st_mtime})
-        return True
-
-    _web_state(fn)
-    log.info("web conversation 'web' adopted into the conversation registry")
-
-
-def web_entry(key):
-    """The registry entry for one key, or None."""
-    for s in _web_state()["sessions"]:
-        if isinstance(s, dict) and s.get("key") == key:
-            return s
-    return None
-
-
-def web_title(entry):
-    """What the rail shows: the operator's own name for it, else the first thing
-    they asked in it, else when it was made."""
-    t = (entry.get("title") or "").strip()
-    if t:
-        return t
-    try:
-        for m in AGENT._history(entry.get("key") or ""):
-            if isinstance(m, dict) and m.get("role") == "user":
-                first = str(m.get("content") or "").strip().splitlines()
-                if first and first[0].strip():
-                    return first[0].strip()[:70]
-    except Exception:
-        pass
-    # An empty conversation is named as such: the rail already says when it was
-    # last used, and a row titled "2026-09-20 09:18" reads like a task, not a
-    # chat you have not said anything in yet.
-    return "new conversation"
-
-
-def web_session_brief(entry, client):
-    """One row of the rail: the conversation plus what it is doing right now."""
-    key = entry.get("key") or ""
-    try:
-        st = AGENT.stats(key)
-    except Exception:
-        st = {"exchanges": 0, "est_tokens": 0}
-    live = _web_active_run(key)
-    owner = entry.get("client") or ""
-    return {"key": key, "title": web_title(entry),
-            "created": entry.get("created"), "last_active": entry.get("last_active"),
-            "exchanges": st.get("exchanges", 0), "tokens": st.get("est_tokens", 0),
-            "model": AGENT.model_overrides.get(key) or CONFIG["llm"]["model"],
-            "owner": ("mine" if owner and owner == client
-                      else ("shared" if not owner else "other")),
-            "live": ({"run_id": live.id, "steps": live.steps, "status": live.status,
-                      "elapsed": round(time.time() - live.started, 1)}
-                     if live is not None else None)}
-
-
-def web_sessions(client, include_all=False):
-    """The conversations this browser may see, newest activity first."""
-    web_adopt_legacy()
-    rows = []
-    for entry in _web_state()["sessions"]:
-        if not isinstance(entry, dict) or not _web_key_ok(entry.get("key") or ""):
-            continue
-        owner = entry.get("client") or ""
-        if owner and owner != client and not include_all:
-            continue
-        rows.append(web_session_brief(entry, client))
-    rows.sort(key=lambda r: r.get("last_active") or 0, reverse=True)
-    return rows
-
-
-def web_new_session(client, title=""):
-    """A fresh conversation, owned by this browser."""
-    key = "web-" + os.urandom(4).hex()
-
-    def fn(st):
-        st["sessions"].append({"key": key, "client": client, "title": title or "",
-                               "created": time.time(), "last_active": time.time()})
-        if client:
-            st["open"][client] = key
-        mine = [s for s in st["sessions"] if (s.get("client") or "") == client]
-        if len(mine) > WEB_SESSION_MAX:      # the oldest ones stay on disk, unlisted
-            drop = sorted(mine, key=lambda s: s.get("last_active") or 0
-                          )[0:len(mine) - WEB_SESSION_MAX]
-            gone = {s.get("key") for s in drop}
-            st["sessions"] = [s for s in st["sessions"]
-                              if s.get("key") not in gone]
-        return key
-
-    return _web_state(fn)
-
-
-def web_rename_session(key, title):
-    def fn(st):
-        for s in st["sessions"]:
-            if s.get("key") == key:
-                s["title"] = (title or "").strip()[:80]
-                return True
-        return False
-
-    return bool(_web_state(fn))
-
-
-def web_delete_session(key):
-    """Forget a conversation: the registry entry and every file that belongs to
-    that key. Refused while a run is live in it - that run is still writing."""
-    if _web_active_run(key) is not None:
-        return "busy"
-    # A job that reports into this conversation would fire into nothing: it still
-    # runs, but the report the operator asked for has nowhere to land.
-    try:
-        token = f"{WEB_DEST_PREFIX}{key}"
-        for job in (SCHEDULER.jobs.values() if SCHEDULER else []):
-            if (job or {}).get("channel_id") == token:
-                return "scheduled"
-    except Exception:
-        pass
-
-    def fn(st):
-        before = len(st["sessions"])
-        st["sessions"] = [s for s in st["sessions"] if s.get("key") != key]
-        st["open"] = {c: k for c, k in st["open"].items() if k != key}
-        return len(st["sessions"]) != before
-
-    if not _web_state(fn):
-        return "missing"
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
-    for suffix in (".json", ".web.jsonl", ".carry.json", ".transcript.jsonl",
-                   ".events.jsonl"):
-        try:
-            (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
-        except Exception as e:
-            log.warning("could not remove %s%s: %s", safe, suffix, e)
-    AGENT.histories.pop(key, None)
-    AGENT.model_overrides.pop(key, None)
-    log.info("web conversation %s deleted", key)
-    return "deleted"
-
-
-def web_set_open(client, key):
-    if not client:
-        return False
-
-    def fn(st):
-        st["open"][client] = key
-        return True
-
-    return bool(_web_state(fn))
-
-
-def web_open_key(client):
-    """Which conversation this browser had open last."""
-    if not client:
-        return None
-    key = _web_state()["open"].get(client)
-    return key if _web_key_ok(key or "") else None
-
-
-def web_touch(key):
-    """Mark a conversation as just used (called when a run starts in it)."""
-    def fn(st):
-        for s in st["sessions"]:
-            if s.get("key") == key:
-                s["last_active"] = time.time()
-                return True
-        st["sessions"].append({"key": key, "client": "", "title": "",
-                               "created": time.time(), "last_active": time.time()})
-        return True
-
-    try:
-        _web_state(fn)
-    except Exception as e:
-        log.warning("could not touch web conversation %s: %s", key, e)
-
-
-def web_resolve_session(client, requested):
-    """The conversation a request means: what it asked for, else what this
-    browser had open, else the shared one. Never anything outside the host."""
-    if requested and _web_key_ok(requested):
-        return requested
-    return web_open_key(client) or "web"
-
-
-# -- the conversation on disk: one line list per finished run --------------
-WEB_DEST_PREFIX = "web:"
-
-
-def web_token_key(token):
-    """The conversation a destination token names, or None.
-
-    A job stores WHERE it reports the same way a chat job stores a channel id -
-    one string on the job - so nothing new has to be added to the schedule tool
-    or to jobs.json. `web:<key>` means "report into that conversation".
-
-    This is what closes the channel_id gap: a job made from the browser used to
-    carry channel_id None, so it fired with no reporter at all and no place for
-    its answer to land.
-    """
-    if isinstance(token, str) and token.startswith(WEB_DEST_PREFIX):
-        key = token[len(WEB_DEST_PREFIX):]
-        return key if _web_key_ok(key) else None
-    return None
-
-
-def web_new_scheduled_run(key):
-    """A headless run inside a web conversation, for a scheduled job's report.
-
-    Returns None when that conversation is gone: the job still runs (the work
-    matters more than the report), and the log says where the report could not go.
-    """
-    if not (key and _web_key_ok(key) and web_entry(key) is not None):
-        log.warning("a scheduled job reports into conversation %r, which no longer "
-                    "exists - it will run and report to the log only", key)
-        return None
-    return _web_new_run(key)
-
-
-def _finish_web_run(run, reporter, answer, failed=False):
-    """End a browser run: the answer, the done line, and the record on disk.
-
-    One implementation for the run the page started and the run a scheduled job
-    put in the same conversation.
-    """
-    with run.lock:
-        run.done = True
-        seen_final = run.answered
-    if answer and not seen_final:
-        run.answer_i = run.add("final", answer)
-    # The Done line lands BEFORE the run is marked done. Otherwise a client that
-    # stops polling the moment it sees done:true (which is what the page does)
-    # keeps the pre-Done text on its screen while the copy written to disk says
-    # "✅ Done — ..." - measured: the two disagreed, and the suite compares them.
-    reporter.finish(ok=not failed)
-    run.finish()
-    with run.lock:
-        written = list(run.lines)
-    _WEB_SAVED_AT.pop(run.id, None)
-    web_runlog_append(run.session_key, run.id, run.started, written)
-
-
-def _web_runlog_path(key):
-    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
-    return SESSIONS_DIR / f"{safe}.web.jsonl"
-
-
-def web_runlog(key):
-    """Finished runs of one conversation, oldest first. A damaged line is
-    skipped, never fatal: a transcript is a view, not the work."""
-    try:
-        raw = _web_runlog_path(key).read_text(encoding="utf-8")
-    except OSError:
-        return []
-    out = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except Exception:
-            continue
-        if isinstance(rec, dict) and isinstance(rec.get("lines"), list):
-            out.append(rec)
-    return out
-
-
-WEB_RUNLOG_CHECKPOINT = 20.0   # seconds between mid-run saves
-_WEB_SAVED_AT = {}
-
-
-def web_runlog_checkpoint(run):
-    """Save a run's lines WHILE it is still going.
-
-    A run was written to disk only when it FINISHED, so a restart landing on top
-    of one left nothing at all - measured on 2026-09-20, when a long browser task
-    was cut off mid-research and the conversation kept no trace of the work, the
-    tools it ran or what it had found. One small atomic write every twenty
-    seconds means the next one is cut off with its record intact.
-    """
-    now = time.time()
-    if now - _WEB_SAVED_AT.get(run.id, 0.0) < WEB_RUNLOG_CHECKPOINT:
-        return
-    _WEB_SAVED_AT[run.id] = now
-    lines = list(run.lines)          # no lock: the report never blocks the run
-    if lines:
-        web_runlog_append(run.session_key, run.id, run.started, lines)
-
-
-def web_runlog_append(key, run_id, started, lines):
-    """Persist one finished run's lines. Fails SOFT: a disk problem must never
-    turn a finished run into a failed one."""
-    if not lines:
-        return
-    rec = {"run_id": run_id, "started": round(started or 0, 3),
-           "lines": lines}
-    with WEB_RUNLOG_LOCK:
-        try:
-            _ensure_sessions_dir()
-            recs = web_runlog(key)
-            recs = [r for r in recs if r.get("run_id") != run_id]
-            recs.append(rec)
-            while len(recs) > WEB_RUNLOG_KEEP:
-                recs.pop(0)
-            text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
-            while len(text) > WEB_RUNLOG_MAX_CHARS and len(recs) > 1:
-                recs.pop(0)
-                text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
-            atomic_write_text(_web_runlog_path(key), text + "\n")
-        except Exception as e:
-            log.warning("could not write the web run log for %s: %s", key, e)
-
-
-def web_history_lines(key):
-    """A transcript for a conversation that predates the run log: history as it
-    stands (the operator's turns and the answers, no tool lines)."""
-    out = []
-    try:
-        hist = AGENT._history(key)
-    except Exception:
-        return out
-    for m in hist:
-        if not isinstance(m, dict):
-            continue
-        role, text = m.get("role"), m.get("content")
-        if role not in ("user", "assistant"):
-            continue
-        if not isinstance(text, str) or not text.strip():
-            continue
-        i = len(out)
-        out.append({"i": i, "uid": f"history-{key}#{i}",
-                    "kind": "you" if role == "user" else "final",
-                    "text": text.strip(), "t": None, "r": 0})
-    return out
-
-
-def web_transcript(key):
-    """The ordered line lists of a conversation: what is on disk, with the live
-    run merged in if one is going. Keyed by run id, so a run that is both
-    recorded and still in memory is drawn once."""
-    runs, order = {}, []
-    for rec in web_runlog(key):
-        rid = rec.get("run_id") or "run"
-        if rid not in runs:
-            order.append(rid)
-        runs[rid] = {"run_id": rid, "lines": rec.get("lines") or [],
-                     "live": False}
-    if not runs and key:
-        hist = web_history_lines(key)
-        if hist:
-            rid = f"history-{key}"
-            order.append(rid)
-            runs[rid] = {"run_id": rid, "lines": hist, "live": False}
-            web_runlog_append(key, rid, 0, hist)
-    live = _web_active_run(key)
-    if live is not None:
-        with live.lock:
-            snap = {"run_id": live.id, "lines": list(live.lines),
-                    "live": True, "done": live.done, "status": live.status,
-                    "steps": live.steps,
-                    "elapsed": round(time.time() - live.started, 1)}
-        if live.id not in runs:
-            order.append(live.id)
-        runs[live.id] = snap
-    return {"runs": [runs[r] for r in order if runs.get(r, {}).get("lines")]}
-# -- live runs for the local web UI --------------------------------------
-# The page polls /api/events while a run is in flight, so a browser sees the
-# same thing Mattermost shows: what the agent is doing while it works, not a
-# spinner that resolves at the end. Session key "web" is shared with
-# /api/chat, so a scripted call and a browser chat are one conversation.
-WEB_RUNS = {}
-WEB_RUNS_LOCK = threading.Lock()
-WEB_RUN_KEEP = 40          # finished runs that stay pollable
-
-
-
-
-
-class WebRun:
-    """One agent run driven from the browser, with its own line buffer."""
-
-    def __init__(self, run_id, session_key):
-        self.id = run_id
-        self.session_key = session_key
-        self.lines = []
-        self.done = False
-        self.answered = False
-        self.cancel = threading.Event()
-        self.steer = []
-        self.started = time.time()
-        self.turn_start = self.started
-        self.status = "starting"
-        self.steps = 0
-        self.last_checkin = self.started     # the ⏳ cadence, as in Mattermost
-        self.last_checkin_step = 0
-        self.rev = 0            # bumps on every add AND on every in-place grow
-        self.stream_i = None    # the line the model's text is currently growing
-        self.answer_i = None    # the line the run's answer is (decided at the end)
-        self.status_i = None    # the run's own line: "Working…" edited into the Done line
-        self.asked = None       # the ask_user row this run is parked on, if any
-        self.lock = threading.Lock()
-
-    def _line(self, kind, text):
-        # uid is the page's identity for a line: stable for the life of the run,
-        # so a line that grows in place is repainted and never duplicated, and
-        # two runs can never be confused by sharing an index.
-        i = len(self.lines)
-        return {"i": i, "uid": f"{self.id}#{i}", "kind": kind, "text": text,
-                "t": round(time.time() - self.started, 1),
-                "r": self.rev}
-
-    def add(self, kind, text):
-        with self.lock:
-            self.rev += 1
-            if kind == "tool":
-                # what the page prints as "N tool calls". The reporter counts its
-                # own steps for the check-in cadence; this is the buffer's count of
-                # the lines it actually holds, and no heartbeat can inflate it.
-                self.steps += 1
-            self.lines.append(self._line(kind, text))
-            # A tool call ends this turn's thinking: the next fragment of model
-            # text starts a NEW line instead of growing this turn's tool line.
-            if kind in ("tool", "tool_done", "tool_fail"):
-                self.stream_i = None
-            i = self.lines[-1]["i"]
-        # Outside the lock: what this run has done so far goes to disk, so a
-        # restart cannot swallow the whole run (see web_runlog_checkpoint).
-        web_runlog_checkpoint(self)
-        return i
-
-
-
-    def set_line(self, i, kind, text):
-        """Redraw a line the reporter already drew (it grew, or it is the status).
-
-        The uid does not change: the page keys its nodes on it, so a line can be
-        repainted forever without ever being drawn twice.
-        """
-        with self.lock:
-            if not isinstance(i, int) or not (0 <= i < len(self.lines)):
-                return
-            line = self.lines[i]
-            self.rev += 1
-            line["kind"] = kind
-            line["text"] = text
-            line["r"] = self.rev
-            return i
-
-    def drop_line(self, i):
-        """Take a line back (the draft that turned out to be the answer)."""
-        with self.lock:
-            if not isinstance(i, int) or not (0 <= i < len(self.lines)):
-                return
-            self.rev += 1
-            self.lines.pop(i)
-            # Indices shift when a line in front of them goes; the run keeps three
-            # of its own (the status line, the growing line, the answer), and a
-            # stale index repaints a line that is now something else.
-            if self.status_i is not None and i < self.status_i:
-                self.status_i -= 1
-            if self.answer_i is not None and i < self.answer_i:
-                self.answer_i -= 1
-            if self.stream_i is not None and i < self.stream_i:
-                self.stream_i -= 1
-            for n, line in enumerate(self.lines):
-                line["i"] = n
-                line["uid"] = f"{self.id}#{n}"
-                line["r"] = self.rev
-
-    def view(self, since=0, rev=0):
-        """Lines at/after an index, plus lines that grew in place.
-
-        'updates' carries the lines whose index the caller has already passed
-        but whose text changed since rev: the streamed narration that became the
-        final answer. Both lists are ordered, so the page can draw in order."""
-        with self.lock:
-            return {"lines": [l for l in self.lines if l["i"] >= since],
-                    "updates": [l for l in self.lines
-                                if l["i"] < since and l["r"] > rev],
-                    "rev": self.rev,
-                    "done": self.done,
-                    "elapsed": round(time.time() - self.started, 1),
-                    "status": self.status, "steps": self.steps}
-
-    # -- callbacks handed to Agent.run ------------------------------------
-
-
-    def finish(self):
-        """End of run: the last text the model produced is the answer.
-
-        Called exactly once, from the thread that drove the run, after any
-        fallback answer line exists - so the page's answer is always the last
-        thing the model said, and never an intermediate turn's narration."""
-        with self.lock:
-            i = self.answer_i
-            if i is not None and 0 <= i < len(self.lines):
-                line = self.lines[i]
-                if line["kind"] != "final":
-                    line["kind"] = "final"
-                    self.rev += 1
-                    line["r"] = self.rev
-            self.stream_i = None
-            self.status = "done"
-            self.done = True
-
-    label = "the web page"
-
-    def opener(self, question, options, wait, label=None):
-        """The web door's row. It is published so that an /api/steer POST can be told
-        apart from a plain steering line: only a live row turns that POST into an
-        answer. The WAIT belongs to ask_operator, which this event shares."""
-        row = {"ev": threading.Event(), "answer": None, "question": question,
-               "options": list(options or [])}
-        with self.lock:
-            self.asked = row
-        return row
-
-
-
-    def close_question(self, answered=False):
-        with self.lock:
-            self.asked = None
-
-    def post(self, question, options, wait, label=None):
-        """The question belongs in the run's own stream, where the page is already
-        drawing lines, and nowhere else: this door has no second surface."""
-        numbered = [f"{i}. {o}" for i, o in enumerate(options or [], 1)]
-        tail = (" — " + " · ".join(numbered)) if numbered else ""
-        self.add("ask", "❓ " + question + tail)
-        return True
-
-    def take_steer(self):
-        with self.lock:
-            out, self.steer = self.steer, []
-        return [("web", m) for m in out]
-
-
-def _web_new_run(session_key="web"):
-    run = WebRun(os.urandom(6).hex(), session_key)
-    with WEB_RUNS_LOCK:
-        WEB_RUNS[run.id] = run
-        if len(WEB_RUNS) > WEB_RUN_KEEP:
-            for old in sorted(WEB_RUNS, key=lambda k: WEB_RUNS[k].started):
-                if len(WEB_RUNS) <= WEB_RUN_KEEP:
-                    break
-                if WEB_RUNS[old].done:
-                    del WEB_RUNS[old]
-    return run
-
-
-def _web_active_run(session_key="web"):
-    with WEB_RUNS_LOCK:
-        for r in WEB_RUNS.values():
-            if r.session_key == session_key and not r.done:
-                return r
-    return None
-
-
-class WebDestination(Destination):
-    """A browser conversation: the run's own line buffer, with stable uids.
-
-    Same vocabulary as the chat lane, drawn the way a page wants it: a line that
-    grows is updated in place (its uid never changes, so the page repaints the
-    node it already has), the live status lives in the run's header rather than
-    in the transcript, and the Done line is a line of its own so a reload still
-    shows how the run ended.
-    """
-
-    name = "web"
-    has_human = True          # the page can ask: a question row + /api/steer
-    merge_tools = False       # a browser line costs nothing: show every call
-    shows_calls = True        # ...including the call as it starts
-    # The reasoning stream was on here (a transcript seemed the right place for
-    # "it is alive and chewing on this"), and the operator turned it off on
-    # 2026-09-21: in a transcript it is a wall of private thinking between the
-    # lines that matter, and the narration already says what it is DOING.
-    shows_reasoning = False
-    stream_gap = 0.0          # a local buffer: update the growing line every delta
-    # the status slot, not a line: the page's header already shows elapsed and
-    # steps, and a line that rewrites itself every two seconds is noise in a
-    # transcript the operator reads later
-    STATUS_REF = ("web-status",)
-
-    # The reporter's tones, drawn with the classes the page already styles. Two
-    # lanes, one vocabulary: 'note' and 'narration' are the same words in chat
-    # (both 💬), and on the page the interstitial line reads as dimmer thinking
-    # while the streamed narration is the same amber italic as the chat bubble.
-    KINDS = {"note": "thinking", "narration": "say", "say": "say",
-             "tool": "tool", "tool_done": "tool_done", "tool_fail": "tool_fail",
-             "checkin": "checkin", "ask": "ask", "system": "system",
-             # The model's reasoning is drawn in the same dim read as an interim
-             # note - both are the model talking to itself, and the transcript
-             # styles them apart from what it says TO the operator (say/final).
-             "reasoning": "thinking",
-             # The run's own line (working -> Done) is drawn as a check-in line:
-             # dim, monospace, left, no bubble - it is metadata about the run, not
-             # something the agent said.
-             "status": "checkin",
-             "final": "final", "error": "error"}
-
-    def __init__(self, run):
-        self.run = run
-
-    def line(self, kind, text, src="main"):
-        if kind == "status":
-            # The run's OWN line: drawn once, where the run starts, and edited in
-            # place into the Done line when it ends. It used to live in the header
-            # alone, and the header resets to "idle" on reload - so a reloaded page
-            # held no record of how the run ended, while the chat lane keeps its
-            # Done post in the thread forever. The header still carries the live
-            # tick (elapsed, steps); this is the record.
-            self.run.status = str(text)
-            self.run.status_i = self.run.add(self.KINDS["status"], str(text))
-            return self.STATUS_REF
-        return self.run.add(self.KINDS.get(kind, "system"), str(text))
-
-    def update(self, ref, kind, text, src="main"):
-        if kind == "status" or ref == self.STATUS_REF:
-            self.run.status = str(text)
-            if self.run.status_i is None:       # progress_updates off at the start
-                self.run.status_i = self.run.add(self.KINDS["status"], str(text))
-            else:
-                self.run.set_line(self.run.status_i,
-                                  "error" if kind == "error"
-                                  else self.KINDS["status"], str(text))
-            return ref
-        self.run.set_line(ref, self.KINDS.get(kind, "system"), str(text))
-        return ref
-
-    def drop(self, ref):
-        self.run.drop_line(ref)
-
-    def ask(self, question, options=None, wait=300.0, label=None):
-        """Ask the page: a question row the operator answers with /api/steer.
-
-        Returns the operator's words, or None if nobody answered in the wait, so
-        the reporter's confirm is the same code here as in chat.
-        """
-        row = self.run.opener(question, options, wait, label)
-        numbered = [f"{i}. {o}" for i, o in enumerate(options or [], 1)]
-        tail = (" — " + " · ".join(numbered)) if numbered else ""
-        self.run.add("ask", "❓ " + str(question) + tail)
-        answered = row["ev"].wait(wait)
-        self.run.close_question(answered=bool(row.get("answer")))
-        return row.get("answer") if answered else None
-def _web_drive(run, text):
-    """Run the agent for a browser run, reporting through the shared reporter.
-
-    Nothing here knows what a tool line or a check-in looks like: the run gets a
-    destination, the destination gets a reporter, and every word the operator
-    reads comes from the one implementation the other two lanes use.
-    """
-    answer = ""
-    failed = False
-    run.turn_start = time.time()
-    reporter = RunReporter(WebDestination(run), run.session_key)
-    try:
-        answer = drive_run(run.session_key, text, reporter,
-                           # who this run is, for anything that has to report
-                           # somewhere later: a job scheduled here comes back here
-                           channel_id=f"{WEB_DEST_PREFIX}{run.session_key}",
-                           ask_door=run,
-                           cancel_event=run.cancel,
-                           steer_cb=run.take_steer)
-    except Exception as e:
-        failed = True
-        log.exception("web run failed")
-        run.add("error", f"⚠️ Something broke on my side: {e}")
-    finally:
-        # The conversation lives on disk, not in this process: this is what a
-        # reload, a second browser or a restart repaints from. Fail-soft on
-        # purpose - a disk problem must not turn a finished run into a failed one.
-        _finish_web_run(run, reporter, answer, failed=failed)
-
-
-
-# -- the page's panels: what this host already keeps, read only -------------
-# Everything here is per host and already on disk (the ledger, the scheduler's
-# jobs, the log, the skill and tool inventory). None of it was reachable from a
-# browser, so the same facts had to be asked for in chat. Read-only on purpose:
-# the model owns these files, and a page that writes them is a second writer with
-# no lock discipline.
-WEB_COMMANDS = (
-    ("/tinycmdr new", "start a fresh conversation"),
-    ("/tinycmdr status", "this host: model, context, limits, uptime"),
-    ("/tinycmdr stop", "cancel the run that is going"),
-    ("/tinycmdr undo [N]", "drop the last N exchanges"),
-    ("/tinycmdr retry", "run my last request again"),
-    ("/tinycmdr model [name|list] [--global]", "show, list or switch the model"),
-    ("/tinycmdr restart", "restart the bot"),
-    ("/tinycmdr version", "the version this page is talking to"),
-    ("/tinycmdr help", "this list"),
-)
-
-
-def web_commands(active):
-    return [{"cmd": c, "help": h, "active": c.lower() in (active or "")}
-            for c, h in WEB_COMMANDS]
-
-
-def web_tasks_view():
-    """The ledger, newest first. `load_tasks` salvages a damaged file and never
-    raises, so a broken ledger shows as what survived rather than as a 500."""
-    t = load_tasks()
-    items = []
-    for it in t.get("items") or []:
-        if not isinstance(it, dict):
-            continue
-        items.append({"id": it.get("id"), "desc": it.get("desc") or "",
-                      "status": it.get("status") or "", "note": it.get("note") or "",
-                      "created": it.get("created") or "",
-                      "updated": it.get("updated") or ""})
-    items.reverse()
-    return {"items": items, "next_id": t.get("next_id")}
-
-
-def web_jobs_view():
-    """Scheduled jobs and when each one fires next."""
-    jobs = []
-    try:
-        sched = SCHEDULER
-    except NameError:
-        sched = None
-    if sched is not None:
-        with sched.lock:
-            snapshot = dict(sched.jobs)
-        for name, j in sorted(snapshot.items()):
-            nxt = j.get("next")
-            try:
-                nxt = float(nxt)
-            except (TypeError, ValueError):
-                nxt = 0.0
-            jobs.append({"name": name, "cron": j.get("cron") or "",
-                         "task": (j.get("task") or "")[:200],
-                         "model": j.get("model") or "",
-                         "next": nxt or None,
-                         "next_iso": (time.strftime("%Y-%m-%d %H:%M",
-                                                    time.localtime(nxt)) if nxt else ""),
-                         "in_seconds": (round(nxt - time.time()) if nxt else None)})
-    return {"jobs": jobs, "scheduler": sched is not None,
-            "croniter": bool(getattr(sched, "ok", False))}
-
-
-def web_log_tail(lines=120):
-    """The tail of this host's log, read from the end: the file is big enough
-    (megabytes) that slurping it for a panel would be silly."""
-    path = BASE_DIR / "tinycmdr.log"
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - 200_000))
-            text = f.read().decode("utf-8", "replace")
-    except OSError:
-        return {"lines": [], "path": path.name, "bytes": 0}
-    try:
-        want = max(1, min(int(lines), 500))
-    except (TypeError, ValueError):
-        want = 120
-    return {"lines": text.splitlines()[-want:], "path": path.name, "bytes": size}
-
-
-def web_inventory():
-    """What this bot can do: its skills, its own custom tools, and what the
-    tool-result spill folder is holding."""
-    try:
-        # skill_index() returns a LIST of records, not a mapping: sorting it
-        # directly raises, and a bare except here reported a host with 108 skills
-        # as having none (found on the live box, not in the suite).
-        skills = sorted(s.get("name") or "?" for s in skill_index())
-    except Exception as e:
-        log.warning("could not read the skill index for the panel: %s", e)
-        skills = []
-    try:
-        tools = sorted(REGISTRY.custom)
-    except Exception:
-        tools = []
-    spill = {"files": 0, "bytes": 0}
-    try:
-        for f in _spill_dir().glob("*.txt"):
-            spill["files"] += 1
-            spill["bytes"] += f.stat().st_size
-    except Exception:
-        pass
-    return {"skills": skills, "tools": tools, "spill": spill,
-            "host": socket.gethostname(), "version": VERSION,
-            "notes_kb": round((NOTES_FILE.stat().st_size / 1024)
-                              if NOTES_FILE.exists() else 0, 1)}
-# One ceiling for the web lane's request bodies (security review, 2026-09-23):
-# the largest legitimate post is a long paste into /api/chat, and 1 MiB is
-# already several times the model's whole context window.
-WEB_BODY_MAX = 1048576
-# How long a request body may take to arrive. The handler socket timeout (60 s) bounds a
-# client that never finishes its headers; this bounds the BODY, so a caller that announces
-# a length and then trickles bytes cannot hold a worker for the whole minute (BUGREPORT §S8).
-WEB_BODY_DEADLINE = 15
-
-
 # --------------------------------------------------------------- lane state
 # "Is it up?" had three answers, and all three were true about the wrong question: the
-# process was running, the page answered, a token was configured - while the bot could not
-# hear anybody. Measured on a live install, 2026-09-28: 510 restarts, `/api/health` returning
+# process was running, an endpoint answered, a token was configured - while the bot could not
+# hear anybody. Measured on a live install, 2026-09-28: 510 restarts, a health probe returning
 # {"ok": true}, `tinycmdr health` naming mattermost because a token EXISTED, and nothing
 # anywhere saying the chat lane was dead.
 #
@@ -17800,7 +16106,6 @@ WEB_BODY_DEADLINE = 15
 #     DISK (logs/state.json, atomic); the next start reads it back and says "attempt 511";
 #   * the log gets one line per STATE CHANGE, not one per attempt. The incident wrote 419 KB
 #     of the same CRITICAL every ten seconds, which is noise, not a signal.
-_WEB_HOSTS_CACHE = None           # this box's own names, computed once (getfqdn hits DNS)
 def _lane_state_read():
     try:
         data = json.loads(LANE_STATE_FILE.read_text(encoding="utf-8"))
@@ -17876,12 +16181,10 @@ def lane_up(lane, detail=""):
 
 def _lane_token(lane):
     if lane == "mattermost":
-        return str(CONFIG["mattermost"].get("token")
-                   or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
+        return _mm_token_configured()
     if lane == "telegram":
-        return str((CONFIG.get("telegram") or {}).get("token")
-                   or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
-    return "web" if (CONFIG.get("web") or {}).get("enabled") else ""
+        return _tg_token_configured()
+    return ""
 
 
 def lanes_snapshot():
@@ -17898,7 +16201,7 @@ def lanes_snapshot():
         state = json.loads(json.dumps(LANE_STATE)) or (stored.get("lanes") or {})
         fails = json.loads(json.dumps(LANE_FAILS)) or (stored.get("failures") or {})
     out = {}
-    for lane in ("mattermost", "telegram", "web"):
+    for lane in ("mattermost", "telegram"):
         if not _lane_token(lane):
             continue
         st = state.get(lane) or {}
@@ -17912,611 +16215,6 @@ def lanes_snapshot():
             "from_pid": stored.get("pid"),
         }
     return out
-
-
-def health_payload():
-    """What a monitor should read, answering "can it hear me?" rather than "is the HTTP
-    server up".
-
-    HTTP stays 200 even when `ok` is false, on purpose: the installers and the macOS restart
-    door probe this endpoint with `curl -sf`, and turning a dead chat lane into a failing HTTP
-    probe would break the very commands that bring a box back. The door with an exit code is
-    `tinycmdr health`.
-    """
-    lanes = lanes_snapshot()
-    return {
-        "ok": all(v["state"] != "failed" for v in lanes.values()),
-        "version": VERSION,
-        "pid": os.getpid(),
-        "lanes": lanes,
-        # Not folded into `ok`: a pending restart is not a dead lane, but a reader deciding
-        # whether to believe this page needs it.
-        "config_changed": config_drift(),
-    }
-
-
-def _web_local_hosts():
-    """Every name THIS box answers to: loopback, its own host name, its own addresses.
-
-    The page's Host check exists so a hostile site cannot POST into a loopback page
-    (BUGREPORT §S7). It allowed loopback names plus `web.host` when that was a specific
-    name - and NOTHING when it was `0.0.0.0`, which is exactly what all three installers
-    write for "Should the page be reachable from other machines on your network?" (yes).
-    So the installer promised a page you could reach, and the server refused every request
-    to it: `forbidden: cross-origin or unexpected Host` on the box's own LAN address, found by
-    the operator on 2026-09-28, ~11 releases after both halves were written a day apart.
-
-    A Host that names this box is not a threat - the Origin rule below is what carries CSRF
-    protection - it is the door being used the way the installer said it could be.
-    """
-    global _WEB_HOSTS_CACHE
-    if _WEB_HOSTS_CACHE is None:
-        names = {"127.0.0.1", "localhost", "::1"}
-        try:
-            host = socket.gethostname()
-            names.add(host.strip().lower())
-            fq = socket.getfqdn(host)
-            if fq:
-                names.add(fq.strip().lower())
-            for ip in socket.gethostbyname_ex(host)[2]:
-                names.add(str(ip).strip().lower())
-        except Exception:                                    # noqa: BLE001
-            pass
-        _WEB_HOSTS_CACHE = names
-    return set(_WEB_HOSTS_CACHE)
-
-
-def run_webui():
-    """Start the local web UI (chat + live run view + /api/health) on a
-    daemon thread.  No-op if disabled.  Returns the server so a caller that
-    owns the process (--web) can hold it open, and so tests can read the
-    bound port."""
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    class QuietServer(ThreadingHTTPServer):
-        """ThreadingHTTPServer that does not scream when a client hangs up.
-
-        A browser tab closed mid-poll, or a caller that stops reading because it
-        already has what it wanted, makes the handler's write fail with
-        ConnectionAbortedError.  The stock server prints a full traceback for
-        that, which reads like a crash in the agent's own log.  Clients leaving
-        is normal; log it as one line and keep serving."""
-
-        daemon_threads = True
-        # SO_REUSEADDR means two DIFFERENT things: on POSIX it only relaxes the TIME_WAIT
-        # rebind a restart needs, while on Windows it lets a SECOND process bind a port
-        # that is already served - measured 2026-09-22, `tinycmdr web` shared 8787 with the
-        # running bot's page, so the operator saw a banner for a page that was already up
-        # and two servers shared one port. On where it only helps, off where it bit, and
-        # the retry loop below still covers the second or two after a restart (BUGREPORT §S9).
-        allow_reuse_address = os.name != "nt"
-
-        # One thread per connection with no ceiling means a LAN peer can stack
-        # threads up to the box's limit (security review, 2026-09-23). Count the
-        # live handlers and refuse past a modest cap; a refused connection never
-        # spawns a thread, and the counter drops when a handler thread ends.
-        MAX_CONN = 32
-        _conn_lock = threading.Lock()
-        _conn_live = 0
-        _tls_ctx = None     # set by run_webui when web.tls_cert/tls_key load
-
-        def process_request(self, request, client_address):
-            with self._conn_lock:
-                if self._conn_live >= self.MAX_CONN:
-                    log.info("web: refused a connection, %d already open",
-                             self._conn_live)
-                    request.close()
-                    return
-                self._conn_live += 1
-            try:
-                super().process_request(request, client_address)
-            except Exception:
-                with self._conn_lock:
-                    self._conn_live -= 1
-                raise
-
-        def process_request_thread(self, request, client_address):
-            # The TLS handshake runs HERE, in the connection's own thread: in the
-            # accept loop one stalled handshake would block every other client.
-            if QuietServer._tls_ctx is not None:
-                try:
-                    request.settimeout(60)     # bound the handshake
-                    request = QuietServer._tls_ctx.wrap_socket(
-                        request, server_side=True)
-                except Exception as e:
-                    log.info("web TLS handshake failed (%s)", type(e).__name__)
-                    try:
-                        request.close()
-                    except Exception:
-                        pass
-                    with self._conn_lock:
-                        self._conn_live -= 1
-                    return
-            try:
-                super().process_request_thread(request, client_address)
-            finally:
-                with self._conn_lock:
-                    self._conn_live -= 1
-
-        def handle_error(self, request, client_address):
-            err = sys.exc_info()[1]
-            if isinstance(err, (ConnectionError, BrokenPipeError,
-                                ConnectionResetError, ConnectionAbortedError,
-                                TimeoutError)):
-                log.info("web client hung up before the reply finished (%s)",
-                         type(err).__name__)
-                return
-            log.error("web request failed: %s", err, exc_info=True)
-
-    web = CONFIG.get("web") or {}
-    if not web.get("enabled", True):
-        return None
-    token = web.get("token", "")
-
-    class Handler(BaseHTTPRequestHandler):
-        # a peer that sends a request line and never finishes the headers or the
-        # body is cut off by the socket timeout, so one silent client cannot
-        # hold a handler thread (security review, 2026-09-23)
-        timeout = 60
-
-        def log_message(self, *a):
-            pass
-
-        def _send(self, body, code=200, ctype="text/html; charset=utf-8"):
-            data = body.encode()
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            # The page IS the application: a cached copy means the browser keeps
-            # running yesterday's client after the server was fixed, which is
-            # how a real fix gets reported as "still broken". Poll responses too.
-            self.send_header("Cache-Control", "no-store, must-revalidate")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
-
-        def _json(self, obj, code=200):
-            self._send(json.dumps(obj), code, "application/json")
-
-        def _auth_ok(self):
-            if not token:
-                return True
-            # compare_digest, not ==: this token is shell and code execution on
-            # this box, and a plain compare leaks its prefix through response
-            # timing (security review, 2026-09-23). Bytes on both sides so a
-            # header carrying non-ASCII can never raise here.
-            return hmac.compare_digest(
-                (self.headers.get("X-Tinycmdr-Token") or "").encode("utf-8", "replace"),
-                token.encode("utf-8"))
-
-        def _origin_ok(self):
-            """Same-origin/Host check for EVERY route (BUGREPORT §S7).
-
-            This lane is loopback-only by default and carries NO token then, so any page
-            on any site could `fetch("http://127.0.0.1:8787/api/run", {method: "POST",
-            body: ...})` and the browser would deliver it: CSRF against shell access.
-            Two rules: Host must be a loopback name (or the configured bind host), and an
-            Origin header, when the browser sends one, must match that host. curl, the
-            installer's probe and the supervisor send no Origin and keep working; an
-            opaque "null" origin (a file:// page, a sandboxed iframe) is refused.
-            """
-            host_hdr = (self.headers.get("Host") or "").strip().lower()
-            name = host_hdr.rsplit(":", 1)[0].strip("[]")
-            # This box's own names answer the question "did you address me?"; `web.host`,
-            # when it names one host, is an extra name the operator chose.
-            allowed = _web_local_hosts()
-            configured = str((CONFIG.get("web") or {}).get("host") or "").strip().lower()
-            if configured and configured not in ("0.0.0.0", "::"):
-                allowed.add(configured.rsplit(":", 1)[0].strip("[]"))
-            if name not in allowed:
-                log.warning("web: refused a request with Host %r (not a loopback/"
-                            "configured name)", host_hdr)
-                return False
-            origin = (self.headers.get("Origin") or "").strip()
-            if not origin:
-                return True                     # curl, the installer, the supervisor
-            ohost = origin.split("://", 1)[-1].split("/", 1)[0].lower()
-            ohost = ohost.rsplit(":", 1)[0].strip("[]")
-            if ohost == name:
-                return True
-            log.warning("web: refused a cross-origin request (Origin %r, Host %r)",
-                        origin, host_hdr)
-            return False
-
-        def _forbidden(self):
-            self._drain()
-            # Say what WOULD work. The old body was four words of jargon, and the operator
-            # who hit it (2026-09-28, browsing to a live install by IP) had no way to learn
-            # that the page accepts only particular names - or which.
-            self._json({
-                "error": "forbidden: unexpected Host, or a cross-origin request",
-                "host": (self.headers.get("Host") or ""),
-                "accepts": ", ".join(sorted(_web_local_hosts())),
-                "fix": ("browse this box by one of `accepts`, or make the name you use one "
-                        "of them: `tinycmdr config set web.host <name-or-ip>` then restart. "
-                        "A tunnel sidesteps it: ssh -N -L 8787:127.0.0.1:8787 <user>@<box>"),
-            }, 403)
-
-        # -- routing ------------------------------------------------------
-
-        def _query(self):
-            """?a=b&c=d as a dict, without depending on urllib.parse."""
-            if "?" not in self.path:
-                return {}
-            out = {}
-            for pair in self.path.split("?", 1)[1].split("&"):
-                if "=" in pair:
-                    k, v = pair.split("=", 1)
-                    out[k] = v.replace("%20", " ")
-                elif pair:
-                    out[pair] = ""
-            return out
-
-        def do_GET(self):
-            if not self._origin_ok():
-                self._forbidden()
-                return
-            if self.path.startswith("/api/health"):
-                self._json(health_payload())
-            elif self.path.startswith("/api/events"):
-                if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                q = self._query()
-                run = WEB_RUNS.get(q.get("run_id", ""))
-                if run is None:
-                    self._json({"error": "no such run"}, 404)
-                    return
-                try:
-                    since = int(q.get("since", "0"))
-                except ValueError:
-                    since = 0
-                try:
-                    rev = int(q.get("rev", "0"))
-                except ValueError:
-                    rev = 0
-                self._json(run.view(since, rev))
-            elif self.path.startswith("/api/sessions"):
-                # The rail: what conversations this browser has, newest first.
-                # ?all=1 is the token holder's view of every conversation on this
-                # host, which is what the operator uses on their own box.
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                q = self._query()
-                client = _web_client(self.headers)
-                self._json({"sessions": web_sessions(client, q.get("all") == "1"),
-                            "open": web_resolve_session(client, q.get("session")),
-                            "client": client, "budget": AGENT._context_budget(),
-                            "host": socket.gethostname(), "version": VERSION})
-            elif self.path.startswith("/api/session?"):
-                # One conversation as ordered line lists per run - what a reload
-                # paints, so a browser that lost its localStorage still sees the
-                # conversation and can go on with it instead of a blank page.
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                q = self._query()
-                client = _web_client(self.headers)
-                key = web_resolve_session(client, q.get("key") or q.get("session"))
-                out = web_transcript(key)
-                out["key"] = key
-                self._json(out)
-            elif self.path.startswith("/api/live"):
-                # A page that just loaded (reload, second tab, phone waking up)
-                # has no run id and used to guess: it posted a message, which
-                # the server turned into a steer of the run already going, and
-                # the operator saw their message twice in the transcript. Ask
-                # instead, then re-attach to that run and keep polling it.
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                q = self._query()
-                live = _web_active_run(
-                    web_resolve_session(_web_client(self.headers),
-                                        q.get("session")))
-                self._json({"run_id": live.id if live else None})
-            elif self.path.startswith("/api/commands"):
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                client = _web_client(self.headers)
-                q = self._query()
-                self._json({"commands": web_commands(q.get("prefix")),
-                            "session": web_resolve_session(client, q.get("session"))})
-            elif self.path.startswith("/api/tasks"):
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                self._json(web_tasks_view())
-            elif self.path.startswith("/api/jobs"):
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                self._json(web_jobs_view())
-            elif self.path.startswith("/api/log"):
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                self._json(web_log_tail(self._query().get("lines")))
-            elif self.path.startswith("/api/inventory"):
-                if not self._auth_ok():
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                self._json(web_inventory())
-            elif self.path.startswith("/manifest.webmanifest"):
-                self._send(WEB_MANIFEST, 200, "application/manifest+json")
-            elif self.path.startswith("/icon.png"):
-                data = base64.b64decode(WEB_ICON_PNG_B64)
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "max-age=86400")
-                self.end_headers()
-                self.wfile.write(data)
-            elif self.path == "/" or self.path.startswith("/?"):
-                self._send(WEB_PAGE.replace("{{VERSION}}", VERSION))
-            else:
-                self._send("not found", 404, "text/plain")
-
-        def _body(self):
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                if not 0 <= length <= WEB_BODY_MAX:
-                    # the claimed length is attacker-controlled and both paths
-                    # ran before the 401 (security review, 2026-09-23): a huge
-                    # claim allocates or blocks, and read(-n) runs to EOF.
-                    self.close_connection = True
-                    return None
-                # An absolute deadline for THIS read: a client that announces a length and
-                # trickles bytes must not hold a worker for the whole socket timeout.
-                self.connection.settimeout(WEB_BODY_DEADLINE)
-                return json.loads(self.rfile.read(length) or b"{}")
-            except Exception:
-                return None
-
-        def _drain(self):
-            """Read and drop a request body before answering early.
-
-            Answering an unauthorized POST while the caller is still sending the
-            body makes Windows abort the connection under the caller (WinError
-            10053) instead of delivering the 401, which looks like the server
-            crashed rather than refused. Same for a 404 on a POST."""
-            try:
-                length = int(self.headers.get("Content-Length", 0) or 0)
-                if not 0 <= length <= WEB_BODY_MAX:
-                    self.close_connection = True
-                    return
-                if length > 0:
-                    self.connection.settimeout(WEB_BODY_DEADLINE)
-                    self.rfile.read(length)
-            except Exception:
-                pass
-
-        def _start_run(self, text, key="web"):
-            """Kick off a browser run on its own thread; the page polls for
-            lines.  One run per CONVERSATION at a time - two conversations may
-            both be working, which is what makes parking one and opening another
-            possible instead of queueing behind it."""
-            web_touch(key)
-            busy = _web_active_run(key)
-            if busy is not None:
-                # A tab that reloaded (or a second tab) does not know a run is
-                # live, and its message used to be dropped on the floor. Queue
-                # it into the running run as a steer - what the page does when
-                # it does know - and echo it into that run's buffer so it shows.
-                with busy.lock:
-                    busy.steer.append(text)
-                busy.add("you", text + "   (mid-run)")
-                log.info("web run %s: message from a second client queued as steer",
-                         busy.id)
-                self._json({"run_id": busy.id, "busy": True, "steered": True})
-                return
-            run = _web_new_run(key)
-            run.add("you", text)
-            threading.Thread(target=_web_drive, args=(run, text),
-                             daemon=True, name=f"webrun-{run.id}").start()
-            log.info("web run %s started from the browser in %s", run.id, key)
-            self._json({"run_id": run.id, "busy": False})
-
-        def do_POST(self):
-            if not self._origin_ok():
-                self._forbidden()
-                return
-            if self.path.startswith("/api/run"):
-                if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                body = self._body()
-                if body is None:
-                    self._json({"error": "bad request"}, 400)
-                    return
-                text = (body.get("message") or "").strip()
-                if not text:
-                    self._json({"error": "empty message"}, 400)
-                    return
-                client = _web_client(self.headers)
-                key = web_resolve_session(client, body.get("session"))
-                kind, payload = _web_command(text, key)
-                if kind != "task":
-                    # fast-path commands answer immediately, like /api/chat
-                    self._json({"reply": payload, "immediate": True, "session": key})
-                    return
-                web_set_open(client, key)
-                self._start_run(payload, key)
-                return
-            if self.path.startswith("/api/sessions"):
-                if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                body = self._body() or {}
-                op = (body.get("op") or "").strip()
-                key = (body.get("key") or "").strip()
-                client = _web_client(self.headers)
-                if op == "new":
-                    made = web_new_session(client, (body.get("title") or "").strip()[:80])
-                    log.info("web conversation %s created", made)
-                    self._json({"key": made, "sessions": web_sessions(client)})
-                    return
-                if op in ("rename", "delete", "open"):
-                    if not _web_key_ok(key) or web_entry(key) is None:
-                        self._json({"error": "no such conversation"}, 404)
-                        return
-                    if op == "rename":
-                        web_rename_session(key, body.get("title") or "")
-                        self._json({"ok": True, "sessions": web_sessions(client)})
-                        return
-                    if op == "delete":
-                        verdict = web_delete_session(key)
-                        if verdict == "busy":
-                            self._json({"error": "a run is still going in that "
-                                                 "conversation - stop it first"}, 409)
-                            return
-                        if verdict == "scheduled":
-                            self._json({"error": "a scheduled job reports into "
-                                                 "that conversation - remove the "
-                                                 "job first"}, 409)
-                            return
-                        if verdict != "deleted":
-                            self._json({"error": "no such conversation"}, 404)
-                            return
-                        self._json({"deleted": key, "sessions": web_sessions(client)})
-                        return
-                    web_set_open(client, key)
-                    self._json({"open": key})
-                    return
-                self._json({"error": "unknown op"}, 400)
-                return
-            if self.path.startswith("/api/steer"):
-                if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                body = self._body() or {}
-                run = WEB_RUNS.get(body.get("run_id", ""))
-                text = (body.get("message") or "").strip()
-                if run is None:
-                    self._json({"error": "no such run"}, 404)
-                    return
-                if not text:
-                    self._json({"error": "empty message"}, 400)
-                    return
-                if run.done:
-                    self._json({"error": "run finished"}, 409)
-                    return
-                # A question is open on this run: this POST is its ANSWER, not a steering
-                # line. It is read here and handed to the parked run through the row,
-                # because only the run's own thread can unblock itself.
-                with run.lock:
-                    _row = getattr(run, "asked", None)
-                if _row is not None:
-                    _row["answer"] = text
-                    _row["ev"].set()
-                    run.add("you", text + "   (answer)")
-                    log.info("web run %s: question answered", run.id)
-                    self._json({"answered": True})
-                    return
-                with run.lock:
-                    run.steer.append(text)
-                run.add("you", text + "   (mid-run)")
-                log.info("web run %s: steering message queued", run.id)
-                self._json({"queued": True})
-                return
-            if self.path.startswith("/api/stop"):
-                if not self._auth_ok():
-                    self._drain()
-                    self._json({"error": "unauthorized"}, 401)
-                    return
-                body = self._body() or {}
-                run = WEB_RUNS.get(body.get("run_id", ""))
-                if run is None:
-                    self._json({"error": "no such run"}, 404)
-                    return
-                run.cancel.set()
-                run.add("system", "stop requested")
-                log.info("web run %s: stop requested", run.id)
-                self._json({"stopping": True})
-                return
-            if not self.path.startswith("/api/chat"):
-                self._drain()
-                self._send("not found", 404, "text/plain")
-                return
-            if not self._auth_ok():
-                self._drain()
-                self._json({"reply": "unauthorized — wrong token"}, 401)
-                return
-            req = self._body()
-            if req is None:
-                self._json({"reply": "bad request"}, 400)
-                return
-            text = (req.get("message") or "").strip()
-            if not text:
-                self._json({"reply": "(empty message)"})
-                return
-            kind, payload = _web_command(text)
-            if kind == "task":
-                try:
-                    payload = AGENT.run("web", payload)
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except BaseException as e:      # noqa: BLE001 - a lane must not die
-                    # BaseException, not Exception: a stop raised from inside the run used
-                    # to escape here and the browser got nothing at all (BUGREPORT §M11).
-                    log.exception("web run failed")
-                    payload = f"⚠️ Something broke on my side: {e}"
-            self._json({"reply": payload})
-
-    if token:
-        host = web.get("host") or "0.0.0.0"
-    else:
-        host = "127.0.0.1"
-        log.warning("no web token set — the page is loopback-only. Set TINYCMDR_WEB_TOKEN "
-                    "in .env (or web.token in config.json) to require a token and reach it "
-                    "from other machines.")
-    port = int(web.get("port", 8787))
-    tls_cert = str(web.get("tls_cert") or "").strip()
-    tls_key = str(web.get("tls_key") or "").strip()
-    if tls_cert or tls_key:
-        # A half-configured TLS pair REFUSES loudly and never serves the page as
-        # plaintext on a lane the operator believes is https (security review,
-        # 2026-09-23). Raised, not logged: a silent fallback is the real bug.
-        if not (tls_cert and tls_key):
-            raise RuntimeError("web.tls_cert and web.tls_key must BOTH be set "
-                               "(got one of them) - refusing to serve plaintext")
-        import ssl as _ssl
-        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_SERVER)
-        try:
-            ctx.load_cert_chain(tls_cert, tls_key)
-        except Exception as e:
-            raise RuntimeError("web TLS configured but the cert/key did not "
-                               "load: %s (%s / %s)" % (e, tls_cert, tls_key))
-        QuietServer._tls_ctx = ctx
-    srv = None
-    for attempt in range(6):
-        try:
-            srv = QuietServer((host, port), Handler)
-            break
-        except OSError as e:
-            if attempt == 5:
-                # The web UI is auxiliary — a taken port (hermes-webui also
-                # defaults to 8787!) must never kill the Mattermost bot.
-                log.error("web UI disabled: cannot bind %s:%d (%s). Another "
-                          "process holds the port — set web.port or "
-                          "web.enabled: false in config.json.", host, port, e)
-                return None
-            # after a restart the previous instance may still be releasing the
-            # port for a second or two
-            log.info("web UI port %d busy — retrying in 1s (attempt %d/6)",
-                     port, attempt + 1)
-            time.sleep(1)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
-    log.info("web UI listening on %s://%s:%d%s",
-             "https" if QuietServer._tls_ctx is not None else "http", host, port,
-             "" if token else " (loopback only)")
-    lane_up("web", "port %d" % port)
-    return srv
 
 
 def run_bot():
@@ -18612,7 +16310,7 @@ def run_bot():
 # --------------------------------------------------------------------------
 
 # ------------------------------------------------------------------ telegram lane
-# The third messaging door beside Mattermost and the page: the same agent, the same
+# The second messaging door beside Mattermost: the same agent, the same
 # notes/tasks/atlas/skills and the same sessions corpus, reached from a Telegram DM.
 #
 # The transport is the Bot API over plain HTTPS long polling, so there is no webhook,
@@ -18990,7 +16688,7 @@ def run_telegram():
     """The Telegram lane: long poll, gate on allowed ids, one run per chat.
 
     The unified backend is the point: same Agent, same notes/tasks/atlas/skills, same
-    sessions corpus as the chat and page lanes, so the fleet keeps one memory whichever
+    sessions corpus as the chat lanes, so the fleet keeps one memory whichever
     door is used.
     """
     tg = CONFIG.get("telegram") or {}
@@ -20255,7 +17953,7 @@ def _note_restart(channel_id, root_id, by):
     """Record that a restart was asked for, so the NEW process can say it is
     back in the channel that asked.
 
-    A channel-less restart (web UI / CLI) must NOT stomp a notice already
+    A channel-less restart (CLI) must NOT stomp a notice already
     queued for a real channel — otherwise the chat only ever hears
     'restarting…'.
     """
@@ -20441,7 +18139,7 @@ def user_is_allowed(sender, user_id):
 #     on one token came from.
 
 VERBS = ("status", "doctor", "health", "tasks", "model", "config", "setup", "logs", "proc",
-         "ports", "restart", "update", "clean", "token", "version", "run", "help")
+         "restart", "update", "clean", "token", "version", "run", "help")
 
 # Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
 # (Windows installs by default, and a fleet Windows box had no git at all on 2026-09-24).
@@ -20706,8 +18404,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   tasks [--all]      the task ledger: what is open, in progress and recently done
                      (--json prints the file itself; never a model call)
   version            the version alone
-  proc               the processes running from THIS folder, and the web port's holder
-  ports              what this install listens on + the LAN firewall rule it needs
+  proc               the processes running from THIS folder
   update             pull the published build (git; adopts the checkout on a fresh install)
   update <src>       put a newer build in place (file, zip or folder) with a backup
   clean [--yes]      list the junk in this folder; --yes removes it (state is kept)
@@ -20723,8 +18420,11 @@ In a chat window the same names are slash commands, and `/tinycmdr` is the prefi
 always gets through: `/tinycmdr model` lists them, `/tinycmdr status` is this host,
 `/tinycmdr help` lists every command.
 
-`tinycmdr web` (the same as --web) serves the local page instead of the chat lanes, and a
-bare `tinycmdr` from a shell is a session in this folder (the same as --cli).
+A bare `tinycmdr` from a shell is a session in this folder (the same as --cli).
+
+A chat lane is chosen by the token that is set; when BOTH a Mattermost and a
+Telegram token are configured, neither lane starts on its own - pass --telegram or
+--mattermost (neither lane is primary).
 
 With no verb this file is the agent itself, exactly as it has always been.
 """
@@ -20829,9 +18529,7 @@ def _verb_doctor():
 
     err = validate_startup_config()
     if not _chat_lane_configured():
-        # A page-only install is legitimate: the installer offers exactly that lane.
-        notes.append("no chat lane configured (fine for a local-page install)")
-        err = None
+        notes.append("no chat lane configured - CLI-only install (--cli / --once)")
     print("  config    : %s" % (err.splitlines()[0] if err else "ok"))
     if err:
         problems.append(err)
@@ -20877,7 +18575,7 @@ def _verb_doctor():
     print("  .env      : %s (%d key%s)" % ("present" if have_env else "missing",
                                            len(env), "" if len(env) == 1 else "s"))
     # names only, never values
-    wanted = ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
+    wanted = ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
               "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY")
     for name in wanted:
         where = []
@@ -20934,13 +18632,6 @@ def _verb_doctor():
         print("  config    : %s" % _drift)
         notes.append(_drift)
 
-    _web = CONFIG.get("web") or {}
-    if _web.get("enabled"):
-        print("  page      : http://%s:%s - accepts Host: %s"
-              % (_web.get("host") or "0.0.0.0", _web.get("port") or 8787,
-                 ", ".join(sorted(_web_local_hosts()))))
-    else:
-        print("  page      : off (web.enabled is false)")
 
     for n in notes:
         print("  note      : %s" % n)
@@ -21038,8 +18729,8 @@ def _config_take_effect():
 # --- the verbs that wrap a host command --------------------------------------
 # Each of these replaces something that was typed by hand on cmd, PowerShell or bash, and
 # got typed wrong at least once: the process query filtered by the install folder, the
-# listener/port check, the Windows firewall rule that lets the LAN reach the local page,
-# a dotted-key edit of config.json, swapping in a newer build, and tidying the folder.
+# instance-lock check, a dotted-key edit of config.json, swapping in a newer build,
+# and tidying the folder.
 # Nothing here runs the agent or spends a token, and no verb prints a secret value.
 
 
@@ -21060,17 +18751,11 @@ def _verb_health():
     # STATES, not names: a configured lane is not a connected lane, and that distinction is
     # what let 510 failed starts look like a healthy bot (a live install, 2026-09-28).
     lanes_state = lanes_snapshot()
-    if "web" in lanes_state:
-        lanes_state["web"]["port"] = (CONFIG.get("web") or {}).get("port") or 8787
     # Built as a list on purpose: a conditional expression as a genexp element swallows the
     # `for` clause, so `",".join(A if c else B for ...)` joined the STRING's characters -
     # the health line printed `lane m,a,t,t,e,r,m,o,s,t,...` (caught by the suite, 2026-09-28).
-    _parts = []
-    for _name, _info in lanes_state.items():
-        if _name == "web":
-            _parts.append("web:%s=%s" % (_info["port"], _info["state"]))
-        else:
-            _parts.append("%s=%s" % (_name, _info["state"]))
+    _parts = ["%s=%s" % (_name, _info["state"])
+              for _name, _info in lanes_state.items()]
     lanes = ",".join(_parts)
     state = {True: "up", False: "not running", None: "unknown"}[running]
     # The envelope rides this line only when it was already computed: `health` keeps
@@ -21089,9 +18774,9 @@ def _verb_health():
     _drift = config_drift()
     if _drift:
         # On stderr with the lane lines, so the one readable stdout line keeps its shape.
-        # This is the surface that SURVIVES the page's removal, which is why it is here:
-        # /api/health and the page banner both die with the web UI, and the trap (an edit
-        # that has not applied) is what an operator hits after asking the agent in chat.
+        # This is the surface that SURVIVED the web UI's removal, which is why it is here:
+        # the trap (an edit that has not applied) is what an operator hits after asking
+        # the agent in chat.
         print(_drift, file=sys.stderr)
     for _name, _info in lanes_state.items():
         if _info["state"] == "failed":
@@ -21129,19 +18814,6 @@ def _install_processes():
     return rows, None
 
 
-def _web_port(web):
-    """(port, complaint) for the configured web port. Never raises.
-
-    A hand-edited config.json can hold anything here (`int('nope')` was a traceback out
-    of two verbs before this), and a verb that reports on a box must name the problem."""
-    raw = (web or {}).get("port")
-    try:
-        return int(raw), None
-    except (TypeError, ValueError):
-        return 8787, ("web.port in config.json is %r, which is not a port: reading 8787"
-                      % (raw,))
-
-
 def _verb_proc():
     """This install's own processes, and who holds the lock. Read-only."""
     rows, err = _install_processes()
@@ -21157,70 +18829,6 @@ def _verb_proc():
         print("  %s" % r[:160])
     if len(rows) > 12:
         print("  ... %d more" % (len(rows) - 12))
-    web = CONFIG.get("web") or {}
-    if web.get("enabled"):
-        port, complaint = _web_port(web)
-        if complaint:
-            print("  %s" % complaint)
-        holder = _port_holder(port)
-        print("  web port %d: %s" % (port, holder or "nothing is listening"))
-    return 0
-
-
-def _port_holder(port):
-    """Who is listening on a TCP port, as a printable line (or None). Read-only."""
-    if os.name == "nt":
-        rc, out, _err, _ = run_capture(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-NetTCPConnection -State Listen -LocalPort %d -ErrorAction SilentlyContinue | "
-             "ForEach-Object { 'pid ' + $_.OwningProcess + ' on ' + $_.LocalAddress }" % port],
-            60)
-    else:
-        rc, out, _err, _ = run_capture(
-            ["sh", "-c", "(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) "
-                         "| grep -E '[:.]%d[[:space:]]' | head -3" % port], 60)
-    lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
-    return "; ".join(lines[:3]) if lines else None
-
-
-def _verb_ports():
-    """What this install listens on, and whether the LAN can reach it.
-
-    The Windows lesson this exists for: the python.exe firewall rules cover the PUBLIC
-    profile and the bot runs as pythonw.exe, so a first bind on 8787 from the LAN is
-    dropped with a timeout (it looks like the page is broken, not blocked). Read-only:
-    the fix is printed, never applied."""
-    web = CONFIG.get("web") or {}
-    port, complaint = _web_port(web)
-    host = web.get("host") or "127.0.0.1"
-    if complaint:
-        print("warning: %s" % complaint)
-    token = bool(str(web.get("token") or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip())
-    print("web page : %s:%d  enabled=%s  token=%s"
-          % (host, port, bool(web.get("enabled")), "set" if token else "NOT set"))
-    print("           (no token = loopback only, whatever host says)")
-    print("listening: %s" % (_port_holder(port) or "nothing on that port"))
-    if not web.get("enabled"):
-        print("enable it: tinycmdr config set web.enabled true   (then restart)")
-    if os.name == "nt":
-        rule = "tinycmdr web UI %d (LAN only)" % port
-        rc, out, _err, _ = run_capture(
-            ["powershell", "-NoProfile", "-Command",
-             "(Get-NetFirewallRule -DisplayName '%s' -ErrorAction SilentlyContinue | "
-             "Select-Object -First 1 -ExpandProperty DisplayName)" % rule], 60)
-        if (out or "").strip():
-            print("firewall : rule %r is present" % rule)
-        else:
-            print("firewall : NO rule for this port, so a LAN client cannot reach it")
-            print("           python.exe's rules are Public-profile only and the bot runs")
-            print("           as pythonw.exe, so the LAN is dropped with a timeout.")
-            print("           add it with (as administrator):")
-            print("             New-NetFirewallRule -DisplayName '%s' -Direction Inbound "
-                  "-Action Allow -Protocol TCP -LocalPort %d -Profile Domain,Private "
-                  "-RemoteAddress LocalSubnet" % (rule, port))
-    else:
-        print("firewall : ufw/firewalld are not this verb's business; check the port "
-              "from another host: curl -s http://<this-host>:%d/api/health" % port)
     return 0
 
 
@@ -21889,7 +19497,7 @@ def _verb_token(rest):
     env = _env_file_keys()
     print("  .env.example lists every key; set one with: tinycmdr token set NAME")
     print("  %-22s %s" % ("key", "state"))
-    for name in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
+    for name in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
                  "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY"):
         state = "set (%s)" % (".env" if name in env else "environment") \
             if os.environ.get(name) else "not set"
@@ -21919,7 +19527,7 @@ def _verb_run(rest):
 # while a run owns the channel. `help` is NOT here on purpose: the chat lane answers
 # `/tinycmdr help` with its own list of commands (the "**Commands**" block), which names the
 # chat verbs a host-side help page cannot, and a suite pins it.
-_CHAT_VERB_SET = frozenset(("status", "doctor", "health", "version", "proc", "ports",
+_CHAT_VERB_SET = frozenset(("status", "doctor", "health", "version", "proc",
                             "config", "model", "logs", "clean", "update"))
 
 
@@ -21984,8 +19592,6 @@ def run_verb(argv):
         return _verb_version()
     if verb == "proc":
         return _verb_proc()
-    if verb == "ports":
-        return _verb_ports()
     if verb == "setup":
         return run_setup(rest)
     if verb == "config":
@@ -22007,21 +19613,35 @@ def run_verb(argv):
     return 2
 
 
-def _chat_lane_configured():
-    """Is any chat lane configured at all - a Mattermost or Telegram token, from .env
-    (loaded into the environment), the environment itself, or config.json?
+# The values config.example.json ships so a reader sees the shape. They are NOT a lane:
+# counting them made every fresh, token-less install look like a Mattermost host with a
+# broken URL - and that is exactly the install that is meant to be a supported CLI-only
+# one.
+MM_TOKEN_PLACEHOLDER = "PASTE_BOT_TOKEN_HERE"
+MM_USER_PLACEHOLDER = "your-mattermost-user-id"
 
-    A page-only install has none, and that is a supported install: the installer offers
-    exactly that lane, `main` starts the page when there is no chat token, and every
-    requirement in validate_startup_config below is a CHAT-LANE requirement, so none of
-    them apply (H2). Measured 2026-09-26: a page-only install was told
-    "mattermost.url ... is empty/placeholder" and `doctor` exited 1.
+
+def _mm_token_configured():
+    """The Mattermost token a lane could run with, or "" - the placeholder excluded."""
+    tok = str(CONFIG["mattermost"].get("token")
+              or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
+    return "" if tok == MM_TOKEN_PLACEHOLDER else tok
+
+
+def _tg_token_configured():
+    """The Telegram token a lane could run with, or ""."""
+    return str((CONFIG.get("telegram") or {}).get("token")
+               or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
+
+
+def _chat_lane_configured():
+    """Is any chat lane configured at all (the shipped placeholders do not count)?
+
+    Every requirement in validate_startup_config below is a CHAT-LANE requirement, so a
+    host with no chat lane is asked none of them: it can still run `--cli` and `--once`,
+    and there is nothing remote to serve.
     """
-    mm = str(CONFIG["mattermost"].get("token")
-             or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
-    tg = str((CONFIG.get("telegram") or {}).get("token")
-             or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
-    return bool(mm or tg)
+    return bool(_mm_token_configured() or _tg_token_configured())
 
 
 def validate_startup_config():
@@ -22039,26 +19659,24 @@ def validate_startup_config():
     _drift = guard_list_drift()
     if _drift:
         log.warning("%s", guard_drift_note(_drift))
-    # No chat lane is not a mistake (H2): the page lane is a lane. Everything below
-    # exists because a CHAT driver would misbehave, so with no chat token it is simply
-    # not asked - and a box that is only a Telegram bot is not asked about Mattermost
-    # either (its own lane's requirements are gated the same way).
-    _mm_token = str(CONFIG["mattermost"].get("token")
-                    or os.environ.get("TINYCMDR_MM_TOKEN") or "").strip()
-    _tg_token = str((CONFIG.get("telegram") or {}).get("token")
-                    or os.environ.get("TINYCMDR_TG_TOKEN") or "").strip()
+    # Everything below exists because a CHAT driver would misbehave, so with no chat token
+    # it is simply not asked - and a box that is only a Telegram bot is not asked about
+    # Mattermost either (its own lane's requirements are gated the same way).
+    _mm_token = _mm_token_configured()
+    _tg_token = _tg_token_configured()
     # "Intends to run Mattermost" = a real host or a non-empty allowlist. The example
-    # file's placeholders do not count, or every fresh page-only install would be told
+    # file's placeholders do not count, or a session-only install would be told
     # to fill in a lane it never wanted.
     _mm_url = str(CONFIG["mattermost"].get("url") or "").strip().lower()
     _mm_users = [u for u in (CONFIG["mattermost"].get("allowed_users") or [])
-                 if str(u).strip()]
+                 if str(u).strip() and str(u).strip() != MM_USER_PLACEHOLDER]
     _mm_intent = bool(_mm_users or (_mm_url and "example.com" not in _mm_url
                                     and "change-me" not in _mm_url))
-    if not _mm_token and not _tg_token and not _mm_intent:
-        log.info("no chat lane configured (no Mattermost/Telegram token, no Mattermost "
-                 "host or allowlist): the page lane is the lane, which is a supported "
-                 "install")
+    if not _chat_lane_configured() and not _mm_intent:
+        # A CLI-only install is a supported end state: the installers register no
+        # service for it, there is no chat driver to validate, and nothing remote
+        # to serve. `--cli` and `--once` are its doors.
+        log.info("no chat lane configured: CLI-only install (--cli / --once)")
         return None
     tg_users = [u for u in ((CONFIG.get("telegram") or {}).get("allowed_users") or [])
                 if str(u).strip()]
@@ -22087,7 +19705,7 @@ def validate_startup_config():
         log.warning("mattermost.url still reads %r — that is the placeholder "
                     "from config.example.json; set your real host", url)
     wanted = [("requests", "the HTTP layer")]
-    if str(CONFIG["mattermost"].get("token", "") or "").strip():
+    if _mm_token:
         wanted.append(("mmpy_bot", "the Mattermost layer"))
     for mod, why in tuple(wanted):
         try:
@@ -22107,13 +19725,12 @@ def validate_startup_config():
     if not _mm_token:
         if _tg_token or not _mm_intent:
             return None
-        return ("no Mattermost bot token.\n"
+        _head = "no Mattermost bot token.\n"
+        if str(CONFIG["mattermost"].get("token") or "").strip() == MM_TOKEN_PLACEHOLDER:
+            _head = ("mattermost.token still has the placeholder from "
+                     "config.example.json.\n")
+        return (_head +
                 "Put it in .env as TINYCMDR_MM_TOKEN=... (preferred, keeps it "
-                "out of config.json), or paste it into mattermost.token. "
-                "Get it from System Console -> Integrations -> Bot Accounts.")
-    if _mm_token == "PASTE_BOT_TOKEN_HERE":
-        return ("mattermost.token still has the placeholder from config.example.json.\n"
-                "Put the real token in .env as TINYCMDR_MM_TOKEN=... (preferred, keeps it "
                 "out of config.json), or paste it into mattermost.token. "
                 "Get it from System Console -> Integrations -> Bot Accounts.")
     if CONFIG["mattermost"].get("allowed_users") == ["your-mattermost-user-id"]:
@@ -22125,97 +19742,29 @@ def validate_startup_config():
     return None
 
 
-def web_busy_note(host, port):
-    """What to say when the page did not start: which URL, who holds it, what to do.
-
-    `--web` failing used to print one vague line ("the port may be taken"), which on a box
-    where the BOT already serves the page (web.enabled true in config.json) reads as a
-    mystery rather than as "it is already up". Read-only: it names the holder, it never
-    kills anything. `port` may be junk (a hand-edited config), which is not an error here.
-    """
-    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    url = "http://%s:%s" % (shown, port)
-    try:
-        holder = _port_holder(int(port))
-    except (TypeError, ValueError):
-        holder = None
-    if holder:
-        return ["Could not start the web UI on %s." % url,
-                "  %s is listening there - another tinycmdr (this install's bot serving its "
-                "own page, or a second web lane) or an unrelated program." % holder,
-                "  If a page answers at %s it is already usable: open that instead. Otherwise "
-                "set web.port in config.json." % url]
-    return ["Could not start the web UI on %s." % url,
-            "  No process answered a look-up on that port, which does not mean it is "
-            "free: a socket in the kernel's TIME_WAIT window (a restart seconds ago) "
-            "or a holder this verb cannot see (another user) both look like this. Wait "
-            "a few seconds and retry, or set web.port in config.json."]
-
-
-def run_web_mode():
-    """Server-free use: serve the local web UI and nothing else.  No
-    Mattermost account, no bot token, no chat server to stand up, and the
-    page streams what the agent is doing while it works."""
-    web = CONFIG.setdefault("web", {}) or {}
-    log.info("%s", capability_line("web"))
-    if not web.get("enabled", False):
-        # The bot build leaves the port closed unless it is asked for, so a
-        # machine running the chat build does not quietly serve a chat page.
-        # Typing --web IS the asking: enable it for this process only.
-        web["enabled"] = True
-        log.info("web UI enabled for this process (--web)")
-    srv = run_webui()
-    if srv is None:
-        for line in web_busy_note(web.get("host") or "127.0.0.1", web.get("port")):
-            print(line)
-        return
-    host, port = srv.server_address[0], srv.server_address[1]
-    shown = "127.0.0.1" if host in ("0.0.0.0", "::") else host
-    print("")
-    print(f"tinycmdr web UI: http://{shown}:{port}")
-    print(f"  model: {CONFIG['llm'].get('model') or '(default)'} at "
-          f"{CONFIG['llm'].get('base_url') or '(no base_url set!)'}")
-    print("  token: " + ("required - the TINYCMDR_WEB_TOKEN line in .env (config.json "
-                    "web.token works too)" if web.get("token")
-                    else "none, loopback only"))
-    print("  same agent and session as the chat build ('web'). ctrl-c stops it.")
-    print("")
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        print("stopping.")
-
-
 def tg_token_only():
-    """True when Telegram is the configured door and Mattermost is not."""
-    tg = (CONFIG.get("telegram") or {}).get("token") or ""
-    mm = CONFIG["mattermost"].get("token") or ""
-    return bool(str(tg).strip()) and not str(mm).strip()
+    """True when Telegram is the configured lane and Mattermost is not."""
+    return bool(_tg_token_configured()) and not _mm_token_configured()
 
 
 def both_doors_note():
-    """The warning when BOTH doors are configured, or "" when they are not.
+    """The refusal when BOTH doors are configured, or "" when they are not.
 
-    Mattermost wins and the Telegram lane stays down. That used to happen in
-    silence, which reads to the operator as "Telegram is broken" (audit,
-    2026-09-22). A function rather than an inline branch so the suite can grade it
-    without driving main() at a real Mattermost.
+    Mattermost used to win silently while the Telegram lane stayed down. Neither
+    lane is primary now: with both configured, a plain start serves NEITHER and
+    says so - the operator picks with `--telegram` or `--mattermost`, so no lane
+    is ever started (or left down) by accident. A function rather than an inline
+    branch so the suite can grade it without driving main() at a real Mattermost.
     """
-    if (str((CONFIG.get("telegram") or {}).get("token") or "").strip()
-            and str(CONFIG["mattermost"].get("token") or "").strip()):
-        return ("both a Telegram and a Mattermost token are set, so the Telegram "
-                "lane does NOT start - Mattermost wins. Use `tinycmdr.py --telegram` "
-                "for a Telegram-only process, or remove one of the two tokens.")
+    if _tg_token_configured() and _mm_token_configured():
+        return ("both a Telegram and a Mattermost token are set, and neither lane "
+                "is primary, so NO lane was started. Pick one: `tinycmdr.py "
+                "--telegram` or `tinycmdr.py --mattermost`, or keep a single "
+                "token.")
     return ""
 
 
 def main():
-    # `tinycmdr web` - the page lane in the same one-word shape as everything else. `web`
-    # is not a management verb (it serves the agent), so it is translated here instead of
-    # being listed in VERBS, and `--web` keeps working for scripts.
-    if len(sys.argv) > 1 and sys.argv[1].lower() in ("web", "webui", "page"):
-        sys.argv[1] = "--web"
     # Management verbs, and the two inert flags. Nothing here starts the agent loop:
     # `tinycmdr status` asks the endpoint for metadata and answers a question.
     if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:
@@ -22233,9 +19782,12 @@ def main():
     if "--help" in sys.argv or "-h" in sys.argv:
         print(VERB_HELP)
         sys.exit(0)
-    if "--web" in sys.argv:
-        run_web_mode()
-    elif "--once" in sys.argv:
+    for _gone in ("--web", "--web-port", "--web-host", "--no-web"):
+        if _gone in sys.argv:
+            print("the local web UI has been removed (`%s`): use Mattermost, "
+                  "Telegram, or --cli." % _gone, file=sys.stderr)
+            sys.exit(2)
+    if "--once" in sys.argv:
         idx = sys.argv.index("--once")
         run_cli(once=" ".join(sys.argv[idx + 1:]))
     elif "--cli" in sys.argv:
@@ -22268,13 +19820,17 @@ def main():
                 pass
             sys.exit(3)
         _both = both_doors_note()
-        if _both:
-            log.warning("%s", _both)
-        if tg_token_only():
-            run_telegram()
-        else:
-            run_webui()
-        if str(CONFIG["mattermost"].get("token") or "").strip():
+        _want_mm = "--mattermost" in sys.argv
+        if _want_mm and not _mm_token_configured():
+            print("--mattermost was given, but no Mattermost token is configured.",
+                  file=sys.stderr)
+            sys.exit(2)
+        if _both and not _want_mm:
+            # Neither lane is primary: with both configured there is nothing to guess.
+            log.critical("%s", _both)
+            print("\n*** tinycmdr cannot start ***\n%s\n" % _both, file=sys.stderr)
+            sys.exit(2)
+        if _want_mm or _mm_token_configured():
             try:
                 run_bot()
             except Exception as e:
@@ -22295,18 +19851,20 @@ def main():
                                  "this with exit code 1; the full state is in %s.",
                                  e, ENV_FILE.name, LANE_STATE_FILE)
                 raise
+        elif _tg_token_configured():
+            # Telegram-only: this process IS the Telegram lane.
+            run_telegram()
         else:
-            log.info("no Mattermost token: running without the chat lane "
-                     "(the page lane is up)")
-            # And hold the process open: `run_webui` serves in a daemon thread and
-            # returns, so with no chat lane to block on, the page came up and the
-            # process exited on the spot - a page-only install could not outlive its
-            # own startup (H2, measured 2026-09-26: "listening" then a clean exit 0).
-            try:
-                while True:
-                    time.sleep(3600)
-            except KeyboardInterrupt:
-                log.info("page lane stopped")
+            # A CLI-only install: no lane to serve and nothing remote to answer.
+            # Not an abort - the install is complete, and --cli / --once are its doors.
+            log.info("no chat lane configured: CLI-only install, nothing to serve")
+            print("no chat lane is configured (no Mattermost and no Telegram token), "
+                  "so there is nothing remote to serve.\n"
+                  "A session needs no service, and this folder is ready for one:\n"
+                  "  tinycmdr                 (or: python tinycmdr.py --cli)\n"
+                  "  tinycmdr --once \"<task>\"  (one task, then exit)\n"
+                  "Add a chat account whenever you want one: re-run the installer "
+                  "with a Mattermost or Telegram token.")
 
 
 if __name__ == "__main__":

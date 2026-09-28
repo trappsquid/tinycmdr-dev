@@ -7,15 +7,13 @@ to a suite that only reads the scripts:
       folder is never created (systemd has no tmpfiles entry for it). A fresh
       Debian/Ubuntu user-mode install - THE door the README prints - died after the
       venv, config.json and .env existed and before any unit, enable or start.
-  D6  `--no-web` did not close the port: the no-token branch set APP_ARGS="--web"
-      regardless, `--web` forces web.enabled=True for that process, no page token was
-      minted (WEB_ON=0), and _auth_ok answers True when no token is configured. The
-      agent's HTTP API - which runs shell - was open to any local process after the
-      operator had closed it. The switch-detection loop that was supposed to notice ran
-      on an already-shifted empty "$@", in both installers.
+  D6  the token-less install used to register the local web page as its lane. That lane is
+      gone: with no Mattermost and no Telegram token there is nothing remote to serve, and a
+      CLI-only install is a supported way to run it - the files are installed and no service
+      is registered (a lane that exits at once would be looped by Restart=always) - and the
+      run says so and names the two local doors (--cli, --once).
   D5  config.json shipped 0644 (the macOS writer opened it before `umask 077`; Linux
-      hardcoded `chmod 644`) beside a 0600 .env, and the install log was 0644 in /tmp
-      with the page token printed into it.
+      hardcoded `chmod 644`) beside a 0600 .env, and the install log was 0644 in /tmp.
   D2  every documented removal door derived its paths from $HOME, so `sudo bash
       uninstall-tinycmdr-macos.sh` looked in /var/root, found nothing, printed "done."
       and exited 0 - and a `--label <l>` install could not be removed by any door.
@@ -30,7 +28,7 @@ to a suite that only reads the scripts:
       could not override `--python`, so an unattended install could not complete.
 
 HOW IT STAYS HERMETIC. Nothing here touches the author's live install (`~/tinycmdr`,
-launchd `com.tinycmdr.agent` on *:8787):
+launchd `com.tinycmdr.agent`):
 
   * every path is under a mkdtemp folder, and HOME points into it;
   * `getent`, `systemctl`, `loginctl`, `journalctl`, `launchctl` and `plutil` are STUBS
@@ -240,7 +238,8 @@ def case_linux_user_mode(sb, pkg, bindir, user, py):
     log.parent.mkdir(parents=True, exist_ok=True)
     env = sandbox_home_env(sb, bindir, log, user)
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-               "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+               "--no-deps", "--no-sudoers", "--no-start",
+               "--mattermost-url", "chat.invalid", "--token", "0123456789abcdef0123456789abcdef",
                "--install-dir", inst], env, pkg)
     unit = sb / "home" / ".config" / "systemd" / "user" / "tinycmdr.service"
     check("D1 the Linux user-mode install exits 0", got.returncode == 0,
@@ -249,7 +248,8 @@ def case_linux_user_mode(sb, pkg, bindir, user, py):
           f"{unit} is not there: {got.stdout[-300:]}")
     text = unit.read_text(encoding="utf-8") if unit.exists() else ""
     execs = [l for l in text.splitlines() if l.startswith("ExecStart")]
-    check("D6 --no-web leaves --web out of the unit", "--web" not in text,
+    check("D6 the unit starts the chat lane with no extra arguments",
+          bool(execs) and execs[0].strip().endswith("tinycmdr.py"),
           f"ExecStart: {execs}")
     check("D5 config.json is 0600",
           mode_of(inst / "config.json") == 0o600,
@@ -278,7 +278,8 @@ def case_linux_chown_fallback(sb, pkg, bindir, user, py):
     env = stub_env(fake, log, {"HOME": str(home), "XDG_RUNTIME_DIR": str(sb / "run"),
                                "TINYCMDR_USER": user, "TINYCMDR_PYTHON": py})
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-               "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+               "--no-deps", "--no-sudoers", "--no-start",
+               "--mattermost-url", "chat.invalid", "--token", "0123456789abcdef0123456789abcdef",
                "--install-dir", inst], env, pkg)
     out = got.stdout + got.stderr
     check("D9 the install completes where chown user:user used to abort",
@@ -294,32 +295,32 @@ def case_linux_chown_fallback(sb, pkg, bindir, user, py):
           "a chown failure still cost the install its .env or unit")
 
 
-def case_linux_web_on(sb, pkg, bindir, user, py):
-    """D5/D6 from the other side: with the page wanted, the unit runs it, a token
-    exists, and the token value stays out of the transcript."""
-    inst = sb / "lin-web"
+def case_linux_no_chat_token(sb, pkg, bindir, user, py):
+    """D6 (Linux half): no Mattermost and no Telegram token. There is NOTHING REMOTE to
+    serve, so the install writes the files but registers no unit, and says so - a service
+    started with no lane exits at once, and Restart=always would loop it forever."""
+    home = sb / "home-nolane"
+    home.mkdir(parents=True, exist_ok=True)
+    inst = sb / "lin-nolane"
     fake_venv(inst, py)
-    log = sb / "logs" / "lin-web.log"
-    env = sandbox_home_env(sb, bindir, log, user)
+    log = sb / "logs" / "lin-nolane.log"
+    env = stub_env(bindir, log, {"HOME": str(home), "XDG_RUNTIME_DIR": str(sb / "run"),
+                                 "TINYCMDR_USER": user, "TINYCMDR_PYTHON": py})
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-               "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst],
-              env, pkg)
-    unit = sb / "home" / ".config" / "systemd" / "user" / "tinycmdr.service"
-    text = unit.read_text(encoding="utf-8") if unit.exists() else ""
-    check("D6 with the page wanted the unit does start it", "--web" in text,
-          f"ExecStart: {[l for l in text.splitlines() if 'ExecStart' in l]}")
+               "--no-deps", "--no-sudoers", "--install-dir", inst], env, pkg)
+    unit = home / ".config" / "systemd" / "user" / "tinycmdr.service"
+    out = got.stdout + got.stderr
+    check("D6 no chat token: the install exits 0", got.returncode == 0,
+          f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
+    check("D6 no chat token: no unit is written or enabled", not unit.exists(),
+          f"{unit} was written with no lane to run")
+    check("D6 no chat token: the run says nothing is served remotely and names --cli/--once",
+          "nothing remote" in out.lower() and "--cli" in out and "--once" in out,
+          f"the run did not explain the no-lane install: {got.stdout[-400:]}")
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
-    token = re.search(r"^TINYCMDR_WEB_TOKEN=([0-9a-f]{48})$", env_text, re.M)
-    check("D5 a page token is minted into .env when the page runs", bool(token),
-          f"no 48-hex TINYCMDR_WEB_TOKEN in .env: {env_text[-160:]}")
-    if token:
-        log_text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
-        check("D5 the page token never reaches the transcript",
-              token.group(1) not in got.stdout and token.group(1) not in log_text,
-              "the token was echoed to stdout or written into the install log")
-    check("D5 .env holds exactly one TINYCMDR_WEB_TOKEN line",
-          env_text.count("TINYCMDR_WEB_TOKEN=") == 1,
-          f"{env_text.count('TINYCMDR_WEB_TOKEN=')} line(s)")
+    check("D6 no chat token: no page/secret token is minted into .env",
+          env_text.count("_TOKEN=") == 1,
+          f"{[l for l in env_text.splitlines() if '_TOKEN' in l]}")
     return inst
 
 
@@ -354,7 +355,7 @@ def case_linux_secrets_lane(sb, pkg, bindir, user, py):
     fleet_env(pkg / "install" / "fleet-secrets.env")
     env = sandbox_home_env(sb, bindir, sb / "logs" / "lin-lane.log", user)
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-               "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+               "--no-deps", "--no-sudoers", "--no-start",
                "--mattermost-url", "chat.invalid", "--allowed-user", "u1",
                "--install-dir", inst], env, pkg)
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
@@ -362,7 +363,7 @@ def case_linux_secrets_lane(sb, pkg, bindir, user, py):
           "installing WITHOUT a chat account" not in got.stdout
           and "TINYCMDR_MM_TOKEN from" in got.stdout
           and "fleet-secrets.env" in got.stdout,
-          f"the run still took the page lane, or never read the token: {got.stdout[-300:]}")
+          f"the run took the no-lane branch, or never read the token: {got.stdout[-300:]}")
     check("D8 the token is written once, with the file's value",
           env_text.count("TINYCMDR_MM_TOKEN=") == 1
           and "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789" in env_text,
@@ -385,7 +386,7 @@ def case_linux_secrets_file(sb, pkg, bindir, user, py):
     log = sb / "logs" / "lin-secrets.log"
     env = sandbox_home_env(sb, bindir, log, user)
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-               "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+               "--no-deps", "--no-sudoers", "--no-start",
                "--secrets-file", planted,
                "--mattermost-url", "chat.invalid", "--allowed-user", "u1",
                "--install-dir", inst], env, pkg)
@@ -403,7 +404,7 @@ def case_linux_secrets_file(sb, pkg, bindir, user, py):
     # lane the reader meant to configure.
     missing = sb / "not-here.env"
     got2 = run(["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
-                "--no-deps", "--no-sudoers", "--no-start", "--no-web",
+                "--no-deps", "--no-sudoers", "--no-start",
                 "--secrets-file", missing,
                 "--install-dir", sb / "lin-missing"], sandbox_home_env(sb, bindir, log, user),
                pkg)
@@ -426,7 +427,9 @@ def case_macos_install(sb, pkg, bindir, user, py):
     # the real launchd path, which is what the label/plist checks are about.
     on_mac = os.uname().sysname == "Darwin"
     args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-start",
-            "--no-web", "--no-path", "--python", py, "--label", "com.tinycmdr.insttest"]
+            "--no-path", "--python", py, "--label", "com.tinycmdr.insttest",
+            "--mattermost-url", "chat.invalid", "--token", "0123456789abcdef0123456789abcdef",
+            "--allowed-user", "u1"]
     if not on_mac:
         args.append("--no-launchd")
     got = run([*args, "--install-dir", inst], env, pkg)
@@ -512,7 +515,7 @@ def case_macos_secrets_lane(sb, pkg, bindir, user, py):
     env = sandbox_home_env(sb, bindir, sb / "logs" / "mac-secrets.log", user,
                            {"TINYCMDR_PYTHON": py})
     got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-launchd",
-               "--no-path", "--no-web", "--python", py, "--secrets-file", secrets,
+               "--no-path", "--python", py, "--secrets-file", secrets,
                "--mattermost-url", "chat.invalid", "--allowed-user", "u1",
                "--install-dir", inst], env, pkg)
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
@@ -635,7 +638,7 @@ def case_archive_and_python(sb, pkg, bindir, user, py):
     log = sb / "logs" / "py39.log"
     env = sandbox_home_env(sb, bindir, log, user, {"TINYCMDR_PYTHON": py})
     got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-launchd",
-               "--no-web", "--python", fake39, "--install-dir", sb / "py39-inst"], env, pkg)
+               "--python", fake39, "--install-dir", sb / "py39-inst"], env, pkg)
     out = got.stdout + got.stderr
     check("D7 python 3.9 is refused, with the band named",
           got.returncode != 0 and "3.10-3.12" in out and "3.9" in out,
@@ -648,7 +651,7 @@ def case_archive_and_python(sb, pkg, bindir, user, py):
     offline = write_stubs(sb / "bin-offline", user, sb / "home", curl_fails=True)
     env2 = sandbox_home_env(sb, offline, sb / "logs" / "pyfetch.log", user)
     got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-launchd",
-               "--no-web", "--python", fake39, "--install-python",
+               "--python", fake39, "--install-python",
                "--install-dir", sb / "pyfetch-inst"], env2, pkg)
     out = got.stdout + got.stderr
     check("D7 --install-python wins over --python (it fetches instead of refusing)",
@@ -682,8 +685,8 @@ def main():
         pkg = package_tree(sb / "pkg")
         case_linux_user_mode(sb, pkg, bindir, user, py)
         case_linux_chown_fallback(sb, pkg, bindir, user, py)
-        lin_web = case_linux_web_on(sb, pkg, bindir, user, py)
-        case_linux_uninstall(sb, pkg, bindir, user, py, lin_web)
+        lin_nolane = case_linux_no_chat_token(sb, pkg, bindir, user, py)
+        case_linux_uninstall(sb, pkg, bindir, user, py, lin_nolane)
         case_linux_secrets_lane(sb, package_tree(sb / "pkg-lane"), bindir, user, py)
         case_linux_secrets_file(sb, pkg, bindir, user, py)
         mac_inst = case_macos_install(sb, pkg, bindir, user, py)

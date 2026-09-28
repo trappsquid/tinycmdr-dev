@@ -3,7 +3,7 @@ REM tinycmdr - the door on Windows. On PATH:
 REM     tinycmdr                     a session in this folder (no arguments)
 REM     tinycmdr status | doctor | model | logs | restart | token | help | clean | ...
 REM     tinycmdr --cli               the same session, spelled out
-REM     tinycmdr --web | --once "<task>" | --telegram    a bot lane in the foreground
+REM     tinycmdr --once "<task>" | --telegram          a bot lane in the foreground
 REM A shim, not a second build: it runs tinycmdr.py from THIS folder, so the install
 REM stays one folder with one config.json and one .env.
 setlocal

@@ -282,21 +282,24 @@ def main():
           '-replace "(?m)^#?\\s*$k=.*$"' not in install,
           "%d literal site(s), %d -replace site(s): %r" % (len(env_lit), len(env_repl), env_repl[:1]))
 
-    print("\n== the page token is generated, written to .env, and never displayed ==")
-    # A page token drives shell on this box, and this installer transcribes its console to
-    # tinycmdr.log: the value must not appear in any line it prints. The Unix installers were
-    # fixed for the same leak in 1.0.24; Windows asked for the token with the generated value
-    # as the prompt's default and printed it in the summary (measured 2026-09-26).
-    printed = [l.strip() for l in install.splitlines()
-               if re.search(r"\b(Say|Write-Host)\b", l) and "webToken" in l]
-    check("no console line interpolates the page token", not printed, printed[:2])
-    check("the generated token is not offered as a prompt default",
-          "Ask-Text \"Page token\"" not in install and "$suggested" not in install,
-          "the ask still puts the value on screen")
-    check("the token is written to .env and the summary says where to read it",
-          "TINYCMDR_WEB_TOKEN=$webToken" in install
-          and "Select-String TINYCMDR_WEB_TOKEN" in install,
-          "no .env write or no pointer to it")
+    print("\n== no chat account -> no service is registered, nothing remote to serve ==")
+    # A token-less install used to register the local page as its lane. That lane was removed
+    # from the assistant, so with no Mattermost and no Telegram token there is nothing remote
+    # to serve: no task and no logon shortcut is registered, because that process would exit at
+    # once and the supervisor would loop it. The files land; the run says so.
+    check("the local-page lane variable is gone", "$LocalWeb" not in install,
+          "the installer still computes a page lane")
+    check("registration needs a real chat lane",
+          "$RegisterTask = (-not $SkipTask) -and ($AnyLane -or $LocalWeb)" not in install
+          and "$RegisterTask = (-not $SkipTask) -and $AnyLane" in install,
+          "RegisterTask still counts a page lane")
+    check("the supervisor argument variable is gone", "$SuperviseArgs" not in install,
+          "the launcher still carries a page argument")
+    check("the token-less run says nothing runs in the background and names the local doors",
+          "autostart: skipped" in install
+          and "there is nothing to keep running in the" in install
+          and "python tinycmdr.py --cli" in install and "python tinycmdr.py --once" in install,
+          "the no-lane branch is missing or silent")
 
     print("\n== the emitted install is still the repo's own shape ==")
     check("the uninstall branch still comes before the installer preamble",

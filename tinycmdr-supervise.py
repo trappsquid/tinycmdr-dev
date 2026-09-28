@@ -1,444 +1,77 @@
-"""Supervisor: keep tinycmdr running 24/7.
+#!/usr/bin/env python3
+"""Windows launch helper: keep tinycmdr running when nothing else will.
 
-Why this exists
----------------
-The "Tinycmdr" scheduled task starts `tinycmdr-service.vbs`, which spawns the
-bot detached and exits immediately. Task Scheduler therefore believes the task
-finished successfully and its RestartOnFailure policy can never fire — and,
-launched through pythonw, an exception in the bot leaves no trace anywhere. The
-observed result: the bot can be down for hours and the only evidence is a log
-file that stops mid-line.
+WHY THIS FILE EXISTS. Linux and macOS already own this: the systemd unit ships
+`Restart=always` and the launchd agent ships `KeepAlive`, so on those platforms the
+OS IS the watchdog and this file is not installed at all (the Linux installer stopped
+copying it).
 
-This supervisor is the task's action instead (via the VBS, which now waits for
-it). It runs the bot as a *child*, so:
+Windows has no per-user service manager. A plain install is a logon shortcut and an
+`-AsService` install is a scheduled task, and neither brings back a crashed process on
+its own: the task's restart policy never fires, because the launcher wakes it and the
+launcher exits 0 whatever the bot does. So on Windows this file is the mechanism - it
+starts the bot hidden, waits for it, and starts it again.
 
-  * the task stays "Running" while the bot is up (Task Scheduler tells the truth),
-  * if the bot exits — crash, network failure at startup, single-instance lock
-    conflict — it is relaunched automatically with backoff, forever,
-  * the child's stdout/stderr are captured to logs/bot-stdout.log, so the
-    traceback that used to vanish into pythonw is on disk,
-  * every start/exit/ready event is logged and mirrored into
-    logs/supervisor-status.json for an external check,
-  * a revival is announced in Mattermost (bot token from config.json), because a
-    silently-recovered bot is indistinguishable from a dead one from the outside.
+It does exactly that and nothing else. No readiness probes, no status JSON, no
+notifications: `tinycmdr health` and `doctor` are the surfaces that answer "can it hear
+me", and the bot's own log is where a failure is read.
 
-Usage
------
-    python tinycmdr-supervise.py            run forever (this is what the task does)
-    python tinycmdr-supervise.py --status   print status JSON and exit
-    python tinycmdr-supervise.py --once     one supervision pass, then exit (tests)
+    pythonw tinycmdr-supervise.py [--telegram|--cli|<verb>]   (the VBS launcher)
+    python  tinycmdr-supervise.py --once                       one lifetime, for tests
 
-Never run two: a lock file (logs/supervisor.lock) makes the second one exit 3.
+A /restart inside the bot exits 75 (RESTART_EXIT_CODE) and is relaunched at once; any
+other exit is a crash and is retried with a growing backoff.
 """
-
 from __future__ import annotations
 
-import json
 import os
-import shutil
 import subprocess
 import sys
 import time
-import traceback
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 BOT = BASE_DIR / "tinycmdr.py"
-CONFIG_FILE = BASE_DIR / "config.json"
 LOGS = BASE_DIR / "logs"
-SUPERVISOR_LOG = LOGS / "supervisor.log"
-SUPERVISOR_STDOUT = LOGS / "supervisor-stdout.log"
-SUPERVISOR_LOCK = LOGS / "supervisor.lock"
-STATUS_FILE = LOGS / "supervisor-status.json"
+LOG_FILE = LOGS / "supervisor.log"
 BOT_STDOUT = LOGS / "bot-stdout.log"
-BOT_LOCK = BASE_DIR / "tinycmdr.lock"
+LOCK_FILE = LOGS / "supervisor.lock"
 
-def find_python():
-    """The interpreter the bot is launched with, resolved on THIS machine.
-
-    A different one (a venv without mmpy_bot or croniter) starts a degraded bot: schedule
-    tool disabled, Mattermost driver missing - so the choice still matters. Order: an
-    explicit TINYCMDR_PYTHON, then the interpreter running THIS process (the launcher
-    starts the supervisor with the very python the bot should use), then PATH, then the
-    usual Windows install locations.
-
-    No host path is baked in any more (2026-09-20): this file ships inside the package and
-    is installed on machines we have never seen, where a pinned
-    C:/Users/<someone>/.../python.exe is simply a supervisor that cannot start anything.
-    """
-    cands = []
-    override = (os.environ.get("TINYCMDR_PYTHON") or "").strip()
-    if override:
-        cands.append(override)
-    if sys.executable:
-        cands.append(sys.executable)
-        try:
-            cands.append(str(Path(sys.executable).with_name("pythonw.exe")))
-        except ValueError:
-            pass
-    for name in ("pythonw.exe", "pythonw", "python3", "python"):
-        found = shutil.which(name)
-        if found:
-            cands.append(found)
-    local = (os.environ.get("LOCALAPPDATA") or "").strip()
-    if local:
-        for ver in ("313", "312", "311", "310"):
-            cands.append(str(Path(local) / "Programs" / "Python" / ("Python" + ver)
-                             / "python.exe"))
-    cands.extend(("/usr/bin/python3", "/usr/local/bin/python3"))
-    for c in cands:
-        try:
-            if c and Path(c).exists():
-                return Path(c)
-        except OSError:
-            continue
-    raise SystemExit("no python interpreter found for the bot: set TINYCMDR_PYTHON to the "
-                     "one it should run under (it needs requests, mmpy_bot and croniter)")
-
-
-PYTHON = find_python()
-
-REQUIRED = ("requests", "mmpy_bot", "croniter")
-
-READY_TIMEOUT = 90          # seconds to wait for Mattermost to answer
-WAIT_SLICE = 30             # seconds per child.wait() slice
+RESTART_EXIT_CODE = 75          # the bot exits with this to ask US to start it again
+LOCKED_EXIT_CODE = 3            # the bot exits with this when another instance holds its lock
 BACKOFF_START = 5
 BACKOFF_MAX = 60
-LOCK_CONFLICT_BACKOFF = 30   # another tinycmdr holds the lock: re-test soon. A
-                             # /restart spawns an UNSUPERVISED replacement; this
-                             # keeps recovery after its death inside ~30s instead
-                             # of minutes. The test is one lock attempt, no network.
-RAPID_EXIT_S = 30           # an exit sooner than this counts as a failed start
-RESTART_EXIT_CODE = 75      # tinycmdr exiting with this wants US to start it again
-
+RAPID_EXIT_S = 30               # an exit sooner than this counts as a failed start
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-STATUS = {
-    "supervisor_pid": os.getpid(),
-    "supervisor_started_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-    "python": str(PYTHON),
-    "child_pid": None,
-    "child_started_at": None,
-    "restarts": 0,
-    "last_exit_code": None,
-    "last_exit_at": None,
-    "last_uptime_s": None,
-    "consecutive_failures": 0,
-    "last_ready_s": None,
-    "mattermost_ok": None,
-    "updated_at": None,
-}
+CHILD_ARGS = []
 
 
-# --------------------------------------------------------------------------
-# logging
-# --------------------------------------------------------------------------
-
-def log(msg, level="INFO"):
-    line = "%s %-7s %s" % (time.strftime("%Y-%m-%d %H:%M:%S"), level, msg)
-    LOGS.mkdir(exist_ok=True)
-    try:
-        with open(SUPERVISOR_LOG, "a", encoding="utf-8") as fh:
-            fh.write(line + "\n")
-    except OSError:
-        pass
-    try:
-        print(line, flush=True)
-    except Exception:
-        pass
-
-
-def save_status():
-    STATUS["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+def log(msg):
+    """One line, timestamped, to logs/supervisor.log. Never raises."""
+    line = "%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg)
     try:
         LOGS.mkdir(exist_ok=True)
-        STATUS_FILE.write_text(json.dumps(STATUS, indent=2), encoding="utf-8")
-    except OSError as e:
-        log("could not write status file: %s" % e, "WARN")
+        with LOG_FILE.open("a", encoding="utf-8", errors="replace") as fh:
+            fh.write(line)
+    except OSError:
+        pass
 
 
-# --------------------------------------------------------------------------
-# probes
-# --------------------------------------------------------------------------
+def supervisor_lock():
+    """Hold a lock for this supervisor, or None when one is already running.
 
-def bot_lock_free():
-    """True when nothing holds tinycmdr's single-instance lock.
-
-    tinycmdr takes an OS lock (msvcrt) on tinycmdr.lock, so the file existing
-    means nothing — only a failed lock attempt does.
+    Two supervisors would fight over one bot (each relaunching what the other's child
+    lost the lock to). Windows only, like the rest of this file; everywhere else the
+    lock is skipped, which is what lets the test drive it on POSIX.
     """
     try:
         import msvcrt
-    except ImportError:                     # non-Windows: not our platform
+    except ImportError:
         return True
     try:
-        fh = open(BOT_LOCK, "a+b")
-    except OSError:
-        return True
-    try:
-        fh.seek(0)
-        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
-        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
-        return True
-    except OSError:
-        return False
-    finally:
-        try:
-            fh.close()
-        except OSError:
-            pass
-
-
-def mm_config():
-    try:
-        cfg = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    mm = cfg.get("mattermost") or {}
-    url, token = mm.get("url"), mm.get("token")
-    if not url or not token:
-        return None
-    base = "%s://%s" % (mm.get("scheme", "https"), url)
-    port = mm.get("port")
-    if port and not ((mm.get("scheme", "https") == "https" and int(port) == 443)
-                     or (mm.get("scheme") == "http" and int(port) == 80)):
-        base += ":%s" % port
-    return {"base": base.rstrip("/"), "token": token,
-            "verify": bool(mm.get("ssl_verify", True)),
-            "dm_user": (cfg.get("supervisor") or {}).get("dm_user")
-                       or (mm.get("allowed_users") or [None])[0],
-            "notify": (cfg.get("supervisor") or {}).get("notify", True)}
-
-
-def mm_ok(timeout=6):
-    """Is the bot's Mattermost reachable and is the token still valid?"""
-    import urllib.request
-    import ssl
-    conf = mm_config()
-    if not conf:
-        return None
-    ctx = None if conf["verify"] else ssl._create_unverified_context()
-    req = urllib.request.Request(conf["base"] + "/api/v4/users/me",
-                                 headers={"Authorization":
-                                          "Bearer %s" % conf["token"]})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
-            return r.status == 200
-    except Exception:
-        return False
-
-
-def mm_post(text):
-    """Best-effort DM to the operator. Never raises."""
-    import urllib.request
-    import ssl
-    conf = mm_config()
-    if not conf or not conf.get("notify") or not conf.get("dm_user"):
-        return False
-    ctx = None if conf["verify"] else ssl._create_unverified_context()
-    hdrs = {"Authorization": "Bearer %s" % conf["token"],
-            "Content-Type": "application/json"}
-
-    def call(path, payload=None):
-        req = urllib.request.Request(
-            conf["base"] + path, headers=hdrs,
-            data=None if payload is None else json.dumps(payload).encode())
-        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
-            return json.loads(r.read().decode() or "{}")
-
-    try:
-        me = call("/api/v4/users/me")
-        chan = call("/api/v4/channels/direct", [me["id"], conf["dm_user"]])
-        call("/api/v4/posts", {"channel_id": chan["id"], "message": text})
-        return True
-    except Exception as e:
-        log("Mattermost notify failed: %s" % e, "WARN")
-        return False
-
-
-def preflight():
-    """Check the pinned interpreter can actually run the bot."""
-    if not PYTHON.is_file():
-        log("interpreter missing: %s" % PYTHON, "CRITICAL")
-        return False
-    code = ("import importlib,sys\n"
-            "miss=[m for m in %r if importlib.util.find_spec(m) is None]\n"
-            "print('MISSING:' + ','.join(miss))\n" % (list(REQUIRED),))
-    try:
-        out = subprocess.run([str(PYTHON), "-c", code], capture_output=True,
-                             text=True, timeout=60, creationflags=NO_WINDOW)
-    except Exception as e:
-        log("preflight could not run %s: %s" % (PYTHON, e), "CRITICAL")
-        return False
-    missing = ""
-    for line in (out.stdout or "").splitlines():
-        if line.startswith("MISSING:"):
-            missing = line.split(":", 1)[1].strip()
-    if missing:
-        log("interpreter %s is missing %s — the bot would start DEGRADED "
-            "(schedule tool / Mattermost driver disabled). Install with: "
-            '"%s" -m pip install %s' % (PYTHON, missing, PYTHON, missing),
-            "CRITICAL")
-        return False
-    log("preflight ok: %s has %s" % (PYTHON.name, ", ".join(REQUIRED)))
-    return True
-
-
-# --------------------------------------------------------------------------
-# child management
-# --------------------------------------------------------------------------
-
-def start_bot():
-    LOGS.mkdir(exist_ok=True)
-    env = dict(os.environ)
-    env["PYTHONUNBUFFERED"] = "1"
-    env["PYTHONIOENCODING"] = "utf-8"     # redirected stdout is cp1252 otherwise
-    # Tell the bot it is supervised, so a /restart exits for us to relaunch
-    # instead of spawning a detached copy that races our next child for the
-    # lock (which is what used to fill this log with "exited 3" and 300 s waits).
-    env["TINYCMDR_SUPERVISED"] = "1"
-    fh = open(BOT_STDOUT, "a", encoding="utf-8", errors="replace")
-    fh.write("\n===== supervised start %s =====\n"
-             % time.strftime("%Y-%m-%d %H:%M:%S"))
-    fh.flush()
-    proc = subprocess.Popen([str(PYTHON), str(BOT)] + list(CHILD_ARGS), cwd=str(BASE_DIR),
-                            stdout=fh, stderr=subprocess.STDOUT,
-                            stdin=subprocess.DEVNULL, env=env,
-                            creationflags=NO_WINDOW)
-    STATUS["child_pid"] = proc.pid
-    STATUS["child_started_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    save_status()
-    log("started bot: pid %d (%s)%s" % (proc.pid, PYTHON.name,
-                                        (" args=%s" % " ".join(CHILD_ARGS)) if CHILD_ARGS else ""))
-    return proc, fh
-
-
-def web_port():
-    """The page this child was asked to serve, or None when the lane is not --web.
-
-    The port is a per-install value (8787 unless another web UI already has it), so
-    it is read from config.json the same way tinycmdr.py reads it.
-    """
-    if "--web" not in CHILD_ARGS:
-        return None
-    try:
-        conf = json.loads(CONFIG_FILE.read_text(encoding="utf-8-sig"))
-        web = conf.get("web") or {}
-        if not web.get("enabled", True):
-            return None
-        return int(web.get("port", 8787))
-    except Exception:
-        return 8787
-
-
-def web_ok(timeout=4):
-    """/api/health needs no token: this is a plain GET on loopback."""
-    port = web_port()
-    if not port:
-        return False
-    try:
-        import urllib.request
-        with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port,
-                                    timeout=timeout) as r:
-            return json.loads(r.read().decode() or "{}").get("ok") is True
-    except Exception:
-        return False
-
-
-def waiting_on():
-    """The doors this child was asked to serve, named for the not-ready message."""
-    doors = []
-    if mm_config():
-        doors.append("Mattermost")
-    if web_port():
-        doors.append("the page on 127.0.0.1:%d" % web_port())
-    return doors
-
-
-def wait_ready(proc, timeout=READY_TIMEOUT):
-    """Wait until every door this child was asked to serve is open.
-
-    A chat install waits for the lock and Mattermost, exactly as before. A PAGE-ONLY
-    install has no chat account at all, so that test could never pass: it logged "up
-    but not ready after 90s" inside its first two minutes, then counted every later
-    exit as a failed start (growing backoff, and an eventual "tinycmdr keeps failing"
-    announcement) on a bot that was healthy the whole time. Wait for the door the
-    install actually has.
-    """
-    t0 = time.time()
-    chat = mm_config()
-    page = web_port()
-    while time.time() - t0 < timeout:
-        if proc.poll() is not None:
-            return None                      # died while starting
-        chat_ok = (not chat) or (not bot_lock_free() and mm_ok() is True)
-        page_ok = (not page) or web_ok()
-        if chat_ok and page_ok:
-            return int(time.time() - t0)
-        time.sleep(3)
-    return None
-
-
-def supervise_once(first, once=False, intentional=False):
-    """One bot lifetime. Returns (exit_code, uptime_seconds, was_ready)."""
-    if not bot_lock_free():
-        if once:
-            log("another tinycmdr already holds the lock — that instance is the "
-                "bot; nothing to do", "WARN")
-            return 3, 0, False
-        log("another tinycmdr already holds the lock — waiting %ds before "
-            "trying again" % LOCK_CONFLICT_BACKOFF, "WARN")
-        time.sleep(LOCK_CONFLICT_BACKOFF)
-        return 3, 0, False
-
-    proc, fh = start_bot()
-    ready = wait_ready(proc)
-    STATUS["last_ready_s"] = ready
-    STATUS["mattermost_ok"] = mm_ok()
-    save_status()
-    if ready is None and proc.poll() is None:
-        log("bot pid %d is up but not ready after %ds (still waiting for %s; "
-            "mattermost=%s)" % (proc.pid, READY_TIMEOUT,
-                                ", ".join(waiting_on()) or "nothing",
-                                STATUS["mattermost_ok"]), "WARN")
-    elif ready is not None:
-        log("bot ready in %ds (pid %d)" % (ready, proc.pid))
-        if not first and not intentional and mm_post(
-                "⚠️ **tinycmdr was down** — supervisor "
-                "restarted it (ready in %ds)." % ready):
-            log("revival announced in Mattermost")
-
-    t0 = time.time()
-    while True:
-        try:
-            code = proc.wait(timeout=WAIT_SLICE)
-            break
-        except subprocess.TimeoutExpired:
-            if proc.poll() is None:
-                continue
-            code = proc.returncode
-            break
-    uptime = int(time.time() - t0)
-    try:
-        fh.close()
-    except Exception:
-        pass
-    return code, uptime, ready is not None
-
-
-def next_backoff(failures):
-    return min(BACKOFF_MAX, BACKOFF_START * (2 ** max(0, failures - 1)))
-
-
-# --------------------------------------------------------------------------
-# entry points
-# --------------------------------------------------------------------------
-
-def acquire_supervisor_lock():
-    try:
-        import msvcrt
         LOGS.mkdir(exist_ok=True)
-        fh = open(SUPERVISOR_LOCK, "a+b")
+        fh = open(LOCK_FILE, "a+b")
         fh.seek(0)
         msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
         return fh
@@ -448,113 +81,93 @@ def acquire_supervisor_lock():
         return True   # lock mechanics broken: never block on that
 
 
-# Extra arguments for the CHILD (tinycmdr.py). The supervisor used to launch a fixed
-# [python, tinycmdr.py], so a mode like --web could not be asked for. Set from our own argv in
-# main(): the supervisor's own switches (--status, --once) are consumed here, everything else
-# belongs to the agent.
-CHILD_ARGS = []
+def start_bot():
+    """Launch the bot hidden, its stdout appended to logs/bot-stdout.log."""
+    LOGS.mkdir(exist_ok=True)
+    env = dict(os.environ)
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    # Tells the bot that exiting is a handover, so /restart does not spawn a second
+    # copy that would race us for the instance lock.
+    env["TINYCMDR_SUPERVISED"] = "1"
+    fh = open(BOT_STDOUT, "a", encoding="utf-8", errors="replace")
+    fh.write("\n===== supervised start {} =====\n".format(
+        time.strftime("%Y-%m-%d %H:%M:%S")))
+    fh.flush()
+    proc = subprocess.Popen([sys.executable, str(BOT)] + list(CHILD_ARGS),
+                            cwd=str(BASE_DIR), stdout=fh, stderr=subprocess.STDOUT,
+                            stdin=subprocess.DEVNULL, env=env,
+                            creationflags=NO_WINDOW)
+    log("started bot: pid %d%s" % (proc.pid, (" args=%s" % " ".join(CHILD_ARGS))
+                                   if CHILD_ARGS else ""))
+    return proc, fh
+
+
+def run_once():
+    """One bot lifetime: start it, wait for it, return (exit_code, uptime_seconds)."""
+    proc, fh = start_bot()
+    t0 = time.time()
+    try:
+        code = proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        raise
+    finally:
+        try:
+            fh.close()
+        except OSError:
+            pass
+    return code, int(time.time() - t0)
+
+
+def next_backoff(failures):
+    return min(BACKOFF_MAX, BACKOFF_START * (2 ** max(0, failures - 1)))
+
+
+def respond_to_exit(code, uptime, failures):
+    """What one lifetime's exit means: (failures, delay_seconds).
+
+    A handover (/restart) is not a failure and is relaunched at once. Another instance
+    holding the bot's lock is not our failure either - wait and look again. A lifetime
+    that ran longer than RAPID_EXIT_S was healthy, so the failure count resets; a
+    shorter one is a failed start and grows the backoff.
+    """
+    if code == RESTART_EXIT_CODE:
+        return 0, 1
+    if code == LOCKED_EXIT_CODE:
+        return failures, 30
+    if uptime > RAPID_EXIT_S and code == 0:
+        return 0, BACKOFF_START
+    failures += 1
+    return failures, next_backoff(failures)
 
 
 def main(argv):
     global CHILD_ARGS
-    CHILD_ARGS = [a for a in argv if a not in ("--status", "--once")]
-    if "--status" in argv:
-        try:
-            print(STATUS_FILE.read_text(encoding="utf-8"))
-        except OSError:
-            print(json.dumps({"error": "no status file — supervisor never ran",
-                              "expected": str(STATUS_FILE)}, indent=2,
-                             ensure_ascii=False))
-        return 0
-
-    lock = acquire_supervisor_lock()
+    CHILD_ARGS = list(argv)
+    lock = supervisor_lock()
     if lock is None:
-        log("another supervisor is already running (lock held) — exiting", "WARN")
+        log("another supervisor is already running (lock held) - exiting")
         return 3
-
-    # Our own stdout/stderr: pythonw gives us none, and we want tracebacks.
-    try:
-        stream = open(SUPERVISOR_STDOUT, "a", encoding="utf-8", errors="replace")
-        sys.stdout = sys.stderr = stream
-        print("\n===== supervisor start %s ====="
-              % time.strftime("%Y-%m-%d %H:%M:%S"), flush=True)
-    except OSError:
-        pass
-
     log("supervisor up (pid %d), watching %s" % (os.getpid(), BOT.name))
-    if not preflight():
-        log("preflight failed — starting anyway, but expect a degraded bot",
-            "WARN")
-    save_status()
-
-    once = "--once" in argv
-    first = True
+    once = "--once" in CHILD_ARGS
+    if once:
+        CHILD_ARGS.remove("--once")
     failures = 0
-    intentional = False          # the last exit was a deliberate /restart
     while True:
         try:
-            code, uptime, ready = supervise_once(first, once, intentional)
+            code, uptime = run_once()
         except KeyboardInterrupt:
-            log("interrupted — exiting")
+            log("interrupted - exiting")
             return 0
-        except Exception:
-            log("supervision error:\n%s" % traceback.format_exc(), "ERROR")
-            code, uptime, ready = -1, 0, False
-
-        STATUS["last_exit_code"] = code
-        STATUS["last_exit_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        STATUS["last_uptime_s"] = uptime
-        STATUS["child_pid"] = None
-        if code == RESTART_EXIT_CODE:
-            # A /restart: the bot exited on purpose and is waiting for US. Start
-            # it again at once. No failure counted, no backoff, and no "was down"
-            # announcement — it was never down.
-            log("intentional restart (exit %s) — relaunching now" % code)
-            failures = 0
-            STATUS["consecutive_failures"] = 0
-            save_status()
-            if once:
-                return 0
-            first = False
-            intentional = True
-            time.sleep(1)
-            continue
-
-        if code == 3:
-            # Another instance owns the lock; that instance is the bot. Not a
-            # failure of ours — re-check soon, don't count it as a crash.
-            log("bot exited 3 (lock held elsewhere)", "WARN")
-            STATUS["consecutive_failures"] = 0
-            save_status()
-            if once:
-                return 0
-            first = False
-            continue
-
-        if ready and uptime > RAPID_EXIT_S:
-            failures = 0
-        else:
-            failures += 1
-        STATUS["consecutive_failures"] = failures
-        if failures:
-            STATUS["restarts"] += 1
-        save_status()
-        log("bot exited: code=%s uptime=%ds ready=%s (consecutive failures %d)"
-            % (code, uptime, ready, failures),
-            "WARN" if failures else "INFO")
-
-        if failures == 5:
-            mm_post("❌ **tinycmdr keeps failing** — 5 supervised starts in a "
-                    "row did not come up. Last exit code %s; see "
-                    "logs\\supervisor.log and logs\\bot-stdout.log." % code)
-            log("5 consecutive failures — announced in Mattermost", "ERROR")
-
+        except Exception as e:                                    # noqa: BLE001
+            code, uptime = -1, 0
+            log("could not run the bot: %s" % e)
+        failures, delay = respond_to_exit(code, uptime, failures)
+        log("bot exited: code=%s uptime=%ds (consecutive failures %d) - relaunching "
+            "in %ds" % (code, uptime, failures, delay))
         if once:
-            return 0
-        first = False
-        intentional = False      # anything else is a crash or a stop, not a handover
-        delay = next_backoff(failures) if failures else BACKOFF_START
-        log("relaunching in %ds" % delay)
+            return code if isinstance(code, int) and code >= 0 else 1
         time.sleep(delay)
 
 
@@ -564,8 +177,6 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception:
-        try:
-            log("supervisor crashed:\n%s" % traceback.format_exc(), "CRITICAL")
-        except Exception:
-            pass
+        import traceback
+        log("supervisor crashed:\n%s" % traceback.format_exc())
         raise

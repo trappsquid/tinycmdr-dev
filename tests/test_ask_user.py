@@ -353,7 +353,7 @@ def test_the_model_cannot_grant_itself_a_longer_wait():
 
 
 def test_a_prose_timeout_from_a_door_does_not_raise():
-    """ask_operator is called by the tool, the web door and the scheduler alike. A door
+    """ask_operator is called by the tool and the scheduler alike. A door
     that hands over "5m" used to hit float("5m") and raise out of the call instead of
     becoming a bounded wait."""
     saved_wait = fb.CONFIG["agent"].get("ask_user_wait_seconds")
@@ -422,37 +422,6 @@ def test_one_question_per_session():
         check("and it did not wait", time.time() - t0 < 1.0)
         d.reply_ask("sess-o", "yes")
         join(5)
-    finally:
-        fb.CONFIG["agent"]["ask_user"] = saved
-        fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
-
-
-def test_a_web_run_object_is_a_door():
-    """The web UI's door is an OBJECT (WebRun), not a dict: a dict-only check silently
-    reduced the browser to 'nobody can answer' - caught here, not in production."""
-    saved = fb.CONFIG["agent"].get("ask_user")
-    saved_wait = fb.CONFIG["agent"].get("ask_user_wait_seconds")
-    fb.CONFIG["agent"]["ask_user"] = True
-    fb.CONFIG["agent"]["ask_user_wait_seconds"] = 600
-    try:
-        run = fb.WebRun("r1", "web")
-        t0 = time.time()
-        join, box = in_thread(fb.ask_operator, "web", "Which branch?",
-                              {"session_key": "web", "ask_door": run})
-        check("the question is drawn in the run's stream",
-              wait_for(lambda: any("Which branch?" in l["text"] for l in run.lines), 3.0),
-              [l["text"] for l in run.lines])
-        check("the run publishes the row the POST answers",
-              wait_for(lambda: getattr(run, "asked", None) is not None, 3.0))
-        check("the web door never falls through to nobody-can-answer",
-              box.get("out") is None, box)
-        row = run.asked
-        row["answer"] = "main"
-        row["ev"].set()
-        join(5)
-        status, text = box.get("out", ("?", ""))
-        check("an /api/steer POST answered it", (status, text) == ("answered", "main"),
-              (status, text))
     finally:
         fb.CONFIG["agent"]["ask_user"] = saved
         fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait

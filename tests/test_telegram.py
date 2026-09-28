@@ -256,8 +256,9 @@ try:
     fb.CONFIG["telegram"]["token"] = "tg-token-here"
     fb.CONFIG["mattermost"]["token"] = "mm-token-here"
     note = fb.both_doors_note()
-    check("both doors set is a STARTUP warning, not silence",
-          "Mattermost wins" in note, note[:120])
+    check("both doors set is a STARTUP refusal, not a silent Mattermost win",
+          "neither lane" in note and "--telegram" in note and "--mattermost" in note,
+          note[:160])
     fb.CONFIG["mattermost"]["token"] = ""
     check("one door is not a warning", fb.both_doors_note() == "")
     fb.CONFIG["mattermost"]["token"] = "mm-token-here"

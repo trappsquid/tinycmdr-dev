@@ -449,7 +449,7 @@ def test_run_silent_without_narration():
 
 
 def test_run_works_without_the_new_callbacks():
-    """Default kwargs must stay optional — the web/SSE path passes neither."""
+    """Default kwargs must stay optional — a caller may pass neither."""
     redirect_files()
     fb.AGENT.histories.clear()
     saved_chat = fb.AGENT._chat
@@ -882,8 +882,8 @@ def test_capability_line_reports_what_this_process_can_enforce():
         check("capability: the lane is not hardcoded", "lane cli" in edited, edited)
         fb.CONFIG["agent"]["blocked_patterns"] = []
         check("capability: an empty list reads as 0, not as absent",
-              "blocked_patterns 0 " in fb.capability_line("web"),
-              fb.capability_line("web"))
+              "blocked_patterns 0 " in fb.capability_line("cli"),
+              fb.capability_line("cli"))
     finally:
         fb.CONFIG["agent"]["blocked_patterns"] = saved
 

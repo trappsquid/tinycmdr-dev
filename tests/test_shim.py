@@ -9,7 +9,7 @@ session was `--cli`. The shims now add `--cli` when there is nothing to pass, an
 checks hold that mapping to the letter:
 
   * no arguments -> ["--cli"], in `tinycmdr.cmd` (Windows) and `tinycmdr` (POSIX)
-  * a verb, `--web`, `--once "<task>"` and a multi-word verb pass through untouched
+  * a verb, `--once "<task>"` and a multi-word verb pass through untouched
   * the BOT keeps starting the way it always has: `python tinycmdr.py` with no flags still
     runs the supervised lanes, because the scheduled task, the systemd unit and the VBS
     launcher name the file directly and never go through a shim
@@ -103,13 +103,12 @@ def main():
     for runner, label in (((run_windows, "windows"),) if os.name == "nt" else ()):
         check_pass_through(runner, label, [], ["--cli"])
         check_pass_through(runner, label, ["status"], ["status"])
-        check_pass_through(runner, label, ["--web"], ["--web"])
         check_pass_through(runner, label, ["--once", "reply with READY"], ["--once", "reply with READY"])
         check_pass_through(runner, label, ["model", "use", "main"], ["model", "use", "main"])
         check_pass_through(runner, label, ["help"], ["help"])
 
     if os.name == "posix":
-        for args, want in (([], ["--cli"]), (["status"], ["status"]), (["--web"], ["--web"]),
+        for args, want in (([], ["--cli"]), (["status"], ["status"]),
                            (["--once", "reply with READY"], ["--once", "reply with READY"]),
                            (["model", "use", "main"], ["model", "use", "main"])):
             check_pass_through(run_posix, "posix", args, want)
