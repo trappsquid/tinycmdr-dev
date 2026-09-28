@@ -13,6 +13,7 @@ The lane rules this grades, all of them visible only by RUNNING the file:
 
     python tests/test_lane_choice.py
 """
+import importlib.util
 import json
 import os
 import shutil
@@ -59,6 +60,16 @@ def run(dirpath, args=(), tokens=(), with_mm=False):
     return r.returncode, said
 
 
+def load(dirpath):
+    """Import the staged file in-process, for the rules that are not about the process."""
+    spec = importlib.util.spec_from_file_location("lane_" + dirpath.name,
+                                                 dirpath / "tinycmdr.py")
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def main():
     work = Path(tempfile.mkdtemp(prefix="fblane-"))
     try:
@@ -75,10 +86,22 @@ def main():
         check("cannot start" not in said, "it is NOT a startup abort")
 
         # -- the shipped placeholders are not a lane -----------------------------
-        code, said = run(work / "health")
-        check("CLI-only install" in said,
-              "the shipped placeholder token is not treated as a Mattermost lane",
-              [l for l in said.splitlines() if "chat lane" in l][:2])
+        # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -
+        # the log listener need not have flushed its last lines when a fast child exits -
+        # which macOS won and ubuntu lost, so it graded the platform, not the rule. The run
+        # here is only what stages this case's config.json; the rule is read off the module.
+        run(work / "health")
+        saved = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("TINYCMDR_")}
+        try:
+            m = load(work / "health")
+            check(m._chat_lane_configured() is False,
+                  "the shipped placeholder token is not treated as a Mattermost lane",
+                  repr(m.CONFIG["mattermost"].get("token")))
+            err = m.validate_startup_config()
+            check(err is None,
+                  "so a token-less install is a CLI-only one, not a startup error", err)
+        finally:
+            os.environ.update(saved)
         env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
         env["HOME"] = str(work / "health")
         r = subprocess.run([sys.executable, str(work / "health" / "tinycmdr.py"), "health"],
