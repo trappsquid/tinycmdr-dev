@@ -5,7 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.35] - 2026-09-27
+
+Web search becomes a provider chain you configure and an egress you consent to; the
+shell door stops eating `echo`/`printf` commands that merely mention a tool; and
+`read_file`'s window tells the truth about the lines it hands back.
 
 Added
 - **Web search providers are configured, and leaving the machine is opt-in.** `web_search`

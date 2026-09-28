@@ -1,7 +1,7 @@
 # tinycmdr: what it actually is
 
 <!-- measured:header:start -->
-Working definition of v1.0.34, the tree this document ships with. Every number in
+Working definition of v1.0.35, the tree this document ships with. Every number in
 section 1 and section 3.2 is rendered from the code by
 `maintenance/measured-block.py` - `tests/test_measured_doc.py` fails when the
 committed numbers disagree with the tree, so they cannot rot. Section 6 is a
