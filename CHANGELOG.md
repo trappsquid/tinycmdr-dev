@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Found by watching the live run (2026-09-29)
 
 Fixed
+- **The harness no longer asks a box for more concurrency than it serves.** `/props` reports
+  `total_slots`, and the harness read that reply only to fingerprint llama.cpp and then threw
+  the number away. Measured on the live box: `total_slots=2` while one batch fanned out **4**
+  delegated subtasks, so two requests queued and *every one* fell from ~50 to ~8-10 tok/s.
+  The box was being asked for twice what it serves, and the run was blamed for being slow.
+  `batch_workers` now caps a batch at the endpoint's slot count - and only for batches that
+  call the model: four shells or file reads are local work and still run fully in parallel.
+  An endpoint that does not report slots, and an off-LAN one (never probed for them), keep
+  the old fan-out.
 - **A `.txt` is a document, not a log.** The "log file" digest shape matched
   `\.(log|out|err|txt)$`, and the subject for a read_file is the PATH - so every read of a .txt
   file was reduced to the lines that happen to contain error/warn/fail. On a text-rewriting job,

@@ -184,6 +184,36 @@ def main():
     check("the configured model's entry wins over the first in the list",
           window(f) == 32768)
 
+    # ------------------------------------------- slots: how many requests at once
+    # The /props reply that fingerprints llama.cpp also carries total_slots, and until
+    # 2026-09-29 the harness threw it away: the live box reported 2 slots while a run fanned
+    # out 4 delegated subtasks, so two requests queued and EVERY one fell from ~50 to ~8-10
+    # tok/s. A batch of delegate_task calls is a batch of MODEL requests; a batch of shells
+    # is local work and must stay parallel. Both stubs are restored so nothing here reaches
+    # the network (a real hostname would be a DNS lookup).
+    real_props, real_local = fb._llama_props, fb._is_local_url
+    try:
+        fb._llama_props = lambda url: {"default_generation_settings": {"n_ctx": 131072},
+                                       "total_slots": 2}
+        check("llama.cpp's total_slots is the concurrency the box serves",
+              fb.endpoint_slots("http://127.0.0.1:8081/v1/chat/completions") == 2)
+        four_delegated = [{"function": {"name": "delegate_task"}}] * 4
+        four_shells = [{"function": {"name": "shell"}}] * 4
+        check("four delegated subtasks on a 2-slot box fan out 2 at a time",
+              fb.batch_workers(four_delegated, "http://127.0.0.1:8081/v1") == 2)
+        check("  four SHELLS are local work and still run in parallel",
+              fb.batch_workers(four_shells, "http://127.0.0.1:8081/v1") == 4)
+        fb._llama_props = lambda url: {"build_info": "b1", "default_generation_settings": {}}
+        check("an endpoint that does not report slots keeps the old fan-out",
+              fb.batch_workers(four_delegated, "http://127.0.0.1:8081/v1") == 4)
+        check("  0 means 'did not say', never a guess",
+              fb.endpoint_slots("http://127.0.0.1:8081/v1") == 0)
+        fb._is_local_url = lambda url: False
+        check("an off-LAN endpoint is never asked for its slots",
+              fb.endpoint_slots("https://api.example.com/v1") == 0)
+    finally:
+        fb._llama_props, fb._is_local_url = real_props, real_local
+
     print()
     print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
     return 1 if FAILS else 0

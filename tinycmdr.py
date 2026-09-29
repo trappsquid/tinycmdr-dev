@@ -2310,6 +2310,50 @@ def _llama_props(base_url, headers=None, timeout=5):
     return props
 
 
+def endpoint_slots(url):
+    """How many requests this endpoint will serve AT ONCE, or 0 when it does not say.
+
+    llama.cpp answers /props with total_slots; every other backend here reports nothing, and
+    0 means "unknown" so the caller keeps its own default. Read from the same reply the
+    llama.cpp fingerprint already fetches, so it costs no extra request, and only for an
+    on-LAN endpoint - an off-LAN metadata GET is not something this harness does.
+    """
+    if not _is_local_url(url):
+        return 0
+    props = _llama_props(url)
+    if not isinstance(props, dict):
+        return 0
+    try:
+        n = int(props.get("total_slots") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return n if n > 0 else 0
+
+
+# The most tool calls from ONE batch this harness will ever run at once.
+BATCH_MAX_WORKERS = 4
+
+
+def batch_workers(tool_calls, url):
+    """How many calls from one batch may run AT ONCE.
+
+    Model-calling tools are the ones that can over-subscribe an endpoint. A batch of
+    delegate_task calls is a batch of MODEL requests, and measured 2026-09-29 the live box
+    answered /props with total_slots=2 while the run fanned out 4 subtasks: two requests
+    queued, every one fell from ~50 to ~8-10 tok/s, and the box was simply being asked for
+    twice what it serves. A batch of shells and file reads is LOCAL work - it does not touch
+    the model - and stays fully parallel.
+    """
+    workers = min(BATCH_MAX_WORKERS, len(tool_calls))
+    delegated = any(isinstance(tc, dict)
+                    and ((tc.get("function") or {}).get("name") == "delegate_task")
+                    for tc in tool_calls)
+    if not delegated:
+        return workers
+    slots = endpoint_slots(url)
+    return min(workers, slots) if slots else workers
+
+
 _LLAMA_EXT_ANNOUNCED = set()
 
 
@@ -13403,7 +13447,14 @@ class Agent:
                         _batch_timeout = (float(CONFIG["agent"].get("shell_timeout") or 380)
                                           + float(CONFIG["llm"].get("request_grace") or 30)
                                           + 30.0)
-                        ex = ThreadPoolExecutor(max_workers=min(4, len(tool_calls)))
+                        _workers = max(1, batch_workers(tool_calls, self.llm_url))
+                        if _workers < min(BATCH_MAX_WORKERS, len(tool_calls)):
+                            log.info("[%s] the endpoint serves %s request(s) at once - "
+                                     "running %d of %d delegated subtask(s) now and the "
+                                     "rest after, instead of queueing them all",
+                                     session_key, endpoint_slots(self.llm_url) or "?",
+                                     _workers, len(tool_calls))
+                        ex = ThreadPoolExecutor(max_workers=_workers)
                         try:
                             futures = [ex.submit(work, i, tc)
                                        for i, tc in enumerate(tool_calls)]
