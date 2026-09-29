@@ -12,7 +12,7 @@
     "state:  open | blocked | wish | shipped | closed",
     "anchor: {file: <path>}                      the work is a gap in this file",
     "        {commit: <sha>, expect: tagged}     must be reachable from a tag (it shipped)",
-    "        {commit: <sha>, expect: untagged}   must be reachable from NO tag (it has not)",
+    "        {commit: <sha>, expect: untagged}   must be reachable from NO tag (it has not).\n                                           release.sh promotes these once its tag exists -\n                                           maintenance/ledger-tag.py, written after the 1.0.39\n                                           release commit went red on exactly this claim\n        {commit: <sha>}                    no claim at all: merged, not described as released",
     "gate:   what would close it, so the next reader knows what 'done' looks like"
   ],
   "items": [
@@ -162,7 +162,7 @@
       "state": "shipped",
       "anchor": {
         "commit": "5740200",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "On main, not in a release yet - so the anchor says untagged on purpose, and this suite fails the moment it becomes reachable from a tag without this line changing to match. That is the whole mechanism: 'unshipped' is a claim the repository can refuse."
     },
@@ -172,7 +172,7 @@
       "state": "shipped",
       "anchor": {
         "commit": "9b44d84",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Closed 2026-09-29 on main. The shell-write detector captured an optional quote followed by no-whitespace, so a QUOTED path - the only correct way to pass one containing a space - was cut at its first space: on C:\\Users\\David Trapp it returned C:\\Users\\David, which does not exist, and this module ignores a candidate it cannot find, so write verification verified nothing. It reads a quoted run or a bare one now; the spill messages quote the kept path and test_stall captures to the delimiter; test_verify's fixtures quote. test_verify, test_stall (317 checks) and the gate pass on both fleet hosts.",
       "gate": "done"
@@ -183,7 +183,7 @@
       "state": "shipped",
       "anchor": {
         "commit": "9b44d84",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Closed 2026-09-29 on main. A manifest command is wrapped in `cmd /c` on Windows and `sh -c` elsewhere, and the unwrapping stripped flags beginning with a dash - cmd's switch is `/c` - so the verb read as '/c', matched nothing, and both tiers were bypassed for every dropped-in manifest. `/c` and `/k` are stripped too now: `cmd /c rm -rf ./build` confirms and `cmd /c \"rm -rf /\"` blocks.",
       "gate": "done"
@@ -194,7 +194,7 @@
       "state": "shipped",
       "anchor": {
         "commit": "bb2081c",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "On main, not in a release yet. cmd parses a ')' inside an echo inside an 'if (...)' block as the END of the block, so the shim's 'exit /b 127' ran unconditionally and the documented entry point (tinycmdr status, tinycmdr --once ...) was dead on Windows while the bot kept working from the installer's scheduled task."
     }

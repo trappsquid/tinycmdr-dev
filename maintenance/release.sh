@@ -120,4 +120,17 @@ gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
 say "fetch the tag this cut created, so this tree knows its own release"
 git fetch --tags
 
+# The release commit was pushed BEFORE this tag existed, so its ledger items could not claim
+# `expect: tagged` (no tag yet) and could not claim `untagged` either (this cut falsifies it) -
+# measured on 1.0.39, where the pushed release commit then failed CI in all three jobs with
+# "sglang-window says unreleased, but 5740200 is in v1.0.39". Now that the tag exists, state the
+# claim while it is checkable.
+say "promote the ledger for the tag just cut, so the record and the release agree"
+"$PY" maintenance/ledger-tag.py "$TAG" || echo "  (the ledger was not promoted - fix STATUS.json by hand)" >&2
+if ! git diff --quiet -- STATUS.json; then
+    git add STATUS.json
+    git commit -q -m "status: $TAG released, and the ledger says so"
+    git push origin main
+fi
+
 say "$TAG is published"
