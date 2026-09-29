@@ -1407,7 +1407,14 @@ def envelope_line(env, raw=False):
                fmt(env.get("reply")), fmt(env.get("budget")), fmt(rem)))
 
 
-def mem_limit_chars(key, default):
+# The most a single tool result may carry on a box with room to spare. window // 8 does the
+# real limiting; this only stops a very large window (500k, say) from letting one result
+# become the whole conversation. It is passed ONLY by the one-shot caps, never by the block
+# that rides every request.
+TOOL_RESULT_CAP_CEILING = 40000
+
+
+def mem_limit_chars(key, default, ceiling=None):
     """A character cap that scales with the WINDOW, not with the model NAME.
 
     apply_model_profile raises these caps for a capable model, which is right on a
@@ -1415,6 +1422,19 @@ def mem_limit_chars(key, default):
     an 8,000-char notes block on a 16,384-token window, where the trailing state
     block alone was most of the budget. The effective limit is the tighter of the
     configured value and window // 8 characters (audit FEATURE D5), never below 512.
+
+    `ceiling` opts a cap into the OTHER direction: a window big enough to afford more may
+    raise the SHIPPED DEFAULT. Only one-shot results pass it. Measured 2026-09-29 on a
+    131k-window box: three reads of ~10.6k chars against the 10,000 default were spilled
+    within six minutes and cost four further calls to read back, while that turn's budget
+    was 110,186 tokens - so the cap was refusing 2,600 tokens of a 110,000-token budget, and
+    every one of those extra calls re-sent the whole conversation. Refusing was the
+    expensive choice, not the safe one.
+
+    A value the operator actually chose is never exceeded, and the every-turn blocks (the
+    notes block, history_exchanges) deliberately do NOT pass a ceiling: those ride EVERY
+    request, so a bigger window must not inflate them. Both halves are pinned in
+    tests/test_envelope.py.
     """
     try:
         configured = int(CONFIG["agent"].get(key) or default)
@@ -1423,7 +1443,12 @@ def mem_limit_chars(key, default):
     window = int((getattr(AGENT, "_envelope_cache", None) or {}).get("window") or 0)
     if window <= 0:
         return configured
-    return max(512, min(configured, window // 8))
+    scaled = window // 8
+    if ceiling and configured == int(default):
+        # Nobody chose this number, and the result rides exactly one request: follow the
+        # window, up to the ceiling. Below the ceiling this is the old rule unchanged.
+        return max(512, min(int(ceiling), scaled))
+    return max(512, min(configured, scaled))
 
 
 def mem_limit_exchanges(key, default):
@@ -2595,9 +2620,12 @@ def cap_output(name, text, label="output", limit=None, session=None):
     not, and plain truncation when the spill itself fails.
     """
     try:
-        cap = int(limit) if limit else mem_limit_chars("tool_output_max_chars", 10000)
+        cap = (int(limit) if limit else
+               mem_limit_chars("tool_output_max_chars", 10000,
+                               ceiling=TOOL_RESULT_CAP_CEILING))
     except (TypeError, ValueError):
-        cap = mem_limit_chars("tool_output_max_chars", 10000)
+        cap = mem_limit_chars("tool_output_max_chars", 10000,
+                              ceiling=TOOL_RESULT_CAP_CEILING)
     if len(text) <= cap:
         return text
     if not CONFIG["agent"].get("spill_output", True):
@@ -6472,7 +6500,8 @@ def tool_fetch_url(args, ctx):
                     "on this LAN is always allowed; for the rest the operator decides. "
                     "Ask them, or answer from what is already here." % which)
     try:
-        ceil = mem_limit_chars("fetch_max_chars", 12000)
+        ceil = mem_limit_chars("fetch_max_chars", 12000,
+                               ceiling=TOOL_RESULT_CAP_CEILING)
     except (TypeError, ValueError):
         ceil = 12000
     # The model may ask for more than the 8k default, but not for 30 KB: the largest page

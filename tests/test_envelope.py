@@ -229,6 +229,30 @@ def main():
               and fb.mem_limit_exchanges("history_exchanges", 20) == 20,
               "w=131072: a big window keeps the configured caps")
 
+        # ... while a ONE-SHOT tool result may follow the window UP to its ceiling. Measured
+        # 2026-09-29 on this 131k box: three reads of ~10.6k chars against the 10,000 default
+        # were spilled inside six minutes and cost four further calls to read back, when the
+        # turn's budget was 110,186 tokens. Every one of those calls re-sends the whole
+        # conversation, so refusing 2,600 tokens of a 110,000-token budget was the expensive
+        # choice. The every-turn blocks above deliberately do NOT move: notes ride EVERY
+        # request, a tool result rides exactly one.
+        at_window(fb, 131072)
+        tool_cap = fb.mem_limit_chars("tool_output_max_chars", 10000,
+                                      ceiling=fb.TOOL_RESULT_CAP_CEILING)
+        check(tool_cap == min(fb.TOOL_RESULT_CAP_CEILING, 131072 // 8) and tool_cap > 10000,
+              f"w=131072: a one-shot tool cap follows the window up to its ceiling "
+              f"({tool_cap}), so a 10.6k document is no longer cut and re-read")
+        fb.CONFIG["agent"]["tool_output_max_chars"] = 40000
+        try:
+            check(fb.mem_limit_chars("tool_output_max_chars", 10000) == 131072 // 8,
+                  "  and a number the OPERATOR chose is still capped by window // 8")
+        finally:
+            fb.CONFIG["agent"]["tool_output_max_chars"] = 10000
+        at_window(fb, 16384)
+        check(fb.mem_limit_chars("tool_output_max_chars", 10000,
+                                 ceiling=fb.TOOL_RESULT_CAP_CEILING) == 16384 // 8,
+              "  on a small window the ceiling changes nothing (window // 8 still wins)")
+
         # --- a bigger tool surface is COUNTED, not ignored --------------------
         at_window(fb, 32768)
         fb.CONFIG["agent"]["tool_disclosure"] = False   # send the whole registry
