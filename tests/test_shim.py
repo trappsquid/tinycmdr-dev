@@ -74,7 +74,15 @@ def run_windows(args):
     python_dir = os.path.dirname(sys.executable)
     env["PATH"] = python_dir + os.pathsep + env.get("PATH", "")
     env.pop("PYTHONPATH", None)
-    p = subprocess.run(["cmd", "/c", os.path.join(d, "tinycmdr.cmd")] + args,
+    # cmd.exe's documented two-quote special case: when the command line after /c carries more
+    # than one quoted token, the OUTER quotes are stripped, so
+    #     cmd /c "C:\Users\David Trapp\tinycmdr.cmd" --once "a b"
+    # is read as the command `C:\Users\David` with junk after it, and cmd answers
+    # "'C:\Users\David' is not recognized as an internal or external command". A Windows profile
+    # with a space - the normal case for a two-word name - hits this every time. One extra pair
+    # of quotes around the whole command is the form `cmd /?` documents.
+    line = subprocess.list2cmdline([os.path.join(d, "tinycmdr.cmd")] + args)
+    p = subprocess.run('cmd /c "%s"' % line,
                        capture_output=True, text=True, timeout=120, env=env, cwd=d)
     return p
 

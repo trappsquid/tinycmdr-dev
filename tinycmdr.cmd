@@ -19,7 +19,10 @@ if not defined PY call :findpy python.exe
 if not defined PY call :findpy py.exe
 if not defined PY (
     echo tinycmdr: no Python found - install Python 3.10-3.12, or re-run the installer. 1>&2
-    echo           (the Microsoft Store stub on PATH is not a usable interpreter.) 1>&2
+    REM Brackets, not parentheses: cmd parses a ')' inside an 'echo' inside an 'if (...)'
+    REM block as the END of the block, so the line after it ran unconditionally and this
+    REM shim exited 127 without printing anything. Measured on Windows 2026-09-29.
+    echo           [the Microsoft Store stub on PATH is not a usable interpreter.] 1>&2
     exit /b 127
 )
 REM No arguments means a human at a keyboard, so give them a session. The bot keeps
