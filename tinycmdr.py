@@ -19155,6 +19155,19 @@ def _verb_config(rest):
                 value = json.loads(value)
             except Exception:
                 pass                      # a bare word is a string, and that is fine
+        # A key whose SHIPPED value is a boolean takes a boolean and nothing else. The
+        # fallback above keeps any bare word as a string, and every non-empty string is
+        # truthy - so a typo (`agent.vision treu`) or a `--str false` turned the flag ON
+        # while the operator read one as a mistake and the other as "off". The shipped
+        # config is the schema here, so this catches the whole class (32 keys today),
+        # not that one key.
+        schema = DEFAULT_CONFIG.get(section)
+        if isinstance(schema, dict) and isinstance(schema.get(key), bool) \
+                and not isinstance(value, bool):
+            print("%s is a boolean in the shipped config, so it takes true or false: %s "
+                  "would be stored as a string, and every non-empty string reads as true"
+                  % (path, json.dumps(value)), file=sys.stderr)
+            return 2
         node[key] = value
     err = _config_write_raw(raw)
     if err:

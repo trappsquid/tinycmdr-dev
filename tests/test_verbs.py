@@ -292,6 +292,20 @@ def main():
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         check("--str keeps it a string", rc == 0 and written["agent"]["bot_name"] == "12",
               written["agent"].get("bot_name"))
+
+        rc, out, err = call(fb, ["config", "set", "agent.vision", "treu"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("a boolean key refuses a bare word (a string is always truthy)",
+              rc == 2 and "true or false" in err and "vision" not in written["agent"],
+              (rc, err[:160]))
+        rc, out, err = call(fb, ["config", "set", "agent.vision", "true"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("...and takes the JSON boolean", rc == 0 and written["agent"]["vision"] is True,
+              written["agent"].get("vision"))
+        rc, out, err = call(fb, ["config", "set", "agent.vision", "false", "--str"])
+        check("--str cannot hide a truthy string under a boolean key",
+              rc == 2 and "true or false" in err, (rc, err[:160]))
+        call(fb, ["config", "unset", "agent.vision"])
         rc, out, err = call(fb, ["config", "set", "agent.probe_port", "nope"])
         check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])
