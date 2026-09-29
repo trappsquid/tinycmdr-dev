@@ -110,4 +110,14 @@ gh release upload "$TAG" --clobber \
 say "read the release back"
 gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
 "$PY" maintenance/check-readme-assets.py --tag "$TAG"
+
+# The tag is created by gh, on the remote, so without this the tree that cut the release does
+# not know it exists. That has bitten twice: v1.0.37's tag was missing from this clone until a
+# fetch pulled it (found by the 2026-09-28 cross-audit, which read the local tag list), and
+# v1.0.38's was missing until the status ledger checked an anchor against it on 2026-09-29.
+# Every "has this shipped?" question asked of this clone reads the LOCAL tag list - and the
+# ledger's whole job is to answer that - so leave it correct at the end of the cut.
+say "fetch the tag this cut created, so this tree knows its own release"
+git fetch --tags
+
 say "$TAG is published"
