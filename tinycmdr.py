@@ -2207,7 +2207,8 @@ def _secret_values():
             # floor here hid the one that leaked (measured 2026-09-25 driving the fleet box: asked
             # where the web token lived, the run quoted it into chat - a 10-char value the
             # sweep had skipped). The floor stays for ENVIRONMENT values below, where a
-            # short value is usually a word like "none".
+            # short value is usually a word like "none" - with one exception there, a
+            # name ending in PASSWORD/PASSWD, which is a credential at any length.
             if isinstance(v, str) and len(v) >= 6 and (
                     "token" in k or "key" in k or "secret" in k):
                 vals.add(v)
@@ -2224,10 +2225,15 @@ def _secret_values():
     for k, v in os.environ.items():
         # Only vars whose name ENDS in a secret-ish word. A looser test (any
         # name containing "PAT"/"KEY") swept up PATH and PATHEXT, whose values
-        # then got «redacted» out of ordinary log lines and paths.
-        if isinstance(v, str) and len(v) >= 12 and re.search(
+        # then got «redacted» out of ordinary log lines and paths. A name ending in
+        # PASSWORD/PASSWD is the exception to the 12-char floor: it is a credential at
+        # 6, the rule the config-side sweep above already uses. Measured 2026-09-29 -
+        # the floor skipped this install's 10-char SUDO_PASSWORD, and a skipped secret
+        # in _SECRETS is a secret that reaches the transcript, the log and the chat.
+        if isinstance(v, str) and re.search(
                 r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$",
-                k):
+                k) and (len(v) >= 12 or (re.search(r"(?i)_?passw(or)?d$", k)
+                                         and len(v) >= 6)):
             vals.add(v)
     vals.discard("none")
     return vals

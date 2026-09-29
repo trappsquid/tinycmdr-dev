@@ -59,6 +59,18 @@ try:
     out = fb.scrub("env token env-token-abcdefghijkl")
     check("an environment secret is redacted", "env-token-abcdefghijkl" not in out, out)
 
+    # A name ending in PASSWORD/PASSWD is a credential at ANY length (floor 6, the rule
+    # the config-side sweep already uses). The 12-char floor skipped this install's
+    # 10-char SUDO_PASSWORD - a secret missing from _SECRETS is one that reaches the
+    # transcript, the log and the chat.
+    os.environ["TINYCMDR_TEST_SUDO_PASSWORD"] = "pwabcd1234"
+    os.environ["TINYCMDR_TEST_TOO_SHORT_PASSWD"] = "abc"
+    fb._SECRETS = fb._secret_values()
+    out = fb.scrub("sudo said pwabcd1234 and meant it")
+    check("a 10-char *_PASSWORD environment value is redacted",
+          "pwabcd1234" not in out, out)
+    check("and a 3-char one is still below the floor", "abc" not in fb._SECRETS)
+
     # the regression the sweep's own comment records: a looser name test swept PATH out
     # of ordinary log lines, so a path line must come through untouched
     probe = "PATH entry C:\\Windows\\System32 and C:\\Program Files\\Python312"
@@ -73,6 +85,8 @@ finally:
     fb._SECRETS = SAVED_SECRETS
     fb.CONFIG = SAVED_CFG
     os.environ.pop("TINYCMDR_ENV_TOKEN", None)
+    os.environ.pop("TINYCMDR_TEST_SUDO_PASSWORD", None)
+    os.environ.pop("TINYCMDR_TEST_TOO_SHORT_PASSWD", None)
 
 # ---- BUGREPORT §M4: a 401 body that echoes the key ---------------------------
 # Measured: a provider that echoes the request's Authorization header in its error body
