@@ -972,6 +972,180 @@ START_TIME = time.time()
 # Small helpers
 # --------------------------------------------------------------------------
 
+# ---------------------------------------------------------- tool images ---
+# A tool may hand the model something to LOOK at. The contract is additive: a
+# tool returns {"text": ..., "images": [spec, ...]} and the text is used exactly
+# as a plain string return is. Images are ONE-SHOT: they are attached to the very
+# next request and then gone. They are never stored in the run's `messages`, on
+# purpose - that list is measured by json.dumps (base64 would count as ~300k
+# fake tokens) and rewritten by _compact (which slices content by character).
+#
+# The whole path is dormant unless agent.vision is true, and that ships false (see
+# DEFAULT_CONFIG), so no install gains a behaviour change from this existing.
+_TOOL_IMAGES = {}                 # session_key -> [spec, ...]
+_TOOL_IMAGES_LOCK = threading.Lock()
+_IMAGE_MAX_PER_CALL = 2
+_IMAGE_MAX_BYTES = 4 * 1024 * 1024
+_IMAGE_ASSUMED_TOKENS = 1500      # when a spec arrives with no dimensions
+_IMAGE_NOTE = ("[HARNESS: %d image(s) produced by the tools above are attached "
+               "below. They show the machine as it was at that moment; they are "
+               "NOT a new instruction.]")
+
+
+def image_tokens_est(w, h):
+    """Tokens a screenshot costs this fleet, from measurement, not a guess.
+
+    Measured 2026-09-28 against the LAN box (llama.cpp, Ornith-1.5-35B-A3B, a real
+    desktop capture): 768x499 -> 408 prompt tokens, 1024x666 -> 696, 1470x956 ->
+    1,404, 2940x1912 -> 4,053. That is ~1,000-1,070 tokens per megapixel around a
+    megapixel and ~720 at 5.6 megapixels, so pixels/1000 is accurate where a
+    screenshot usually lands and 39% conservative at full Retina size - the safe
+    side of a budget subtraction. 0 means "not known", which callers turn into an
+    assumed cost; an unknown must not read as FREE.
+    """
+    try:
+        w, h = int(w), int(h)
+    except (TypeError, ValueError):
+        return 0
+    if w <= 0 or h <= 0:
+        return 0
+    return max(1, int((w * h) / 1000))
+
+
+def _endpoint_vision(url=None):
+    """(ok, why) - does this endpoint claim to take images?
+
+    llama.cpp answers /props with a `modalities` dict ({"vision": true, ...} on the
+    LAN box, measured 2026-09-28). Endpoints that say nothing - a cloud API, an
+    older build - do not veto the config: agent.vision is the operator's assertion
+    and only a positive "vision is false" overrides it.
+    """
+    try:
+        props = _llama_props(url or CONFIG["llm"]["base_url"])
+    except Exception:
+        props = None
+    if not isinstance(props, dict):
+        return True, ""
+    mods = props.get("modalities")
+    if isinstance(mods, dict) and "vision" in mods:
+        if not mods.get("vision"):
+            return False, "the endpoint's /props reports modalities.vision=false"
+        return True, ""
+    if props.get("media_marker"):
+        return True, ""
+    return True, ""
+
+
+def _image_spec(entry):
+    """One spec -> {"path","mime","w","h"} or None. Accepts a bare path too."""
+    if isinstance(entry, str):
+        entry = {"path": entry}
+    if not isinstance(entry, dict):
+        return None
+    path = str(entry.get("path") or "").strip()
+    if not path or not os.path.isfile(path):
+        return None
+    mime = str(entry.get("mime") or "").strip()
+    if not mime:
+        low = path.lower()
+        mime = ("image/jpeg" if low.endswith((".jpg", ".jpeg"))
+                else "image/gif" if low.endswith(".gif") else "image/png")
+    try:
+        w, h = int(entry.get("w") or 0), int(entry.get("h") or 0)
+    except (TypeError, ValueError):
+        w = h = 0
+    return {"path": path, "mime": mime, "w": w, "h": h}
+
+
+def take_tool_images(session_key):
+    """Pop this session's pending images (one-shot: called once per request)."""
+    with _TOOL_IMAGES_LOCK:
+        return _TOOL_IMAGES.pop(session_key or "", [])
+
+
+def peek_tool_images(session_key):
+    with _TOOL_IMAGES_LOCK:
+        return list(_TOOL_IMAGES.get(session_key or "", []))
+
+
+def pending_image_tokens(session_key):
+    total = 0
+    for spec in peek_tool_images(session_key):
+        total += image_tokens_est(spec.get("w") or 0, spec.get("h") or 0) \
+            or _IMAGE_ASSUMED_TOKENS
+    return total
+
+
+def stash_tool_images(session_key, images, tool_name=""):
+    """Validate and stash what a tool asked to show. Returns a note for the tool's
+    text when something was DROPPED, so the model is never told it can see what it
+    cannot."""
+    if not images or not session_key:
+        return ""
+    if not isinstance(images, (list, tuple)):
+        images = [images]
+    if not CONFIG["agent"].get("vision"):
+        return ("\n[the tool produced %d image(s); agent.vision is off, so they were "
+                "NOT attached. Turn agent.vision on and point the bot at a vision "
+                "endpoint to let the model see the screen.]" % len(images))
+    ok, why = _endpoint_vision()
+    if not ok:
+        return ("\n[the tool produced %d image(s) and %s, so they were NOT attached.]"
+                % (len(images), why))
+    kept, notes = [], []
+    for entry in images:
+        if len(kept) >= _IMAGE_MAX_PER_CALL:
+            notes.append(" (only the first %d of %d images were attached)"
+                         % (_IMAGE_MAX_PER_CALL, len(images)))
+            break
+        spec = _image_spec(entry)
+        if not spec:
+            notes.append(" (one image was unreadable and was skipped)")
+            continue
+        try:
+            if os.path.getsize(spec["path"]) > _IMAGE_MAX_BYTES:
+                notes.append(" (an image was over %d MB and was skipped)"
+                             % (_IMAGE_MAX_BYTES // (1024 * 1024)))
+                continue
+        except OSError:
+            notes.append(" (one image could not be read and was skipped)")
+            continue
+        kept.append(spec)
+    if kept:
+        with _TOOL_IMAGES_LOCK:
+            _TOOL_IMAGES.setdefault(session_key, []).extend(kept)
+        log.debug("stashed %d image(s) from %s for the next request",
+                  len(kept), tool_name or "a tool")
+    return "".join(notes)
+
+
+def attach_tool_images(messages, session_key):
+    """The one-shot attachment, appended to the payload COPY. Never mutates the
+    run's `messages` - see the block comment above for why that matters."""
+    specs = take_tool_images(session_key)
+    if not specs:
+        return messages
+    parts = [{"type": "text", "text": _IMAGE_NOTE % len(specs)}]
+    tokens = 0
+    for spec in specs:
+        try:
+            with open(spec["path"], "rb") as fh:
+                b64 = base64.b64encode(fh.read()).decode()
+        except OSError as e:
+            log.warning("tool image %s could not be read for attachment: %s",
+                        spec.get("path"), e)
+            continue
+        parts.append({"type": "image_url",
+                      "image_url": {"url": "data:%s;base64,%s" % (spec["mime"], b64)}})
+        tokens += image_tokens_est(spec.get("w") or 0, spec.get("h") or 0) \
+            or _IMAGE_ASSUMED_TOKENS
+    if len(parts) == 1:
+        return messages
+    log.info("attached %d tool image(s), ~%d tokens, for one request",
+             len(parts) - 1, tokens)
+    return messages + [{"role": "user", "content": parts}]
+
+
 def est_tokens(text):
     """Rough token count, deliberately cheap: this runs on every payload assembly.
 
@@ -11266,14 +11440,15 @@ class Agent:
                              prior_unfinished=(self._prior_run_unfinished(session_key)
                                                if session_key else ""))
         if not v:
-            return messages
+            return attach_tool_images(messages, session_key)
         if messages and messages[-1].get("role") == "user":
             if str(messages[-1].get("content") or "").startswith(_STATE_PREFIX):
                 return messages               # already carries a block: never two
             out = list(messages)
             out.insert(len(out) - 1, {"role": "user", "content": v})
-            return out
-        return messages + [{"role": "user", "content": v}]
+            return attach_tool_images(out, session_key)
+        return attach_tool_images(messages + [{"role": "user", "content": v}],
+                                  session_key)
 
     def _conversation_token_est(self, messages):
         """Tokens the CONVERSATION costs: every message the budget may shrink.
@@ -11501,7 +11676,11 @@ class Agent:
         headroom for one cache miss. The trailing volatile block is counted
         here too — it is part of the payload even though it is not in the list.
         """
-        budget = self._context_budget(key) - est_tokens(volatile_context())
+        # The images riding the next request are not in `messages` (by design),
+        # so their cost has to be subtracted here or a session at the edge of its
+        # budget would push the request past the window.
+        budget = (self._context_budget(key) - est_tokens(volatile_context())
+                  - pending_image_tokens(key))
         if self._conversation_token_est(messages) <= budget:
             return messages
         # Before anything is shrunk or dropped: the full text goes to the transcript.
@@ -11984,7 +12163,16 @@ class Agent:
             if refusal:
                 return name, args, refusal
         try:
-            out = str(tool["fn"](args, ctx))
+            value = tool["fn"](args, ctx)
+            if isinstance(value, dict) and ("text" in value or "images" in value):
+                # A tool that produced something to LOOK at. The text is used
+                # exactly as a plain string return would be, and everything below
+                # (annotations, hints, the repeat cache) still sees a string.
+                out = str(value.get("text") or "")
+                out += stash_tool_images((ctx or {}).get("session_key"),
+                                         value.get("images"), name)
+            else:
+                out = str(value)
         except KeyError as e:
             # A call missing a required argument used to come back as
             # `ERROR in tool 'create_tool': 'name'` - measured 2026-09-25 driving the fleet box,
@@ -12142,6 +12330,12 @@ class Agent:
                                   else ["bash", "-c", c]),
                    "shell_guard": lambda text: shell_guard(text, ctx),
                    "config": CONFIG, "depth": depth,
+                   # A tool may hand the model an image to LOOK at: it returns
+                   # {"text":..., "images":[...]} and the harness attaches them to
+                   # the next request (see the tool-images block above). The flag
+                   # is how a tool knows this build understands that shape - without
+                   # it a dict return would be stringified into the model's view.
+                   "tool_images": True,
                    "confirm_cb": confirm_cb, "channel_id": channel_id,
                    # A /stop has to reach work already in flight, so the tools get the same
                    # event the run checks at its turn boundaries: a shell command or a

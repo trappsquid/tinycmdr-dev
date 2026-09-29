@@ -18,7 +18,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                19,955 lines / 0.93 MB in ONE file, no package, no framework
+code                20,149 lines / 0.94 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -32,7 +32,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       16 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               62 suites / 21,762 lines / 2,585 checks that need no model, plus a graded
+tests               63 suites / 21,962 lines / 2,609 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 5 blocks: llm 18, telegram 2, mattermost 6, search 3, agent 89
@@ -290,7 +290,9 @@ Agent architecture
   no sub-agent fan-out: delegate_task is one level deep by design and refuses to nest
   no parallel worker pool beyond one worker per channel
   no RAG or vector memory, no embeddings, no document ingestion pipeline
-  no voice input/output; vision is a config flag with limited use
+  no voice input/output; vision is agent.vision plus whatever the endpoint
+  reports, and images reach the model two ways - user attachments, and shots a
+  tool produced (computer_use hands over the screen at its logical size, once)
 
 Engineering maturity
   no benchmark against public suites (no SWE-bench-style scores, no leaderboard position);
@@ -434,7 +436,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               19,955 lines, one file, no dependency tree to audit
+readability               20,149 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

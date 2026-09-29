@@ -158,8 +158,8 @@ _, _, out = fb.Agent._exec_tool(fb.AGENT, {"function": {"name": "delegate_tasksk
 check("an unknown name gets the closest matches", "unknown tool" in out and "find_tools" in out,
       out[:120])
 check("and the whole remaining surface", TAIL in out, out[:160])
-_, _, out = fb.Agent._exec_tool(fb.AGENT, {"function": {"name": "computer_use",
-                                                        "arguments": {}}},
+_, _, out = fb.Agent._exec_tool(fb.AGENT, {"function": {"name": "browser_navigate",
+                                                       "arguments": {}}},
                                 {"session_key": "s-absent"})
 check("a tool this box never had still reads as absent",
       "exists on this box" in out and "find_tools" not in out, out[:140])

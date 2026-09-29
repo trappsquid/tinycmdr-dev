@@ -184,14 +184,24 @@ def main():
         # for another harness names tools no build here has, and the old hint answered
         # every unknown with "find_tools can reveal them" - which is what sent the model
         # looking for a tool that was never on the box.
+        #
+        # FIXED 2026-09-28, two bugs in three lines. (a) The three checks below passed
+        # their arguments to check() in the wrong order - this file's helper is
+        # check(cond, what), and these called check(label, cond), so the "condition" was
+        # always the non-empty label string and the result was always `ok`. They printed
+        # `ok True` three times and graded nothing. (b) The fixture name was
+        # `computer_use`, which a drop-in tool on this box now really answers to, so the
+        # call reached that tool instead of the unknown-tool path. The fixture is a name
+        # no build here has; `browser_navigate` is the browser tool from the harness
+        # whose runbooks this test is about.
         _, _, out = fb.Agent._exec_tool(
-            fb.AGENT, {"function": {"name": "computer_use", "arguments": {}}}, ctx)
-        check("an absent tool says it is absent",
-              "unknown tool" in out and "exists on this box" in out)
-        check("and does not send the model hunting for it",
-              "find_tools" not in out)
-        check("and names the way to have that capability here",
-              "create_tool" in out)
+            fb.AGENT, {"function": {"name": "browser_navigate", "arguments": {}}}, ctx)
+        check("unknown tool" in out and "exists on this box" in out,
+              f"an absent tool says it is absent ({out[:110]!r})")
+        check("find_tools" not in out,
+              "and does not send the model hunting for it")
+        check("create_tool" in out,
+              "and names the way to have that capability here")
         out = fb.tool_find_tools({"query": "send it to a subagent"}, {"session_key": "s9"})
         check("delegate" in out, "plain language finds the delegation tool")
 
