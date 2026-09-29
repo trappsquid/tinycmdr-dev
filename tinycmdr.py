@@ -2926,10 +2926,28 @@ def _digest_lines(lines, mode, keep):
 
 
 def _digest_subject(name, args):
-    if name in ("shell", "execute_code"):
-        return str(args.get("command") or args.get("code") or "")
-    if name == "read_file":
-        return str(args.get("path") or "")
+    """What produced this output, for shape matching - ONLY a shell command.
+
+    The shape list describes COMMAND OUTPUTS (a journal, a process list, a package manager),
+    so matching it needs a proxy for what produced the text. A shell command is that proxy:
+    the command string IS the command. Nothing else is, and treating anything else as one
+    shrinks a result the model explicitly asked for.
+
+    Measured 2026-09-29 by probing the shape list:
+      * a read_file's `path` is not a command. `docker ps logs.txt` was read as a container
+        list, `git diff review.md` as git output, `dir/notes.md` as a directory listing, and
+        the `.txt` chapters of a rewrite as log files - the last one gutting every chapter to
+        its error-looking lines and costing a re-read each time.
+      * an execute_code's `code` is not its OUTPUT: `print('grep')` was read as search
+        results and `subprocess.run('ps -ef')` as a process list, judged from the source.
+
+    Both now go straight to cap_output, which never loses anything: a big result is spilled
+    whole, and the copy in the prompt carries its head, its tail, the cause-naming lines from
+    the middle (see _spill_signal) and a pointer. Digestion stays for command output, where
+    re-running the command is the recovery.
+    """
+    if name == "shell":
+        return str(args.get("command") or "")
     return ""
 
 
@@ -5254,7 +5272,8 @@ def tool_execute_code(args, ctx):
         if stderr:
             out += ("\n--- stderr ---\n" if out else "") + stderr
         out = out.strip() or "(no output)"
-        out = digest_output("execute_code", args, out)
+        # No digestion here: an execute_code's SOURCE is not its output, so there is no
+        # shape to match on (see _digest_subject). cap_output still loses nothing.
         out = cap_output("execute_code", out, "code output",
                          session=(ctx or {}).get("session_key"))
         if timeout_hit:
@@ -6274,7 +6293,8 @@ def tool_read_file(args, ctx):
         header = (f"(lines {offset}–{offset + len(selected)} of {len(lines)}"
                   + (" shown, the file is bigger)" if cut else ")"))
     body = "\n".join(selected)
-    body = digest_output("read_file", args, body)
+    # No digestion: a PATH is not a command, and matching one made the harness shrink
+    # documents by their FILENAME (see _digest_subject). A big read is spilled whole instead.
     out = f"{path} {header}\n" + cap_output("read_file", body, "file content",
                                              session=(ctx or {}).get("session_key"))
     out += cap_note
@@ -8986,9 +9006,7 @@ CORE_TOOLS = {
             "parsing, calculations, or anything awkward in shell. "
             "System-Python imports are available.",
             {"code": {"type": "string", "description": "Python source to run"},
-             "timeout": {"type": "integer"},
-             "raw": {"type": "boolean",
-                     "description": "Return the output undigested"}},
+             "timeout": {"type": "integer"}},
             ["code"]),
     },
     "edit_file": {
@@ -9022,9 +9040,7 @@ CORE_TOOLS = {
              "offset": {"type": "integer", "description": "Start line (0-based)"},
              "limit": {"type": "integer", "description": "Max lines (400)"},
              "tail": {"type": "integer",
-                      "description": "Last N lines only"},
-             "raw": {"type": "boolean",
-                     "description": "Return the text undigested"}},
+                      "description": "Last N lines only"}},
             ["path"]),
     },
     "write_file": {

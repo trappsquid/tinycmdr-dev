@@ -95,26 +95,23 @@ def main():
         fb.CONFIG["agent"]["spill_keep"] = 50
 
         # ---- a REAL call site spills, on the exact route the analysis lost data on -----
-        # A .log, not a .txt: digestion is for LOG files. A .txt is a document, and until
-        # 2026-09-29 it was digested too, which gutted the chapter files of a text-rewriting
-        # job (see tests/test_digest.py for that half).
         big = workdir / "big_output.log"
         lines = [f"line {i} token-{i * 7919}" for i in range(4000)]
         big.write_text("\n".join(lines), encoding="utf-8")
 
-        # Plain read: the DIGEST is what shrinks a file read (it matches a "log file" shape and
-        # keeps the newest 40 lines). The digest has its own escape hatch - raw=true - and this
-        # is the route that did NOT have one, because raw bypasses digestion but not the cap.
+        # A read_file is not digested at all (2026-09-29, see _digest_subject): a PATH is not a
+        # command, and shaping a document by its FILENAME gutted the chapter files of a
+        # rewrite. A read over the cap goes straight to the spill - the whole text on disk,
+        # both ends plus a pointer in the prompt - so no filename can change what the model
+        # sees, and nothing is dropped either way.
         plain = fb.tool_read_file({"path": str(big), "limit": 4000},
                                   {"session_key": "spill-session"})
-        check(len(plain) < cap, "a plain read of a big file is digested under the cap")
-        check("raw=true" in plain, "  and the digest states its own escape hatch")
+        check("spill/" in plain,
+              "a read over the cap hands back a spill pointer, whatever the file is called")
+        check("[HARNESS: digested" not in plain,
+              "  and the read is never digested - a document is not a command's output")
 
-        got = fb.tool_read_file({"path": str(big), "limit": 4000, "raw": True},
-                                {"session_key": "spill-session"})
-        check("spill/" in got,
-              "read_file raw=true over the cap hands back a spill pointer (the route that lost data)")
-        m2 = re.search(r"spill/([A-Za-z0-9_.-]+\.txt)", got)
+        m2 = re.search(r"spill/([A-Za-z0-9_.-]+\.txt)", plain)
         spilled2 = ((fb.BASE_DIR / "spill" / m2.group(1)).read_text(encoding="utf-8")
                     if m2 else "")
         check(bool(m2) and spilled2.count("token-") == 4000,

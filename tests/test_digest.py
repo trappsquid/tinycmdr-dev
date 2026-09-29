@@ -119,21 +119,24 @@ def main():
         check("[HARNESS: digested `process list` output" in p, "a process list is recognised")
         check("line(s) omitted" in p, "a process list is head/tail trimmed")
 
-        f = fb.digest_output("read_file", {"path": "/var/log/app.log"},
-                             "\n".join(f"INFO line {i}" for i in range(200)))
-        check("[HARNESS: digested `log file` output" in f,
-              "reading a big .log file is digested too")
-        check("no error lines in it" in f, "a log with no errors says so instead of guessing")
-
-        # A .txt is a DOCUMENT, not a log. It was in the log-file shape until 2026-09-29, and
-        # the subject for a read_file is the PATH - so every chapter file of a text-rewriting
-        # job was reduced to its error-looking lines, and the model paid a second call each
-        # time to read it raw ("The source read got digested into 3 lines. Re-reading it raw").
+        # A read_file is NOT digested, whatever the file is called. The subject used to be the
+        # PATH, so a document was shaped by its FILENAME: measured 2026-09-29 by probing the
+        # shape list, `.txt` chapters of a rewrite came back as "log file" (gutted to their
+        # error-looking lines, and re-read every time), `docker ps logs.txt` as a container
+        # list, `git diff review.md` as git output, `dir/notes.md` as a directory listing.
+        # Digestion is for COMMAND output, where re-running the command is the recovery; a big
+        # read is spilled whole instead, which loses nothing at all.
         TXT = "\n".join(f"line {i} of the chapter" for i in range(200))
-        t = fb.digest_output("read_file", {"path": "/work/chapter08.txt"}, TXT)
-        check(t == TXT, "a .txt read is left whole - it is a document, not a log")
-        t = fb.digest_output("read_file", {"path": "/work/run.out"}, TXT)
-        check(t != TXT, "  while a .out file still digests as a log")
+        for path in ("/work/chapter08.txt", "/var/log/app.log", "/work/run.out",
+                     "/work/docker ps logs.txt", "dir/notes.md", "/w/git diff review.md"):
+            check(fb.digest_output("read_file", {"path": path}, TXT) == TXT,
+                  f"a read_file is left whole ({path})")
+
+        # ... and neither is an execute_code, whose SOURCE is not its output.
+        for code in ("print('docker ps output')", "subprocess.run('ps -ef', shell=True)",
+                     "print(count('grep'))"):
+            check(fb.digest_output("execute_code", {"code": code}, TXT) == TXT,
+                  f"an execute_code result is left whole ({code[:28]})")
 
         # an already-small selection is never announced
         tiny = fb.digest_output("shell", {"command": "journalctl"}, "exit_code=0\none line")

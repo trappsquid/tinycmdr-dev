@@ -58,6 +58,17 @@ Fixed
   chapter...", "The draft came back digested. Reading it raw to get all 119 lines." The shape is
   now `.log` / `.out` / `.err`; `tests/test_digest.py` pins both directions, and the spill
   suite's fixture, which had asserted the old behaviour with a .txt file, is now a .log.
+- **Digestion now applies to SHELL output only - the class the `.txt` fix turned out to be one
+  instance of.** `_digest_subject` fed the shape list a read_file's PATH or an execute_code's
+  SOURCE, so a result was shrunk by what the request *mentioned* rather than by what produced
+  it. Probing the shape list found reading `docker ps logs.txt` treated as a container list,
+  `git diff review.md` as git output, `dir/notes.md` as a directory listing, `pip install
+  notes.txt` as package-manager output, and `print('grep')` / `subprocess.run('ps -ef')` judged
+  from the source text. A path is not a command and code is not its output; both now go straight
+  to the cap, which spills a big result whole - head, tail, the cause-naming lines from the
+  middle, and a pointer - so nothing is lost and no filename can change what the model sees.
+  `raw` is consequently gone from the read_file and execute_code schemas (it stays on `shell`,
+  where it still does something): a control that does nothing is worse than no control.
 
 ### Knowing what is live, what is dev, what is on disk
 
