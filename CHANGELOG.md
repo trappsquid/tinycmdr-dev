@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.38] - 2026-09-29
+
+A tool can show the model the screen and the image rides exactly one request; the secret sweep
+stops missing a ten-character password; `config set` can no longer store a truthy string under a
+boolean; Ollama's context window is detected instead of assumed; and the published numbers are
+now guarded against the prose that contradicts them.
+
+Added
+- **A tool can hand the model a picture, and it rides exactly one request.** A tool returning
+  `{"text": ..., "images": [spec, ...]}` shows the image on the NEXT request and then it is
+  gone. Base64 never enters the conversation: that list is measured by `json.dumps` (base64 counts
+  as ~300k fake tokens) and rewritten by `_compact`, which slices content by character, so the
+  attachment goes onto a payload copy. Dormant unless `agent.vision` is on, which ships false, and
+  an endpoint reporting `modalities.vision=false` is a veto rather than a hint. At most 2 images of
+  4 MB ride one request; anything unreadable or oversized is skipped with the tool's text saying so,
+  so the model is never told it can see what it cannot. The cost is measured against this fleet's
+  own endpoint rather than guessed, and an unknown size is 0, which callers turn into an assumed
+  cost - never into free.
+- **Ollama's context window is detected.** `_detect_window` asks the server root for `/api/ps` and
+  reads the loaded model's `context_length`, which is the window Ollama is actually serving. Ollama
+  was named in the published description and worked only as a generic OpenAI-compatible endpoint
+  before this; it now has a route like llama.cpp's `/props` and vLLM's `max_model_len`.
+- **The README says how to run the gate.** The suites need no model and nothing said how to run
+  them: the only place the invocation lived was a comment at the top of requirements-test.txt.
+
+Changed
+- **The doc-drift guard asserts facts, not sentences.** It forbade specific remembered sentences,
+  which is a guard you can pass while the document contradicts itself - and it did: "no evaluation
+  suite" sat twelve lines from the gated block naming the graded set of 19 tasks, and six numbers in
+  the unguarded prose had gone stale ("474 unit assertions", "one 5.8k-line file", and "43 prose
+  skills" three times, for a gitignored folder holding two). Denials are a family of phrasings now,
+  and every number the prose restates has to equal the one rendered from the tree.
+
 Fixed
 - **Running a verb under sudo now says what it will do.** Every file the process CREATES then
   belongs to root, and the agent - which runs as the install's own user - can no longer read
@@ -16,6 +49,17 @@ Fixed
   CLI lane were dead; and a bare `sudo tinycmdr` - which opens a CLI session - re-created the
   session files as root. A warning, not a refusal: a system-wide install legitimately belongs
   to root, so this only names the damage and the fix.
+- **A `*_PASSWORD` environment variable is a credential at 6 characters, not 12.** The sweep's
+  12-char floor skipped this install's 10-char `SUDO_PASSWORD`, so it was never masked in tool
+  output, in an answer posted to chat, in the notes carried in the prompt, or in the log. A name
+  ending in PASSWORD/PASSWD scrubs at 6 now - the floor the config-side sweep already used - while
+  every other name keeps the 12-char floor, which is what keeps PATH and PATHEXT out of the sweep.
+- **`config set` cannot store a truthy string under a boolean key.** A bare word was kept as a
+  string and every non-empty string is true, so `config set agent.vision treu` (a typo) and `config
+  set agent.vision false --str` both turned the flag ON. A key whose shipped value is a boolean now
+  refuses anything that is not one - stderr, exit 2, like every other usage error - which covers
+  the 32 boolean keys in `llm`, `mattermost`, `search` and `agent`.
+
 
 ## [1.0.37] - 2026-09-27
 
