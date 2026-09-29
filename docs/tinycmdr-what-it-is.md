@@ -32,7 +32,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       16 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               65 suites / 22,357 lines / 2,641 checks that need no model, plus a graded
+tests               65 suites / 22,367 lines / 2,642 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 5 blocks: llm 18, telegram 2, mattermost 6, search 3, agent 89
