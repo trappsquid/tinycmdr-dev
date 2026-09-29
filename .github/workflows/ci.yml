@@ -43,6 +43,10 @@ jobs:
         python: ["3.12"]
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tests/test_status.py decides "shipped" with `git tag --contains`, and the default
+          # fetch-depth of 1 brings no tags: the check would fail on a clone that is fine.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
@@ -62,6 +66,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # tests/test_status.py decides "shipped" with `git tag --contains`, and the default
+          # fetch-depth of 1 brings no tags: the check would fail on a clone that is fine.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
