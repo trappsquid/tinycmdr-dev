@@ -30,6 +30,16 @@ Fixed
   request. The one-pass-per-call progress guarantee in `_drop_oldest_block` (the docstring's
   "delete, re-insert, repeat, for ever" hang) is unchanged: the marker is matched by PREFIX
   and updated in place, never re-inserted.
+- **A question nobody answers is no longer lost with the run.** `ask_user` stops the run on
+  timeout, deliberately: handing a timeout back to the model is how an unapproved production
+  restart happened (2026-09-21), and `ask_timeout_continues` already reopens that per box.
+  What the decision costs is the CONTEXT - on the live box (2026-09-29) the next run spent its
+  first several calls re-deriving the task out of its own session files, because nothing said
+  what had been asked. The question is now parked in a per-session sidecar and surfaced in the
+  trailing block the next run reads, with the options that were offered. Durable on purpose:
+  the session file keeps only the trimmed conversation (measured: one message) and a restart
+  between the two runs is ordinary. An answered or stopped question clears it, and so does
+  `ask_timeout_continues`, which settles it by a stated assumption.
 - **A `.txt` is a document, not a log.** The "log file" digest shape matched
   `\.(log|out|err|txt)$`, and the subject for a read_file is the PATH - so every read of a .txt
   file was reduced to the lines that happen to contain error/warn/fail. On a text-rewriting job,

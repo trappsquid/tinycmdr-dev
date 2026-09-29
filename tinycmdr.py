@@ -8838,6 +8838,18 @@ def tool_ask_user(args, ctx):
                 "is really a report. Ask for the decision, not the whole design.")
     status, text = ask_operator(sk, args.get("question"), ctx=ctx,
                                 options=opts, timeout=want)
+    # An ANSWERED question is settled; a STOPPED one is the operator's own call; and a
+    # timeout with ask_timeout_continues is one the model was told to settle itself, by
+    # stating its assumption. The case that must SURVIVE is the timeout that stops the run:
+    # the run ends on purpose rather than guessing, and the context that costs is what the
+    # next run would otherwise have to re-derive.
+    if status in ("answered", "stopped"):
+        clear_open_question(sk)
+    elif status == "timeout":
+        if CONFIG["agent"].get("ask_timeout_continues", False):
+            clear_open_question(sk)
+        else:
+            set_open_question(sk, args.get("question"), opts)
     if status == "timeout" and not CONFIG["agent"].get("ask_timeout_continues", False):
         # Nobody answered. Handing a timeout back to the model means it invents the
         # operator's intent for the very decisions that get asked about - in the
@@ -8874,6 +8886,62 @@ def _ask_user_pending(session_key):
     """The open question for this session, or None. Used by /status."""
     with _ask_lock(session_key):
         return _ASK_PENDING.get(session_key or "")
+
+
+def _question_path(session_key):
+    """The sidecar an unanswered question is parked in, per session."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(session_key or ""))[:80] or "default"
+    return SESSIONS_DIR / f"{safe}.question.json"
+
+
+def set_open_question(session_key, question, options=None):
+    """Remember a question nobody answered, so the NEXT run starts knowing it.
+
+    The timeout path deliberately STOPS the run rather than letting the model invent the
+    operator's intent for the decisions that get asked about - measured 2026-09-21: an
+    unapproved production restart, and then an outage. That decision stands, and
+    `ask_timeout_continues` already reopens it per box if an operator wants the other shape.
+
+    What was missing is the context that stop costs. The next run had to re-derive the whole
+    task, and on the live box (2026-09-29) it spent its first calls reading its own session
+    files and carry file trying to work out what it had asked. Kept in a sidecar rather than
+    in run_state on purpose: run_state dies with the process, the session file keeps only the
+    trimmed conversation (measured: one message), and a restart between the two runs is
+    ordinary.
+    """
+    try:
+        _ensure_sessions_dir()
+        atomic_write_text(_question_path(session_key), json.dumps(
+            {"question": str(question or "")[:500],
+             "options": [str(o)[:80] for o in (options or [])][:8],
+             "at": time.time()}, indent=2))
+    except Exception as e:      # never fail the ask path over its own bookkeeping
+        log.debug("could not record the unanswered question: %s", e)
+
+
+def clear_open_question(session_key):
+    """The question was answered (or the run was stopped): nothing is outstanding."""
+    try:
+        _question_path(session_key).unlink()
+    except OSError:
+        pass
+
+
+def open_question(session_key):
+    """The question an earlier run left unanswered, as a line for the trailing block, or ""."""
+    try:
+        d = json.loads(_question_path(session_key).read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    q = str((d or {}).get("question") or "").strip()
+    if not q:
+        return ""
+    opts = [str(o) for o in (d.get("options") or []) if str(o).strip()]
+    line = ('[HARNESS: a question from an earlier run is still unanswered: "%s"' % q)
+    if opts:
+        line += " (the options offered were: %s)" % ", ".join(opts)
+    return (line + " - ask it again with ask_user before acting on an assumption, or say "
+            "plainly in your answer what you are assuming.]")
 CORE_TOOLS = {
     "shell": {
         "fn": tool_shell,
@@ -10904,6 +10972,12 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
             "unfinished work and finish it from what the transcript and the carried "
             "results already show; otherwise answer the new message and leave the old "
             "task alone." % prior_unfinished)
+    # A question an earlier run asked and nobody answered: the run stopped on purpose rather
+    # than guess, and this is the context that stop would otherwise cost. Absent is the
+    # ordinary case, so it costs a failed stat on a session that has never timed out.
+    _oq = open_question(session_key) if session_key else ""
+    if _oq:
+        parts.append(_oq)
     # The mint invitation, same discipline: it rides the block the model reads while writing
     # its report, and only a run whose census already fired pays for the line.
     mint_line = mint_offer_line(session_key) if session_key else ""

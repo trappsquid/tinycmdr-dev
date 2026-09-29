@@ -322,13 +322,25 @@ def test_an_unanswered_question_stops_the_run():
         check("and the stop says why", "nobody answered" in str(raised), str(raised)[:120])
         check("the operator is told what happened",
               any("No answer" in t for _, t in d.posted), [t for _, t in d.posted][-2:])
+        # The stop costs CONTEXT, and that is what the next run paid for on the live box
+        # (2026-09-29): it spent its first calls re-deriving the task out of its own session
+        # files. The question is kept durably and surfaced in the block the next run reads.
+        check("the unanswered question is KEPT for the next run",
+              "Which of the two?" in fb.open_question("sess-t"),
+              fb.open_question("sess-t")[:140])
+        check("  and it rides the trailing block, so the task is not re-derived",
+              "Which of the two?" in fb.volatile_context(session_key="sess-t"))
         # the old shape stays available per box, deliberately, and only by config
         fb.CONFIG["agent"]["ask_timeout_continues"] = True
         out = fb.tool_ask_user({"question": "Which of the two?", "options": ["a", "b"]},
                                {"session_key": "sess-t", "ask_door": door})
         check("ask_timeout_continues hands the decision back, as it used to",
               "NO ANSWER" in out and "assumption" in out, out[:200])
+        check("  and settles it, so the next run is not nagged about a question the model "
+              "was told to decide itself",
+              fb.open_question("sess-t") == "", fb.open_question("sess-t")[:140])
     finally:
+        fb.clear_open_question("sess-t")
         fb.CONFIG["agent"]["ask_user"] = saved
         fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
         fb.CONFIG["agent"]["ask_timeout_continues"] = True   # the suite's baseline
