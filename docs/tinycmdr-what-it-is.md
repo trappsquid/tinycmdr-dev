@@ -32,7 +32,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       16 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               63 suites / 21,990 lines / 2,614 checks that need no model, plus a graded
+tests               63 suites / 22,031 lines / 2,615 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 5 blocks: llm 18, telegram 2, mattermost 6, search 3, agent 89
@@ -351,7 +351,7 @@ runtime              Python, one file, 3 dependencies    Node.js, plugin archite
 channels             Mattermost, the fleet's own server  Discord, WhatsApp, Slack, iMessage,
                                                          Teams, Signal, Matrix, Telegram, Zalo,
                                                          WebChat
-identity and memory  notes.md plus 43 prose skills read   AGENTS.md/SOUL.md/MEMORY.md injected into
+identity and memory  notes.md plus per-host skills read   AGENTS.md/SOUL.md/MEMORY.md injected into
                      on demand (about 40 tokens per       every session
                      skill in the prompt index)
 always-on behaviour  check-ins every 5 minutes during a   heartbeats every 30 minutes, cron jobs,
@@ -378,12 +378,14 @@ Two pieces of framing from that same literature describe this build better than 
   guard after a tool was re-issued eight times, /stop after it lied about an abandoned run, the task
   ledger after work evaporated between turns.
 - The break-even rule from that comparison: a harness earns its keep once there are around ten
-  distinct jobs that can be described in markdown. This one carries 43.
+  distinct jobs that can be described in markdown. This one clears it, and how far depends
+  on the box: prose skills are per-host and read on demand, not shipped.
 
 And the limitation the same sources name, which applies here: the thing that tells you the choice was
-right is an evaluation suite, and it is the piece most often missing. tinycmdr has 474 unit assertions
-and no evaluation suite, so none of the Terminal-Bench or SWE-bench numbers in that field can be held
-against it, in either direction. That is the honest comparison, not a favourable one.
+right is an evaluation suite, and it is the piece most often missing. tinycmdr has its own graded
+set of 19 tasks against one endpoint and no third-party benchmark, so none of the Terminal-Bench
+or SWE-bench numbers in that field can be held against it, in either direction. That is the honest
+comparison, not a favourable one.
 
 ## 7. Compared with harnesses other people maintain
 
@@ -393,7 +395,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 5.8k-line file,         full platform:         closed-source CLI      CLI pair
+shape                         one 20,168-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -417,8 +419,8 @@ interfaces                    Mattermost bot, --cli,      web UI, CLI,          
 ops features                  stall watchdog, task        runtime lifecycle      hooks for enforcing    git-native undo
                               ledger, check-ins, live     control, security      workflow at commit     and diff review
                               steering, /stop, restart
-maturity signal               one operator, 474           large team, papers,    vendor-maintained      large OSS user
-                              assertions, 43 skills       funding, ecosystem     product                base, docs site
+maturity signal               one operator, 2,614         large team, papers,    vendor-maintained      large OSS user
+                              model-free assertions       funding, ecosystem     product                base, docs site
 ```
 
 The four coding harnesses above do a different job from tinycmdr and from OpenClaw: they are built to

@@ -20,6 +20,7 @@ only asserts the provenance is present so a reader can re-run it.
 """
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -47,6 +48,22 @@ def load_generator():
     sys.modules["tc_measured_block"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+def _prose(doc):
+    """The doc with every measured block cut out - the only part nothing renders for you.
+
+    What is inside the markers is generated from the tree and gated by stale_blocks(); the
+    prose between them is written by hand, and until 2026-09-29 nothing checked it at all.
+    """
+    out, at = [], 0
+    for m in re.finditer(r"<!-- measured:([A-Za-z0-9_]+):start -->", doc):
+        out.append(doc[at:m.start()])
+        end = doc.find("<!-- measured:%s:end -->" % m.group(1), m.end())
+        cut = doc.find("\n", end) if end != -1 else m.end()
+        at = cut + 1 if cut != -1 else len(doc)
+    out.append(doc[at:])
+    return "".join(out)
 
 
 def main():
@@ -121,20 +138,44 @@ def main():
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    # The facts that are NOT computable must keep their provenance, and the two claims this
-    # suite was written against must not come back.
+    # The facts that are NOT computable must keep their provenance, and the claims this suite
+    # was written against must not come back.
+    #
+    # These checks were PHRASE-shaped, and 2026-09-29 is what that cost (review 5.1/5.2): the
+    # guard forbade the literal "no benchmark or eval harness" while a synonym - "no evaluation
+    # suite" - sat in the same file contradicting the gated block twelve lines above it, and six
+    # numbers in the unguarded prose had gone stale unnoticed (a 5.8k-line file, 474 assertions
+    # twice, 43 skills three times). A remembered sentence is not a fact, so a passing run of
+    # this suite did not mean the document was consistent. Denials are a FAMILY of phrasings
+    # now, and every number the prose restates has to equal the one rendered from the tree.
     check("the doc points at the command that re-measures the token figures",
           "maintenance/measure-prompt.py" in doc, "no pointer to measure-prompt.py")
-    check("the doc no longer claims there is no eval set",
-          "no benchmark or eval harness" not in doc)
     check("the doc names the graded set it does have",
           "tests/eval_tasks.py" in doc, "eval tasks not mentioned")
-    check("the doc no longer claims there is no release process",
-          "no release process" not in doc)
     check("the doc names the release machinery it does have",
           "maintenance/release.sh" in doc, "release.sh not mentioned")
     check("the doc says releases are unsigned (the honest half of the claim)",
           "NOT signed" in doc or "not signed" in doc)
+
+    denials = ("no benchmark or eval harness", "no evaluation suite", "no eval set",
+               "no evaluation harness", "no release process", "no test suite", "no ci")
+    said = [d for d in denials if d in doc.lower()]
+    check("the doc denies neither the eval set nor the release process, in any phrasing",
+          not said, said)
+
+    f = mb.facts()
+    prose = _prose(doc)
+    for label, pat, want in (("line count", r"([\d,]+)-line file", f["lines"]),
+                             ("assertion count", r"([\d,]+) unit assertions?", f["checks"]),
+                             ("suite count", r"([\d,]+) suites", f["suites"]),
+                             ("graded-task count", r"([\d,]+) (?:graded )?tasks", f["graded"])):
+        wrong = [n for n in re.findall(pat, prose) if int(n.replace(",", "")) != want]
+        check("every %s the prose states matches the tree (%s)" % (label, want), not wrong, wrong)
+
+    # A per-host number in a document a stranger reads is a claim about the author's box:
+    # skills/ is gitignored, this box holds two, and the doc claimed 43 in three places.
+    per_host = re.findall(r"\d+ (?:prose )?skills", prose)
+    check("the prose quotes no per-host skill count", not per_host, per_host)
 
     print()
     if FAILS:
