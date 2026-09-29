@@ -3516,11 +3516,21 @@ def verify_note(path):
 # Core tool implementations
 # --------------------------------------------------------------------------
 
+# Each pattern captures a QUOTED path or a bare one, in that order of preference.
+#
+# A path is quoted precisely because it contains a space, and the old capture was
+# `["']?([^\s"';|)]+)` - an optional quote followed by "no whitespace" - so a quoted path was
+# truncated at its first space. Measured 2026-09-29 on a Windows install whose profile is
+# "C:\Users\David Trapp": `Set-Content -Path 'C:\Users\David Trapp\s1.json' -Value x` yielded
+# "C:\Users\David". That path does not exist, and this module ignores a candidate it cannot
+# find, so the write was never verified and nothing said so. The same truncation would hit a
+# macOS or Linux path with a space in it - only the fleet's Windows box, whose temp directory
+# carries the space, made it visible.
 _SHELL_WRITE_PATTERNS = (
     re.compile(r"(?:Set-Content|Out-File|Add-Content)\s+(?:-Path\s+|-(?:Value|File)\s+)?"
-               r"[\"']?([^\s\"';|)]+)", re.I),
-    re.compile(r"(?:^|[^>])>{1,2}\s*[\"']?([^\s\"';|)]+)"),
-    re.compile(r"\btee\s+(?:-a\s+)?[\"']?([^\s\"';|)]+)", re.I),
+               r"(?:\"([^\"]+)\"|'([^']+)'|([^\s\"';|)]+))", re.I),
+    re.compile(r"(?:^|[^>])>{1,2}\s*(?:\"([^\"]+)\"|'([^']+)'|([^\s\"';|)]+))"),
+    re.compile(r"\btee\s+(?:-a\s+)?(?:\"([^\"]+)\"|'([^']+)'|([^\s\"';|)]+))", re.I),
 )
 
 
@@ -3535,7 +3545,9 @@ def shell_written_files(command, limit=2):
     found = []
     for rx in _SHELL_WRITE_PATTERNS:
         for m in rx.finditer(command or ""):
-            cand = m.group(1).strip().strip("\"'")
+            # Three alternatives per pattern (double-quoted, single-quoted, bare): whichever
+            # one matched is the path.
+            cand = (next((g for g in m.groups() if g), "") or "").strip().strip("\"'")
             # "2>&1" and friends: a redirected descriptor is not a file. Require the
             # candidate to look like a path before believing it.
             if (not cand or cand.startswith(("-", "&")) or cand.isdigit()
@@ -3643,7 +3655,7 @@ def _read_capped(path, limit=None, from_end=False):
         where = "last" if from_end else "first"
         note = (f"\n[HARNESS: this produced {size / 1048576:.1f} MiB; only the "
                 f"{where} {limit / 1048576:.0f} MiB is shown so the harness (and this "
-                f"box) survive it. The full text is at {path} — read it in slices, or "
+                f"box) survive it. The full text is at `{path}` — read it in slices, or "
                 f"narrow the command.]")
     # Separate on purpose: read_file sliced this note into the file's own lines - a `tail`
     # of a 28.6 MiB file returned the note's two lines instead of the file's last two, and
@@ -5150,11 +5162,20 @@ def destructive_risk(command, _depth=0):
             argv = argv[1:]
             launched = True
         if launched:
-            # `bash -c 'rm -rf /'`, `nohup rm -rf /x`: the flag belongs to the launcher and
+            # `bash -c 'rm -rf /'`, `cmd /c "rm -rf /"`: the flag belongs to the launcher and
             # the command is what is left, so recurse into THAT rather than reading the
             # launcher's own argv as the verb (this is how a command hidden one level down
             # reaches the same rule).
-            while argv and argv[0].startswith("-"):
+            #
+            # cmd spells its switch with a SLASH, not a dash, and only dashes were stripped -
+            # so on Windows `cmd /c rm -rf ./build` read as the verb "/c", matched nothing,
+            # and the whole POSIX recursive-delete rule was bypassed. A manifest tool's
+            # command is wrapped in exactly that on Windows (`["cmd", "/c", command]`), so
+            # every dropped-in manifest escaped the confirm tier there, and the same text
+            # escaped the block-tier check at load. Measured 2026-09-29 by running the gate on
+            # a Windows box; on macOS and Linux the wrapper is `sh -c`, whose flag is a dash,
+            # which is why only Windows showed it.
+            while argv and (argv[0].startswith("-") or argv[0].lower() in ("/c", "/k")):
                 argv = argv[1:]
             if not argv:
                 continue
@@ -5972,7 +5993,7 @@ def tool_read_file(args, ctx):
             # empty body under a header that claims `lines 400000–400000 of 167775`.
             return (f"ERROR: line {offset} is past the {len(lines)} lines this read "
                     f"covered - the file is bigger than one read. The full text is at "
-                    f"{path}: use tail=N for its end, or a narrower offset.")
+                    f"`{path}`: use tail=N for its end, or a narrower offset.")
         selected = lines[offset:offset + limit]
         header = (f"(lines {offset}–{offset + len(selected)} of {len(lines)}"
                   + (" shown, the file is bigger)" if cut else ")"))
@@ -16587,470 +16608,926 @@ def run_bot():
 # CLI mode (test + terminal use, no Mattermost needed)
 # --------------------------------------------------------------------------
 
-# ------------------------------------------------------------------ telegram lane
+# ------------------------------------------------------------------ telegram lane
+
 # The second messaging door beside Mattermost: the same agent, the same
-# notes/tasks/atlas/skills and the same sessions corpus, reached from a Telegram DM.
-#
-# The transport is the Bot API over plain HTTPS long polling, so there is no webhook,
-# no certificate, no inbound port and NO new dependency: it uses the requests the bot
-# already ships. What it costs instead is presentation. Telegram has posts rather than
-# attachments, an edit rate of about one per second per chat, and a hard 4096-character
-# ceiling per message, so the lane keeps ONE growing message per run and posts the
-# answer on its own.
-TG_API = "https://api.telegram.org"
-TG_MAX = 4096                 # per message, hard
-TG_EDIT_AFTER = 1.0           # the API's own edit rate, per chat
-TG_LIVE_LINES = 9             # tool lines kept in the growing message
-TG_POLL_TIMEOUT = 50          # getUpdates long poll, seconds
-TG_HELP = ("<b>tinycmdr</b>\n"
-           "Send a task in plain words and it runs on this box: shell, files, a URL "
-           "you hand it, its notes and its own tools.\n\n"
-           "<b>/new</b> start a fresh conversation\n"
-           "<b>/usage</b> tokens and time for this chat's last run\n"
-           "<b>/stop</b> cancel the run in flight\n\n"
-           "Anything else is a request. While it works, the message above keeps "
-           "itself current, and a plain line you type is sent in at the next step.")
-
-
-def tg_escape(text):
-    """HTML parse mode, which is the one that survives a model's own output.
-
-    MarkdownV2 needs eighteen characters escaped and one of them is '-', so a
-    sentence about a command line turns into noise. HTML needs three.
-    """
-    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
-
-
-def tg_html(text):
-    """Escaped text, with `backticks` rendered as the code they always meant."""
-    return re.sub(r"`([^`]+)`", r"<code>\1</code>", tg_escape(text))
-
-
-def tg_split(text, limit=TG_MAX):
-    """Split for Telegram without losing a character.
-
-    Paragraphs first, then lines, then words, then a hard cut: a long answer becomes
-    several messages rather than a truncated one.
-    """
-    text = str(text)
-    if len(text) <= limit:
-        return [text]
-    out, rest = [], text
-    while len(rest) > limit:
-        window = rest[:limit]
-        cut = window.rfind("\n\n")
-        if cut < limit // 3:
-            cut = window.rfind("\n")
-        if cut < limit // 3:
-            cut = window.rfind(" ")
-        if cut < limit // 3:
-            cut = limit
-        out.append(rest[:cut].rstrip())
-        rest = rest[cut:].lstrip("\n")
-    if rest:
-        out.append(rest)
-    return out
-
-
-class TelegramClient:
-    """The Bot API, one method per thing this lane needs and nothing more.
-
-    A token is a credential: it is never logged and never returned to a caller. The
-    API wants it in the URL path, so the base URL is built once, here, and kept.
-    """
-
-    def __init__(self, token, http_timeout=45):
-        self._base = "%s/bot%s/" % (TG_API, token)
-        self.http_timeout = http_timeout
-
-    def call(self, method, http_timeout=None, **payload):
-        r = requests.post(self._base + method, json=payload,
-                          timeout=http_timeout or self.http_timeout)
-        try:
-            data = r.json()
-        except Exception:
-            raise RuntimeError("%s: HTTP %s and no JSON" % (method, r.status_code))
-        if not data.get("ok"):
-            raise RuntimeError("%s: %s" % (method, data.get("description") or r.status_code))
-        return data.get("result")
-
-    def me(self):
-        return self.call("getMe") or {}
-
-    def send(self, chat_id, text, buttons=None, reply_to=None):
-        """Send, splitting a long body; buttons ride the last piece."""
-        pieces = tg_split(text)
-        sent = []
-        for i, piece in enumerate(pieces):
-            payload = {"chat_id": chat_id, "text": piece or "(empty)",
-                       "parse_mode": "HTML", "disable_web_page_preview": True}
-            if i == 0 and reply_to:
-                payload["reply_to_message_id"] = reply_to
-            if buttons and i == len(pieces) - 1:
-                payload["reply_markup"] = {"inline_keyboard": buttons}
-            sent.append(self.call("sendMessage", **payload))
-        return sent
-
-    def edit(self, chat_id, message_id, text, buttons=None):
-        if len(text) > TG_MAX:
-            text = text[:TG_MAX - 1] + "..."
-        payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
-                   "parse_mode": "HTML", "disable_web_page_preview": True}
-        if buttons:
-            payload["reply_markup"] = {"inline_keyboard": buttons}
-        try:
-            return self.call("editMessageText", **payload)
-        except RuntimeError as exc:
-            if "not modified" in str(exc).lower():
-                return None                    # the same text twice is not an error
-            raise
-
-    def typing(self, chat_id):
-        return self.call("sendChatAction", chat_id=chat_id, action="typing")
-
-    def answer_callback(self, callback_id, text=""):
-        return self.call("answerCallbackQuery", callback_query_id=callback_id,
-                         text=text or None)
-
-    def updates(self, offset):
-        return self.call("getUpdates", http_timeout=TG_POLL_TIMEOUT + 20,
-                         offset=offset, timeout=TG_POLL_TIMEOUT,
-                         allowed_updates=["message", "callback_query"]) or []
-
-
-class TelegramDestination(Destination):
-    """The Telegram lane's reporter: one growing message per run, then the answer.
-
-    An edit is a whole message write and the API allows about one per second per
-    chat, so a line per tool call would be both a wall of notifications and a rate
-    limit problem. The run's own line and the last few tool lines share a single
-    message, and the answer is posted as its own so it can be read without the
-    chatter above it.
-    """
-
-    merge_tools = True
-    shows_calls = True
-
-    def __init__(self, client, chat_id, session_key="", reply_to=None):
-        self.c = client
-        self.chat_id = chat_id
-        self.session_key = session_key
-        self.reply_to = reply_to
-        self.live_id = None
-        self.lines = []                 # (kind, text) in the growing message
-        self.status = ""
-        self._edited = 0.0
-        self._asking = {}               # question id -> wait state
-
-    # -- the growing message ---------------------------------------------
-    def _live_text(self):
-        body = [self._mark(kind, text) for kind, text in self.lines[-TG_LIVE_LINES:]]
-        if len(self.lines) > TG_LIVE_LINES:
-            body.insert(0, "... %d earlier step(s)" % (len(self.lines) - TG_LIVE_LINES))
-        if self.status:
-            body.append(tg_escape(self.status))
-        return "\n".join(body) or tg_escape("working...")
-
-    @staticmethod
-    def _mark(kind, text):
-        mark = {"tool": "\U0001F527 ", "tool_done": "\u2714 ", "tool_fail": "\u26a0\ufe0f ",
-                "ask": "\u2753 ", "checkin": "", "note": "", "narration": "",
-                "error": "\u26d4 ", "say": ""}.get(kind, "")
-        return mark + tg_html(text)
-
-    def _flush(self, force=False):
-        """Write the growing message, at most once a second unless it must land."""
-        now = time.time()
-        if not force and (now - self._edited) < TG_EDIT_AFTER:
-            return
-        self._edited = now
-        text = self._live_text()
-        try:
-            if self.live_id is None:
-                sent = self.c.send(self.chat_id, text)
-                if sent:
-                    self.live_id = sent[0].get("message_id")
-            else:
-                self.c.edit(self.chat_id, self.live_id, text)
-        except Exception as exc:            # a failed edit must never kill the run
-            log.warning("telegram: the live message failed (%s)", exc)
-
-    # -- the Destination contract ----------------------------------------
-    def line(self, kind, text, src="main"):
-        if kind == "final":
-            self.answer(text)
-            return ("tg-final", len(self.lines))
-        self.lines.append((kind, str(text)))
-        self._flush(force=kind in ("ask", "error"))
-        return ("tg", len(self.lines) - 1)
-
-    def update(self, ref, kind, text, src="main"):
-        if kind == "status":
-            self.status = str(text)
-            self._flush()
-            return ref
-        if kind == "narration":
-            self.lines.append(("narration", str(text)))
-            self._flush()
-            return ref
-        if kind == "final":
-            self.answer(text)
-            return ref
-        return self.line(kind, text, src)
-
-    def drop(self, ref):
-        """A draft that turned out to be the answer: drop the line, keep the text."""
-        try:
-            _, idx = ref
-            self.lines.pop(idx)
-        except Exception:
-            pass
-
-    def answer(self, text):
-        """The answer as its own message, so the chatter never buries it."""
-        try:
-            self.c.send(self.chat_id, "\u2705 " + tg_html(text), reply_to=self.reply_to)
-        except Exception as exc:
-            log.error("telegram: the answer could not be posted (%s)", exc)
-
-    def ask(self, question, options=None, wait=300.0, label=None):
-        """Post the question with the options as buttons, and wait for either a press
-        or a typed line. Both land in the same slot: the reporter decides what counts
-        as a yes, exactly as it does in every other lane."""
-        row = {"event": threading.Event(), "answer": None}
-        self._asking["q"] = row
-        body = "\u2753 " + tg_html(question)
-        if options:
-            body += "\n" + "\n".join(tg_escape("%d) %s" % (i + 1, o))
-                                   for i, o in enumerate(options))
-        buttons = [[{"text": str(o)[:60], "callback_data": "opt:%d" % (i + 1)}]
-                   for i, o in enumerate(options or [])]
-        try:
-            self.c.send(self.chat_id, body, buttons=buttons or None,
-                        reply_to=self.reply_to)
-            self.c.typing(self.chat_id)
-        except Exception as exc:
-            log.warning("telegram: the question could not be posted (%s)", exc)
-        answered = row["event"].wait(wait)
-        self._asking.pop("q", None)
-        if not answered:
-            self.line("checkin", "no answer in %ds, carrying on without one"
-                      % int(wait))
-            return None
-        return row["answer"]
-
-    def reply_ask(self, text):
-        """A typed answer to the open question."""
-        row = self._asking.get("q")
-        if row is None:
-            return False
-        row["answer"] = text
-        row["event"].set()
-        return True
-
-    def button_ask(self, data):
-        """A button press: 'opt:<n>'."""
-        row = self._asking.get("q")
-        if row is None:
-            return False
-        try:
-            row["answer"] = str(data).split(":", 1)[1]
-        except Exception:
-            return False
-        row["event"].set()
-        return True
-
-
-class TelegramPoller:
-    """Long-poll the Bot API and hand each update to the right chat's worker.
-
-    One worker per chat, like the Mattermost dispatcher: a chat's second request
-    queues behind its first, and two chats never wait on each other. The allowed list
-    is a gate, not a warning: anyone else is logged and ignored, and group chats are
-    ignored by design (DM only, the same discipline as the chat lane).
-    """
-
-    def __init__(self, client, allowed):
-        self.c = client
-        self.allowed = allowed
-        self.submit = None              # set by run_telegram
-        self.live = {}                  # chat_id -> TelegramDestination
-        self.cancel = {}                # chat_id -> the run's cancel event
-        self.seen = deque(maxlen=4000)
-
-    def allowed_user(self, user):
-        uid = str((user or {}).get("id") or "")
-        return bool(uid) and uid in self.allowed
-
-    def _verb(self, chat_id, text):
-        verb = text.split()[0].lower()
-        if verb in ("/start", "/help"):
-            self.c.send(chat_id, TG_HELP)
-            return True
-        if verb == "/stop":
-            ev = self.cancel.get(chat_id)
-            if ev is not None:
-                ev.set()
-                self.c.send(chat_id, "\u23f9 stopping - the call in flight is being closed")
-            else:
-                self.c.send(chat_id, "nothing is running")
-            return True
-        if verb == "/new":
-            AGENT.reset(tg_session_key(chat_id))
-            self.c.send(chat_id, "\U0001F195 fresh conversation")
-            return True
-        if verb == "/usage":
-            u = AGENT.last_usage.get(tg_session_key(chat_id))
-            self.c.send(chat_id, tg_escape(fmt_usage(u) if u and u.get("calls")
-                                           else "nothing yet in this chat"))
-            return True
-        return False
-
-    def handle(self, update):
-        """One update. True when it was ours to handle."""
-        cb = update.get("callback_query")
-        if cb:
-            user = cb.get("from") or {}
-            chat_id = ((cb.get("message") or {}).get("chat") or {}).get("id")
-            if not chat_id or not self.allowed_user(user):
-                log.warning("telegram: ignored a button press from %s", user.get("id"))
-                return False
-            try:
-                self.c.answer_callback(cb.get("id"))
-            except Exception:
-                pass
-            dest = self.live.get(chat_id)
-            return bool(dest is not None and dest.button_ask(cb.get("data")))
-        msg = update.get("message") or update.get("edited_message")
-        if not msg:
-            return False
-        chat = msg.get("chat") or {}
-        chat_id = chat.get("id")
-        user = msg.get("from") or {}
-        text = (msg.get("text") or "").strip()
-        if not chat_id or not text:
-            return False
-        if chat.get("type") != "private":
-            log.info("telegram: ignored a message in a %s chat (DM only)",
-                     chat.get("type"))
-            return False
-        if not self.allowed_user(user):
-            log.warning("telegram: ignored a message from %s (@%s) - not in "
-                        "telegram.allowed_users", user.get("id"), user.get("username"))
-            return False
-        mid = msg.get("message_id")
-        if mid in self.seen:
-            return True
-        self.seen.append(mid)
-        dest = self.live.get(chat_id)
-        if dest is not None and dest.reply_ask(text):
-            return True
+# notes/tasks/atlas/skills and the same sessions corpus, reached from a Telegram DM.
+
+#
+
+# The transport is the Bot API over plain HTTPS long polling, so there is no webhook,
+
+# no certificate, no inbound port and NO new dependency: it uses the requests the bot
+
+# already ships. What it costs instead is presentation. Telegram has posts rather than
+
+# attachments, an edit rate of about one per second per chat, and a hard 4096-character
+
+# ceiling per message, so the lane keeps ONE growing message per run and posts the
+
+# answer on its own.
+
+TG_API = "https://api.telegram.org"
+
+TG_MAX = 4096                 # per message, hard
+
+TG_EDIT_AFTER = 1.0           # the API's own edit rate, per chat
+
+TG_LIVE_LINES = 9             # tool lines kept in the growing message
+
+TG_POLL_TIMEOUT = 50          # getUpdates long poll, seconds
+
+TG_HELP = ("<b>tinycmdr</b>\n"
+
+           "Send a task in plain words and it runs on this box: shell, files, a URL "
+
+           "you hand it, its notes and its own tools.\n\n"
+
+           "<b>/new</b> start a fresh conversation\n"
+
+           "<b>/usage</b> tokens and time for this chat's last run\n"
+
+           "<b>/stop</b> cancel the run in flight\n\n"
+
+           "Anything else is a request. While it works, the message above keeps "
+
+           "itself current, and a plain line you type is sent in at the next step.")
+
+
+
+
+
+def tg_escape(text):
+
+    """HTML parse mode, which is the one that survives a model's own output.
+
+
+
+    MarkdownV2 needs eighteen characters escaped and one of them is '-', so a
+
+    sentence about a command line turns into noise. HTML needs three.
+
+    """
+
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+
+
+
+def tg_html(text):
+
+    """Escaped text, with `backticks` rendered as the code they always meant."""
+
+    return re.sub(r"`([^`]+)`", r"<code>\1</code>", tg_escape(text))
+
+
+
+
+
+def tg_split(text, limit=TG_MAX):
+
+    """Split for Telegram without losing a character.
+
+
+
+    Paragraphs first, then lines, then words, then a hard cut: a long answer becomes
+
+    several messages rather than a truncated one.
+
+    """
+
+    text = str(text)
+
+    if len(text) <= limit:
+
+        return [text]
+
+    out, rest = [], text
+
+    while len(rest) > limit:
+
+        window = rest[:limit]
+
+        cut = window.rfind("\n\n")
+
+        if cut < limit // 3:
+
+            cut = window.rfind("\n")
+
+        if cut < limit // 3:
+
+            cut = window.rfind(" ")
+
+        if cut < limit // 3:
+
+            cut = limit
+
+        out.append(rest[:cut].rstrip())
+
+        rest = rest[cut:].lstrip("\n")
+
+    if rest:
+
+        out.append(rest)
+
+    return out
+
+
+
+
+
+class TelegramClient:
+
+    """The Bot API, one method per thing this lane needs and nothing more.
+
+
+
+    A token is a credential: it is never logged and never returned to a caller. The
+
+    API wants it in the URL path, so the base URL is built once, here, and kept.
+
+    """
+
+
+
+    def __init__(self, token, http_timeout=45):
+
+        self._base = "%s/bot%s/" % (TG_API, token)
+
+        self.http_timeout = http_timeout
+
+
+
+    def call(self, method, http_timeout=None, **payload):
+
+        r = requests.post(self._base + method, json=payload,
+
+                          timeout=http_timeout or self.http_timeout)
+
+        try:
+
+            data = r.json()
+
+        except Exception:
+
+            raise RuntimeError("%s: HTTP %s and no JSON" % (method, r.status_code))
+
+        if not data.get("ok"):
+
+            raise RuntimeError("%s: %s" % (method, data.get("description") or r.status_code))
+
+        return data.get("result")
+
+
+
+    def me(self):
+
+        return self.call("getMe") or {}
+
+
+
+    def send(self, chat_id, text, buttons=None, reply_to=None):
+
+        """Send, splitting a long body; buttons ride the last piece."""
+
+        pieces = tg_split(text)
+
+        sent = []
+
+        for i, piece in enumerate(pieces):
+
+            payload = {"chat_id": chat_id, "text": piece or "(empty)",
+
+                       "parse_mode": "HTML", "disable_web_page_preview": True}
+
+            if i == 0 and reply_to:
+
+                payload["reply_to_message_id"] = reply_to
+
+            if buttons and i == len(pieces) - 1:
+
+                payload["reply_markup"] = {"inline_keyboard": buttons}
+
+            sent.append(self.call("sendMessage", **payload))
+
+        return sent
+
+
+
+    def edit(self, chat_id, message_id, text, buttons=None):
+
+        if len(text) > TG_MAX:
+
+            text = text[:TG_MAX - 1] + "..."
+
+        payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
+
+                   "parse_mode": "HTML", "disable_web_page_preview": True}
+
+        if buttons:
+
+            payload["reply_markup"] = {"inline_keyboard": buttons}
+
+        try:
+
+            return self.call("editMessageText", **payload)
+
+        except RuntimeError as exc:
+
+            if "not modified" in str(exc).lower():
+
+                return None                    # the same text twice is not an error
+
+            raise
+
+
+
+    def typing(self, chat_id):
+
+        return self.call("sendChatAction", chat_id=chat_id, action="typing")
+
+
+
+    def answer_callback(self, callback_id, text=""):
+
+        return self.call("answerCallbackQuery", callback_query_id=callback_id,
+
+                         text=text or None)
+
+
+
+    def updates(self, offset):
+
+        return self.call("getUpdates", http_timeout=TG_POLL_TIMEOUT + 20,
+
+                         offset=offset, timeout=TG_POLL_TIMEOUT,
+
+                         allowed_updates=["message", "callback_query"]) or []
+
+
+
+
+
+class TelegramDestination(Destination):
+
+    """The Telegram lane's reporter: one growing message per run, then the answer.
+
+
+
+    An edit is a whole message write and the API allows about one per second per
+
+    chat, so a line per tool call would be both a wall of notifications and a rate
+
+    limit problem. The run's own line and the last few tool lines share a single
+
+    message, and the answer is posted as its own so it can be read without the
+
+    chatter above it.
+
+    """
+
+
+
+    merge_tools = True
+
+    shows_calls = True
+
+
+
+    def __init__(self, client, chat_id, session_key="", reply_to=None):
+
+        self.c = client
+
+        self.chat_id = chat_id
+
+        self.session_key = session_key
+
+        self.reply_to = reply_to
+
+        self.live_id = None
+
+        self.lines = []                 # (kind, text) in the growing message
+
+        self.status = ""
+
+        self._edited = 0.0
+
+        self._asking = {}               # question id -> wait state
+
+
+
+    # -- the growing message ---------------------------------------------
+
+    def _live_text(self):
+
+        body = [self._mark(kind, text) for kind, text in self.lines[-TG_LIVE_LINES:]]
+
+        if len(self.lines) > TG_LIVE_LINES:
+
+            body.insert(0, "... %d earlier step(s)" % (len(self.lines) - TG_LIVE_LINES))
+
+        if self.status:
+
+            body.append(tg_escape(self.status))
+
+        return "\n".join(body) or tg_escape("working...")
+
+
+
+    @staticmethod
+
+    def _mark(kind, text):
+
+        mark = {"tool": "\U0001F527 ", "tool_done": "\u2714 ", "tool_fail": "\u26a0\ufe0f ",
+
+                "ask": "\u2753 ", "checkin": "", "note": "", "narration": "",
+
+                "error": "\u26d4 ", "say": ""}.get(kind, "")
+
+        return mark + tg_html(text)
+
+
+
+    def _flush(self, force=False):
+
+        """Write the growing message, at most once a second unless it must land."""
+
+        now = time.time()
+
+        if not force and (now - self._edited) < TG_EDIT_AFTER:
+
+            return
+
+        self._edited = now
+
+        text = self._live_text()
+
+        try:
+
+            if self.live_id is None:
+
+                sent = self.c.send(self.chat_id, text)
+
+                if sent:
+
+                    self.live_id = sent[0].get("message_id")
+
+            else:
+
+                self.c.edit(self.chat_id, self.live_id, text)
+
+        except Exception as exc:            # a failed edit must never kill the run
+
+            log.warning("telegram: the live message failed (%s)", exc)
+
+
+
+    # -- the Destination contract ----------------------------------------
+
+    def line(self, kind, text, src="main"):
+
+        if kind == "final":
+
+            self.answer(text)
+
+            return ("tg-final", len(self.lines))
+
+        self.lines.append((kind, str(text)))
+
+        self._flush(force=kind in ("ask", "error"))
+
+        return ("tg", len(self.lines) - 1)
+
+
+
+    def update(self, ref, kind, text, src="main"):
+
+        if kind == "status":
+
+            self.status = str(text)
+
+            self._flush()
+
+            return ref
+
+        if kind == "narration":
+
+            self.lines.append(("narration", str(text)))
+
+            self._flush()
+
+            return ref
+
+        if kind == "final":
+
+            self.answer(text)
+
+            return ref
+
+        return self.line(kind, text, src)
+
+
+
+    def drop(self, ref):
+
+        """A draft that turned out to be the answer: drop the line, keep the text."""
+
+        try:
+
+            _, idx = ref
+
+            self.lines.pop(idx)
+
+        except Exception:
+
+            pass
+
+
+
+    def answer(self, text):
+
+        """The answer as its own message, so the chatter never buries it."""
+
+        try:
+
+            self.c.send(self.chat_id, "\u2705 " + tg_html(text), reply_to=self.reply_to)
+
+        except Exception as exc:
+
+            log.error("telegram: the answer could not be posted (%s)", exc)
+
+
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+
+        """Post the question with the options as buttons, and wait for either a press
+
+        or a typed line. Both land in the same slot: the reporter decides what counts
+
+        as a yes, exactly as it does in every other lane."""
+
+        row = {"event": threading.Event(), "answer": None}
+
+        self._asking["q"] = row
+
+        body = "\u2753 " + tg_html(question)
+
+        if options:
+
+            body += "\n" + "\n".join(tg_escape("%d) %s" % (i + 1, o))
+
+                                   for i, o in enumerate(options))
+
+        buttons = [[{"text": str(o)[:60], "callback_data": "opt:%d" % (i + 1)}]
+
+                   for i, o in enumerate(options or [])]
+
+        try:
+
+            self.c.send(self.chat_id, body, buttons=buttons or None,
+
+                        reply_to=self.reply_to)
+
+            self.c.typing(self.chat_id)
+
+        except Exception as exc:
+
+            log.warning("telegram: the question could not be posted (%s)", exc)
+
+        answered = row["event"].wait(wait)
+
+        self._asking.pop("q", None)
+
+        if not answered:
+
+            self.line("checkin", "no answer in %ds, carrying on without one"
+
+                      % int(wait))
+
+            return None
+
+        return row["answer"]
+
+
+
+    def reply_ask(self, text):
+
+        """A typed answer to the open question."""
+
+        row = self._asking.get("q")
+
+        if row is None:
+
+            return False
+
+        row["answer"] = text
+
+        row["event"].set()
+
+        return True
+
+
+
+    def button_ask(self, data):
+
+        """A button press: 'opt:<n>'."""
+
+        row = self._asking.get("q")
+
+        if row is None:
+
+            return False
+
+        try:
+
+            row["answer"] = str(data).split(":", 1)[1]
+
+        except Exception:
+
+            return False
+
+        row["event"].set()
+
+        return True
+
+
+
+
+
+class TelegramPoller:
+
+    """Long-poll the Bot API and hand each update to the right chat's worker.
+
+
+
+    One worker per chat, like the Mattermost dispatcher: a chat's second request
+
+    queues behind its first, and two chats never wait on each other. The allowed list
+
+    is a gate, not a warning: anyone else is logged and ignored, and group chats are
+
+    ignored by design (DM only, the same discipline as the chat lane).
+
+    """
+
+
+
+    def __init__(self, client, allowed):
+
+        self.c = client
+
+        self.allowed = allowed
+
+        self.submit = None              # set by run_telegram
+
+        self.live = {}                  # chat_id -> TelegramDestination
+
+        self.cancel = {}                # chat_id -> the run's cancel event
+
+        self.seen = deque(maxlen=4000)
+
+
+
+    def allowed_user(self, user):
+
+        uid = str((user or {}).get("id") or "")
+
+        return bool(uid) and uid in self.allowed
+
+
+
+    def _verb(self, chat_id, text):
+
+        verb = text.split()[0].lower()
+
+        if verb in ("/start", "/help"):
+
+            self.c.send(chat_id, TG_HELP)
+
+            return True
+
+        if verb == "/stop":
+
+            ev = self.cancel.get(chat_id)
+
+            if ev is not None:
+
+                ev.set()
+
+                self.c.send(chat_id, "\u23f9 stopping - the call in flight is being closed")
+
+            else:
+
+                self.c.send(chat_id, "nothing is running")
+
+            return True
+
+        if verb == "/new":
+
+            AGENT.reset(tg_session_key(chat_id))
+
+            self.c.send(chat_id, "\U0001F195 fresh conversation")
+
+            return True
+
+        if verb == "/usage":
+
+            u = AGENT.last_usage.get(tg_session_key(chat_id))
+
+            self.c.send(chat_id, tg_escape(fmt_usage(u) if u and u.get("calls")
+
+                                           else "nothing yet in this chat"))
+
+            return True
+
+        return False
+
+
+
+    def handle(self, update):
+
+        """One update. True when it was ours to handle."""
+
+        cb = update.get("callback_query")
+
+        if cb:
+
+            user = cb.get("from") or {}
+
+            chat_id = ((cb.get("message") or {}).get("chat") or {}).get("id")
+
+            if not chat_id or not self.allowed_user(user):
+
+                log.warning("telegram: ignored a button press from %s", user.get("id"))
+
+                return False
+
+            try:
+
+                self.c.answer_callback(cb.get("id"))
+
+            except Exception:
+
+                pass
+
+            dest = self.live.get(chat_id)
+
+            return bool(dest is not None and dest.button_ask(cb.get("data")))
+
+        msg = update.get("message") or update.get("edited_message")
+
+        if not msg:
+
+            return False
+
+        chat = msg.get("chat") or {}
+
+        chat_id = chat.get("id")
+
+        user = msg.get("from") or {}
+
+        text = (msg.get("text") or "").strip()
+
+        if not chat_id or not text:
+
+            return False
+
+        if chat.get("type") != "private":
+
+            log.info("telegram: ignored a message in a %s chat (DM only)",
+
+                     chat.get("type"))
+
+            return False
+
+        if not self.allowed_user(user):
+
+            log.warning("telegram: ignored a message from %s (@%s) - not in "
+
+                        "telegram.allowed_users", user.get("id"), user.get("username"))
+
+            return False
+
+        mid = msg.get("message_id")
+
+        if mid in self.seen:
+
+            return True
+
+        self.seen.append(mid)
+
+        dest = self.live.get(chat_id)
+
+        if dest is not None and dest.reply_ask(text):
+
+            return True
+
         # `/tinycmdr <cmd>` works here too: a Telegram client hands an unknown command
         # over as ordinary text, so the prefix only has to be understood.
         _cmdr = cmdr_strip(text)
         if _cmdr != text:
             text = _cmdr
-        if text.startswith("/") and self._verb(chat_id, text):
-            return True
-        if self.submit is not None:
-            self.submit(chat_id, text, mid)
-        return True
-
-
-def tg_session_key(chat_id):
-    """One conversation per Telegram chat, named so the corpus stays readable."""
-    return "telegram-%s" % chat_id
-
-
-def run_telegram():
-    """The Telegram lane: long poll, gate on allowed ids, one run per chat.
-
-    The unified backend is the point: same Agent, same notes/tasks/atlas/skills, same
+        if text.startswith("/") and self._verb(chat_id, text):
+
+            return True
+
+        if self.submit is not None:
+
+            self.submit(chat_id, text, mid)
+
+        return True
+
+
+
+
+
+def tg_session_key(chat_id):
+
+    """One conversation per Telegram chat, named so the corpus stays readable."""
+
+    return "telegram-%s" % chat_id
+
+
+
+
+
+def run_telegram():
+
+    """The Telegram lane: long poll, gate on allowed ids, one run per chat.
+
+
+
+    The unified backend is the point: same Agent, same notes/tasks/atlas/skills, same
+
     sessions corpus as the chat lanes, so the fleet keeps one memory whichever
-    door is used.
-    """
-    tg = CONFIG.get("telegram") or {}
-    token = (tg.get("token") or "").strip()
-    if not token:
-        log.critical("no Telegram token: put TINYCMDR_TG_TOKEN=<bot token> in %s "
-                     "(or telegram.token in config.json) and restart.", BASE_DIR / ".env")
-        sys.exit(2)
-    allowed = {str(u).strip() for u in (tg.get("allowed_users") or []) if str(u).strip()}
-    if not allowed:
-        log.critical("telegram.allowed_users is empty, and this bot is deny-by-default: "
-                     "it would ignore every DM. Put your numeric Telegram id there.")
-        sys.exit(2)
-    client = TelegramClient(token)
-    try:
-        me = client.me()
-    except Exception as exc:
-        log.critical("telegram: the token was refused (%s)", exc)
-        sys.exit(2)
+    door is used.
+
+    """
+
+    tg = CONFIG.get("telegram") or {}
+
+    token = (tg.get("token") or "").strip()
+
+    if not token:
+
+        log.critical("no Telegram token: put TINYCMDR_TG_TOKEN=<bot token> in %s "
+
+                     "(or telegram.token in config.json) and restart.", BASE_DIR / ".env")
+
+        sys.exit(2)
+
+    allowed = {str(u).strip() for u in (tg.get("allowed_users") or []) if str(u).strip()}
+
+    if not allowed:
+
+        log.critical("telegram.allowed_users is empty, and this bot is deny-by-default: "
+
+                     "it would ignore every DM. Put your numeric Telegram id there.")
+
+        sys.exit(2)
+
+    client = TelegramClient(token)
+
+    try:
+
+        me = client.me()
+
+    except Exception as exc:
+
+        log.critical("telegram: the token was refused (%s)", exc)
+
+        sys.exit(2)
+
     lane_up("telegram", "connected as @%s" % me.get("username"))
-    log.info("telegram: connected as @%s, %d allowed id(s), DM only",
-             me.get("username"), len(allowed))
-
-    poller = TelegramPoller(client, allowed)
-    queues, workers, locks = {}, {}, threading.Lock()
-
-    def worker(chat_id):
-        while True:
-            task = queues[chat_id].get()
-            if task is None:
-                return
-            text, msg_id = task
-            key = tg_session_key(chat_id)
-            dest = TelegramDestination(client, chat_id, key, reply_to=msg_id)
-            cancel = threading.Event()
-            with locks:
-                poller.live[chat_id] = dest
-                poller.cancel[chat_id] = cancel
-            reporter = RunReporter(dest, key)
-            try:
-                client.typing(chat_id)
-                answer = drive_run(key, text, reporter, cancel_event=cancel)
-                if answer:
-                    dest.answer(answer)
-            except OperatorStop as exc:
-                dest.line("checkin", "stopped: %s" % exc)
-            except Exception as exc:                        # noqa: BLE001 - reported
-                log.exception("telegram: the run failed")
-                dest.line("error", "run failed: %s: %s" % (type(exc).__name__, exc))
-            finally:
-                reporter.finish(ok=True)
-                with locks:
-                    poller.live.pop(chat_id, None)
-                    poller.cancel.pop(chat_id, None)
-
-    def submit(chat_id, text, msg_id):
-        with locks:
-            if chat_id not in queues:
-                queues[chat_id] = queue.Queue()
-                t = threading.Thread(target=worker, args=(chat_id,), daemon=True,
-                                     name="tg-%s" % chat_id)
-                workers[chat_id] = t
-                t.start()
-            poller.cancel.setdefault(chat_id, threading.Event())
-        queues[chat_id].put((text, msg_id))
-
-    poller.submit = submit
-
-    offset = 0
-    while True:
-        try:
-            updates = client.updates(offset)
-        except Exception as exc:                            # noqa: BLE001 - retried
-            log.warning("telegram: poll failed (%s), retrying in 5s", exc)
-            time.sleep(5)
-            continue
-        for update in updates:
-            offset = max(offset, int(update.get("update_id") or 0) + 1)
-            try:
-                poller.handle(update)
-            except Exception:                               # noqa: BLE001 - per update
-                log.exception("telegram: one update failed")
-
-
+    log.info("telegram: connected as @%s, %d allowed id(s), DM only",
+
+             me.get("username"), len(allowed))
+
+
+
+    poller = TelegramPoller(client, allowed)
+
+    queues, workers, locks = {}, {}, threading.Lock()
+
+
+
+    def worker(chat_id):
+
+        while True:
+
+            task = queues[chat_id].get()
+
+            if task is None:
+
+                return
+
+            text, msg_id = task
+
+            key = tg_session_key(chat_id)
+
+            dest = TelegramDestination(client, chat_id, key, reply_to=msg_id)
+
+            cancel = threading.Event()
+
+            with locks:
+
+                poller.live[chat_id] = dest
+
+                poller.cancel[chat_id] = cancel
+
+            reporter = RunReporter(dest, key)
+
+            try:
+
+                client.typing(chat_id)
+
+                answer = drive_run(key, text, reporter, cancel_event=cancel)
+
+                if answer:
+
+                    dest.answer(answer)
+
+            except OperatorStop as exc:
+
+                dest.line("checkin", "stopped: %s" % exc)
+
+            except Exception as exc:                        # noqa: BLE001 - reported
+
+                log.exception("telegram: the run failed")
+
+                dest.line("error", "run failed: %s: %s" % (type(exc).__name__, exc))
+
+            finally:
+
+                reporter.finish(ok=True)
+
+                with locks:
+
+                    poller.live.pop(chat_id, None)
+
+                    poller.cancel.pop(chat_id, None)
+
+
+
+    def submit(chat_id, text, msg_id):
+
+        with locks:
+
+            if chat_id not in queues:
+
+                queues[chat_id] = queue.Queue()
+
+                t = threading.Thread(target=worker, args=(chat_id,), daemon=True,
+
+                                     name="tg-%s" % chat_id)
+
+                workers[chat_id] = t
+
+                t.start()
+
+            poller.cancel.setdefault(chat_id, threading.Event())
+
+        queues[chat_id].put((text, msg_id))
+
+
+
+    poller.submit = submit
+
+
+
+    offset = 0
+
+    while True:
+
+        try:
+
+            updates = client.updates(offset)
+
+        except Exception as exc:                            # noqa: BLE001 - retried
+
+            log.warning("telegram: poll failed (%s), retrying in 5s", exc)
+
+            time.sleep(5)
+
+            continue
+
+        for update in updates:
+
+            offset = max(offset, int(update.get("update_id") or 0) + 1)
+
+            try:
+
+                poller.handle(update)
+
+            except Exception:                               # noqa: BLE001 - per update
+
+                log.exception("telegram: one update failed")
+
+
+
+
+
 # ------------------------------------------------------------------ the console
 # This is the console: `tinycmdr` with no verb, or `--cli`. No second build cuts
 # it, so every change lands here and nowhere else (audit, 2026-09-21).
@@ -17533,9 +18010,12 @@ def run_setup(rest=None):
         "Run `tinycmdr restart` to apply to background service.",
     ]
     print(_cli_render_box("Setup Complete", summary))
-    return 0
-
-
+    return 0
+
+
+
+
+
 def _cli_model(rest):
     tokens = (rest or "").strip().split()
     sub = tokens[0].lower() if tokens else ""

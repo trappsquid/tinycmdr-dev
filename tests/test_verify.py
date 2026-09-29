@@ -239,10 +239,17 @@ def main():
         # Measured in the eval: asked to create a JSON file, this model used shell
         # redirection rather than write_file, so a verifier wired only to the write
         # tools never ran. That is the common path, not the exception.
+        # The paths are QUOTED, and that is load-bearing rather than tidiness: on a host whose
+        # temporary directory contains a space (any Windows profile for a two-word account
+        # name, e.g. "C:\Users\David Trapp\AppData\Local\Temp\...") an unquoted path is two
+        # arguments to the shell, so the command is not one anybody would run and the first
+        # token is the only thing any reader could recover. Quoted, it is the shape the shell
+        # actually receives - and the shape the detector has to read (fixed the same day).
+        _p1, _p2, _p3 = workdir / "s1.json", workdir / "s2.json", workdir / "s3.txt"
         for cmd, want in (
-                (f"Set-Content -Path {workdir / 's1.json'} -Value '{{\"a\": 1'", "s1.json"),
-                (f"echo '{{\"b\": 2}}' > {workdir / 's2.json'}", "s2.json"),
-                (f"printf 'x' | tee {workdir / 's3.txt'}", "s3.txt"),
+                (f"Set-Content -Path '{_p1}' -Value '{{\"a\": 1'", "s1.json"),
+                (f"echo '{{\"b\": 2}}' > '{_p2}'", "s2.json"),
+                (f"printf 'x' | tee '{_p3}'", "s3.txt"),
         ):
             got = fb.shell_written_files(cmd)
             check(any(want in g for g in got),

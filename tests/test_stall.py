@@ -173,9 +173,14 @@ def test_oversized_output_is_capped_not_held():
     check("oversized output is not returned whole", len(out) < cap + 8192, len(out))
     check("the model is told it was cut, and where the rest is",
           "[HARNESS:" in out and "only the first" in out, out[-260:])
-    m = re.search(r"The full text is at (\S+?) —", out)
+    # Capture to the delimiter, not to the first space: on a host whose temp directory has a
+    # space in it (any Windows profile for a two-word account name) `(\S+?)` recovered
+    # "C:\Users\David" and the file it named did not exist. The path is backticked by the
+    # harness now, and stripped here so the capture works either way.
+    m = re.search(r"The full text is at (.+?) —", out)
+    kept = (m.group(1).strip().strip("`") if m else "")
     check("the kept file exists so the rest can be read deliberately",
-          bool(m) and Path(m.group(1)).exists(), out[-200:])
+          bool(kept) and Path(kept).exists(), out[-200:])
 
 
 def test_small_output_passes_through_untouched():

@@ -17,6 +17,14 @@ Added
   per-request window, so taking it would over-report by an order of magnitude, the same trap as
   Ollama's model maximum.
 
+Fixed
+- **A manifest tool's command escaped the recursive-delete rule on Windows.** A manifest
+  command is wrapped in `cmd /c` there and `sh -c` elsewhere, and the unwrapping
+  `destructive_risk()` does stripped flags beginning with a dash - cmd spells its switch with a
+  slash - so the verb read as `/c`, matched nothing, and BOTH tiers were bypassed for every
+  dropped-in manifest: `cmd /c "rm -rf /"` reached the block tier only through its own regex,
+  and a named directory like `rm -rf ./build` reached neither. Found by running the gate on a
+  Windows box; macOS and Linux never show it because their wrapper uses a dash.
 ## [1.0.38] - 2026-09-29
 
 A tool can show the model the screen and the image rides exactly one request; the secret sweep
