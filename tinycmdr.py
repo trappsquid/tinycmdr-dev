@@ -2064,14 +2064,16 @@ def lan_permission_hint(base_url):
 def _detect_window(base_url, headers, timeout=10):
     """Ask an endpoint how many tokens it serves per request; 0 when it does not say.
 
-    Two routes, because there is no standard one: vLLM reports max_model_len,
-    llama.cpp carries n_ctx under meta on /v1/models, and any llama.cpp build
-    answers /props at the server root. Read-only metadata, never a model call, so
-    it is safe to ask a box that is busy serving somebody else.
+    Three routes, because there is no standard one: vLLM reports max_model_len and
+    llama.cpp carries n_ctx under meta on /v1/models; any llama.cpp build answers
+    /props at the server root; and Ollama answers /api/ps with the context_length it
+    is actually serving. Read-only metadata, never a model call, so it is safe to ask
+    a box that is busy serving somebody else.
     """
     base = str(base_url or "").rstrip("/")
     if not base:
         return 0
+    root = _endpoint_root(base)
     detected = None
     try:
         models = (requests.get(base + "/models", headers=headers,
@@ -2086,13 +2088,35 @@ def _detect_window(base_url, headers, timeout=10):
         log.debug("window detect: /models on %s did not answer: %s", base, e)
     if not detected:
         try:
-            root = base[:-3] if base.endswith("/v1") else base
             props = requests.get(root + "/props", headers=headers,
                                  timeout=timeout).json()
             detected = ((props.get("default_generation_settings") or {})
                         .get("n_ctx") or props.get("n_ctx"))
         except Exception as e:
             log.debug("window detect: /props on %s did not answer: %s", base, e)
+    if not detected:
+        # Ollama. Its OpenAI-compatible /v1 answers /models like everything else, but
+        # the window it SERVES is its own API's business, and /api/ps reports exactly
+        # that: the loaded model's context_length, which is the number the budget needs.
+        # The reply's shape is the fingerprint (a `models` list), so another server's 200
+        # to an unrelated route is not read as an answer.
+        #
+        # /api/show is deliberately NOT probed. It needs a POST (this function is
+        # read-only everywhere else), and its model_info.<arch>.context_length is the
+        # model's MAXIMUM: Ollama serves num_ctx, 4096 by default, so using it would
+        # over-report the window by orders of magnitude - the one direction a budget
+        # subtraction must never be wrong in. A model that is not loaded answers with an
+        # empty list, this returns 0, and the operator's configured budget stands -
+        # which is what every endpoint that does not say already gets.
+        try:
+            ps = requests.get(root + "/api/ps", headers=headers,
+                              timeout=timeout).json()
+            for entry in (ps.get("models") or []):
+                if isinstance(entry, dict) and entry.get("context_length"):
+                    detected = entry["context_length"]
+                    break
+        except Exception as e:
+            log.debug("window detect: /api/ps on %s did not answer: %s", base, e)
     try:
         return int(detected) if detected else 0
     except (TypeError, ValueError):
