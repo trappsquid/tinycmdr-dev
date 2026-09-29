@@ -11277,6 +11277,33 @@ MARK_SHRINK = ("[earlier context dropped: the server's context window is "
                "smaller than the configured budget]")
 ELISION_MARKERS = (MARK_COMPACT, MARK_SHRINK)
 
+# A note about WHAT was elided rides with the marker, because a bare marker tells the model
+# that something vanished without telling it what. Measured on the live box (2026-09-29): a
+# rewrite compacted mid-task, and the next several calls went into re-deriving the task from
+# the harness's own session files and carry.json instead of continuing the work.
+ELISION_NOTES_MAX = 10        # one line per dropped call, oldest dropped first
+ELISION_NOTES_CHARS = 1200    # bounded: this rides every LATER request
+
+
+def _short_args(raw, limit=60):
+    """A one-line hint of what a tool call was doing: the command, path, query or task.
+
+    Used only to describe calls that have just been dropped from the conversation, so it is
+    deliberately shallow - the FIRST recognisable key wins, and a call carrying none of them
+    contributes nothing.
+    """
+    try:
+        obj = json.loads(raw) if isinstance(raw, str) else (raw or {})
+    except Exception:
+        return ""
+    if not isinstance(obj, dict):
+        return ""
+    for key in ("command", "path", "query", "task", "pattern", "note", "name"):
+        val = obj.get(key)
+        if isinstance(val, str) and val.strip():
+            return " ".join(val.split())[:limit]
+    return ""
+
 # Sampling keys tinycmdr is willing to pin explicitly on a request. Anything it
 # does NOT send is silently inherited from the server's own flags, which is how
 # the box ran a hybrid nobody chose: temperature 0.6 sent, while top_k 20 /
@@ -11928,8 +11955,51 @@ class Agent:
         """
         return int(self._envelope(session_key)["budget"])
 
+    def _elision_note(self, base, dropped, prev=""):
+        """`base`, plus a bounded one-line note per call the cut just removed.
+
+        A bare marker told the model that something had vanished, not what - so a live run
+        (2026-09-29) that compacted mid-rewrite spent its next several calls re-deriving the
+        task out of the harness's own session files. This names the shape of what is gone:
+        the tool calls that were dropped, one line each, with the command/path/query that
+        identifies them, plus any operator message that was in the dropped range.
+
+        Bounded twice over (line count and characters), because the note rides EVERY later
+        request - and ACCUMULATED, because a long run compacts more than once and the earlier
+        notes would otherwise be replaced by the newest.
+        """
+        keep = ""
+        if str(prev).startswith(base):
+            keep = str(prev)[len(base):].strip("\n")
+        lines = []
+        for m in dropped:
+            if not isinstance(m, dict):
+                continue
+            if m.get("role") == "assistant":
+                for tc in (m.get("tool_calls") or []):
+                    fn = tc.get("function") if isinstance(tc, dict) else None
+                    if not isinstance(fn, dict):
+                        continue
+                    nm = str(fn.get("name") or "")
+                    if not nm:
+                        continue
+                    hint = _short_args(fn.get("arguments"))
+                    lines.append(("- %s %s" % (nm, hint)) if hint else ("- %s" % nm))
+            elif m.get("role") == "user":
+                txt = " ".join(str(m.get("content") or "").split())[:80]
+                # a state/elision block is not something to summarise
+                if txt and not txt.startswith("["):
+                    lines.append("- operator: %s" % txt)
+        if not lines and not keep:
+            return base
+        merged = [ln for ln in keep.splitlines() if ln.strip()] + lines
+        note = "\n".join(merged[-ELISION_NOTES_MAX:])
+        if len(note) > ELISION_NOTES_CHARS:
+            note = note[-ELISION_NOTES_CHARS:]
+        return base + "\n" + note
+
     def _drop_oldest_block(self, messages, marker):
-        """Delete the oldest whole exchange, leaving `marker` as its stand-in.
+        """Delete the oldest whole exchange, leaving `marker` (plus what it covered) behind.
 
         Returns False when there is no whole exchange left to drop. The marker
         is REUSED, never re-inserted on every pass: the previous version cut at
@@ -11939,12 +12009,16 @@ class Agent:
         `_force_shrink`, hung recovery from a server-side context overflow.
         Cutting AFTER the marker guarantees progress: each pass deletes a real
         exchange or gives up.
+
+        The marker is matched by PREFIX, because it now carries the note from
+        `_elision_note`; on a later pass it is updated in place rather than
+        re-inserted, so the progress guarantee above is unchanged.
         """
         if len(messages) < 4:
             return False
         start = 1
         if (messages[1].get("role") == "user"
-                and messages[1].get("content") in ELISION_MARKERS):
+                and str(messages[1].get("content") or "").startswith(ELISION_MARKERS)):
             start = 2                  # keep the marker already in place
         if start >= len(messages):
             return False
@@ -11957,9 +12031,14 @@ class Agent:
                     if messages[i].get("role") == "user"), None)
         if cut is None:
             return False               # only the newest exchange is left
+        dropped = messages[start:cut]
+        prev = str(messages[1].get("content") or "") if start != 1 else ""
         del messages[start:cut]
+        note = self._elision_note(marker, dropped, prev)
         if start == 1:
-            messages.insert(1, {"role": "user", "content": marker})
+            messages.insert(1, {"role": "user", "content": note})
+        else:
+            messages[1]["content"] = note
         return True
 
     def _save_transcript(self, key, messages, reason):

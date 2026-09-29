@@ -393,12 +393,57 @@ def test_force_shrink_terminates_under_a_tight_budget():
                   for i in range(1, len(msgs))))
         check("shrinks hard", after < before / 2, f"{before} -> {after}")
         marks = [m["content"] for m in msgs
-                 if m.get("content") in fb.ELISION_MARKERS]
+                 if str(m.get("content") or "").startswith(fb.ELISION_MARKERS)]
         check("reuses one elision marker instead of stacking them",
               len(marks) == 1, marks)
     finally:
         redirect_files()
         _budget_clear()
+
+
+def test_elision_note_names_what_was_dropped():
+    """A bare elision marker told the model that something had vanished, not WHAT.
+
+    Measured on the live box 2026-09-29: a rewrite compacted mid-task, and the next several
+    calls went into re-deriving the task out of the harness's own session files and carry
+    file instead of continuing the work. The marker now carries the shape of what it
+    replaced, and it grows across repeated compactions - a long run compacts more than once,
+    and the earlier notes must not be replaced by the newest.
+    """
+    def call(name, args, cid):
+        return {"role": "assistant", "content": "", "tool_calls": [
+            {"id": cid, "type": "function",
+             "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+    msgs = [{"role": "system", "content": "sys"},
+            {"role": "user", "content": "rewrite the Book of Enoch"},
+            call("shell", {"command": "ls -la /work"}, "c1"),
+            {"role": "tool", "tool_call_id": "c1", "content": "y" * 200},
+            {"role": "assistant", "content": "found it"},
+            {"role": "user", "content": "carry on"}]
+    check("the cut happened", fb.AGENT._drop_oldest_block(msgs, fb.MARK_COMPACT))
+    note = str(msgs[1].get("content") or "")
+    check("the marker still LEADS, so prefix matching recognises it",
+          note.startswith(fb.MARK_COMPACT), note[:70])
+    check("  and it names the call that was dropped",
+          "shell" in note and "ls -la /work" in note, note)
+    check("  and it carries the operator's words that were in that range",
+          "operator: rewrite the Book of Enoch" in note, note)
+
+    msgs += [call("read_file", {"path": "/work/p01.txt"}, "c2"),
+             {"role": "tool", "tool_call_id": "c2", "content": "y" * 200},
+             {"role": "user", "content": "keep going"}]
+    check("a second cut happened", fb.AGENT._drop_oldest_block(msgs, fb.MARK_COMPACT))
+    note2 = str(msgs[1].get("content") or "")
+    check("a later compaction ADDS to the note instead of replacing it",
+          "shell" in note2 and "read_file" in note2, note2)
+    check("  and the note stays bounded",
+          len(note2) <= len(fb.MARK_COMPACT) + fb.ELISION_NOTES_CHARS + 4,
+          f"{len(note2)} chars")
+    check("_short_args reads the one useful key and shrugs at the rest",
+          fb._short_args('{"command": "echo hi"}') == "echo hi"
+          and fb._short_args({"path": "/x"}) == "/x"
+          and fb._short_args("not json at all") == "")
 
 
 def test_evidence_rules():

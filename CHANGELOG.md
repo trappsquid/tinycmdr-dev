@@ -19,6 +19,17 @@ Fixed
   call the model: four shells or file reads are local work and still run fully in parallel.
   An endpoint that does not report slots, and an off-LAN one (never probed for them), keep
   the old fan-out.
+- **A compaction now says WHAT it removed, not just that it removed something.** The marker
+  was `[earlier investigation context removed to fit context window]` - the model was told that
+  something had vanished and nothing about what, so a run that compacted mid-rewrite spent its
+  next several calls re-deriving the task out of the harness's own session files and carry
+  file instead of continuing the work. The marker now carries one line per dropped tool call
+  (the name plus the command, path or query that identifies it) and any operator message that
+  was in the dropped range. It accumulates across repeated compactions - a long run compacts
+  more than once - and is bounded to 10 lines / 1,200 characters, because it rides every later
+  request. The one-pass-per-call progress guarantee in `_drop_oldest_block` (the docstring's
+  "delete, re-insert, repeat, for ever" hang) is unchanged: the marker is matched by PREFIX
+  and updated in place, never re-inserted.
 - **A `.txt` is a document, not a log.** The "log file" digest shape matched
   `\.(log|out|err|txt)$`, and the subject for a read_file is the PATH - so every read of a .txt
   file was reduced to the lines that happen to contain error/warn/fail. On a text-rewriting job,
