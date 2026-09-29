@@ -209,6 +209,15 @@ venv/bin/python tests/run_all.py           # non-zero if any suite fails
 A suite that cannot run exits 77 and counts as **red**, so a machine that grades nothing cannot
 report success. `--select 'tests/test_ledger*.py'` narrows the run while you work on one suite.
 
+Before pushing, `bash maintenance/pre-push.sh` decides the cheap things - the leak gate, that the
+published numbers are still regenerated from the tree, and that the work ledger's anchors agree
+with the repository - in about a second. Install it as the hook once per clone:
+
+```bash
+printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/maintenance/pre-push.sh"\n' \
+    > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
 ---
 
 ## License
