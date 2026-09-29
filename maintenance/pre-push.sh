@@ -55,6 +55,29 @@ say "the published numbers are regenerated from the tree"
 say "the work ledger's anchors agree with the repository"
 "$PY" tests/test_status.py || fail=1
 
+say "every tracked path can survive a checkout"
+# A filename with a space or a shell character is legal on macOS and Linux and REJECTED by git on
+# Windows: measured 2026-09-29, a stray file created by a mis-quoted shell command ("%r % (c,
+# T.destructive_risk(c)))\"") passed the leak gate, the measured block and the ledger, was
+# committed by `git add -A`, was pushed - and broke the Windows CI job at CHECKOUT, before a
+# single test ran. On this machine nothing objected.
+if ! "$PY" - <<'PYEOF'
+import subprocess
+import sys
+# -z, not the default: git C-QUOTES a path holding a quote or a backslash, and the quoted
+# form is not a pathspec - `git rm -- "<that>"` answers "did not match any files".
+raw = subprocess.run(["git", "ls-files", "-z"], capture_output=True).stdout
+paths = [q.decode("utf-8", "surrogateescape") for q in raw.split(b"\0") if q]
+bad = [p for p in paths if any(ch in p for ch in ' %()"\';|&')]
+for p in bad:
+    print("  %s" % p)
+print("tracked paths: %d, carrying a space or a shell character: %d" % (len(paths), len(bad)))
+sys.exit(1 if bad else 0)
+PYEOF
+then
+    fail=1
+fi
+
 if [ "$fail" != 0 ]; then
     echo
     echo "pre-push: REFUSED. Fix the above, or override deliberately with --no-verify." >&2
