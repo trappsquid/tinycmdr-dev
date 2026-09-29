@@ -7,24 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.39] - 2026-09-29
+
+Two security fixes and the Windows entry point, all of them found by running the gate on real
+hardware instead of reading it: the command every Windows user types was dead, a dropped-in
+manifest could carry a recursive delete past the guard, and a path with a space in it made write
+verification silently verify nothing.
+
 Added
 - **SGLang's context window is detected.** `_detect_window` asks the server root for
   `/get_server_info` and reads `context_length`, falling back to `max_req_input_len`. SGLang was
   named in the README's "any OpenAI-compatible endpoint" list and had no route at all:
   `get_server_info` appeared once in the core, in a comment explaining why `/props` fingerprints
-  llama.cpp, and the 2026-09-28 review read that comment as an implementation. `max_total_num_tokens`
-  is deliberately NOT used - that is the KV-cache budget shared across concurrent requests, not a
-  per-request window, so taking it would over-report by an order of magnitude, the same trap as
-  Ollama's model maximum.
+  llama.cpp, and the 2026-09-28 review read that comment as an implementation.
+  `max_total_num_tokens` is deliberately NOT used - that is the KV-cache budget shared across
+  concurrent requests, not a per-request window, so taking it would over-report by an order of
+  magnitude, the same trap as Ollama's model maximum.
+- **The work record ships with the code.** `STATUS.json` lists what is open, blocked and shipped,
+  each item anchored to a commit or a file, and `tests/test_status.py` grades those anchors in
+  CI - an item claiming "unshipped (commit X)" fails the moment a tag contains X. Written after
+  a review of this project's own notes found three items describing their work as unshipped for
+  a change that had shipped in 1.0.37, and two cross-references pointing at the wrong item.
+- **`maintenance/pre-push.sh`.** The leak gate, the measured-block check, the ledger's anchors and
+  a check that every tracked path can survive a checkout - about a second, and each of the four
+  exists because something got past it.
+
+Changed
+- **The Windows CI job runs the suites that switch on the platform.** It ran only the suites
+  certain to pass there, and none of those touched `IS_WINDOWS`: the platform-specific behaviour
+  was the one thing Windows CI never exercised. Six suites added, and three more listed as
+  candidates.
 
 Fixed
-- **A manifest tool's command escaped the recursive-delete rule on Windows.** A manifest
-  command is wrapped in `cmd /c` there and `sh -c` elsewhere, and the unwrapping
-  `destructive_risk()` does stripped flags beginning with a dash - cmd spells its switch with a
-  slash - so the verb read as `/c`, matched nothing, and BOTH tiers were bypassed for every
-  dropped-in manifest: `cmd /c "rm -rf /"` reached the block tier only through its own regex,
-  and a named directory like `rm -rf ./build` reached neither. Found by running the gate on a
-  Windows box; macOS and Linux never show it because their wrapper uses a dash.
+- **`tinycmdr.cmd` exited 127 with no output, for everyone.** cmd parses a `)` inside an `echo`
+  inside an `if (...)` block as the END of the block, so the no-Python branch's `exit /b 127` ran
+  unconditionally and the documented entry point - `tinycmdr status`, `tinycmdr --once "..."` -
+  was dead on Windows. Nothing noticed because the installer's scheduled task calls `tinycmdr.py`
+  directly, so the bot kept working. Measured on a Windows 11 box, which is also where the two
+  path bugs below came from.
+- **A manifest tool's command escaped the recursive-delete rule on Windows.** A manifest command
+  is wrapped in `cmd /c` there and `sh -c` elsewhere, and the unwrapping `destructive_risk()` does
+  stripped flags beginning with a dash - cmd spells its switch with a slash - so the verb read as
+  `/c`, matched nothing, and BOTH tiers were bypassed for every dropped-in manifest:
+  `cmd /c "rm -rf /"` reached the block tier only through its own regex, and a named directory
+  like `rm -rf ./build` reached neither.
+- **A quoted path was truncated at its first space.** The shell-write detector captured an
+  optional quote followed by "no whitespace", so `Set-Content -Path 'C:\Users\David Trapp\s.json'`
+  - a quoted path is the only correct way to pass one containing a space - yielded
+  `C:\Users\David`. That path does not exist and this module ignores a candidate it cannot find,
+  so write verification verified nothing and said nothing. The spill messages and their test had
+  the same truncation.
+- **The published numbers could not be computed outside a git checkout.** The shipped-tool count
+  came from `git ls-files`, which answers nothing in an export, so the count silently became 0 and
+  the `surface` block contradicted itself. A reader who downloads a package can verify the numbers
+  again.
+- **Four suites graded the wrong thing off macOS**, and the fleet gate found each one: `test_verbs`
+  read `os.geteuid` (no uid on Windows), `test_lane_health` imported `fcntl` at module level (it
+  now takes the folder lock the way the product does, flock or msvcrt), `test_root_safety` ran the
+  macOS-only restart helper wherever a bash existed and counted `os.stat` calls in a way that only
+  holds on macOS, and `test_installer_unix` now answers 77 - "cannot grade this subject here" -
+  rather than failing on a platform whose installer it does not describe.
+
+
 ## [1.0.38] - 2026-09-29
 
 A tool can show the model the screen and the image rides exactly one request; the secret sweep
