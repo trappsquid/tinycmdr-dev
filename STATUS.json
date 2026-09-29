@@ -20,7 +20,9 @@
       "id": "linux-install-python",
       "title": "the Linux installer has no --install-python",
       "state": "open",
-      "anchor": {"file": "install/install-tinycmdr.sh"},
+      "anchor": {
+        "file": "install/install-tinycmdr.sh"
+      },
       "detail": "The macOS installer takes the flag; the Linux script and the Windows one never mention it. A per-host gap rather than a bug: the flag exists so a host can point the install at an interpreter it already trusts.",
       "gate": "the flag in install/install-tinycmdr.sh, or a decision that Linux does not need it"
     },
@@ -28,23 +30,39 @@
       "id": "linux-installer-distro",
       "title": "the Linux installer assumes apt and detects no distro",
       "state": "open",
-      "anchor": {"file": "install/install-tinycmdr.sh"},
+      "anchor": {
+        "file": "install/install-tinycmdr.sh"
+      },
       "detail": "Its one package call is a bare 'apt-get install -y -q python3-venv' behind an ensurepip probe, and the error text names apt. On a non-apt distribution ensurepip may be absent from the system Python, so that branch fires and the package manager does not exist. The install has been done by hand on a non-apt host, so the path is survivable, but no CI job exercises one.",
       "gate": "a distro branch, or a documented 'supported: Debian-shaped' with the failure named"
     },
     {
-      "id": "windows-ci-coverage",
-      "title": "the Windows CI job runs few suites and none that touch the platform switches",
+      "id": "windows-ci-tier2",
+      "title": "three more suites could run on Windows once their shell expectations are read",
       "state": "open",
-      "anchor": {"file": ".github/workflows/ci.yml"},
-      "detail": "The job selects a deliberately small set - the ones known to pass on Windows - while several suites branch on IS_WINDOWS for exactly the platform-specific behaviour that goes untested there. A suite that cannot run on a runner exits 77, which the gate counts as red, so widening it is a sequence of small additions rather than one.",
-      "gate": "the IS_WINDOWS-branching suites added to the Windows job, one at a time"
+      "anchor": {
+        "file": ".github/workflows/ci.yml"
+      },
+      "detail": "test_dropin_tools, test_guard_battery and test_tool_doors reference the shell but write no platform branch, so they were left out of the 2026-09-29 widening rather than added blind - a suite that cannot run on a runner exits 77 and the gate counts that as red. test_verbs (os.X_OK, st_mode, uid) and test_shim (pwd/grp) are POSIX by construction and stay out on purpose. test_endpoint_window is platform-neutral (it stubs the transport) and is a candidate too.",
+      "gate": "each suite read, then added to .github/workflows/ci.yml if its shell expectations hold on Windows"
+    },
+    {
+      "id": "windows-ci-coverage",
+      "title": "the Windows job now runs the suites that switch on the platform",
+      "state": "closed",
+      "anchor": {
+        "file": ".github/workflows/ci.yml"
+      },
+      "detail": "Closed 2026-09-29. The job ran six suites chosen as the ones certain to pass on a runner, none of which touched a platform switch. The candidates were triaged by how each names the platform, and the six that write an IS_WINDOWS branch at the platform-specific point were added: test_route_hint, test_stall, test_stop_now, test_checkin, test_endpoint_gate, test_installer_windows - plus test_status.py. First run on Windows: green in 3m25s.",
+      "gate": "done - see windows-ci-tier2 for what is left"
     },
     {
       "id": "tools-versioning",
       "title": "tools/* is gitignored, so tool code that was built and smoke-tested ships nowhere",
       "state": "open",
-      "anchor": {"file": ".gitignore"},
+      "anchor": {
+        "file": ".gitignore"
+      },
       "detail": "tools/ is per-host by design and only four files ship (README.md, patch.py, process.py, toolsmith.py). A full GUI-driving tool was written, tested on three platforms and left out of every archive: tools/README.md is tracked while the tools it documents are not.",
       "gate": "a policy: version them, or state in the README that tools/ is per-host by design"
     },
@@ -52,7 +70,9 @@
       "id": "sampling-unpinned",
       "title": "eval sampling is inherited, so two arms of the same build are not comparable",
       "state": "open",
-      "anchor": {"file": "tests/eval_baseline.json"},
+      "anchor": {
+        "file": "tests/eval_baseline.json"
+      },
       "detail": "The baseline file says it out loud: two arms of the same build differed by 36% of steps and 14% of tokens. The harness has a sampling key set and a per-model profile path, but the profile covers output caps only, so it cannot express sampling or generation length - the two things that move most between runs and matter most on a small model.",
       "gate": "the sampling set pinned for eval arms and surfaced in the startup line"
     },
@@ -60,7 +80,9 @@
       "id": "small-model-eval",
       "title": "the 'built for weak local models' claim has no small-model measurement",
       "state": "wish",
-      "anchor": {"file": "tests/eval_tasks.py"},
+      "anchor": {
+        "file": "tests/eval_tasks.py"
+      },
       "detail": "No eval arm has run against a small window or a small model - every number in the baseline came from a large budget against one endpoint. That is the differentiator the README advertises and the one claim without evidence behind it.",
       "gate": "two arms - same build, a small model on a small window, sampling pinned - scored against the graded set"
     },
@@ -68,7 +90,9 @@
       "id": "caps-from-window",
       "title": "output caps come from a model-name match, not the detected window",
       "state": "wish",
-      "anchor": {"file": "tinycmdr.py"},
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
       "detail": "The per-model profile keys caps off a substring of the model name while the window-detection routes already know the real window. A new or unnamed model - the common case for someone swapping quantisations - gets the desktop defaults.",
       "gate": "caps derived from the detected window, plus a few named small-context profiles in config.example.json"
     },
@@ -76,49 +100,70 @@
       "id": "search-egress-shipped",
       "title": "search egress is gated and the provider chain is configurable",
       "state": "shipped",
-      "anchor": {"commit": "4b57888", "expect": "tagged"},
+      "anchor": {
+        "commit": "4b57888",
+        "expect": "tagged"
+      },
       "detail": "Shipped in 1.0.37. The gate defaults to allowing off-LAN search, which was the direction the shipped installers ask about."
     },
     {
       "id": "tool-images-shipped",
       "title": "a tool can show the model the screen, and the image rides one request",
       "state": "shipped",
-      "anchor": {"commit": "f333398", "expect": "tagged"},
+      "anchor": {
+        "commit": "f333398",
+        "expect": "tagged"
+      },
       "detail": "Shipped in 1.0.38. Dormant unless the vision flag is on; capped at two images of 4 MB per request."
     },
     {
       "id": "scrub-floor-shipped",
       "title": "a *_PASSWORD environment variable is a credential at 6 characters, not 12",
       "state": "shipped",
-      "anchor": {"commit": "e96f9fe", "expect": "tagged"},
+      "anchor": {
+        "commit": "e96f9fe",
+        "expect": "tagged"
+      },
       "detail": "Shipped in 1.0.38. The old floor missed a ten-character password, so it was never masked."
     },
     {
       "id": "config-bool-guard-shipped",
       "title": "config set cannot store a truthy string under a boolean key",
       "state": "shipped",
-      "anchor": {"commit": "e82c4a0", "expect": "tagged"},
+      "anchor": {
+        "commit": "e82c4a0",
+        "expect": "tagged"
+      },
       "detail": "Shipped in 1.0.38. Covers every key whose shipped default is a boolean."
     },
     {
       "id": "doc-guard-shipped",
       "title": "the doc-drift guard asserts facts, not remembered sentences",
       "state": "shipped",
-      "anchor": {"commit": "bb2f4ef", "expect": "tagged"},
+      "anchor": {
+        "commit": "bb2f4ef",
+        "expect": "tagged"
+      },
       "detail": "Shipped in 1.0.38. It caught a stale line count within the hour of being written."
     },
     {
       "id": "ollama-window-shipped",
       "title": "Ollama's context window is detected from /api/ps",
       "state": "shipped",
-      "anchor": {"commit": "5d65748", "expect": "tagged"},
+      "anchor": {
+        "commit": "5d65748",
+        "expect": "tagged"
+      },
       "detail": "Shipped in 1.0.38. Verified against Ollama's documented reply; the failure mode is returning 0."
     },
     {
       "id": "sglang-window",
       "title": "SGLang's context window is detected from /get_server_info",
       "state": "shipped",
-      "anchor": {"commit": "5740200", "expect": "untagged"},
+      "anchor": {
+        "commit": "5740200",
+        "expect": "untagged"
+      },
       "detail": "On main, not in a release yet - so the anchor says untagged on purpose, and this suite fails the moment it becomes reachable from a tag without this line changing to match. That is the whole mechanism: 'unshipped' is a claim the repository can refuse."
     }
   ]
