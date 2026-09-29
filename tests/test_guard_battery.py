@@ -139,10 +139,18 @@ def test_broad_root_escalates():
 
 def test_file_door_and_shell_door_agree():
     """BUGREPORT §S3: a write to this bot's own notes.md is gated through write_file
-    exactly as it is through the shell, and an ordinary file is not gated at all."""
+    exactly as it is through the shell, and an ordinary file is not gated at all.
+
+    The bot's OWN file is identified by its RESOLVED PATH. Until the 2026-09-29 audit the
+    check was the BASENAME alone, so an operator's own `docs/notes.md` was gated as "this
+    bot's own notes.md" and DECLINED on a lane with nobody to ask. The fixture used to write
+    to a temp-dir notes.md, which that old rule accepted - it has to be the INSTALL's own file
+    to test this, and an identically-named file elsewhere has to NOT be gated.
+    """
     d = Path(tempfile.mkdtemp(prefix="tc-surface-"))
     try:
-        notes = d / "notes.md"
+        notes = Path(fb.BASE_DIR) / "notes.md"
+        notes.parent.mkdir(parents=True, exist_ok=True)
         notes.write_text("- [2026-01-01 00:00] original\n", encoding="utf-8")
         asks = []
 
@@ -152,7 +160,7 @@ def test_file_door_and_shell_door_agree():
 
         out = fb.tool_write_file({"path": str(notes), "content": "WIPED"},
                                  {"confirm_cb": door})
-        check("write_file on notes.md is gated",
+        check("write_file on the bot's own notes.md is gated",
               str(out).startswith("DECLINED"), str(out)[:140])
         check("the operator was asked once", len(asks) == 1, asks)
         check("the file was NOT replaced",
@@ -161,18 +169,30 @@ def test_file_door_and_shell_door_agree():
         shell = fb._prompt_surface_write("printf x > %s" % notes)
         check("the shell door flags the same file", bool(shell), shell)
 
+        their_notes = d / "notes.md"
+        their_notes.write_text("their notes\n", encoding="utf-8")
+        out_theirs = fb.tool_write_file({"path": str(their_notes), "content": "theirs"},
+                                        {"confirm_cb": door})
+        check("a notes.md that is NOT the bot's own is written without a question",
+              str(out_theirs).startswith("OK"), str(out_theirs)[:120])
+
         scratch = d / "scratch.txt"
         out2 = fb.tool_write_file({"path": str(scratch), "content": "hello"},
                                   {"confirm_cb": door})
         check("an ordinary file is written without a question",
               str(out2).startswith("OK") and len(asks) == 1, str(out2)[:100])
 
-        tasks = d / "tasks.json"
+        tasks = Path(fb.BASE_DIR) / "tasks.json"
         tasks.write_text('{"items": []}\n', encoding="utf-8")
         out3 = fb.tool_edit_file({"path": str(tasks), "old_string": "[]",
                                   "new_string": "[1]"}, {"confirm_cb": door})
         check("edit_file on tasks.json is gated too",
               str(out3).startswith("DECLINED"), str(out3)[:140])
+        for leftover in (notes, tasks):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
     finally:
         shutil.rmtree(d, ignore_errors=True)
 

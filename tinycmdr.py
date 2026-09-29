@@ -2891,6 +2891,48 @@ _DIGEST_SHAPES = (
     ("log file", re.compile(r"\.(log|out|err)$", re.I), "signal"),
 )
 
+# A quoted argument, and the wrappers that can sit in front of the real verb.
+_QUOTED_ARG = re.compile(r"'[^']*'|\"[^\"]*\"|'[^']*$|\"[^\"]*$")
+_CMD_LEAD = re.compile(
+    r"(?:^|[;&|])\s*(?:(?:sudo|doas|env|time|nice|nohup|command)\s+)*")
+
+
+def _digest_shape(subject):
+    """The output-shape rule for this command, or None. (name, mode)
+
+    Two rules, both measured 2026-09-29 by probing the shape list, and both about the same
+    mistake the read_file bug made - matching a STRING instead of the thing:
+
+      * QUOTED ARGUMENTS are removed first. `grep -rn "docker ps" docs/` was shaped as a
+        CONTAINER LIST, because "docker ps" sat inside the grep pattern, so its results were
+        head/tail-trimmed and labelled as a container listing. `bash -c "apt-get update &&
+        make build"` became package-manager output for the same reason. A word inside quotes
+        is an argument - the command being run is `grep`.
+      * A PROGRAM SHAPE must match at the START of a command, not anywhere in it. `cat
+        ipconfig-notes.txt` (prose notes) was shaped as network output because its FILENAME
+        looked like the command. Wrappers (sudo, env, time...) are allowed in front, and each
+        stage of a pipeline or `;` list is a fresh start.
+
+    The FILE shape (`*.log|out|err`) is deliberately exempt from the second rule: there the
+    filename IS the answer - the command's output is that file's contents, so `tail -n 50
+    /var/log/app.log` must still digest.
+    """
+    text = _QUOTED_ARG.sub(" ", subject)
+    best = None
+    for nm, rx, mode in _DIGEST_SHAPES:
+        if nm == "log file":
+            m = rx.search(text)
+            if m and (best is None or m.start() < best[0]):
+                best = (m.start(), nm, mode)
+            continue
+        for lead in _CMD_LEAD.finditer(text):
+            m = rx.match(text[lead.end():])
+            if m:
+                if best is None or lead.end() < best[0]:
+                    best = (lead.end(), nm, mode)
+                break
+    return None if best is None else (best[1], best[2])
+
 
 def _digest_lines(lines, mode, keep):
     """Pure line selection: (kept_lines, rule). No I/O, so it is testable offline."""
@@ -2966,7 +3008,7 @@ def digest_output(name, args, text):
     if len(text) < int(CONFIG["agent"].get("digest_min_chars") or 1200):
         return text
     subject = _digest_subject(name, args)
-    hit = next(((n, m) for n, rx, m in _DIGEST_SHAPES if rx.search(subject)), None)
+    hit = _digest_shape(subject)
     if not hit:
         return text
     label, mode = hit
@@ -3593,6 +3635,21 @@ def _verify_python(path, text):
         # static scan of attribute names is not that test: seen in the field, a tool
         # whose NAME disagreed with its file name loaded under the WRONG name, so a
         # model calling the file name found nothing. Ask the loader itself.
+        #
+        # The gate is the BOT'S OWN tools directory, by resolved path - not the NAME of the
+        # directory the file happens to sit in. Measured by audit 2026-09-29: writing
+        # `/home/user/proj/tools/helpers.py` (any project's ordinary ./tools/) ran the tool
+        # loader, which correctly said "no tool here", and verify_note reported
+        # "[HARNESS verify FAILED ... The file on disk is broken]" about a perfectly good
+        # module. The model then rewrote a correct file. tools_dir_verdict already answers
+        # this question with the exact-path test; this is the same test.
+        try:
+            _in_tools = (Path(path).resolve().parent
+                         == Path(REGISTRY.tools_dir).resolve())
+        except OSError:
+            _in_tools = False
+        if not _in_tools:
+            return True, "python syntax OK"
         ok, why = _exercise_tool_load(path)
         if ok is None:
             return None, why
@@ -5995,6 +6052,16 @@ def _surface_write_gate(path, subject, ctx):
     """
     name = os.path.basename(str(path or ""))
     if name not in _SURFACE_FILES:
+        return None
+    # ...and it has to be the BOT'S OWN file, by resolved path - not any file on the box that
+    # shares the name. Measured by audit 2026-09-29: `write_file {"path":
+    # "/home/user/acme/docs/notes.md"}` was gated as "a write to this bot's own notes.md (its
+    # memory/ledger)" and DECLINED on a lane with nobody to ask, so an operator's own document
+    # could not be written because of its basename.
+    try:
+        if Path(str(path)).resolve().parent != Path(BASE_DIR).resolve():
+            return None
+    except OSError:
         return None
     return endpoint_gate("%s: %s" % (subject, name),
                          "a write to this bot's own %s (its memory/ledger, not a "

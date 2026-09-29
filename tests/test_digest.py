@@ -138,6 +138,32 @@ def main():
             check(fb.digest_output("execute_code", {"code": code}, TXT) == TXT,
                   f"an execute_code result is left whole ({code[:28]})")
 
+        # ...and the SHAPE is decided by the command actually being run, not by a string that
+        # happens to appear in it. Measured by audit 2026-09-29: `grep -rn "docker ps" docs/`
+        # was shaped as a CONTAINER LIST because "docker ps" sat inside the grep PATTERN, so
+        # the results were head/tail-trimmed and mislabelled; `cat ipconfig-notes.txt` was
+        # shaped as network output because of its FILENAME.
+        def shape(cmd):
+            return fb._digest_shape(fb._digest_subject("shell", {"command": cmd}))
+
+        check(shape('grep -rn "docker ps" docs/')[0] == "search results",
+              "a command that MENTIONS another shape is still itself")
+        check(shape('bash -c "apt-get update && make build"') is None,
+              "  a quoted argument is an argument, not the command")
+        check(shape('echo "run ps -ef to see"') is None,
+              "  and a mention in quotes does not shape the output")
+        check(shape("cat ipconfig-notes.txt") is None,
+              "  a FILENAME is not a command either")
+        for cmd, want in (("docker ps -a", "container list"),
+                          ("ipconfig /all", "network"),
+                          ("journalctl -u backupd", "journal"),
+                          ("sudo journalctl -u backupd", "journal"),
+                          ("cd /srv && ps aux", "process list"),
+                          ("cat build.log", "log file"),
+                          ("tail -n 50 /var/log/app.log", "log file")):
+            got = shape(cmd)
+            check(got and got[0] == want, f"  the real cases still work: {cmd} -> {got}")
+
         # an already-small selection is never announced
         tiny = fb.digest_output("shell", {"command": "journalctl"}, "exit_code=0\none line")
         check("[HARNESS" not in tiny, "a digest that would drop nothing is not announced")

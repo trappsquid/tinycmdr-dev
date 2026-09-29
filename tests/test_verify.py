@@ -107,6 +107,20 @@ def main():
             fb.sys.executable = real_exe
         check(st == "skip", f"a probe that cannot run is a skip -> {st}/{why}")
 
+        # ...but a file in SOMEBODY ELSE'S ./tools/ is not a drop-in tool. Measured by audit
+        # 2026-09-29: the gate was the DIRECTORY NAME, so any .py under any directory called
+        # tools ran the tool loader, which correctly said "no tool here" - and the model was
+        # handed "[HARNESS verify FAILED ... The file on disk is broken]" about a perfectly
+        # good module, then rewrote a correct file. tools_dir_verdict already used the
+        # resolved-path test; _verify_python does now too.
+        other = workdir / "userproject" / "tools"
+        other.mkdir(parents=True, exist_ok=True)
+        plain = other / "helpers.py"
+        plain.write_text("def load(p):\n    return open(p).read()\n", encoding="utf-8")
+        st, why = fb.verify_written_file(plain)
+        check((st, why) == ("ok", "python syntax OK"),
+              f"a module in somebody else's ./tools/ still verifies -> {st}/{why}")
+
         # ---- json ----------------------------------------------------------
         okj = workdir / "ok.json"
         okj.write_text('{"a": [1, 2]}', encoding="utf-8")

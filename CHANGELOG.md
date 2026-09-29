@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### The proxy audit (2026-09-29)
+
+Swept the CLASS the `.txt` bug belonged to: every place the harness decides something from a
+PROXY STRING - a filename, a path, a model name, a command's text - rather than from the thing
+itself. Three read-only passes (paths/extensions, names/substrings/URLs, content heuristics)
+found ~40 sites; most are correct keys (a tool name dispatching to its tool, a file extension
+choosing a syntax checker, `/props` probing the endpoint itself). The ones fixed here are the
+ones that made the harness do the wrong thing to legitimate work.
+
+Fixed
+- **A file in somebody else's `./tools/` is no longer reported as a broken tool.**
+  `_verify_python` gated on `path.parent.name == "tools"` - the DIRECTORY NAME. Writing
+  `/home/user/proj/tools/helpers.py`, any project's ordinary `./tools/`, ran the tool loader,
+  which correctly answered "no tool here"; `verify_note` then told the model
+  "[HARNESS verify FAILED ... The file on disk is broken]" about a valid module, and it rewrote
+  a correct file. It now uses the same resolved-path test `tools_dir_verdict` already used.
+- **The bot's own memory files are identified by PATH, not by basename.** `_surface_write_gate`
+  matched `os.path.basename(path) in (notes.md, tasks.json, ...)`, so an operator's own
+  `docs/notes.md` was gated as "a write to this bot's own notes.md" - a needless confirm, and a
+  flat DECLINED on a lane with nobody to ask.
+- **A digest shape is decided by the command being RUN, not by a string inside it.** `grep -rn
+  "docker ps" docs/` was shaped as a CONTAINER LIST because "docker ps" sat inside the grep
+  pattern, so its results were head/tail-trimmed and mislabelled; `cat ipconfig-notes.txt` was
+  shaped as network output because of its FILENAME; `bash -c "apt-get update && make build"` as
+  package-manager output. Quoted arguments are now removed before matching, and a program shape
+  must match at the START of a command (allowing sudo/env/time/nice/nohup wrappers, and at each
+  pipeline or `;` stage). The file shape (`*.log|out|err`) still matches anywhere on purpose:
+  there the filename IS the answer, which is why `tail -n 50 /var/log/app.log` still digests.
+
+Found and NOT changed, deliberately: the BLOCKED tier searches operator regexes anywhere in a
+command, quoted strings included, so `grep -rn "rm -rf /" docs/` is refused outright and told no
+confirmation unlocks it. That is a SAFETY tier, and relaxing it is the operator's call, not a
+bug fix - the same search is also how `sh -c "rm -rf /"` gets caught. Left exactly as it is.
+
 ### Found by watching the live run (2026-09-29)
 
 Fixed

@@ -323,6 +323,18 @@ def main():
             got = bool(fb._prompt_surface_write(shape))
             check(f"surface write: {shape[:50]!r} -> {want}", got == want, f"got {got}")
 
+        # The same question asked of a file PATH was answered from the BASENAME alone, so an
+        # operator's own document was mistaken for the bot's memory. Measured by audit
+        # 2026-09-29: a write to "/home/user/acme/docs/notes.md" was gated as "a write to this
+        # bot's own notes.md", and DECLINED on a lane with nobody to ask. The bot's own file is
+        # identified by its RESOLVED PATH, like tools_dir_verdict does for tools.
+        for path, want in ((str(fb.BASE_DIR / "notes.md"), True),
+                           ("/home/user/acme/docs/notes.md", False),
+                           ("/tmp/scratch/notes.md", False),
+                           ("/tmp/tasks.json", False)):
+            got = bool(fb._surface_write_gate(path, "write_file", {}))
+            check(f"surface path: {path} -> {want}", got == want, f"got {got}")
+
         # ---- the strict-mode shell is a per-host CHOICE (measured before it was offered) ----
         if fb.IS_WINDOWS:
             fb.CONFIG["agent"]["shell_strict_mode"] = False
