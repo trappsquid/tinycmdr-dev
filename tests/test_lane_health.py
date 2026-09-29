@@ -17,7 +17,10 @@ doctor`'s lane lines, and `config_drift()`. Hermetic: the staged copy is the mod
     python tests/test_lane_health.py
 """
 import contextlib
-import fcntl
+try:
+    import fcntl                      # POSIX: the folder lock is flock on a descriptor
+except ImportError:                   # Windows: no fcntl module - the same target is locked
+    fcntl = None                      # through msvcrt, which _hold_lock below drives
 import importlib.util
 import io
 import json
@@ -117,8 +120,27 @@ _drift = T.config_drift()
 check("a config.json edited after start IS reported", "restart to apply" in _drift, _drift)
 
 # ------------------------------------------------------------ the two verbs, on top
+def _hold_lock(kind, fh):
+    """Take this folder's single-instance lock the way the product does, to pretend to be a
+    running bot.
+
+    `_lock_target()` hands back a folder DESCRIPTOR on POSIX and a FILE object on Windows
+    (a Windows directory handle cannot be locked), and each needs its own primitive. Driving
+    only flock meant the suite could not even import on Windows, so the lane checks below -
+    its actual subject, and the incidents that created this file - went ungraded on that
+    platform. Release goes through the product's own `_lock_release_fd`, so the pair matches.
+    """
+    if kind == "dir":
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return fh
+    import msvcrt
+    fh.seek(0)
+    msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+    return fh
+
+
 _kind, _fd = T._lock_target()          # (kind, fd): the lock target is a descriptor
-fcntl.flock(_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)      # pretend to be the running bot
+_hold_lock(_kind, _fd)                 # pretend to be the running bot
 try:
     # A running install whose lane is up must exit 0, so the non-zero below means the
     # lane, not the lock.
@@ -144,7 +166,7 @@ try:
     check("...and a down lane is listed as a problem",
           "mattermost lane is DOWN" in err_d, err_d[-300:])
 finally:
-    fcntl.flock(_fd, fcntl.LOCK_UN)
+    T._lock_release_fd(_fd)            # the product's own release, so both platforms match
 
 print()
 if FAILS:

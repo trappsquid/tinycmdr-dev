@@ -127,6 +127,13 @@ def mode_is_restored(work):
 
 def helper_refuses_root(work):
     """The macOS restart helper must not run as root (it would leave the agent stopped)."""
+    if os.name == "nt":
+        # Git for Windows ships a bash, so `which bash` succeeds here and this function used to
+        # run a macOS-only helper under it: the helper exits non-zero for its own reasons and
+        # never says "macOS-only", so the check failed on a platform the helper never targets.
+        # The neighbouring mode_is_restored() already returns early for the same reason.
+        print("     (Windows: the macOS restart helper is not the door here - not exercised)")
+        return
     if not shutil.which("bash"):
         print("     (no bash on this host: the restart helper cannot be exercised)")
         return

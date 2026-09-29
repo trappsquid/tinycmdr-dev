@@ -664,6 +664,15 @@ sandbox_home_env.py = ""      # filled in main(), read by the helper above
 
 
 def main():
+    if os.name == "nt":
+        # This suite drives the UNIX installer under bash and inspects systemd semantics and
+        # an AF_UNIX session bus. Windows has neither, and the Windows installer has its own
+        # suite (test_installer_windows.py). 77 is this tree's "could not grade the subject on
+        # this host", the same answer it gives when no acceptable interpreter is present - and
+        # the runner counts a skip as red on purpose, so this cannot hide.
+        print("SKIP Windows: this suite grades the Unix installer (bash + systemd + AF_UNIX); "
+              "test_installer_windows.py covers the Windows one")
+        return 77
     py = interpreter()
     if not py:
         # 77 is this tree's "could not grade the subject on this host": a box with only
