@@ -42,7 +42,12 @@ def check(name, cond, detail=""):
 
 
 def git(*args):
-    p = subprocess.run(["git", "-C", str(BASE), *args], capture_output=True, text=True)
+    # A host with no git at all - the Windows fleet box - raises FileNotFoundError from exec,
+    # not a non-zero exit. That crashed this suite with WinError 2 before it graded anything.
+    try:
+        p = subprocess.run(["git", "-C", str(BASE), *args], capture_output=True, text=True)
+    except OSError:
+        return 127, ""
     return p.returncode, p.stdout.strip()
 
 
@@ -71,7 +76,7 @@ def main():
     # which and how many. A CHECKOUT with no tags is a different thing - a shallow clone or a
     # missing fetch - and that fails, because git tag is how "shipped" is decided here.
     is_checkout = (BASE / ".git").exists()
-    _, taglist = git("tag", "-l")
+    _, taglist = git("tag", "-l") if is_checkout else (0, "")
     tags = [t for t in taglist.splitlines() if t.strip()]
     if is_checkout:
         check("this checkout carries tag history, so 'shipped' can be decided", bool(tags),
