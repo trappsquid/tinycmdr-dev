@@ -65,13 +65,22 @@ def main():
     check("every state is one this file knows", all(it.get("state") in STATES for it in items),
           [(it.get("id"), it.get("state")) for it in items if it.get("state") not in STATES])
 
-    # A clone with no tags cannot answer "shipped", and must say so.
+    # An EXPORT has no history at all - a package, or `git archive` - and that is a normal way to
+    # deploy: the fleet gate runs from one because the Windows host has no git. There the ledger's
+    # shape and its file anchors are still graded, and the commit anchors cannot be; the run says
+    # which and how many. A CHECKOUT with no tags is a different thing - a shallow clone or a
+    # missing fetch - and that fails, because git tag is how "shipped" is decided here.
+    is_checkout = (BASE / ".git").exists()
     _, taglist = git("tag", "-l")
     tags = [t for t in taglist.splitlines() if t.strip()]
-    check("the clone carries tag history, so 'shipped' can be decided at all", bool(tags),
-          "no tags: actions/checkout needs fetch-depth: 0, or run `git fetch --tags`")
+    if is_checkout:
+        check("this checkout carries tag history, so 'shipped' can be decided", bool(tags),
+              "no tags: actions/checkout needs fetch-depth: 0, or run `git fetch --tags`")
+    else:
+        print("note  no .git in this tree: it is an export, not a checkout - file anchors are "
+              "graded below, commit anchors cannot be")
 
-    bad_file, bad_commit, wrong_expect = [], [], []
+    bad_file, bad_commit, wrong_expect, unverified = [], [], [], 0
     for it in items:
         a = it.get("anchor") or {}
         if "file" in a:
@@ -80,6 +89,9 @@ def main():
             continue
         commit = a.get("commit")
         if not commit:
+            continue
+        if not is_checkout:
+            unverified += 1
             continue
         rc, _ = git("cat-file", "-e", commit + "^{commit}")
         if rc != 0:
@@ -96,6 +108,8 @@ def main():
     check("every file anchor exists", not bad_file, bad_file)
     check("every commit anchor exists", not bad_commit, bad_commit)
     check("every 'shipped'/'unreleased' claim agrees with the tags", not wrong_expect, wrong_expect)
+    if unverified:
+        print("note  %d commit anchor(s) NOT verified: this tree carries no git history" % unverified)
 
     print()
     print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
