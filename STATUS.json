@@ -168,23 +168,25 @@
     },
     {
       "id": "windows-path-with-spaces",
-      "title": "a Windows profile path with a space breaks two suites",
-      "state": "open",
+      "title": "a Windows profile path with a space truncated two suites (fixed)",
+      "state": "shipped",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "9b44d84",
+        "expect": "untagged"
       },
-      "detail": "Found by the fleet gate 2026-09-29 on a real install: the profile is 'C:\\Users\\David Trapp', and test_verify reports the shell-write detector returning 'C:\\Users\\David' - truncated at the space - for three commands, while test_stall's kept-file check points at a path that does not exist. CI's Windows runner uses a profile with no space, which is why neither is seen there. Worth knowing how wide this is: a two-word Windows account name is the normal case, and the write verification silently stops verifying.",
-      "gate": "the detector's path extraction handles a spaced path (or the suites build quoted paths)"
+      "detail": "Closed 2026-09-29 on main. The shell-write detector captured an optional quote followed by no-whitespace, so a QUOTED path - the only correct way to pass one containing a space - was cut at its first space: on C:\\Users\\David Trapp it returned C:\\Users\\David, which does not exist, and this module ignores a candidate it cannot find, so write verification verified nothing. It reads a quoted run or a bare one now; the spill messages quote the kept path and test_stall captures to the delimiter; test_verify's fixtures quote. test_verify, test_stall (317 checks) and the gate pass on both fleet hosts.",
+      "gate": "done"
     },
     {
       "id": "windows-confirm-gate",
-      "title": "the confirm-tier decline behaves differently on Windows",
-      "state": "open",
+      "title": "a manifest's cmd /c wrapper hid the recursive-delete rule (fixed)",
+      "state": "shipped",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "9b44d84",
+        "expect": "untagged"
       },
-      "detail": "test_guard_battery fails one check on the fleet's Windows box: 'a confirm-tier manifest command is DECLINED at call time with no door: exit_code=1'. Its sibling checks pass, including the pwsh -ec and powershell -EncodedCommand gates and the drift reporting, so this is one path rather than the gate itself.",
-      "gate": "the decline path graded the same way on both platforms"
+      "detail": "Closed 2026-09-29 on main. A manifest command is wrapped in `cmd /c` on Windows and `sh -c` elsewhere, and the unwrapping stripped flags beginning with a dash - cmd's switch is `/c` - so the verb read as '/c', matched nothing, and both tiers were bypassed for every dropped-in manifest. `/c` and `/k` are stripped too now: `cmd /c rm -rf ./build` confirms and `cmd /c \"rm -rf /\"` blocks.",
+      "gate": "done"
     },
     {
       "id": "windows-shim-shipped",
