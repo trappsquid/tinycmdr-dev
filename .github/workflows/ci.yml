@@ -58,9 +58,19 @@ jobs:
       - name: gate
         run: python tests/run_all.py
 
-  # Windows: the pure-Python suites only, for the same reason the install work is
-  # split - Phase 1's Windows fixes are reasoned, not executed. This job is therefore
-  # [READ]-verified like them: the first CI run on Windows is the real test.
+  # Windows: the suites that are known to pass here, plus the ones that branch on the platform.
+  #
+  # The original selection was the six suites certain to pass on a Windows runner, because this
+  # job was [READ]-verified - Phase 1's Windows fixes were reasoned, not executed. The cost was
+  # that none of the suites which actually SWITCH on IS_WINDOWS ran here: the platform-specific
+  # behaviour was the one thing Windows CI never exercised.
+  #
+  # 2026-09-29: the candidates were triaged by how each suite names the platform. These are the
+  # ones that write an IS_WINDOWS branch at the platform-specific point (findstr vs grep, the
+  # child-command quoting in test_stall, the visibility/desktop paths, the installer checks), so
+  # adding them is what turns "reasoned" into "executed". A suite that cannot run here exits 77,
+  # which the gate counts as red, so this list grows one addition at a time and never shrinks by
+  # silencing a suite.
   windows:
     name: windows / pure-python suites
     runs-on: windows-latest
@@ -78,10 +88,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: gate (ledger, events, config example, tool discovery)
+      - name: gate (ledger, events, config example, tool discovery + the IS_WINDOWS suites)
         run: >
           python tests/run_all.py
           --select tests/test_ledger*.py
           --select tests/test_events.py
           --select tests/test_config_example.py
           --select tests/test_tool_discovery.py
+          --select tests/test_status.py
+          --select tests/test_route_hint.py
+          --select tests/test_stall.py
+          --select tests/test_stop_now.py
+          --select tests/test_checkin.py
+          --select tests/test_endpoint_gate.py
+          --select tests/test_installer_windows.py
