@@ -66,6 +66,18 @@ def _staged_module():
 
 
 def _git_ls(pattern):
+    """The files under a path - the TRACKED ones when this is a checkout.
+
+    A checkout answers with `git ls-files`, which is what keeps a per-host untracked tool
+    (tools/computer_use.py, 160 KB of it) out of a number the doc publishes as the repository's
+    own. An EXPORT has no .git and cannot be asked - but a `git archive` export contains exactly
+    the tracked files by construction, so the filesystem gives the same answer there.
+
+    Measured 2026-09-29: the git-only version reported 3 shipped tools in a checkout and 0 in an
+    export, so the `surface` block contradicted itself and tests/test_measured_doc failed on BOTH
+    fleet boxes - the same failure on Ubuntu and on Windows, which is what pointed here. It also
+    meant the published numbers could not be verified by anyone without a clone.
+    """
     try:
         out = subprocess.run(["git", "-C", str(BASE), "ls-files", pattern],
                              capture_output=True, text=True, timeout=20)
@@ -73,7 +85,19 @@ def _git_ls(pattern):
             return [l for l in out.stdout.splitlines() if l.strip()]
     except Exception:                                   # noqa: BLE001
         pass
-    return []
+    target = BASE / pattern
+    if not target.is_dir():
+        return []
+    found = []
+    for p in target.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(BASE)
+        # Skip what git would not have listed: __pycache__ and dotted entries.
+        if any(part == "__pycache__" or part.startswith(".") for part in rel.parts):
+            continue
+        found.append(rel.as_posix())
+    return sorted(found)
 
 
 def file_stats(path):
