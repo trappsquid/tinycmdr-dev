@@ -39,6 +39,8 @@
     "max_tokens": 16384,
     "final_max_tokens": 8192,
     "max_tokens_ceiling": 65536,
+    "_max_call_seconds": "No single generation gets more than this many SECONDS at the decode rate the endpoint last measured (from its own usage line). 16,384 tokens is a six-minute generation at 45 tok/s and half an hour at 8 - both measured on the fleet's Mac while requests shared its two slots. 0 disables it, and an endpoint that has not reported a rate yet leaves the cap alone.",
+    "max_call_seconds": 300,
     "request_timeout": 1200,
     "request_grace": 30,
     "retry_after_max": 60,

@@ -199,6 +199,12 @@ DEFAULT_CONFIG = {
         "max_tokens": 16384,
         "final_max_tokens": 8192,     # forced wrap-up call at the budget limit
         "max_tokens_ceiling": 65536,  # one-shot retry cap when cut off mid-think
+        # No single generation may be given more than this many SECONDS at the decode rate the
+        # endpoint last measured. 16,384 tokens is a 6-minute generation at 45 tok/s and half an
+        # hour at 8 - and 8 was measured on this box (2026-09-29) while several requests shared
+        # its two slots. 0 disables it, and an endpoint that has not reported a rate yet leaves
+        # the cap alone, so nothing changes until something has actually been measured.
+        "max_call_seconds": 300,
         "request_timeout": 1200,
         # Hard wall-clock bound = request_timeout + request_grace. requests'
         # timeout bounds INACTIVITY, not total time: an endpoint that trickles
@@ -2352,6 +2358,22 @@ def batch_workers(tool_calls, url):
         return workers
     slots = endpoint_slots(url)
     return min(workers, slots) if slots else workers
+
+
+# The last decode rate this process MEASURED per endpoint, tokens/second, from the server's own
+# usage line. This is the only honest way to size a generation to a box: measured 2026-09-29, the
+# same endpoint served 8-57 tok/s depending on how many requests were in flight against its two
+# slots. Keyed by the server root, so the configured base_url and the request URL agree.
+_DECODE_TPS = {}
+
+
+def decode_rate(url=None):
+    """The decode rate last measured for this endpoint, or 0 when nothing has been measured."""
+    try:
+        return float(_DECODE_TPS.get(
+            _endpoint_root(url or CONFIG["llm"].get("base_url"))) or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 _LLAMA_EXT_ANNOUNCED = set()
@@ -12002,6 +12024,21 @@ class Agent:
                         "a %s-token window. Set llm.max_context_tokens in "
                         "config.json to say otherwise.%s", window,
                         lan_permission_hint(CONFIG["llm"].get("base_url")))
+        # Size ONE generation to the box, when the box has said how fast it is. A 16,384-token
+        # cap is a six-minute generation at 45 tok/s and half an hour at 8, and BOTH were
+        # measured on this box (2026-09-29) depending on how many requests shared its two slots.
+        # A smaller reply only ever leaves MORE room for the conversation, so the budget
+        # computed above stays conservative. max_call_seconds 0, or no rate measured yet,
+        # leaves the cap exactly as it was.
+        _mc = float(CONFIG["llm"].get("max_call_seconds") or 0)
+        _tps = decode_rate()
+        if _mc > 0 and _tps > 0 and reply > 0:
+            _bounded = max(256, int(_tps * _mc))
+            if _bounded < reply:
+                log.info("[%s] %s tok/s measured - this call is capped at %d tokens "
+                         "(%.0fs at that rate), not %d", session_key, _tps, _bounded,
+                         _mc, reply)
+                reply = _bounded
         # Caps for the band this window falls in, before anything reads them. The
         # window-scaled defaults in mem_limit_* are the floor of this design; this is
         # the operator's override for a model whose NAME cannot describe its window.
@@ -12379,6 +12416,10 @@ class Agent:
                                                       + sstats["ttft"])
                             if sstats.get("server_tps"):
                                 usage["server_tps"] = sstats["server_tps"]
+                                # The measured rate, for the NEXT call's size: see
+                                # decode_rate and max_call_seconds.
+                                _DECODE_TPS[_endpoint_root(url)] = float(
+                                    sstats["server_tps"])
                         log.info("stream %s: %d chunk(s)%s%s, first delta %s, "
                                  "%s tok/s (server), %s",
                                  url, sstats.get("deltas", 0),

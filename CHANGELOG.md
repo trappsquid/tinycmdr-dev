@@ -40,6 +40,15 @@ Fixed
   the session file keeps only the trimmed conversation (measured: one message) and a restart
   between the two runs is ordinary. An answered or stopped question clears it, and so does
   `ask_timeout_continues`, which settles it by a stated assumption.
+- **One generation is sized to the box's measured speed.** `max_tokens` 16,384 is a six-minute
+  generation at 45 tok/s and half an hour at 8 - and BOTH were measured on the fleet's Mac
+  (2026-09-29) depending on how many requests shared its two slots. The new
+  `llm.max_call_seconds` (300) caps a single call at that many seconds at the rate the endpoint
+  last reported, read from the server's own usage line. `0` disables it, and an endpoint that
+  has not reported a rate yet leaves the cap exactly as it was - nothing moves until a rate has
+  actually been measured. Honest about its size: this is a guardrail against one slow turn
+  outliving the run, not a throughput win. The hours in the observed run went on the NUMBER of
+  calls, which is what the concurrency, digest and cap fixes above are about.
 - **A `.txt` is a document, not a log.** The "log file" digest shape matched
   `\.(log|out|err|txt)$`, and the subject for a read_file is the PATH - so every read of a .txt
   file was reduced to the lines that happen to contain error/warn/fail. On a text-rewriting job,

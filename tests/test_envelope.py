@@ -253,6 +253,26 @@ def main():
                                  ceiling=fb.TOOL_RESULT_CAP_CEILING) == 16384 // 8,
               "  on a small window the ceiling changes nothing (window // 8 still wins)")
 
+        # --- a SLOW box gets a shorter generation, sized to its measured rate ----------
+        # Measured 2026-09-29 on the fleet's Mac: the same endpoint served 8-57 tok/s depending
+        # on how many requests shared its two slots, so one 16,384-token cap meant a six-minute
+        # generation at its best and half an hour at its worst.
+        _rate_key = fb._endpoint_root(fb.CONFIG["llm"]["base_url"])
+        _saved_rate = dict(fb._DECODE_TPS)
+        try:
+            fb._DECODE_TPS[_rate_key] = 8.0
+            slow = at_window(fb, 131072)
+            check(slow["reply"] == int(8 * fb.CONFIG["llm"]["max_call_seconds"]),
+                  f"w=131072 at 8 tok/s: one call is capped to max_call_seconds of "
+                  f"generation ({slow['reply']})")
+            fb._DECODE_TPS[_rate_key] = 400.0
+            fast = at_window(fb, 131072)
+            check(fast["reply"] == min(reply_cfg, 131072 // 4),
+                  f"  and a fast box keeps the ordinary cap ({fast['reply']})")
+        finally:
+            fb._DECODE_TPS.clear()
+            fb._DECODE_TPS.update(_saved_rate)
+
         # --- a bigger tool surface is COUNTED, not ignored --------------------
         at_window(fb, 32768)
         fb.CONFIG["agent"]["tool_disclosure"] = False   # send the whole registry
