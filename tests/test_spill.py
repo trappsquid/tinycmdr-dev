@@ -95,7 +95,10 @@ def main():
         fb.CONFIG["agent"]["spill_keep"] = 50
 
         # ---- a REAL call site spills, on the exact route the analysis lost data on -----
-        big = workdir / "big_output.txt"
+        # A .log, not a .txt: digestion is for LOG files. A .txt is a document, and until
+        # 2026-09-29 it was digested too, which gutted the chapter files of a text-rewriting
+        # job (see tests/test_digest.py for that half).
+        big = workdir / "big_output.log"
         lines = [f"line {i} token-{i * 7919}" for i in range(4000)]
         big.write_text("\n".join(lines), encoding="utf-8")
 

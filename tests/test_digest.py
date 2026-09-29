@@ -125,6 +125,16 @@ def main():
               "reading a big .log file is digested too")
         check("no error lines in it" in f, "a log with no errors says so instead of guessing")
 
+        # A .txt is a DOCUMENT, not a log. It was in the log-file shape until 2026-09-29, and
+        # the subject for a read_file is the PATH - so every chapter file of a text-rewriting
+        # job was reduced to its error-looking lines, and the model paid a second call each
+        # time to read it raw ("The source read got digested into 3 lines. Re-reading it raw").
+        TXT = "\n".join(f"line {i} of the chapter" for i in range(200))
+        t = fb.digest_output("read_file", {"path": "/work/chapter08.txt"}, TXT)
+        check(t == TXT, "a .txt read is left whole - it is a document, not a log")
+        t = fb.digest_output("read_file", {"path": "/work/run.out"}, TXT)
+        check(t != TXT, "  while a .out file still digests as a log")
+
         # an already-small selection is never announced
         tiny = fb.digest_output("shell", {"command": "journalctl"}, "exit_code=0\none line")
         check("[HARNESS" not in tiny, "a digest that would drop nothing is not announced")

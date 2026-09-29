@@ -2788,7 +2788,13 @@ _DIGEST_SHAPES = (
     ("network", re.compile(
         r"\bip\s+(a|addr|route)\b|\bifconfig\b|\bipconfig\b|\bnetstat\b|\bss\s|"
         r"\bping\b|\btraceroute\b", re.I), "head_tail"),
-    ("log file", re.compile(r"\.(log|out|err|txt)$", re.I), "signal"),
+    # `.txt` was in this shape and had to come out (measured 2026-09-29): the subject for a
+    # read_file is the PATH, so every read of a .txt document was treated as a log file and
+    # reduced to its error-looking lines. On a text-rewriting job - the harness reading its
+    # own chapter files - that gutted the source, and the model paid a second call each time
+    # to fetch it back raw: "The source read got digested into 3 lines. Re-reading it raw to
+    # get all of chapter..." A .txt is a document; a log is .log/.out/.err.
+    ("log file", re.compile(r"\.(log|out|err)$", re.I), "signal"),
 )
 
 

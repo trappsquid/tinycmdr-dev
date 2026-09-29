@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Found by watching the live run (2026-09-29)
+
+Fixed
+- **A `.txt` is a document, not a log.** The "log file" digest shape matched
+  `\.(log|out|err|txt)$`, and the subject for a read_file is the PATH - so every read of a .txt
+  file was reduced to the lines that happen to contain error/warn/fail. On a text-rewriting job,
+  where the files being read ARE .txt, that gutted the source and the model paid a second call
+  each time to fetch it back raw. Measured four times in one afternoon on the live box, in the
+  model's own words: "The source read got digested into 3 lines. Re-reading it raw to get all of
+  chapter...", "The draft came back digested. Reading it raw to get all 119 lines." The shape is
+  now `.log` / `.out` / `.err`; `tests/test_digest.py` pins both directions, and the spill
+  suite's fixture, which had asserted the old behaviour with a .txt file, is now a .log.
+
 ### Knowing what is live, what is dev, what is on disk
 
 Added
