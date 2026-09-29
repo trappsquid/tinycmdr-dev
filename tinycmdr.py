@@ -1420,7 +1420,7 @@ def mem_limit_chars(key, default):
         configured = int(CONFIG["agent"].get(key) or default)
     except (TypeError, ValueError):
         configured = int(default)
-    window = int(getattr(AGENT, "_envelope_cache", {}).get("window") or 0)
+    window = int((getattr(AGENT, "_envelope_cache", None) or {}).get("window") or 0)
     if window <= 0:
         return configured
     return max(512, min(configured, window // 8))
@@ -1432,10 +1432,95 @@ def mem_limit_exchanges(key, default):
         configured = int(CONFIG["agent"].get(key) or default)
     except (TypeError, ValueError):
         configured = int(default)
-    window = int(getattr(AGENT, "_envelope_cache", {}).get("window") or 0)
+    window = int((getattr(AGENT, "_envelope_cache", None) or {}).get("window") or 0)
     if window <= 0:
         return configured
     return max(2, min(configured, window // 2000))
+
+
+def mem_limit_num(key, default, per_window, floor):
+    """The same rule as mem_limit_chars, for a cap that is a COUNT, not a length.
+
+    digest_lines is the one that matters: 40 kept lines is a reasonable digest on a
+    32k window and a large share of the budget on an 8k one. So the configured value
+    is the ceiling on a big box, `window // per_window` is the ceiling on a small one,
+    and a window we could not detect leaves the configured value alone - nothing moves
+    on an endpoint that does not report one.
+    """
+    try:
+        configured = int(CONFIG["agent"].get(key) or default)
+    except (TypeError, ValueError):
+        configured = int(default)
+    window = int((getattr(AGENT, "_envelope_cache", None) or {}).get("window") or 0)
+    if window <= 0:
+        return configured
+    return max(int(floor), min(configured, window // int(per_window)))
+
+
+# The window band in force, and the caps that band overrode, so a later band can put
+# them back. See apply_window_profile.
+_WINDOW_PROFILE_APPLIED = {}
+
+
+def apply_window_profile(window):
+    """Caps for a WINDOW BAND, not for a model NAME (review 2026-09-28, item 2.1).
+
+    `llm.profiles` keys off the model name, which cannot help the common self-hosted
+    case: the same box restarted with a different quantisation or slot count, or a model
+    whose name says nothing about the window it is served at. This keys off the window
+    the endpoint actually serves - {"8192": {...}, "16384": {...}, "32768": {...}} - and
+    the SMALLEST band at least as large as the window wins, so a box serving 12288 takes
+    the 16384 entry instead of falling through to nothing.
+
+    Only keys the harness already reads are accepted (the same rule as llm.profiles), and
+    whatever a band sets is undone when a later band takes over (a restart into a smaller
+    slot count), so only the last band applied is in force. Empty by default: the
+    window-scaled defaults in mem_limit_chars already shrink every cap on a small window;
+    this is the operator's way to override that per band, for a model the name cannot
+    describe.
+    """
+    bands = CONFIG["llm"].get("window_profiles")
+    state = _WINDOW_PROFILE_APPLIED
+    chosen = None
+    if isinstance(bands, dict) and bands:
+        try:
+            want = int(window or 0)
+        except (TypeError, ValueError):
+            want = 0
+        if want > 0:
+            for key, over in bands.items():
+                try:
+                    band = int(str(key).strip())
+                except (TypeError, ValueError):
+                    continue
+                if (band >= want and isinstance(over, dict)
+                        and (chosen is None or band < chosen[0])):
+                    chosen = (band, str(key), over)
+    band = chosen[0] if chosen else None
+    if state.get("band") == band:
+        return state.get("applied") if chosen else None
+    # The band in force is not this one, or there is no band at all: put its values back
+    # FIRST, so removing the bands - or a restart into a window no band covers - leaves
+    # the CONFIGURED values, never the last band's overrides.
+    for k, v in (state.get("restore") or {}).items():
+        CONFIG.setdefault("agent", {})[k] = v
+    state.clear()
+    if chosen is None:
+        return None
+    band, name, over = chosen
+    restore, applied = {}, {}
+    for k, v in over.items():
+        if k in CONFIG.get("agent", {}):
+            restore[k] = CONFIG["agent"][k]
+            CONFIG["agent"][k] = v
+            applied[k] = v
+    state.update({"band": band, "restore": restore, "applied": applied})
+    if applied:
+        log.info("llm.window_profiles band %s applies to this %d-token window: %s",
+                 name, int(window or 0),
+                 ", ".join("%s=%s" % kv for kv in sorted(applied.items())))
+    return {"profile": name, "applied": applied}
+
 
 # How long a detected endpoint window / context budget is trusted (seconds). It is
 # metadata, not a model call, but it MOVES: .47 serves 131,072 per request with -np 2
@@ -2463,6 +2548,46 @@ def spill_index_block(session=None):
             "but their files stay in spill/.]\n" + "\n".join(lines))
 
 
+# A line that names a cause, for the excerpt _spill_signal lifts out of a dropped middle.
+_SPILL_SIGNAL = re.compile(
+    r"(?i)(\b(?:error|errors|failed|failure|fatal|panic|traceback|exception|"
+    r"denied|refused|timeout|timed out|unreachable|cannot|can't|no such file|"
+    r"not found|not permitted|invalid|abort|corrupt|warning|warn)\b"
+    r"|exit[_ ]?(?:code|status)\s*[=:]?\s*[1-9])")
+
+
+def _spill_signal(text, lo, hi, budget):
+    """The cause-naming lines from the span of a spilled result the prompt drops.
+
+    spill-not-shred keeps the whole text on disk, but the recovery path costs the model a
+    whole extra call - minutes on a slow local endpoint - to fetch a log tail it was
+    already handed. So the span between the head and the tail is scanned for the lines
+    that name a cause or a failure; that excerpt rides inline, and the spill pointer stays
+    the way to see the rest. Nothing is invented and nothing moves out of the file: a body
+    of ordinary output has no such line and returns "" - which is why this costs nothing
+    on the results that do not need it.
+    """
+    span = text[lo:hi]
+    if not span or budget <= 0:
+        return ""
+    picked, used = [], 0
+    for raw in span.splitlines():
+        line = raw.strip()
+        if not line or not _SPILL_SIGNAL.search(line):
+            continue
+        if used + len(line) + 1 > budget:
+            break
+        picked.append(line[:400])
+        used += min(len(line), 400) + 1
+        if len(picked) >= 12:
+            break
+    if not picked:
+        return ""
+    return (f"[HARNESS: {len(picked)} line(s) from the dropped middle that name a cause or "
+            f"a failure - the full text is still in the spill file:\n"
+            + "\n".join(picked) + "]\n")
+
+
 def cap_output(name, text, label="output", limit=None, session=None):
     """Cap a tool result, spilling the whole text to disk first when it is over the limit.
 
@@ -2497,6 +2622,7 @@ def cap_output(name, text, label="output", limit=None, session=None):
               f"`read_file {{\"path\": \"{rel}\", \"offset\": N, \"limit\": M}}`, or search it "
               f"with `search_files {{\"pattern\": \"...\", \"path\": \"{rel}\"}}`. Do NOT "
               f"re-run the command to see the middle.] ...\n"
+            + _spill_signal(text, head, len(text) - tail, max(200, cap // 4))
             + text[-tail:])
 
 
@@ -2726,7 +2852,7 @@ def digest_output(name, args, text):
     if not hit:
         return text
     label, mode = hit
-    keep = int(CONFIG["agent"].get("digest_lines") or 40)
+    keep = mem_limit_num("digest_lines", 40, 400, 8)
     lines = text.splitlines()
     kept, rule = _digest_lines(lines, mode, keep)
     if len(kept) >= len(lines):
@@ -2891,18 +3017,68 @@ def result_hint(name, args, out, session_key=None):
     return "\n[HARNESS: %s]" % _HINT_TEXTS[hint]
 
 
+_LAST_GOOD_CALL = {}       # tool name -> the arguments of the last call that WORKED
+
+# Tools whose arguments are not a shape to copy: the ledger/plan/notes mutators take
+# free text, and list/find take nothing that a replay could teach.
+_REPLAY_SKIP = ("plan", "task", "remember", "list_tools", "find_tools")
+
+
+def remember_good_call(name, args, out):
+    """Keep the last call to this tool that WORKED, so a later failure can show its shape.
+
+    The field note says what a failure MEANS; this says what a call that worked on this box
+    LOOKED like, which is the other half a weak model needs. It is deliberately not a note on
+    a successful call - the harness refuses those, because a note on success teaches a cause
+    that is not there. This is not a note about a cause; it is the shape of a call. One entry
+    per tool, scrubbed, and it rides out only attached to a FAILURE of the same tool.
+    """
+    if name in _REPLAY_SKIP or not isinstance(out, str) or failed_output(out):
+        return
+    try:
+        blob = scrub(json.dumps(args, ensure_ascii=False, default=str))
+    except Exception:
+        return
+    if len(blob) > 600:
+        return                 # a call too big to be a shape is not a shape
+    _LAST_GOOD_CALL[name] = blob
+
+
+def last_good_call(name, args):
+    """A one-line replay of the last call to this tool that worked, or "".
+
+    Only when the failing call is NOT the same call: re-sending an identical call is what
+    the repeat guards are for, and showing it back would encourage exactly that. _call_sig
+    is the harness's own canonical signature, so whitespace does not make two identical
+    calls look different.
+    """
+    blob = _LAST_GOOD_CALL.get(name)
+    if not blob:
+        return ""
+    try:
+        if _call_sig(name, args) == _call_sig(name, blob):
+            return ""
+    except Exception:
+        return ""
+    return ("\n[HARNESS: the last `%s` call on this box that worked was:\n"
+            "  %s %s\n"
+            "If this failure is about the SHAPE of the call, copy that.]"
+            % (name, name, blob[:400]))
+
+
 def annotate_failure(name, args, text):
     """The one place a failed result is annotated, for core and custom tools alike."""
     if not isinstance(text, str):
         return text
     notes = match_field_notes(text)
-    if not notes:
-        return text
     block = "\n".join(
         f"[HARNESS field note — {e['title']}] {e['note']}"
         + (f" (source: {e['source']})" if e.get("source") else "")
         for e in notes)
-    return text + "\n\n" + block
+    replay = last_good_call(name, args) if failed_output(text) else ""
+    if not block and not replay:
+        return text
+    return (text + ("\n\n" + block if block else "") + replay)
 
 
 # --------------------------------------------------------------------------
@@ -6610,7 +6786,7 @@ def tool_remember(args, ctx):
     if action in ("replace", "forget") and not old:
         return (f"ERROR: {action} needs `old` - the words already in the entry you mean "
                 f"(matched case-insensitively against the note text).")
-    cap = int(CONFIG["agent"].get("notes_max_note_chars") or 1200)
+    cap = mem_limit_chars("notes_max_note_chars", 1200)
     budget = mem_limit_chars("notes_max_chars", 8000)
     if action != "forget" and len(note) > cap * 4:
         # NEVER truncate. A mutilated fact is worse than a missing one: the clipped
@@ -11646,9 +11822,14 @@ class Agent:
                         "a %s-token window. Set llm.max_context_tokens in "
                         "config.json to say otherwise.%s", window,
                         lan_permission_hint(CONFIG["llm"].get("base_url")))
+        # Caps for the band this window falls in, before anything reads them. The
+        # window-scaled defaults in mem_limit_* are the floor of this design; this is
+        # the operator's override for a model whose NAME cannot describe its window.
+        window_profile = apply_window_profile(window)
         env = {"key": session_key, "at": now, "window": window, "static": static,
                "reply": reply, "budget": budget, "source": source,
-               "refused": refused, "warned": warned, "refusal": refusal}
+               "refused": refused, "warned": warned, "refusal": refusal,
+               "window_profile": window_profile}
         self._envelope_cache = env
         self._window_at = now      # the same metadata read: one TTL, not two
         return env
@@ -11875,10 +12056,15 @@ class Agent:
                 # is answerable without guessing.
                 log.info("routing model %s to %s", ep_model, url)
             # The output cap is the ENVELOPE's clamped reply (min(configured
-            # max_tokens, window // 4)) unless a caller names one deliberately: the
-            # forced wrap-up (final_max_tokens) and the cut-off-mid-think escalation
-            # (max_tokens_ceiling) are recovery paths that only fire on a server that
-            # already answered, and clamping those would make them no-ops.
+            # max_tokens, window // 4)) unless a caller names one deliberately. The two
+            # callers that name one are BOTH recovery paths, and they are bounded
+            # differently on purpose:
+            #   * the forced wrap-up (final_max_tokens) IS clamped the same way, because it
+            #     is one short generation whose whole job is to fit an answer into a window
+            #     that a 8,192-token allowance can exceed (review 2026-09-28, item 2.5);
+            #   * the cut-off-mid-think escalation (max_tokens_ceiling) is bounded by the
+            #     WINDOW and never by window // 4 - clamping a retry to the cap that just
+            #     failed would make it the no-op it is not (see the escalation below).
             cap = int(max_tokens) if max_tokens else int(env.get("reply") or 0)
             payload = {
                 "model": ep_model,
@@ -12147,6 +12333,15 @@ class Agent:
                         and not msg.get("tool_calls")):
                     ceiling = int(
                         CONFIG["llm"].get("max_tokens_ceiling") or 0)
+                    # Bounded by the window, never by window // 4: a retry that asks for more
+                    # tokens than the endpoint can hold is cut off at the window and answers
+                    # nothing, which is the failure this retry exists to prevent - while a
+                    # retry clamped down to the cap that just came back empty would be no
+                    # retry at all. window // 4 is the NORMAL cap, so this stays far above it
+                    # and the escalation is still an escalation.
+                    _win = int(env.get("window") or 0)
+                    if _win and ceiling:
+                        ceiling = min(ceiling, _win)
                     # one retry, straight to the ceiling: re-thinking from
                     # scratch at 8K -> 32K -> 64K would pay for the
                     # reasoning three times over
@@ -12178,26 +12373,44 @@ class Agent:
         fn_info = tool_call.get("function", {})
         name = fn_info.get("name", "")
         raw_args = fn_info.get("arguments", "{}")
+        _salvage_note = ""
         if isinstance(raw_args, str):
             try:
                 args = json.loads(raw_args or "{}")
             except json.JSONDecodeError as exc:
-                # What ARRIVED is what could not be parsed, and the model has to be told
-                # exactly that - not handed a line that reads as its own mistake. Measured
-                # 2026-09-27: a run read this result as "my previous call went out with
-                # empty arguments", blamed itself and re-issued the same call, while the
-                # text it was shown had been altered before anything ran. The whole payload
-                # goes to the log; the model's copy stays bounded.
-                log.warning("%s: arguments did not parse (%s); arrived as %d chars: %r",
-                            name, exc, len(raw_args), scrub(raw_args[:4000]))
-                return name, raw_args, (
-                    "ERROR: invalid JSON arguments - the harness could not parse the text "
-                    f"that arrived for `{name}` ({exc}).\n"
-                    "What arrived, verbatim, first 400 characters:\n"
-                    f"{raw_args[:400]}\n"
-                    "That is the text as it reached the harness, before any tool ran; it is "
-                    "not evidence about what you sent. If it differs from your call, the "
-                    "text was altered in transit - say so, and send the call once more.")
+                # The SAME recovery the REPLAY path already uses, applied to the call in
+                # front of us. A local model wraps its arguments in a ```json fence or one
+                # line of prose often enough that the SHAPE, not the content, is what
+                # failed - and on a slow endpoint the retry that follows costs minutes.
+                # _salvage_tool_args only ever returns an object that PARSED inside the
+                # text; it never guesses or edits content, and the error path below still
+                # takes a blob it cannot read.
+                salvaged = _salvage_tool_args(raw_args)
+                if salvaged is not None:
+                    log.warning("%s: arguments were wrapped in other text; kept the JSON "
+                                "object inside them (%s)", name, scrub(raw_args[:60]))
+                    args = salvaged
+                    _salvage_note = (
+                        "\n[HARNESS: your `arguments` arrived wrapped in other text (a "
+                        "fence or prose). The JSON object inside it is what ran, "
+                        "unchanged; send the bare object next time.]")
+                    # What ARRIVED is what could not be parsed, and the model has to be told
+                else:
+                    # exactly that - not handed a line that reads as its own mistake. Measured
+                    # 2026-09-27: a run read this result as "my previous call went out with
+                    # empty arguments", blamed itself and re-issued the same call, while the
+                    # text it was shown had been altered before anything ran. The whole payload
+                    # goes to the log; the model's copy stays bounded.
+                    log.warning("%s: arguments did not parse (%s); arrived as %d chars: %r",
+                                name, exc, len(raw_args), scrub(raw_args[:4000]))
+                    return name, raw_args, (
+                        "ERROR: invalid JSON arguments - the harness could not parse the text "
+                        f"that arrived for `{name}` ({exc}).\n"
+                        "What arrived, verbatim, first 400 characters:\n"
+                        f"{raw_args[:400]}\n"
+                        "That is the text as it reached the harness, before any tool ran; it is "
+                        "not evidence about what you sent. If it differs from your call, the "
+                        "text was altered in transit - say so, and send the call once more.")
         else:
             args = raw_args
         tool = REGISTRY.get(name)
@@ -12327,6 +12540,11 @@ class Agent:
         # What this run learned is kept for the NEXT one: the harness stores no tool
         # results between runs otherwise (item 7b, see the block above).
         record_tool_result(ctx, name, args, out)
+        # The other half of the failure annotation: the last call to this tool that
+        # WORKED, so a later failure of the same tool can show its shape.
+        remember_good_call(name, args, out)
+        if _salvage_note:
+            out += _salvage_note
         # AFTER the record: a hint guides THIS turn, it is not a fact about the box,
         # and the stored result is what a later run may carry forward.
         out += result_hint(name, args, out, (ctx or {}).get("session_key"))
@@ -13444,17 +13662,35 @@ class Agent:
                                         else f" (and {len(_open) - 4} more)."))
                         messages.append({"role": "user", "content": (
                             "SYSTEM: your task budget is exhausted. Do NOT "
-                            "call any more tools. Give the final report now: "
-                            "what you found, what you changed, what is left "
-                            "undone, and finish with one line `VERIFIED: ` "
-                            "naming what you actually checked (or `VERIFIED: "
-                            "nothing`)." + hint)})
+                            "call any more tools. Answer with exactly these "
+                            "four lines, one per line, each starting with its "
+                            "label, a terse value after the label and "
+                            "`unknown` where you genuinely do not know:\n"
+                            "ROOT CAUSE: <why it was broken>\n"
+                            "CHANGED: <what you changed, with paths>\n"
+                            "STATE: <what state the machine is in now>\n"
+                            "UNFINISHED: <what is left, or `nothing`>\n"
+                            "Then one last line `VERIFIED: ` naming what you "
+                            "actually checked (or `VERIFIED: nothing`)." + hint)})
                         try:
+                            # A wrap-up is ONE generation, so it is clamped the way every
+                            # other call is (window // 4) rather than trusted at the
+                            # configured 8,192: on an 8k window that allowance is larger
+                            # than the window itself, and asking for it is how a small
+                            # box ends a run with a truncated, empty final answer.
+                            _final = CONFIG["llm"].get("final_max_tokens") or None
+                            try:
+                                _win = int((self._envelope(session_key) or {})
+                                           .get("window") or 0)
+                            except Exception:
+                                _win = 0
+                            if _win:
+                                _final = min(int(_final or _win // 4),
+                                             max(256, _win // 4))
                             reply = self._chat(
                                 self._payload(messages, state=False), model,
                                 use_tools=False, usage=usage,
-                                max_tokens=CONFIG["llm"].get("final_max_tokens")
-                                or None)
+                                max_tokens=_final)
                             answer = (reply.get("content") or "").strip()
                             # This call carries NO tool list (use_tools=False) and says
                             # so in the prompt, so a promise-shaped reply here is the

@@ -218,6 +218,29 @@ printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/maintenance/pre-p
     > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
 ```
 
+## What is live, what is dev, what is on disk
+
+On a box with more than one checkout - the install the bot runs from, the tree releases are cut
+from, a backup clone - the roles are stated once and every fact is read from the tree itself:
+
+```bash
+python3 maintenance/where.py           # the table: version, commit, tag, changes, distance from origin
+python3 maintenance/where.py --check   # non-zero when a tree that must be clean is not
+```
+
+There is no map to keep in sync, on purpose: a hand-written one lived outside this repository,
+went two releases stale, and named a scratch tree that had been deleted. `where.py --check` also
+runs in `maintenance/pre-push.sh`, because a live tree with an uncommitted change to a tracked
+file is invisible until the next `git pull` there fails.
+
+The shipped table declares `live` and `dev` - true of any box. A box with a backup clone or an
+ops workspace declares its own in `maintenance/where-roles.json` (gitignored, because a path on
+somebody's share is not source):
+
+```json
+[{"role": "backup", "path": "~/somewhere/tinycmdr", "why": "pre-rewrite history"}]
+```
+
 ---
 
 ## License

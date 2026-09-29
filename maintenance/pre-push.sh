@@ -52,6 +52,13 @@ say "leak gate: files, commit messages, reachable blobs"
 say "the published numbers are regenerated from the tree"
 "$PY" maintenance/measured-block.py || fail=1
 
+say "what is live, what is dev, what is on disk"
+# maintenance/where.py reads every fact from each declared tree, so there is nothing to keep in
+# sync. The hard rule is that the tree declared `live` carries no uncommitted change to a TRACKED
+# file: that is the state the 2026-09-29 `git pull` died in ("your local changes would be
+# overwritten by merge"), and nothing else on this machine said so before the pull failed.
+"$PY" maintenance/where.py --check || fail=1
+
 say "the work ledger's anchors agree with the repository"
 "$PY" tests/test_status.py || fail=1
 

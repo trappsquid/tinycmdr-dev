@@ -84,8 +84,18 @@ tinycmdr-service.vbs
 # build-package.py refuses to build a public package without it.
 maintenance/private_rules.py
 
+# maintenance/where.py's per-host tree declaration: it names this box's own paths
+# (a backup share, an ops workspace), which are true of one machine and nobody else.
+maintenance/where-roles.json
+
 # --- found by adopting the git path on the fleet (2026-09-24): every host showed these
 # as untracked, which makes `git status` useless for spotting real drift.
 venv/
 .DS_Store
 .DS_Store?
+# --- found on the live box (2026-09-29) by maintenance/where.py, for the same reason ---
+# experiments.jsonl is written by the run itself; the tool-audit folder is one box's
+# evidence dump. Neither is source, and both made `git status` in the live tree look
+# dirty next to a REAL tracked modification - the two are now told apart.
+experiments.jsonl
+maintenance/tool-audit-*/

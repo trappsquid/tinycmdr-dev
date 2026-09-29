@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Knowing what is live, what is dev, what is on disk
+
+Added
+- **`maintenance/where.py`: the roles are declared once, and every fact is read from the tree.**
+  The 2026-09-28 review found a hand-generated map kept beside the ops notes - outside this
+  repository and outside every gate - two releases and three facts out of date (it still named a
+  deleted scratch tree); on 2026-09-29 a `git pull` in the live tree died on an uncommitted
+  backport nobody remembered applying, while the dev tree was 27 commits ahead. A DOCUMENT cannot
+  be the answer to that - prose has no way to disagree with the repository - so the roles (live /
+  dev, plus a box's own in the gitignored `maintenance/where-roles.json`) are stated once and the
+  version, commit, tag, tracked changes, untracked residue and distance from origin are read from
+  each tree when you ask. Nothing to keep in sync. `--check` fails when a tree declared
+  `must_be_clean` is not, which is exactly the state that blocked the pull, and
+  `maintenance/pre-push.sh` now runs it.
+- **`tests/test_where.py`** grades the command on synthetic git trees, so it runs in CI on a
+  machine that has none of the real ones: a tracked change fails the live role and an untracked
+  file does not, a clone one commit behind origin reports it, two roles on one path is a problem,
+  and a bot running from a tree that is not the declared live one is caught.
+
+Changed
+- **`experiments.jsonl` and `maintenance/tool-audit-*/` are gitignored.** They are runtime residue
+  the live box writes, and in a one-line `git status` count they looked identical to the real
+  modification blocking the pull. `where.py` now reports tracked changes and untracked residue as
+  the two different things they are.
+
+### The small-model path (review 2026-09-28, section 2)
+
+Everything here is for the premise the harness is built on: a weak, low-parameter model
+served at a slow decode and a small window. No change moves the default behaviour of a
+large-window box.
+
+Added
+- **`llm.window_profiles`: caps chosen by the WINDOW the endpoint serves, not only by the
+  model's NAME.** `llm.profiles` matches a substring of the model name, which cannot help
+  the common self-hosted case - the same box restarted with a different quantisation or
+  slot count, or a model whose name says nothing about its window. The smallest band at
+  least as large as the served window wins (a box serving 12288 takes the `16384` entry),
+  only keys the harness already reads are accepted, and a band's values are undone when a
+  later band takes over. `config.example.json` now ships `8192` / `16384` / `32768`
+  presets as the documented starting point; empty by default, because the window-scaled
+  defaults already shrink every cap on a small window.
+- **A spilled result carries its cause inline.** `spill-not-shred` keeps the whole text on
+  disk, but recovery cost the model a whole extra call - minutes on a slow endpoint - to
+  fetch a log tail it was already handed. The span the prompt drops is now scanned for the
+  lines that name a cause (errors, failures, non-zero exits) and a bounded excerpt rides
+  inline; the spill pointer stays the way to see the rest, and an ordinary body produces
+  no excerpt at all.
+- **A failed call is shown the last call to the same tool that worked** - one line, the
+  shape of the call, scrubbed and bounded. The field note says what a failure MEANS; this
+  says what a call that worked on this box LOOKED like, which is the half a weak model
+  cannot supply. It rides out only attached to a failure, never as a note on a success
+  (which the harness refuses, because it would teach a cause that is not there), and it is
+  suppressed when the failing call is the same call.
+
+Changed
+- **The forced wrap-up asks for a fixed skeleton**: `ROOT CAUSE:` / `CHANGED:` / `STATE:`
+  / `UNFINISHED:` then `VERIFIED:`, one line each. Landing a run is the thing a weak model
+  is worst at, so the shape is the harness's now, not the model's discretion.
+- **That final call is clamped to the window like every other call.** It took
+  `final_max_tokens` (8,192) on trust, which is larger than an 8k window: the one call
+  whose whole job is to produce an answer could be cut off before answering. It is now
+  `min(final_max_tokens, window // 4)`.
+- **The cut-off-mid-think retry is bounded by the window, not by 65,536.** It stays well
+  above the normal cap on purpose - a retry clamped down to the cap that just came back
+  empty would be no retry at all - but asking for more tokens than the endpoint can hold is
+  cut off at the window and answers nothing, which is the failure the retry exists to
+  prevent. The comment that said both recovery paths are exempt from clamping now says which
+  is and which is not.
+- **A tool call whose `arguments` arrived wrapped in a fence or prose runs, instead of
+  costing a retry.** `_salvage_tool_args` already recovered this shape on REPLAY; it now
+  applies to the call in front of the harness too. It only ever returns an object that
+  parsed inside the text - it never guesses or edits content - so a blob with no JSON
+  object still takes the error path, with the same message as before.
+- **`digest_lines` and `notes_max_note_chars` scale with the detected window**, joining the
+  character caps that already did (`window // 400` lines, `window // 8` chars). A 40-line
+  digest is right for a 32k window and a large share of the budget on an 8k one.
+
+Fixed
+- **`mem_limit_chars` / `mem_limit_exchanges` raised `AttributeError` when the envelope
+  cache was explicitly `None`** - `getattr(AGENT, "_envelope_cache", {})` returns `None`
+  for an attribute that exists and is `None`, so the default never applied. Found by
+  `tests/test_small_model.py`; the window is now read through `(x or {})`.
+
 ## [1.0.39] - 2026-09-29
 
 Two security fixes and the Windows entry point, all of them found by running the gate on real
