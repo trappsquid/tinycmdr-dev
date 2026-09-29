@@ -194,6 +194,23 @@ have, and how it compares with other harnesses — is
 
 ---
 
+## Run the gate
+
+The suites need no model, no endpoint and no chat token, and `tests/run_all.py` is the gate a
+release is cut against - the same command CI runs on macOS and Linux (the Windows job runs the
+pure-Python subset):
+
+```bash
+python3.12 -m venv venv                    # 3.10-3.12; run_all.py refuses anything else
+venv/bin/pip install -r requirements.txt -r requirements-test.txt
+venv/bin/python tests/run_all.py           # non-zero if any suite fails
+```
+
+A suite that cannot run exits 77 and counts as **red**, so a machine that grades nothing cannot
+report success. `--select 'tests/test_ledger*.py'` narrows the run while you work on one suite.
+
+---
+
 ## License
 
 MIT. Free and open source for personal and enterprise hardware.
