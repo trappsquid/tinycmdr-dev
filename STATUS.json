@@ -165,6 +165,36 @@
         "expect": "untagged"
       },
       "detail": "On main, not in a release yet - so the anchor says untagged on purpose, and this suite fails the moment it becomes reachable from a tag without this line changing to match. That is the whole mechanism: 'unshipped' is a claim the repository can refuse."
+    },
+    {
+      "id": "windows-path-with-spaces",
+      "title": "a Windows profile path with a space breaks two suites",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "Found by the fleet gate 2026-09-29 on a real install: the profile is 'C:\\Users\\David Trapp', and test_verify reports the shell-write detector returning 'C:\\Users\\David' - truncated at the space - for three commands, while test_stall's kept-file check points at a path that does not exist. CI's Windows runner uses a profile with no space, which is why neither is seen there. Worth knowing how wide this is: a two-word Windows account name is the normal case, and the write verification silently stops verifying.",
+      "gate": "the detector's path extraction handles a spaced path (or the suites build quoted paths)"
+    },
+    {
+      "id": "windows-confirm-gate",
+      "title": "the confirm-tier decline behaves differently on Windows",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "test_guard_battery fails one check on the fleet's Windows box: 'a confirm-tier manifest command is DECLINED at call time with no door: exit_code=1'. Its sibling checks pass, including the pwsh -ec and powershell -EncodedCommand gates and the drift reporting, so this is one path rather than the gate itself.",
+      "gate": "the decline path graded the same way on both platforms"
+    },
+    {
+      "id": "windows-shim-shipped",
+      "title": "the Windows shim exited 127 for everyone (one ')' in an echo)",
+      "state": "shipped",
+      "anchor": {
+        "commit": "bb2081c",
+        "expect": "untagged"
+      },
+      "detail": "On main, not in a release yet. cmd parses a ')' inside an echo inside an 'if (...)' block as the END of the block, so the shim's 'exit /b 127' ran unconditionally and the documented entry point (tinycmdr status, tinycmdr --once ...) was dead on Windows while the bot kept working from the installer's scheduled task."
     }
   ]
 }
