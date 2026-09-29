@@ -2064,11 +2064,12 @@ def lan_permission_hint(base_url):
 def _detect_window(base_url, headers, timeout=10):
     """Ask an endpoint how many tokens it serves per request; 0 when it does not say.
 
-    Three routes, because there is no standard one: vLLM reports max_model_len and
+    Four routes, because there is no standard one: vLLM reports max_model_len and
     llama.cpp carries n_ctx under meta on /v1/models; any llama.cpp build answers
-    /props at the server root; and Ollama answers /api/ps with the context_length it
-    is actually serving. Read-only metadata, never a model call, so it is safe to ask
-    a box that is busy serving somebody else.
+    /props at the server root; Ollama answers /api/ps with the context_length it is
+    actually serving; and SGLang answers /get_server_info with the model's own
+    context_length. Read-only metadata, never a model call, so it is safe to ask a box
+    that is busy serving somebody else.
     """
     base = str(base_url or "").rstrip("/")
     if not base:
@@ -2117,6 +2118,22 @@ def _detect_window(base_url, headers, timeout=10):
                     break
         except Exception as e:
             log.debug("window detect: /api/ps on %s did not answer: %s", base, e)
+    if not detected:
+        # SGLang answers /get_server_info at its root - the third fingerprint, beside
+        # llama.cpp's /props and vLLM's /models. context_length is the served window,
+        # and max_req_input_len is the same number written as an input cap, so it is the
+        # fallback. max_total_num_tokens is deliberately NOT used: that is the KV-cache
+        # budget shared across concurrent requests, not a per-request window, and taking
+        # it would over-report by an order of magnitude - the same trap as Ollama's
+        # model maximum. A server that says neither is 0, which leaves the operator's
+        # configured budget in charge.
+        try:
+            info = requests.get(root + "/get_server_info", headers=headers,
+                                timeout=timeout).json()
+            if isinstance(info, dict):
+                detected = info.get("context_length") or info.get("max_req_input_len")
+        except Exception as e:
+            log.debug("window detect: /get_server_info on %s did not answer: %s", base, e)
     try:
         return int(detected) if detected else 0
     except (TypeError, ValueError):

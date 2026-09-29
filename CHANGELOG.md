@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **SGLang's context window is detected.** `_detect_window` asks the server root for
+  `/get_server_info` and reads `context_length`, falling back to `max_req_input_len`. SGLang was
+  named in the README's "any OpenAI-compatible endpoint" list and had no route at all:
+  `get_server_info` appeared once in the core, in a comment explaining why `/props` fingerprints
+  llama.cpp, and the 2026-09-28 review read that comment as an implementation. `max_total_num_tokens`
+  is deliberately NOT used - that is the KV-cache budget shared across concurrent requests, not a
+  per-request window, so taking it would over-report by an order of magnitude, the same trap as
+  Ollama's model maximum.
+
 ## [1.0.38] - 2026-09-29
 
 A tool can show the model the screen and the image rides exactly one request; the secret sweep

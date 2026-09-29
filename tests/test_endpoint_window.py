@@ -1,10 +1,10 @@
 """How the harness asks an endpoint how much context it serves.
 
 `_detect_window` is the one place the context budget gets a number that did not come from
-config, and it has three routes because there is no standard one: vLLM reports
+config, and it has four routes because there is no standard one: vLLM reports
 max_model_len and llama.cpp carries n_ctx under meta on /v1/models, any llama.cpp build
-answers /props at the server root, and Ollama answers /api/ps with the context_length it
-is actually serving.
+answers /props at the server root, Ollama answers /api/ps with the context_length it is
+actually serving, and SGLang answers /get_server_info with the model's own context_length.
 
 What this suite guards, in order of what would hurt most:
 
@@ -12,7 +12,9 @@ What this suite guards, in order of what would hurt most:
      fail loudly - it overflows mid-run, and on a slow local endpoint that spends exactly
      the minutes this harness exists to save. Ollama's /api/show carries the model's
      MAXIMUM context while it serves num_ctx (4096 by default), so /api/show must stay
-     unprobed, and an endpoint that does not say must come back 0 rather than a guess.
+     unprobed; SGLang's max_total_num_tokens is the KV-cache budget shared across
+     concurrent requests rather than a per-request window; and an endpoint that does not
+     say must come back 0 rather than a guess.
   2. 0 means "did not say", and every route falls through to it rather than to a default.
   3. The probes ask the SERVER ROOT (.../props, .../api/ps), never the OpenAI path.
   4. An unrelated server's 200 is not read as an answer: each route checks the shape of
@@ -56,6 +58,12 @@ VLLM_MODELS = {"object": "list", "data": [{"id": "main", "max_model_len": 32768}
 LLAMA_MODELS = {"object": "list", "data": [{"id": "main", "meta": {"n_ctx": 131072}}]}
 LLAMA_PROPS = {"default_generation_settings": {"n_ctx": 65536}}
 OLLAMA_PS = {"models": [{"name": "main:latest", "context_length": 8192}]}
+# SGLang's /get_server_info, cut to the keys that matter. max_total_num_tokens is the
+# KV-cache budget across all concurrent requests - an order of magnitude above the window.
+SGLANG_INFO = {"model_path": "meta-llama/Llama-3-8B", "context_length": 32768,
+               "max_req_input_len": 30000, "max_total_num_tokens": 819200}
+SGLANG_INPUT_ONLY = {"model_path": "x", "max_req_input_len": 30000}
+SGLANG_CAPACITY_ONLY = {"model_path": "x", "max_total_num_tokens": 819200}
 # What Ollama answers when nothing is loaded - and the shape /api/show would give, which
 # carries the model MAXIMUM and must never be read as the served window.
 OLLAMA_PS_EMPTY = {"models": []}
@@ -122,6 +130,15 @@ def main():
           window(Fake({"/v1/models": FOREIGN_LIST, "/props": LLAMA_PROPS})) == 65536)
     check("Ollama's /api/ps context_length is the window",
           window(Fake({"/api/ps": OLLAMA_PS}), "http://127.0.0.1:11434/v1") == 8192)
+    check("SGLang's /get_server_info context_length is the window",
+          window(Fake({"/get_server_info": SGLANG_INFO}),
+                 "http://127.0.0.1:30000/v1") == 32768)
+    check("...and max_req_input_len is the fallback when context_length is absent",
+          window(Fake({"/get_server_info": SGLANG_INPUT_ONLY}),
+                 "http://127.0.0.1:30000/v1") == 30000)
+    check("SGLang's KV-cache capacity is NOT read as a window",
+          window(Fake({"/get_server_info": SGLANG_CAPACITY_ONLY}),
+                 "http://127.0.0.1:30000/v1") == 0)
 
     # The route the code must NOT take: Ollama's model maximum is 16x what it serves.
     f = Fake({"/api/ps": OLLAMA_PS_EMPTY, "/api/show": OLLAMA_SHOW})
