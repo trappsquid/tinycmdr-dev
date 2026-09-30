@@ -11549,21 +11549,25 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
         cap = mem_limit_chars("notes_max_chars", 8000)
         notes = NOTES_FILE.read_text(encoding="utf-8", errors="replace")
         if len(notes) > cap:
-            # Bounded at write time, so this is the abnormal path (hand-edited
-            # file, lowered cap, pre-ledger notes). Curate rather than silently
-            # lopping the oldest facts off the head — and if it still does not
-            # fit, say so in the prompt instead of pretending memory is whole.
-            curate_notes("prompt over budget")
-            notes = NOTES_FILE.read_text(encoding="utf-8", errors="replace")
-        if len(notes) > cap:
+            # NEVER curate from here. This is a READ path, and it also runs purely
+            # to ESTIMATE tokens (_compact, the budget status line, the live
+            # estimate in the CLI), while curation is a locked whole-file rewrite
+            # that evicts entries to the archive. A measurement must not rewrite
+            # memory, or take the notes.md lock against every other process for it.
+            # Notes are capped at write time, so over budget is abnormal (hand-
+            # edited file, lowered cap): bound what the PROMPT sees instead — the
+            # newest `cap` chars, marked as such — and leave the file alone. The
+            # next `remember` (or a `notes` curate) curates it for real.
             global _notes_warned
             if not _notes_warned:
                 _notes_warned = True
-                log.warning("notes.md is %d chars even after curation — only "
-                            "the newest %d go into the prompt", len(notes), cap)
+                log.warning("notes.md is %d chars, over its %d-char budget — the "
+                            "prompt gets only the newest %d; the file is left "
+                            "as it is (curate it with the notes tool)",
+                            len(notes), cap, cap)
             notes = (f"<!-- only the newest {cap} chars of notes.md fit this "
-                     f"prompt; older entries are in "
-                     f"{NOTES_ARCHIVE_FILE.name} -->\n" + notes[-cap:])
+                     f"prompt; the older entries are on disk but not shown "
+                     f"here -->\n" + notes[-cap:])
     parts = []
     # The clock lives HERE, in the trailing block, and never in the system
     # prompt. This block is re-read on every call anyway, so a line that changes

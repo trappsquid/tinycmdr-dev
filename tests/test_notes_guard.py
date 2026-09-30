@@ -286,6 +286,41 @@ def main():
         check("nearly the same thing" in out and "replace" in out,
               "remember: a related-but-different fact is flagged, not replaced")
 
+        # ---- the READ path never writes (2026-09-29) ---------------------------
+        # volatile_context() feeds the prompt, but it is ALSO called purely to ESTIMATE
+        # tokens (compaction, the budget status line, the CLI's live estimate). It used
+        # to curate an over-budget file, so a measurement rewrote memory and took the
+        # notes.md flock. Notes are capped at write time, so this path needs the file to
+        # be over budget already (hand-edited, or a lowered cap) — but when it is, the
+        # read must bound the prompt and leave the file byte-identical.
+        cap = fb.mem_limit_chars("notes_max_chars", 8000)   # the effective cap, not the raw config
+        oldest = "the oldest hand-written fact: OLDEST-MARKER-ALPHA"
+        newest = "the newest hand-written fact: NEWEST-MARKER-OMEGA"
+        body = (note("2026-09-20 09:00", oldest)
+                + "".join(note("2026-09-20 10:%02d" % (i % 60),
+                               "older fact %03d " % i + "detail " * 8)
+                          for i in range(100))
+                + note("2026-09-20 11:00", newest))
+        notes.write_text(body, encoding="utf-8")
+        check(len(body) > cap, f"the file is over its cap ({len(body)} > {cap})")
+        before = notes.read_bytes()
+        arch = Path(fb.NOTES_ARCHIVE_FILE)
+        arch_before = arch.read_bytes() if arch.exists() else None
+        fb._notes_warned = False
+        vc = fb.volatile_context()
+        check(notes.read_bytes() == before,
+              "volatile_context() left the over-budget notes.md byte-identical")
+        check((arch.read_bytes() if arch.exists() else None) == arch_before,
+              "  and archived nothing: assembling a prompt is not a curation trigger")
+        check("NEWEST-MARKER-OMEGA" in vc, "  the prompt still carries the newest notes")
+        check("OLDEST-MARKER-ALPHA" not in vc,
+              "  and drops what does not fit, WITHOUT editing the file")
+        check("only the newest" in vc,
+              "  the prompt says the older entries were left off")
+        section = vc.split("Notes from previous sessions", 1)[-1]
+        check(len(section) <= cap + 500,
+              f"  what the model sees is bounded ({len(section)} <= {cap} + header)")
+
         print()
         if FAILS:
             print(f"{len(FAILS)} check(s) FAILED")
