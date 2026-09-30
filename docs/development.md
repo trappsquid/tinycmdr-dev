@@ -33,8 +33,9 @@ Two rules follow from that table, and they are the whole point of this page:
 
 Two shapes are supported, and which one a box uses is *declared*, not guessed:
 
-**A. one tree** (`same_as`, used on this box). The install the bot runs from is also where code
-work happens. `maintenance/where-roles.json` says so:
+**A. one tree** (`same_as`) - the install the bot runs from is also where code work happens. It is
+the shape a single-operator box usually wants, and it is the one this checkout declares in
+`maintenance/where-roles.json`:
 
 ```json
 [{"role": "dev", "same_as": "live",
@@ -110,9 +111,11 @@ tracked, because it is the seed the agent's workspace starts from.
   password (`SUDO_PASSWORD`), per-bot keys. The names the app writes are the names it reads
   (`tests/test_env_names.py`); values never print, and anything named `*PASSWORD` or `*PASSWD` of 6+
   characters is scrubbed from tool output.
-- Root is not blanket-granted on this box: a scoped `NOPASSWD` drop-in lives at
-  `/private/etc/sudoers.d/tinycmdr`. `launchctl bootstrap/bootstrapout` are excluded on purpose -
-  loading a plist is a full escalation. Everything else needs the password.
+- Privilege is the host's decision and the repository carries none of it: an install may be given a
+  scoped `NOPASSWD` grant for the read-only verbs it needs (service queries, logs, power state).
+  Anything that LOADS a unit, plist or scheduled task is deliberately outside that family - loading
+  one is full escalation - and anything outside the grant takes the operator's password. Same rule
+  as everything else here: it lives in the host's own file, never in a tracked one.
 - Never put a host path, host name, token or private domain in a tracked file. That is what
   `maintenance/leak-gate.py` is for, and it is the reason `where-roles.json` is gitignored.
 
