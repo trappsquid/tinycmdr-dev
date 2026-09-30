@@ -95,9 +95,9 @@ check("the answer is titled on the quiet frame", str(p.title).strip() == "answer
 check("...and its title is the one accent",
       screen.style("title") in str(p.title.style), str(p.title.style))
 check("...and it is rendered as markdown, not raw text",
-      type(p.renderable).__name__ == "Markdown")
-check("...with its blank band stripped", "\n\n\n" not in str(p.renderable.markup),
-      repr(str(p.renderable.markup)[:60]))
+      type(p.renderable).__name__ == "_TightMarkdown")
+check("...through the tight renderer that strips rich's table band",
+      type(p.renderable.markdown).__name__ == "Markdown")
 check("no tier paints anything blue",
       not any("blue" in str(value) for tier in fb.TUI_PALETTE.values()
               for value in tier.values()),
@@ -317,7 +317,8 @@ check("--app draws a window title with the session in it",
 check("--app draws a rail with a live context gauge",
       "SESSION" in _rail and "CONTEXT" in _rail and "\u2588" in _rail, _rail[:120])
 check("--app's composer is a labeled box, not a bare prompt",
-      str(_app.composer.title).strip() == "you", str(_app.composer.title))
+      "".join(p for _, p in _app.composer.title.__pt_formatted_text__()).strip() == "you",
+      _app.composer.title)
 
 # --- round-3 polish ---------------------------------------------------------------
 # P-01: in the app the chrome carries the meta, so the transcript opens on content.
@@ -376,7 +377,8 @@ check("--app's status line carries the run status only; keys live in the rail (P
       and "KEYS" in "".join(p for _, p in _app._sidebar_text().__pt_formatted_text__()),
       "hints still share the status line")
 check("--app's input box is labeled 'you', not 'ask' (P-06)",
-      str(_app.composer.title).strip() == "you", str(_app.composer.title))
+      "".join(p for _, p in _app.composer.title.__pt_formatted_text__()).strip() == "you",
+      _app.composer.title)
 
 # P-03: the done line and the rail read ONE counter (the run accumulator).
 _events = []
@@ -408,6 +410,46 @@ finally:
         fb.AGENT.last_usage.pop("cli", None)
     else:
         fb.AGENT.last_usage["cli"] = _saved_usage_3
+
+# --- round-4: the pane replaces the run's WHOLE draft region (P-02) ---------------
+# The reporter draws a narration line and only then streams deltas into it, so the
+# first draw is a committed line; dropping just the last item filed the model's
+# opening sentence above the answer card with its markdown characters intact.
+_app4 = fb.AppScreen(colour=True, tier="truecolor")
+_d4 = fb.CliDestination(colour=True, out=io.StringIO(), screen=_app4)
+_r4 = _d4.line("narration", "The only Apple machine that hits 800 GB/s is the **M4 Ultra** -")
+for _extra in (" let me confirm the exact numbers", " since this is newer than my data."):
+    _d4.update(_r4, "narration",
+               "\U0001F4AC The only Apple machine that hits 800 GB/s is the **M4 Ultra** -"
+               + _extra)
+_d4.drop(_r4)
+_d4._close()
+_app4.card("final", "| Chip | Bandwidth |\n|---|---|\n| M4 Ultra | 800 GB/s |\n")
+check("--app replaces the run's whole draft region, first draw included (P-02)",
+      not any(k == "ansi" and "M4 Ultra" in str(p) for k, p in _app4.items),
+      [str(p)[:70] for k, p in _app4.items])
+
+# --- round-4: no blank band around a table, and nothing trailing (T-05) ----------
+_t5 = fb.TuiScreen(out=io.StringIO(), width=90, tier="truecolor")
+_t5._plain_fallback = True
+_t5.card("final", "| Slot | Size |\n|---|---|\n| DIMM 1 | 8 GB |\n| DIMM 2 | 8 GB |\n\n"
+                  "After the table.\n")
+_plain5 = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in _t5.out.getvalue().splitlines()]
+_rows5 = [l[1:-1] for l in _plain5 if l.startswith("\u2502")]
+check("the answer card carries no blank band around a table (T-05)",
+      _rows5 and not any(not r.strip() for r in _rows5), _rows5)
+check("...and a table at the end of an answer adds no trailing row",
+      _rows5[-1].strip() == "After the table.", _rows5)
+
+# --- round-4: the composer reports its size and grows with a paste ----------------
+_app5 = fb.AppScreen(colour=True, tier="truecolor")
+_app5.input.text = "x" * 400
+_title5 = "".join(p for _, p in _app5._composer_title().__pt_formatted_text__())
+check("the composer reports what is in it and names the keys",
+      "400 chars" in _title5 and "send" in _title5, _title5)
+check("...and grows to show a long paste, to a ceiling",
+      _app5._composer_rows() == fb.AppScreen.COMPOSER_MAX_ROWS
+      and _app5._composer_rows() > 1, _app5._composer_rows())
 
 # --- the run's key is a filename; the editing surface is not one (the Windows bed
 # measured 2026-09-22: a PromptSession in the key slot crashed _save() with
