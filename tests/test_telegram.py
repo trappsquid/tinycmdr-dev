@@ -195,6 +195,112 @@ check("a task is handed to the chat's worker",
 check("each chat gets its own conversation name",
       fb.tg_session_key(42) == "telegram-42")
 
+# ---- a duplicate id in ANOTHER chat is not the same message ----------------
+# (audit, 2026-09-29: seen held the bare message_id, but Telegram numbers messages
+# per chat, so with two allowed users the second chat's id-1 was swallowed as a dup
+# of the first chat's and never answered - silently.)
+cross = FakeClient()
+xp = fb.TelegramPoller(cross, {"111", "222"})
+handed = []
+xp.submit = lambda chat_id, text, mid: handed.append((chat_id, text, mid))
+check("the same message id in two chats is two messages",
+      xp.handle(msg(11, "one", 111, mid=1)) is True
+      and xp.handle(msg(22, "two", 222, mid=1)) is True
+      and handed == [(11, "one", 1), (22, "two", 1)], str(handed))
+check("...and a true repeat inside one chat is still dropped once",
+      xp.handle(msg(11, "one", 111, mid=1)) is True and len(handed) == 2,
+      str(handed))
+
+# ---- a /stop that lands before the worker picks the task up still bites -----
+# (audit, 2026-09-29: submit() registered the chat's cancel event and /stop set it,
+# but the worker minted its OWN event and overwrote the slot, so a stop in the gap
+# between the message arriving and the run starting was discarded: the run began
+# un-stoppable. Drive the real run_telegram with the bot API and the run faked.)
+
+_hold = threading.Event()               # holds the worker until the test has stopped it
+_parked = threading.Event()
+_poller_box = {}
+_result = {}
+
+
+class _ParkedDestination(fb.TelegramDestination):
+    """The real reporter, held at construction until the test has pressed /stop."""
+
+    def __init__(self, *a, **kw):
+        _parked.set()
+        _hold.wait(3)
+        super().__init__(*a, **kw)
+
+
+class _RecordingPoller(fb.TelegramPoller):
+    """The real poller, kept so the test can reach the channel's cancel slot."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        _poller_box["poller"] = self
+
+
+class _HeadlessReporter:
+    def __init__(self, dest, key):
+        pass
+
+    def finish(self, ok=True):
+        pass
+
+
+class _LoopOnceClient(FakeClient):
+    """The bot API, but the second poll presses /stop and then ends the lane."""
+
+    def __init__(self, token):
+        super().__init__()
+        self.polls = 0
+
+    def updates(self, offset):
+        self.polls += 1
+        if self.polls == 1:
+            return [msg(7, "do the thing", 123456789, mid=1)]
+        if not _parked.wait(3):
+            raise SystemExit
+        ev = _poller_box["poller"].cancel.get(7)
+        _result["stop_event"] = ev
+        if ev is not None:
+            ev.set()
+        _hold.set()
+        raise SystemExit                        # not an Exception: leaves the poll loop
+
+
+def _run_once(key, text, reporter, *, cancel_event=None, **kw):
+    _result["cancel"] = cancel_event
+    _result["sees_stop"] = cancel_event is not None and cancel_event.is_set()
+    return None
+
+
+_keep = (fb.CONFIG["telegram"], fb.TelegramClient, fb.TelegramPoller,
+         fb.TelegramDestination, fb.RunReporter, fb.drive_run, fb.lane_up)
+fb.CONFIG["telegram"] = {"token": "1:tok", "allowed_users": ["123456789"]}
+fb.TelegramClient = _LoopOnceClient
+fb.TelegramPoller = _RecordingPoller
+fb.TelegramDestination = _ParkedDestination
+fb.RunReporter = _HeadlessReporter
+fb.drive_run = _run_once
+fb.lane_up = lambda *a, **k: None
+try:
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    for _ in range(40):
+        if "sees_stop" in _result:
+            break
+        time.sleep(0.05)
+    check("a /stop before the worker picks the task up is not discarded",
+          _result.get("sees_stop") is True,
+          str({k: v for k, v in _result.items() if k != "cancel"}))
+finally:
+    (fb.CONFIG["telegram"], fb.TelegramClient, fb.TelegramPoller,
+     fb.TelegramDestination, fb.RunReporter, fb.drive_run,
+     fb.lane_up) = _keep
+
 # ---- the token has ONE home, and both doors never fight silently -----------
 # (audit, 2026-09-22: telegram.token was read from config.json, which contradicts
 # the package's own rule that secrets live only in .env; and with both tokens set

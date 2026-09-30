@@ -18537,11 +18537,17 @@ class TelegramPoller:
 
         mid = msg.get("message_id")
 
-        if mid in self.seen:
+        # Telegram numbers message ids per chat, so the dedupe key is the pair:
+
+        # with two allowed users a bare id swallowed the second chat's message.
+
+        seen_key = (chat_id, mid)
+
+        if seen_key in self.seen:
 
             return True
 
-        self.seen.append(mid)
+        self.seen.append(seen_key)
 
         dest = self.live.get(chat_id)
 
@@ -18648,13 +18654,17 @@ def run_telegram():
 
                 return
 
-            text, msg_id = task
+            # Adopt the event submit() already registered for this chat: /stop sets
+
+            # that one, so minting a fresh event here silently dropped a stop that
+
+            # landed between the message arriving and this run starting.
+
+            text, msg_id, cancel = task
 
             key = tg_session_key(chat_id)
 
             dest = TelegramDestination(client, chat_id, key, reply_to=msg_id)
-
-            cancel = threading.Event()
 
             with locks:
 
@@ -18712,9 +18722,13 @@ def run_telegram():
 
                 t.start()
 
-            poller.cancel.setdefault(chat_id, threading.Event())
+            # The cancel event lives from here, not from the worker: /stop reads
 
-        queues[chat_id].put((text, msg_id))
+            # this slot, so it exists the moment a message is submitted.
+
+            cancel = poller.cancel.setdefault(chat_id, threading.Event())
+
+        queues[chat_id].put((text, msg_id, cancel))
 
 
 
