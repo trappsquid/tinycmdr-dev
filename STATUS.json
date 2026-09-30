@@ -37,6 +37,226 @@
       "gate": "either a category for what a host drops in, or the check exempts host tools and says which rule wins"
     },
     {
+      "id": "F-02-max-tokens-400",
+      "title": "a 400 naming max_tokens is fatal, and the error blames the key",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29. max_tokens rides whenever cap is set (13008-13009), and cap is >= 1 on every envelope branch; the named-field 400 retry scans only stream_options, chat_template_kwargs, return_progress, sse_ping_interval and stream (13082-13085); an unsupported-parameter body matches no _CONTEXT_OVERFLOW_RE pattern and 400 is in FATAL_STATUS (1369), so the run dies telling the operator to check the key, model id and base_url (13256) - all three of which are right. The reviewer's 13037 was a stale line number.",
+      "gate": "wave 1 - on a 400 that names max_tokens, rename it to max_completion_tokens and retry once; a stub test asserts the second request carries the new name and the same value, and no max_tokens"
+    },
+    {
+      "id": "F-04-telegram-dedupe-and-stop",
+      "title": "Telegram swallows a second chat's message, and can lose a /stop",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29. self.seen is a flat deque of bare message ids (18333) and handle() drops a repeat unconditionally (18459-18463) - Telegram ids are per-chat, so two allowed users' identical ids collide silently. Separately, submit() pre-creates poller.cancel[chat_id] (18634) and the worker overwrites it with a fresh Event (18576-18582), so a /stop landing in that window is discarded. The document's related clause (a /stop while another task is queued stops the RUNNING one) is normal behaviour, not this bug.",
+      "gate": "wave 1 - key the dedupe on (chat_id, message_id), mint the cancel event in submit and have the worker adopt it; tests for cross-chat interleave and for a /stop arriving before worker pickup"
+    },
+    {
+      "id": "F-01-stall-abandon-lock",
+      "title": "a hard-wedged run keeps the session lock, so the respawned worker blocks forever",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED end to end 2026-09-29. run() holds self._lock(session_key) for the whole run (13467); _lock is a bare threading.Lock with no acquire timeout (12404-12405); the abandon path pops active/running and respawns a worker only when the queue is non-empty (17022-17046) and releases nothing, and reset() never pops a lock either. The fresh worker blocks in run() forever, and the message telling the operator it is picking up their queue is false. Two corrections to the finding: the respawn is conditional, and after it new text is STEERED into the dead run (16933-16940) rather than queued, so the operator is never even shown the queued-behind notice. /restart force on the listener thread (16872-16886) is the only real out.",
+      "gate": "wave 1 - give the run lock an acquire timeout and post the /restart force guidance on expiry (or rotate the session key on abandon); hermetic test that the respawned worker does not block on an abandoned session's lock"
+    },
+    {
+      "id": "F-13-429-sleep-cancel",
+      "title": "the 429 retry sleep ignores cancel_event",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29 at 13111-13112 (not 13087). One unconditional time.sleep(wait) in _chat, while _post_watchdog promises a /stop lands within a quarter second (1712). cancel_event is already in scope. Nuance the finding misses: wait comes from the Retry-After header, so it is 0 without one, 60 is a cap, and it happens at most once per call.",
+      "gate": "wave 1 - slice the wait in 0.25 s steps checking cancel_event, mirroring _post_watchdog; test a stop during a retry wait with a retry_after_max that is not zero"
+    },
+    {
+      "id": "F-03-stream-blacklist",
+      "title": "one transient mid-stream break blacklists streaming for the process",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "PARTIAL 2026-09-29. All four StreamFailed raises (1979 no first byte, 1982 idle gap, 2129 mid-stream break, 2138 no SSE data) reach one handler that adds the URL to the process-global _STREAM_UNSUPPORTED and sets stream_on = False (13054-13058), which also suppresses stream for the remaining failover endpoints in that call. Real, but the finding overstates one consequence: cancel latency is unaffected (the watchdog slices at 0.25 s regardless of streaming); what is lost is live progress display and the socket hang-up that stops a trickling server.",
+      "gate": "wave 1 - blacklist only on the no-SSE-data case (2138) and treat 1979/1982/2129 as ordinary retryable errors with streaming kept; test that a stream dying after N deltas still sends stream: true next call"
+    },
+    {
+      "id": "F-07-local-url-cache-ttl",
+      "title": "the locality cache never expires, so the egress gates can be stale",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29. _LOCAL_URL_CACHE is read and written with no TTL, eviction or size bound (1288, 1313-1316) and fronts the failover filter (12920, 12929), search and fetch egress (7008, 7087) and the llama.cpp extension decision (2468, 2400). Correction: the trigger is a DNS re-pointing of a HOSTNAME - an IP literal is its own cache key and never re-resolves, so DHCP renumbering of one is inert. Reverse staleness (remote cached, later local) is the harmless direction. WINDOW_TTL = 300 at 1599 is the in-tree precedent.",
+      "gate": "wave 1 - store (verdict, at) and treat a hit older than 300 s as a miss; test that a cached verdict expires"
+    },
+    {
+      "id": "F-08-secrets-refresh",
+      "title": "a key added after startup is never scrubbed",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "PARTIAL 2026-09-29. _SECRETS = _secret_values() runs once at import (2532) and nothing re-derives it: config set ends at CONFIG.update(back) (20857), model add ends at _config_take_effect (20643-20651), run_setup updates CONFIG (19134) and writes .env through _env_set (21378) without touching os.environ. The finding's named vector is wrong, though: model add takes --key-env NAME only and never an inline key. The real vectors are config set llm.api_key <value> and config set llm.fallbacks with an inline key (both allowed because the secret guard skips the llm section), plus setup keys that only ever reach .env.",
+      "gate": "wave 1 - re-derive _SECRETS at the end of config set, _config_take_effect and run_setup; test that a key set at runtime is masked without a restart"
+    },
+    {
+      "id": "F-12-run-capture-mode",
+      "title": "run_capture's output directory is world-readable on a shared host",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29 for Linux shared hosts. run_capture makes tempfile.gettempdir()/tinycmdr-runs with mkdir and no mode (4485-4486) and writes .out/.err through plain open (4508), so umask 022 leaves the directory 0755 and the files 0644 under a world-readable /tmp; kept outputs are pruned only by a LATER call, after 86400 s (4562-4565). On macOS gettempdir() is the per-user 0700 $TMPDIR, which neutralises it - the fleet's primary platform is not exposed. The installer's umask 077 does not persist into the launchd-run bot.",
+      "gate": "wave 1 - chmod the run directory 0o700 (files then inherit it); test asserts the mode, skipped where the platform's temp dir is already private"
+    },
+    {
+      "id": "F-14-carry-json-ingest",
+      "title": "the session loader reads *.carry.json as phantom sessions",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29. Agent.__init__ reloads SESSIONS_DIR.glob('*.json') (12381) into self.histories keyed by f.stem, and a carry sidecar is written as <safe>.carry.json (10739-10741, saved 10766-10769), so histories['x.carry'] holds a dict. No iteration of histories exists today (init, _history, _trim_history, reset all key in), so it is dead memory - and a trap for the next for-k loop, which search_sessions already documents for these same sidecars (8578-8586).",
+      "gate": "wave 1 - skip *.carry.json in the load glob; test that a carry file does not become a history entry"
+    },
+    {
+      "id": "F-15-locks-growth",
+      "title": "Agent.locks grows for the life of the process",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29. _lock does self.locks.setdefault(key, threading.Lock()) (12404-12405) and nothing anywhere removes a key: reset() pops histories, model_overrides, carry, run_state, reveals and spills but not locks (14669-14698). The finding misses the punchline: delegate_task mints sub-<epoch> and calls AGENT.reset(key) on it (8690, 8720) - the throwaway-session call is exactly the one that should reclaim the lock and does not.",
+      "gate": "wave 1 - pop the lock in reset() when it is not held (an abandoned worker may still own it); test a delegation leaves no lock behind"
+    },
+    {
+      "id": "F-20-double-decorator",
+      "title": "tool_remember carries the notes lock twice",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29 at exactly 7394-7395. Harmless by design: _path_lock hands back one cached _FileLock per path (6437, 654) and _FileLock is reentrant per thread, and its own docstring names this incident (6307-6309). Pure cruft - but the cost of leaving it is that a future reader cannot tell the redundancy was intentional.",
+      "gate": "wave 1 - delete one decorator; test_ledger_race's notes-lock check passes identically with one"
+    },
+    {
+      "id": "F-17-ask-vs-abandon",
+      "title": "ask_user_wait_seconds and stall_abandon_minutes are never compared",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29. The ask cap is min(ask_user_wait_seconds or 120, 900) (9230-9236) and abandon is stall_abandon_minutes or 20 (452), and nothing validates the pair: config set checks only dotted-key shape, secret names and boolean types (20759-20860); validate_startup_config checks chat-lane preconditions only (21584-21700); doctor has no cross-key check (20450-20623). Defaults are safe (120 s vs 20 min). A run parked on a human whose cap exceeds the abandon is cancelled mid-question (17027 sets the run's events, ask_operator returns stopped at 9404-9410). Note for the fix: with the watchdog disabled (stall_abandon_minutes <= 0, 16552) there is nothing to clamp against.",
+      "gate": "wave 1 - a doctor problem (or a load-time clamp) when ask_user_wait_seconds exceeds stall_abandon_minutes while the watchdog is on; test both the warn and the watchdog-off case"
+    },
+    {
+      "id": "F-21-execute-code-doc",
+      "title": "the doc says execute_code runs in-process; it runs in a subprocess",
+      "state": "open",
+      "anchor": {
+        "file": "docs/tinycmdr-what-it-is.md"
+      },
+      "detail": "CONFIRMED 2026-09-29. docs/tinycmdr-what-it-is.md:49 advertises 'run Python in-process for parsing, math, log wrangling' while the tool runs [sys.executable, -c, code] (tinycmdr.py:5615) under a timeout. The subprocess is the better design - it is killable and cancel-aware - so the doc undersells it rather than overselling.",
+      "gate": "wave 1 - correct the line, and assert it in the doc-drift suite so it cannot drift back"
+    },
+    {
+      "id": "F-22-installer-shasums",
+      "title": "the installers never verify the SHA256SUMS they ship beside",
+      "state": "open",
+      "anchor": {
+        "file": "install/install-tinycmdr.sh"
+      },
+      "detail": "CONFIRMED 2026-09-29. Neither install.sh nor install/install-tinycmdr.sh mentions SHA256SUMS, sha256 or shasum anywhere, so the curl-into-bash path - the one the README leads with - unpacks whatever arrived while the README's sha256sum -c step stays manual. Releases are unsigned, so the sums only catch corruption or truncation; that is exactly the case the pipe-to-shell path handles worst.",
+      "gate": "wave 1 - fetch SHA256SUMS with the asset and verify before unpacking, saying in the output that it catches corruption and not a replaced release"
+    },
+    {
+      "id": "F-09-batch-closure-binding",
+      "title": "a zombie batch worker writes into a later turn's results",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29, narrower than described. work(i, tc) is a nested def in the same frame as the per-turn buffers (14155-14160) and the for-loop creates no scope, so every turn's closure shares one cell; ex.shutdown(wait=False, cancel_futures=True) (14299) deliberately lets a hung worker outlive its batch, and cancel_futures only cancels not-yet-started ones. The later list is live only until its own batch completes (roughly its own duration), and the concrete damage is an orphan tool message plus '[HARNESS: no result was recorded for this call...]' padding for the current call (12203, 12240) - with an IndexError if the stale index exceeds the later list's length.",
+      "gate": "wave 2 - bind the buffers as default arguments on work(); test that a tool outliving its batch cannot touch a later turn's results"
+    },
+    {
+      "id": "F-18-volatile-context-writes",
+      "title": "prompt assembly can write notes.md (and measurement can too)",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29, with reach understated. volatile_context() calls curate_notes('prompt over budget') and re-reads the file when notes exceed the cap (11547-11551); curation is safe today (whole read-modify-write under the notes lock, 7301-7305). What the finding misses is that volatile_context() is also called purely to ESTIMATE: compaction (12818) and status/estimation paths (1447, 18794), so a disk write plus an inter-process flock can fire from measurement, not only assembly. Trigger is abnormal only (notes are bounded at write time).",
+      "gate": "wave 2 - curate on write or on a timer, and have the read path truncate or flag instead; test that prompt assembly writes nothing"
+    },
+    {
+      "id": "F-19-cloud-window-preset",
+      "title": "a cloud endpoint is driven at an assumed 8k window",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "PARTIAL 2026-09-29. Detection fails on OpenAI-style endpoints (no max_model_len, no /props), so the envelope takes budget=8000, reply=min(cfg_max or 2048, 2048) (12638-12639) - the numbers are right. Two corrections: it is not silent (log.warning 12641 names llm.max_context_tokens, and doctor reports the endpoint as NO ANSWER with a problem, 20532-20535), and the suggested fix is misaimed - window_profiles caps character budgets by detected window band and cannot widen the assumed window; only llm.max_context_tokens can. Side effect worth knowing: the example config's 16384 band then applies small-model character caps to a cloud user.",
+      "gate": "wave 2 - have doctor (and setup, for a non-LAN endpoint) suggest llm.max_context_tokens for the provider's real window, and cover the assumed envelope branch in a test"
+    },
+    {
+      "id": "F-16-endpoint-keyed-envelope",
+      "title": "the envelope is measured against the primary endpoint and reused on failover",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "PARTIAL 2026-09-29, and worse than described. _endpoint_window probes CONFIG['llm']['base_url'] only (12545-12557) and the envelope cache is keyed by session (12582-12583), computed once before the endpoint loop (12863, cap at 12955), so a fallback inherits the primary's window, reply and budget. The self-heal is not reliable: _force_shrink targets self._context_budget(key) * 0.5 (12843-12850) - the PRIMARY budget - and the run loop retries once (13711), so 32k primary to 8k fallback can still die after shrinking.",
+      "gate": "wave 2 - key the window and envelope by endpoint URL and base the shrink on the FAILING endpoint's window; test that a smaller fallback gets its own envelope"
+    },
+    {
+      "id": "F-06-lane-lifecycle-parity",
+      "title": "watchdog, steering and cancel are per-lane, so a new lane inherits none of them",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED structurally 2026-09-29. Mattermost owns the watchdog registration (active at 16622, _stall_tick 17016), the cancel plumbing (16446, 17175) and steering (17449); Telegram calls drive_run with a cancel_event and no steer_cb (18590), so a mid-run message queues instead of steering - which contradicts README:110 and 137; and the scheduler passes neither (9160-9163). Telegram workers also block on q.get() with no timeout (18564) where Mattermost's exit after 10 s idle (16967-16969). One correction: the CLI lane does have steering and cancel (19806-19814), so 'only Mattermost' should read 'only Mattermost and the CLI'. drive_run consolidated the CALLBACK half only (15764-15765); this is the lifecycle half, and F-04b and F-11 are instances of it.",
+      "gate": "wave 2 - move watchdog registration, cancel plumbing and steering into drive_run/Agent keyed by session, so each lane gets them by construction; test a scheduled run and a Telegram run are stoppable and steerable"
+    },
+    {
+      "id": "F-11-scheduler-cancel",
+      "title": "a scheduled run has no cancel event and never enters the watchdog",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29, harm overstated. Scheduler._fire calls drive_run with no cancel_event and no steer_cb (9160-9163) and never touches dispatcher.active (set only at 16622), so _stall_tick never sees the run and a channel /stop finds nothing (17173-17177). Correction: manifest drop-in tools ARE bounded by their own per-call timeout (10144-10168 through run_capture's deadline, 4513-4531); what is unbounded is a native in-process drop-in (10059-10061) or any other in-process hang, because max_minutes is only tested at turn boundaries (13585, 13876, 13926, 14031, 14495).",
+      "gate": "wave 2 (properly fixed by F-06) - mint a cancel event for a scheduled run and register its activity; test that a channel /stop reaches a wedged scheduled job"
+    },
+    {
+      "id": "F-05-monotonic-clock",
+      "title": "every duration is wall-clock, so a suspend abandons healthy runs",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "CONFIRMED 2026-09-29, severity re-scoped. Counts exact: 102 time.time() calls by grep, zero monotonic or perf_counter. Deadlines really are wall clock - _post_watchdog (1707-1723), run_capture (4513-4529), ask waits (9397-9400), WINDOW_TTL (1599 against 1431, 12553, 12581), the run budget (13589 vs 13876/13926/14031/14495) - and _stall_tick's quiet is now minus a wall-clock last (17020-17023, last touched at 16558/16622). But the practical arm is not NTP stepping (slewed, corrected in seconds): it is suspend/resume on this laptop, where one 30-minute sleep makes every active run look wedged and gets it abandoned and cancelled. The fix is a per-site audit, not a helper swap - cron fire times (9100, 9061-9062) and persisted or displayed timestamps (state.json at, last_seen) must stay wall-clock, and test_catchup actively pins that.",
+      "gate": "wave 2 - now_mono()/now_wall(), monotonic for elapsed and interval math only; tests for a forward step during a healthy run (no abandonment) and a backward step (the run budget still ends it), with test_catchup left green"
+    },
+    {
+      "id": "F-10-zip-slip",
+      "title": "zip-slip in update <zip> (refuted on audit)",
+      "state": "closed",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "REFUTED 2026-09-29. The code fact is true - z.extractall(work) with no filter kwarg (20922-20924) - but the security claim is not, and the suggested fix would not run. zipfile.ZipFile.extractall has no filter parameter in the supported 3.10-3.12 band (signature on this box's 3.12.13: (self, path=None, members=None, pwd=None); filter= is a tarfile/3.12 PEP 706 name), and CPython's _extract_member strips leading separators and every '..' component before joining. Proved here: an archive carrying ../escaped.txt, /abs.txt and ..\\..\\backslash.txt extracted entirely inside the target directory. Residual is cosmetic: CPython silently sanitises rather than refusing. No action; recorded so it is not re-reported as a vulnerability.",
+      "gate": "done - refuted; only an optional hygiene pass (reject such members) remains, and only if a future Python version changes the behaviour"
+    },
+    {
       "id": "linux-install-python",
       "title": "the Linux installer has no --install-python",
       "state": "open",
