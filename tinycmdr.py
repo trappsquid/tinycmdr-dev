@@ -2177,6 +2177,39 @@ def lan_permission_hint(base_url):
             "Network, and allow the python this agent runs")
 
 
+def _pick_model(models, want):
+    """The advertised entry for `want`, or None when it cannot be identified honestly.
+
+    Identity, not a guess. The id match may be lenient - case, and a gateway's owner prefix
+    ("Qwen/Qwen2.5-72B" for a config that says "Qwen2.5-72B") - but when several models are
+    advertised and none of them is this one, the answer is "unknown", not "the first one".
+
+    Measured by audit 2026-09-29: the fallback was `models[0]`, so a gateway advertising
+    ["...0.5B", "...72B"] with an aliased config name sized the ENTIRE envelope - messages
+    budget, reply cap and every window-scaled limit - from the 0.5B's window. Over-reporting is
+    the direction this harness calls out as dangerous (2026-09-21: a 126,261-token payload in a
+    131,072 slot, cut off mid-think with no answer), and under-reporting clips every large
+    result for the whole run. Unknown lets the endpoint's own root answer instead, and failing
+    that leaves the operator's configured budget in charge.
+    """
+    rows = [m for m in (models or []) if isinstance(m, dict)]
+    if not rows:
+        return None
+    want = str(want or "").strip().lower()
+    if want:
+        for m in rows:
+            if str(m.get("id") or "").strip().lower() == want:
+                return m
+        tail = [m for m in rows
+                if str(m.get("id") or "").strip().lower().rsplit("/", 1)[-1] == want]
+        if len(tail) == 1:
+            return tail[0]
+    if len(rows) == 1:
+        # Exactly one advertised model: that model IS what this endpoint serves.
+        return rows[0]
+    return None
+
+
 def _detect_window(base_url, headers, timeout=10):
     """Ask an endpoint how many tokens it serves per request; 0 when it does not say.
 
@@ -2195,12 +2228,15 @@ def _detect_window(base_url, headers, timeout=10):
     try:
         models = (requests.get(base + "/models", headers=headers,
                                timeout=timeout).json().get("data") or [])
-        want = CONFIG["llm"]["model"]
-        entry = next((m for m in models if m.get("id") == want),
-                     models[0] if models else {})
-        detected = entry.get("max_model_len")               # vLLM
-        if not detected:
-            detected = (entry.get("meta") or {}).get("n_ctx")   # llama.cpp
+        entry = _pick_model(models, CONFIG["llm"]["model"])
+        if entry is None:
+            log.debug("window detect: %d model(s) advertised on %s, none is %r - asking the "
+                      "endpoint's own root instead", len(models), base,
+                      CONFIG["llm"]["model"])
+        else:
+            detected = entry.get("max_model_len")               # vLLM
+            if not detected:
+                detected = (entry.get("meta") or {}).get("n_ctx")   # llama.cpp
     except Exception as e:
         log.debug("window detect: /models on %s did not answer: %s", base, e)
     if not detected:
@@ -3089,13 +3125,35 @@ def _platform_tag():
     return "macos" if sys.platform == "darwin" else "linux"
 
 
+# Every result the harness formats as a COMMAND's output begins with this header - tool_shell,
+# tool_execute_code and the manifest runner all emit `exit_code=<n>`. It is the harness's own
+# marker, so it is the one reliable signal that what follows is a command's output.
+_HARNESS_EXIT_HEADER = re.compile(r"exit_code=-?\d+\s*(?:\n|$)")
+
+
 def failed_output(text):
     """Is this a failed tool result? Only failures get a field note: a note on a
-    successful call would teach the model to see a cause that is not there."""
+    successful call would teach the model to see a cause that is not there.
+
+    The prefix is the harness's own verdict and every tool sets it. The remaining checks are
+    about a COMMAND's output, so they are gated on the harness's own `exit_code=` header -
+    they are only meaningful where the harness put them.
+
+    Measured by audit 2026-09-29: scanning arbitrary text instead meant a SUCCESSFUL read_file
+    of a file that happened to contain a traceback (or `--- stderr ---`, or a first line
+    reading `ERROR: `) was classified as a failed call. A field note and the last-good-call
+    replay were then attached to a success - the very thing this docstring forbids - and the
+    working call was not recorded as the good shape. A result the harness did not format as
+    command output now answers from its prefix alone.
+    """
     if not isinstance(text, str):
         return False
     if text.startswith(("ERROR", "BLOCKED", "DECLINED", "TIMEOUT")):
         return True
+    if not _HARNESS_EXIT_HEADER.match(text):
+        # Not command output: a file's contents, a search hit, a listing. Its text is not
+        # evidence about whether the CALL failed.
+        return False
     if re.match(r"exit_code=(?!0\b)\d+", text):
         return True
     if "--- stderr ---" in text and "exit_code=0" not in text[:40]:

@@ -184,6 +184,35 @@ def main():
     check("the configured model's entry wins over the first in the list",
           window(f) == 32768)
 
+    # ------------------------------------------- identified, never guessed
+    # Audit 2026-09-29: the fallback was `models[0]`, so a gateway advertising a 0.5B and a 72B
+    # while the config named an alias sized the ENTIRE envelope from the 0.5B - or, worse, from
+    # whatever happened to be listed first. Over-reporting a window is the direction this
+    # harness treats as dangerous; under-reporting clips every large result for the whole run.
+    GW = [{"id": "Qwen/Qwen2.5-0.5B", "max_model_len": 32768},
+          {"id": "Qwen/Qwen2.5-72B", "max_model_len": 131072}]
+    check("an exact id picks that model",
+          fb._pick_model(GW, "Qwen/Qwen2.5-72B")["max_model_len"] == 131072)
+    check("  case alone does not defeat it",
+          fb._pick_model(GW, "qwen/qwen2.5-72B")["max_model_len"] == 131072)
+    check("  a gateway's owner prefix does not either",
+          fb._pick_model(GW, "Qwen2.5-72B")["max_model_len"] == 131072)
+    check("several advertised and none of them this one -> UNKNOWN, not the first",
+          fb._pick_model(GW, "some-other-alias") is None,
+          fb._pick_model(GW, "some-other-alias"))
+    check("  but ONE advertised model is the model, whatever the config calls it",
+          fb._pick_model([GW[0]], "some-other-alias")["id"] == "Qwen/Qwen2.5-0.5B")
+    check("  and nothing advertised is unknown, not a crash",
+          fb._pick_model([], "x") is None and fb._pick_model(None, "x") is None)
+
+    two = Fake({"/v1/models": {"object": "list", "data": GW}})
+    check("the window is UNKNOWN when the model cannot be identified",
+          window(two) == 0, window(two))
+    one = Fake({"/v1/models": {"object": "list", "data": [
+        {"id": "renamed-by-the-box", "max_model_len": 8192}]}})
+    check("  and a single-model endpoint still reports its window",
+          window(one) == 8192, window(one))
+
     # ------------------------------------------- slots: how many requests at once
     # The /props reply that fingerprints llama.cpp also carries total_slots, and until
     # 2026-09-29 the harness threw it away: the live box reported 2 slots while a run fanned

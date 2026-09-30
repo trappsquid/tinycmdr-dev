@@ -197,6 +197,23 @@ def main():
         check(fb.failed_output("exit_code=0\n--- stderr ---\nwarning only") is False,
               "stderr with a zero exit code is not treated as a failure")
 
+        # A CONTENT tool's result is DATA, not a command's output, so its own text is not
+        # evidence about whether the CALL failed. Measured by audit 2026-09-29: a successful
+        # read of a file containing a traceback was called a failure, so a field note and the
+        # last-good-call replay were attached to a success - the thing this module's own
+        # docstring forbids - and the working call was not remembered as the good shape.
+        check(fb.failed_output("/w/run.py (lines 1-40 of 400)\n"
+                               "Traceback (most recent call last):\n  File x.py") is False,
+              "a file that CONTAINS a traceback is not a failed call")
+        check(fb.failed_output("/w/build.log (lines 1-10 of 90)\nexit_code=1") is False,
+              "  nor is one that contains the text exit_code=1")
+        check(fb.failed_output("/w/notes.md (lines 1-3 of 9)\n--- stderr ---") is False,
+              "  nor one that contains a stderr banner")
+        check(fb.failed_output("exit_code=1\nboom\nTraceback (most recent call last):") is True,
+              "while a real SHELL result with a traceback still is")
+        check(fb.failed_output("exit_code=0\nok\nTraceback (most recent call last):") is True,
+              "  and a command that PRINTED a traceback is too, even at exit 0")
+
         # signature match, respecting scope: notes only fire on the platform they
         # were written for, and an unscoped note fires everywhere
         fail = "exit_code=100\nE: Could not get lock /var/lib/dpkg/lock-frontend"

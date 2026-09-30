@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **A file's CONTENTS are not a verdict on the call that read it.** `failed_output` scanned any
+  tool result for `Traceback`, `--- stderr ---` or a leading `exit_code=1`, so a SUCCESSFUL
+  `read_file` of a file containing a traceback was classified as a failed call. A field note and
+  the last-good-call replay were then attached to a success - the thing its own docstring forbids,
+  because "a note on a successful call would teach the model to see a cause that is not there" -
+  and the working call was not remembered as the good shape either. Those checks are now gated on
+  the harness's OWN `exit_code=` header, which `tool_shell`, `tool_execute_code` and the manifest
+  runner all emit: they were only ever meaningful for a command's output, and now they can only
+  apply there. The prefix verdict (ERROR/BLOCKED/DECLINED/TIMEOUT) still decides for every tool.
+- **The context window is IDENTIFIED, never guessed.** `_detect_window` matched the configured
+  model id exactly and otherwise took `models[0]` - the first model the endpoint happened to list
+  - so a gateway advertising a 0.5B and a 72B while the config named an alias sized the WHOLE
+  envelope from whichever came first: messages budget, reply cap, and every window-scaled limit.
+  Matching is now lenient about identity (case, and a gateway's owner prefix) and strict about
+  guessing - several advertised and none of them this one means UNKNOWN, which lets the
+  endpoint's own root answer first and then leaves the operator's configured budget in charge.
+  A single advertised model is still taken as the model, whatever the config calls it.
+  Still open, and named here so it is not lost: a conversation switched with `/model` is still
+  sized from the CONFIG model, because the window cache is per-process, not per-session.
+
 ### The proxy audit (2026-09-29)
 
 Swept the CLASS the `.txt` bug belonged to: every place the harness decides something from a
