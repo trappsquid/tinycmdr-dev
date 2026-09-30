@@ -17,6 +17,36 @@
   ],
   "items": [
     {
+      "id": "offline-window-restart-storm",
+      "title": "an offline window costs ~1650 process restarts, one every 10s",
+      "state": "open",
+      "anchor": {
+        "file": "install/com.tinycmdr.agent.plist"
+      },
+      "detail": "Measured 2026-09-30 on the Mac, whose router radio is deliberately off overnight: the configured Mattermost host stopped resolving at 00:15:33 and the LAN model endpoint was unreachable with it, so run_bot() raised, main() re-raised by design (tinycmdr.py ~22346), and launchd's KeepAlive{SuccessfulExit: false} with ThrottleInterval 10 respawned the process every ~10s until the network returned at ~05:00:21 - 1654 startups of a 22k-line module, each printing the capabilities banner and one lane-down line. The 'one line per STATE, not per attempt' rule at ~22344 is what kept the log to 1654 lines instead of 1654 times N; it did not stop the restarts. Nothing was lost (jobs.json is empty, so no scheduled work was due), but the window is deterministic for this host rather than bad luck, and it repeats nightly.",
+      "gate": "a decision, then a test: raise ThrottleInterval (the same 4h45m window then costs ~57 startups at 5 minutes) or retry connectivity-class failures in-process with a backoff while keeping the exit path for config errors (a bad token or URL); the test simulates the window and counts startups"
+    },
+    {
+      "id": "offline-window-invisible",
+      "title": "an offline window leaves no record once the lane recovers",
+      "state": "open",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "logs/state.json holds only the CURRENT verdict: after the 2026-09-30 00:15-05:00 outage it reads an empty failures map and a lane that is ok - lane_down() empties the failures map on recovery, so the only trace of 4h45m offline is 1654 lines in logs/launchd.err.log. `tinycmdr health` reports the live state with an exit code, which is the right answer WHILE it is down; an operator who was asleep learns nothing afterwards. On this host the window is predictable - the router radio is off overnight - and it costs more than the chat lane: the model endpoint is on the same LAN, so the agent can do nothing at all for those hours.",
+      "gate": "on the first successful connect after a gap past a threshold, say so where the operator reads (a chat line and/or a field in status/health): the window, and that nothing was missed. While offline no notice is possible at all, so the report has to be the recovery rather than an alert"
+    },
+    {
+      "id": "log-rotation-ignored",
+      "title": "tinycmdr.log.1 was not covered by .gitignore",
+      "state": "closed",
+      "anchor": {
+        "commit": "0c1c7ab"
+      },
+      "detail": "Fixed 2026-09-30 (0c1c7ab). The rules covered logs/ and *.log, but a rotated file keeps a numeric suffix and `*` stops at the dot, so tinycmdr.log.1 (5 MB, rotated 00:08) sat in the live tree as untracked-and-visible and a `git add -A` would have committed a host log - which is why every commit in the 1.0.41 batch had to be path-scoped. *.log.* covers the rotation shapes (tinycmdr.log.1, tinycmdr.log.2026-09-30, logs/x.log.2) and leaves the exact-name rule as it was.",
+      "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
+    },
+    {
       "id": "telegram-suite-grades-the-box",
       "title": "test_telegram goes red on any box whose .env carries a chat token",
       "state": "shipped",
