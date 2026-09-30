@@ -148,6 +148,31 @@ def test_a_comment_cannot_run():
           fb.command_cost_risk('bash -c "find / -name x"') is not None)
 
 
+def test_a_mention_is_not_a_command():
+    """The BLOCK tier reads what would RUN, not what is merely carried (audit 2026-09-29).
+
+    It matched the whole command, so `grep -rn "rm -rf /" docs/` was refused outright, with the
+    model told no confirmation unlocks it - a dead end for a read-only SEARCH. The rule is now
+    two views of the command: quoted regions removed, because a quote is an argument, EXCEPT
+    command substitutions, which run wherever they appear; and a match surviving only inside
+    quotes blocks too, but only when something in the command EXECUTES that text.
+
+    Both halves matter: the first list is what a seatbelt is for, and the second is what it was
+    costing. If a future change makes this fail in the FIRST list, the change is a hole.
+    """
+    for cmd in ('rm -rf /', 'sudo rm -rf /', 'sh -c "rm -rf /"', "bash -c 'rm -rf /'",
+                '$(rm -rf /)', '`rm -rf /`', 'xargs rm -rf /', 'find . -exec rm -rf / \\;',
+                'ssh box "rm -rf /"', 'echo "rm -rf /" | sh',
+                "echo 'rm -rf /' > /tmp/x.sh && sh /tmp/x.sh",
+                'subprocess.run("rm -rf /", shell=True)'):
+        check(f"still blocked: {cmd[:44]!r}", bool(fb.is_blocked(cmd)), fb.is_blocked(cmd))
+    for cmd in ('grep -rn "rm -rf /" docs/', "git log -S 'rm -rf /'", 'rg "mkfs" docs/',
+                'sudo grep -rn "rm -rf /" docs/', "printf '%s' 'rm -rf /'",
+                'print("rm -rf /")', 'echo "dd if=/dev/zero of=/dev/sda"'):
+        check(f"a mention, not a command: {cmd[:44]!r}", fb.is_blocked(cmd) is None,
+              fb.is_blocked(cmd))
+
+
 def test_broad_root_escalates():
     """A whole tree is the absolute tier; a named directory is a question."""
     check("a whole-tree delete is BLOCKED, not confirmed",

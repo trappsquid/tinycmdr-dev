@@ -55,6 +55,26 @@ Fixed
   winner was whichever was written first rather than the more specific one. Digits stay part of a
   word, so `llama` still matches `llama3-8b` and `deepseek` still matches
   `deepseek-r1-distill-llama-8b`; a longer key now beats a shorter one that also matches.
+- **The BLOCK tier reads what would RUN, not what is merely carried.** It matched the whole
+  command, so `grep -rn "rm -rf /" docs/` was refused outright - the model told that no
+  confirmation unlocks it - because a SEARCH for the string looked like the string being run.
+  Same for `git log -S 'rm -rf /'`, and for an execute_code whose source merely contains the
+  text, which is why the harness could not run its own guard battery through it.
+
+  The rule is now two views of the command. FIRST the live text: quoted regions removed, because
+  a quote is an argument, EXCEPT command substitutions, which run wherever they appear - a match
+  there blocks exactly as before. SECOND, a match surviving only inside quotes blocks too, but
+  only when the command hands that text to something that EXECUTES it: `sh -c`, `eval`, `xargs`,
+  `find -exec`, `ssh`, `python -c`, `$()` / backticks, a pipe into an interpreter, or in code
+  `subprocess` / `os.system` / `os.popen` / `exec`.
+
+  This narrows what is MATCHED, never what is dangerous. Thirteen forms of a real invocation
+  still block - including the write-then-run shape (`echo '...' > x.sh && sh x.sh`) and the
+  interpreters - and both halves are pinned in tests/test_guard_battery.py, with the first list
+  labelled as the one whose failure would be a hole. The admitted cost, stated in the code: a
+  mention sitting NEXT to an interpreter is still refused (`python check.py "rm -rf /"`), because
+  over-blocking a mention is the direction a seatbelt should err in - refusing a plain search was
+  not.
 
 ### The proxy audit (2026-09-29)
 

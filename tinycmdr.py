@@ -2805,13 +2805,74 @@ def _patterns(kind):
     return got
 
 
+# --- what the BLOCK tier reads: what would RUN, not what is merely carried -----------------
+#
+# A blocked pattern stands for "this command would do it", so the tier has to match the text
+# that would run - it matched the whole command instead, and that refused a SEARCH for the
+# string. Measured by audit 2026-09-29: `grep -rn "rm -rf /" docs/` came back BLOCKED, with the
+# model told no confirmation unlocks it. A dead end for a read-only command, and the same for
+# `git log -S 'rm -rf /'` or an execute_code whose source merely contains the text.
+#
+# Two views, in this order:
+#   1. LIVE text - quoted regions removed, because a quote is an argument - EXCEPT command
+#      substitutions, which run wherever they appear ("$(...)" and backticks). A match here
+#      blocks, exactly as it did before.
+#   2. A match surviving only INSIDE quotes also blocks, but only when the command hands that
+#      text to something that EXECUTES text. A quoted mention with no executor is inert, and
+#      inert text is not a command.
+#
+# This narrows WHAT IS MATCHED, never what is dangerous. The executor list is about running a
+# STRING, so `sudo grep "rm -rf /" log` stays a search (sudo does not re-parse its arguments),
+# while `sh -c "rm -rf /"`, `bash -c '...'`, `$(rm -rf /)`, `` `rm -rf /` ``, `xargs rm -rf`,
+# `find . -exec ...`, `ssh host "..."` and `subprocess.run("rm -rf /")` all still block.
+#
+# The admitted cost: a mention that sits NEXT TO an interpreter is still refused - `python
+# check.py "rm -rf /"` counts as handing a string to Python. Over-blocking a mention is the
+# direction a seatbelt should err in; refusing a plain search was not.
+_SUBSTITUTION = re.compile(r"\$\([^()]*\)|`[^`]*`")
+_EXECUTORS = (
+    # an interpreter asked to run a STRING
+    re.compile(r"(?i)\b(?:sh|bash|zsh|dash|ksh|fish|python[0-9.]*|perl|ruby|node|php|lua)"
+               r"\b[^\n]{0,24}?\s-[a-z]*[ce]\b"),
+    # an interpreter asked to run a FILE - the write-then-run shape inside one command
+    re.compile(r"(?i)\b(?:sh|bash|zsh|dash|ksh|fish|python[0-9.]*|perl|ruby|node)\b\s+\S"),
+    re.compile(r"(?i)\b(?:eval|exec|xargs|ssh)\b"),
+    re.compile(r"(?i)\bfind\b[^\n|&;]*-exec\b"),
+    re.compile(r"(?i)\|\s*\S*(?:sh|bash|zsh|python[0-9.]*|perl|node)\b"),
+    # a string handed to a process-spawning call in code
+    re.compile(r"(?i)\b(?:subprocess|pty\.spawn|commands\.get(?:output|statusoutput))\b"),
+    re.compile(r"(?i)\bos\.(?:system|popen|exec\w*)\b"),
+    re.compile(r"(?<![\w.])(?:exec|eval)\s*\("),
+)
+
+
+def _live_text(text):
+    """The part of `text` a shell or interpreter would RUN: quotes removed, substitutions kept."""
+    body = str(text or "")
+    subs = " ".join(_SUBSTITUTION.findall(body))
+    return _QUOTED_ARG.sub(" ", body) + " " + subs
+
+
+def _executes_text(text):
+    """Does this command hand a STRING to something that runs it?"""
+    text = str(text or "")
+    return any(rx.search(text) for rx in _EXECUTORS)
+
+
 def is_blocked(command):
     # case-insensitive on purpose: PowerShell cmdlets are capitalised
     # (Remove-Item, Stop-Computer) and 'Format C:' must match too (the patterns
     # compile with IGNORECASE in _patterns)
+    text = str(command or "")
+    live = _live_text(text)
+    mention = None
     for pat in _patterns("blocked_patterns"):
-        if pat.search(command):
-            return pat.pattern
+        if pat.search(live):
+            return pat.pattern                     # this would run
+        if mention is None and pat.search(text):
+            mention = pat.pattern                  # inside quotes so far: see the rule above
+    if mention is not None and _executes_text(text):
+        return mention                             # ... and something here executes that text
     return None
 
 
