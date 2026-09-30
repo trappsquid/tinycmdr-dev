@@ -17226,6 +17226,9 @@ class AppScreen(TuiScreen):
     def close_model_pick(self, value=None):
         on_pick, self._pick_done = self._pick_done, None
         self.pick = None
+        # The status line still said "choose a model" after the picker was gone (seen on a
+        # pty, 2026-09-30): it is the picker's hint, so it goes with the picker.
+        self.status = ""
         self._invalidate()
         if on_pick is not None:
             on_pick(value)

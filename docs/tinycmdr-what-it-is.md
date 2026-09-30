@@ -18,7 +18,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                24,353 lines / 1.11 MB in ONE file, no package, no framework
+code                24,356 lines / 1.11 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -420,7 +420,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 24,353-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 24,356-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -463,7 +463,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               24,353 lines, one file, no dependency tree to audit
+readability               24,356 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
