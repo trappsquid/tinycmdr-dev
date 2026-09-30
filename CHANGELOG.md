@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.43] - 2026-09-30
+
+The console stops looking like a prompt. `tinycmdr --app` is a full-screen window - a frame with
+the app name, session and clock in its title bar, a rail carrying the session, a live context
+gauge, the last run and the keys, cards drawn on a filled surface, a status bar whose spinner and
+clock tick while a run is in flight, and a labeled `you` composer box - and a bare `tinycmdr` opens
+it on every OS. Inline and plain keep the same cards, the same palette and byte-stable output; the
+one accent is a muted teal and blue is gone. Four defects a review found in the streamed-narration
+lane are fixed with them: the answer no longer renders three times, a structured draft can no
+longer leak raw markdown, a streamed line GROWS instead of stair-stepping one line per delta, and
+the prompt can no longer paint between a draft and its answer card.
+
 Added
 - **`tinycmdr --app`: the same console as a full-screen terminal app.** The inline console cannot
   take a printed line back, which is the whole reason the drop()/prefix-dedupe machinery existed -
