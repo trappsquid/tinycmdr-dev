@@ -8,7 +8,9 @@ suite runs anywhere, including CI on a machine that has none of the real trees.
 
 Run:  python tests/test_where.py
 """
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -162,6 +164,77 @@ def main():
                                [{"pid": "1", "script": str(dirty / "tinycmdr.py")}])
         check(any("not from the tree declared live" in p for p in problems),
               "a bot running from somewhere else is caught")
+
+        # ---- one tree may hold two roles, if it SAYS so -----------------------
+        # The arrangement a box that develops in place needs. Declared, it is not the
+        # duplicate-path mix-up; undeclared it still is (checked just above).
+        one = make_tree(tmp, "one-tree", "9.9.9")
+        spec = {"role": "dev", "path": str(one), "git": True, "same_tree_as": "live"}
+        facts = [where.tree_facts({"role": "live", "path": str(one), "git": True,
+                                   "must_be_clean": True}),
+                 where.tree_facts(spec)]
+        check(where.check(facts, []) == [],
+              "a role declaring `same_as live` on one tree raises nothing")
+        co = tmp / "roles-colocated.json"
+        co.write_text(json.dumps([
+            {"role": "live", "path": str(one), "git": True, "must_be_clean": True},
+            {"role": "dev", "same_as": "live", "why": "one tree"}]), encoding="utf-8")
+        check(where.main(["--roles", str(co), "--check"]) == 0,
+              "  and --check passes on a clean co-located pair")
+
+        # ---- same_as inherits the path, so the two can never disagree ---------
+        roles = where.roles_from(str(co))
+        dev = next(r for r in roles if r["role"] == "dev")
+        check(dev["path"] == str(one), "same_as takes its path from the role it names")
+        check(dev["same_tree_as"] == "live", "  and records which tree it shares")
+
+        # a same_as that names nothing, or contradicts the path it names, is refused
+        bad = tmp / "roles-bad.json"
+        bad.write_text(json.dumps([{"role": "dev", "same_as": "live"}]), encoding="utf-8")
+        try:
+            where.roles_from(str(bad))
+            check(False, "same_as naming an undeclared role is refused")
+        except ValueError as e:
+            check("not declared" in str(e), "same_as naming an undeclared role is refused")
+        facts = [where.tree_facts({"role": "live", "path": str(one), "git": True}),
+                 where.tree_facts({"role": "dev", "path": str(live), "git": True,
+                                   "same_tree_as": "live"})]
+        check(any("different paths" in p for p in where.check(facts, [])),
+              "a same_as that contradicts the tree it names is caught")
+
+        # ---- the host file OVERRIDES a shipped role, and says so --------------
+        host = tmp / "where-roles.json"
+        host.write_text(json.dumps([{"role": "dev", "path": str(one), "why": "this box"}]),
+                        encoding="utf-8")
+        saved_host, saved_env = where.HOST_ROLES, os.environ.pop("TINYCMDR_WHERE_ROLES", None)
+        where.HOST_ROLES = host
+        try:
+            roles = where.roles_from()
+            dev = next(r for r in roles if r["role"] == "dev")
+            check(dev["path"] == str(one) and dev.get("overridden"),
+                  "a host entry overrides a shipped role by name, and is marked as an override")
+            shipped_live = next(r for r in where.ROLES if r["role"] == "live")["path"]
+            check(next(r for r in roles if r["role"] == "live")["path"] == shipped_live,
+                  "  and a role it does not name is left exactly as shipped")
+        finally:
+            where.HOST_ROLES = saved_host
+            if saved_env is not None:
+                os.environ["TINYCMDR_WHERE_ROLES"] = saved_env
+
+        # ---- the GitHub view degrades instead of failing ----------------------
+        f = where.github_facts(str(plain))
+        check(not f["available"] and f["why_not"],
+              "asking GitHub about a tree with no origin says why, rather than dying")
+        check(where.ref_age(str(one)) == "",
+              "a tree nobody has fetched says so, instead of implying its refs are fresh")
+
+        # ---- --json still parses, and admits github was not asked for ---------
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = where.main(["--roles", str(co), "--json"])
+        payload = json.loads(buf.getvalue())
+        check(rc == 0 and payload.get("github") is None and payload["trees"],
+              "--json is still valid JSON, with github null unless --remote was asked for")
 
         print()
         if FAILS:

@@ -17,6 +17,26 @@
   ],
   "items": [
     {
+      "id": "telegram-suite-grades-the-box",
+      "title": "test_telegram goes red on any box whose .env carries a chat token",
+      "state": "open",
+      "anchor": {
+        "file": "tests/test_telegram.py"
+      },
+      "detail": "The check 'one door is not a warning' edits CONFIG and asserts both_doors_note() == '', but _mm_token_configured() falls back to os.environ['TINYCMDR_MM_TOKEN'], which a real install's .env supplies and the fixture cannot clear - so the predicate stays true and the refusal note comes back. Measured 2026-09-29 on the fleet Mac: 41 passed, 1 failed; the same suite is 42/42 on a clean clone of HEAD, and on a copy of HEAD with this box's diff applied, so the suite grades the BOX rather than the rule. It is the class tests/hermetic.py was written for.",
+      "gate": "the check neutralizes the environment it grades (or grades the rule on CONFIG alone), then 42/42 on a box whose .env has a token"
+    },
+    {
+      "id": "host-tools-no-shelf",
+      "title": "a per-host tool with no category is red in test_tool_discovery",
+      "state": "open",
+      "anchor": {
+        "file": "tests/test_tool_discovery.py"
+      },
+      "detail": "The check 'every tool files on a shelf (nothing strays into `other`)' enumerates the REGISTERED tools, which on a real box includes the per-host tools/ drop-ins. Measured 2026-09-29 on the fleet Mac: two of them land in `other` and the suite is 130 passed, 1 failed; a clean clone carries only the shipped example tools, where it is 129/129. The red is host data, not the tree - but it means the gate is not green on a working box, which is what a reader assumes 'the gate' means.",
+      "gate": "either a category for what a host drops in, or the check exempts host tools and says which rule wins"
+    },
+    {
       "id": "linux-install-python",
       "title": "the Linux installer has no --install-python",
       "state": "open",

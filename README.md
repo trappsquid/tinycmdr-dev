@@ -226,6 +226,7 @@ from, a backup clone - the roles are stated once and every fact is read from the
 ```bash
 python3 maintenance/where.py           # the table: version, commit, tag, changes, distance from origin
 python3 maintenance/where.py --check   # non-zero when a tree that must be clean is not
+python3 maintenance/where.py --remote  # ... plus what GitHub has NOW (network, read-only)
 ```
 
 There is no map to keep in sync, on purpose: a hand-written one lived outside this repository,
@@ -240,6 +241,16 @@ somebody's share is not source):
 ```json
 [{"role": "backup", "path": "~/somewhere/tinycmdr", "why": "pre-rewrite history"}]
 ```
+
+A host entry may also **override** a shipped role by name, and a role may declare that it shares
+another's tree - the shape a box uses when it develops in the install itself:
+
+```json
+[{"role": "dev", "same_as": "live", "why": "one tree: code work happens in the install"}]
+```
+
+The full development contract - the flow, the gate, what is deliberately not in git, and where the
+truth about this box lives - is [`docs/development.md`](docs/development.md).
 
 ---
 

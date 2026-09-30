@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **`maintenance/where.py --remote` reads GitHub instead of this clone's refs.** Every other fact
+  in the table comes from local refs, which are only as fresh as the last fetch - "in sync with
+  origin" read from a stale ref is how a tree 27 commits ahead looked current. `--remote` runs
+  `git ls-remote` and `gh release list` and writes nothing: it prints main's sha beside what this
+  clone's `origin/main` says, and the newest published release. It is a separate flag so the gate
+  and the pre-push hook keep working on a box with no route to github.com; the ORIGIN block now
+  also says WHEN this clone last fetched, and says so outright when it never has.
+- **A host may override a shipped role, and a role may declare that it shares another's tree.**
+  `maintenance/where-roles.json` used to only ADD roles - a same-name entry was skipped - which made
+  both arrangements a real box needs impossible: point `live` at an install in another folder, or
+  say that `dev` IS the live tree on a box that develops in place. A host entry now merges over the
+  shipped one (and the row says it was overridden), and `{"role": "dev", "same_as": "live"}` takes
+  its path from the role it names - so the two can never disagree, and one tree stops reading as
+  the duplicate-path mix-up only when it is DECLARED as one. `tests/test_where.py` pins all of it,
+  including a `same_as` that names nothing or contradicts the tree it names.
+- **`docs/development.md` and `AGENTS.md`, the development contract.** For whichever model, harness
+  or auditor is at the keyboard: the command that decides each question, the flow from topic branch
+  to release, what is deliberately not in git and why, the secrets and privilege rules, and the
+  invariants the gate enforces. The README points at it; `AGENTS.md` is the door a harness reads
+  first.
+
 ## [1.0.40] - 2026-09-29
 
 The day's audit batch, plus two things the operator found by using it. A dropped-in manifest could
