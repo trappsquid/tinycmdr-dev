@@ -19,6 +19,7 @@ One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
 
 import base64
+import contextlib
 import datetime as _dt
 import hashlib
 import hmac
@@ -12436,6 +12437,19 @@ class Agent:
     def _lock(self, key):
         return self.locks.setdefault(key, threading.Lock())
 
+    def _run_lock_wait_secs(self):
+        """How long a run waits for its session's lock before it stops waiting.
+
+        A plain Lock cannot be force-released, so a run the stall watchdog abandoned
+        (see _stall_tick) keeps this session's lock for ever, and the worker respawned
+        behind it used to block in run() with no answer posted - the operator was told
+        the backlog was being picked up instead (F-01). Same-session runs are sequential
+        by construction in the chat lane and a scheduled job overlapping its own
+        previous run is the only other way to meet a held lock, so a minute is already
+        generous: past it, saying so beats another minute of silence.
+        """
+        return 60.0
+
     def _trim_history(self, key):
         """Trim in BLOCKS, with hysteresis — not a couple of messages per turn.
 
@@ -13536,7 +13550,25 @@ class Agent:
         the harness-side progress lines.
         say_cb(text): a line posted to the operator from the harness itself (not the
         model), e.g. the notice that a run continued past its budget."""
-        with self._lock(session_key), _RunSpan(session_key):
+        # The session lock is taken with a DEADLINE, and the deadline ends in words.
+        # The stall watchdog abandons a wedged run but cannot take its lock away (a
+        # plain Lock has no force-release), so the worker it respawns used to block
+        # HERE for ever on that same key while the operator was told the queue behind
+        # the wedged run was being served (F-01) - silence, not an answer.
+        _wait = self._run_lock_wait_secs()
+        _run_lock = self._lock(session_key)
+        if not _run_lock.acquire(timeout=_wait):
+            log.error("[%s] this session's lock is still held after %.0fs - the run "
+                      "holding it never unwound (an abandoned run keeps it for ever: a "
+                      "Lock cannot be force-released); refusing to queue behind it",
+                      session_key, _wait)
+            return ("⚠️ The previous run in this session is still going and still "
+                    "holds it, so I won't wait behind it in silence. If that run is "
+                    "wedged, `/tinycmdr restart force` clears it. Nothing was sent to "
+                    "the model.")
+        _stack = contextlib.ExitStack()
+        _stack.callback(_run_lock.release)   # released after _RunSpan, as before
+        with _stack, _RunSpan(session_key):
             REGISTRY.note_provenance()  # once per process: tools/ provenance
             reset_scan_spend(session_key)   # a run starts with a fresh scan budget
             hist = self._history(session_key)
@@ -14230,7 +14262,16 @@ class Agent:
                     dedupe_after = int(
                         CONFIG["agent"].get("loop_dedupe_after", 2) or 0)
 
-                    def work(i, tc):
+                    # This turn's buffers ride in as DEFAULTS, never as free names: the
+                    # turn loop rebinds results/timings/dedupe_after in this same frame
+                    # (a for-loop opens no scope, so one closure cell serves every turn),
+                    # and ex.shutdown(wait=False) deliberately lets a hung tool outlive
+                    # its batch. A worker that finished late used to write its result
+                    # into whatever list the NEXT turn had just created - an orphan tool
+                    # result carrying a stale id, the current call padded as "no result
+                    # was recorded", or an IndexError past the end of the new list.
+                    def work(i, tc, results=results, tool_calls=tool_calls,
+                             timings=timings, dedupe_after=dedupe_after):
                         f = tc.get("function", {})
                         name = f.get("name", "?")
                         raw_args = f.get("arguments", "")

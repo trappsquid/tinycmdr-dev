@@ -411,6 +411,81 @@ def test_watchdog_abandon_clears_the_busy_flag():
           not d.steering.get(ch), d.steering)
 
 
+class _RealHandleDispatcher(FakeDispatcher):
+    """FakeDispatcher with the REAL _handle wired back in.
+
+    Safe for the two lock tests below: the run under test returns before the model is
+    ever asked anything, so nothing here can reach the live LLM or the live ledger.
+    Every other test in this suite wants the stub, which is why this is its own subclass.
+    """
+    _handle = fb.MattermostDispatcher._handle
+
+
+def test_a_run_does_not_wait_for_ever_on_an_abandoned_session_lock():
+    """F-01. The stall watchdog abandons a wedged run, but it can never take away the
+    session lock that run still holds - threading.Lock has no force-release - so the
+    worker it respawns called AGENT.run() on the SAME key and blocked there for ever,
+    while the operator was told the backlog behind the wedged run was being picked up.
+    The wait now ends in an answer naming the one command that clears it."""
+    d = _RealHandleDispatcher()
+    _redirect_state()
+    ch = "chan-lock-wait"
+    key = f"mm-{ch}"
+    wedged = fb.AGENT._lock(key)
+    check("no run holds this session yet", not wedged.locked(), "lock already taken")
+    wedged.acquire()               # the abandoned run, still inside run(), still holds it
+    fb.AGENT._run_lock_wait_secs = lambda: 0.4   # the wait under test, not the 60s one
+    try:
+        finished, _ = timed(lambda: d._handle(ch, "david", "carry on", "m-lock",
+                                              "", True, 0), 30)
+        held_after = wedged.locked()
+    finally:
+        del fb.AGENT._run_lock_wait_secs
+    check("the next run gives up instead of blocking for ever", finished,
+          "still blocked on the abandoned run's lock")
+    check("the operator is told, and told the way out",
+          any("restart force" in t for _, t in d.posted), d.posted)
+    check("the abandoned run's lock was left alone", held_after,
+          "the live lock was taken or released")
+    wedged.release()
+
+
+def test_the_watchdog_respawn_ends_in_an_answer_not_a_blocked_worker():
+    """F-01, the whole chain as it was reported: the watchdog abandons the wedged run and
+    respawns a worker for the backlog behind it - and because the wedged run still holds
+    the session lock, that fresh worker sat in AGENT.run() for ever while the operator was
+    told "picking up whatever you queued behind it". Here the abandoned run is a lock the
+    tick cannot take away, the respawn is real, and what the operator reads has to be an
+    answer rather than silence."""
+    d = _RealHandleDispatcher()
+    _redirect_state()
+    ch = "chan-stall-lock"
+    q = d.queues.setdefault(ch, fb.queue.Queue())
+    q.put(("david", "carry on", "m-lock2", "m-lock2", True))   # queued behind the wedged run
+    wedged = fb.AGENT._lock(f"mm-{ch}")
+    wedged.acquire()               # the run the tick is about to write off, still holding it
+    d.worker_gen[ch] = 3           # a zombie worker's signature: no thread to race the tick
+    d.workers.add(ch)
+    d.active[ch] = {"started": time.time(), "last": time.time() - 25 * 60,
+                    "warned": False, "gen": 3}
+    fb.AGENT._run_lock_wait_secs = lambda: 0.4   # the wait under test, not the 60s one
+    try:
+        d._stall_tick()            # abandons, and hands the channel to a fresh worker
+        deadline = time.time() + 30
+        while time.time() < deadline and not any("restart force" in t
+                                                 for _, t in d.posted):
+            time.sleep(0.1)
+        answered = [t for _, t in d.posted if "restart force" in t]
+        held_after = wedged.locked()
+    finally:
+        del fb.AGENT._run_lock_wait_secs
+        wedged.release()
+    check("the respawned worker answers instead of blocking for ever", answered,
+          d.posted)
+    check("the abandoned run's lock was left alone", held_after,
+          "the live lock was taken or released")
+
+
 def test_second_message_while_busy_steers_the_live_run_instead_of_queueing():
     """Live on a Linux bot 2026-09-11: a run was mid-flight when the operator sent
     "Leave it alone". Queueing it meant the correction was read only after the run it was meant to
@@ -1809,7 +1884,7 @@ def test_stop_guard_sits_inside_the_batch_worker():
     test can order "the stop arrives between call 1 and call 2" deterministically; what can be
     pinned is that the guard is there, inside work(), before anything executes."""
     src = (SRC).read_text(encoding="utf-8", errors="replace")
-    i = src.find("def work(i, tc):")
+    i = src.find("def work(i, tc")
     check("stop: the batch worker has a body", i > 0, "work() not found")
     if i > 0:
         body = src[i:i + 1400]
@@ -1820,6 +1895,32 @@ def test_stop_guard_sits_inside_the_batch_worker():
               0 < j < k if k > 0 else j > 0, f"check@{j} announce@{k}")
         check("stop: the skipped call still gets an answer (pairing)",
               "NOT EXECUTED" in body, "no answer for the skipped call")
+
+
+def test_the_batch_worker_closes_over_its_own_turn_buffers():
+    """F-09, source-level for the same reason as the stop guard: the batch deadline is
+    ~440s, so "a hung tool outlives its batch and finishes inside the NEXT turn" cannot be
+    driven in a test. It can be pinned. ex.shutdown(wait=False) deliberately leaves that
+    worker running, the turn loop rebinds results/timings/dedupe_after in the SAME frame (a
+    for-loop opens no scope, so every turn shared one closure cell), and the late worker
+    then wrote into whatever list the current turn had just created: an orphan tool result
+    carrying a stale id, the current call padded as "no result was recorded", or an
+    IndexError past the end of the new list. The fix is the binding asserted here."""
+    src = (SRC).read_text(encoding="utf-8", errors="replace")
+    i = src.find("def work(i, tc")
+    check("batch worker: the worker has a signature", i > 0, "work() not found")
+    if i > 0:
+        end = src.find("):", i)
+        sig = src[i:end + 2]
+        check("batch worker: the signature was found whole", end > i and
+              "\n" in sig, repr(sig[:120]))
+        for name in ("results", "tool_calls", "timings", "dedupe_after"):
+            check(f"batch worker: {name} is closed over as this turn's own buffer",
+                  f"{name}={name}" in sig, sig)
+        # and the body really does write into the bound names, not into fresh globals
+        body = src[end:end + 1000]
+        check("batch worker: the body writes the result it bound",
+              "results[i] = (" in body, body[:200])
 
 
 def test_a_correction_that_arrives_with_the_answer_gets_another_turn():
