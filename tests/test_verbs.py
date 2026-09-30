@@ -160,6 +160,40 @@ def main():
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
 
+        # ---- F-19: a cloud endpoint on an ASSUMED window is told the lever --------
+        # /v1/models on a hosted API carries no max_model_len and there is no /props,
+        # /api/ps or /get_server_info, so _detect_window returns 0 and the envelope assumes
+        # its 8000-token window with replies clipped at 2048 - a 128k model driven at 8k.
+        # Doctor used to call that "did not answer" and name no lever; the fix is one key,
+        # and only for an off-LAN endpoint. A server that DID report a window needs no
+        # advice, and an on-LAN box is asked again once it is restarted with a bigger slot.
+        saved_url = fb.CONFIG["llm"]["base_url"]
+        saved_ceiling = fb.CONFIG["llm"].get("max_context_tokens")
+        fb.CONFIG["llm"]["base_url"] = "http://192.0.2.10:8081/v1"   # off-LAN, no DNS
+        fb.CONFIG["llm"]["max_context_tokens"] = "auto"              # nothing to believe
+        fb._detect_window = lambda url, headers=None: 0
+        forget_probes()
+        rc, out, err = call(fb, ["doctor"])
+        check("doctor names the window lever for a cloud endpoint that reports no window",
+              rc == 1 and "llm.max_context_tokens" in err, (rc, err[-400:]))
+        check("...and says the window is assumed, not that the endpoint is down",
+              "no window known" in out and "did not answer" not in err,
+              (out[-300:], err[-300:]))
+        fb.CONFIG["llm"]["base_url"] = "http://192.0.2.10:8081/v1"
+        fb._detect_window = lambda url, headers=None: 131072         # the server answered
+        forget_probes()
+        rc, out, err = call(fb, ["doctor"])
+        check("...and stays silent when the endpoint does report a window",
+              rc == 0 and "llm.max_context_tokens" not in err, (rc, err[-300:]))
+        fb.CONFIG["llm"]["base_url"] = saved_url                     # back on the LAN
+        fb._detect_window = lambda url, headers=None: 0
+        forget_probes()
+        rc, out, err = call(fb, ["doctor"])
+        check("...and stays silent for a LAN endpoint with no window",
+              "llm.max_context_tokens" not in err, err[-300:])
+        fb.CONFIG["llm"]["max_context_tokens"] = saved_ceiling
+        forget_probes()
+
         # A run parked on a legitimate question must not be abandoned as a stall first.
         # Nothing compared the pair: with the ask cap at 900 s and abandon at 10 min,
         # `_stall_tick` set the cancel event and ask_operator returned "stopped" instead

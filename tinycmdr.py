@@ -19217,6 +19217,16 @@ def run_setup(rest=None):
     if ans_key:
         _env_set("TINYCMDR_LLM_API_KEY", ans_key)
         print(dim("   API key saved to .env as TINYCMDR_LLM_API_KEY"))
+    # A hosted endpoint says nothing about its window (/v1/models carries no max_model_len
+    # and there is no /props to ask), so the harness would run it on an assumed 8000 and clip
+    # replies at 2048. Setup is where the endpoint is being named, so it is where the one key
+    # that fixes it belongs (F-19). The probe is read-only, the same one the envelope runs;
+    # an on-LAN box is skipped - its lever is its own context slot, not a config key.
+    if not _is_local_url(llm["base_url"]) and not _detect_window(llm["base_url"], None):
+        print(dim("   Note: no context window was reported, so the harness will assume an"))
+        print(dim("   8000-token conversation budget and clip replies at 2048. Set"))
+        print(dim("   llm.max_context_tokens in config.json to the window your provider"))
+        print(dim("   documents (hosted models are usually 32k-128k+)."))
     print()
 
     print(bold("2. Mattermost Gateway (Chat)"))
@@ -20670,6 +20680,21 @@ def _verb_doctor():
         print("  envelope  : %s" % envelope_line(env))
         if env.get("refused"):
             problems.append(env["refusal"])
+    elif env["source"] == "assumed" and not _is_local_url(url):
+        # A hosted endpoint answers /v1/models but carries no max_model_len there and serves
+        # no /props, /api/ps or /get_server_info - nothing tells the harness its window, so
+        # the envelope falls back to an assumed 8000 tokens and clips replies at 2048 (a 128k
+        # cloud model driven at 8k). The old line called this "did not answer", which sends
+        # the operator to the endpoint when the lever is one config key. Silent on an on-LAN
+        # box: its window comes from its own context slot, which a restart changes.
+        print("  endpoint  : %s — no window known; assuming %s"
+              % (url, fmt_tokens(int(env["window"]))))
+        problems.append(
+            "no context length was available from %s, so the harness assumes a %s "
+            "window and clips replies at %s tokens. Set llm.max_context_tokens in "
+            "config.json to the window your provider documents (hosted models are usually "
+            "32k-128k+)."
+            % (url, fmt_tokens(int(env["window"])), fmt_tokens(int(env["reply"]))))
     else:
         print("  endpoint  : %s — NO ANSWER" % url)
         problems.append(("the model endpoint at %s did not answer" % url)
