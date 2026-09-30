@@ -157,6 +157,17 @@ def main():
     check("the doc says releases are unsigned (the honest half of the claim)",
           "NOT signed" in doc or "not signed" in doc)
 
+    # F-21: the tool table advertised execute_code as running Python "in-process". It runs
+    # `[sys.executable, "-c", code]` under a timeout, and the subprocess is the better
+    # design - it is what makes a runaway script killable - so the doc was underselling it.
+    # Asserted in BOTH directions: the sentence cannot drift back, and the call cannot
+    # quietly become an exec without this suite saying so.
+    app = (BASE / "tinycmdr.py").read_text(encoding="utf-8", errors="replace")
+    check("the doc does not claim execute_code runs Python in-process",
+          "run Python in-process" not in doc, "the in-process claim is back in the table")
+    check("execute_code runs Python in a subprocess (what makes it killable)",
+          'sys.executable, "-c", code' in app, "the subprocess call is gone from tinycmdr.py")
+
     denials = ("no benchmark or eval harness", "no evaluation suite", "no eval set",
                "no evaluation harness", "no release process", "no test suite", "no ci")
     said = [d for d in denials if d in doc.lower()]

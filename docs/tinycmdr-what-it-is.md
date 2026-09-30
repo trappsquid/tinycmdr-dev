@@ -32,7 +32,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       16 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               68 suites / 23,584 lines / 2,805 checks that need no model, plus a graded
+tests               68 suites / 23,718 lines / 2,813 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 5 blocks: llm 19, telegram 2, mattermost 6, search 3, agent 91
@@ -46,7 +46,7 @@ state on disk       sessions/*.json (per channel), notes.md, tasks.json (ledger)
 
 ```
 shell           run a command on this machine (bash / PowerShell), per-call timeout
-execute_code    run Python in-process for parsing, math, log wrangling
+execute_code    run Python in a subprocess (killable on timeout or a stop)
 read_file       read text, including UTF-16 and null-padded files
 write_file      create/overwrite a file
 edit_file       exact-string replacement, automatic .bak
