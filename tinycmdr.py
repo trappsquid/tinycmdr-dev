@@ -4405,6 +4405,55 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
 # than a slow search. When in doubt this returns None and the command runs as it
 # always did.
 
+# --- what a GUARD should read -----------------------------------------------------------
+# A guard is only as good as its subject. These two strip what cannot run, so a guard fires on
+# the command/code that would, and not on a mention of it.
+#
+# A comment cannot execute, so a guard that fires on one is a false positive by construction.
+# STRING LITERALS ARE KEPT on purpose: `subprocess.run("reboot")` really does reboot, and a
+# guard that stripped strings would be a hole rather than a fix. Measured by audit 2026-09-29:
+# a comment reading "# restart happens in the next step" tripped the confirm tier over
+# execute_code, which on a lane with nobody at the door is a flat DECLINED.
+#
+# The approximation: a `#` inside a string literal is not a comment, so `print("a # b")` loses
+# its tail here. That is a GUARD SUBJECT, not code that runs - and every pattern in the tiers is
+# a whole command or path shape, never a bare word, so a truncated print cannot stage anything.
+_PY_COMMENT = re.compile(r"#[^\n]*")
+
+# Quotes turned into SPACES (not removed), for reading a path out of a command: the walked
+# target is usually quoted, and removing the quotes deleted it.
+_QUOTE_CHARS = re.compile(r"['\"]")
+
+# A command that hands its quoted text to something that RUNS it: `bash -c "find /"`, eval,
+# xargs, `python -c`. There the quotes stay, because the quoted text really is the command.
+_REEXECUTOR = re.compile(
+    r"(?i)\b(?:sh|bash|zsh|dash|ksh|python[0-9.]*|perl|ruby|node)\b[^|;&\n]{0,24}?\s-[a-zA-Z]*[ce]\b"
+    r"|\beval\b|\bxargs\b|\bexec\b")
+
+
+def _strip_py_comments(code):
+    """Python source with its COMMENTS removed, for the guards that read source text."""
+    return _PY_COMMENT.sub("", code or "")
+
+
+def _cost_subject(command):
+    """The command text a COST guard should read: quoted arguments removed.
+
+    `echo "find / -name x"` is not a walk - those words are an argument to echo - but the shape
+    regexes read them, charged the run for a walk that never happened, and once the run's scan
+    budget was spent REFUSED the harmless echo. A quote is not a command.
+
+    Unless the command hands its quoted text to something that RUNS it (`_REEXECUTOR`): `bash -c
+    "find /"` and `xargs` really do walk, so there the quotes stay and the guard still sees it.
+    Erring this way costs a mis-billed echo; erring the other way would let a real walk past the
+    ceiling this guard exists to hold.
+    """
+    cmd = str(command or "")
+    if _REEXECUTOR.search(cmd):
+        return cmd
+    return _QUOTED_ARG.sub(" ", cmd)
+
+
 _RECURSIVE_WALK = (
     (re.compile(r"(?i)\b(?:get-childitem|gci|dir|tree)\b[^\n|&;]*(?:-recurse\b|/s\b)"),
      "a recursive directory walk"),
@@ -4484,31 +4533,47 @@ def code_cost_risk(code):
     """{"shape", "root"} when this code walks a broad root, else None.
 
     Same two conditions as the shell rule, because it is the same cost: the measured
-    dodge was os.walk from a broad root once the shell cap bit.
+    dodge was os.walk from a broad root once the shell cap bit. Comments are removed first
+    (see _strip_py_comments) - a comment cannot walk anything, and it was charging the run's
+    scan budget for a walk that never happened.
     """
+    code = _strip_py_comments(code)
     shape = None
     for rx, name in _CODE_WALK:
-        if rx.search(code or ""):
+        if rx.search(code):
             shape = name
             break
     if not shape:
         return None
-    for tok in _path_tokens(code):
+    # Quotes become SPACES rather than disappearing, so a path inside a string is still a
+    # token: `subprocess.run("rglob('/')")` otherwise reads as one opaque token and a real
+    # sweep is missed.
+    for tok in _path_tokens(_QUOTE_CHARS.sub(" ", code)):
         if _broad_root(tok):
             return {"shape": shape, "root": tok}
     return None
 
 
 def command_cost_risk(command):
-    """{"shape", "root"} when this is an unbounded walk, else None."""
+    """{"shape", "root"} when this is an unbounded walk, else None.
+
+    The SHAPE is read from the command with its quoted arguments removed (see _cost_subject):
+    a mention inside quotes is an argument, and charging for it both mis-bills the run and,
+    once the budget is gone, refuses a command that never walked anything.
+
+    The ROOT is read from the command with its quotes turned into SPACES rather than removed.
+    A walked path is normally quoted - `-Path "C:/Users/<user>"`, or any directory with a space
+    in it, or the payload of `bash -c "..."` - so deleting it deleted the very thing being
+    judged, and every quoted walk slipped the ceiling this guard exists to hold.
+    """
     shape = None
     for rx, name in _RECURSIVE_WALK:
-        if rx.search(command or ""):
+        if rx.search(_cost_subject(command)):
             shape = name
             break
     if not shape:
         return None
-    for tok in _path_tokens(command):
+    for tok in _path_tokens(_QUOTE_CHARS.sub(" ", str(command or ""))):
         if _broad_root(tok):
             return {"shape": shape, "root": tok}
     return None
@@ -5343,10 +5408,11 @@ def tool_execute_code(args, ctx):
     # The CONFIRM tier covers code (audit, 2026-09-22). Block was the only check here,
     # which is why an over-broad block was worse than a confirm: the same command, one
     # string-assembly away, walked past the seatbelt with nothing asked at all.
-    confirm_hit = _confirm_hit(code)
+    _code_guard = _strip_py_comments(code)
+    confirm_hit = _confirm_hit(_code_guard)
     # The named gates return a REASON, not a regex, so they are kept apart from the one the
     # subject line is found with.
-    _other_hit = _endpoint_load_request(code) or _prompt_surface_write(code)
+    _other_hit = _endpoint_load_request(_code_guard) or _prompt_surface_write(_code_guard)
     if confirm_hit or _other_hit:
         # Quote the LINE that matched, not the first line: the operator is being asked
         # about a destructive shape, and "import os" is not the subject of the question.

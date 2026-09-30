@@ -129,6 +129,25 @@ def test_must_allow():
         check(f"allowed: {cmd!r}", verdict is None, verdict)
 
 
+def test_a_comment_cannot_run():
+    """A guard reads the SOURCE, so a COMMENT must not trip it: a comment cannot execute.
+
+    STRINGS ARE KEPT - `subprocess.run("reboot")` really does reboot - so this costs nothing
+    that can run, only inert text. Measured by audit 2026-09-29: a comment reading
+    "# restart happens in the next step" tripped the confirm tier over execute_code, which on
+    a lane with nobody at the door is a flat DECLINED.
+    """
+    check("a comment mentioning a gated verb does not gate",
+          fb._confirm_hit(fb._strip_py_comments("# reboot the box when you are done")) is None,
+          fb._confirm_hit(fb._strip_py_comments("# reboot the box when you are done")))
+    check("  while a STRING that would run it still does",
+          fb._confirm_hit(fb._strip_py_comments('subprocess.run("reboot")')) is not None)
+    check("  and a comment cannot spend the scan budget",
+          fb.code_cost_risk('# os.walk("/") is exactly what we must not do') is None)
+    check("  while a quoted argument handed to a re-executor still can",
+          fb.command_cost_risk('bash -c "find / -name x"') is not None)
+
+
 def test_broad_root_escalates():
     """A whole tree is the absolute tier; a named directory is a question."""
     check("a whole-tree delete is BLOCKED, not confirmed",

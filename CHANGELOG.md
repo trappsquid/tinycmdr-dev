@@ -27,6 +27,22 @@ Fixed
   A single advertised model is still taken as the model, whatever the config calls it.
   Still open, and named here so it is not lost: a conversation switched with `/model` is still
   sized from the CONFIG model, because the window cache is per-process, not per-session.
+- **A cost guard reads the command that RUNS, not a mention of one.** `command_cost_risk` matched
+  its walk shapes against the whole command, quotes included, so `echo "find / -name x"` was
+  billed against the run's scan budget - and once that budget was spent the harmless echo was
+  refused outright. The SHAPE now comes from the command with quoted arguments removed, while the
+  ROOT is read with quotes turned into SPACES rather than deleted: a walked path is normally
+  quoted (`-Path "C:/Users/<user>"`, any directory with a space in it), so removing it deleted the
+  very target being judged - which the suite's own Windows fixture caught immediately. A command
+  that hands its quoted text to a re-executor (`bash -c`, `eval`, `xargs`, `python -c`) keeps its
+  quotes, so `bash -c "find / -name x"` still counts. On the code side the walk shapes ignore
+  COMMENTS for the same reason.
+- **A COMMENT cannot trip a guard over code.** The confirm tier and the endpoint gates were
+  matched against raw Python source, so a comment reading `# restart happens in the next step`
+  was confirmed-and-declined - and on a lane with nobody at the door that is a flat DECLINED,
+  with the work lost. Comments are removed before those guards read source. STRING LITERALS ARE
+  KEPT on purpose: `subprocess.run("reboot")` really does reboot, so stripping them would be a
+  hole rather than a fix - `tests/test_guard_battery.py` pins that half explicitly.
 
 ### The proxy audit (2026-09-29)
 

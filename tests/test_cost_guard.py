@@ -109,6 +109,29 @@ def main():
             check(fb.code_cost_risk(code) is None,
                   f"ordinary code is left alone -> {code.splitlines()[0][:46]}")
 
+        # ---- a MENTION is not a walk (audit 2026-09-29) -----------------------
+        # The shape regexes read the whole command, so a quoted argument DESCRIBING a walk was
+        # billed against the run's scan budget - and once the budget was spent, the harmless
+        # command was refused outright. A quote is not a command, and a comment cannot walk
+        # anything, so neither should be able to spend this budget.
+        for cmd in ('echo "find / -name x"',
+                    "printf '%s\\n' 'grep -r error /var'",
+                    'grep -n "os.walk" notes.md'):
+            check(fb.command_cost_risk(cmd) is None,
+                  f"a quoted mention is not a walk -> {cmd[:52]}")
+        for cmd in ('find / -name x', 'bash -c "find / -name x"', 'eval "find / -name x"',
+                    "sh -c 'grep -r error /var'"):
+            check(bool(fb.command_cost_risk(cmd)),
+                  f"  but a walk that RUNS still counts -> {cmd[:52]}")
+        for code in ('# os.walk("/") is exactly what we must not do',
+                     '# rglob("/") was the slow path\nprint(1)'):
+            check(fb.code_cost_risk(code) is None,
+                  f"a comment cannot walk -> {code.splitlines()[0][:46]}")
+        check(bool(fb.code_cost_risk('os.walk("/")')),
+              "  while real code that walks is still a walk")
+        check(bool(fb.code_cost_risk('exec("os.walk(\'/\')")')),
+              "  and a walk assembled in a STRING is still seen")
+
         # ---- the per-call ceiling --------------------------------------------
         ctx = {"session_key": "s"}
         risk = fb.command_cost_risk(RISKY[0])
