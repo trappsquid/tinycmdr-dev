@@ -180,3 +180,11 @@ python3 tests/test_status.py               # what is already known-open
 
 That is the whole onboarding. If those four disagree with any other document you were handed,
 they are right and the document is stale.
+
+One honest wrinkle, verified by cloning to a fresh directory on a machine that already has an
+install: `where.py` declares roles for the box it runs on, so the shipped table expects `~/tinycmdr`
+(and `~/tinycmdr-dev` beside it). A clone somewhere else shows those roles as MISSING - that is the
+tool being truthful about a layout it does not recognise, not a fault. Declare your own in
+`maintenance/where-roles.json` (gitignored, format in §2), or point `TINYCMDR_WHERE_ROLES=<file>` at
+a declaration of your own. The roles describe a box; they are never a statement about this
+repository.
