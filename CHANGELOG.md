@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.42] - 2026-09-30
+
+One behaviour change, and it is about what happens when the bot cannot reach its lane: the host
+that runs it is down, a laptop woke up without wifi, the model box was switched off, the host in
+config is wrong, the token was refused. The process used to exit and leave the retry to the
+platform, and the three platforms disagreed - Windows backed off; Linux and macOS restarted every
+ten seconds for as long as the condition lasted, because systemd's `RestartSec` and launchd's
+`ThrottleInterval` cannot grow a delay. One measured night of that was 1654 startups in 4 h 45 m,
+each importing a 22k-line module. All three platforms now share the growing backoff the Windows
+supervisor already shipped, and what genuinely needs a human still exits.
+
 Changed
 - **A chat lane whose host is unreachable is retried in-process, on a growing backoff.** The bot
   exited on a failed lane start and left the restart policy to the platform - and the three
@@ -22,7 +33,14 @@ Changed
   `logs/state.json`). What needs a human still exits: a missing token, a broken config and a token
   the API refused pass `SystemExit` straight through, and `/restart` still exits 75. The unit and
   the plist keep a fixed delay as the CRASH backstop (raised to 60 s), because a real crash still
-  needs the manager.
+  needs the manager. `tests/test_lane_health.py` pins the two policies to each other, step for
+  step, so they cannot drift apart again.
+
+Fixed
+- **A rotated log is ignored.** `.gitignore` covered `logs/` and `*.log`, but a rotated file keeps
+  a numeric suffix and `*` stops at the dot: `tinycmdr.log.1` (5 MB, rotated at 00:08) sat in a
+  live tree as untracked-and-visible, so a `git add -A` there would have committed a host log.
+  `*.log.*` covers the rotation shapes and leaves the exact-name rule as it was.
 
 ## [1.0.41] - 2026-09-30
 
