@@ -585,7 +585,8 @@
       "title": "the app filed the model's pre-answer narration above the answer card",
       "state": "shipped",
       "anchor": {
-        "commit": "437f231"
+        "commit": "437f231",
+        "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (437f231), the round-4 residual of P-02. Reproduced from the reporter's own call pattern: RunReporter.narration draws a NEW line (CliDestination.line('narration', ...)) and only then streams deltas into it with update(), so the first draw is a committed transcript item and the deltas are a second. The answer card dropped only the item it believed was the draft, so the model's opening sentence stayed filed above the card with its markdown characters intact - literally the last survivor of the triple-render family the brief opened with. AppScreen now tracks the run's draft region (narration lines and streamed deltas since the last real card) and the answer drops the whole span; a card in between ends the region, so narration a tool call came after stays as history. tests/test_tui.py replays the first-draw-plus-deltas shape and asserts no item mentioning the draft survives the card.",
       "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
@@ -595,7 +596,8 @@
       "title": "an answer card carried a two-row blank band around a markdown table",
       "state": "shipped",
       "anchor": {
-        "commit": "437f231"
+        "commit": "437f231",
+        "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (437f231). T-05 again, and the first pass could not have closed it: the band is emitted by the RENDERER, not present in the markup, so stripping blank source lines and collapsing triple newlines left two blank rows between a table and the following paragraph and one before the card's closing border. Measured: 2 rows between the table and a paragraph, 1 row when the answer ended in a table. The answer body now renders through a small renderable that draws the markdown at whatever width the panel gives it (so the wrapping is still rich's own), drops the whole blank run after a table, collapses blank runs elsewhere to one, keeps blank lines inside a code surface (a background style is the giveaway) and crops a line wider than the box - rich's horizontal rule was overflowing by the panel's padding and wrapping onto a second row. tests/test_tui.py asserts a table followed by a paragraph leaves no blank row inside the card.",
       "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
@@ -605,7 +607,8 @@
       "title": "a pasted page was invisible in the composer: one row, no size, no review",
       "state": "shipped",
       "anchor": {
-        "commit": "437f231"
+        "commit": "437f231",
+        "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (437f231), from the operator's question about pasting large text. The data path measured clean before any change - bracketed paste (which the app enables) delivers a paste as one event, so 1 KB / 20 KB / 200 KB all arrived complete in the buffer in about 0.1 s, kept their newlines, never triggered a submit mid-paste, and were handed to the loop as ONE request (only the outer whitespace is stripped) - but the composer showed a single horizontally-scrolled row with nothing anywhere reporting the size, so a page could be sent unreviewed. The box is multiline now, its label reports the size and the keys ('you - 12,345 chars - send, Ctrl-J newline'), it grows to six wrapped rows and collapses when sent, Enter sends and Ctrl-J inserts a newline. tests/test_tui.py pins the label and the growth.",
       "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
