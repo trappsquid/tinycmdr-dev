@@ -1061,6 +1061,12 @@ def _endpoint_vision(url=None):
     return True, ""
 
 
+_IMAGE_MIME = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".jpe": "image/jpeg",
+               ".png": "image/png", ".gif": "image/gif", ".webp": "image/webp",
+               ".bmp": "image/bmp", ".tif": "image/tiff", ".tiff": "image/tiff",
+               ".heic": "image/heic", ".heif": "image/heif", ".avif": "image/avif"}
+
+
 def _image_spec(entry):
     """One spec -> {"path","mime","w","h"} or None. Accepts a bare path too."""
     if isinstance(entry, str):
@@ -1072,9 +1078,12 @@ def _image_spec(entry):
         return None
     mime = str(entry.get("mime") or "").strip()
     if not mime:
-        low = path.lower()
-        mime = ("image/jpeg" if low.endswith((".jpg", ".jpeg"))
-                else "image/gif" if low.endswith(".gif") else "image/png")
+        # The extension IS the right key for a mime type; the fallback was the problem.
+        # Measured by audit 2026-09-29: anything that was not jpg/gif was declared image/png,
+        # so a screenshot saved as .webp went to the endpoint as a PNG. An unknown extension
+        # still defaults to png - that is where the arrow pointed - but the real image types
+        # are named now.
+        mime = _IMAGE_MIME.get(os.path.splitext(path.lower())[1], "image/png")
     try:
         w, h = int(entry.get("w") or 0), int(entry.get("h") or 0)
     except (TypeError, ValueError):
@@ -3934,6 +3943,36 @@ def _exercise_tool_load(path):
                   % (", ".join(repr(n) for n in names), note))
 
 
+# The Mattermost placeholder, checked on the HOST rather than on the whole URL. The check used
+# to be a substring, so a real host with "change-me" or "example.com" anywhere - including in a
+# PATH - was read as unset (audit 2026-09-29).
+#
+# TWO predicates, because the code deliberately treats the two placeholders differently and
+# that is preserved here: the CHANGE-ME shape config.example.json ships is REFUSED, while the
+# documented example.com host only WARNS ("a host could legitimately use it, and a wrong URL
+# fails loudly anyway").
+def _mm_host(url):
+    """The lowercased host of a Mattermost url, with any user:pass and port stripped."""
+    host = re.sub(r"^[a-z]+://", "", str(url or "").strip()).split("/")[0]
+    return host.rsplit("@", 1)[-1].split(":", 1)[0].strip().lower()
+
+
+def _mm_placeholder_unset(url):
+    """True when this url is empty, or still the shipped CHANGE-ME placeholder.
+
+    The first HOST LABEL decides: `change-me`, `change-me.example.com` and
+    `CHANGE-ME.example.com` are the shipped shapes, and every one of them is refused.
+    """
+    host = _mm_host(url)
+    return (not host) or host.split(".")[0] == "change-me"
+
+
+def _mm_documented_placeholder(url):
+    """True when the host is example.com or sits under it - the placeholder that WARNS."""
+    host = _mm_host(url)
+    return bool(host) and (host == "example.com" or host.endswith(".example.com"))
+
+
 def _config_startup_problems(data):
     """The startup refusals in validate_startup_config() that are pure DATA.
 
@@ -3954,7 +3993,7 @@ def _config_startup_problems(data):
                                 "deny-by-default and would ignore everybody)")
         if "url" in mm:
             url = str(mm.get("url") or "").strip()
-            if not url or "change-me" in url.lower():
+            if not url or _mm_placeholder_unset(url):
                 problems.append("mattermost.url is empty or the placeholder")
     return problems
 
@@ -4023,6 +4062,39 @@ _SHELL_WRITE_PATTERNS = (
 )
 
 
+def _quoted_spans(text):
+    """The (start, end) spans of the quoted regions in `text`.
+
+    For the guards that must not read a quote as a command. Approximate on purpose - one pass,
+    tracking single and double quotes, with a backslash escaping the next character inside a
+    double quote - which is all a heuristic needs. It fails toward KEEPING a span, never toward
+    inventing one.
+    """
+    spans, i, n, quote = [], 0, len(str(text or "")), ""
+    text = str(text or "")
+    start = 0
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                spans.append((start, i + 1))
+                quote = ""
+        elif ch in ("'", '"'):
+            quote, start = ch, i
+        i += 1
+    if quote:
+        spans.append((start, n))
+    return spans
+
+
+def _inside_quotes(text, pos):
+    """Is this offset inside a quoted region?"""
+    return any(a <= pos < b for a, b in _quoted_spans(text))
+
+
 def shell_written_files(command, limit=2):
     """Files a shell command appears to have written, best effort.
 
@@ -4030,10 +4102,18 @@ def shell_written_files(command, limit=2):
     a verifier hooked only to write_file/edit_file never sees most writes. This is a
     heuristic on purpose, and it is safe in both directions: a guessed path that does
     not exist is ignored, and a path that cannot be verified adds nothing.
+
+    A redirection INSIDE a quote is text, not a redirection - `grep 'x>y' notes.md` writes
+    nothing - so a match that starts inside a quoted region is skipped. Measured by audit
+    2026-09-29: the quoted form produced a candidate path, and when a file of that name
+    happened to exist the result carried a verify verdict about a file the command never
+    touched.
     """
     found = []
     for rx in _SHELL_WRITE_PATTERNS:
         for m in rx.finditer(command or ""):
+            if _inside_quotes(command, m.start()):
+                continue
             # Three alternatives per pattern (double-quoted, single-quoted, bare): whichever
             # one matched is the path.
             cand = (next((g for g in m.groups() if g), "") or "").strip().strip("\"'")
@@ -5602,6 +5682,33 @@ _STOP_VERBS = re.compile(
     re.I)
 
 
+def _names_endpoint(text, host):
+    """Does this text NAME the endpoint, or merely contain its letters?
+
+    Two ways, and they answer different misfires:
+
+      * `host:port` TOGETHER is the endpoint's identity, and it may sit inside a longer
+        identifier - `Stop-Service -Name 'llama-127.0.0.1:8081'` names a service built from it,
+        and stopping that service does stop this bot's endpoint.
+      * The bare host as a WORD, for a command that names the box without a port
+        (`systemctl restart main`). A host name is a word: a letter, digit, dot or dash on
+        either side means it belongs to something else, which is how a host called `main`
+        stopped matching `systemctl restart main-api` and a host called `llama` stopped
+        matching `pgrep -f llama.cpp` (audit 2026-09-29).
+
+    The port alone no longer matches: `:8081` fired inside `:80810`, and a different host on
+    the same port number is not this endpoint.
+    """
+    text = str(text or "")
+    name, _, port = str(host or "").partition(":")
+    if not name:
+        return False
+    if port and re.search(r"(?<![\w.])%s:%s(?!\d)" % (re.escape(name), re.escape(port)),
+                          text, re.I):
+        return True
+    return bool(re.search(r"(?<![\w.-])%s(?![\w.-])" % re.escape(name), text, re.I))
+
+
 def _endpoint_self_harm(command):
     """True-ish when a command stops or restarts the endpoint THIS bot is talking to.
 
@@ -5613,11 +5720,8 @@ def _endpoint_self_harm(command):
     if not base or not _STOP_VERBS.search(str(command)):
         return None
     host = re.sub(r"^[a-z]+://", "", base).split("/")[0]
-    name, _, port = host.partition(":")
-    if name and name in str(command):
+    if _names_endpoint(command, host):
         return "the endpoint this bot talks to (%s)" % host
-    if port and (":" + port) in str(command):
-        return "the endpoint this bot talks to (port %s)" % port
     return None
 
 
@@ -5648,8 +5752,7 @@ def _endpoint_load_request(command):
     if not base:
         return None
     host = re.sub(r"^[a-z]+://", "", base).split("/")[0]
-    name, _, port = host.partition(":")
-    if not ((name and name in text) or (port and (":" + port) in text)):
+    if not _names_endpoint(text, host):
         return None
     return "a generation request to the model endpoint this bot talks to (%s)" % host
 
@@ -15909,7 +16012,7 @@ def model_command(session_key, arg):
     if name.lower() in ("list", "ls", "models"):
         return ("Models this bot can run:\n"
                 + "\n".join(f"- `{e['name']}` → `{e['url']}`"
-                            + (" (local)" if e["local"] else "")
+                            + (" (local)" if _is_local_url(e.get("url")) else "")
                             for e in cat)
                 + "\nOnly the names on off-box endpoints change where a call "
                   "goes — the local server serves whatever is loaded.")
@@ -21268,8 +21371,8 @@ def validate_startup_config():
     _mm_url = str(CONFIG["mattermost"].get("url") or "").strip().lower()
     _mm_users = [u for u in (CONFIG["mattermost"].get("allowed_users") or [])
                  if str(u).strip() and str(u).strip() != MM_USER_PLACEHOLDER]
-    _mm_intent = bool(_mm_users or (_mm_url and "example.com" not in _mm_url
-                                    and "change-me" not in _mm_url))
+    _mm_intent = bool(_mm_users or (_mm_url and not _mm_placeholder_unset(_mm_url)
+                                    and not _mm_documented_placeholder(_mm_url)))
     if not _chat_lane_configured() and not _mm_intent:
         # A CLI-only install is a supported end state: the installers register no
         # service for it, there is no chat driver to validate, and nothing remote
@@ -21293,11 +21396,11 @@ def validate_startup_config():
                 'Add your Mattermost user id, e.g. "allowed_users": ["abc123"], '
                 "or ship it in install/fleet-defaults.json so installs fill it in.")
     url = str(CONFIG["mattermost"].get("url", "") or "").strip()
-    if _mm_token and (not url or "change-me" in url.lower()):
+    if _mm_token and (not url or _mm_placeholder_unset(url)):
         return ("mattermost.url in config.json is empty/placeholder.\n"
                 "Set it to your Mattermost host, e.g. chat.example.com "
                 "(scheme and port are separate keys).")
-    if "example.com" in url.lower():
+    if _mm_documented_placeholder(url):
         # warn, don't abort: example.com is the documented placeholder, but a
         # host could legitimately use it, and a wrong URL fails loudly anyway
         log.warning("mattermost.url still reads %r — that is the placeholder "

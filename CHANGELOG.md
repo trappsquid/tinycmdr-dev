@@ -76,6 +76,50 @@ Fixed
   over-blocking a mention is the direction a seatbelt should err in - refusing a plain search was
   not.
 
+### The audit's low-stakes tail (2026-09-29)
+
+The remaining findings from the class sweep. None loses work outright, which is why they sat
+below the ranked six, but each is wrong in a way an operator would eventually notice.
+
+Fixed
+- **The endpoint guard NAMES the endpoint; it no longer merely contains it.** The host was
+  matched with `in`, so a host called `main` fired on `systemctl restart main-api` and a host
+  called `llama` on `pgrep -f llama.cpp`. `host:port` TOGETHER is the identity and may sit inside
+  a longer name - a service called `llama-127.0.0.1:8081` really is this bot's endpoint, and the
+  suite already asserted so - while the bare host must be a WORD, and the port alone no longer
+  matches: `:8081` fired inside `:80810`, and a different host on the same port is not this
+  endpoint.
+- **The image type is named, not assumed.** Anything that was not jpg/gif was declared
+  `image/png`, so a `.webp` screenshot went to the endpoint as a PNG and the answer was about the
+  wrong format. The real image extensions are mapped; an unknown one still defaults to png.
+- **The Mattermost placeholder is a HOST, not a substring of the URL.** A real host whose path
+  contained "change-me" or "example.com" was read as unset. The two placeholders stay
+  deliberately distinct, which is the behaviour the code already had: the shape
+  `config.example.json` ships - `CHANGE-ME.example.com`, judged by its first host LABEL - is
+  REFUSED, while the documented `example.com` host only WARNS.
+- **A redirection inside a quote is text, not a write.** `grep 'x>y' notes.md` produced a
+  candidate "written file", and when a file of that name happened to exist the result carried a
+  verify verdict about a file the command never touched.
+- **`/model list` derives "(local)" from the URL**, not from which config SLOT the entry came
+  from - a LAN fallback was labelled a remote endpoint and a cloud primary was labelled local.
+
+Left alone, deliberately, each for a reason:
+- **`_is_local_url` treats an unresolvable name as REMOTE.** That is pessimistic on purpose:
+  flipping it would open the failover and egress gates on a transient DNS failure, which is the
+  wrong direction for a privacy gate.
+- **`_bare_tool_name` / `_tool_run_as_script` still intercept a shell command whose first token
+  matches a tool name.** A measured incident already narrowed this once - a broader matcher ate 5
+  of 9 legitimate `echo`/`printf` commands - and the residual is self-correcting: the model is
+  told the name is a tool and can call the real program by path.
+- **`_verb_clean` still treats `docs/` and `tests/` as removable on an explicit `clean --yes`.**
+  It is operator-invoked and prints the list before acting, and the set is the install's own
+  tree: changing which directories an operator asked to clean is their call, not a bug fix.
+- **`_scheduled_task_owned` reads the install path as a substring of the `schtasks` listing.** A
+  precise fix needs field parsing of that output; it is Windows-only and decides a restart hint.
+- **`_endpoint_root` strips a URL by SUFFIX**, so a gateway whose real route ends in
+  `/completions` is probed one level too high. Left documented rather than changed: the probes
+  fail soft (0 / None) and the operator's configured budget stands.
+
 ### The proxy audit (2026-09-29)
 
 Swept the CLASS the `.txt` bug belonged to: every place the harness decides something from a

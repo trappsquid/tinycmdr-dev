@@ -303,6 +303,18 @@ def main():
             "the shell path honours the same off switch")
         fb.CONFIG["agent"]["verify_after_write"] = True
         check(fb.verify_note(badj) != "", "turning it back on restores the verdict")
+
+        # A redirection INSIDE a quote is text, not a write (audit 2026-09-29): the guesser
+        # produced a candidate path from inside `'x>y'`, and when a file of that name happened
+        # to exist the result carried a verify verdict about a file the command never touched.
+        check(fb.shell_written_files("grep 'x>y' notes.md") == [],
+              fb.shell_written_files("grep 'x>y' notes.md"))
+        check(fb.shell_written_files('grep "a > b" notes.md') == [],
+              fb.shell_written_files('grep "a > b" notes.md'))
+        check(fb.shell_written_files("echo hi > out.txt") == ["out.txt"],
+              fb.shell_written_files("echo hi > out.txt"))
+        check(fb.shell_written_files('echo hi > "my file.txt"') == ["my file.txt"],
+              fb.shell_written_files('echo hi > "my file.txt"'))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
