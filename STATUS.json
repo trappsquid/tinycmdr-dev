@@ -19,9 +19,10 @@
     {
       "id": "startup-retry-has-no-backoff",
       "title": "an offline window costs ~1650 process restarts, one every 10s",
-      "state": "closed",
+      "state": "shipped",
       "anchor": {
-        "commit": "3d6a653"
+        "commit": "3d6a653",
+        "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (3d6a653), merged to main. The lane start is retried in this process on tinycmdr-supervise.py's own curve and reset rule (5/10/20/40/60s, LANE_BACKOFF_START/MAX/RAPID_EXIT_S pinned to the supervisor's constants by tests/test_lane_health.py, so the two policies cannot drift), for both lanes, with one log line per state change and lane_down() kept accurate so health and logs/state.json stay meaningful. SystemExit passes straight through, so a missing token, a broken config and a token the API refused still exit, and /restart still exits 75. The unit and the plist keep a fixed delay as the CRASH backstop, raised 10 -> 60s, with the reason in each file. Audited and fixed: Measured 2026-09-30 on the Mac, whose router radio is deliberately off overnight: the configured Mattermost host stopped resolving at 00:15:33 and the LAN model endpoint was unreachable with it, so run_bot() raised, main() re-raised by design (tinycmdr.py ~22346), and launchd's KeepAlive{SuccessfulExit: false} with ThrottleInterval 10 respawned the process every ~10s until the network returned at ~05:00:21 - 1654 startups of a 22k-line module, each printing the capabilities banner and one lane-down line. The 'one line per STATE, not per attempt' rule at ~22344 is what kept the log to 1654 lines instead of 1654 times N; it did not stop the restarts. Nothing was lost (jobs.json is empty, so no scheduled work was due), but the window is deterministic for this host rather than bad luck, and it repeats nightly.",
       "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
@@ -39,9 +40,10 @@
     {
       "id": "log-rotation-ignored",
       "title": "tinycmdr.log.1 was not covered by .gitignore",
-      "state": "closed",
+      "state": "shipped",
       "anchor": {
-        "commit": "0c1c7ab"
+        "commit": "0c1c7ab",
+        "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (0c1c7ab). The rules covered logs/ and *.log, but a rotated file keeps a numeric suffix and `*` stops at the dot, so tinycmdr.log.1 (5 MB, rotated 00:08) sat in the live tree as untracked-and-visible and a `git add -A` would have committed a host log - which is why every commit in the 1.0.41 batch had to be path-scoped. *.log.* covers the rotation shapes (tinycmdr.log.1, tinycmdr.log.2026-09-30, logs/x.log.2) and leaves the exact-name rule as it was.",
       "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
