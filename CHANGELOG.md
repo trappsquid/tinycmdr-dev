@@ -300,6 +300,33 @@ Fixed
   for an attribute that exists and is `None`, so the default never applied. Found by
   `tests/test_small_model.py`; the window is now read through `(x or {})`.
 
+### A delete of real content now says what it would destroy (2026-09-29)
+
+Added
+- **A single-target delete of real content outside scratch asks first, and the ask carries the
+  MEASURED effect.** The tier only ever covered RECURSIVE deletes of a tree, so the model's own
+  `rm -f ~/Desktop/<a real document>` ran with nothing asked and nothing said. And the ask it
+  did have described the COMMAND rather than the thing: "a recursive delete of ~/enoch_build"
+  reads identically for an empty scratch directory and for four hours of finished work, which
+  is precisely what the operator could not tell apart while approving one.
+
+  Every number is read from the filesystem at the moment of the ask - file count, total size,
+  and how recently the newest file was written:
+
+      a recursive delete (/Users/…/enoch_build - 108 file(s), 512.4 KB, newest 4 minutes ago)
+      a delete of /Users/…/Desktop/Book_of_Enoch_simple.txt (198.0 KB, last written 5 hours ago)
+
+  A path that does not exist asks nothing (deleting it is a no-op) and nothing is measured
+  through a quoted argument the command never acted on. `~` is expanded before measuring, the
+  way the shell would.
+
+  The scope, stated because it is NARROWER than "ask about every delete": the new ask covers a
+  single-target delete of something that exists outside a scratch root. The RECURSIVE shape
+  keeps the contract it already had - any named directory asks, scratch included, because that
+  is what BUGREPORT §S1 was about and the MUST_GATE list says so in as many words. Of the ten
+  delete-shaped commands the model ran in three days, nine were `rm` of scratch under /tmp that
+  the operator had no interest in; `agent.confirm_deletes: false` restores the old shape per box.
+
 ## [1.0.39] - 2026-09-29
 
 Two security fixes and the Windows entry point, all of them found by running the gate on real

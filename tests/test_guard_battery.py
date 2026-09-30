@@ -173,6 +173,72 @@ def test_a_mention_is_not_a_command():
               fb.is_blocked(cmd))
 
 
+def test_a_delete_of_real_content_asks_with_the_measured_effect():
+    """Effect-keyed, not spelling-keyed: the ask describes what will actually be lost.
+
+    Two measured reasons (audit 2026-09-29). The tier only covered RECURSIVE tree deletes, so
+    the model's own `rm -f ~/Desktop/<a real document>` ran with nothing asked. And the ask
+    itself was about the command, not the thing: "a recursive delete of ~/enoch_build" reads
+    identically for an empty scratch directory and for four hours of finished work, which is
+    exactly what the operator could not tell apart.
+
+    Every number asserted here is built, then read back off the filesystem.
+    """
+    d = Path(tempfile.mkdtemp(prefix="tc-delask-"))
+    keep_roots = fb._SCRATCH_ROOTS
+    try:
+        # Only this directory counts as scratch, so the real rules are exercised hermetically
+        # (no /tmp, no $HOME, nothing of the operator's).
+        (d / "scratch").mkdir()
+        fb._SCRATCH_ROOTS = (str(d / "scratch"),)
+
+        tree = d / "work"
+        (tree / "sub").mkdir(parents=True)
+        for i, n in enumerate((100, 200, 300, 400)):
+            (tree / ("f%d.txt" % i)).write_bytes(b"x" * n)
+        (tree / "sub" / "deep.txt").write_bytes(b"y" * 500)
+
+        kind, why = fb.destructive_risk("rm -rf %s" % tree)
+        check("a recursive delete of a named tree still CONFIRMS", kind == "confirm", kind)
+        check("  and the ask names the file count it MEASURED",
+              "5 file(s)" in why, why)
+        check("  and the total size", "1.5 KB" in why, why)
+        check("  and how recently it was written", "newest" in why, why)
+
+        doc = d / "a-real-document.txt"
+        doc.write_bytes(b"z" * 2048)
+        kind, why = fb.destructive_risk("rm -f %s" % doc)
+        check("a single-file delete of real content CONFIRMS", kind == "confirm", kind)
+        check("  naming its measured size", "2.0 KB" in why, why)
+        check("  and its age", "last written" in why, why)
+
+        kind, why = fb.destructive_risk("rm %s" % doc)
+        check("  whether or not the -f flag is spelled", kind == "confirm", kind)
+
+        check("a delete of a path that does not exist asks nothing",
+              fb.destructive_risk("rm -f %s/nothing-here.txt" % d) is None)
+
+        (d / "scratch" / "junk.txt").write_bytes(b"j" * 10)
+        check("  and neither does a single-file delete under a scratch root",
+              fb.destructive_risk("rm -f %s" % (d / "scratch" / "junk.txt")) is None)
+        check("  while the RECURSIVE shape still asks, scratch or not (MUST_GATE)",
+              (fb.destructive_risk("rm -rf %s" % (d / "scratch")) or (None,))[0] == "confirm")
+
+        kind, why = fb.destructive_risk("rm -rf /")
+        check("a whole-tree delete is still BLOCKED, not asked", kind == "block", kind)
+
+        keep = fb.CONFIG["agent"].get("confirm_deletes")
+        try:
+            fb.CONFIG["agent"]["confirm_deletes"] = False
+            check("confirm_deletes=false restores the old shape",
+                  fb.destructive_risk("rm -f %s" % doc) is None)
+        finally:
+            fb.CONFIG["agent"]["confirm_deletes"] = keep
+    finally:
+        fb._SCRATCH_ROOTS = keep_roots
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_broad_root_escalates():
     """A whole tree is the absolute tier; a named directory is a question."""
     check("a whole-tree delete is BLOCKED, not confirmed",

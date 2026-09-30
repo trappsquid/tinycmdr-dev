@@ -429,6 +429,10 @@ DEFAULT_CONFIG = {
         # (measured 2026-09-27: an iPhone/Linux item from the day before drove a
         # 26-step run nobody asked for).
         "ledger_stale_hours": 12,
+        # A single-target delete of real content OUTSIDE scratch asks first, and the ask
+        # carries the measured effect (file count, size, age). Deleting a temp path, or a path
+        # that is not there, stays ordinary work. false restores the old shape per box.
+        "confirm_deletes": True,
         "checkin_minutes": 5,     # post a NEW progress message this often (0 = off)
         "checkin_steps": 30,      # ...or every N tool steps, whichever comes first
         "scope_note_steps": 40,   # one line, once per run, past this many tool calls: the
@@ -5798,6 +5802,107 @@ def _shlex_words(segment):
         return segment.split()
 
 
+def _ago(secs):
+    """A human age: 'just now', '4 minutes', '3 hours', '2 days'."""
+    try:
+        secs = max(0.0, float(secs))
+    except (TypeError, ValueError):
+        return "unknown"
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return "%d minutes" % round(secs / 60)
+    if secs < 36 * 3600:
+        return "%d hours" % round(secs / 3600)
+    return "%d days" % round(secs / 86400)
+
+
+def _fs_size(n):
+    """A byte count as a short human string."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "unknown size"
+    for unit, div in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if n >= div:
+            return "%.1f %s" % (n / div, unit)
+    return "%d bytes" % int(n)
+
+
+_SCRATCH_ROOTS = tuple(p for p in {tempfile.gettempdir(), "/tmp", "/var/tmp"} if p)
+
+
+def _is_scratch(path):
+    """True when a path is ordinary disposable scratch - a temp/tmp directory.
+
+    The measured distribution decides this. Of the ten delete-shaped commands in three days of
+    this box's log, NINE were scratch under /tmp: probe files the run itself had just written,
+    and `rm -rf <dir> && git clone …` for a fresh checkout. Asking about those is noise on an
+    attended lane and a SILENT REFUSAL on an unattended one, because a confirm with nobody at
+    the door declines rather than waiting.
+    """
+    try:
+        p = Path(os.path.expanduser(str(path))).resolve()
+    except (OSError, ValueError):
+        return False
+    for root in _SCRATCH_ROOTS:
+        try:
+            r = Path(root).resolve()
+        except (OSError, ValueError):
+            continue
+        if p == r:
+            return True
+        try:
+            p.relative_to(r)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _delete_effect(path, cap=20000):
+    """What deleting this path would actually destroy, MEASURED - or "" when there is nothing.
+
+    Every number is read from the filesystem at the moment of the ask, because the operator is
+    being asked to authorise a loss. A description built from the command's words - "a recursive
+    delete of ~/enoch_build" - says exactly as much about an empty scratch directory as about
+    four hours of finished work, and on 2026-09-29 the operator had no way to tell which they
+    were approving.
+
+    "" means "nothing to lose here": a path that does not exist (deleting it is a no-op) or a
+    broken symlink (which is a link, not content). The caller treats "" as ordinary work.
+    """
+    p = Path(os.path.expanduser(str(path)))
+    try:
+        if not p.is_symlink() and not p.exists():
+            return ""
+        if p.is_dir() and not p.is_symlink():
+            files = total = 0
+            newest = 0.0
+            complete = True
+            for root, _dirs, names in os.walk(p):
+                for nm in names:
+                    try:
+                        st = os.stat(os.path.join(root, nm))
+                    except OSError:
+                        continue
+                    files += 1
+                    total += st.st_size
+                    newest = max(newest, st.st_mtime)
+                    if files >= cap:
+                        complete = False
+                        break
+                if not complete:
+                    break
+            count = ("%d file(s)" % files) if complete else ("over %d file(s)" % cap)
+            age = "never written" if not newest else "%s ago" % _ago(time.time() - newest)
+            return "%s, %s, newest %s" % (count, _fs_size(total), age)
+        st = p.stat()
+        return "%s, last written %s" % (_fs_size(st.st_size), _ago(time.time() - st.st_mtime))
+    except OSError:
+        return ""
+
+
 def destructive_risk(command, _depth=0):
     """('block'|'confirm', why) for a recursive delete aimed at a TREE, else None.
 
@@ -5882,6 +5987,19 @@ def destructive_risk(command, _depth=0):
                 continue
             targets.append(w)
         if not recursive:
+            # A single-target delete is ordinary work - UNLESS the target is real content
+            # outside scratch, and then the operator is asked with the effect MEASURED. The
+            # tier only ever covered recursive tree deletes, so on 2026-09-29 the model's own
+            # `rm -f ~/Desktop/<a real document>` ran with nothing asked and nothing said.
+            # The path that does not exist asks nothing: deleting it is a no-op.
+            if not CONFIG["agent"].get("confirm_deletes", True):
+                continue
+            for t in targets:
+                if _is_scratch(t):
+                    continue
+                effect = _delete_effect(t)
+                if effect:
+                    return ("confirm", "a delete of %s (%s)" % (t, effect))
             continue
         broad = [t for t in targets if _broad_root(t)]
         if broad:
@@ -5890,7 +6008,17 @@ def destructive_risk(command, _depth=0):
             # `gci C:\x | ri -Recurse`: the target is piped in from the previous segment,
             # so there is nothing here to measure - ask (BUGREPORT §S2).
             return ("confirm", "a recursive delete of a piped-in target")
-        return ("confirm", "a recursive delete (%s)" % ", ".join(targets[:3]))
+        # The RECURSIVE shape keeps its original contract: any named directory asks, scratch
+        # included, because that is what BUGREPORT §S1 was about and the operator's MUST_GATE
+        # list says so in as many words (`rm -rf /tmp/scratch`). What changes here is only that
+        # the ask now says what it would destroy, measured.
+        effect = ""
+        for t in targets:
+            effect = _delete_effect(t)
+            if effect:
+                break
+        return ("confirm", "a recursive delete (%s)%s"
+                % (", ".join(targets[:3]), (" - " + effect) if effect else ""))
     return None
 
 
