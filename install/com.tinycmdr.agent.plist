@@ -18,8 +18,12 @@
 		<key>SuccessfulExit</key>
 		<false/>
 	</dict>
+	<!-- A FIXED delay, on purpose: launchd cannot grow one. This is the CRASH backstop - it
+	     is only reached once the process is gone - and it is 60s, not the 10s that respawned
+	     a bot 1654 times in one 4h45m outage. A lane that cannot START does not get here at
+	     all: tinycmdr.py retries that in-process on a growing backoff (5s to 60s). -->
 	<key>ThrottleInterval</key>
-	<integer>10</integer>
+	<integer>60</integer>
 	<key>StandardOutPath</key>
 	<string>__APP__/logs/launchd.out.log</string>
 	<key>StandardErrorPath</key>

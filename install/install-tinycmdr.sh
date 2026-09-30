@@ -1326,8 +1326,12 @@ Environment="USER=$RUN_USER"
 Environment="LOGNAME=$RUN_USER"
 Environment="PATH=$INSTALL_DIR/venv/bin:$USER_HOME/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="TINYCMDR_DIR=$INSTALL_DIR"
+# A FIXED delay, on purpose: systemd cannot grow one. This is the CRASH backstop - it is
+# only reached once the process is gone - and it is 60s, not the 10s that respawned a bot
+# 1654 times in one 4h45m outage. A lane that cannot START does not get here at all:
+# tinycmdr.py retries that in-process on a growing backoff (5s to 60s).
 Restart=always
-RestartSec=10
+RestartSec=60
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30

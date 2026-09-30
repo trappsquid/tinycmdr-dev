@@ -17998,7 +17998,8 @@ def _lane_fails_snapshot():
 
 def lane_down(lane, error):
     """Record a lane failing. Returns (count, was_same_error, first_seen) so the caller can
-    decide what to SAY: the full story once, a one-line counter afterwards."""
+    decide what to SAY: the full story once per state, and nothing while the same error
+    repeats on the retry backoff."""
     _lane_fails_load()
     now = time.time()
     with _LANE_LOCK:
@@ -18024,6 +18025,92 @@ def lane_up(lane, detail=""):
         log.warning("%s lane recovered after %d failed start(s), the first at %s",
                     lane, prior["count"],
                     time.strftime("%Y-%m-%d %H:%M", time.localtime(prior.get("first") or 0)))
+
+
+# ------------------------------------------------- retrying a lane that CANNOT START
+# The Windows helper (tinycmdr-supervise.py) relaunches a crashed bot on a GROWING backoff,
+# but systemd's RestartSec and launchd's ThrottleInterval are fixed - neither manager can
+# grow a delay - so on Linux and macOS a lane that could not start exited every 10s and
+# re-imported this 22k-line module with it. Measured 2026-09-30: 1654 startups in the 4h45m
+# the network was gone. Retrying HERE gives every host the supervisor's curve from the same
+# build, and leaves the manager its fixed delay for what only a manager can do: the CRASH
+# backstop, which needs the process to be GONE first.
+LANE_BACKOFF_START = 5           # tinycmdr-supervise.py BACKOFF_START - keep in step
+LANE_BACKOFF_MAX = 60            # ... BACKOFF_MAX
+LANE_RAPID_EXIT_S = 30           # ... RAPID_EXIT_S: a shorter lifetime is a failed start
+
+
+def lane_backoff(failures):
+    """tinycmdr-supervise.py's next_backoff, in-process: 5, 10, 20, 40, 60, 60, ..."""
+    return min(LANE_BACKOFF_MAX, LANE_BACKOFF_START * (2 ** max(0, failures - 1)))
+
+
+def lane_backoff_after(failures, uptime):
+    """What one failed lane start means for the next try: (failures, delay).
+
+    The supervisor's reset rule: a lifetime longer than LANE_RAPID_EXIT_S was healthy, so
+    the count resets and the next attempt waits the start delay; a shorter one is a failed
+    start and grows the backoff.
+    """
+    if uptime > LANE_RAPID_EXIT_S:
+        return 0, LANE_BACKOFF_START
+    failures += 1
+    return failures, lane_backoff(failures)
+
+
+def _lane_wait(seconds):
+    """The one place the retry sleeps, so a suite can drive the backoff without sleeping
+    (the same seam _stall_tick gets from its now=)."""
+    time.sleep(seconds)
+
+
+def lane_with_retry(start, lane, report, sleep=None, now=None):
+    """Run a chat lane, retrying one that cannot START, in this process.
+
+    `start` raising SystemExit is NOT caught: a missing token, a broken config and a token
+    the API refused all need a human, and the line between "this will fix itself" and "this
+    needs a human" is the point of retrying the connectivity-class failures only. `report`
+    gets (error, count, same, first_seen, delay) and decides what to SAY: the log stays one
+    line per STATE change, never one per attempt. Returns when the lane ends by itself.
+    """
+    sleep = sleep or _lane_wait
+    now = now or time.time
+    failures = 0
+    while True:
+        t0 = now()
+        try:
+            start()
+        except Exception as e:                                # noqa: BLE001 - retried
+            failures, delay = lane_backoff_after(failures, now() - t0)
+            count, same, first = lane_down(lane, str(e))
+            report(e, count, same, first, delay)
+            sleep(delay)
+            continue
+        return
+
+
+def _lane_report_mattermost(e, count, same, first, delay):
+    """One line per STATE, not one per attempt: a repeat of the SAME error is not news (the
+    incident wrote 419 KB saying so), and the count and the reason are in LANE_STATE_FILE
+    where `tinycmdr health` reads them."""
+    if same and count > 1:
+        return
+    log.critical("Mattermost connection failed: %s — this bot cannot hear anybody. Check "
+                 "mattermost.url/port in config.json, and the bot token in %s as "
+                 "TINYCMDR_MM_TOKEN (System Console -> Integrations -> Bot Accounts). "
+                 "Retrying in %ds; `tinycmdr health` reports this with exit code 1, and "
+                 "the full state is in %s.", e, ENV_FILE.name, delay, LANE_STATE_FILE)
+
+
+def _lane_report_telegram(e, count, same, first, delay):
+    """The Telegram twin: what reaches here is the network. A token the API REFUSED is a
+    permanent failure and exits 2 from the lane itself, before this."""
+    if same and count > 1:
+        return
+    log.critical("Telegram lane is down: %s — this bot cannot hear anybody. Check this "
+                 "host's network and TINYCMDR_TG_TOKEN in %s; retrying in %ds. `tinycmdr "
+                 "health` reports this with exit code 1, and the full state is in %s.",
+                 e, ENV_FILE.name, delay, LANE_STATE_FILE)
 
 
 def _lane_token(lane):
@@ -18992,6 +19079,14 @@ def run_telegram():
     try:
 
         me = client.me()
+
+    except requests.RequestException:
+
+        # The HOST, not the token: api.telegram.org could not be reached at all (no wifi,
+        # an ISP outage), which is exactly what main()'s lane retry backs off on. A token
+        # the API REFUSED answered, so it is permanent and takes the exit-2 path below.
+
+        raise
 
     except Exception as exc:
 
@@ -22298,7 +22393,7 @@ def main():
     elif "--cli" in sys.argv:
         run_cli()
     elif "--telegram" in sys.argv:
-        run_telegram()
+        lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
     else:
         err = validate_startup_config()
         if err:
@@ -22336,29 +22431,10 @@ def main():
             print("\n*** tinycmdr cannot start ***\n%s\n" % _both, file=sys.stderr)
             sys.exit(2)
         if _want_mm or _mm_token_configured():
-            try:
-                run_bot()
-            except Exception as e:
-                _n, _same, _first = lane_down("mattermost", str(e))
-                if _same and _n > 1:
-                    # One line per STATE, not one per attempt: the incident wrote 419 KB of
-                    # the same CRITICAL every ten seconds.
-                    log.error("mattermost lane still down (attempt %d, since %s): %s — "
-                              "`tinycmdr health` prints this state with an exit code, and "
-                              "the token lives in %s as TINYCMDR_MM_TOKEN.",
-                              _n, time.strftime("%Y-%m-%d %H:%M", time.localtime(_first)),
-                              e, ENV_FILE.name)
-                else:
-                    log.critical("Mattermost connection failed: %s — this bot cannot hear "
-                                 "anybody. Check mattermost.url/port in config.json, and the "
-                                 "bot token in %s as TINYCMDR_MM_TOKEN (System Console -> "
-                                 "Integrations -> Bot Accounts). `tinycmdr health` reports "
-                                 "this with exit code 1; the full state is in %s.",
-                                 e, ENV_FILE.name, LANE_STATE_FILE)
-                raise
+            lane_with_retry(run_bot, "mattermost", _lane_report_mattermost)
         elif _tg_token_configured():
             # Telegram-only: this process IS the Telegram lane.
-            run_telegram()
+            lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
         else:
             # A CLI-only install: no lane to serve and nothing remote to answer.
             # Not an abort - the install is complete, and --cli / --once are its doors.
