@@ -39,6 +39,11 @@ Added
   `--remote` still answers what GitHub has now.
 
 Changed
+- **`--app` detaches the console log before it draws.** Installing the app's screen directly
+  skipped the `log_console_off()` that `tui_screen()` does, so every INFO record kept going to the
+  console and painted over the alternate screen - seen in a live screenshot of `--app` on
+  2026-09-30, where log lines landed in the middle of the frame. One writer per terminal, which is
+  what the inline screen has always done.
 - **`--once` draws the same answer card the interactive session does.** A one-shot run printed the
   answer verbatim under a dim rule, so `tinycmdr --once "…"` showed the model's pipes and heading
   markers where a session showed a rendered card (seen on a live screenshot of the real CLI,

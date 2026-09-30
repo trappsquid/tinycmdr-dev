@@ -21100,6 +21100,12 @@ def _run_cli_app():
     screen = AppScreen(colour=bool(_CLI["colour"]))
     _CLI["app"] = screen
     _CLI["screen"] = screen
+    # One writer per terminal. Installing the screen HERE (rather than letting
+    # tui_screen() build it) skipped the detach tui_screen() does, so every INFO
+    # record kept going to the console and painted over the alternate screen - seen
+    # in a live screenshot of `--app` on 2026-09-30, where the log lines landed in
+    # the middle of the frame.
+    log_console_off()
     _CLI["inbox"] = queue.Queue()
     _CLI["steer"] = queue.Queue()
     _CLI["leave"] = False
