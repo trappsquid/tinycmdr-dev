@@ -649,6 +649,91 @@ def test_activity_tracking_keeps_a_healthy_run_off_the_watchdog():
           not any("Still on it" in t for _, t in d.posted), d.posted)
 
 
+# ------------------------------------------------- scheduled runs are runs too
+# F-11 (audit, 2026-09-29): Scheduler._fire called drive_run with no cancel event and
+# registered the run nowhere the watchdog could see it, so a wedged cron job was
+# unstoppable until the process restarted, and a /stop in the channel it reports to
+# found nothing to stop. drive_run now opens the run's lifecycle for every run, so a
+# scheduled one is reached by the same mechanism as a chat run.
+
+def _wedged_scheduled_fire(name, channel_id):
+    """Run Scheduler._fire for real, with only the model call replaced by a block.
+
+    Returns (dispatcher, thread, started, release): the fake dispatcher the job reports
+    into, the job's thread, the event that says the run reached the model, and the
+    event that lets it go. The caller restores fb.AGENT.run / fb.SCHEDULER.dispatcher.
+    """
+    d = _dispatcher()
+    started, release = threading.Event(), threading.Event()
+
+    def wedged(session_key, text, **kw):
+        started.set()
+        release.wait(30)
+        return "done"
+
+    fb.SCHEDULER.dispatcher = d
+    fb.AGENT.run = wedged
+    t = threading.Thread(target=fb.SCHEDULER._fire,
+                         args=(name, {"task": "back up the box",
+                                      "channel_id": channel_id}), daemon=True)
+    t.start()
+    return d, t, started, release
+
+
+def test_a_scheduled_run_is_registered_and_the_watchdog_abandons_it():
+    ch = "chan-cron"
+    saved_disp, saved_run = fb.SCHEDULER.dispatcher, fb.AGENT.run
+    d, t, started, release = _wedged_scheduled_fire("nightly", ch)
+    try:
+        check("the scheduled run reaches the model", started.wait(10),
+              "Scheduler._fire never started the run")
+        ctrl = fb.RUNS.control("sched-nightly")
+        check("drive_run registered the scheduled run (no lane wiring)",
+              ctrl is not None, list(fb.RUNS.snapshot()))
+        check("...under the scheduler's own session key, with no invented channel",
+              ctrl is not None and ctrl.session_key == "sched-nightly"
+              and ctrl.channel_id == ch, ctrl)
+        check("...and the watchdog watches it", ctrl is not None and ctrl.watching)
+        if ctrl is not None:
+            ctrl.last = time.time() - 25 * 60        # 25 minutes of silence
+        acted = fb.RUNS.watch_tick(now=time.time())
+        check("the stall watchdog sees the wedged scheduled run",
+              any(c.session_key == "sched-nightly" for c in acted),
+              [c.session_key for c in acted])
+        check("...and cancels it the way a chat run is cancelled",
+              ctrl is not None and ctrl.cancel_event.is_set(),
+              ctrl.cancel_event.is_set() if ctrl else None)
+    finally:
+        release.set()
+        t.join(5)
+        fb.AGENT.run = saved_run
+        fb.SCHEDULER.dispatcher = saved_disp
+
+
+def test_a_channel_stop_cancels_a_run_the_channel_did_not_spawn():
+    ch = "chan-cron-stop"
+    saved_disp, saved_run = fb.SCHEDULER.dispatcher, fb.AGENT.run
+    d, t, started, release = _wedged_scheduled_fire("nightly-stop", ch)
+    try:
+        check("the scheduled run reaches the model", started.wait(10),
+              "Scheduler._fire never started the run")
+        ctrl = fb.RUNS.control("sched-nightly-stop")
+        d.posted.clear()
+        d._stop_channel(ch, None)
+        check("a channel /stop reaches a scheduled run reporting into it",
+              ctrl is not None and ctrl.cancel_event.is_set(),
+              ctrl.cancel_event.is_set() if ctrl else None)
+        check("...and does not answer 'nothing is running'",
+              not any("Nothing is running" in t for _, t in d.posted), d.posted)
+        check("...the operator is told it is stopping",
+              any("Stopping now" in t for _, t in d.posted), d.posted)
+    finally:
+        release.set()
+        t.join(5)
+        fb.AGENT.run = saved_run
+        fb.SCHEDULER.dispatcher = saved_disp
+
+
 def _scripted_run(scripted):
     """Run AGENT with a stubbed model; every file write goes to tmp/."""
     fb.NOTES_FILE = TMP / "notes.md"

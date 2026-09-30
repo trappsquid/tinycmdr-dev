@@ -301,6 +301,103 @@ finally:
      fb.TelegramDestination, fb.RunReporter, fb.drive_run,
      fb.lane_up) = _keep
 
+# ---- a message during a LIVE run steers it, and the worker still leaves -----
+# (audit, 2026-09-29, F-06. The Telegram lane handed drive_run a cancel event but no
+# steering and no watchdog record, so a plain message sent mid-run queued behind the
+# run it was meant to redirect - while README 110/137 promise a mid-run message steers,
+# which was already true of Mattermost and the CLI. And its workers blocked on the
+# queue with no timeout, so one thread lived per chat this process ever heard from.)
+#
+# Driven end to end: the real run_telegram, the real drive_run (so the run's steering
+# comes from the registry drive_run opens), and only the model call replaced.
+
+lane = {}
+run_started = threading.Event()
+release = threading.Event()
+got = {}
+
+
+class _LivePoller(fb.TelegramPoller):
+    """The real poller, kept so the test can feed it a message mid-run."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        lane["poller"] = self
+
+
+class _FeedThenLeaveClient(FakeClient):
+    """Poll 1 the task; poll 2 a mid-run message through the real handler; poll 3 leave
+    the loop (SystemExit is not an Exception, so it leaves run_telegram) while the
+    worker is held inside the run, so the idle exit can be observed afterwards."""
+
+    def __init__(self, token):
+        super().__init__()
+        lane["client"] = self
+        self.polls = 0
+
+    def updates(self, offset):
+        self.polls += 1
+        if self.polls == 1:
+            return [msg(21, "start the check", 123456789, mid=1)]
+        if self.polls == 2:
+            if not run_started.wait(5):
+                raise SystemExit
+            lane["poller"].handle(msg(21, "hold on, skip step 3",
+                                      123456789, mid=2))
+            lane["poller"].handle(msg(21, "/stop", 123456789, mid=3))
+            return []
+        raise SystemExit
+
+
+def _live_model_run(session_key, text, **kw):
+    got["steer_cb"] = kw.get("steer_cb")
+    got["runs"] = got.get("runs", 0) + 1
+    run_started.set()
+    release.wait(10)
+    return "done"
+
+
+_keep2 = (fb.CONFIG["telegram"], fb.TelegramClient, fb.TelegramPoller,
+          fb.TelegramDestination, fb.RunReporter, fb.AGENT.run, fb.lane_up,
+          fb.TG_IDLE_SECONDS)
+fb.CONFIG["telegram"] = {"token": "1:tok", "allowed_users": ["123456789"]}
+fb.TelegramClient = _FeedThenLeaveClient
+fb.TelegramPoller = _LivePoller
+fb.AGENT.run = _live_model_run
+fb.lane_up = lambda *a, **k: None
+fb.TG_IDLE_SECONDS = 1.0
+try:
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    check("the run started (the lane reached the model)", run_started.is_set(),
+          str(got))
+    check("a message during the run is steered into it, not queued",
+          got.get("steer_cb") is not None
+          and got["steer_cb"]() == [("123456789", "hold on, skip step 3")],
+          str(got.get("steer_cb") and got["steer_cb"]()))
+    check("...so no second run starts behind it", got.get("runs") == 1, got)
+    check("...and the operator is told it went into the run",
+          any("Passing that into the run" in m["text"]
+              for m in lane["client"].messages),
+          [m["text"][:60] for m in lane["client"].messages])
+    check("a /stop mid-run is still out-of-band, never steered",
+          got["steer_cb"]() == [], "a command was steered into the run")
+    release.set()
+    deadline = time.time() + 6
+    while time.time() < deadline and any(
+            t.name == "tg-21" for t in threading.enumerate()):
+        time.sleep(0.05)
+    check("the chat's worker exits once the chat goes idle",
+          not any(t.name == "tg-21" for t in threading.enumerate()),
+          [t.name for t in threading.enumerate() if t.name.startswith("tg-")])
+finally:
+    release.set()
+    (fb.CONFIG["telegram"], fb.TelegramClient, fb.TelegramPoller,
+     fb.TelegramDestination, fb.RunReporter, fb.AGENT.run, fb.lane_up,
+     fb.TG_IDLE_SECONDS) = _keep2
+
 # ---- the token has ONE home, and both doors never fight silently -----------
 # (audit, 2026-09-22: telegram.token was read from config.json, which contradicts
 # the package's own rule that secrets live only in .env; and with both tokens set

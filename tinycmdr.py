@@ -15963,54 +15963,222 @@ class NowhereDestination(Destination):
         return ref
 
 
+# ------------------------------------------------------------- run lifecycle
+# The three things every run needs to be reachable from OUTSIDE it - a record the
+# watchdog can see, a cancel event, and a place a mid-run message can steer into -
+# used to be wired one lane at a time, each keyed the way that lane happened to be
+# shaped. The Mattermost dispatcher kept all three keyed by channel, so a scheduled
+# job (which has no channel of its own) was invisible to the watchdog and had no
+# cancel event at all: a wedged cron job was unstoppable until the process restarted
+# (F-11). Telegram kept a bare cancel event and nothing else, so a message sent
+# mid-run queued behind the run it was meant to redirect (F-06). A new lane inherited
+# none of it.
+#
+# They live here now, keyed by SESSION - the one name every run has - and drive_run
+# opens one for every run it starts, so a lane gets all three by construction. A lane
+# that already runs its own, stronger guard (Mattermost's channel watchdog, which
+# also reclaims a wedged worker) passes watch=False and keeps it; a lane that does
+# not (a cron job, a Telegram DM, a background task) is watched and cancellable
+# without writing any of it.
+
+class RunControl:
+    """One live run: when it last did anything, how to cancel it, what was steered in."""
+
+    def __init__(self, session_key, channel_id=None, cancel_event=None, watch=True):
+        self.session_key = session_key
+        self.channel_id = channel_id       # where a human reaches this run, if anywhere
+        self.cancel_event = cancel_event or threading.Event()
+        self.watching = watch
+        now = time.time()
+        self.started = now
+        self.last = now
+        self.warned = False
+        self.abandoned = False
+        self._steered = []
+        self._steer_lock = threading.Lock()
+
+    def touch(self):
+        """Something came out of the run: keep it off the watchdog."""
+        self.last = time.time()
+
+    def steer(self, sender, text):
+        with self._steer_lock:
+            self._steered.append((sender, text))
+
+    def take_steering(self):
+        with self._steer_lock:
+            out, self._steered = self._steered, []
+            return out
+
+
+class RunRegistry:
+    """session_key -> the RunControl of the run in flight, and the net under them."""
+
+    def __init__(self):
+        self._runs = {}
+        self._lock = threading.Lock()
+        self._watching = False
+
+    def open(self, session_key, *, channel_id=None, cancel_event=None, watch=True):
+        ctrl = RunControl(session_key, channel_id=channel_id,
+                          cancel_event=cancel_event, watch=watch)
+        with self._lock:
+            self._runs[session_key] = ctrl
+        self.start_watch()     # the first run raises the net; no lane has to
+        return ctrl
+
+    def close(self, ctrl):
+        with self._lock:
+            if self._runs.get(ctrl.session_key) is ctrl:
+                self._runs.pop(ctrl.session_key, None)
+
+    def control(self, session_key):
+        with self._lock:
+            return self._runs.get(session_key)
+
+    def by_channel(self, channel_id):
+        """Every run reporting into one channel, whatever lane started it."""
+        with self._lock:
+            return [c for c in self._runs.values() if c.channel_id == channel_id]
+
+    def snapshot(self):
+        with self._lock:
+            return dict(self._runs)
+
+    def start_watch(self):
+        with self._lock:
+            if self._watching:
+                return
+            self._watching = True
+        threading.Thread(target=self._watch_loop, daemon=True,
+                         name="run-watch").start()
+
+    def _watch_loop(self):
+        while True:
+            time.sleep(30)
+            try:
+                self.watch_tick()
+            except Exception:
+                log.exception("run watchdog tick failed")
+
+    def watch_tick(self, warn_m=None, kill_m=None, now=None):
+        """One watchdog pass over every watched run, whichever lane started it.
+
+        The same thresholds as the Mattermost guard, because it is the same promise:
+        a run that stops making progress is cancelled and the operator is told, never
+        left silent.
+        """
+        if warn_m is None:
+            warn_m = float(CONFIG["agent"].get("stall_warn_minutes", 8) or 0)
+        if kill_m is None:
+            kill_m = float(CONFIG["agent"].get("stall_abandon_minutes", 20) or 0)
+        now = time.time() if now is None else now
+        acted = []
+        for ctrl in self.snapshot().values():
+            if not ctrl.watching or ctrl.abandoned:
+                continue
+            quiet = now - ctrl.last
+            if kill_m and quiet > kill_m * 60:
+                ctrl.abandoned = True
+                ctrl.cancel_event.set()
+                log.error("run watchdog: abandoning %s after %.0f min without "
+                          "progress", ctrl.session_key, quiet / 60)
+                self._notify(ctrl, f"⚠️ No output for {int(quiet / 60)} min — that "
+                                   f"run is wedged, so I'm stopping it. "
+                                   f"(`/tinycmdr status` for state.)")
+                acted.append(ctrl)
+            elif warn_m and quiet > warn_m * 60 and not ctrl.warned:
+                ctrl.warned = True
+                log.warning("run watchdog: no output in %s for %.0f min",
+                            ctrl.session_key, quiet / 60)
+                self._notify(ctrl, f"⏳ Still on it — nothing posted for "
+                                   f"{int(quiet / 60)} min (run started "
+                                   f"{int((now - ctrl.started) / 60)} min ago).")
+        return acted
+
+    @staticmethod
+    def _notify(ctrl, text):
+        """Where the operator hears it: the run's channel if it has one, else the log."""
+        if ctrl.channel_id:
+            report(ctrl.channel_id, text)
+        else:
+            log.info("run watchdog (%s): %s", ctrl.session_key, text)
+
+
+RUNS = RunRegistry()
+
+
 def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
               channel_id=None, cancel_event=None, steer_cb=None, ask_door=None,
-              source="main"):
+              source="main", watch=True):
     """Run the agent, wired to ONE reporter. The only place these callbacks live.
 
     Lanes used to build this keyword list separately with different subsets,
     which is exactly how one of them ended up without the exit codes, the failure
     reasons, the check-ins or the confirm door.
+
+    The run's own lifecycle (the watchdog record, the cancel event, the steering)
+    is opened here too, so no lane has to pass or remember any of it. `watch=False`
+    is for a lane whose own guard is stronger - Mattermost's watchdog also reclaims
+    the wedged channel - and keeps the record without double-watching it.
     """
     # Ask the OPERATOR about ledger items an earlier session left open, before the model
     # is handed the same list. The prompt tells the model to ask; measured 2026-09-29,
     # it did not, and the operator found out from a tool call instead.
     notice_stale_tasks(reporter, session_key, depth)
+    ctrl = RUNS.open(session_key, channel_id=channel_id,
+                     cancel_event=cancel_event, watch=watch)
+
+    def _alive(cb):
+        """Every line the run emits is progress; touch it so the watchdog stays away."""
+        if cb is None:
+            return None
+
+        def wrapped(*a, **k):
+            ctrl.touch()
+            return cb(*a, **k)
+        return wrapped
+
     try:
-        answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
-                           channel_id=channel_id, source=source,
-                           say_cb=reporter.say,
-                         progress_cb=reporter.progress,
-                         interim_cb=reporter.note,
-                         narration_cb=reporter.narration,
-                         narration_drop_cb=reporter.narration_drop,
-                         reasoning_cb=reporter.reasoning,
-                         progress_done_cb=reporter.tool_done,
-                           confirm_cb=reporter.confirm,
-                           cancel_event=cancel_event,
-                           steer_cb=steer_cb,
-                           ask_door=ask_door,
-                           send_file_cb=reporter.attach)
-    except OperatorStop as e:
-        # The lane boundary: a stop must become an ANSWER, never a dead lane. run() now
-        # catches its own turn-level stop, and this catches one raised around it (a cancel
-        # seen between turns); every lane ever written catches Exception, so a
-        # BaseException used to escape with no answer posted at all (BUGREPORT §M11).
-        log.info("[%s] stopped by the operator at the lane", session_key)
-        answer = ("🛑 Stopped. The run was abandoned where it stood; nothing further "
-                  "was executed.")
-    except (KeyboardInterrupt, SystemExit):
-        raise                      # a shutdown is not a failed run
-    except BaseException as e:     # noqa: BLE001
-        log.exception("[%s] run failed at the lane", session_key)
-        answer = f"⚠️ Something broke on my side: {e}"
-    # One offer per run, after the answer, from the harness: the operator is the only party
-    # who knows whether a by-hand routine recurs (see mint_offer).
-    try:
-        mint_offer(session_key, reporter, source=source)
-    except Exception:
-        log.debug("mint offer failed", exc_info=True)
-    return answer
+        try:
+            answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
+                               channel_id=channel_id, source=source,
+                               say_cb=_alive(reporter.say),
+                             progress_cb=_alive(reporter.progress),
+                             interim_cb=_alive(reporter.note),
+                             narration_cb=_alive(reporter.narration),
+                             narration_drop_cb=_alive(reporter.narration_drop),
+                             reasoning_cb=_alive(reporter.reasoning),
+                             progress_done_cb=_alive(reporter.tool_done),
+                               confirm_cb=_alive(reporter.confirm),
+                               cancel_event=ctrl.cancel_event,
+                               steer_cb=steer_cb or ctrl.take_steering,
+                               ask_door=ask_door,
+                               # handed over unwrapped: tests pin this door's identity,
+                               # and every attach is preceded by a tool line that touched.
+                               send_file_cb=reporter.attach)
+        except OperatorStop as e:
+            # The lane boundary: a stop must become an ANSWER, never a dead lane. run() now
+            # catches its own turn-level stop, and this catches one raised around it (a cancel
+            # seen between turns); every lane ever written catches Exception, so a
+            # BaseException used to escape with no answer posted at all (BUGREPORT §M11).
+            log.info("[%s] stopped by the operator at the lane", session_key)
+            answer = ("🛑 Stopped. The run was abandoned where it stood; nothing further "
+                      "was executed.")
+        except (KeyboardInterrupt, SystemExit):
+            raise                      # a shutdown is not a failed run
+        except BaseException as e:     # noqa: BLE001
+            log.exception("[%s] run failed at the lane", session_key)
+            answer = f"⚠️ Something broke on my side: {e}"
+        # One offer per run, after the answer, from the harness: the operator is the only party
+        # who knows whether a by-hand routine recurs (see mint_offer).
+        try:
+            mint_offer(session_key, reporter, source=source)
+        except Exception:
+            log.debug("mint offer failed", exc_info=True)
+        return answer
+    finally:
+        RUNS.close(ctrl)
 
 
 
@@ -17381,7 +17549,12 @@ class MattermostDispatcher:
         """One /stop implementation for both entry points (listener + handler)."""
         events = self.cancel_events.get(channel_id, set())
         live = [e for e in events if not e.is_set()]
-        busy = self._channel_busy(channel_id)
+        # A run this channel did not spawn - a scheduled job reporting into it, a
+        # background task - lives only in the session registry, so /stop has to reach
+        # it here too or a wedged cron job answers "nothing is running" (F-11).
+        runs = RUNS.by_channel(channel_id)
+        live += [c for c in runs if not c.cancel_event.is_set()]
+        busy = self._channel_busy(channel_id) or bool(runs)
         # A run parked on an ask_user question must be RELEASED, not merely flagged: its
         # cancel check runs only once the wait returns, so without this a /stop sat out
         # the whole window - the "my stop was ignored" complaint.
@@ -17398,6 +17571,8 @@ class MattermostDispatcher:
         self._drain(channel_id)
         for e in events:              # idempotent: re-flag anything still set to run
             e.set()
+        for c in runs:                # ...and the same for a run this channel did not spawn
+            c.cancel_event.set()
         if live:
             note = "🛑 Stopping now — nothing further will be executed."
         elif busy:
@@ -17654,7 +17829,11 @@ class MattermostDispatcher:
                                steer_cb=lambda: self._take_steering(channel_id),
                                ask_door=self.ask_door_factory(channel_id,
                                                               session_key),
-                               channel_id=channel_id)
+                               channel_id=channel_id,
+                               # the channel's own watchdog is stronger here: it also
+                               # reclaims the wedged worker, so this run is not watched
+                               # twice (the record still exists, for /stop and status).
+                               watch=False)
         except Exception as e:
             log.exception("agent run failed")
             answer = f"⚠️ Something broke on my side: {e}"
@@ -17986,6 +18165,13 @@ TG_EDIT_AFTER = 1.0           # the API's own edit rate, per chat
 TG_LIVE_LINES = 9             # tool lines kept in the growing message
 
 TG_POLL_TIMEOUT = 50          # getUpdates long poll, seconds
+
+# How long a chat's worker waits with nothing to do before it exits. A worker used to
+# block on its queue for ever, so one thread lived per chat this process ever heard
+# from; Mattermost's worker gives up after the same kind of idle wait, and the next
+# message respawns it.
+
+TG_IDLE_SECONDS = 10.0
 
 TG_HELP = ("<b>tinycmdr</b>\n"
 
@@ -18595,6 +18781,38 @@ class TelegramPoller:
 
 
 
+    def steer(self, chat_id, text, sender=""):
+
+        """Hand a mid-run message to the live run instead of queueing it behind.
+
+        A chat's worker holds the chat for the whole run, so a message that only
+        queued was read AFTER the run it was meant to redirect - the README's
+        "a message sent mid-run steers the run instead of queueing behind it" was
+        true of Mattermost and the CLI, not here. The run's control (drive_run opens
+        it by construction) is what the message goes into.
+
+        """
+
+        ctrl = RUNS.control(tg_session_key(chat_id))
+
+        if ctrl is None:
+
+            return False
+
+        ctrl.steer(sender, text)
+
+        log.info("telegram: steering from %s handed to the live run in %s",
+
+                 sender or "?", chat_id)
+
+        self.c.send(chat_id, "\U0001f4e8 Passing that into the run now — it picks "
+
+                             "it up on its next step.")
+
+        return True
+
+
+
     def handle(self, update):
 
         """One update. True when it was ours to handle."""
@@ -18688,6 +18906,13 @@ class TelegramPoller:
 
             return True
 
+        # A run is live for this chat: a plain message is a correction to it, not a
+        # second task to queue behind it (a command above is still out-of-band).
+
+        if self.steer(chat_id, text, str(user.get("id") or "")):
+
+            return True
+
         if self.submit is not None:
 
             self.submit(chat_id, text, mid)
@@ -18772,7 +18997,28 @@ def run_telegram():
 
         while True:
 
-            task = queues[chat_id].get()
+            try:
+
+                task = queues[chat_id].get(timeout=TG_IDLE_SECONDS)
+
+            except queue.Empty:
+
+                # Nothing to do: this thread has outlived its run. Exit and let the
+                # next message spawn a fresh worker - one thread per chat this process
+                # ever heard from used to live for ever (Mattermost's worker gives up
+                # after the same kind of idle wait).
+
+                with locks:
+
+                    if queues.get(chat_id) is not None and queues[chat_id].empty():
+
+                        queues.pop(chat_id, None)
+
+                        workers.pop(chat_id, None)
+
+                        return
+
+                continue
 
             if task is None:
 
