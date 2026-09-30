@@ -136,6 +136,31 @@ check("a name that resolves nowhere is REMOTE (the pessimistic branch)",
       fb._is_local_url(REMOTE) is False)
 check("loopback is LOCAL", fb._is_local_url(BASE_URL + "/") is True)
 
+# F-07: the locality verdict expires. A hostname that first resolved private and later
+# points off-LAN (DNS moved) must be re-classified, or every gate - failover, search and
+# fetch egress - keeps saying "local" and traffic leaves with allow_cloud_egress: false.
+_local_calls = []
+_state = {"local": True}
+_real_host_is_local = fb._host_is_local
+try:
+    fb._LOCAL_URL_CACHE.clear()
+    fb._host_is_local = lambda h: (_local_calls.append(h), _state["local"])[1]
+    check("a fresh hostname is classified and cached",
+          fb._is_local_url("http://lan-box:8080/") is True and len(_local_calls) == 1,
+          _local_calls)
+    _state["local"] = False
+    check("...the cached verdict is reused inside the TTL",
+          fb._is_local_url("http://lan-box:8080/") is True and len(_local_calls) == 1,
+          _local_calls)
+    _verdict, _at = fb._LOCAL_URL_CACHE["lan-box"]
+    fb._LOCAL_URL_CACHE["lan-box"] = (_verdict, _at - fb.WINDOW_TTL - 1)
+    check("...but past the TTL the verdict is re-derived",
+          fb._is_local_url("http://lan-box:8080/") is False and len(_local_calls) == 2,
+          _local_calls)
+finally:
+    fb._host_is_local = _real_host_is_local
+    fb._LOCAL_URL_CACHE.clear()
+
 # --------------------------------------------------------------- resolving the chain
 search_config([{"kind": "searxng", "url": BASE_URL}], False)
 chain, problems = fb._search_providers()

@@ -88,6 +88,41 @@ finally:
     os.environ.pop("TINYCMDR_TEST_SUDO_PASSWORD", None)
     os.environ.pop("TINYCMDR_TEST_TOO_SHORT_PASSWD", None)
 
+# ---- F-08: a key added after import is swept too -----------------------------
+# _SECRETS was frozen at import, so `config set llm.api_key` (the guard skips the llm
+# section, since llm keys live in config.json) took effect while the sweep still held
+# the import-time set - the new key reached the transcript, the log and the chat
+# (audit, 2026-09-29). Drive the real verb against a temp config.json.
+import contextlib
+import io
+import shutil
+import tempfile
+
+NEWKEY = "sk-added-after-start-9876543210"
+_saved_path = fb.CONFIG_PATH
+_saved_cfg = dict(fb.CONFIG)
+_saved_secrets = fb._SECRETS
+_saved_source = dict(fb.CONFIG_SOURCE)
+_saved_running = fb._verb_running
+_stage = Path(tempfile.mkdtemp(prefix="tinycmdr-scrub-"))
+try:
+    fb.CONFIG_PATH = _stage / "config.json"
+    fb.CONFIG_PATH.write_text("{}", encoding="utf-8")
+    fb._verb_running = lambda: False        # the verb only prints its restart note
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        rc = fb._verb_config(["set", "llm.api_key", NEWKEY])
+    check("config set llm.api_key takes effect through the real verb", rc == 0, rc)
+    out = fb.scrub("the new endpoint key is " + NEWKEY)
+    check("...and the new key is masked without re-binding _SECRETS by hand",
+          NEWKEY not in out and "«redacted»" in out, out)
+finally:
+    fb.CONFIG_PATH = _saved_path
+    fb._verb_running = _saved_running
+    fb._SECRETS = _saved_secrets
+    fb.CONFIG = _saved_cfg
+    fb.CONFIG_SOURCE.update(_saved_source)
+    shutil.rmtree(_stage, ignore_errors=True)
+
 # ---- BUGREPORT §M4: a 401 body that echoes the key ---------------------------
 # Measured: a provider that echoes the request's Authorization header in its error body
 # put the live key into the fatal notes, the run's return value, the log and the chat.

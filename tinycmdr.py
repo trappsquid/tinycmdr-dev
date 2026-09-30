@@ -1297,6 +1297,12 @@ def _is_local_url(url):
     failover AND `stream_options` on exactly the boxes this build targets. A name that
     cannot be resolved is treated as REMOTE (pessimistic: no off-LAN send is ever
     invented out of a failure to answer).
+
+    The verdict is cached per host for WINDOW_TTL, not for the life of the process: a
+    hostname that first resolved private and later points off-LAN (DNS moved) would
+    otherwise leave every gate - the model-failover filter, the search and fetch egress
+    gate - saying "local", so traffic leaves the box with `allow_cloud_egress: false`.
+    Same TTL and same reason as static_prompt_tokens (audit, 2026-09-29).
     """
     try:
         host = url.split("//", 1)[-1].split("/", 1)[0]
@@ -1311,10 +1317,11 @@ def _is_local_url(url):
     if not host:
         return False
     hit = _LOCAL_URL_CACHE.get(host)
-    if hit is None:
-        hit = _host_is_local(host)
+    now = time.time()
+    if hit is None or now - hit[1] > WINDOW_TTL:
+        hit = (_host_is_local(host), now)
         _LOCAL_URL_CACHE[host] = hit
-    return hit
+    return hit[0]
 
 
 def _host_is_local(host):
@@ -19149,6 +19156,10 @@ def run_setup(rest=None):
     except Exception as e:
         print(red("could not write config.json: %s" % e), file=sys.stderr)
         return 1
+    # Setup can add a key this process did not have at import; re-derive the sweep so
+    # the keys it just wrote are masked like the rest (audit, 2026-09-29).
+    global _SECRETS
+    _SECRETS = _secret_values()
 
     summary = [
         "LLM Endpoint : %s" % llm.get("base_url"),
@@ -20660,6 +20671,10 @@ def _config_take_effect():
         return err
     CONFIG["llm"] = back.get("llm") or CONFIG["llm"]
     _MODEL_CACHE["at"] = 0.0
+    # A key added after import was not in the sweep, so it reached the transcript, the
+    # log and the chat unmasked. Re-derive it with the config (audit, 2026-09-29).
+    global _SECRETS
+    _SECRETS = _secret_values()
     return None
 
 
@@ -20868,6 +20883,11 @@ def _verb_config(rest):
     if key in ("base_url", "model", "fallbacks", "token") and section == "llm":
         _MODEL_CACHE["at"] = 0.0
     CONFIG.update(back)
+    # The secret guard above skips the llm section, so `config set llm.api_key` lands
+    # here and takes effect; the import-time sweep does not hold it, and an unscrubbed
+    # new key reaches the transcript, the log and the chat (audit, 2026-09-29).
+    global _SECRETS
+    _SECRETS = _secret_values()
     if _verb_running() is True:
         print("a running bot reads config.json at start: `tinycmdr restart`.")
     return 0
