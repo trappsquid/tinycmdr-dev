@@ -980,6 +980,48 @@ def test_429_is_waited_out_on_the_same_endpoint():
         fb.CONFIG = saved_cfg
 
 
+def test_a_cancel_is_noticed_while_waiting_out_a_429():
+    """A 429 wait is the one place the call slept in a single un-interruptible block, so
+    a /stop sent during it was not seen until the whole Retry-After (a config cap of 60s,
+    by default) had elapsed. The wait is sliced now, and the OperatorStop is raised from
+    inside it, exactly as _post_watchdog does."""
+    saved_cfg = fb.CONFIG
+    try:
+        cfg = isolated_config()
+        cfg["llm"]["retry_after_max"] = 5
+        ev = threading.Event()
+        box = {}
+
+        def call():
+            try:
+                fb.AGENT._chat([{"role": "user", "content": "hi"}], usage={},
+                               cancel_event=ev)
+                box["r"] = "returned"
+            except fb.OperatorStop:
+                box["r"] = "stopped"
+            except BaseException as e:        # noqa: BLE001 - reported below
+                box["r"] = f"{type(e).__name__}: {e}"
+
+        def go():
+            th = threading.Thread(target=call, daemon=True)
+            th.start()
+            time.sleep(0.3)
+            ev.set()
+            th.join(3)
+            return box
+
+        t0 = time.time()
+        box, _calls = with_fake_post(
+            [FakeResp(429, text="slow down", headers={"Retry-After": "5"}),
+             ok_resp("never reached")], go)
+        elapsed = time.time() - t0
+        check("429 wait: the cancel stops the call", box.get("r") == "stopped", box)
+        check("429 wait: it stops long before Retry-After elapses",
+              elapsed < 2.0, f"{elapsed:.2f}s")
+    finally:
+        fb.CONFIG = saved_cfg
+
+
 def test_context_overflow_is_recoverable():
     saved_cfg = fb.CONFIG
     try:
@@ -999,6 +1041,44 @@ def test_context_overflow_is_recoverable():
               "context window" in str(e), str(e))
     except Exception as e:
         check("context overflow raised for the agent loop", False, repr(e))
+    finally:
+        fb.CONFIG = saved_cfg
+
+
+def test_a_400_naming_max_tokens_is_retried_as_max_completion_tokens():
+    """OpenAI's newer models (and Azure) answer 400 to the legacy `max_tokens` and NAME
+    it. That used to be classified FATAL, so the run died telling the operator to check
+    the key/model/base_url over a renamed field - and the optional-field scan could not
+    help, because dropping the field would remove the envelope's output clamp. The same
+    value is re-sent under `max_completion_tokens` to the SAME endpoint."""
+    saved_cfg = fb.CONFIG
+    try:
+        isolated_config()
+        # The cap the envelope actually sends, learned from a clean call: the payloads
+        # recorded by with_fake_post are the LIVE dict, so the first (rejected) record
+        # has already been mutated by the rename below and cannot be compared against.
+        probe = with_fake_post([ok_resp("probe")],
+                               lambda: fb.AGENT._chat(
+                                   [{"role": "user", "content": "hi"}]))[1]
+        cap = probe[0]["payload"]["max_tokens"]
+        check("400 max_tokens: the envelope sends a cap to begin with", cap >= 1, cap)
+        usage = {}
+        resp, calls = with_fake_post(
+            [FakeResp(400, text="Unsupported parameter: 'max_tokens' is not supported "
+                                "with this model. Use 'max_completion_tokens' instead."),
+             ok_resp("recovered")],
+            lambda: fb.AGENT._chat([{"role": "user", "content": "hi"}], usage=usage))
+        check("400 max_tokens: the same endpoint is retried",
+              len(calls) == 2 and calls[0]["url"] == calls[1]["url"], calls)
+        sent = calls[1]["payload"]
+        check("400 max_tokens: the value is re-sent under the new name",
+              sent.get("max_completion_tokens") == cap,
+              (cap, sent.get("max_completion_tokens")))
+        check("400 max_tokens: the rejected name is gone",
+              "max_tokens" not in sent, sorted(sent))
+        check("400 max_tokens: the answer arrives",
+              resp.get("content") == "recovered", resp)
+        check("400 max_tokens: recorded as a retry", usage.get("retries") == 1, usage)
     finally:
         fb.CONFIG = saved_cfg
 
@@ -1773,6 +1853,49 @@ def test_chat_retries_the_same_endpoint_without_streaming_when_the_stream_fails(
         fb.CONFIG.clear()
         fb.CONFIG.update(saved_cfg)
 
+
+
+def test_a_mid_stream_break_does_not_blacklist_streaming():
+    """A break after the first deltas is a transient failure, not proof the endpoint
+    cannot stream. It used to add the URL to _STREAM_UNSUPPORTED (a module global) and
+    set stream_on=False - so one hiccup ended streaming for the whole process, and for
+    the remaining failover endpoints of that call. Only the "server ignored stream:true
+    and answered with plain JSON" cause is remembered now."""
+    saved_cfg = copy.deepcopy(fb.CONFIG)
+    fb.CONFIG["llm"]["stream"] = True
+    fb._STREAM_UNSUPPORTED.clear()
+
+    class BreakAfterDeltas(StreamResp):
+        """Delivers one delta and then the reader dies: the mid-stream break (the 2129
+        path), which is NOT a server that cannot stream."""
+
+        def iter_lines(self, decode_unicode=False):
+            for line in _sse(_chunk({"content": "partial"}), done=False).splitlines():
+                yield line
+            raise fb.requests.ConnectionError("connection reset by peer")
+
+    try:
+        resp, calls = with_fake_post(
+            [BreakAfterDeltas(), ok_resp("recovered without streaming")],
+            lambda: fb.AGENT._chat([{"role": "user", "content": "hi"}]))
+        check("mid-stream break: the same endpoint is retried",
+              len(calls) == 2 and calls[0]["url"] == calls[1]["url"], calls)
+        check("mid-stream break: the first attempt asked for a stream",
+              calls[0].get("stream") is True, calls[0].get("stream"))
+        check("mid-stream break: the answer arrives",
+              resp.get("content") == "recovered without streaming", resp)
+        check("mid-stream break: the endpoint is NOT remembered as stream-less",
+              not any(u.endswith("/chat/completions") for u in fb._STREAM_UNSUPPORTED),
+              fb._STREAM_UNSUPPORTED)
+        # The process-level promise: a later call must stream again.
+        _r, calls2 = with_fake_post(
+            [StreamResp(_sse(_chunk({"content": "streamed"}), _chunk({}, finish="stop")))],
+            lambda: fb.AGENT._chat([{"role": "user", "content": "again"}]))
+        check("mid-stream break: a later call still asks to stream",
+              calls2[0].get("stream") is True, calls2[0].get("stream"))
+    finally:
+        fb.CONFIG.clear()
+        fb.CONFIG.update(saved_cfg)
 
 
 def test_a_cancel_is_noticed_while_chunks_are_still_flowing():

@@ -1666,7 +1666,17 @@ class StreamFailed(InfraError):
     Distinct from a plain endpoint failure on purpose: the caller retries the SAME
     endpoint without streaming before demoting it, because a server that cannot
     stream is still a working model.
+
+    `not_a_stream` carries WHY out of the raise, so the caller need not match the
+    message text: only the "server ignored stream:true and answered with plain
+    JSON" case proves the endpoint cannot stream and is worth remembering. A
+    prefill/idle/mid-stream break is transient - a single hiccup used to end
+    streaming for the whole process.
     """
+
+    def __init__(self, *args, not_a_stream=False):
+        super().__init__(*args)
+        self.not_a_stream = not_a_stream
 
 
 class OperatorStop(BaseException):
@@ -2142,7 +2152,8 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         # be a silent wrong answer; it is a stream that did not happen, so the
         # caller retries the same endpoint without streaming.
         _close()
-        raise StreamFailed("the response carried no SSE data (not a stream?)")
+        raise StreamFailed("the response carried no SSE data (not a stream?)",
+                           not_a_stream=True)
     if timings:
         stats["server_tps"] = float(
             timings.get("predicted_per_second") or 0.0)
@@ -13025,9 +13036,12 @@ class Agent:
             escalated = False
             waited_after_429 = False
             dropped_optional = False
+            # The field carrying the output cap: `max_tokens` unless a provider's 400
+            # names it, in which case the same value goes out as its replacement.
+            cap_field = "max_tokens"
             while True:
                 if cap:
-                    payload["max_tokens"] = cap
+                    payload[cap_field] = cap
                 t0 = time.time()
                 try:
                     use_stream = bool(stream_on and url not in _STREAM_UNSUPPORTED
@@ -13073,10 +13087,16 @@ class Agent:
                                   if sstats.get("server_tps") else "?"),
                                  f"{int(time.time() - t0)}s")
                 except StreamFailed as e:
-                    # Same endpoint, without streaming: a server that cannot stream
-                    # is still a working model, and this is not a failover.
-                    _STREAM_UNSUPPORTED.add(url)
-                    stream_on = False
+                    # Only a server that ignored "stream": true and answered with
+                    # plain JSON has proven it cannot stream: THAT one is remembered
+                    # (and streaming is turned off for the rest of this call). A
+                    # prefill that produced nothing, an idle gap and a mid-stream
+                    # break are ordinary transient failures - the endpoint can still
+                    # stream, so it is not blacklisted and later calls (and the other
+                    # endpoints in this call) keep streaming. See StreamFailed.
+                    if e.not_a_stream:
+                        _STREAM_UNSUPPORTED.add(url)
+                        stream_on = False
                     for k in ("stream", "stream_options", "return_progress",
                               "sse_ping_interval"):
                         payload.pop(k, None)
@@ -13089,6 +13109,25 @@ class Agent:
                     status = _http_status(e)
                     body = _http_body(e)
                     secs = time.time() - t0
+                    if (status == 400 and cap_field == "max_tokens"
+                            and re.search(r"\bmax_tokens\b", body)):
+                        # Some providers (OpenAI's newer models, Azure) reject the
+                        # legacy `max_tokens` and NAME it in the 400. The optional-field
+                        # scan below can only DROP a field it is told about, and
+                        # dropping this one removes the envelope's output clamp; the
+                        # same value is sent under the replacement name instead, once,
+                        # on the SAME endpoint. `cap_field` is what the top of this
+                        # loop writes, so the rename carries into the retry rather than
+                        # both names going out (a request naming both can 400 too).
+                        payload.pop("max_tokens", None)
+                        cap_field = "max_completion_tokens"
+                        _record_attempt(usage, url, "retry",
+                                        f"400 named max_tokens: {body}", secs)
+                        log.warning("LLM %s rejected max_tokens with a 400 - retrying "
+                                    "the same endpoint with max_completion_tokens",
+                                    url)
+                        last_err = e
+                        continue
                     if status == 400 and not dropped_optional:
                         # A 400 that NAMES one of the optional fields we added is the
                         # provider saying "unknown argument", not "your request is
@@ -13130,7 +13169,20 @@ class Agent:
                         waited_after_429 = True
                         last_err = e
                         if wait:
-                            time.sleep(wait)
+                            # Sliced so a /stop lands in a quarter of a second instead
+                            # of after the whole Retry-After (which is a config cap of
+                            # 60s): a 429 wait is the one place the call still slept in
+                            # one un-interruptible block. Mirrors _post_watchdog.
+                            deadline = time.time() + wait
+                            while True:
+                                if cancel_event is not None and cancel_event.is_set():
+                                    raise OperatorStop(
+                                        f"stopped by the operator while waiting out a "
+                                        f"429 on {url} after {int(time.time() - t0)}s")
+                                remaining = deadline - time.time()
+                                if remaining <= 0:
+                                    break
+                                time.sleep(min(0.25, remaining))
                         continue
                     if (status in (400, 413, 422)
                             and _CONTEXT_OVERFLOW_RE.search(body)):
