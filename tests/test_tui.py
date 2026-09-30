@@ -309,13 +309,48 @@ finally:
     fb._CLI.update(_saved_loop_cli)
 
 # --- the app's own chrome: a window, not a prompt ---------------------------------
+# The rail is live: it reads AGENT.stats() for the session's estimate and the detected window, so
+# how full the gauge draws depends on the state of the box the suite runs on. On a clean clone -
+# which is what CI grades - usage is zero, the bar is all shade, and this failed while the same
+# tree passed on a host that had run a session (2026-09-30; the first red of that shape was CI run
+# 36778872020, and it stayed green here for exactly that reason). Pin the two numbers the gauge
+# reads, grade the fill against them, and put both back: the chrome is then graded the same way on
+# a clone and on a box that has done work.
 _app = fb.AppScreen(colour=True, tier="truecolor")
 _title = "".join(part for _, part in _app._frame_title().__pt_formatted_text__())
-_rail = "".join(part for _, part in _app._sidebar_text().__pt_formatted_text__())
+
+
+def _rail_for(used, budget):
+    _saved_stats, _saved_budget = fb.AGENT.stats, fb.AGENT._context_budget
+    try:
+        fb.AGENT.stats = lambda key: {"exchanges": 2 if used else 0, "est_tokens": used}
+        fb.AGENT._context_budget = lambda: budget
+        return "".join(part for _, part in
+                       fb.AppScreen(colour=True, tier="truecolor")
+                       ._sidebar_text().__pt_formatted_text__())
+    finally:
+        fb.AGENT.stats = _saved_stats
+        fb.AGENT._context_budget = _saved_budget
+
+
+_rail = _rail_for(4096, 8192)
+_bar = next((l.strip() for l in _rail.splitlines() if "\u2588" in l or "\u2591" in l), "")
+_bar_w = max(6, _app.RAIL_WIDTH - 8)
 check("--app draws a window title with the session in it",
       "tinycmdr" in _title and "cli" in _title, _title)
 check("--app draws a rail with a live context gauge",
-      "SESSION" in _rail and "CONTEXT" in _rail and "\u2588" in _rail, _rail[:120])
+      "SESSION" in _rail and "CONTEXT" in _rail and "4.1K / 8.2K" in _rail
+      and "50%" in _rail and _bar.count("\u2588") == _bar_w // 2
+      and _bar.count("\u2591") == _bar_w - _bar_w // 2, _rail[:120])
+_rail_zero = _rail_for(0, 8192)
+check("...and a session with no usage yet draws an empty gauge, not a full one",
+      "\u2588" not in _rail_zero and "0 / 8.2K" in _rail_zero and "0%" in _rail_zero,
+      _rail_zero[:120])
+# The rail is a fixed-width window, so a line longer than it is silently CUT (no wrap): the
+# wheel hint had to be shortened to fit, and the next one has to be told the same way.
+check("--app: every rail line fits the rail",
+      max(len(l) for l in _rail.splitlines()) <= _app.RAIL_WIDTH,
+      [(l, len(l)) for l in _rail.splitlines() if len(l) > _app.RAIL_WIDTH])
 check("--app's composer is a labeled box, not a bare prompt",
       "".join(p for _, p in _app.composer.title.__pt_formatted_text__()).strip() == "you",
       _app.composer.title)
