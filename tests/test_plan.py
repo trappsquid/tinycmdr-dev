@@ -7,10 +7,13 @@ ends up in the REQUEST BODY, and only an end-to-end run can prove those.
 
     python tests/test_plan.py
 """
+import contextlib
+import io
 import json
 import shutil
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -227,6 +230,36 @@ def main():
         check("Open plan steps at the cap" in final,
               "the wrap-up names the plan steps that are still open")
         check("step one" in final, "and it names them by text, not just by count")
+
+        # ---- the ledger's staleness rule lives in ONE place (audit 2026-09-29) ----------
+        # The prompt labelled items `(3d, stale)` while `tinycmdr tasks` - the verb the operator
+        # is pointed at - showed no age at all: each view had its own copy of the rule, so they
+        # could disagree about the same ledger. They share task_age() now, and this pins what it
+        # decides, including the correction that came out of putting them side by side.
+        old_open = {"id": 1, "desc": "an old open item", "status": "open",
+                    "updated": "2026-09-26 15:48", "created": "2026-09-26 15:48"}
+        old_done = {"id": 2, "desc": "an old finished item", "status": "done",
+                    "updated": "2026-09-26 15:48", "created": "2026-09-26 15:48"}
+        fresh = {"id": 3, "desc": "just added", "status": "open",
+                 "updated": time.strftime("%Y-%m-%d %H:%M")}
+        check(fb.task_age(fresh)[1] is False, "a fresh item is not stale")
+        check(fb.task_age(old_open)[1] is True, "an old OPEN item is stale")
+        check(fb.task_age(old_done)[1] is False,
+              "  and an old FINISHED item is not - stale means it needs attention")
+
+        fb.TASKS_FILE.write_text(json.dumps({"items": [old_open, old_done, fresh]}),
+                                 encoding="utf-8")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            fb._verb_tasks([])
+        shown = buf.getvalue()
+        rows = [l for l in shown.splitlines() if l.strip().startswith("#")]
+        open_row = next((l for l in rows if "an old open item" in l), "")
+        done_row = next((l for l in rows if "an old finished item" in l), "")
+        check("(3d, stale)" in open_row,
+              f"the operator's view shows the age and the judgement ({open_row.strip()[:70]})")
+        check("stale" not in done_row,
+              f"  and only on the row that needs attention ({done_row.strip()[:70]})")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

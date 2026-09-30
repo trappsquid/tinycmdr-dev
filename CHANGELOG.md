@@ -327,6 +327,25 @@ Added
   delete-shaped commands the model ran in three days, nine were `rm` of scratch under /tmp that
   the operator had no interest in; `agent.confirm_deletes: false` restores the old shape per box.
 
+### The ledger's age and staleness, in one place and visible (2026-09-29)
+
+Fixed
+- **`tinycmdr tasks` now shows the age and the stale judgement the model sees.** The verb - which
+  the README promises and the help names for exactly this question - printed `#1 [open] Boot
+  Linux …` with no age at all, while the prompt handed the model `#1 [open] (3d, stale)` for the
+  same row. Each view had its own copy of the rule, which is how they came to disagree about the
+  same ledger. Both call `task_age()` now, so the operator can see the judgement the model acts
+  on instead of having to infer it.
+- **A finished item is no longer labelled `stale`.** The rule says what it is for - "an open item
+  untouched this long renders `stale`" - but `render_task_prompt` put finished rows through the
+  same age function, so a two-day-old `done` item rendered `(2d, stale)`: in the prompt, and then
+  on the operator's screen the moment the verb shared the rule. Stale means it needs attention,
+  and a finished item does not. Age yes, label no.
+
+  Both were found by running the verb against the live ledger after an operator asked how they
+  were supposed to know any of this. The tool existed; what was missing was that it agreed with
+  the model.
+
 ## [1.0.39] - 2026-09-29
 
 Two security fixes and the Windows entry point, all of them found by running the gate on real

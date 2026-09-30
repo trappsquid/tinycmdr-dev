@@ -7714,6 +7714,47 @@ def save_tasks(t):
     atomic_write_text(TASKS_DOC, "\n".join(lines))
 
 
+def ledger_stale_seconds():
+    """The staleness threshold in seconds - the ONE source for it.
+
+    task_age() decides with it and the prompt footer states it; a second literal
+    is how the stated number and the applied one drift apart.
+    """
+    return float(CONFIG["agent"].get("ledger_stale_hours") or 12) * 3600.0
+
+
+def task_age(item, now=None):
+    """(human age, is_stale) for a ledger item, from its own timestamps.
+
+    The ONE place the staleness rule lives, so the model's view (`render_task_prompt`) and the
+    operator's (`tinycmdr tasks`) cannot drift apart. Measured 2026-09-29: the prompt labelled an
+    item `(3d, stale)` while the verb the operator was pointed at showed no age at all, so the
+    operator could not see the judgement the model was acting on.
+
+    The ledger is durable by design, so age IS the difference between "the operator asked an hour
+    ago" and "a session that ended three days ago left this lying around" - and the second one is
+    what a fresh session must not adopt silently.
+    """
+    ts = str((item or {}).get("updated") or (item or {}).get("created") or "")
+    try:
+        when = time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M"))
+    except Exception:
+        return "", False
+    now = time.time() if now is None else now
+    secs = max(0.0, now - when)
+    stale_after = ledger_stale_seconds()
+    # Stale is about ATTENTION, and only an unfinished item needs any: "an open item untouched
+    # this long renders stale" is what the rule says it is for. A finished item carries an age
+    # for context and never the label - and it did, until the two views shared this function and
+    # `#2 [done] (2d, stale)` appeared on the operator's screen (2026-09-29).
+    stale = secs > stale_after and (item or {}).get("status") in TASK_ACTIVE
+    if secs < 3600:
+        return "%dm" % int(secs // 60), False
+    if secs < 86400:
+        return "%dh" % int(secs // 3600), stale
+    return "%dd" % int(secs // 86400), stale
+
+
 def render_task_prompt():
     """Compact rendering of the ledger for the system prompt: everything still
     active, plus the last few finished items for continuity."""
@@ -7724,31 +7765,11 @@ def render_task_prompt():
     keep_done = int(CONFIG["agent"].get("tasks_done_keep") or 3)
     if not active and not done:
         return ""
-    stale_after = float(CONFIG["agent"].get("ledger_stale_hours") or 12) * 3600.0
     now = time.time()
-
-    def _age(item):
-        """(human age, is_stale) from the item's own timestamps.
-
-        The ledger is durable by design, so age is the whole difference between "the
-        operator asked an hour ago" and "a session that ended yesterday left this lying
-        around" - and the second one is what a fresh session must not adopt silently.
-        """
-        ts = str(item.get("updated") or item.get("created") or "")
-        try:
-            t = time.mktime(time.strptime(ts, "%Y-%m-%d %H:%M"))
-        except Exception:
-            return "", False
-        secs = max(0.0, now - t)
-        if secs < 3600:
-            return "%dm" % int(secs // 60), False
-        if secs < 86400:
-            return "%dh" % int(secs // 3600), secs > stale_after
-        return "%dd" % int(secs // 86400), secs > stale_after
 
     rows = []
     for i in active:
-        human, stale = _age(i)
+        human, stale = task_age(i, now)
         age = (" (%s%s)" % (human, ", stale" if stale else "")) if human else ""
         row = f"- #{i['id']} [{i.get('status')}]{age} {i.get('desc', '')}"
         if i.get("note"):
@@ -7776,7 +7797,7 @@ def render_task_prompt():
             f"earlier run (or this one) - they are NOT a plan for the current "
             f"conversation: ask the operator before resuming one, and close what they "
             f"do not want. `stale` marks an item untouched for over "
-            f"{int(stale_after // 3600)}h. `[done, no action]` rows are history. Curate "
+            f"{int(ledger_stale_seconds() // 3600)}h. `[done, no action]` rows are history. Curate "
             f"with the `task` tool - mark, don't append.\n" + "\n".join(rows))
 
 
@@ -20286,8 +20307,12 @@ def _verb_tasks(rest):
         print("  (empty: the agent adds items with the `task` tool)")
         return 0
     rows = items if show_all else (active + done[-8:])
+    now = time.time()
     for i in rows:
-        print("  #%-3s [%s] %s" % (i.get("id"), i.get("status"), i.get("desc", "")))
+        human, stale = task_age(i, now)
+        age = (" (%s%s)" % (human, ", stale" if stale else "")) if human else ""
+        print("  #%-3s [%s]%s %s" % (i.get("id"), i.get("status"), age,
+                                      i.get("desc", "")))
         if i.get("note"):
             print("        note: %s" % i["note"])
     if not show_all and len(rows) < len(items):
