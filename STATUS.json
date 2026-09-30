@@ -579,6 +579,36 @@
       },
       "detail": "Fixed 2026-09-30 (44f97d1), from the operator's verdict on the first --app screenshot ('looks the exact same') and the round-3 review. The app is now a window: a frame whose title bar carries the app name, the session and a live clock; a left rail with the session, a context gauge, the last run's calls/tok-s, the model and the keys; cards drawn on a filled surface; a status bar whose spinner and clock tick while a run is in flight; and a labeled `you` composer box. The round-3 items are in the same commit: the transcript opens on the first exchange (the chrome carries the banner, the note and the capability line), an empty draft card is never committed as a stub, the done line and the rail read one run accumulator, no rich Markdown default colour reaches an answer body (magenta headings, cyan lists/table headers and the white `bw` code background were all on screen), the footer carries the run status only, and the input box says `you`. A bare `tinycmdr` now passes --app from both shims on every OS (falling back to inline cards where the app cannot run), and TINYCMDR_APP=1 does the same for a hand-typed --cli. tests/test_tui.py pins the chrome and the six polish behaviours.",
       "gate": "merged to main (gate 68/68 green); the operator still has to look at it on a Linux and a Windows terminal before the platform matrix is fully claimed. release.sh states the tagged claim"
+    },
+    {
+      "id": "console-app-draft-region-not-replaced",
+      "title": "the app filed the model's pre-answer narration above the answer card",
+      "state": "shipped",
+      "anchor": {
+        "commit": "437f231"
+      },
+      "detail": "Fixed 2026-09-30 (437f231), the round-4 residual of P-02. Reproduced from the reporter's own call pattern: RunReporter.narration draws a NEW line (CliDestination.line('narration', ...)) and only then streams deltas into it with update(), so the first draw is a committed transcript item and the deltas are a second. The answer card dropped only the item it believed was the draft, so the model's opening sentence stayed filed above the card with its markdown characters intact - literally the last survivor of the triple-render family the brief opened with. AppScreen now tracks the run's draft region (narration lines and streamed deltas since the last real card) and the answer drops the whole span; a card in between ends the region, so narration a tool call came after stays as history. tests/test_tui.py replays the first-draw-plus-deltas shape and asserts no item mentioning the draft survives the card.",
+      "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
+    },
+    {
+      "id": "console-answer-table-band",
+      "title": "an answer card carried a two-row blank band around a markdown table",
+      "state": "shipped",
+      "anchor": {
+        "commit": "437f231"
+      },
+      "detail": "Fixed 2026-09-30 (437f231). T-05 again, and the first pass could not have closed it: the band is emitted by the RENDERER, not present in the markup, so stripping blank source lines and collapsing triple newlines left two blank rows between a table and the following paragraph and one before the card's closing border. Measured: 2 rows between the table and a paragraph, 1 row when the answer ended in a table. The answer body now renders through a small renderable that draws the markdown at whatever width the panel gives it (so the wrapping is still rich's own), drops the whole blank run after a table, collapses blank runs elsewhere to one, keeps blank lines inside a code surface (a background style is the giveaway) and crops a line wider than the box - rich's horizontal rule was overflowing by the panel's padding and wrapping onto a second row. tests/test_tui.py asserts a table followed by a paragraph leaves no blank row inside the card.",
+      "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
+    },
+    {
+      "id": "console-composer-paste-invisible",
+      "title": "a pasted page was invisible in the composer: one row, no size, no review",
+      "state": "shipped",
+      "anchor": {
+        "commit": "437f231"
+      },
+      "detail": "Fixed 2026-09-30 (437f231), from the operator's question about pasting large text. The data path measured clean before any change - bracketed paste (which the app enables) delivers a paste as one event, so 1 KB / 20 KB / 200 KB all arrived complete in the buffer in about 0.1 s, kept their newlines, never triggered a submit mid-paste, and were handed to the loop as ONE request (only the outer whitespace is stripped) - but the composer showed a single horizontally-scrolled row with nothing anywhere reporting the size, so a page could be sent unreviewed. The box is multiline now, its label reports the size and the keys ('you - 12,345 chars - send, Ctrl-J newline'), it grows to six wrapped rows and collapses when sent, Enter sends and Ctrl-J inserts a newline. tests/test_tui.py pins the label and the growth.",
+      "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
     }
   ]
 }
