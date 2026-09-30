@@ -15938,7 +15938,13 @@ class RunReporter:
             # it was reported, so the Done line goes red (the operator asked for
             # red to mean "something is actually wrong").
             ok = False
-        elapsed = int(time.time() - self.t0)
+        usage = AGENT.last_usage.get(self.session_key) or {}
+        # ONE source of truth for the run's counters: the same accumulator the rail,
+        # `tinycmdr usage` and /status render. The reporter's own tally is the
+        # fallback for a run that never reached the accumulator (round-3 P-03: the
+        # done line read "0 step(s) in 0s" beside "25.2K tok over 2 call(s)").
+        steps = usage["steps"] if "steps" in usage else self.steps
+        elapsed = int(usage["secs"]) if usage.get("secs") else int(time.time() - self.t0)
         extra = ""
         if CONFIG["agent"].get("show_usage", True):
             u = fmt_usage(AGENT.last_usage.get(self.session_key))
@@ -15951,13 +15957,13 @@ class RunReporter:
         if fell:
             # never let a silent fallback look like the chosen model ran
             extra += f" · ⚠️ fell back from {len(fell)} endpoint(s)"
-        if not self.steps:
+        if not steps:
             # A run that made no tool call did no work, and the done line has to say
             # so: measured 2026-09-25, a 0-step run's green done line read as a
             # finished task while its reply only described work that never started.
             extra += " · no tool was used - nothing was read from this box"
         self.dest.update(ref, "final" if ok else "error",
-                         f"{'✅' if ok else '⚠️'} Done — {self.steps} step(s) in "
+                         f"{'✅' if ok else '⚠️'} Done — {steps} step(s) in "
                          f"{elapsed}s · model `{model}`{extra}")
 
 
@@ -16349,10 +16355,37 @@ class TuiScreen:
         self._plain_fallback = False
         self._last_was_panel = False   # cards stack; a new group gets a blank
         self.surface = ""              # a card's background fill ("" = transparent)
+        self.repaint = False           # True when the screen can take a line back
+        self.theme = self._markdown_theme()
 
     def style(self, role):
         """The active tier's style for one palette role."""
         return self.palette.get(role, "")
+
+    def _markdown_theme(self):
+        """The answer body's own theme, pinned to this palette.
+
+        rich's default Markdown theme paints h2-h4 and block quotes MAGENTA (this
+        palette's "a question to the operator"), lists and code cyan, links blue. So
+        every element an answer can contain is pinned here - headings bold, the rest
+        body or dim, links on the one accent - and the palette table stays the only
+        colour source (round-3 P-04).
+        """
+        from rich.theme import Theme
+        accent = self.style("accent") or "dim"
+        return Theme({
+            "markdown.h1": "bold", "markdown.h2": "bold", "markdown.h3": "bold",
+            "markdown.h4": "bold", "markdown.h5": "bold", "markdown.h6": "dim",
+            "markdown.h7": "dim", "markdown.hr": "dim", "markdown.block_quote": "dim",
+            "markdown.list": "default", "markdown.item": "default",
+            "markdown.item.number": "default", "markdown.item.bullet": "default",
+            "markdown.code": "dim", "markdown.code_block": "dim",
+            "markdown.link": accent, "markdown.link_url": "dim",
+            "markdown.table.border": "dim", "markdown.table.header": "bold",
+            "markdown.em": "italic", "markdown.strong": "bold",
+            "markdown.s": "strike", "table.header": "bold", "table.cell": "default",
+            "table.footer": "bold", "table.title": "dim", "table.caption": "dim",
+        })
 
     @staticmethod
     def _width():
@@ -16366,7 +16399,7 @@ class TuiScreen:
         import io
         con = self._Console(file=io.StringIO(), force_terminal=True, width=self.width,
                             color_system=TUI_COLOR_SYSTEM.get(self.tier, "truecolor"),
-                            highlight=False)
+                            highlight=False, theme=self.theme)
         buf = con.file
         con.print(renderable)
         self.shown.append(renderable)
@@ -16425,6 +16458,11 @@ class TuiScreen:
         title, role = TUI_KINDS.get(kind, (None, "body"))
         style = self.style(role)
         text = str(text)
+        if title is None and not text.strip() and self.repaint:
+            # A repaintable screen opens a draft line with an empty card; committing
+            # that stub as a line leaves a lone "…" between the result and the answer
+            # (round-3 P-02). The live region replaces itself instead.
+            return
         if title is None:
             quiet = "dim" if kind in ("checkin", "system", "narration") else style
             label = (self.ellipsis + "  ") if kind == "narration" else ""
@@ -16437,7 +16475,15 @@ class TuiScreen:
             # markdown's own spacing plus the panel padding was reading as dead
             # space (brief T-05).
             text = re.sub(r"\n{3,}", "\n\n", text).strip("\n")
-            body = Markdown(text)
+            # rich's default Markdown theme paints h2-h4 and block quotes MAGENTA,
+            # lists and code cyan, links blue. Magenta is this palette's "a question
+            # to the operator" and nothing else (brief section 5), so every markdown
+            # element is pinned here: headings bold, the rest body/dim, links on the
+            # one accent. The palette table stays the only colour source (P-04).
+            # code_theme="native": monokai (rich's default) paints keywords MAGENTA,
+            # and pygments' "bw" paints a white background - both outside the palette.
+            # native is a quiet dark theme, so a fenced block reads as a code surface.
+            body = Markdown(text, code_theme="native")
         else:
             body = Text(text, style=style or "default")
         # the approved render's rhythm (tui-preview): call/result cards stack
@@ -16826,6 +16872,7 @@ class AppScreen(TuiScreen):
         # two rules. The inline lane keeps a transparent surface - a terminal there
         # has no background of ours to sit on.
         self.surface = "on #12161c" if self.tier in ("truecolor", "256") else ""
+        self.repaint = True            # an alternate-screen pane can be repainted
         self.RAIL_WIDTH = 26
         self.items = []            # ("r", renderable) | ("ansi", painted lines)
         self._rendered = []        # item index -> lines, for the current width
@@ -17079,7 +17126,9 @@ class AppScreen(TuiScreen):
                 value("%d call(s)" % u["calls"])
                 value("%s tok" % fmt_tokens(u["prompt"] + u["completion"]))
                 tps = (u["completion"] / u["llm_secs"]) if u.get("llm_secs") else 0
-                value("%d tok/s \u00b7 %ss" % (tps, int(u.get("secs") or 0)))
+                # the same rounding fmt_usage() uses: the rail and the done line must
+                # not disagree about a number they both show (P-03)
+                value("%.0f tok/s \u00b7 %ss" % (tps, int(u.get("secs") or 0)))
             else:
                 value("-")
             title()
@@ -17102,12 +17151,6 @@ class AppScreen(TuiScreen):
             return FormattedText([("class:app.status.hot",
                                    "  %s  %s" % (spin, self.status or "working\u2026"))])
         return FormattedText([("class:app.hint", "  " + (self.status or "ready"))])
-
-    def _hints_text(self):
-        from prompt_toolkit.formatted_text import FormattedText
-        return FormattedText([("class:app.hint",
-                               "/help  \u00b7  /stop  \u00b7  /exit  \u00b7  "
-                               "\u23ce send  ")])
 
     def _app_style(self):
         """The app's own surface colours. One table, tier-aware: a 16-colour terminal
@@ -17160,12 +17203,13 @@ class AppScreen(TuiScreen):
                            style="class:app.body")
         rail = Window(FormattedTextControl(text=self._sidebar_text),
                       width=Dimension.exact(self.RAIL_WIDTH), style="class:app.rail")
+        # The footer is the run's own status and nothing else: the keys live in the
+        # rail's KEYS section, and sharing the line cut the usage tuple in half at
+        # 120 columns (round-3 P-05).
         status = VSplit([
             Window(FormattedTextControl(text=self._status_text), style="class:app.status"),
-            Window(FormattedTextControl(text=self._hints_text), align="right",
-                   dont_extend_width=True, style="class:app.status"),
         ], height=1)
-        self.composer = Frame(self.input, title=" ask ", style="class:app.composer")
+        self.composer = Frame(self.input, title=" you ", style="class:app.composer")
         shell = Frame(
             HSplit([
                 VSplit([rail, VerticalLine(), self.body]),
@@ -21052,6 +21096,28 @@ def _cli_reader():
         _cli_handle_line(line)
 
 
+def _cli_startup(app_mode, once=False):
+    """What a console says before its first request.
+
+    The app's chrome already carries the meta - the rail has the session, the model
+    and the context gauge, the status bar has the idle hint - so the transcript is
+    left EMPTY and opens on the first exchange. Inline (and the plain path) keep the
+    banner, the note and the capability line, because there is no chrome to hold them
+    (round-3 P-01).
+    """
+    if app_mode and not once:
+        screen = tui_screen()
+        if screen is not None:
+            screen.status = "ready \u00b7 type a request \u00b7 /help lists the commands"
+        return
+    if not once:
+        cli_banner()
+        print(dim("  type at any time: a line is sent in at the next step, "
+                  "%s stop cancels the run,\n  Ctrl-C does the same. Nothing you "
+                  "type is lost while it works.\n" % CMDR))
+    print(dim(capability_line("cli")))
+
+
 def run_cli(once=None, app=False):
     global CONFIG
     _console_utf8()
@@ -21131,12 +21197,7 @@ def run_cli(once=None, app=False):
     if not once and _CLI.get("app") is None:
         threading.Thread(target=_cli_reader, daemon=True).start()
 
-    if not once:
-        cli_banner()
-        print(dim("  type at any time: a line is sent in at the next step, "
-                  "%s stop cancels the run,\n  Ctrl-C does the same. Nothing you "
-                  "type is lost while it works.\n" % CMDR))
-    print(dim(capability_line("cli")))
+    _cli_startup(_CLI.get("app") is not None, once=bool(once))
     # reported for BOTH entry points. It used to live in cli_banner(), which a
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).

@@ -39,6 +39,21 @@ Added
   `--remote` still answers what GitHub has now.
 
 Changed
+- **The app's round-3 polish.** Six things a screenshot of the running app showed. The transcript
+  now opens on the first exchange: in app mode the banner, the "type at any time" note and the
+  capability line are gone, because the chrome carries them (rail: session, model, context gauge,
+  last run, keys; the status bar: the idle hint) - the inline and plain paths keep all three. An
+  empty draft card is no longer committed as a stub in a repaintable pane, so nothing leaves a lone
+  `…` between a result and the answer. The done line's steps and elapsed now come from the same run
+  accumulator the rail, `/status` and `tinycmdr usage` read (they used to be the reporter's own
+  tally, so a line could read "0 step(s) in 0s" beside "25.2K tok over 2 call(s)"), and the rail
+  rounds tok/s exactly as `fmt_usage` does. An answer body no longer renders rich's default
+  Markdown colours - magenta headings and block quotes, cyan lists/code/table headers, blue links,
+  and a white background from the `bw` code theme - every markdown element is pinned to this
+  palette (headings bold, the rest body or dim, links on the one accent) and fenced code uses a
+  quiet dark theme, so no hue outside the palette table can appear in an answer. The footer carries
+  the run's status only (the keys live in the rail's KEYS section, which stops the usage tuple being
+  cut in half at 120 columns), and the input box says `you` rather than `ask`.
 - **A bare `tinycmdr` now opens the app, on every OS.** The POSIX and Windows shims passed
   `--cli` when nothing was given; they pass `--app` now, so typing `tinycmdr` in Terminal, cmd or
   PowerShell opens the full-screen session, and a console that cannot host it still falls back to

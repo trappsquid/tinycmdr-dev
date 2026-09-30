@@ -317,7 +317,97 @@ check("--app draws a window title with the session in it",
 check("--app draws a rail with a live context gauge",
       "SESSION" in _rail and "CONTEXT" in _rail and "\u2588" in _rail, _rail[:120])
 check("--app's composer is a labeled box, not a bare prompt",
-      "ask" in str(_app.composer.title), str(_app.composer.title))
+      str(_app.composer.title).strip() == "you", str(_app.composer.title))
+
+# --- round-3 polish ---------------------------------------------------------------
+# P-01: in the app the chrome carries the meta, so the transcript opens on content.
+_calls = []
+_saved_banner, _saved_caps = fb.cli_banner, fb.capability_line
+_saved_screen = fb._CLI.get("screen")
+
+
+class _FakeScreen:
+    status = ""
+
+
+try:
+    fb.cli_banner = lambda: _calls.append("banner")
+    fb.capability_line = lambda lane: (_calls.append("caps"), "caps")[1]
+    fb._CLI["screen"] = _FakeScreen()
+    fb._cli_startup(app_mode=True)
+    check("app mode seeds no meta text: the chrome carries it (P-01)",
+          _calls == [] and "ready" in fb._CLI["screen"].status,
+          (_calls, fb._CLI["screen"].status))
+    import contextlib
+    _buf = io.StringIO()
+    with contextlib.redirect_stdout(_buf):
+        fb._cli_startup(app_mode=False)
+    check("...and the inline path still prints the banner and the capability line",
+          _calls == ["banner", "caps"], _calls)
+finally:
+    fb.cli_banner, fb.capability_line = _saved_banner, _saved_caps
+    fb._CLI["screen"] = _saved_screen
+
+# P-02: an empty draft card is a live region in the app, never a committed stub.
+_app2 = fb.AppScreen(colour=True, tier="truecolor")
+_n_items = len(_app2.items)
+_app2.card("narration", "")
+check("--app commits no empty draft stub (P-02)",
+      len(_app2.items) == _n_items, _app2.items[-1:])
+
+# P-04: an answer body is bold/dim/default - never hue of its own.
+_ans = fb.TuiScreen(out=io.StringIO(), width=100, tier="truecolor")
+_ans._plain_fallback = True
+_ans.card("final", "## H\n\n> quote\n\n- item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
+                   "```python\nx = 1\n```\n\n[link](http://x)\n")
+_ans_codes = sorted(set(re.findall(r"\x1b\[([0-9;]+)m", _ans.out.getvalue())))
+_ANS_HUES = ("34", "35", "36")
+_ans_out = _ans.out.getvalue()
+_off = min([_ans_out.find("\x1b[%sm" % h) for h in _ANS_HUES] + [-1])
+_off = _off if _off >= 0 else max(0, len(_ans_out) - 80)
+check("an answer body never renders magenta or cyan (P-04)",
+      not [c for c in _ans_codes
+           if c in _ANS_HUES or c.startswith("35;") or "38;5;13" in c],
+      repr(_ans_out[max(0, _off - 140):_off + 80]))
+
+# P-05/P-06: the footer is the run's status only; the box the operator types in says "you".
+check("--app's status line carries the run status only; keys live in the rail (P-05)",
+      not hasattr(fb.AppScreen, "_hints_text")
+      and "KEYS" in "".join(p for _, p in _app._sidebar_text().__pt_formatted_text__()),
+      "hints still share the status line")
+check("--app's input box is labeled 'you', not 'ask' (P-06)",
+      str(_app.composer.title).strip() == "you", str(_app.composer.title))
+
+# P-03: the done line and the rail read ONE counter (the run accumulator).
+_events = []
+
+
+class _RecDest:
+    def update(self, ref, kind, text, src="main"):
+        _events.append((kind, text))
+        return ref
+
+    def line(self, *a, **k):
+        return ("x",)
+
+
+_saved_usage_3 = fb.AGENT.last_usage.get("cli")
+try:
+    fb.AGENT.last_usage["cli"] = {"calls": 2, "steps": 7, "secs": 9, "prompt": 100,
+                                  "completion": 10, "llm_secs": 1.0}
+    _rep = fb.RunReporter(_RecDest(), "cli")
+    _rep.status_ref = ("x",)
+    _rep.steps = 0                      # the reporter's own tally disagrees on purpose
+    _rep.t0 = time.time()
+    _rep.finish(ok=True)
+    _done = _events[-1][1] if _events else ""
+    check("the done line's steps/elapsed come from the run accumulator (P-03)",
+          "7 step(s) in 9s" in _done, _done)
+finally:
+    if _saved_usage_3 is None:
+        fb.AGENT.last_usage.pop("cli", None)
+    else:
+        fb.AGENT.last_usage["cli"] = _saved_usage_3
 
 # --- the run's key is a filename; the editing surface is not one (the Windows bed
 # measured 2026-09-22: a PromptSession in the key slot crashed _save() with
