@@ -260,6 +260,49 @@ def main():
               f"the operator's view shows the age and the judgement ({open_row.strip()[:70]})")
         check("stale" not in done_row,
               f"  and only on the row that needs attention ({done_row.strip()[:70]})")
+
+        # ---- the harness asks the OPERATOR, instead of hoping the model does ----------
+        # The prompt's standing instruction says an inherited open item "is not your
+        # instruction: ask the operator before you resume one". Measured 2026-09-29 the model did
+        # not ask, and the operator found out from a tool call that happened to mention it - so
+        # the harness asks. It must ask ONCE per item version, or it becomes a nag, and never
+        # from a sub-agent, which has no operator of its own.
+        class _Rep:
+            def __init__(self):
+                self.said = []
+
+            def say(self, text):
+                self.said.append(text)
+
+        stale_item = {"id": 11, "desc": "an item nobody came back to", "status": "open",
+                      "updated": "2026-09-20 09:00", "created": "2026-09-20 09:00"}
+        fb.TASKS_FILE.write_text(json.dumps({"items": [stale_item, old_done, fresh]}),
+                                 encoding="utf-8")
+        rep = _Rep()
+        check(fb.notice_stale_tasks(rep) == 1, "a stale OPEN item is announced to the operator")
+        said = (rep.said or [""])[0]
+        check("#11" in said and "an item nobody came back to" in said, said[:120])
+        check("NOT this run" in said, "  and it says the item is not this run's instruction")
+
+        rep2 = _Rep()
+        check(fb.notice_stale_tasks(rep2) == 0 and not rep2.said,
+              "  it does not nag: one announcement per item VERSION")
+        told = json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))["items"][0]
+        check(told.get("told_updated") == "2026-09-20 09:00",
+              f"  and the version it announced is recorded ({told.get('told_updated')})")
+
+        told["updated"] = "2026-09-21 09:00"
+        fb.TASKS_FILE.write_text(json.dumps({"items": [told]}), encoding="utf-8")
+        check(fb.notice_stale_tasks(_Rep()) == 1, "  a later edit makes it eligible again")
+
+        check(fb.notice_stale_tasks(_Rep(), depth=1) == 0,
+              "a sub-agent never announces - it has no operator of its own")
+        keep_notice = fb.CONFIG["agent"].get("ledger_notice")
+        try:
+            fb.CONFIG["agent"]["ledger_notice"] = False
+            check(fb.notice_stale_tasks(_Rep()) == 0, "ledger_notice=false turns it off")
+        finally:
+            fb.CONFIG["agent"]["ledger_notice"] = keep_notice
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

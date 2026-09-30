@@ -329,6 +329,20 @@ Added
 
 ### The ledger's age and staleness, in one place and visible (2026-09-29)
 
+Added
+- **The harness asks the OPERATOR about stale items, instead of leaving it to the model.** The
+  standing instruction already says an inherited open item "is not your instruction: ask the
+  operator before you resume one" - and measured 2026-09-29 the model did not ask, so the
+  operator found out from a tool call that happened to mention it, having never been told the
+  ledger existed. At the start of a run the harness now posts one line naming the stale items
+  and saying plainly that they are not this run's instructions.
+
+  Once per item VERSION: the item records the `updated` stamp it was announced at, so a later
+  edit - the model touching it, or the operator answering - makes it eligible again, while a row
+  nobody has changed is never mentioned twice. A sub-agent (depth > 0) never announces, having
+  no operator of its own. `agent.ledger_notice: false` turns it off. Operator-facing, so the
+  prompt cost is zero.
+
 Fixed
 - **`tinycmdr tasks` now shows the age and the stale judgement the model sees.** The verb - which
   the README promises and the help names for exactly this question - printed `#1 [open] Boot

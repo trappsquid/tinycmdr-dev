@@ -429,6 +429,11 @@ DEFAULT_CONFIG = {
         # (measured 2026-09-27: an iPhone/Linux item from the day before drove a
         # 26-step run nobody asked for).
         "ledger_stale_hours": 12,
+        # Tell the OPERATOR when a run starts and the ledger holds an item an earlier
+        # session left open. The prompt's standing instruction already says to ask; a
+        # weak model does not, so the harness asks instead. Once per item VERSION, and
+        # operator-facing, so it costs no prompt tokens.
+        "ledger_notice": True,
         # A single-target delete of real content OUTSIDE scratch asks first, and the ask
         # carries the measured effect (file count, size, age). Deleting a temp path, or a path
         # that is not there, stays ordinary work. false restores the old shape per box.
@@ -7721,6 +7726,64 @@ def ledger_stale_seconds():
     is how the stated number and the applied one drift apart.
     """
     return float(CONFIG["agent"].get("ledger_stale_hours") or 12) * 3600.0
+
+
+def notice_stale_tasks(reporter, session_key=None, depth=0):
+    """Tell the OPERATOR about ledger items gone stale - once per item, once per version.
+
+    The standing instruction already says an item an earlier session left open "is not your
+    instruction: ask the operator before you resume one". That is PROSE IN THE PROMPT, and a
+    weak model does not act on it: measured 2026-09-29, an iPhone item left open three days
+    earlier rode into a run's tool calls and the operator was never asked - they found out by
+    noticing the word in a tool call, having never been told the ledger existed at all.
+
+    So the harness asks, instead of hoping the model does. Operator-facing BY DESIGN: none of
+    this enters the prompt, so it costs no tokens on any turn.
+
+    Once per VERSION: the item records the `updated` stamp it was announced at, so a later edit
+    - the model touching it, or the operator answering - makes it eligible again, and nobody is
+    nagged about a row that has not changed. A sub-agent (depth > 0) never announces: it has no
+    operator of its own, and it shares this ledger.
+    """
+    if depth or not CONFIG["agent"].get("ledger_notice", True):
+        return 0
+    try:
+        t = load_tasks()
+    except Exception as e:                       # a broken ledger must not stop a run
+        log.debug("ledger notice skipped: %s", e)
+        return 0
+    due = []
+    for i in t.get("items") or []:
+        if i.get("status") not in TASK_ACTIVE:
+            continue
+        human, stale = task_age(i)
+        if not stale:
+            continue
+        stamp = str(i.get("updated") or i.get("created") or "")
+        if str(i.get("told_updated") or "") == stamp:
+            continue
+        due.append((human, stamp, i))
+    if not due or not hasattr(reporter, "say"):
+        return 0
+    lines = ["%d ledger item(s) an earlier session left open:" % len(due)]
+    for human, _stamp, i in due[:5]:
+        lines.append("  #%s [%s] %s (%s)" % (i.get("id"), i.get("status"),
+                                             str(i.get("desc") or "")[:90], human))
+    if len(due) > 5:
+        lines.append("  ... and %d more" % (len(due) - 5))
+    lines.append("  They are NOT this run's instructions. Close the ones you do not want.")
+    try:
+        reporter.say("\n".join(lines))
+    except Exception as e:                       # a lane that cannot speak is not a crash
+        log.debug("ledger notice could not be posted: %s", e)
+        return 0
+    for _human, stamp, i in due:
+        i["told_updated"] = stamp
+    try:
+        save_tasks(t)
+    except Exception as e:
+        log.debug("ledger notice could not be stamped: %s", e)
+    return len(due)
 
 
 def task_age(item, now=None):
@@ -15688,6 +15751,10 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
     which is exactly how one of them ended up without the exit codes, the failure
     reasons, the check-ins or the confirm door.
     """
+    # Ask the OPERATOR about ledger items an earlier session left open, before the model
+    # is handed the same list. The prompt tells the model to ask; measured 2026-09-29,
+    # it did not, and the operator found out from a tool call instead.
+    notice_stale_tasks(reporter, session_key, depth)
     try:
         answer = AGENT.run(session_key, text, rich_content=rich_content, depth=depth,
                            channel_id=channel_id, source=source,
