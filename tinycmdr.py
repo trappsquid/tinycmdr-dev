@@ -1286,6 +1286,22 @@ def fmt_usage(u):
     return s
 
 
+def now_mono():
+    """Elapsed time: the clock for every deadline, TTL and watchdog.
+
+    time.monotonic() does not follow the wall clock, so an NTP step (forward or back)
+    cannot stretch or collapse a timeout, and on Linux it stops while the machine is
+    suspended: a 30-minute sleep advances the wall clock but not this one, so a live
+    run is no longer read as "30 min without progress" and abandoned on resume."""
+    return time.monotonic()
+
+
+def now_wall():
+    """The wall clock: cron fire times, persisted/displayed timestamps, anything a
+    human or another process reads. Named so the two clocks are never confused here."""
+    return time.time()
+
+
 _LOCAL_URL_CACHE = {}
 
 
@@ -1318,7 +1334,7 @@ def _is_local_url(url):
     if not host:
         return False
     hit = _LOCAL_URL_CACHE.get(host)
-    now = time.time()
+    now = now_mono()
     if hit is None or now - hit[1] > WINDOW_TTL:
         hit = (_host_is_local(host), now)
         _LOCAL_URL_CACHE[host] = hit
@@ -1436,7 +1452,7 @@ def static_prompt_tokens(session_key=None):
     names = frozenset(str((s.get("function") or {}).get("name") or "")
                       for s in schemas)
     hit = _STATIC_CACHE.get(session_key)
-    now = time.time()
+    now = now_mono()
     if hit and now - hit[0] <= WINDOW_TTL and hit[1] == names:
         return hit[2]
     total = est_tokens(build_system_prompt()) + est_tokens(json.dumps(schemas))
@@ -1700,7 +1716,7 @@ class OperatorStop(BaseException):
 
 def _post_watchdog(url, headers, payload, timeout, grace, cancel_event=None,
                    stream=False):
-    """POST with a hard wall-clock bound, in a daemon thread.
+    """POST with a hard elapsed-time bound, in a daemon thread.
 
     Past timeout+grace the thread is abandoned (it dies with its socket when
     the process exits, and the caller moves to the next endpoint) instead of
@@ -1731,7 +1747,7 @@ def _post_watchdog(url, headers, payload, timeout, grace, cancel_event=None,
             box["err"] = e
 
     t = threading.Thread(target=_do, daemon=True, name="llm-post")
-    t0 = time.time()
+    t0 = now_mono()
     t.start()
     deadline = t0 + float(timeout or 0) + max(0.0, float(grace or 0))
     while True:
@@ -1744,14 +1760,14 @@ def _post_watchdog(url, headers, payload, timeout, grace, cancel_event=None,
             if cancel_event.is_set():
                 raise OperatorStop(
                     f"stopped by the operator while waiting on {url} "
-                    f"after {int(time.time() - t0)}s")
+                    f"after {int(now_mono() - t0)}s")
         else:
-            t.join(max(0.0, deadline - time.time()))
-        if not t.is_alive() or time.time() >= deadline:
+            t.join(max(0.0, deadline - now_mono()))
+        if not t.is_alive() or now_mono() >= deadline:
             break
     if t.is_alive():
         raise InfraError(
-            f"no response from {url} after {int(time.time() - t0)}s "
+            f"no response from {url} after {int(now_mono() - t0)}s "
             f"(abandoned: request_timeout={timeout}s + grace={grace}s — the "
             f"endpoint accepted the connection then stopped sending)")
     if "err" in box:
@@ -4517,7 +4533,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     # them, and an oversized output is kept here for a full day. macOS hides the leak
     # ($TMPDIR is already 0700), which is why it went unnoticed until the audit.
     os.chmod(run_dir, 0o700)
-    stem = f"{int(time.time())}-{os.getpid()}-{threading.get_ident()}"
+    stem = f"{int(now_wall())}-{os.getpid()}-{threading.get_ident()}"
     out_path = run_dir / f"{stem}.out"
     err_path = run_dir / f"{stem}.err"
     kwargs = hidden_proc_kwargs()
@@ -4543,7 +4559,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
                                     stdin=fin if fin is not None
                                     else subprocess.DEVNULL,
                                     cwd=str(cwd or BASE_DIR), **kwargs)
-            deadline = time.time() + timeout
+            deadline = now_mono() + timeout
             stopped = False
             while True:
                 try:
@@ -4559,7 +4575,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
                     except subprocess.TimeoutExpired:
                         rc = None
                     break
-                if time.time() >= deadline:
+                if now_mono() >= deadline:
                     timeout_hit = True
                     _kill_tree(proc)
                     try:
@@ -9426,10 +9442,10 @@ def ask_operator(session_key, question, ctx=None, options=None, timeout=None,
             log.warning("ask_user: could not post the question: %s", e)
             return "unreadable", f"the question could not be delivered: {e}"
     log.info("ask_user[%s]: question open, waiting up to %.0fs", sk, wait)
-    deadline = time.time() + wait
+    deadline = now_mono() + wait
     stopped = False
     while not row["ev"].is_set():
-        left = deadline - time.time()
+        left = deadline - now_mono()
         if left <= 0:
             break
         row["ev"].wait(min(left, 3.0))
@@ -9452,7 +9468,7 @@ def ask_operator(session_key, question, ctx=None, options=None, timeout=None,
     answered = (not stopped) and row["ev"].is_set() and bool(str(answer or "").strip())
     with _ask_lock(sk):
         _ASK_PENDING.pop(sk, None)
-    _ASK_ANSWERED[sk] = {"answer": answer, "at": time.time()}
+    _ASK_ANSWERED[sk] = {"answer": answer, "at": now_wall()}
     closer = door.get("close_question")
     if callable(closer):
         try:
@@ -12611,7 +12627,7 @@ class Agent:
         The scalar `_window_cache` a stub or scenario still sets is adopted as the
         PRIMARY endpoint's answer, so those callers keep working (and it still expires);
         everything lives in one {server_root: (at, value)} map from here on."""
-        now = time.time()
+        now = now_mono()
         primary_root = _endpoint_root(CONFIG["llm"]["base_url"])
         cache = getattr(self, "_window_cache", None)
         if not isinstance(cache, dict):
@@ -12655,7 +12671,7 @@ class Agent:
         """
         base = str(endpoint or CONFIG["llm"]["base_url"])
         ep_root = _endpoint_root(base)
-        now = time.time()
+        now = now_mono()
         cached = getattr(self, "_envelope_cache", None)
         if (cached and cached.get("key") == session_key
                 and cached.get("endpoint") == ep_root
@@ -13771,7 +13787,7 @@ class Agent:
             model = (self.model_overrides.get(session_key)
                      or CONFIG["llm"]["model"])
             ctx["model"] = model   # derived sessions inherit this (sub-agents)
-            t0 = time.time()
+            t0 = now_mono()
             steps = 0
             # Segments: a run that lands on a cap may hand the same task to a fresh one
             # instead of stopping (see the budget branch). _seg_cap bounds that.
@@ -14061,7 +14077,7 @@ class Agent:
                                 and not _promise.endswith("?")
                                 and (_promised or _fragmented or _claimed)
                                 and steps < max_steps
-                                and (time.time() - t0) < max_seconds):
+                                and (now_mono() - t0) < max_seconds):
                             _no_call_nudge = True
                             # Drop the promise turn: a transcript whose last word is
                             # "let me start" invites the same words again (the same
@@ -14111,7 +14127,7 @@ class Agent:
                                 and len(_promise) <= _INTENT_MAX_CHARS
                                 and not _promise.endswith("?")
                                 and steps < max_steps
-                                and (time.time() - t0) < max_seconds):
+                                and (now_mono() - t0) < max_seconds):
                             _promise_asked = True
                             if messages and messages[-1] is reply:
                                 messages.pop()
@@ -14216,7 +14232,7 @@ class Agent:
                         if (status == "truncated" and not spun
                                 and _no_answer < NO_ANSWER_CONTINUES
                                 and steps < max_steps
-                                and (time.time() - t0) < max_seconds):
+                                and (now_mono() - t0) < max_seconds):
                             _no_answer += 1
                             if messages and messages[-1] is reply:
                                 messages.pop()
@@ -14689,7 +14705,7 @@ class Agent:
 
                     steps += len(tool_calls)
                     over_steps = steps >= max_steps
-                    over_time = (time.time() - t0) > max_seconds
+                    over_time = (now_mono() - t0) > max_seconds
                     if over_steps or over_time or spun or _run.get("deliver_forced"):
                         why = ("step budget" if over_steps
                                else "time budget" if over_time
@@ -14717,7 +14733,7 @@ class Agent:
                                 and CONFIG["agent"].get("auto_continue", True)
                                 and (_open or not _st.get("plan"))):
                             _segments += 1
-                            _elapsed = int(time.time() - t0)
+                            _elapsed = int(now_mono() - t0)
                             _notice = (
                                 f"{why} reached at {steps} steps, {_elapsed}s — continuing "
                                 f"the same task (segment {_segments + 1} of {_seg_cap + 1})"
@@ -14740,14 +14756,14 @@ class Agent:
                                 + (" Open steps: "
                                    + "; ".join(f"{i}. {t}" for i, t in _open[:4])
                                    + "." if _open else ""))})
-                            t0 = time.time()
+                            t0 = now_mono()
                             steps = 0
                             continue
                         status = "budget"
                         log.warning("[%s] %s exhausted (%d steps, %ds) — "
                                     "forcing final report",
                                     session_key, why, steps,
-                                    int(time.time() - t0))
+                                    int(now_mono() - t0))
                         hint = ""
                         if muts and calls == muts[-1][2]:
                             name, target, _n = muts[-1]
@@ -14824,7 +14840,7 @@ class Agent:
                                     "kept restating the same status without moving on")
                             return (f"🔁 Stopped a loop: {spun} — {_why}, so I wrapped up "
                                     f"instead of burning the budget "
-                                    f"({steps} steps, {int(time.time() - t0)}s)."
+                                    f"({steps} steps, {int(now_mono() - t0)}s)."
                                     f"\n\n" + (answer or "(no summary)"))
                         _label = ("Delivery guard" if why == "delivery guard"
                                   else "Budget reached")
@@ -14832,7 +14848,7 @@ class Agent:
                                  "wrapped up.\n\n" if why == "delivery guard"
                                  else "wrapping up early.\n\n")
                         return (f"⏱️ {_label} ({steps} steps, "
-                                f"{int(time.time() - t0)}s) — " + _tail
+                                f"{int(now_mono() - t0)}s) — " + _tail
                                 + (answer or "(no summary)"))
 
                 _limit = ("⚠️ Hit the turn limit without finishing. "
@@ -14855,7 +14871,7 @@ class Agent:
                         "further was executed.")
             finally:
                 usage["steps"] = steps
-                usage["secs"] = time.time() - t0
+                usage["secs"] = now_mono() - t0
                 usage["mutations"] = len(muts)
                 usage["status"] = status
                 usage["compactions"] = int((run_state(session_key) or {}).get("compactions") or 0)
@@ -15989,7 +16005,7 @@ class RunControl:
         self.channel_id = channel_id       # where a human reaches this run, if anywhere
         self.cancel_event = cancel_event or threading.Event()
         self.watching = watch
-        now = time.time()
+        now = now_mono()
         self.started = now
         self.last = now
         self.warned = False
@@ -15999,7 +16015,7 @@ class RunControl:
 
     def touch(self):
         """Something came out of the run: keep it off the watchdog."""
-        self.last = time.time()
+        self.last = now_mono()
 
     def steer(self, sender, text):
         with self._steer_lock:
@@ -16066,13 +16082,13 @@ class RunRegistry:
 
         The same thresholds as the Mattermost guard, because it is the same promise:
         a run that stops making progress is cancelled and the operator is told, never
-        left silent.
+        left silent. `now` is monotonic seconds, like RunControl.started/.last.
         """
         if warn_m is None:
             warn_m = float(CONFIG["agent"].get("stall_warn_minutes", 8) or 0)
         if kill_m is None:
             kill_m = float(CONFIG["agent"].get("stall_abandon_minutes", 20) or 0)
-        now = time.time() if now is None else now
+        now = now_mono() if now is None else now
         acted = []
         for ctrl in self.snapshot().values():
             if not ctrl.watching or ctrl.abandoned:
@@ -16928,7 +16944,7 @@ class MattermostDispatcher:
         """Mark output in a channel as progress for the stall watchdog."""
         a = self.active.get(channel_id)
         if a:
-            a["last"] = time.time()
+            a["last"] = now_mono()
 
     def _ask_label(self, channel_id):
         """How to answer: a DM has no @mention, a channel needs one."""
@@ -16992,7 +17008,7 @@ class MattermostDispatcher:
         gen = self.worker_gen.get(channel_id, 0) + 1
         self.worker_gen[channel_id] = gen
         self.workers.add(channel_id)
-        self.active[channel_id] = {"started": time.time(), "last": time.time(),
+        self.active[channel_id] = {"started": now_mono(), "last": now_mono(),
                                    "warned": False, "gen": gen}
         threading.Thread(target=self._worker, args=(channel_id, q, gen),
                          daemon=True).start()
@@ -17387,10 +17403,13 @@ class MattermostDispatcher:
                 log.exception("stall watchdog tick failed")
 
     def _stall_tick(self, warn_m=None, kill_m=None, now=None):
-        """One watchdog pass (separate from the loop so it can be tested)."""
+        """One watchdog pass (separate from the loop so it can be tested).
+
+        `now` is monotonic seconds: `active[...]["started"/"last"]` are set from
+        now_mono(), and injecting a wall clock here would abandon every live run."""
         warn_m = self._stall_warn_minutes() if warn_m is None else warn_m
         kill_m = self._stall_abandon_minutes() if kill_m is None else kill_m
-        now = time.time() if now is None else now
+        now = now_mono() if now is None else now
         _mem_probe()        # cheap when the process is small; names the hog when it isn't
         for channel_id, a in list(self.active.items()):
             quiet = now - a["last"]

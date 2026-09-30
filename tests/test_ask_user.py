@@ -449,17 +449,18 @@ def test_the_stall_watchdog_does_not_eat_a_question():
     fb.CONFIG["agent"]["ask_user_wait_seconds"] = 6
     d = dispatcher()
     try:
-        d.active["chan-w"] = {"started": time.time() - 3600, "last": time.time() - 3000,
+        d.active["chan-w"] = {"started": fb.now_mono() - 3600,
+                              "last": fb.now_mono() - 3000,
                               "warned": False, "gen": 1}
         door = d.ask_door_factory("chan-w", "sess-w")
         in_thread(fb.tool_ask_user, {"question": "quick?"},
                   {"session_key": "sess-w", "ask_door": door})
         check("the question post counts as progress",
-              wait_for(lambda: d.active["chan-w"]["last"] > time.time() - 5, 3.0),
+              wait_for(lambda: d.active["chan-w"]["last"] > fb.now_mono() - 5, 3.0),
               d.active["chan-w"])
         # and the watchdog, run at that instant, must not abandon the channel
         before = len(d.posted)
-        d._stall_tick(now=time.time())
+        d._stall_tick(now=fb.now_mono())
         check("the watchdog leaves it alone",
               not any("wedged" in t for _, t in d.posted[before:]),
               [t for _, t in d.posted[before:]])
@@ -572,7 +573,8 @@ def test_the_stage_two_post_exists_and_counts_as_progress():
     watchdog abandons runs for."""
     d = dispatcher()
     check("the door has a real post hook", callable(getattr(d, "door_post", None)))
-    d.active["chan-p"] = {"started": time.time(), "last": 0.0, "warned": False, "gen": 1}
+    d.active["chan-p"] = {"started": fb.now_mono(), "last": 0.0, "warned": False,
+                          "gen": 1}
     check("it answers True", d.door_post("chan-p", "q", ["a"], 30) is True)
     check("and it counts as progress",
           d.active["chan-p"]["last"] > 0, d.active["chan-p"])

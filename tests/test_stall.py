@@ -402,7 +402,7 @@ def test_watchdog_abandon_clears_the_busy_flag():
     with d.workers_lock:
         d._spawn_worker(ch, d.queues[ch])
     d.running.add(ch)
-    d.active[ch]["last"] = time.time() - 25 * 60
+    d.active[ch]["last"] = fb.now_mono() - 25 * 60
     d._stall_tick()
     check("abandon: the wedged run is not counted as busy", ch not in d.running, d.running)
     msg = _FakeMsg(ch, "carry on", mid="m4")
@@ -466,7 +466,7 @@ def test_the_watchdog_respawn_ends_in_an_answer_not_a_blocked_worker():
     wedged.acquire()               # the run the tick is about to write off, still holding it
     d.worker_gen[ch] = 3           # a zombie worker's signature: no thread to race the tick
     d.workers.add(ch)
-    d.active[ch] = {"started": time.time(), "last": time.time() - 25 * 60,
+    d.active[ch] = {"started": fb.now_mono(), "last": fb.now_mono() - 25 * 60,
                     "warned": False, "gen": 3}
     fb.AGENT._run_lock_wait_secs = lambda: 0.4   # the wait under test, not the 60s one
     try:
@@ -600,7 +600,7 @@ def test_stall_watchdog_warns_then_abandons_and_serves_the_queue():
     # channel (observed: `worker_gen {'chan-stall': 1}`, `(set(), {})`).
     d.worker_gen[ch] = 3
     d.workers.add(ch)
-    d.active[ch] = {"started": time.time(), "last": time.time() - 9 * 60,
+    d.active[ch] = {"started": fb.now_mono(), "last": fb.now_mono() - 9 * 60,
                     "warned": False, "gen": 3}
     old_gen = d.worker_gen[ch]
     d._stall_tick()
@@ -610,7 +610,7 @@ def test_stall_watchdog_warns_then_abandons_and_serves_the_queue():
           d.worker_gen[ch] == old_gen, d.worker_gen)
 
     # now wedge it well past the abandon threshold, with something queued
-    d.active[ch]["last"] = time.time() - 25 * 60
+    d.active[ch]["last"] = fb.now_mono() - 25 * 60
     d.queues[ch].put(("david", "queued while stuck", "m3", "m3", True))
     ev = threading.Event()
     d.cancel_events.setdefault(ch, set()).add(ev)
@@ -642,11 +642,42 @@ def test_activity_tracking_keeps_a_healthy_run_off_the_watchdog():
     ch = "chan-live"
     with d.workers_lock:
         d._spawn_worker(ch, d.queues.setdefault(ch, fb.queue.Queue()))
-    d.active[ch]["last"] = time.time() - 9 * 60
+    d.active[ch]["last"] = fb.now_mono() - 9 * 60
     d._post(ch, None, "progress!")            # a normal check-in
     d._stall_tick()
     check("a channel that is posting is never warned about",
           not any("Still on it" in t for _, t in d.posted), d.posted)
+
+
+def test_a_forward_clock_step_does_not_abandon_a_healthy_run():
+    """Suspend/resume, the live arm on a laptop: sleeping advances the wall clock by
+    the length of the sleep while a run's own elapsed clock does not move. The watchdog
+    reads the run's clock, so a run that was never actually silent must survive the
+    resume - the first version measured the wall clock and wrote off EVERY live run on
+    wake (abandon notice plus cancel event)."""
+    saved = fb.now_mono
+    d = _dispatcher()
+    ch = "chan-suspend"
+    try:
+        clock = [1000.0]
+        fb.now_mono = lambda: clock[0]
+        with d.workers_lock:
+            d._spawn_worker(ch, d.queues.setdefault(ch, fb.queue.Queue()))
+        # 30 minutes of SUSPEND: the wall clock advances, monotonic does not.
+        d._stall_tick()
+        check("a resume does not abandon a run that was never silent",
+              not any("wedged" in t or "Still on it" in t for _, t in d.posted),
+              d.posted)
+        # ...while 30 minutes of REAL silence is still a wedge.
+        clock[0] += 30 * 60
+        d._stall_tick()
+        check("real silence is still abandoned on the elapsed clock",
+              any("wedged" in t for _, t in d.posted), d.posted)
+    finally:
+        fb.now_mono = saved
+        with d.workers_lock:
+            d.workers.discard(ch)
+            d.active.pop(ch, None)
 
 
 # ------------------------------------------------- scheduled runs are runs too
@@ -695,8 +726,8 @@ def test_a_scheduled_run_is_registered_and_the_watchdog_abandons_it():
               and ctrl.channel_id == ch, ctrl)
         check("...and the watchdog watches it", ctrl is not None and ctrl.watching)
         if ctrl is not None:
-            ctrl.last = time.time() - 25 * 60        # 25 minutes of silence
-        acted = fb.RUNS.watch_tick(now=time.time())
+            ctrl.last = fb.now_mono() - 25 * 60        # 25 minutes of silence
+        acted = fb.RUNS.watch_tick(now=fb.now_mono())
         check("the stall watchdog sees the wedged scheduled run",
               any(c.session_key == "sched-nightly" for c in acted),
               [c.session_key for c in acted])
@@ -732,6 +763,24 @@ def test_a_channel_stop_cancels_a_run_the_channel_did_not_spawn():
         t.join(5)
         fb.AGENT.run = saved_run
         fb.SCHEDULER.dispatcher = saved_disp
+
+
+def test_cron_times_stay_on_the_wall_clock():
+    """Cron is a wall-clock concept: 09:00 means 09:00, not "uptime plus nine hours".
+    The elapsed-time conversion deliberately leaves the scheduler alone, and this is
+    the guard that says so - croniter is seeded from the wall clock, so the answer is
+    an epoch a human can read."""
+    if not fb.SCHEDULER.ok:
+        skip("cron next-run", "croniter is not installed on this host")
+        return
+    now = fb.now_wall()
+    nxt = fb.Scheduler._next_run("0 9 * * 1", base=now)
+    check("the next 09:00 Monday is a wall-clock epoch",
+          nxt > 1_000_000_000 and 0 < nxt - now <= 7 * 86400 + 60, (now, nxt))
+    lt = time.localtime(nxt)
+    check("...and it lands on 09:00 local, not on an off-by-uptime time",
+          (lt.tm_hour, lt.tm_min, lt.tm_wday) == (9, 0, 0),
+          time.strftime("%a %H:%M", lt))
 
 
 def _scripted_run(scripted):
@@ -2275,6 +2324,57 @@ def test_a_finished_plan_ends_the_run_at_the_cap_without_continuing():
 
     check("finished plan: nothing is continued", said == [], said)
     check("finished plan: the cap still ends the run", "Budget reached" in out, out[:120])
+
+
+def test_a_backward_wall_clock_step_does_not_stretch_the_run_budget():
+    """NTP can step the wall clock backward mid-run. The budget is ELAPSED time: on the
+    run's own clock it still expires, so a run cannot sail past max_minutes because the
+    wall clock moved backwards under it. (For the same reason a forward step used to end
+    every run at once - the budget now reads neither direction of the wall clock.)"""
+    p = TMP / "budget_probe.txt"
+    p.write_text("stable\n", encoding="utf-8")
+    call = {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "1", "function": {
+                "name": "read_file", "arguments": json.dumps({"path": str(p)})}}]}
+    # More turns than a run with a dead budget could need: the stub raises rather than
+    # let the run sail on, so "Budget reached" is the only clean ending.
+    seq = [copy.deepcopy(call) for _ in range(12)]
+    seq.append({"role": "assistant", "content": "Final: done."})
+    saved_chat = fb.AGENT._chat
+    saved = dict(fb.CONFIG["agent"])
+    saved_mono, saved_wall = fb.now_mono, fb.time.time
+    used = {"n": 0}
+    clock = {"t": 1000.0}
+
+    def fake_chat(messages, model=None, use_tools=True, **kw):
+        if used["n"] >= len(seq):
+            raise AssertionError("the run sailed past its time budget")
+        r = seq[used["n"]]
+        used["n"] += 1
+        return r
+
+    def fake_mono():
+        clock["t"] += 61.0        # every read is a minute of ELAPSED time
+        return clock["t"]
+
+    key = "budget-session"
+    fb.AGENT._chat = fake_chat
+    fb.now_mono = fake_mono
+    fb.time.time = lambda: 1.0    # the wall clock steps back to 1970 mid-run
+    fb.CONFIG["agent"].update(max_steps=99, max_minutes=1, auto_continue=False,
+                              plan_from_request=False, progress_updates=False)
+    try:
+        out = fb.AGENT.run(key, "read the probe file")
+    finally:
+        fb.AGENT._chat = saved_chat
+        fb.now_mono, fb.time.time = saved_mono, saved_wall
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved)
+
+    check("a backward wall-clock step does not stretch the budget",
+          "Budget reached" in out, out[:220])
+    check("...and the run ended where it stood, it did not sail on", used["n"] <= 2,
+          used["n"])
 
 
 def test_the_second_read_of_a_file_leaves_with_its_map():
