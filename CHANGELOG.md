@@ -327,6 +327,23 @@ Added
   delete-shaped commands the model ran in three days, nine were `rm` of scratch under /tmp that
   the operator had no interest in; `agent.confirm_deletes: false` restores the old shape per box.
 
+### Bulk text is one reply, not a file per chapter (2026-09-29)
+
+Changed
+- **The prompt now says a document is not a code change.** The operator ran a 108-chapter
+  rewrite through the harness and watched it grind for hours over what the same model did in a
+  single stream elsewhere. The log says why: 24 model calls in one step, 22,544 tokens generated
+  and a 93-character reply - a full round trip per chapter, each paying a 20-33s re-prefill and a
+  fresh reasoning pass. End to end, the run turned ~3-5% of the model's decode capacity into
+  prose; the model was never the bottleneck, the number of times the prompt crossed the wire was.
+
+  Nothing was broken. Nothing in the harness had ever said a REPLY holds ten thousand words, so
+  with `write_file` sitting in the tool list the model took the file path and paid the round trip
+  for every chapter - the cheap route was simply never named. The static prompt names it now:
+  prose that fits in one reply belongs IN the reply; `write_file` is for when a file was asked
+  for, when the result is larger than one reply, or when it must outlive the session - and when it
+  is the right tool, several chapters per call, not one.
+
 ### The ledger's age and staleness, in one place and visible (2026-09-29)
 
 Added
