@@ -155,6 +155,26 @@ def main():
             check(not fb.looks_like_path_failure(text),
                   f"and not invented from: {text[:34]!r}")
 
+        # ---- the re-ask fires on a FAILURE, not on a mention (audit 2026-09-29) ---------
+        # It ran on EVERY result, so a successful read of a tutorial, README or captured log
+        # containing "no such file or directory" re-attached the whole machine map - around
+        # 2000 characters of prompt, every turn after it - and framed a call that worked as a
+        # wrong-path problem.
+        doc = workdir / "tutorial.md"
+        doc.write_text("If you see 'no such file or directory', the path was wrong.\n",
+                       encoding="utf-8")
+        fb.AGENT._exec_tool({"function": {"name": "read_file",
+                                          "arguments": json.dumps({"path": str(doc)})}},
+                            {"session_key": "atlas-sess"})
+        check(not (fb.run_state("atlas-sess") or {}).get("atlas_reask"),
+              "a SUCCESSFUL read that merely mentions a path error does not re-ask for the map")
+        fb.AGENT._exec_tool({"function": {"name": "shell",
+                                          "arguments": json.dumps(
+                                              {"command": "cat /definitely/not/here"})}},
+                            {"session_key": "atlas-sess"})
+        check((fb.run_state("atlas-sess") or {}).get("atlas_reask") is True,
+              "  while a real missing-path FAILURE still does")
+
         # ---- shell rights: said up front, once ---------------------------------
         check(isinstance(fb.shell_rights_line(), str),
               "shell_rights_line() renders on this host (elevated or not)")

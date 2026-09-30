@@ -43,6 +43,18 @@ Fixed
   with the work lost. Comments are removed before those guards read source. STRING LITERALS ARE
   KEPT on purpose: `subprocess.run("reboot")` really does reboot, so stripping them would be a
   hole rather than a fix - `tests/test_guard_battery.py` pins that half explicitly.
+- **The machine map is re-attached on a FAILURE, not on a mention of a path error.** The
+  wrong-path and rights-denial heuristics ran on EVERY tool result, so a successful read of a
+  README, a tutorial, or a captured log containing "no such file or directory" or "command not
+  found" re-attached the whole atlas - about 2000 characters of prompt, on every turn after it -
+  and framed a call that worked as a wrong-path problem. It is now gated on the call having
+  actually failed, which is what its own comment always said it was for.
+- **A model profile matches a WHOLE WORD, and the most specific key wins.** The key was matched
+  as a bare SUBSTRING of the model name and the first one in dict order won, so `pro` matched
+  `prometheus-14b`, `mini` matched `MiniMax-M2`, and given both `deepseek` and `deepseek-r1` the
+  winner was whichever was written first rather than the more specific one. Digits stay part of a
+  word, so `llama` still matches `llama3-8b` and `deepseek` still matches
+  `deepseek-r1-distill-llama-8b`; a longer key now beats a shorter one that also matches.
 
 ### The proxy audit (2026-09-29)
 

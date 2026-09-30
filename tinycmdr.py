@@ -942,9 +942,17 @@ def apply_model_profile():
                                           "fetch_max_chars": 60000,
                                           "notes_max_note_chars": 4000}}}
 
-    The first key that appears in the model name wins; keys it does not set keep the value
-    already in config, so nothing moves until a config says so. The winner is recorded in
-    agent.active_profile so a box can never be running caps silently.
+    A profile key matches a WHOLE WORD of the model name, and the LONGEST matching key wins.
+    "The first key that appears in the model name" was decided by dict order and a bare
+    substring, so measured by audit 2026-09-29: the key `pro` matched `prometheus-14b`, the key
+    `mini` matched `MiniMax-M2`, and given both `deepseek` and `deepseek-r1` the winner was
+    whichever was written first rather than the more specific one. Digits stay part of a word,
+    so `llama` still matches `llama3-8b`, and `deepseek` still matches
+    `deepseek-r1-distill-llama-8b`.
+
+    Keys the winner does not set keep the value already in config, so nothing moves until a
+    config says so, and the winner is recorded in agent.active_profile so a box can never be
+    running caps silently.
     """
     llm = CONFIG.get("llm") or {}
     prof = llm.get("profiles")
@@ -953,17 +961,28 @@ def apply_model_profile():
     name = str(llm.get("model") or "").lower()
     if not name:
         return None
+    best = None
     for key, over in prof.items():
-        if str(key).lower() not in name or not isinstance(over, dict):
+        if not isinstance(over, dict):
             continue
-        applied = {}
-        for k, v in over.items():
-            if k in CONFIG.get("agent", {}):
-                CONFIG["agent"][k] = v
-                applied[k] = v
-        CONFIG.setdefault("agent", {})["active_profile"] = str(key)
-        return {"profile": str(key), "applied": applied}
-    return None
+        want = str(key).lower().strip()
+        if not want:
+            continue
+        # `(?<![a-z])` / `(?![a-z])`: a letter on either side means a longer word swallowed it.
+        if not re.search(r"(?<![a-z])%s(?![a-z])" % re.escape(want), name):
+            continue
+        if best is None or len(want) > len(best[0]):
+            best = (want, key, over)
+    if best is None:
+        return None
+    _want, key, over = best
+    applied = {}
+    for k, v in over.items():
+        if k in CONFIG.get("agent", {}):
+            CONFIG["agent"][k] = v
+            applied[k] = v
+    CONFIG.setdefault("agent", {})["active_profile"] = str(key)
+    return {"profile": str(key), "applied": applied}
 
 
 PROFILE = apply_model_profile()
@@ -13008,10 +13027,17 @@ class Agent:
         # One hook for every tool, core and custom: a failed result whose signature
         # is already understood leaves with the known cause attached.
         out = annotate_failure(name, args, out)
-        # A failure that reads like a wrong path re-attaches the atlas on the next turn.
+        # A FAILURE that reads like a wrong path re-attaches the atlas on the next turn.
         # That is the one moment the map is worth its tokens: a guessed path is the most
         # common tool error this model makes (measured on the eval).
-        if ((looks_like_path_failure(out) or looks_like_rights_denial(out))
+        #
+        # Gated on the call having actually FAILED (audit 2026-09-29). It ran on every result,
+        # so a successful read of a README, a tutorial, or a captured log containing "no such
+        # file or directory" or "command not found" re-attached the whole machine map - around
+        # 2000 characters of prompt, every turn after it - and framed a call that worked as a
+        # wrong-path problem.
+        if ((failed_output(out)
+             and (looks_like_path_failure(out) or looks_like_rights_denial(out)))
                 and CONFIG["agent"].get("atlas_enabled", True)
                 and ctx and ctx.get("session_key")):
             run_state(ctx["session_key"], create=True)["atlas_reask"] = True

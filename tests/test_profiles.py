@@ -79,6 +79,25 @@ def main():
     check("not_a_real_key" not in fb.CONFIG["agent"],
           "a profile cannot write keys the harness does not read")
 
+    # 5. a key matches a WHOLE WORD, and the LONGEST match wins
+    # Audit 2026-09-29: a bare substring meant `pro` matched `prometheus-14b` and `mini`
+    # matched `MiniMax-M2`, and when two keys matched, dict order decided the winner instead
+    # of the more specific key.
+    fb = load("prometheus-14b", {"pro": {"tool_output_max_chars": 40000}})
+    check(fb.PROFILE is None, "a key that merely SITS INSIDE a word does not match")
+    fb = load("MiniMax-M2", {"mini": {"tool_output_max_chars": 40000}})
+    check(fb.PROFILE is None, "  nor does one that begins a longer word")
+    fb = load("llama3-8b", {"llama": {"tool_output_max_chars": 40000}})
+    check(bool(fb.PROFILE) and fb.PROFILE["profile"] == "llama",
+          "  while a digit after the key is still the same word")
+    fb = load("deepseek-r1-distill-llama-8b",
+              {"deepseek": {"tool_output_max_chars": 20000},
+               "deepseek-r1": {"tool_output_max_chars": 40000}})
+    check(bool(fb.PROFILE) and fb.PROFILE["profile"] == "deepseek-r1",
+          "the MOST SPECIFIC key wins, not the one written first")
+    check(fb.CONFIG["agent"]["tool_output_max_chars"] == 40000,
+          "  and it is that key's caps that apply")
+
     print()
     if FAILS:
         print("%d failed: %s" % (len(FAILS), FAILS))
