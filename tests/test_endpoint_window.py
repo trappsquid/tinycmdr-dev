@@ -26,6 +26,7 @@ import importlib.util
 import shutil
 import sys
 import tempfile
+import time
 import types
 from pathlib import Path
 
@@ -242,6 +243,52 @@ def main():
               fb.endpoint_slots("https://api.example.com/v1") == 0)
     finally:
         fb._llama_props, fb._is_local_url = real_props, real_local
+
+    # ------------------------------------- the cache is per ENDPOINT, with the same TTL
+    # F-16: one process-wide window meant a failover box was measured with the primary's
+    # number (a 32k primary "proved" an 8k fallback was big, and the fallback's 400 became
+    # a context overflow with no endpoint left to try). Each answer is cached under its own
+    # server root instead - and the scalar `_window_cache` a stub sets is still read as the
+    # PRIMARY's window, so those callers keep working and it still expires.
+    real_detect = fb._detect_window
+    calls = []
+    try:
+        fb._detect_window = lambda url, headers=None: (
+            calls.append(fb._endpoint_root(url))
+            or (8192 if "10.0.0.9" in str(url) else 32768))
+        for _n in ("_window_cache", "_window_at"):
+            fb.AGENT.__dict__.pop(_n, None)
+        check("_endpoint_window answers for the endpoint it was asked about",
+              fb.AGENT._endpoint_window("http://127.0.0.1:8081/v1") == 32768
+              and fb.AGENT._endpoint_window("http://10.0.0.9:9000/v1") == 8192, calls)
+        check("  and a second ask is the cache, not a second probe",
+              calls == ["http://127.0.0.1:8081", "http://10.0.0.9:9000"], calls)
+
+        primary = fb.CONFIG["llm"]["base_url"]
+        before = list(calls)
+        fb.AGENT.__dict__["_window_cache"] = 65536       # the scalar stub surface
+        fb.AGENT.__dict__.pop("_window_at", None)
+        check("a scalar stub is the PRIMARY endpoint's window",
+              fb.AGENT._endpoint_window(primary) == 65536 and calls == before, calls)
+
+        root = fb._endpoint_root(primary)
+        at, val = fb.AGENT._window_cache[root]
+        fb.AGENT._window_cache[root] = (time.time() - (fb.WINDOW_TTL + 60), val)
+        calls.clear()
+        check("  and each endpoint's answer still expires on the TTL",
+              fb.AGENT._endpoint_window(primary) == 32768
+              and calls == [root], calls)
+
+        fb.AGENT.__dict__["_window_cache"] = 12345       # stale scalar stub
+        fb.AGENT.__dict__["_window_at"] = time.time() - (fb.WINDOW_TTL + 60)
+        calls.clear()
+        check("  a stale scalar stub is re-asked too, not trusted for ever",
+              fb.AGENT._endpoint_window(primary) == 32768
+              and calls == [root], calls)
+    finally:
+        fb._detect_window = real_detect
+        for _n in ("_window_cache", "_window_at"):
+            fb.AGENT.__dict__.pop(_n, None)
 
     print()
     print("%d passed, %d failed" % (len(PASSES), len(FAILS)))

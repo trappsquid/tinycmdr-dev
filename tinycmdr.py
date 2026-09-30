@@ -1621,7 +1621,16 @@ class InfraError(RuntimeError):
 
 class ContextOverflow(RuntimeError):
     """The server rejected the prompt for exceeding its own context window —
-    recoverable by shrinking the conversation and retrying."""
+    recoverable by shrinking the conversation and retrying.
+
+    It names the ENDPOINT that rejected it. The shrink target is that box's window, not
+    the primary's (F-16): a 32k primary failing over to an 8k fallback made the run
+    shrink to the primary's budget, which left the payload above the fallback's window
+    and killed the turn."""
+
+    def __init__(self, message, endpoint=None):
+        super().__init__(message)
+        self.endpoint = endpoint
 
 
 def _http_status(exc):
@@ -12588,28 +12597,48 @@ class Agent:
                 total += est_tokens(json.dumps(m["tool_calls"]))
         return total
 
-    def _endpoint_window(self):
-        """What this endpoint serves per request, or 0 when it does not say.
+    def _endpoint_window(self, url=None):
+        """What THIS endpoint serves per request, or 0 when it does not say.
 
-        Cached with a TTL: it is metadata (one /v1/models or /props GET), not a
-        model call. A generation that stopped at this number stopped because the
-        WINDOW filled, not because the output cap was small - and the number moves
-        when the box is restarted with a different slot count, which is why this is
-        re-asked rather than remembered for the life of the process."""
+        Per-ENDPOINT, cached with a TTL: it is metadata (one /v1/models or /props GET),
+        not a model call. Per-endpoint because a failover box is a different box with
+        its own window - the old single cache was keyed to the process, so an 8k
+        fallback inherited the 32k primary's number and was handed a payload it had to
+        reject (F-16). The number also moves when a box is restarted with a different
+        slot count, which is why each entry is re-asked rather than remembered for the
+        life of the process.
+
+        The scalar `_window_cache` a stub or scenario still sets is adopted as the
+        PRIMARY endpoint's answer, so those callers keep working (and it still expires);
+        everything lives in one {server_root: (at, value)} map from here on."""
         now = time.time()
-        at = getattr(self, "_window_at", 0.0)
-        if not hasattr(self, "_window_cache") or (at and now - at > WINDOW_TTL):
-            self._window_cache = _detect_window(CONFIG["llm"]["base_url"],
-                                                self.headers)
-            self._window_at = now
-        elif not at:
-            # Set from outside this method (a scenario stub, a future per-endpoint
-            # probe): adopt it as fresh, so it is trusted now and still expires.
-            self._window_at = now
-        return self._window_cache
+        primary_root = _endpoint_root(CONFIG["llm"]["base_url"])
+        cache = getattr(self, "_window_cache", None)
+        if not isinstance(cache, dict):
+            # Set from outside this method: it is the primary endpoint's number. Adopt it
+            # as fresh (a 0.0 timestamp means "just stubbed"), so it is trusted now and
+            # still expires on the same TTL.
+            at = getattr(self, "_window_at", 0.0) or now
+            cache = ({primary_root: (at, cache)} if isinstance(cache, int) else {})
+            self._window_cache = cache
+        root = _endpoint_root(url or CONFIG["llm"]["base_url"])
+        hit = cache.get(root)
+        if hit is not None and now - hit[0] <= WINDOW_TTL:
+            self._window_at = hit[0]
+            return hit[1]
+        value = _detect_window(url or CONFIG["llm"]["base_url"], self.headers)
+        cache[root] = (now, value)
+        self._window_at = now
+        return value
 
-    def _envelope(self, session_key=None):
+    def _envelope(self, session_key=None, endpoint=None):
         """Window, static, clamped reply and messages budget for one request.
+
+        `endpoint` is the URL that will READ this envelope - the failover loop asks for
+        each one in turn, because a fallback box serves its own window (F-16). None
+        means the configured primary. The cache holds the last-computed envelope and is
+        valid only for the same session AND the same endpoint, so moving down the chain
+        recomputes instead of reusing the primary's numbers.
 
         Cached for WINDOW_TTL like the window itself: it is the same metadata read.
         `static` is MEASURED from the prompt this session will actually send;
@@ -12624,13 +12653,16 @@ class Agent:
         old contract, and the window is back-computed so the arithmetic stays true);
         otherwise an assumed window, named in the log.
         """
+        base = str(endpoint or CONFIG["llm"]["base_url"])
+        ep_root = _endpoint_root(base)
         now = time.time()
         cached = getattr(self, "_envelope_cache", None)
         if (cached and cached.get("key") == session_key
+                and cached.get("endpoint") == ep_root
                 and now - cached.get("at", 0.0) <= WINDOW_TTL):
             return cached
         static = static_prompt_tokens(session_key)
-        detected = int(self._endpoint_window() or 0)
+        detected = int(self._endpoint_window(base) or 0)
         cfg_max = int(CONFIG["llm"].get("max_tokens") or 0)
         explicit = _context_ceiling()
         refused = warned = False
@@ -12658,7 +12690,7 @@ class Agent:
                     "budget=%d). Raise the server's context slot (--ctx-size / n_ctx), "
                     "point llm.base_url at a larger endpoint, or set "
                     "llm.max_context_tokens explicitly to accept a small box."
-                    % (CONFIG["llm"]["base_url"], window, ENVELOPE_MIN_WINDOW,
+                    % (base, window, ENVELOPE_MIN_WINDOW,
                        static, reply, budget, window, static, reply, budget))
             elif window < ENVELOPE_WARN_WINDOW:
                 warned = True
@@ -12687,7 +12719,7 @@ class Agent:
             log.warning("could not detect the endpoint's context length — assuming "
                         "a %s-token window. Set llm.max_context_tokens in "
                         "config.json to say otherwise.%s", window,
-                        lan_permission_hint(CONFIG["llm"].get("base_url")))
+                        lan_permission_hint(base))
         # Size ONE generation to the box, when the box has said how fast it is. A 16,384-token
         # cap is a six-minute generation at 45 tok/s and half an hour at 8, and BOTH were
         # measured on this box (2026-09-29) depending on how many requests shared its two slots.
@@ -12695,7 +12727,7 @@ class Agent:
         # computed above stays conservative. max_call_seconds 0, or no rate measured yet,
         # leaves the cap exactly as it was.
         _mc = float(CONFIG["llm"].get("max_call_seconds") or 0)
-        _tps = decode_rate()
+        _tps = decode_rate(base)
         if _mc > 0 and _tps > 0 and reply > 0:
             _bounded = max(256, int(_tps * _mc))
             if _bounded < reply:
@@ -12707,8 +12739,8 @@ class Agent:
         # window-scaled defaults in mem_limit_* are the floor of this design; this is
         # the operator's override for a model whose NAME cannot describe its window.
         window_profile = apply_window_profile(window)
-        env = {"key": session_key, "at": now, "window": window, "static": static,
-               "reply": reply, "budget": budget, "source": source,
+        env = {"key": session_key, "endpoint": ep_root, "at": now, "window": window,
+               "static": static, "reply": reply, "budget": budget, "source": source,
                "refused": refused, "warned": warned, "refusal": refusal,
                "window_profile": window_profile}
         self._envelope_cache = env
@@ -12721,14 +12753,16 @@ class Agent:
         no-network contract."""
         return getattr(self, "_envelope_cache", None)
 
-    def _context_budget(self, session_key=None):
+    def _context_budget(self, session_key=None, endpoint=None):
         """Messages budget for the payload, from the measured envelope.
 
         Kept as the name every caller already uses; the arithmetic lives in
-        _envelope. A window below ENVELOPE_MIN_WINDOW still returns a budget so a
-        status verb can report it - _chat is what refuses to send.
+        _envelope. `endpoint` says WHOSE budget: the run loop and _force_shrink ask
+        for the endpoint that has to carry the payload, so a failing fallback's own
+        window sizes the shrink (F-16). A window below ENVELOPE_MIN_WINDOW still
+        returns a budget so a status verb can report it - _chat is what refuses to send.
         """
-        return int(self._envelope(session_key)["budget"])
+        return int(self._envelope(session_key, endpoint)["budget"])
 
     def _elision_note(self, base, dropped, prev=""):
         """`base`, plus a bounded one-line note per call the cut just removed.
@@ -12886,20 +12920,57 @@ class Agent:
                 break
         return messages
 
-    def _force_shrink(self, messages, key=None):
+    def _force_shrink(self, messages, key=None, endpoint=None):
         """Emergency compaction for a server context-overflow rejection.
+
+        `endpoint` is the box that REJECTED the prompt; its window sets the target, not
+        the primary's budget. Failing over from a 32k primary to an 8k fallback used to
+        cut to ~16k - still above the fallback's window - so the run died after one
+        shrink it could have made (F-16).
 
         _compact trusts the configured budget; when the server disagrees, drop
         the oldest whole blocks until the payload is well under half of it, then
         clip any remaining tool output. Never leaves an orphan tool message: the
         cut always lands on a user-message boundary."""
-        target = max(2000, int(self._context_budget(key) * 0.5))
+        target = max(2000, int(self._context_budget(key, endpoint) * 0.5))
         while len(messages) > 4 and self._conversation_token_est(messages) > target:
             if not self._drop_oldest_block(messages, MARK_SHRINK):
                 break
         for m in messages[1:-2]:
             if m.get("role") == "tool" and len(m.get("content") or "") > 300:
                 m["content"] = m["content"][:150] + " ...[trimmed to fit]"
+        return messages
+
+    def _fit_payload(self, messages, key, endpoint):
+        """Cut an ASSEMBLED payload down to a failover endpoint's own budget.
+
+        The payload _chat holds already carries the trailing volatile block and any
+        attached images, so its conversation estimate is compared to the endpoint's
+        messages budget DIRECTLY. _compact subtracts those because the run loop's
+        history does not carry them yet; doing it again here would fire on every
+        request and drop a block (and the server's prefix cache with it) for nothing.
+
+        Only a non-primary endpoint reaches the cut. The primary's payload was sized by
+        the run loop's _compact against the same window, and re-checking it is exactly
+        the double subtraction above. Sized so a small fallback gets a request it can
+        accept instead of a guaranteed 400 (F-16)."""
+        if _endpoint_root(endpoint) == _endpoint_root(CONFIG["llm"]["base_url"]):
+            return messages
+        budget = self._context_budget(key, endpoint)
+        if self._conversation_token_est(messages) <= budget:
+            return messages
+        # Cut a COPY: the run loop's history keeps its blocks, only this request shrinks.
+        messages = list(messages)
+        low = max(2000, int(budget * 0.6))
+        while self._conversation_token_est(messages) > low:
+            if not self._drop_oldest_block(messages, MARK_SHRINK):
+                break
+        for m in messages[1:-6]:
+            if m.get("role") == "tool" and len(m.get("content") or "") > 500:
+                m["content"] = m["content"][:200] + " ...[trimmed]"
+        log.info("[%s] failover endpoint %s serves %d tokens per request - payload cut "
+                 "to fit its %d-token budget", key, endpoint,
+                 int(self._envelope(key, endpoint)["window"]), budget)
         return messages
 
     def _chat(self, messages, model=None, use_tools=True, usage=None,
@@ -12988,6 +13059,14 @@ class Agent:
                 # Visible in the log so "did that model switch take effect?"
                 # is answerable without guessing.
                 log.info("routing model %s to %s", ep_model, url)
+            # The envelope belongs to the ENDPOINT, not the session (F-16): a failover is
+            # a different box with its own window, and inheriting the primary's sized an
+            # 8k fallback's request for a 32k primary - the 400 it answered matched the
+            # overflow regex, and the run stopped there instead of trying another
+            # endpoint. Ask each endpoint for its own envelope, and cut the payload to
+            # the box that will actually read it.
+            env = self._envelope(session_key, endpoint=url)
+            messages = self._fit_payload(messages, session_key, url)
             # The output cap is the ENVELOPE's clamped reply (min(configured
             # max_tokens, window // 4)) unless a caller names one deliberately. The two
             # callers that name one are BOTH recovery paths, and they are bounded
@@ -13206,7 +13285,8 @@ class Agent:
                         # to the agent loop, which shrinks context and retries.
                         raise ContextOverflow(
                             f"server rejected the prompt for exceeding its "
-                            f"context window ({status}: {body[:200]})")
+                            f"context window ({status}: {body[:200]})",
+                            endpoint=url)
                     if status in FATAL_STATUS:
                         _record_attempt(usage, url, "fatal", f"{status}: {body}",
                                         secs)
@@ -13272,7 +13352,7 @@ class Agent:
                               .get("completion_tokens") or 0)
                     _pt = int((data.get("usage") or {})
                               .get("prompt_tokens") or 0)
-                    _win = self._endpoint_window()
+                    _win = self._endpoint_window(url)
                     if _win and _pt and _pt + got >= _win - 8:
                         # The request FILLED the endpoint's window, so the answer
                         # had nowhere to go. That is not an output cap, and raising
@@ -13287,7 +13367,7 @@ class Agent:
                             f"the model filled this endpoint's context window "
                             f"({_pt} prompt + {got} generated tokens of {_win}) and "
                             f"was cut off before answering - the output cap was not "
-                            f"the limit")
+                            f"the limit", endpoint=url)
                     if got and got < cap * 0.9:
                         # Suspected clamp: compare what came back against the
                         # cap actually SENT, not the one we meant to send — a
@@ -13810,10 +13890,13 @@ class Agent:
                     except ContextOverflow as e:
                         # The server's window is smaller than our budget guess.
                         # That is recoverable: shrink hard and retry the same
-                        # turn on the same endpoint.
+                        # turn on the same endpoint. Shrink against the window of
+                        # the endpoint that REJECTED the prompt - on a failover that
+                        # is the fallback, not the primary (F-16).
                         log.warning("[%s] %s — shrinking the prompt and "
                                     "retrying this turn", session_key, e)
-                        self._force_shrink(messages, session_key)
+                        self._force_shrink(messages, session_key,
+                                           endpoint=getattr(e, "endpoint", None))
                         if usage is not None:
                             usage["context_retries"] = (
                                 usage.get("context_retries", 0) + 1)

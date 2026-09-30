@@ -99,6 +99,33 @@ def capture_request(fb, session_key="envtest"):
     return seen, sent
 
 
+def capture_chain(fb, messages, session_key="envtest"):
+    """Walk one _chat down the failover chain; return [(url, payload), ...].
+
+    The stub fails EVERY endpoint with a plain 500 (which is not a context overflow, so
+    the loop moves to the next endpoint instead of raising). Each payload is deep-copied
+    at the moment it was about to be sent, because _chat keeps mutating the same dict
+    across endpoints/retries.
+    """
+    import requests
+    seen = []
+
+    def fake_post(url, headers, payload, timeout, grace, cancel_event=None,
+                  stream=False):
+        seen.append((url, json.loads(json.dumps(payload))))
+        raise requests.HTTPError("stub", response=FakeResp())
+
+    real = fb._post_watchdog
+    fb._post_watchdog = fake_post
+    try:
+        fb.AGENT._chat(messages, session_key=session_key)
+    except Exception:                          # noqa: BLE001 - no endpoint answered
+        pass
+    finally:
+        fb._post_watchdog = real
+    return seen
+
+
 def main():
     workdir = Path(tempfile.mkdtemp(prefix="tc-envelope-"))
     try:
@@ -272,6 +299,86 @@ def main():
         finally:
             fb._DECODE_TPS.clear()
             fb._DECODE_TPS.update(_saved_rate)
+
+        # --- F-16: each endpoint's request is sized to its OWN window ----------
+        # A failover box is a different box. The window/envelope used to be keyed to the
+        # SESSION, so a big primary handed a small fallback a payload sized for the
+        # primary; the fallback's 400 matched the overflow regex and the run stopped with
+        # no endpoint left to try. Here the chain is 65,536 -> 16,384 and the primary
+        # fails (500), so the payload the fallback receives must be the fallback's.
+        saved_fallbacks = fb.CONFIG["llm"].get("fallbacks")
+        saved_allow = fb.CONFIG["llm"].get("allow_cloud_fallback")
+        real_win = fb.AGENT._endpoint_window
+        primary_chat = fb.AGENT.llm_url
+        fb_chat = "http://127.0.0.1:2/v1/chat/completions"
+        fb.CONFIG["llm"]["fallbacks"] = [{"base_url": "http://127.0.0.1:2/v1",
+                                          "model": "fb-model", "api_key": "x"}]
+        fb.CONFIG["llm"]["allow_cloud_fallback"] = True
+        fb.AGENT._endpoint_window = (
+            lambda url=None: 16384 if url and "127.0.0.1:2" in url else 65536)
+        try:
+            fb.AGENT._envelope_cache = None
+            prim = fb.AGENT._envelope("fochain")
+            fb.AGENT._envelope_cache = None
+            fbk = fb.AGENT._envelope("fochain", fb_chat)
+            check(prim["window"] == 65536 and fbk["window"] == 16384
+                  and prim["endpoint"] != fbk["endpoint"],
+                  f"F-16: the envelope follows the endpoint ({prim['window']} then "
+                  f"{fbk['window']})")
+            check(fbk["reply"] == min(reply_cfg, 16384 // 4)
+                  and prim["reply"] == min(reply_cfg, 65536 // 4),
+                  f"F-16:   and so does the clamped reply "
+                  f"({prim['reply']} vs {fbk['reply']})")
+
+            # A conversation sized to fit the primary, and several times the fallback.
+            # Each exchange is a quarter of the fallback's budget, so the newest exchange
+            # (which no shrink may drop) still fits under a half-budget target.
+            per = max(200, fbk["budget"] // 4)
+            tpc = fb.est_tokens("z" * 4000) / 4000.0     # tokens/char, measured
+            chunk = "z" * max(64, int(per / tpc))
+            msgs = [{"role": "system", "content": "sys"}]
+            while fb.AGENT._conversation_token_est(msgs) < fbk["budget"] * 3:
+                msgs.append({"role": "user", "content": chunk})
+                msgs.append({"role": "assistant", "content": "ok"})
+            chain = capture_chain(fb, msgs, "fochain")
+            urls = [u for u, _ in chain]
+            by_url = dict(chain)
+            check(len(urls) == 2 and "127.0.0.1:2" in urls[1],
+                  f"F-16: the chain fell over to the fallback {urls}")
+            conv_p = fb.AGENT._conversation_token_est(
+                by_url[primary_chat]["messages"])
+            conv_f = fb.AGENT._conversation_token_est(by_url[fb_chat]["messages"])
+            check(conv_p > fbk["budget"],
+                  f"F-16: the primary's request was NOT resized for the fallback "
+                  f"({conv_p} > {fbk['budget']})")
+            check(conv_f <= fbk["budget"],
+                  f"F-16: the fallback's request fits the fallback's budget "
+                  f"({conv_f} <= {fbk['budget']})")
+            check(fbk["static"] + conv_f <= fbk["window"],
+                  f"F-16:   and the real payload fits the fallback's window "
+                  f"({fbk['static']} + {conv_f} <= {fbk['window']})")
+            check(by_url[fb_chat]["max_tokens"] == fbk["reply"]
+                  and by_url[primary_chat]["max_tokens"] == prim["reply"],
+                  f"F-16: each request carried its own endpoint's reply cap "
+                  f"({by_url[primary_chat]['max_tokens']} vs "
+                  f"{by_url[fb_chat]['max_tokens']})")
+
+            # The shrink target follows the endpoint that REJECTED the prompt.
+            plain = [dict(m) for m in msgs]
+            routed = [dict(m) for m in msgs]
+            fb.AGENT._force_shrink(plain, "fochain")
+            fb.AGENT._force_shrink(routed, "fochain", endpoint=fb_chat)
+            est_p = fb.AGENT._conversation_token_est(plain)
+            est_r = fb.AGENT._conversation_token_est(routed)
+            target = max(2000, fb.AGENT._context_budget("fochain", fb_chat) // 2)
+            check(est_r <= target and est_r < est_p,
+                  f"F-16: shrinking for the FAILING endpoint cuts to its own window "
+                  f"({est_r} <= {target}), not the primary's ({est_p})")
+        finally:
+            fb.CONFIG["llm"]["fallbacks"] = saved_fallbacks
+            fb.CONFIG["llm"]["allow_cloud_fallback"] = saved_allow
+            fb.AGENT._endpoint_window = real_win
+            fb.AGENT._envelope_cache = None
 
         # --- a bigger tool surface is COUNTED, not ignored --------------------
         at_window(fb, 32768)
