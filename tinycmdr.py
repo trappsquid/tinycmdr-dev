@@ -17032,7 +17032,7 @@ class AppScreen(TuiScreen):
         self.surface = "on #12161c" if self.tier in ("truecolor", "256") else ""
         self.repaint = True            # an alternate-screen pane can be repainted
         self.RAIL_WIDTH = 26
-        self.items = []            # ("r", renderable) | ("ansi", painted lines)
+        self.items = []            # (tag, payload, the plain text it was drawn from, kind)
         self._rendered = []        # item index -> lines, for the current width
         self._flat = []            # the transcript, flattened
         self._flat_of = -1         # how many items _flat was built from
