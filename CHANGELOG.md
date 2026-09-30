@@ -7,6 +7,114 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.41] - 2026-09-30
+
+An outside code review - 22 findings, every one graded against this tree before it was acted on -
+plus the development contract that makes the next review cheaper to check. Twenty-one findings
+were real and are fixed below. The twenty-second, a claimed zip-slip in `update <zip>`, does not
+exist: `zipfile.ZipFile.extractall` has no `filter=` argument anywhere in the supported 3.10-3.12
+band, and CPython strips `..` and absolute members itself - the reviewer's suggested fix would
+have found that out by raising `TypeError`. Five more had the mechanism right and the consequence
+or the trigger wrong; all 22 verdicts, with the line numbers and what each one would have missed,
+are in `STATUS.json`, and the working record of the audit is `docs/dev-log.md`.
+
+Two behaviours an operator will notice. A run wedged so hard it ignores its own cancel no longer
+takes its channel down with it: the next run answers in a minute with the one command that clears
+it, instead of waiting for ever while being told the queue was being served. And a message sent
+during a live Telegram run now steers that run rather than queueing behind it, which the README
+had promised all along.
+
+Fixed
+- **A `400` naming `max_tokens` is retried as `max_completion_tokens`, same value.** Newer
+  OpenAI-family models reject `max_tokens`, the named-field retry did not know the name, and the
+  body matched no overflow pattern - so `400` fell into the fatal set and the run died telling the
+  operator to check the key, model id and base_url, all three of which were right. Dropping the
+  field instead of renaming it was not an option: it carries the envelope clamp.
+  `tests/test_ledger.py` asserts the retry carries the new name and no `max_tokens`, and that a
+  second `400` is still fatal.
+- **One transient mid-stream break no longer ends streaming for the process.** All four
+  `StreamFailed` causes fed one handler that blacklisted the endpoint for the life of the process
+  and cleared `stream_on` for the remaining failover endpoints in that call. Only the
+  "server ignored `stream: true` and answered with plain JSON" case proves an endpoint cannot
+  stream; a prefill limit, an idle gap and a mid-stream break are ordinary transient failures and
+  now keep streaming. The cause travels on the exception, not in its text.
+- **A 429 `Retry-After` wait is cancellable.** It was one `time.sleep` of up to 60 s with no
+  cancel slicing, while `_post_watchdog` promises a `/stop` lands within a quarter second. It is
+  sliced at 0.25 s now and raises `OperatorStop`.
+- **A wedged run's session lock no longer blocks the run behind it.** `threading.Lock` has no
+  force-release, so the worker the stall watchdog respawned blocked for ever on the lock the
+  abandoned run still held - and the operator was told the backlog behind it was being picked up.
+  `run()` now acquires with a deadline (60 s) and, on expiry, answers with `/tinycmdr restart
+  force` and says nothing was sent to the model. The held lock is never touched, and rotating the
+  session key was rejected as the alternative: it would have handed the backlog a different
+  session, i.e. a fresh history. `tests/test_stall.py` drives the whole abandon-and-respawn chain.
+- **Elapsed time is measured on a monotonic clock.** 102 `time.time()` calls and no `monotonic`
+  anywhere meant a laptop suspend made every active run look wedged (one 30-minute sleep abandoned
+  healthy runs and cancelled them), and a wall-clock step stretched or collapsed every deadline.
+  Deadlines, TTLs, the stall watchdog, the run budget, the ask wait and the new run registry are
+  monotonic now; cron fire times, persisted timestamps and `last_seen` stay wall-clock, which
+  `tests/test_catchup.py` actively pins. Falsified both ways: the old code abandons a healthy run
+  after a simulated suspend, and never reaches its budget after a backward step.
+- **Telegram no longer swallows a second user's message, and no longer loses a `/stop`.** The
+  dedupe was a flat deque of bare message ids, which are per-chat - two allowed users' identical
+  ids collided and the second message vanished with no log line. Separately, `submit()` created
+  the cancel event and the worker then replaced it, so a `/stop` landing between the two was
+  discarded. Dedupe is keyed on `(chat_id, message_id)`; the worker adopts the event `submit()`
+  minted. Both new checks fail on the previous build.
+- **A run lifecycle every lane gets by construction.** Watchdog registration, a cancel event and
+  steering lived in the Mattermost dispatcher, so the Telegram lane had no steering and no idle
+  worker exit, and a scheduled run had no cancel event, was invisible to the watchdog and could
+  not be stopped at all. `drive_run` opens a session-keyed run record now (watchdog activity,
+  cancel event, steering queue) for every run, whichever lane started it; Mattermost keeps its own
+  stronger guard and registers `watch=False`, so nothing is watched twice, and `Scheduler._fire`
+  needed no change at all.
+- **A late batch worker can only write into its own turn's buffers.** The `work(i, tc)` closure
+  captured the per-turn `results`/`timings`/`dedupe_after` by name, and the batch executor
+  deliberately lets a hung tool outlive its batch - so a late worker wrote into whatever list the
+  NEXT turn had just created, with a stale `tool_call_id`. The buffers ride in as default
+  arguments now.
+- **Failover gets the envelope of the endpoint that actually receives the request.** The window
+  was probed against the primary only and the envelope was keyed by session, so an 8k fallback
+  inherited a 32k primary's sizing and had to reject the payload; `_force_shrink` then aimed at
+  the primary's half, which is still too big for the fallback. Both are per-endpoint now, each
+  request is sized to its endpoint, and `ContextOverflow` carries the endpoint that refused.
+- **The locality cache expires (300 s), and a key added at runtime is scrubbed.** The verdict cache
+  had no TTL, so a hostname that DNS moved off-LAN was still "local" to the search/fetch egress
+  gate and the failover filter; `_SECRETS` was built once at import, so a key set with `config set
+  llm.api_key` reached the logs, chat and transcripts unmasked until a restart.
+- **Prompt assembly no longer writes `notes.md`.** An over-budget read curated the file it was
+  reading - and `volatile_context()` is also called purely to estimate tokens, from compaction and
+  status paths. The read path bounds what the prompt sees and leaves the file byte-identical; the
+  write path is unchanged.
+- **Smaller ones, each with a test**: `run_capture`'s output directory is 0700 (it was 0755 under
+  umask 022 on a shared Linux host, where `/tmp` is world-readable); the session loader no longer
+  reads `*.carry.json` as phantom sessions; `reset()` reclaims a session lock it is not holding;
+  one redundant notes-lock decorator on `tool_remember` is gone; `doctor` compares
+  `ask_user_wait_seconds` against `stall_abandon_minutes`, because a run parked on a question was
+  abandoned mid-question once the ask cap exceeded the abandon window.
+- **The gate is green on a real box, not only on a clone.** `test_telegram` was grading the
+  installer's own `.env` (its check edits CONFIG, but the token predicate falls back to the
+  environment, so it failed on any configured box and passed on a clone), and the tool-shelf rule
+  enumerated every REGISTERED tool, including the per-host `tools/` drop-ins the repository
+  deliberately does not carry. The first now neutralises the environment it grades; the second
+  grades the tools this repository carries and names the host tools it did not grade.
+
+Changed
+- **The one-line door verifies what it is about to run.** `curl | bash` fetched the archive and
+  unpacked it, while the README's `sha256sum -c` step stayed manual - so the door the README leads
+  with was the one path with no check at all. It fetches `SHA256SUMS` first, checks this asset's
+  own line, and refuses a corrupt or truncated transfer before unpacking. A release with no sums
+  file, or one that omits the asset, is refused too; `TINYCMDR_NO_SUMS=1` is the deliberate way
+  past that, and it says so as it does it. The output says what the sums do and do not prove:
+  releases are unsigned, so they catch a bad transfer, not a replaced release.
+- **`/stop` on Telegram also cancels what was already queued behind the live run.** Each affected
+  run reports "stopped"; the channel's cancel slot is cleared when a run finishes, so the chat
+  keeps working.
+- **A non-LAN endpoint running on an assumed window is named as such**, and `doctor` and `setup`
+  now say what to set (`llm.max_context_tokens` with the provider's documented window) instead of
+  only warning that the window could not be detected. `config.example.json` says plainly that a
+  `window_profiles` band caps character budgets and cannot widen a window.
+
 Added
 - **`maintenance/where.py --remote` reads GitHub instead of this clone's refs.** Every other fact
   in the table comes from local refs, which are only as fresh as the last fetch - "in sync with

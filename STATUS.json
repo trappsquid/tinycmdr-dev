@@ -21,230 +21,230 @@
       "title": "test_telegram goes red on any box whose .env carries a chat token",
       "state": "closed",
       "anchor": {
-        "file": "tests/test_telegram.py"
+        "commit": "efadc5d"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (efadc5d). the check neutralises the two token env names it grades, restored afterwards. Audited and fixed: The check 'one door is not a warning' edits CONFIG and asserts both_doors_note() == '', but _mm_token_configured() falls back to os.environ['TINYCMDR_MM_TOKEN'], which a real install's .env supplies and the fixture cannot clear - so the predicate stays true and the refusal note comes back. Measured 2026-09-29 on the fleet Mac: 41 passed, 1 failed; the same suite is 42/42 on a clean clone of HEAD, and on a copy of HEAD with this box's diff applied, so the suite grades the BOX rather than the rule. It is the class tests/hermetic.py was written for.",
-      "gate": "done - closed on wave1-fixes (efadc5d); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (efadc5d), merged to main in the 1.0.41 batch. the check neutralises the two token env names it grades, restored afterwards. Audited and fixed: The check 'one door is not a warning' edits CONFIG and asserts both_doors_note() == '', but _mm_token_configured() falls back to os.environ['TINYCMDR_MM_TOKEN'], which a real install's .env supplies and the fixture cannot clear - so the predicate stays true and the refusal note comes back. Measured 2026-09-29 on the fleet Mac: 41 passed, 1 failed; the same suite is 42/42 on a clean clone of HEAD, and on a copy of HEAD with this box's diff applied, so the suite grades the BOX rather than the rule. It is the class tests/hermetic.py was written for.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "host-tools-no-shelf",
       "title": "a per-host tool with no category is red in test_tool_discovery",
       "state": "closed",
       "anchor": {
-        "file": "tests/test_tool_discovery.py"
+        "commit": "efadc5d"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (efadc5d). the rule grades the tools THIS repository carries (asked of git) and names the host tools it did not grade. Audited and fixed: The check 'every tool files on a shelf (nothing strays into `other`)' enumerates the REGISTERED tools, which on a real box includes the per-host tools/ drop-ins. Measured 2026-09-29 on the fleet Mac: two of them land in `other` and the suite is 130 passed, 1 failed; a clean clone carries only the shipped example tools, where it is 129/129. The red is host data, not the tree - but it means the gate is not green on a working box, which is what a reader assumes 'the gate' means.",
-      "gate": "done - closed on wave1-fixes (efadc5d); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (efadc5d), merged to main in the 1.0.41 batch. the rule grades the tools THIS repository carries (asked of git) and names the host tools it did not grade. Audited and fixed: The check 'every tool files on a shelf (nothing strays into `other`)' enumerates the REGISTERED tools, which on a real box includes the per-host tools/ drop-ins. Measured 2026-09-29 on the fleet Mac: two of them land in `other` and the suite is 130 passed, 1 failed; a clean clone carries only the shipped example tools, where it is 129/129. The red is host data, not the tree - but it means the gate is not green on a working box, which is what a reader assumes 'the gate' means.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-02-max-tokens-400",
       "title": "a 400 naming max_tokens is fatal, and the error blames the key",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "dfc3c55"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (dfc3c55). a 400 naming max_tokens is retried once on the same endpoint as max_completion_tokens with the same value (dropping it would remove the envelope clamp); a second 400 is still fatal. Audited and fixed: CONFIRMED 2026-09-29. max_tokens rides whenever cap is set (13008-13009), and cap is >= 1 on every envelope branch; the named-field 400 retry scans only stream_options, chat_template_kwargs, return_progress, sse_ping_interval and stream (13082-13085); an unsupported-parameter body matches no _CONTEXT_OVERFLOW_RE pattern and 400 is in FATAL_STATUS (1369), so the run dies telling the operator to check the key, model id and base_url (13256) - all three of which are right. The reviewer's 13037 was a stale line number.",
-      "gate": "done - closed on wave1-fixes (dfc3c55); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (dfc3c55), merged to main in the 1.0.41 batch. a 400 naming max_tokens is retried once on the same endpoint as max_completion_tokens with the same value (dropping it would remove the envelope clamp); a second 400 is still fatal. Audited and fixed: CONFIRMED 2026-09-29. max_tokens rides whenever cap is set (13008-13009), and cap is >= 1 on every envelope branch; the named-field 400 retry scans only stream_options, chat_template_kwargs, return_progress, sse_ping_interval and stream (13082-13085); an unsupported-parameter body matches no _CONTEXT_OVERFLOW_RE pattern and 400 is in FATAL_STATUS (1369), so the run dies telling the operator to check the key, model id and base_url (13256) - all three of which are right. The reviewer's 13037 was a stale line number.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-04-telegram-dedupe-and-stop",
       "title": "Telegram swallows a second chat's message, and can lose a /stop",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "8436501"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (8436501). dedupe keyed on (chat_id, message_id); submit() mints the cancel event, the queue item carries it, and the worker adopts it instead of overwriting the slot. Behaviour note: a /stop now also cancels a message already queued behind the live run; each affected run reports stopped, and the slot is popped when the run finishes, so the chat keeps working. Audited and fixed: CONFIRMED 2026-09-29. self.seen is a flat deque of bare message ids (18333) and handle() drops a repeat unconditionally (18459-18463) - Telegram ids are per-chat, so two allowed users' identical ids collide silently. Separately, submit() pre-creates poller.cancel[chat_id] (18634) and the worker overwrites it with a fresh Event (18576-18582), so a /stop landing in that window is discarded. The document's related clause (a /stop while another task is queued stops the RUNNING one) is normal behaviour, not this bug.",
-      "gate": "done - closed on wave1-fixes (8436501); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (8436501), merged to main in the 1.0.41 batch. dedupe keyed on (chat_id, message_id); submit() mints the cancel event, the queue item carries it, and the worker adopts it instead of overwriting the slot. Behaviour note: a /stop now also cancels a message already queued behind the live run; each affected run reports stopped, and the slot is popped when the run finishes, so the chat keeps working. Audited and fixed: CONFIRMED 2026-09-29. self.seen is a flat deque of bare message ids (18333) and handle() drops a repeat unconditionally (18459-18463) - Telegram ids are per-chat, so two allowed users' identical ids collide silently. Separately, submit() pre-creates poller.cancel[chat_id] (18634) and the worker overwrites it with a fresh Event (18576-18582), so a /stop landing in that window is discarded. The document's related clause (a /stop while another task is queued stops the RUNNING one) is normal behaviour, not this bug.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-01-stall-abandon-lock",
       "title": "a hard-wedged run keeps the session lock, so the respawned worker blocks forever",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "f9820ba"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (f9820ba). run() takes the session lock with a deadline (Agent._run_lock_wait_secs, 60s) and on expiry ANSWERS with the /tinycmdr restart force guidance instead of blocking; the wedged run's lock is never touched (a plain Lock has no force-release). Key rotation was the alternative and was rejected: it would hand the backlog a different session. Residual: a second run that legitimately shares the session and runs longer than 60s now fails fast with that message rather than waiting. Audited and fixed: CONFIRMED end to end 2026-09-29. run() holds self._lock(session_key) for the whole run (13467); _lock is a bare threading.Lock with no acquire timeout (12404-12405); the abandon path pops active/running and respawns a worker only when the queue is non-empty (17022-17046) and releases nothing, and reset() never pops a lock either. The fresh worker blocks in run() forever, and the message telling the operator it is picking up their queue is false. Two corrections to the finding: the respawn is conditional, and after it new text is STEERED into the dead run (16933-16940) rather than queued, so the operator is never even shown the queued-behind notice. /restart force on the listener thread (16872-16886) is the only real out.",
-      "gate": "done - closed on wave1-fixes (f9820ba); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (f9820ba), merged to main in the 1.0.41 batch. run() takes the session lock with a deadline (Agent._run_lock_wait_secs, 60s) and on expiry ANSWERS with the /tinycmdr restart force guidance instead of blocking; the wedged run's lock is never touched (a plain Lock has no force-release). Key rotation was the alternative and was rejected: it would hand the backlog a different session. Residual: a second run that legitimately shares the session and runs longer than 60s now fails fast with that message rather than waiting. Audited and fixed: CONFIRMED end to end 2026-09-29. run() holds self._lock(session_key) for the whole run (13467); _lock is a bare threading.Lock with no acquire timeout (12404-12405); the abandon path pops active/running and respawns a worker only when the queue is non-empty (17022-17046) and releases nothing, and reset() never pops a lock either. The fresh worker blocks in run() forever, and the message telling the operator it is picking up their queue is false. Two corrections to the finding: the respawn is conditional, and after it new text is STEERED into the dead run (16933-16940) rather than queued, so the operator is never even shown the queued-behind notice. /restart force on the listener thread (16872-16886) is the only real out.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-13-429-sleep-cancel",
       "title": "the 429 retry sleep ignores cancel_event",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "dfc3c55"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (dfc3c55). the wait is sliced in 0.25s steps against cancel_event and raises OperatorStop, mirroring _post_watchdog. Audited and fixed: CONFIRMED 2026-09-29 at 13111-13112 (not 13087). One unconditional time.sleep(wait) in _chat, while _post_watchdog promises a /stop lands within a quarter second (1712). cancel_event is already in scope. Nuance the finding misses: wait comes from the Retry-After header, so it is 0 without one, 60 is a cap, and it happens at most once per call.",
-      "gate": "done - closed on wave1-fixes (dfc3c55); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (dfc3c55), merged to main in the 1.0.41 batch. the wait is sliced in 0.25s steps against cancel_event and raises OperatorStop, mirroring _post_watchdog. Audited and fixed: CONFIRMED 2026-09-29 at 13111-13112 (not 13087). One unconditional time.sleep(wait) in _chat, while _post_watchdog promises a /stop lands within a quarter second (1712). cancel_event is already in scope. Nuance the finding misses: wait comes from the Retry-After header, so it is 0 without one, 60 is a cap, and it happens at most once per call.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-03-stream-blacklist",
       "title": "one transient mid-stream break blacklists streaming for the process",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "dfc3c55"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (dfc3c55). StreamFailed now carries not_a_stream, and only the no-SSE cause blacklists the URL or clears stream_on. Deliberate reading: the SAME-CALL retry is still sent non-streaming (bounded); what the finding was about - the process-lifetime blacklist and the other endpoints in the call - is fixed. Audited and fixed: PARTIAL 2026-09-29. All four StreamFailed raises (1979 no first byte, 1982 idle gap, 2129 mid-stream break, 2138 no SSE data) reach one handler that adds the URL to the process-global _STREAM_UNSUPPORTED and sets stream_on = False (13054-13058), which also suppresses stream for the remaining failover endpoints in that call. Real, but the finding overstates one consequence: cancel latency is unaffected (the watchdog slices at 0.25 s regardless of streaming); what is lost is live progress display and the socket hang-up that stops a trickling server.",
-      "gate": "done - closed on wave1-fixes (dfc3c55); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (dfc3c55), merged to main in the 1.0.41 batch. StreamFailed now carries not_a_stream, and only the no-SSE cause blacklists the URL or clears stream_on. Deliberate reading: the SAME-CALL retry is still sent non-streaming (bounded); what the finding was about - the process-lifetime blacklist and the other endpoints in the call - is fixed. Audited and fixed: PARTIAL 2026-09-29. All four StreamFailed raises (1979 no first byte, 1982 idle gap, 2129 mid-stream break, 2138 no SSE data) reach one handler that adds the URL to the process-global _STREAM_UNSUPPORTED and sets stream_on = False (13054-13058), which also suppresses stream for the remaining failover endpoints in that call. Real, but the finding overstates one consequence: cancel latency is unaffected (the watchdog slices at 0.25 s regardless of streaming); what is lost is live progress display and the socket hang-up that stops a trickling server.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-07-local-url-cache-ttl",
       "title": "the locality cache never expires, so the egress gates can be stale",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "dc16cd2"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (dc16cd2). the cache stores (verdict, at) and a hit older than WINDOW_TTL (300s) is a miss. Audited and fixed: CONFIRMED 2026-09-29. _LOCAL_URL_CACHE is read and written with no TTL, eviction or size bound (1288, 1313-1316) and fronts the failover filter (12920, 12929), search and fetch egress (7008, 7087) and the llama.cpp extension decision (2468, 2400). Correction: the trigger is a DNS re-pointing of a HOSTNAME - an IP literal is its own cache key and never re-resolves, so DHCP renumbering of one is inert. Reverse staleness (remote cached, later local) is the harmless direction. WINDOW_TTL = 300 at 1599 is the in-tree precedent.",
-      "gate": "done - closed on wave1-fixes (dc16cd2); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (dc16cd2), merged to main in the 1.0.41 batch. the cache stores (verdict, at) and a hit older than WINDOW_TTL (300s) is a miss. Audited and fixed: CONFIRMED 2026-09-29. _LOCAL_URL_CACHE is read and written with no TTL, eviction or size bound (1288, 1313-1316) and fronts the failover filter (12920, 12929), search and fetch egress (7008, 7087) and the llama.cpp extension decision (2468, 2400). Correction: the trigger is a DNS re-pointing of a HOSTNAME - an IP literal is its own cache key and never re-resolves, so DHCP renumbering of one is inert. Reverse staleness (remote cached, later local) is the harmless direction. WINDOW_TTL = 300 at 1599 is the in-tree precedent.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-08-secrets-refresh",
       "title": "a key added after startup is never scrubbed",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "dc16cd2"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (dc16cd2). _SECRETS is re-derived at the end of _verb_config, _config_take_effect and run_setup; _env_set was deliberately left alone (giving .env keys to os.environ mid-process would widen what an in-process load_config honours). Audited and fixed: PARTIAL 2026-09-29. _SECRETS = _secret_values() runs once at import (2532) and nothing re-derives it: config set ends at CONFIG.update(back) (20857), model add ends at _config_take_effect (20643-20651), run_setup updates CONFIG (19134) and writes .env through _env_set (21378) without touching os.environ. The finding's named vector is wrong, though: model add takes --key-env NAME only and never an inline key. The real vectors are config set llm.api_key <value> and config set llm.fallbacks with an inline key (both allowed because the secret guard skips the llm section), plus setup keys that only ever reach .env.",
-      "gate": "done - closed on wave1-fixes (dc16cd2); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (dc16cd2), merged to main in the 1.0.41 batch. _SECRETS is re-derived at the end of _verb_config, _config_take_effect and run_setup; _env_set was deliberately left alone (giving .env keys to os.environ mid-process would widen what an in-process load_config honours). Audited and fixed: PARTIAL 2026-09-29. _SECRETS = _secret_values() runs once at import (2532) and nothing re-derives it: config set ends at CONFIG.update(back) (20857), model add ends at _config_take_effect (20643-20651), run_setup updates CONFIG (19134) and writes .env through _env_set (21378) without touching os.environ. The finding's named vector is wrong, though: model add takes --key-env NAME only and never an inline key. The real vectors are config set llm.api_key <value> and config set llm.fallbacks with an inline key (both allowed because the secret guard skips the llm section), plus setup keys that only ever reach .env.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-12-run-capture-mode",
       "title": "run_capture's output directory is world-readable on a shared host",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "f115855"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (f115855). os.chmod(run_dir, 0o700) right after the mkdir; the test asserts the mode (a plain mkdir is 0755 under umask 022). Audited and fixed: CONFIRMED 2026-09-29 for Linux shared hosts. run_capture makes tempfile.gettempdir()/tinycmdr-runs with mkdir and no mode (4485-4486) and writes .out/.err through plain open (4508), so umask 022 leaves the directory 0755 and the files 0644 under a world-readable /tmp; kept outputs are pruned only by a LATER call, after 86400 s (4562-4565). On macOS gettempdir() is the per-user 0700 $TMPDIR, which neutralises it - the fleet's primary platform is not exposed. The installer's umask 077 does not persist into the launchd-run bot.",
-      "gate": "done - closed on wave1-fixes (f115855); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (f115855), merged to main in the 1.0.41 batch. os.chmod(run_dir, 0o700) right after the mkdir; the test asserts the mode (a plain mkdir is 0755 under umask 022). Audited and fixed: CONFIRMED 2026-09-29 for Linux shared hosts. run_capture makes tempfile.gettempdir()/tinycmdr-runs with mkdir and no mode (4485-4486) and writes .out/.err through plain open (4508), so umask 022 leaves the directory 0755 and the files 0644 under a world-readable /tmp; kept outputs are pruned only by a LATER call, after 86400 s (4562-4565). On macOS gettempdir() is the per-user 0700 $TMPDIR, which neutralises it - the fleet's primary platform is not exposed. The installer's umask 077 does not persist into the launchd-run bot.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-14-carry-json-ingest",
       "title": "the session loader reads *.carry.json as phantom sessions",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "b122f6c"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (b122f6c). the loader glob skips *.carry.json. Audited and fixed: CONFIRMED 2026-09-29. Agent.__init__ reloads SESSIONS_DIR.glob('*.json') (12381) into self.histories keyed by f.stem, and a carry sidecar is written as <safe>.carry.json (10739-10741, saved 10766-10769), so histories['x.carry'] holds a dict. No iteration of histories exists today (init, _history, _trim_history, reset all key in), so it is dead memory - and a trap for the next for-k loop, which search_sessions already documents for these same sidecars (8578-8586).",
-      "gate": "done - closed on wave1-fixes (b122f6c); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (b122f6c), merged to main in the 1.0.41 batch. the loader glob skips *.carry.json. Audited and fixed: CONFIRMED 2026-09-29. Agent.__init__ reloads SESSIONS_DIR.glob('*.json') (12381) into self.histories keyed by f.stem, and a carry sidecar is written as <safe>.carry.json (10739-10741, saved 10766-10769), so histories['x.carry'] holds a dict. No iteration of histories exists today (init, _history, _trim_history, reset all key in), so it is dead memory - and a trap for the next for-k loop, which search_sessions already documents for these same sidecars (8578-8586).",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-15-locks-growth",
       "title": "Agent.locks grows for the life of the process",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "b122f6c"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (b122f6c). reset() pops the session's lock when it is not held (a held one is left alone - an abandoned worker may still own it). Audited and fixed: CONFIRMED 2026-09-29. _lock does self.locks.setdefault(key, threading.Lock()) (12404-12405) and nothing anywhere removes a key: reset() pops histories, model_overrides, carry, run_state, reveals and spills but not locks (14669-14698). The finding misses the punchline: delegate_task mints sub-<epoch> and calls AGENT.reset(key) on it (8690, 8720) - the throwaway-session call is exactly the one that should reclaim the lock and does not.",
-      "gate": "done - closed on wave1-fixes (b122f6c); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (b122f6c), merged to main in the 1.0.41 batch. reset() pops the session's lock when it is not held (a held one is left alone - an abandoned worker may still own it). Audited and fixed: CONFIRMED 2026-09-29. _lock does self.locks.setdefault(key, threading.Lock()) (12404-12405) and nothing anywhere removes a key: reset() pops histories, model_overrides, carry, run_state, reveals and spills but not locks (14669-14698). The finding misses the punchline: delegate_task mints sub-<epoch> and calls AGENT.reset(key) on it (8690, 8720) - the throwaway-session call is exactly the one that should reclaim the lock and does not.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-20-double-decorator",
       "title": "tool_remember carries the notes lock twice",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "b122f6c"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (b122f6c). one decorator (the existing race suite pins the lock either way). Audited and fixed: CONFIRMED 2026-09-29 at exactly 7394-7395. Harmless by design: _path_lock hands back one cached _FileLock per path (6437, 654) and _FileLock is reentrant per thread, and its own docstring names this incident (6307-6309). Pure cruft - but the cost of leaving it is that a future reader cannot tell the redundancy was intentional.",
-      "gate": "done - closed on wave1-fixes (b122f6c); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (b122f6c), merged to main in the 1.0.41 batch. one decorator (the existing race suite pins the lock either way). Audited and fixed: CONFIRMED 2026-09-29 at exactly 7394-7395. Harmless by design: _path_lock hands back one cached _FileLock per path (6437, 654) and _FileLock is reentrant per thread, and its own docstring names this incident (6307-6309). Pure cruft - but the cost of leaving it is that a future reader cannot tell the redundancy was intentional.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-17-ask-vs-abandon",
       "title": "ask_user_wait_seconds and stall_abandon_minutes are never compared",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "f115855"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (f115855). doctor reports the pair when the ask cap exceeds the abandon window, and stays silent with the watchdog disabled. Audited and fixed: CONFIRMED 2026-09-29. The ask cap is min(ask_user_wait_seconds or 120, 900) (9230-9236) and abandon is stall_abandon_minutes or 20 (452), and nothing validates the pair: config set checks only dotted-key shape, secret names and boolean types (20759-20860); validate_startup_config checks chat-lane preconditions only (21584-21700); doctor has no cross-key check (20450-20623). Defaults are safe (120 s vs 20 min). A run parked on a human whose cap exceeds the abandon is cancelled mid-question (17027 sets the run's events, ask_operator returns stopped at 9404-9410). Note for the fix: with the watchdog disabled (stall_abandon_minutes <= 0, 16552) there is nothing to clamp against.",
-      "gate": "done - closed on wave1-fixes (f115855); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (f115855), merged to main in the 1.0.41 batch. doctor reports the pair when the ask cap exceeds the abandon window, and stays silent with the watchdog disabled. Audited and fixed: CONFIRMED 2026-09-29. The ask cap is min(ask_user_wait_seconds or 120, 900) (9230-9236) and abandon is stall_abandon_minutes or 20 (452), and nothing validates the pair: config set checks only dotted-key shape, secret names and boolean types (20759-20860); validate_startup_config checks chat-lane preconditions only (21584-21700); doctor has no cross-key check (20450-20623). Defaults are safe (120 s vs 20 min). A run parked on a human whose cap exceeds the abandon is cancelled mid-question (17027 sets the run's events, ask_operator returns stopped at 9404-9410). Note for the fix: with the watchdog disabled (stall_abandon_minutes <= 0, 16552) there is nothing to clamp against.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-21-execute-code-doc",
       "title": "the doc says execute_code runs in-process; it runs in a subprocess",
       "state": "closed",
       "anchor": {
-        "file": "docs/tinycmdr-what-it-is.md"
+        "commit": "a343f00"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (a343f00). the table says subprocess; test_measured_doc asserts it in both directions (no in-process claim, and the subprocess call is still there). Audited and fixed: CONFIRMED 2026-09-29. docs/tinycmdr-what-it-is.md:49 advertises 'run Python in-process for parsing, math, log wrangling' while the tool runs [sys.executable, -c, code] (tinycmdr.py:5615) under a timeout. The subprocess is the better design - it is killable and cancel-aware - so the doc undersells it rather than overselling.",
-      "gate": "done - closed on wave1-fixes (a343f00); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (a343f00), merged to main in the 1.0.41 batch. the table says subprocess; test_measured_doc asserts it in both directions (no in-process claim, and the subprocess call is still there). Audited and fixed: CONFIRMED 2026-09-29. docs/tinycmdr-what-it-is.md:49 advertises 'run Python in-process for parsing, math, log wrangling' while the tool runs [sys.executable, -c, code] (tinycmdr.py:5615) under a timeout. The subprocess is the better design - it is killable and cancel-aware - so the doc undersells it rather than overselling.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-22-installer-shasums",
       "title": "the installers never verify the SHA256SUMS they ship beside",
       "state": "closed",
       "anchor": {
-        "file": "install/install-tinycmdr.sh"
+        "commit": "c92b750"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (c92b750). install.sh fetches SHA256SUMS, picks this asset's line and refuses a corrupt or truncated transfer before unpacking; no sums file, or one that omits the asset, is refused too, with TINYCMDR_NO_SUMS=1 as the deliberate way past. Audited and fixed: CONFIRMED 2026-09-29. Neither install.sh nor install/install-tinycmdr.sh mentions SHA256SUMS, sha256 or shasum anywhere, so the curl-into-bash path - the one the README leads with - unpacks whatever arrived while the README's sha256sum -c step stays manual. Releases are unsigned, so the sums only catch corruption or truncation; that is exactly the case the pipe-to-shell path handles worst.",
-      "gate": "done - closed on wave1-fixes (c92b750); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (c92b750), merged to main in the 1.0.41 batch. install.sh fetches SHA256SUMS, picks this asset's line and refuses a corrupt or truncated transfer before unpacking; no sums file, or one that omits the asset, is refused too, with TINYCMDR_NO_SUMS=1 as the deliberate way past. Audited and fixed: CONFIRMED 2026-09-29. Neither install.sh nor install/install-tinycmdr.sh mentions SHA256SUMS, sha256 or shasum anywhere, so the curl-into-bash path - the one the README leads with - unpacks whatever arrived while the README's sha256sum -c step stays manual. Releases are unsigned, so the sums only catch corruption or truncation; that is exactly the case the pipe-to-shell path handles worst.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-09-batch-closure-binding",
       "title": "a zombie batch worker writes into a later turn's results",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "f9820ba"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (f9820ba). the four per-turn buffers ride in as default arguments, so a late worker can only write into its own turn's list. Pinned source-level: the batch deadline is ~440s, so the race cannot be driven in a test; the suite already pins that worker's stop guard the same way. Audited and fixed: CONFIRMED 2026-09-29, narrower than described. work(i, tc) is a nested def in the same frame as the per-turn buffers (14155-14160) and the for-loop creates no scope, so every turn's closure shares one cell; ex.shutdown(wait=False, cancel_futures=True) (14299) deliberately lets a hung worker outlive its batch, and cancel_futures only cancels not-yet-started ones. The later list is live only until its own batch completes (roughly its own duration), and the concrete damage is an orphan tool message plus '[HARNESS: no result was recorded for this call...]' padding for the current call (12203, 12240) - with an IndexError if the stale index exceeds the later list's length.",
-      "gate": "done - closed on wave1-fixes (f9820ba); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (f9820ba), merged to main in the 1.0.41 batch. the four per-turn buffers ride in as default arguments, so a late worker can only write into its own turn's list. Pinned source-level: the batch deadline is ~440s, so the race cannot be driven in a test; the suite already pins that worker's stop guard the same way. Audited and fixed: CONFIRMED 2026-09-29, narrower than described. work(i, tc) is a nested def in the same frame as the per-turn buffers (14155-14160) and the for-loop creates no scope, so every turn's closure shares one cell; ex.shutdown(wait=False, cancel_futures=True) (14299) deliberately lets a hung worker outlive its batch, and cancel_futures only cancels not-yet-started ones. The later list is live only until its own batch completes (roughly its own duration), and the concrete damage is an orphan tool message plus '[HARNESS: no result was recorded for this call...]' padding for the current call (12203, 12240) - with an IndexError if the stale index exceeds the later list's length.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-18-volatile-context-writes",
       "title": "prompt assembly can write notes.md (and measurement can too)",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "84bbb4f"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (84bbb4f). the read path no longer calls curate_notes: it bounds what the PROMPT sees (newest cap chars, with a marker) and leaves the file byte-identical; the write path is unchanged. Audited and fixed: CONFIRMED 2026-09-29, with reach understated. volatile_context() calls curate_notes('prompt over budget') and re-reads the file when notes exceed the cap (11547-11551); curation is safe today (whole read-modify-write under the notes lock, 7301-7305). What the finding misses is that volatile_context() is also called purely to ESTIMATE: compaction (12818) and status/estimation paths (1447, 18794), so a disk write plus an inter-process flock can fire from measurement, not only assembly. Trigger is abnormal only (notes are bounded at write time).",
-      "gate": "done - closed on wave1-fixes (84bbb4f); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (84bbb4f), merged to main in the 1.0.41 batch. the read path no longer calls curate_notes: it bounds what the PROMPT sees (newest cap chars, with a marker) and leaves the file byte-identical; the write path is unchanged. Audited and fixed: CONFIRMED 2026-09-29, with reach understated. volatile_context() calls curate_notes('prompt over budget') and re-reads the file when notes exceed the cap (11547-11551); curation is safe today (whole read-modify-write under the notes lock, 7301-7305). What the finding misses is that volatile_context() is also called purely to ESTIMATE: compaction (12818) and status/estimation paths (1447, 18794), so a disk write plus an inter-process flock can fire from measurement, not only assembly. Trigger is abnormal only (notes are bounded at write time).",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-19-cloud-window-preset",
       "title": "a cloud endpoint is driven at an assumed 8k window",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "2f46e9c"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (2f46e9c). doctor names the lever for a non-LAN endpoint on an assumed window (llm.max_context_tokens, with the provider's documented window), setup says the same thing where it configures such an endpoint, and config.example.json's window_profiles comment now says a band CAPS character budgets and never widens the window. Kept deliberately: no second log warning (the existing one already names the key), and no window_profiles behaviour change - it cannot widen a window. Residual: a genuinely unreachable non-LAN endpoint now gets the window advice instead of the old did-not-answer line; the wording is neutral about which case it is. Audited and fixed: PARTIAL 2026-09-29. Detection fails on OpenAI-style endpoints (no max_model_len, no /props), so the envelope takes budget=8000, reply=min(cfg_max or 2048, 2048) (12638-12639) - the numbers are right. Two corrections: it is not silent (log.warning 12641 names llm.max_context_tokens, and doctor reports the endpoint as NO ANSWER with a problem, 20532-20535), and the suggested fix is misaimed - window_profiles caps character budgets by detected window band and cannot widen the assumed window; only llm.max_context_tokens can. Side effect worth knowing: the example config's 16384 band then applies small-model character caps to a cloud user.",
-      "gate": "done - closed on wave1-fixes (2f46e9c); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (2f46e9c), merged to main in the 1.0.41 batch. doctor names the lever for a non-LAN endpoint on an assumed window (llm.max_context_tokens, with the provider's documented window), setup says the same thing where it configures such an endpoint, and config.example.json's window_profiles comment now says a band CAPS character budgets and never widens the window. Kept deliberately: no second log warning (the existing one already names the key), and no window_profiles behaviour change - it cannot widen a window. Residual: a genuinely unreachable non-LAN endpoint now gets the window advice instead of the old did-not-answer line; the wording is neutral about which case it is. Audited and fixed: PARTIAL 2026-09-29. Detection fails on OpenAI-style endpoints (no max_model_len, no /props), so the envelope takes budget=8000, reply=min(cfg_max or 2048, 2048) (12638-12639) - the numbers are right. Two corrections: it is not silent (log.warning 12641 names llm.max_context_tokens, and doctor reports the endpoint as NO ANSWER with a problem, 20532-20535), and the suggested fix is misaimed - window_profiles caps character budgets by detected window band and cannot widen the assumed window; only llm.max_context_tokens can. Side effect worth knowing: the example config's 16384 band then applies small-model character caps to a cloud user.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-16-endpoint-keyed-envelope",
       "title": "the envelope is measured against the primary endpoint and reused on failover",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "f1047ea"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (f1047ea). _endpoint_window caches per server root with a per-entry TTL, _envelope is valid only for the same session AND endpoint, each failover request is sized to the endpoint that gets it (new _fit_payload, which skips the primary so the server prefix cache is untouched), ContextOverflow carries the endpoint that rejected it, and _force_shrink now targets the FAILING endpoint's window. Merged with F-05 and repaired in 03b8bc4: the TTL moved to the monotonic clock, so the two tests that back-dated a cache entry with time.time() had to be moved to now_mono() (they failed in the gate only, which is the semantic half of a merge no textual conflict shows). Audited and fixed: PARTIAL 2026-09-29, and worse than described. _endpoint_window probes CONFIG['llm']['base_url'] only (12545-12557) and the envelope cache is keyed by session (12582-12583), computed once before the endpoint loop (12863, cap at 12955), so a fallback inherits the primary's window, reply and budget. The self-heal is not reliable: _force_shrink targets self._context_budget(key) * 0.5 (12843-12850) - the PRIMARY budget - and the run loop retries once (13711), so 32k primary to 8k fallback can still die after shrinking.",
-      "gate": "done - closed on wave1-fixes (f1047ea); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (f1047ea), merged to main in the 1.0.41 batch. _endpoint_window caches per server root with a per-entry TTL, _envelope is valid only for the same session AND endpoint, each failover request is sized to the endpoint that gets it (new _fit_payload, which skips the primary so the server prefix cache is untouched), ContextOverflow carries the endpoint that rejected it, and _force_shrink now targets the FAILING endpoint's window. Merged with F-05 and repaired in 03b8bc4: the TTL moved to the monotonic clock, so the two tests that back-dated a cache entry with time.time() had to be moved to now_mono() (they failed in the gate only, which is the semantic half of a merge no textual conflict shows). Audited and fixed: PARTIAL 2026-09-29, and worse than described. _endpoint_window probes CONFIG['llm']['base_url'] only (12545-12557) and the envelope cache is keyed by session (12582-12583), computed once before the endpoint loop (12863, cap at 12955), so a fallback inherits the primary's window, reply and budget. The self-heal is not reliable: _force_shrink targets self._context_budget(key) * 0.5 (12843-12850) - the PRIMARY budget - and the run loop retries once (13711), so 32k primary to 8k fallback can still die after shrinking.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-06-lane-lifecycle-parity",
       "title": "watchdog, steering and cancel are per-lane, so a new lane inherits none of them",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "390c46f"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (390c46f). drive_run now opens a session-keyed run record for EVERY run (RunControl/RunRegistry): watchdog activity, a cancel event and a steering queue come by construction. Telegram steers a mid-run message instead of queueing it and its workers exit after an idle wait; the scheduler needed no change at all - drive_run supplies what it lacked. Mattermost keeps its own watchdog (the stronger guard: it also reclaims the wedged worker) and registers watch=False, so nothing is watched twice. Deliberately kept: Mattermost's own active/_stall_tick/_stop_channel. Residual: a watchdog abandon on a channel-less run (Telegram) logs instead of posting, and surfaces through the run's own stopped answer. Audited and fixed: CONFIRMED structurally 2026-09-29. Mattermost owns the watchdog registration (active at 16622, _stall_tick 17016), the cancel plumbing (16446, 17175) and steering (17449); Telegram calls drive_run with a cancel_event and no steer_cb (18590), so a mid-run message queues instead of steering - which contradicts README:110 and 137; and the scheduler passes neither (9160-9163). Telegram workers also block on q.get() with no timeout (18564) where Mattermost's exit after 10 s idle (16967-16969). One correction: the CLI lane does have steering and cancel (19806-19814), so 'only Mattermost' should read 'only Mattermost and the CLI'. drive_run consolidated the CALLBACK half only (15764-15765); this is the lifecycle half, and F-04b and F-11 are instances of it.",
-      "gate": "done - closed on wave1-fixes (390c46f); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (390c46f), merged to main in the 1.0.41 batch. drive_run now opens a session-keyed run record for EVERY run (RunControl/RunRegistry): watchdog activity, a cancel event and a steering queue come by construction. Telegram steers a mid-run message instead of queueing it and its workers exit after an idle wait; the scheduler needed no change at all - drive_run supplies what it lacked. Mattermost keeps its own watchdog (the stronger guard: it also reclaims the wedged worker) and registers watch=False, so nothing is watched twice. Deliberately kept: Mattermost's own active/_stall_tick/_stop_channel. Residual: a watchdog abandon on a channel-less run (Telegram) logs instead of posting, and surfaces through the run's own stopped answer. Audited and fixed: CONFIRMED structurally 2026-09-29. Mattermost owns the watchdog registration (active at 16622, _stall_tick 17016), the cancel plumbing (16446, 17175) and steering (17449); Telegram calls drive_run with a cancel_event and no steer_cb (18590), so a mid-run message queues instead of steering - which contradicts README:110 and 137; and the scheduler passes neither (9160-9163). Telegram workers also block on q.get() with no timeout (18564) where Mattermost's exit after 10 s idle (16967-16969). One correction: the CLI lane does have steering and cancel (19806-19814), so 'only Mattermost' should read 'only Mattermost and the CLI'. drive_run consolidated the CALLBACK half only (15764-15765); this is the lifecycle half, and F-04b and F-11 are instances of it.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-11-scheduler-cancel",
       "title": "a scheduled run has no cancel event and never enters the watchdog",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "390c46f"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (390c46f). closed by F-06 - a scheduled run now has a cancel event and a watchdog record, so a channel /stop reaches it. Scheduler._fire was not touched: it already passes a channel id, and drive_run now supplies the rest. Audited and fixed: CONFIRMED 2026-09-29, harm overstated. Scheduler._fire calls drive_run with no cancel_event and no steer_cb (9160-9163) and never touches dispatcher.active (set only at 16622), so _stall_tick never sees the run and a channel /stop finds nothing (17173-17177). Correction: manifest drop-in tools ARE bounded by their own per-call timeout (10144-10168 through run_capture's deadline, 4513-4531); what is unbounded is a native in-process drop-in (10059-10061) or any other in-process hang, because max_minutes is only tested at turn boundaries (13585, 13876, 13926, 14031, 14495).",
-      "gate": "done - closed on wave1-fixes (390c46f); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (390c46f), merged to main in the 1.0.41 batch. closed by F-06 - a scheduled run now has a cancel event and a watchdog record, so a channel /stop reaches it. Scheduler._fire was not touched: it already passes a channel id, and drive_run now supplies the rest. Audited and fixed: CONFIRMED 2026-09-29, harm overstated. Scheduler._fire calls drive_run with no cancel_event and no steer_cb (9160-9163) and never touches dispatcher.active (set only at 16622), so _stall_tick never sees the run and a channel /stop finds nothing (17173-17177). Correction: manifest drop-in tools ARE bounded by their own per-call timeout (10144-10168 through run_capture's deadline, 4513-4531); what is unbounded is a native in-process drop-in (10059-10061) or any other in-process hang, because max_minutes is only tested at turn boundaries (13585, 13876, 13926, 14031, 14495).",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-05-monotonic-clock",
       "title": "every duration is wall-clock, so a suspend abandons healthy runs",
       "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "ad6562a"
       },
-      "detail": "Closed 2026-09-29 on branch wave1-fixes (ad6562a). now_mono()/now_wall() helpers; every ELAPSED calculation moved to monotonic - the stall watchdog and its records, the run budget, _post_watchdog, run_capture, the ask wait, the window/envelope TTLs, the new RunRegistry. Cron fire times, persisted/displayed timestamps and last_seen stay wall-clock, and test_catchup (which pins that) stays green. Falsified before/after: the old code abandoned a healthy run after a simulated 30-minute suspend (wall +1800s, monotonic frozen) and never reached the budget after a backward wall step; the fixed code does neither. Audited and fixed: CONFIRMED 2026-09-29, severity re-scoped. Counts exact: 102 time.time() calls by grep, zero monotonic or perf_counter. Deadlines really are wall clock - _post_watchdog (1707-1723), run_capture (4513-4529), ask waits (9397-9400), WINDOW_TTL (1599 against 1431, 12553, 12581), the run budget (13589 vs 13876/13926/14031/14495) - and _stall_tick's quiet is now minus a wall-clock last (17020-17023, last touched at 16558/16622). But the practical arm is not NTP stepping (slewed, corrected in seconds): it is suspend/resume on this laptop, where one 30-minute sleep makes every active run look wedged and gets it abandoned and cancelled. The fix is a per-site audit, not a helper swap - cron fire times (9100, 9061-9062) and persisted or displayed timestamps (state.json at, last_seen) must stay wall-clock, and test_catchup actively pins that.",
-      "gate": "done - closed on wave1-fixes (ad6562a); the branch is not merged to main and no release carries it yet"
+      "detail": "Fixed 2026-09-29 (ad6562a), merged to main in the 1.0.41 batch. now_mono()/now_wall() helpers; every ELAPSED calculation moved to monotonic - the stall watchdog and its records, the run budget, _post_watchdog, run_capture, the ask wait, the window/envelope TTLs, the new RunRegistry. Cron fire times, persisted/displayed timestamps and last_seen stay wall-clock, and test_catchup (which pins that) stays green. Falsified before/after: the old code abandoned a healthy run after a simulated 30-minute suspend (wall +1800s, monotonic frozen) and never reached the budget after a backward wall step; the fixed code does neither. Audited and fixed: CONFIRMED 2026-09-29, severity re-scoped. Counts exact: 102 time.time() calls by grep, zero monotonic or perf_counter. Deadlines really are wall clock - _post_watchdog (1707-1723), run_capture (4513-4529), ask waits (9397-9400), WINDOW_TTL (1599 against 1431, 12553, 12581), the run budget (13589 vs 13876/13926/14031/14495) - and _stall_tick's quiet is now minus a wall-clock last (17020-17023, last touched at 16558/16622). But the practical arm is not NTP stepping (slewed, corrected in seconds): it is suspend/resume on this laptop, where one 30-minute sleep makes every active run look wedged and gets it abandoned and cancelled. The fix is a per-site audit, not a helper swap - cron fire times (9100, 9061-9062) and persisted or displayed timestamps (state.json at, last_seen) must stay wall-clock, and test_catchup actively pins that.",
+      "gate": "done - merged to main in the 1.0.41 batch; maintenance/ledger-tag.py states the release claim on this anchor when the tag exists"
     },
     {
       "id": "F-10-zip-slip",
