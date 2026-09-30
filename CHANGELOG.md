@@ -18,6 +18,19 @@ Fixed
   the wheel themselves - three lines a notch, with `TINYCMDR_APP_MOUSE=1` as before. Paging, the
   arrows and `Ctrl-Home` share one rule, so `_top` can no longer point past the tail. The app's
   keys are documented in the README.
+- **An item can be taken out of the app: `Ctrl-Y`.** The pane paints frames, so native selection
+  could only reach the box drawing and the wrap points - never a card's own words, which is what a
+  reader wants to paste somewhere else. `Ctrl-Y` copies the newest transcript item as its own text
+  (the answer's markdown, a tool call, a tool result, a question) and pressing it again walks back
+  through the transcript one item at a time, while the status line names what landed and where it
+  sat; `Ctrl-B` copies the whole transcript. The text goes to every clipboard door the host has -
+  its own tool (`pbcopy`, `clip.exe`, `wl-copy`/`xclip`/`xsel`), the terminal over OSC 52 (the only
+  clipboard reachable with no helper, and it travels over ssh), and `tinycmdr-copy.txt` in the temp
+  directory at mode 0600, because a terminal that refuses OSC 52 says nothing at all. Consecutive
+  printed lines (help, status, `/tinycmdr tools`) coalesce into one item, so a command's output is
+  one step of the walk rather than one per line. Measured on a real pty: `Ctrl-Y` over the `/help`
+  block put 1,377 characters on the host clipboard, read back with `pbpaste`, and the file was
+  `-rw-------`.
 
 ## [1.0.44] - 2026-09-30
 

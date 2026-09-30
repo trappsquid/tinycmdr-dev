@@ -115,6 +115,14 @@ own scrollback is not there while it runs - the app's keys are the way back up. 
 scrolls the transcript too, but only with capture on: `TINYCMDR_APP_MOUSE=1 tinycmdr`. Capture is
 off by default so native selection and copy keep working without a modifier key.
 
+To take an item OUT of the app, `Ctrl-Y` copies the newest one - the answer, a tool call, a tool
+result, a question - as its own text rather than the frame it was painted in, and pressing it again
+walks back through the transcript an item at a time; the status line names what landed and where it
+was. `Ctrl-B` copies the whole transcript. The text goes to every clipboard door this host has: its
+own tool (`pbcopy`, `clip`, `wl-copy`/`xclip`), the terminal over OSC 52 (which works through ssh,
+and which tmux needs `set-clipboard on` for), and `tinycmdr-copy.txt` in the temp directory, mode
+0600, because a terminal that refuses OSC 52 says nothing at all.
+
 A chat lane is where a working agent is easiest to watch: tool calls stream in as they happen,
 and a message sent mid-run steers the run instead of queueing behind it. Neither lane is
 primary: whichever token you configure is the lane that runs, and both share the same

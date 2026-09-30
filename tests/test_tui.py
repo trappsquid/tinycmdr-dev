@@ -13,8 +13,10 @@ that do not need them.
 """
 import importlib.util
 import io
+import base64
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -461,8 +463,8 @@ _d4.drop(_r4)
 _d4._close()
 _app4.card("final", "| Chip | Bandwidth |\n|---|---|\n| M4 Ultra | 800 GB/s |\n")
 check("--app replaces the run's whole draft region, first draw included (P-02)",
-      not any(k == "ansi" and "M4 Ultra" in str(p) for k, p in _app4.items),
-      [str(p)[:70] for k, p in _app4.items])
+      not any(it[0] == "ansi" and "M4 Ultra" in str(it[1]) for it in _app4.items),
+      [str(it[1])[:70] for it in _app4.items])
 
 # --- round-4: no blank band around a table, and nothing trailing (T-05) ----------
 _t5 = fb.TuiScreen(out=io.StringIO(), width=90, tier="truecolor")
@@ -788,6 +790,79 @@ if HAVE_APP:
               and _walk["wheel-up-rail"] == (_last - _pane_h - 6, False), _observed[11:13])
         check("--app: ...and back down a notch", _walk["wheel-down-body"] == (_last - _pane_h - 3, False),
               _observed[13:])
+
+        # copying an item OUT of the pane: the raw text of a card, not the frame it was
+        # painted in. Driven through the real Application so the KEYS are graded, with a
+        # recording output so the OSC 52 sequence is read back byte for byte. The host's own
+        # clipboard tool is stubbed here on purpose: it would clobber the developer's real
+        # clipboard, and the smoke run on a pty is where that door is exercised for real.
+        _saved_copy_file, _saved_helper = fb.COPY_FILE, fb.copy_via_host_tool
+        _copy_dir = Path(tempfile.mkdtemp(prefix="fbcopy-"))
+        _copy_file = _copy_dir / "copy.txt"
+        fb.COPY_FILE = _copy_file
+        _helper_calls = []
+        fb.copy_via_host_tool = lambda text: (_helper_calls.append(len(text)), ("stub-tool", True))[1]
+        try:
+            check("the OSC 52 escape is the terminal-clipboard one, base64 and all",
+                  fb.osc52_sequence("hi") == "\x1b]52;c;aGk=\x1b\\", fb.osc52_sequence("hi"))
+            check("the host clipboard tool picked for this platform exists or is a known name",
+                  all(isinstance(c, list) and c for c in fb.clipboard_commands()),
+                  fb.clipboard_commands())
+
+            class _RecOut(_DummyOutput):
+                def __init__(self):
+                    super().__init__()
+                    self.raw = []
+
+                def write_raw(self, data):
+                    self.raw.append(data)
+
+            _cscr = fb.AppScreen(colour=False, tier="truecolor")
+            _cscr.card("tool", "`shell` echo hi")
+            _cscr.card("tool_done", "-> hi (2 chars)")
+            _cscr.card("final", "# Answer\n\nbody of the answer")
+            _cscr._invalidate()
+            _rec = _RecOut()
+            _cscr.app.output = _rec
+            _copies = []
+
+            def _feed_copy():
+                _time.sleep(0.5)
+                for _key in ("\x19", "\x19", "\x19", "\x02"):
+                    _keys4.send_text(_key)
+                    _time.sleep(0.4)
+                    _copies.append((_cscr.status,
+                                    _copy_file.read_text(encoding="utf-8")
+                                    if _copy_file.exists() else ""))
+                _keys4.send_text("\x11")
+                _time.sleep(0.3)
+
+            with _pipe_input() as _keys4:
+                _cscr.app.input = _keys4
+                _threading.Thread(target=_feed_copy, daemon=True).start()
+                _cscr.app.run()
+            _b64 = [s.split(";", 2)[2].rstrip("\x1b\\") for s in _rec.raw if s.startswith("\x1b]52;c;")]
+            _osc = [base64.b64decode(p).decode("utf-8") for p in _b64]
+            check("--app: Ctrl-Y copies the newest item's own text, not the painted frame",
+                  _copies[0][1] == "# Answer\n\nbody of the answer"
+                  and _osc and _osc[0] == "# Answer\n\nbody of the answer", (_copies[0], _osc[:1]))
+            check("--app: ...and the status line names the item and where it sits",
+                  _copies[0][0].startswith("copied answer 3/3 -")
+                  and "chars" in _copies[0][0], _copies[0][0])
+            check("--app: Ctrl-Y again walks back, item by item, to the call",
+                  [_c[1] for _c in _copies[:3]] == ["# Answer\n\nbody of the answer",
+                                                    "-> hi (2 chars)", "`shell` echo hi"],
+                  [_c[1] for _c in _copies[:3]])
+            check("--app: Ctrl-B copies the whole transcript, in the order it was drawn",
+                  _copies[3][1] == "`shell` echo hi\n\n-> hi (2 chars)\n\n# Answer\n\nbody of the answer",
+                  _copies[3][1])
+            check("--app: the fallback file is the reader's own, 0600",
+                  (_copy_file.stat().st_mode & 0o777) == 0o600, oct(_copy_file.stat().st_mode))
+            check("--app: the host's clipboard tool is offered the same text",
+                  _helper_calls and _helper_calls[-1] == len(_copies[3][1]), _helper_calls)
+        finally:
+            fb.COPY_FILE, fb.copy_via_host_tool = _saved_copy_file, _saved_helper
+            shutil.rmtree(_copy_dir, ignore_errors=True)
 
         # all the console's prints land in the pane, never at the real stdout
         _sink = fb._AppStdout(app_screen_tmp)

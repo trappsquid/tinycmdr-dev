@@ -16405,7 +16405,7 @@ class TuiScreen:
         self.shown.append(renderable)
         return buf.getvalue().rstrip("\n")
 
-    def _put(self, ansi, end="\n"):
+    def _put(self, ansi, end="\n", raw=None, kind=None):
         if not self._plain_fallback:
             try:
                 from prompt_toolkit import print_formatted_text
@@ -16416,17 +16416,21 @@ class TuiScreen:
                 self._plain_fallback = True
         print(ansi, file=self.out, end=end, flush=True)
 
-    def _draw(self, renderable):
+    def _draw(self, renderable, raw=None, kind=None):
         """One renderable, drawn. The inline screen paints it and hands it to the
-        terminal; `--app` keeps it and repaints the pane (AppScreen overrides this)."""
-        self._put(self._ansi(renderable))
+        terminal; `--app` keeps it and repaints the pane (AppScreen overrides this).
+
+        `raw` is the plain text this renderable was built FROM, kept so a reader can copy
+        the words rather than the frame they were painted in (AppScreen.copy_item).
+        """
+        self._put(self._ansi(renderable), raw=raw, kind=kind)
 
     def echo_ansi(self, text):
         """A finished, already-painted line (`cli_out`): straight through inline, one
         closed item on a repaintable screen."""
         self._put(text)
 
-    def _panel(self, title, title_style, border_style, body, foot=""):
+    def _panel(self, title, title_style, border_style, body, foot="", raw=None, kind=None):
         from rich.panel import Panel
         from rich.text import Text
         head = Text(title, style=title_style or "bold")
@@ -16434,7 +16438,7 @@ class TuiScreen:
             head.append("   " + foot, style="dim")
         self._draw(Panel(body, title=head, title_align="left",
                          border_style=border_style, box=self.box, padding=(0, 1),
-                         style=self.surface))
+                         style=self.surface), raw=raw, kind=kind)
 
     # -- the pieces the console asks for -----------------------------------
     def banner(self, title, rows, hint=""):
@@ -16466,7 +16470,7 @@ class TuiScreen:
         if title is None:
             quiet = "dim" if kind in ("checkin", "system", "narration") else style
             label = (self.ellipsis + "  ") if kind == "narration" else ""
-            self._draw(Text("  " + label + text, style=quiet or "default"))
+            self._draw(Text("  " + label + text, style=quiet or "default"), raw=text, kind=kind)
             self._last_was_panel = False
             return
         if title == "answer":
@@ -16495,9 +16499,9 @@ class TuiScreen:
         if title == "answer":
             # the title carries the one accent; the frame stays quiet so the words
             # are the brightest thing on the screen (the brief's §1 and §2)
-            self._panel(title, self.style("title"), style, body, foot)
+            self._panel(title, self.style("title"), style, body, foot, raw=str(text), kind=kind)
         else:
-            self._panel(title, ("bold " + style).strip(), style, body, foot)
+            self._panel(title, ("bold " + style).strip(), style, body, foot, raw=str(text), kind=kind)
 
     def status_line(self, text):
         """The run's own line.
@@ -16922,6 +16926,50 @@ class CliDestination(Destination):
         self._row = None
 
 
+COPY_FILE = Path(tempfile.gettempdir()) / "tinycmdr-copy.txt"
+COPY_OSC_LIMIT = 100_000         # characters; a terminal will take a clipboard payload this big
+
+
+def clipboard_commands():
+    """This host's own clipboard tool, best first - the door that needs no terminal support."""
+    if sys.platform == "darwin":
+        return (["pbcopy"],)
+    if os.name == "nt":
+        return (["clip"],)
+    return (["wl-copy"], ["xclip", "-selection", "clipboard"],
+            ["xsel", "--clipboard", "--input"])
+
+
+def copy_via_host_tool(text):
+    """(tool, ok): pipe the text into the host's clipboard tool. Never raises."""
+    import shutil
+    for cmd in clipboard_commands():
+        if shutil.which(cmd[0]) is None:
+            continue
+        try:
+            done = subprocess.run(cmd, input=text.encode("utf-8"), timeout=5,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:                                        # noqa: BLE001
+            log.debug("clipboard tool failed: %s", " ".join(cmd), exc_info=True)
+            continue
+        if done.returncode == 0:
+            return cmd[0], True
+    return "", False
+
+
+def osc52_sequence(text, limit=COPY_OSC_LIMIT):
+    """The escape that puts text on the clipboard of the TERMINAL the app runs in.
+
+    OSC 52 is the one clipboard a program can reach with no helper binary, and it travels
+    through ssh and tmux - which is why a TUI uses it at all. A terminal that refuses it
+    (Terminal.app, tmux without `set-clipboard on`, a bare screen) ignores the sequence and
+    says NOTHING, so it is never the only door: the copy also goes to the host's own tool
+    and to a file, and the status line names what happened.
+    """
+    payload = base64.b64encode(text[:limit].encode("utf-8")).decode("ascii")
+    return "\x1b]52;c;%s\x1b\\" % payload
+
+
 def pane_control(text, scroll):
     """A FormattedTextControl for `--app`'s panes that answers the wheel itself.
 
@@ -16991,6 +17039,7 @@ class AppScreen(TuiScreen):
         self._width_cache = None
         self._open = False         # a streamed draft line is still growing
         self._narration_from = None   # the run's draft region: items from here on
+        self._copy_at = None       # where Ctrl-Y's walk through the transcript stands
         self._top = 0              # first transcript line the pane shows
         self.autofollow = True
         self._final = ""           # the last answer, for the reprint on exit
@@ -17023,8 +17072,8 @@ class AppScreen(TuiScreen):
         return max(3, rows - 7)
 
     def _render_item(self, item, width):
-        kind, payload = item
-        if kind == "ansi":
+        tag, payload = item[0], item[1]
+        if tag == "ansi":
             return payload.split("\n")
         con = self._Console(file=io.StringIO(), force_terminal=True, width=width,
                             color_system=TUI_COLOR_SYSTEM.get(self.tier, "truecolor"),
@@ -17052,17 +17101,24 @@ class AppScreen(TuiScreen):
             self._flat_of = -1
 
     # -- TuiScreen's draws land here instead of on a terminal ---------------
-    def _draw(self, renderable):
+    def _draw(self, renderable, raw=None, kind=None):
         self.shown.append(renderable)
-        self.items.append(("r", renderable))
+        self.items.append(("r", renderable, raw, kind))
         self._open = False
+        self._new_item()
         self._invalidate()
 
-    def _put(self, ansi):
-        self.items.append(("ansi", ansi))
+    def _put(self, ansi, end="\n", raw=None, kind=None):
+        del end
+        self.items.append(("ansi", ansi, raw, kind))
         self._open = False
         self._narration_from = None    # a finished line is not the run's draft region
+        self._new_item()
         self._invalidate()
+
+    def _new_item(self):
+        """A new item ends a copy walk: Ctrl-Y starts from the newest one again."""
+        self._copy_at = None
 
     def raw_ansi(self, text):
         """A growing line (the streamed draft): ONE item, repainted, until the
@@ -17071,12 +17127,12 @@ class AppScreen(TuiScreen):
             self._open = False         # the newline that closes the line
             return
         if self._open and self.items and self.items[-1][0] == "ansi":
-            self.items[-1] = ("ansi", self.items[-1][1] + text)
+            self.items[-1] = ("ansi", self.items[-1][1] + text, None, None)
             self._drop_rendered_tail()
         else:
             if self._narration_from is None:
                 self._narration_from = len(self.items)
-            self.items.append(("ansi", text))
+            self.items.append(("ansi", text, None, None))
             self._open = True
         self._invalidate()
 
@@ -17121,10 +17177,21 @@ class AppScreen(TuiScreen):
     def write_line(self, line):
         """One finished line from a plain print(): a print at stdout while an
         alternate screen is up corrupts the display, and the brief's rule is that
-        nothing may exist only in the rich render."""
-        self.items.append(("ansi", str(line)))
+        nothing may exist only in the rich render.
+
+        Consecutive prints coalesce into ONE item, so a command's output (help, status,
+        /tinycmdr tools) is one thing to copy and one step on Ctrl-Y's walk rather than one
+        item per line.
+        """
+        if self.items and self.items[-1][0] == "ansi" and self.items[-1][3] == "output":
+            kept = (self.items[-1][2] or "") + "\n" + str(line)
+            self.items[-1] = ("ansi", self.items[-1][1] + "\n" + str(line), kept, "output")
+            self._drop_rendered_tail()
+        else:
+            self.items.append(("ansi", str(line), str(line), "output"))
         self._open = False
         self._narration_from = None
+        self._new_item()
         self._invalidate()
 
     def print_final_inline(self):
@@ -17132,6 +17199,86 @@ class AppScreen(TuiScreen):
         the terminal's own scrollback, so nothing is lost on exit."""
         if self._final.strip():
             print(answer_block(self._final))
+
+    # -- taking an item OUT of the pane -------------------------------------
+    def _copy_targets(self):
+        """The items a reader can copy: the plain text each one was drawn from.
+
+        The pane paints frames for a terminal, and native selection can only reach what
+        was painted - the box drawing, the wrap points, the rail beside it. What a reader
+        wants on the clipboard is the text UNDERNEATH (the answer's markdown, a tool's own
+        output). An item drawn from no text of its own - a spacer, the streamed draft that
+        the answer card replaces - has nothing to offer and is skipped.
+        """
+        return [it for it in self.items if (it[2] or "").strip()]
+
+    def copy_item(self):
+        """Ctrl-Y: the newest copyable item; press it again for the one before it.
+
+        The walk is what makes "each answer, call or result" reachable without a mouse:
+        the status line names what landed and where in the transcript it was, and any new
+        item resets the walk to the newest.
+        """
+        items = self._copy_targets()
+        if not items:
+            self.status = "nothing to copy yet"
+            return
+        if self._copy_at is None:
+            self._copy_at = len(items) - 1
+        else:
+            self._copy_at = max(0, self._copy_at - 1)
+        raw, kind = items[self._copy_at][2], items[self._copy_at][3]
+        label = (TUI_KINDS.get(kind) or (kind,))[0] or kind or "line"
+        self._copy(raw, "%s %d/%d" % (label, self._copy_at + 1, len(items)))
+
+    def copy_transcript(self):
+        """Ctrl-B: every copyable item, in the order it was drawn."""
+        items = [it[2] for it in self._copy_targets()]
+        if not items:
+            self.status = "nothing to copy yet"
+            return
+        self._copy("\n\n".join(items), "transcript (%d items)" % len(items))
+
+    def _copy(self, text, label):
+        """Through every door this host has, then say which ones opened.
+
+        Three doors, because each fails somewhere the others work: the host's own tool
+        (pbcopy/clip/wl-copy) needs no terminal support; OSC 52 reaches the terminal's
+        clipboard even over ssh; and a file always lands, since a terminal that refuses
+        OSC 52 says nothing at all.
+        """
+        doors = []
+        tool, ok = copy_via_host_tool(text)
+        if ok:
+            doors.append(tool)
+        if self._osc52(text):
+            doors.append("OSC 52")
+        if self._copy_file(text):
+            doors.append("file:%s" % COPY_FILE.name)
+        log.info("copied %s (%d chars) via %s", label, len(text), ", ".join(doors) or "nothing")
+        self.status = "copied %s - %s chars, %s" % (label, "{:,}".format(len(text)),
+                                                   " + ".join(doors) or "nowhere")
+
+    def _osc52(self, text):
+        """Set the terminal's clipboard. Writing raw to the app's own output is the only
+        way to get an escape out while prompt_toolkit owns the screen."""
+        try:
+            self.app.output.write_raw(osc52_sequence(text))
+            self.app.output.flush()
+            return True
+        except Exception:                                            # noqa: BLE001
+            log.debug("OSC 52 write failed", exc_info=True)
+            return False
+
+    def _copy_file(self, text):
+        """The copy that always lands, 0600, at a path the status line names."""
+        try:
+            COPY_FILE.write_text(text, encoding="utf-8")
+            os.chmod(COPY_FILE, 0o600)
+            return True
+        except OSError:
+            log.debug("copy file failed: %s", COPY_FILE, exc_info=True)
+            return False
 
     # -- the app itself -----------------------------------------------------
     def _pane_text(self):
@@ -17314,10 +17461,11 @@ class AppScreen(TuiScreen):
             title()
             title("KEYS")
             value("\u2191\u2193 PgUp/PgDn  scroll")
-            value("Ctrl-Home/End  top/bottom")
+            value("Ctrl-Home/End  ends")
+            value("Ctrl-Y  copy item")
+            value("Ctrl-B  copy all")
             value("wheel needs APP_MOUSE=1")
-            value("Ctrl-C  stop a run")
-            value("Ctrl-Q  quit")
+            value("Ctrl-C stop \u00b7 Ctrl-Q quit")
         except Exception:
             value("(no session yet)")
         return FormattedText(rows)
@@ -17432,6 +17580,19 @@ class AppScreen(TuiScreen):
         @kb.add("c-home")
         def _(event):
             self._scroll_to(0)
+
+        # Copying. Ctrl-Y walks the transcript backwards so an answer, a call, a result or
+        # a question can each be taken out without a mouse; Ctrl-B takes the lot. Both keys
+        # shadow an emacs binding in the composer (yank, backward-char) - the composer's
+        # own paste is bracketed paste and its caret is the arrow keys, so the trade is
+        # deliberate (2026-09-30).
+        @kb.add("c-y")
+        def _(event):
+            self.copy_item()
+
+        @kb.add("c-b")
+        def _(event):
+            self.copy_transcript()
 
         @kb.add("c-end")
         def _(event):
