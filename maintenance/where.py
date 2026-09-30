@@ -268,14 +268,25 @@ def ref_age(path):
 
 
 def origin_facts(path):
-    """Newest tag, main's sha, and when this clone last looked. Local refs only: no network."""
+    """Newest tag, main's sha, when this clone last looked, and how far HEAD is past the tag.
+
+    The last one is the fact a reader needs to answer "is the tree I am looking at released?"
+    without remembering a tag name: `newest_tag` is the nearest tag HEAD can reach, so a tree
+    that is three commits PAST a release still prints that release's name and looks current.
+    Local refs only: no network.
+    """
     has = git_out(path, "rev-parse", "--verify", "-q", "origin/main")
+    newest = git_out(path, "describe", "--tags", "--abbrev=0", "HEAD")
+    ahead = git_out(path, "rev-list", "--count", newest + "..HEAD") if newest else ""
     return {
         "newest_tag": git_out(path, "describe", "--tags", "--abbrev=0", "origin/main")
         if has else "",
         "main": git_out(path, "log", "-1", "--format=%h %s", "origin/main") if has else "",
         "main_sha": git_out(path, "rev-parse", "origin/main") if has else "",
         "fetched_at": ref_age(path),
+        "head": git_out(path, "log", "-1", "--format=%h", "HEAD"),
+        "head_tag": newest,
+        "unreleased": int(ahead) if ahead.strip().isdigit() else None,
     }
 
 
@@ -369,6 +380,16 @@ def render(facts, bots, origin=None, dist=None, github=None, out=sys.stdout):
             w("\nORIGIN (this clone has never fetched - these refs came with the clone)\n")
         w("  newest tag  %s\n" % (origin["newest_tag"] or "-"))
         w("  main        %s\n" % (origin["main"] or "-"))
+        # "Is what I am looking at released?" - the question a drop-in reader asks first, and
+        # the one the tag line above cannot answer on its own: describe names the nearest tag
+        # HEAD can reach, so a tree PAST a release still shows that release's name.
+        if origin.get("unreleased") is not None:
+            w("  this tree   %s - %s\n"
+              % (origin.get("head") or "?",
+                 ("%d commit(s) past %s (UNRELEASED)" % (origin["unreleased"], origin["head_tag"]))
+                 if origin["unreleased"] else
+                 ("at %s (nothing unreleased)" % origin["head_tag"])
+                 if origin.get("head_tag") else "no release tag carries it"))
     if github:
         w("\nLIVE ON GITHUB  (network, read-only - the local refs above are untouched)\n")
         if not github["available"]:

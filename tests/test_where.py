@@ -125,6 +125,27 @@ def main():
         check(f["behind"] == 1,
               f"a clone one commit behind origin reports it ({f['behind']})")
 
+        # ---- is the tree I am looking at RELEASED? ---------------------------
+        # The first question a drop-in reader has (audit, handoff), and one the tag line cannot
+        # answer alone: `git describe` names the nearest tag HEAD can reach, so a tree that is
+        # three commits PAST a release still prints that release's name and looks current.
+        tagged = make_tree(tmp, "tagged", "1.0.0")
+        f = where.origin_facts(str(tagged))
+        check(f["unreleased"] is None and f["head_tag"] == "",
+              "a tree with no tag reports no release claim at all (%s)" % f)
+        git("tag", "v1.0.0", cwd=tagged)
+        f = where.origin_facts(str(tagged))
+        check(f["unreleased"] == 0 and f["head_tag"] == "v1.0.0",
+              "at its tag, nothing is unreleased (%s)" % f)
+        for i in range(3):
+            (tagged / "tracked.txt").write_text("one\n%d\n" % i, encoding="utf-8")
+            git("commit", "-qam", "change %d" % i, cwd=tagged)
+        f = where.origin_facts(str(tagged))
+        check(f["unreleased"] == 3 and f["head_tag"] == "v1.0.0",
+              "three commits past it report 3, and still name that tag (%s)" % f)
+        check(f["head"] == git("rev-parse", "--short", "HEAD", cwd=tagged).strip(),
+              "  and the head sha is the tree's own (%s)" % f)
+
         # ---- a missing tree is reported, not invented -------------------------
         f = where.tree_facts({"role": "backup", "path": str(tmp / "nope"), "git": True})
         check(not f["exists"] and f["version"] == "" and not f["problems"],

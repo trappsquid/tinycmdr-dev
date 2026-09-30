@@ -42,6 +42,25 @@ not authority.
 sweep, Windows subset) -> `bash maintenance/release.sh <notes-file>` from a clean, gated `main`.
 Released numbers are never rebuilt; `CHANGELOG.md` is the long-form record, one section per release.
 
+## Picking this up cold
+
+```bash
+python3 maintenance/where.py --remote                 # roles, running agent, GitHub NOW, and how far
+                                                      # this tree is past the last release
+git log --oneline "$(git describe --tags --abbrev=0)..HEAD"   # on main, not in a release yet
+venv/bin/python tests/test_status.py                  # what is open, anchored to files or commits
+git log -5 --format='%h %s'                           # how the last changes were shaped and written up
+```
+
+What one change looks like here - the last twenty commits are the shape to copy: a topic branch, **one
+commit per finding**, message `scope: what it does` with a body carrying WHY plus the measurement or
+the test that pins it, the ledger item re-anchored to that commit, the gate green, and a changelog
+entry when it is user-facing. `maintenance/release.sh` promotes commit anchors to `expect: tagged`,
+which is why that field - not a note - is the honest answer to "has this shipped?".
+
+The full procedure, including the traps this project has paid for, is
+[`docs/development.md`](docs/development.md) §7.
+
 ## If you were handed a list of findings
 
 Each item becomes an entry in `STATUS.json` with a `state`, an `anchor` git can check (`{file: ...}`

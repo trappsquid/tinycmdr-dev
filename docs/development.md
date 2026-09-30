@@ -16,6 +16,7 @@ answer to "what is this box".
 | Which trees are on this box, and what are they? | `maintenance/where.py` `ROLES` + this box's `maintenance/where-roles.json` | `python3 maintenance/where.py` |
 | Is the tree the bot runs from clean, current, and the one the bot actually started from? | same, `--check` (exit 1 on a violation) | `python3 maintenance/where.py --check` |
 | What does GitHub have *now* (not what this clone last fetched)? | `git ls-remote` + `gh release list` | `python3 maintenance/where.py --remote` |
+| Is the tree I am looking at **released**? | `where.py`'s ORIGIN block: how far HEAD is past the newest tag | `python3 maintenance/where.py` |
 | What shipped, and what is still open? | `STATUS.json`, anchored to commits/tags/files | `python3 tests/test_status.py` |
 | Does the code pass? | the suites | `venv/bin/python tests/run_all.py` |
 | Is the published prose stale? | the measured blocks regenerated from the tree | `python3 maintenance/measured-block.py` |
@@ -130,7 +131,43 @@ tracked, because it is the seed the agent's workspace starts from.
 - Keep the gate green *and* keep `maintenance/check-tree-clean.py` honest: a suite writes to its own
   temp dir, never into the checkout.
 
-## 7. Starting from nothing
+## 7. Cutting a release (the batch)
+
+`release.sh` ships; it does not decide. The batch is four files and a decision, and this is the whole
+of it - the two most recent releases were cut exactly this way.
+
+1. **`tinycmdr.py`** - `VERSION = "1.0.4N"`. Byte-exact replacement: the working tree is CRLF, so a
+   `sed` anchored with `$` silently misses.
+2. **`CHANGELOG.md`** - fold `## [Unreleased]` into `## [1.0.4N] - <date>`: a summary paragraph, then
+   `Changed`/`Added`/`Fixed` below it, each entry carrying the mechanism and the test. Leave an empty
+   `## [Unreleased]` heading at the top.
+3. **`STATUS.json`** - re-anchor every item this release carries to `{"commit": "<sha>"}` with **no**
+   `expect`. That is the "merged, nobody is claiming a release yet" state, and `release.sh` promotes
+   it to `expect: tagged` + `shipped` once the tag exists (`maintenance/ledger-tag.py`). Do **not**
+   write `expect: untagged` on a commit the cut is about to tag: CI grades that claim while the tag
+   is being created, and it fails. That is precisely the 1.0.39 incident.
+4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`, plus the prose
+   line count the same tool's check complains about.
+5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`), `bash maintenance/pre-push.sh`, and
+   `bash maintenance/release.sh <notes-file>`. The notes file becomes the release body verbatim, so
+   write it fresh and factual. Afterwards, verify from outside the repo: download the published
+   `SHA256SUMS` and one archive and check the sum.
+
+Traps this project has actually paid for:
+
+- **Do not edit the tree while a gate run is in progress.** The runner's G2 report attributes your
+  write to whichever suite was running, and a half-written `STATUS.json` makes `test_status` read
+  garbage.
+- **A push is refused if any tracked file is dirty** in the tree declared `live` - including a doc you
+  edited after the last commit. The hook is right; commit it.
+- **The leak gate reads every tracked file.** A chat host, a LAN address or a bot account name in a
+  ledger detail is refused before it can reach the remote.
+- **`git add -A` in a live tree takes host state** unless `.gitignore` covers it (that is how
+  `*.log.*` got there).
+- The tag is created on the remote; `release.sh` fetches it back, and §1's
+  `N commit(s) past <tag> (UNRELEASED)` line is what tells you afterwards whether the cut landed.
+
+## 8. Starting from nothing
 
 A fresh clone, or a new model told only "work on tinycmdr here":
 

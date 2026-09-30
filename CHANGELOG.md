@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **`maintenance/where.py` says how far the tree is past its last release.** `git describe` names the
+  newest tag HEAD can *reach*, so a tree several commits past a release still printed that release's
+  name and looked current - and "is what I am looking at released?" is the first question whoever
+  drops in cold has to answer. The ORIGIN block now carries
+  `this tree  <sha> - N commit(s) past v1.0.42 (UNRELEASED)`, read from local refs only;
+  `--remote` still answers what GitHub has now.
+
 ## [1.0.42] - 2026-09-30
 
 One behaviour change, and it is about what happens when the bot cannot reach its lane: the host
