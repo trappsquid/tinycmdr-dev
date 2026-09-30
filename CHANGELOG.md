@@ -22,6 +22,16 @@ Changed
   models that endpoint advertises to pick from. A picker that cannot reach any endpoint says so and
   points here.
 
+Changed
+- **An answer in the app now shows the question it answers.** The composer clears when it sends,
+  so in `--app` the request was nowhere on screen - the transcript only ever held cards - and an
+  answer card said nothing about what it was answering. A dim `re: <your question>` line is filed
+  immediately above the answer card, flattened to one line and capped at 100 characters (an app
+  pane does not wrap; an uncapped paste would be cut mid-word with no marker), and it is a
+  transcript item like any other: `Ctrl-Y` can copy it. `--once` gets it too. Chat is unchanged
+  (the question IS the message being replied to) and so is the inline `--cli` lane, whose `you>`
+  prompt line is still on screen above the card.
+
 Fixed
 - **A session no longer dead-ends a verb it cannot run.** Typing `/update` (or `/doctor`,
   `/logs`, `/version`, `/clean`, `/config`, `/token`, `/health`, `/proc`) into a `tinycmdr` session

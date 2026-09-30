@@ -16303,6 +16303,7 @@ TUI_KINDS = {
     "checkin":   (None,       "dim"),
     "note":      (None,       "body"),
     "narration": (None,       "dim"),
+    "reply":     (None,       "dim"),   # the question this answer replies to
     "say":       (None,       "body"),
     "system":    (None,       "dim"),
 }
@@ -16502,6 +16503,18 @@ class TuiScreen:
             self._panel(title, self.style("title"), style, body, foot, raw=str(text), kind=kind)
         else:
             self._panel(title, ("bold " + style).strip(), style, body, foot, raw=str(text), kind=kind)
+
+    def answer_card(self, ref, answer):
+        """The answer card, with `ref` (the question) filed immediately above it.
+
+        A plain screen has no draft region, so the order is just the order. AppScreen
+        overrides this because it DOES have one - the model's streamed narration - and the
+        reference has to land AFTER that region is dropped or the drop takes it with it
+        (measured: the reply line vanished with the draft it sat inside).
+        """
+        if ref:
+            self.card("reply", ref)
+        self.card("final", answer)
 
     def status_line(self, text):
         """The run's own line.
@@ -17193,6 +17206,16 @@ class AppScreen(TuiScreen):
         self._narration_from = None
         self._new_item()
         self._invalidate()
+
+    def answer_card(self, ref, answer):
+        """The answer card, with the question above it - and the draft region dropped FIRST.
+
+        The model streams a narration draft into this pane and the answer card is what
+        replaces it. Filing the reference before that drop put it INSIDE the region, so the
+        drop deleted the reference along with the draft (measured on a pty, 2026-09-30).
+        """
+        self._drop_narration()
+        super().answer_card(ref, answer)
 
     def print_final_inline(self):
         """After the alternate screen is gone: the session's last answer, back in
@@ -22040,12 +22063,43 @@ def run_cli(once=None, app=False):
             # the raw markdown under a dim rule, so a one-shot run showed the answer's
             # pipes and headings where the session showed a rendered card (measured on
             # a pty, 2026-09-30). The plain path is unchanged: no screen, no card.
-            screen.card("final", answer)
+            _draw_answer(screen, once, answer)
         else:
             print(answer_block(answer))
         _cli_usage_line()
         return
     return _cli_console_loop()
+
+
+REPLY_REF_CHARS = 100
+
+
+def _reply_ref(text, ellipsis="..."):
+    """The question, as the one dim line an answer card is a reply to.
+
+    In `--app` (and `--once`) the request is NOT in the transcript: the composer clears
+    when it sends, and a one-shot prompt never was on screen - so the one thing a reader
+    needs in order to read the answer as an answer ("what did I ask?") was the one thing
+    missing, while every chat client quotes the message it replies to. Flattened to one
+    line and capped, because a pasted page of a question must not push the answer off the
+    pane: an app pane does not wrap it, it would simply be cut mid-word with no marker.
+    """
+    flat = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not flat:
+        return ""
+    if len(flat) > REPLY_REF_CHARS:
+        flat = flat[:REPLY_REF_CHARS].rstrip() + ellipsis
+    return "re: " + flat
+
+
+def _draw_answer(screen, question, answer):
+    """The answer card, preceded by the question it answers (see _reply_ref).
+
+    The console lanes are the only place this is needed: in chat the question is the
+    message the post replies to, and at the inline `you>` prompt it is still on screen
+    above the card. Both call sites below are console lanes.
+    """
+    screen.answer_card(_reply_ref(question, screen.ellipsis), answer)
 
 
 def _cli_new_reporter():
@@ -22144,7 +22198,7 @@ def _cli_console_loop():
                     # prefix-matching that whitespace-collapsed, 400-char-capped draft
                     # is what rendered the answer three times (brief T-01). The
                     # streamed_answer note is the plain path's business only.
-                    screen.card("final", answer)
+                    _draw_answer(screen, text, answer)
                 else:
                     shown = (_CLI.pop("streamed_answer", "") or "").strip()
                     body = answer

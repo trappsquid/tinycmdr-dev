@@ -945,7 +945,40 @@ if HAVE_APP:
                 _got = fb.run_model_pick(_host_state, input=_k7, output=_DummyOutput())
             check("the shell picker: %s -> %r" % (_label, _want), _got == _want, _got)
 
-        # all the console's prints land in the pane, never at the real stdout
+                # ---- the answer reads as a REPLY: the question above it --------------------
+        # Operator's test user, 2026-09-30: "it would be nice to see your own original
+        # question at the final response output kind of in a referenced way or how a
+        # 'reply' looks". In `--app` the request was nowhere on screen - the composer
+        # clears when it sends - so the answer card had nothing saying what it answered.
+        check("the reply reference is one capped, flattened line",
+              fb._reply_ref("a\n\nvery   long\tquestion") == "re: a very long question"
+              and "\n" not in fb._reply_ref("x" * 400)
+              and fb._reply_ref("x" * 400).endswith("...")
+              and len(fb._reply_ref("x" * 400)) <= fb.REPLY_REF_CHARS + 8,
+              fb._reply_ref("x" * 400)[-20:])
+        check("...and an empty question draws no reference at all",
+              fb._reply_ref("") == "" and fb._reply_ref(None) == "" and fb._reply_ref("   ") == "",
+              fb._reply_ref("   "))
+        check("the app's own ellipsis is used when the terminal is not ascii-only",
+              fb._reply_ref("y" * 300, "\u2026").endswith("\u2026"),
+              fb._reply_ref("y" * 300, "\u2026")[-4:])
+
+        _cards = []
+
+        class _CardRec(fb.TuiScreen):
+            def card(self, kind, text, foot=""):
+                _cards.append((kind, text))
+
+        _scr_rep = _CardRec(out=io.StringIO(), width=90, tier="truecolor")
+        _scr_rep.card("tool", "`shell` echo hi")
+        fb._draw_answer(_scr_rep, "how tall is the tower?", "# Tower\n\n310 m.")
+        check("the card drawn before the answer is the question, dim and marked",
+              [k for k, _t in _cards] == ["tool", "reply", "final"]
+              and _cards[1][1] == "re: how tall is the tower?", _cards)
+        check("...and the reference is copyable, like every other item",
+              any(t == "re: how tall is the tower?" for _k, t in _cards), _cards)
+
+# all the console's prints land in the pane, never at the real stdout
         _sink = fb._AppStdout(app_screen_tmp)
         _sink.write("one\n")
         _sink.write("two ")
