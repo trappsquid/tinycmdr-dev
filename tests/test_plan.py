@@ -236,10 +236,19 @@ def main():
         # is pointed at - showed no age at all: each view had its own copy of the rule, so they
         # could disagree about the same ledger. They share task_age() now, and this pins what it
         # decides, including the correction that came out of putting them side by side.
+        # The age stamps are computed from NOW, never a literal date. They were "2026-09-26
+        # 15:48" against a literal "(3d, stale)" expectation, which made this a check that
+        # graded the calendar: it went red by itself at 15:48 on 2026-09-30 (four days) and
+        # would have stayed red forever after - CI run 36778872020 was the first. 74h back is
+        # tests/test_ledger.py's idiom ("30 * 3600" for "(1d"), and the extra two hours over
+        # three days absorb the truncation to the minute and a DST step, so the rendered age is
+        # "(3d" on any day in any timezone.
+        old_stamp = time.strftime("%Y-%m-%d %H:%M",
+                                  time.localtime(time.time() - 3 * 86400 - 2 * 3600))
         old_open = {"id": 1, "desc": "an old open item", "status": "open",
-                    "updated": "2026-09-26 15:48", "created": "2026-09-26 15:48"}
+                    "updated": old_stamp, "created": old_stamp}
         old_done = {"id": 2, "desc": "an old finished item", "status": "done",
-                    "updated": "2026-09-26 15:48", "created": "2026-09-26 15:48"}
+                    "updated": old_stamp, "created": old_stamp}
         fresh = {"id": 3, "desc": "just added", "status": "open",
                  "updated": time.strftime("%Y-%m-%d %H:%M")}
         check(fb.task_age(fresh)[1] is False, "a fresh item is not stale")
