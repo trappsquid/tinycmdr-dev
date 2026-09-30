@@ -17,12 +17,37 @@ capability is told so instead of being guessed at.
 import importlib.util
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+
+
+def shipped_tool_sources():
+    """The tools/ files that are part of THIS repository, by absolute path - or None.
+
+    tools/ is per-host by design: .gitignore carries everything but the starter files, and
+    what an operator drops in is the operator's (the toolsmith grades those). The shelf rule
+    below is a promise about the surface tinycmdr SHIPS, so it must not go red because a box
+    added a tool - measured 2026-09-29 on the fleet Mac: two host tools with no category,
+    130 passed / 1 failed, while the same tree archived to a clean checkout was 129/129.
+
+    Asking git, rather than keeping a second list of what ships, is what keeps the answer
+    from going stale. If git cannot answer, None exempts nothing and the rule stays as strict
+    as it was.
+    """
+    try:
+        out = subprocess.run(["git", "-C", str(BASE), "ls-files", "-z", "--", "tools"],
+                             capture_output=True, text=True, timeout=20)
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    return {(BASE / rel).resolve() for rel in out.stdout.split("\0") if rel}
+
 
 # A `python` reachable BY NAME for the checks that run one through the shell.
 # The shell tool runs its command in the real shell, so `python -c "print(123)"` needs an
@@ -535,10 +560,28 @@ check("and its capability line carries no warning",
 # the prompt shows (and from a shorter word for it), name its tools WITH descriptions, and
 # reveal NOTHING - a reveal is per-session schema rent that calling the tool pays anyway.
 _shelves = {}
+_other_shipped, _other_host = [], []
+_shipped_sources = shipped_tool_sources()
 for _n in sorted(set(fb.CORE_TOOLS) | set(fb.REGISTRY.custom)):
-    _shelves.setdefault(fb._tool_category(_n), []).append(_n)
-check("every tool files on a shelf (nothing strays into `other`)",
-      not _shelves.get("other"), _shelves.get("other"))
+    _shelf = fb._tool_category(_n)
+    _shelves.setdefault(_shelf, []).append(_n)
+    if _shelf != fb._TOOL_CATEGORY_OTHER:
+        continue
+    # A tool that DOES file on a shelf stays graded below whether or not this box added it -
+    # only an unclassifiable one is exempt, and only when the repository does not carry it.
+    _src = (fb.REGISTRY.custom.get(_n) or {}).get("source")
+    _host_added = bool(_shipped_sources is not None and _n not in fb.CORE_TOOLS
+                       and _src is not None
+                       and Path(_src).resolve() not in _shipped_sources)
+    (_other_host if _host_added else _other_shipped).append(_n)
+check("every SHIPPED tool files on a shelf (nothing strays into `other`)",
+      not _other_shipped, _other_shipped)
+if _other_host:
+    # Said out loud rather than silently skipped: these were not graded, and a reader of this
+    # run should know which rule applies to them (the toolsmith's, on the box that owns them)
+    # instead of assuming the shelf rule covered them.
+    print("     (not graded here - host tools this box added with no shelf: %s)"
+          % ", ".join(_other_host))
 for _shelf, _members in sorted(_shelves.items()):
     _out = fb.tool_find_tools({"category": _shelf}, {"session_key": "cat-probe"})
     check("%r names its %d tools with what they do" % (_shelf, len(_members)),

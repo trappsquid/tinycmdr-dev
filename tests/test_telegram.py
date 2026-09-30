@@ -252,6 +252,15 @@ check("the .env token IS honoured", "TOKEN '123456:SECRET-FROM-ENV'" in said,
 check("and it opens the lane on its own", "TG_ONLY True" in said, said[-300:])
 
 _saved = (dict(fb.CONFIG.get("telegram") or {}), dict(fb.CONFIG["mattermost"]))
+# The rule under test is CONFIG precedence, so the environment must not decide it.
+# _mm_token_configured() falls back to os.environ["TINYCMDR_MM_TOKEN"], which a real
+# install's .env supplies and this block cannot clear through CONFIG - so on any
+# configured box "one door is not a warning" failed while a clean clone was green
+# (measured 2026-09-29 on the fleet Mac: 41 passed, 1 failed; the same tree archived to a
+# clean checkout: 42 passed). That is the suite grading the box instead of the rule, which
+# is the class tests/hermetic.py exists for. Neutralise the two names for this block only.
+_env_saved = {k: os.environ.pop(k) for k in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN")
+              if k in os.environ}
 try:
     fb.CONFIG["telegram"]["token"] = "tg-token-here"
     fb.CONFIG["mattermost"]["token"] = "mm-token-here"
@@ -267,6 +276,7 @@ try:
 finally:
     fb.CONFIG["telegram"].update(_saved[0])
     fb.CONFIG["mattermost"].update(_saved[1])
+    os.environ.update(_env_saved)
 
 
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
