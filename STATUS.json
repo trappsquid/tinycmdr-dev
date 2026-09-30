@@ -612,6 +612,50 @@
       },
       "detail": "Fixed 2026-09-30 (437f231), from the operator's question about pasting large text. The data path measured clean before any change - bracketed paste (which the app enables) delivers a paste as one event, so 1 KB / 20 KB / 200 KB all arrived complete in the buffer in about 0.1 s, kept their newlines, never triggered a submit mid-paste, and were handed to the loop as ONE request (only the outer whitespace is stripped) - but the composer showed a single horizontally-scrolled row with nothing anywhere reporting the size, so a page could be sent unreviewed. The box is multiline now, its label reports the size and the keys ('you - 12,345 chars - send, Ctrl-J newline'), it grows to six wrapped rows and collapses when sent, Enter sends and Ctrl-J inserts a newline. tests/test_tui.py pins the label and the growth.",
       "gate": "merged to main (gate 68/68 green); release.sh states the tagged claim for this batch"
+    },
+    {
+      "id": "app-scroll-keys-and-wheel",
+      "title": "the app advertised scroll keys nothing was bound to, and a wheel that only worked on Windows",
+      "state": "shipped",
+      "anchor": {
+        "commit": "4daa918",
+        "expect": "untagged"
+      },
+      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '↑↓ PgUp/PgDn scroll' while ↑ and ↓ were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: ↑/↓ move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
+      "gate": "done - merged to main; the README documents the keys; release.sh states the tagged claim on this anchor when the next tag exists"
+    },
+    {
+      "id": "plan-suite-graded-the-calendar",
+      "title": "test_plan's staleness fixture was a literal date, so the suite went red by itself",
+      "state": "shipped",
+      "anchor": {
+        "commit": "97e9346",
+        "expect": "untagged"
+      },
+      "detail": "Fixed 2026-09-30 (97e9346), merged to main. The ledger-staleness check built its fixture around 'updated': '2026-09-26 15:48' and then demanded the literal '(3d, stale)', so the check graded the calendar rather than the rule: at 15:48 on 2026-09-30 the age became four days and it went red - permanently, on every host, forever. Measured: this tree was green in CI at 13:45Z and red at 21:21Z the same day (run 36778872020, both platforms), and the red is the one that started the failed-run mail. The stamp is now computed 74h back from now - tests/test_ledger.py's idiom for the same claim ('30 * 3600' against '(1d') - and the two hours over three days absorb both the truncation to the minute and a DST step, so the rendered age is '(3d' in any zone on any day; verified in UTC+14, UTC-11 and this host's own. Nuance: run_all.py reported this suite's red as 'died before its own summary: no count line', which reads like a crash - that parser gap is its own item (runall-misreads-check-suites).",
+      "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
+    },
+    {
+      "id": "runall-misreads-check-suites",
+      "title": "a red check-only suite was reported as having died before its own summary",
+      "state": "shipped",
+      "anchor": {
+        "commit": "66abc30",
+        "expect": "untagged"
+      },
+      "detail": "Fixed 2026-09-30 (66abc30), merged to main. run_all.py's _check_tail() recognised one spelling of a suite's summary, 'N passed, M failed', while 22 suites in this tree print 'N check(s) failed' (test_plan, test_digest, test_envelope, test_verify, test_guard_battery, ... - three of them with the failed names appended inline). A red in any of those was annotated '[died before its own summary: no count line]', which tells the reader the suite aborted mid-run and left checks ungraded. Measured: test_plan's own date-rot red (CI run 36778872020) carried exactly that note and it cost a detour into a crash that had not happened. Both shapes are recognised as a summary now; the negative cases still return '' - a traceback with no summary line is still a suite that never reached one.",
+      "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
+    },
+    {
+      "id": "tui-gauge-graded-the-box",
+      "title": "the app's context-gauge check graded this box's session history, not the chrome",
+      "state": "shipped",
+      "anchor": {
+        "commit": "391bd1a",
+        "expect": "untagged"
+      },
+      "detail": "Fixed 2026-09-30 (391bd1a), merged to main, found while answering 'is everything green?'. The check '--app draws a rail with a live context gauge' asserted a filled cell, and the fill is read from the LIVE session (AGENT.stats) and the detected window - so on a clean clone, which is exactly what CI grades, usage is zero, the bar is all shade and the check is red, while the same tree was green here because this box had run a session (7.7K of 110.1K). Measured: red on macOS and Ubuntu from its first full CI run (36782281132, 36784022014) and green here; reproduced by running the suite in a clone of HEAD. The two numbers the gauge reads are pinned for the check and restored afterwards, so the fill is graded as arithmetic (4.1K / 8.2K -> half the bar, the other half shade) with a second arm for a session with no usage, and the rail's fixed 26 columns are pinned too (a longer line is silently cut, never wrapped). Same shape as the two host-graded checks the 1.0.41 batch fixed (telegram-suite-grades-the-box, host-tools-no-shelf).",
+      "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
     }
   ]
 }
