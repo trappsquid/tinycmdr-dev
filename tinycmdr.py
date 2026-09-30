@@ -8702,9 +8702,19 @@ def tool_delegate_task(args, ctx):
         # The contract rides the TASK: the operator's message and this harness's
         # instructions are the only two things a run obeys, so a shape the sub-agent
         # cannot see would be a third voice, and one it may not follow.
+        # /stop must reach the SUB-AGENT, not only the run that spawned it. Without this the
+        # operator's stop flagged a parent that was parked inside THIS call, waiting on the
+        # sub-agent: nothing checked the flag until every subtask had finished, and the
+        # sub-agents themselves had no flag to check, so they could not be stopped at all.
+        # Measured 2026-09-29: three /stop commands across twenty minutes changed nothing while
+        # three sub-agents kept writing files. Passing the parent's event down lets the
+        # sub-agent's own in-flight request abort, which returns this call and lets the parent
+        # see the stop on the next step - one fix for both halves of the same bug.
         answer = AGENT.run(key, task + _SUBAGENT_RESULT_CONTRACT,
                            depth=ctx.get("depth", 0) + 1,
-                           source=sub_src, **_relay_callbacks(ctx, sub_src))
+                           source=sub_src,
+                           cancel_event=ctx.get("cancel_event"),
+                           **_relay_callbacks(ctx, sub_src))
     finally:
         AGENT.model_overrides.pop(key, None)
         AGENT.reset(key)  # sub-agent context is throwaway

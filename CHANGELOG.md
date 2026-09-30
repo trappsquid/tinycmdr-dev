@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Fixed
+- **A `/stop` now reaches the SUB-AGENTS, not only the run parked on them.** `delegate_task`
+  called `AGENT.run` for each subtask with the reporting callbacks and nothing else, so a
+  sub-agent had no cancel event to check and could not be stopped at all - while the parent that
+  owned the operator's event was blocked inside that very call, waiting for it to return. The two
+  halves compounded: the stop flagged a run that was parked, and the only work still moving had
+  nothing to flag. Measured 2026-09-29: three `/stop` commands across twenty minutes changed
+  nothing while three sub-agents kept writing files. The parent's event is now forwarded, so the
+  sub-agent's in-flight request aborts, the batch returns, and the parent sees the stop on its
+  next step. `tests/test_stop_now.py` pins the behaviour - a stopped sub-agent answers with the
+  stop and never starts work (its endpoint fixture cannot be reached, so a regression cannot fire
+  a real job).
 - **A file's CONTENTS are not a verdict on the call that read it.** `failed_output` scanned any
   tool result for `Traceback`, `--- stderr ---` or a leading `exit_code=1`, so a SUCCESSFUL
   `read_file` of a file containing a traceback was classified as a failed call. A field note and

@@ -363,6 +363,30 @@ def test_ordinary_text_is_still_steered_not_queued():
         fb.CONFIG["mattermost"]["allowed_users"] = saved
 
 
+
+def test_a_stop_reaches_a_sub_agent():
+    """A /stop must stop the SUB-AGENTS, not only the run parked on them.
+
+    Measured 2026-09-29: three /stop commands across twenty minutes changed nothing while
+    three sub-agents kept writing files. The parent was parked inside delegate_task waiting
+    for them, and the sub-agents had been handed no cancel event at all - so the operator's
+    stop had nothing to reach, and the parent could not act until every subtask had finished
+    on its own.
+    """
+    ev = threading.Event()
+    ev.set()                              # the operator's stop, already sent
+    t0 = time.time()
+    out = fb.tool_delegate_task(
+        {"task": "Say the word ok. This is a cancellation test."},
+        {"depth": 0, "cancel_event": ev, "session_key": "mm-test", "report": {}})
+    dt = time.time() - t0
+    check("delegate: a stopped sub-agent answers with the stop", "Stopped" in out,
+          out[:160])
+    # Without the event the sub-agent would attempt a MODEL CALL here to begin the work
+    # (there is no endpoint in a suite, so it would spend its retry budget first). An
+    # instant return is the proof the stop arrived before any work began.
+    check("  and it never started work", dt < 5.0, f"took {dt:.1f}s")
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]
