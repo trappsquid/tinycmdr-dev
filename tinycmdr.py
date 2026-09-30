@@ -16737,6 +16737,7 @@ class AppScreen(TuiScreen):
         self._top = 0              # first transcript line the pane shows
         self.autofollow = True
         self._final = ""           # the last answer, for the reprint on exit
+        self._exit_requested = False
         self.app = None
         self._build()
 
@@ -16893,14 +16894,24 @@ class AppScreen(TuiScreen):
         self.request_exit()
 
     def request_exit(self):
-        """Leave the app from any thread; the console loop is released too."""
+        """Leave the app from any thread; the console loop is released too.
+
+        Idempotent, and deliberately: the key binding asks, the console worker asks
+        again when its loop returns, and a SECOND `Application.exit()` raises
+        "Return value already set" - which, scheduled through the loop, surfaces as a
+        prompt_toolkit "Unhandled exception in event loop" and a "Press ENTER to
+        continue..." at the end of a run that otherwise finished cleanly (measured
+        on a pty, 2026-09-30). One ask, one exit."""
+        if self._exit_requested:
+            return
+        self._exit_requested = True
         _CLI["leave"] = True
         try:
             _CLI["inbox"].put(None)
         except Exception:
             pass
         app = self.app
-        if app is None:
+        if app is None or getattr(app, "is_done", False):
             return
         try:
             loop = getattr(app, "loop", None)
@@ -17035,20 +17046,35 @@ class _AppStdout:
     A print at the real stdout would paint over the alternate screen, and the brief's
     first rule is that the plain lines are first-class - so help, /status, the banner
     and every command answer land in the pane instead of being lost.
+
+    Once the app has stopped, writes go back to the REAL stream: prompt_toolkit prints
+    its own post-mortem (a traceback, "Press ENTER to continue...") as the app unwinds,
+    and a failure must never land only in a pane nobody is drawing any more.
     """
 
     encoding = "utf-8"
     errors = "replace"
 
-    def __init__(self, screen):
+    def __init__(self, screen, real=None):
         self.screen = screen
+        self.real = real or sys.__stdout__
         self.buf = ""
+
+    def _put_line(self, line):
+        app = self.screen.app
+        if app is None or getattr(app, "is_done", False):
+            try:
+                print(line, file=self.real, flush=True)
+            except Exception:
+                pass
+        else:
+            self.screen.write_line(line)
 
     def write(self, text):
         self.buf += str(text)
         while "\n" in self.buf:
             line, self.buf = self.buf.split("\n", 1)
-            self.screen.write_line(line)
+            self._put_line(line)
         return len(text)
 
     def writelines(self, lines):
@@ -17057,7 +17083,7 @@ class _AppStdout:
 
     def flush(self):
         if self.buf:
-            self.screen.write_line(self.buf)
+            self._put_line(self.buf)
             self.buf = ""
 
     def isatty(self):
@@ -21068,7 +21094,7 @@ def _run_cli_app():
     _CLI["reader"] = False
     _CLI["stop"] = None
     real_stdout = sys.stdout
-    sys.stdout = _AppStdout(screen)
+    sys.stdout = _AppStdout(screen, real_stdout)
     worker = threading.Thread(target=_cli_app_worker, daemon=True,
                               name="tinycmdr-app-console")
     try:

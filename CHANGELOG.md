@@ -25,6 +25,12 @@ Added
   and a dummy output): exactly one answer card, the draft replaced rather than stacked, no stats in
   the transcript, `/exit` leaves both the loop and the app, and no NETWORK socket is opened (the
   socket class is watched during the run; asyncio's own AF_UNIX wakeup pair is not a port).
+  Leaving is asked for ONCE: a second `Application.exit()` raises "Return value already set", and
+  because the ask is scheduled through the event loop it surfaced as prompt_toolkit's "Unhandled
+  exception in event loop" plus a "Press ENTER to continue..." at the end of a run that had
+  finished cleanly (measured on a pty, 2026-09-30). Anything prompt_toolkit prints while the app
+  unwinds goes to the real stream rather than the pane, so a failure can never land only in a
+  transcript nobody is drawing any more.
 - **`maintenance/where.py` says how far the tree is past its last release.** `git describe` names the
   newest tag HEAD can *reach*, so a tree several commits past a release still printed that release's
   name and looked current - and "is what I am looking at released?" is the first question whoever

@@ -465,6 +465,28 @@ if HAVE_APP:
         _tail = app_screen_tmp.lines(79)[-3:]
         check("--app: printed lines become transcript lines",
               "one" in _tail and "two three" in _tail, _tail)
+
+        # leaving must be asked for ONCE: a second Application.exit() raises "Return
+        # value already set", and scheduled through the loop it became prompt_toolkit's
+        # "Unhandled exception in event loop" + "Press ENTER to continue..." after a
+        # clean run (measured on a pty, 2026-09-30).
+        _exits = []
+
+        class _FakeApp:
+            is_done = False
+            loop = None
+
+            @staticmethod
+            def exit():
+                _exits.append(1)
+
+        _real_app = app_screen_tmp.app
+        app_screen_tmp.app = _FakeApp()
+        app_screen_tmp._exit_requested = False
+        app_screen_tmp.request_exit()
+        app_screen_tmp.request_exit()
+        app_screen_tmp.app = _real_app
+        check("--app: the exit is asked for once, never twice", _exits == [1], _exits)
     finally:
         fb.drive_run = _saved_drive
         fb._CLI.clear()
