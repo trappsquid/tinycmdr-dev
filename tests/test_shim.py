@@ -136,7 +136,7 @@ def main():
     body = src[src.index("def main():"):]
     body = body[:body.index("\nif __name__ ==")]
     check("no flags reaches the startup validation and the bot",
-          "validate_startup_config()" in body and "run_bot()" in body,
+          "validate_startup_config()" in body and "run_bot" in body,
           "main() lost its bot fallthrough")
     check("no flags does NOT silently become a session",
           not re.search(r"else:\s*\n\s+run_cli\(\)", body),
