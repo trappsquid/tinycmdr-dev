@@ -637,13 +637,13 @@
     },
     {
       "id": "runall-misreads-check-suites",
-      "title": "a red check-only suite was reported as having died before its own summary",
+      "title": "a red suite was reported as having died before its own summary",
       "state": "shipped",
       "anchor": {
-        "commit": "66abc30",
+        "commit": "2037f12",
         "expect": "untagged"
       },
-      "detail": "Fixed 2026-09-30 (66abc30), merged to main. run_all.py's _check_tail() recognised one spelling of a suite's summary, 'N passed, M failed', while 22 suites in this tree print 'N check(s) failed' (test_plan, test_digest, test_envelope, test_verify, test_guard_battery, ... - three of them with the failed names appended inline). A red in any of those was annotated '[died before its own summary: no count line]', which tells the reader the suite aborted mid-run and left checks ungraded. Measured: test_plan's own date-rot red (CI run 36778872020) carried exactly that note and it cost a detour into a crash that had not happened. Both shapes are recognised as a summary now; the negative cases still return '' - a traceback with no summary line is still a suite that never reached one.",
+      "detail": "Fixed 2026-09-30 (66abc30, extended in 2037f12), merged to main. run_all.py's _check_tail() recognised one spelling of a suite's summary, 'N passed, M failed', and annotated every other red '[died before its own summary: no count line]' - which says the suite aborted mid-run and left checks ungraded. Measured: every failure branch in this tree spells the summary one of five ways (grep), so the annotation was wrong for all of these: 'N check(s) failed[: names]' (22 check()-only suites - test_plan, test_digest, test_envelope, test_verify, test_guard_battery, ...), 'N failed: names' (test_cross_process, test_profiles), 'N FAILED: names' (test_measured_doc, test_installer_parity, test_llama_extensions), 'FAILED: N' (test_shim, test_atlas), 'failed: names' (test_ledger_journal, which prints no count at all). Two real reds read exactly that way and cost a detour each: test_plan's date-rot (CI run 36778872020) and test_measured_doc's stale numbers (the first clone gate of this batch). All five are recognised as the summary now; the negative cases still return '' - a traceback, an empty run, and a check's own continuation line that merely says 'failed to start' (the colon separates the two).",
       "gate": "done - merged to main; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
     },
     {
