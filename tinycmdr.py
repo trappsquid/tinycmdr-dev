@@ -7392,7 +7392,6 @@ def _curate_notes_impl(reason="curator"):
 
 
 @serialized_on(NOTES_FILE)
-@serialized_on(NOTES_FILE)
 def tool_remember(args, ctx):
     """Append, replace or forget ONE durable fact in notes.md, bounded at write time.
 
@@ -12379,6 +12378,12 @@ class Agent:
         # No mkdir here: opening the agent creates NOTHING (see _ensure_sessions_dir).
         # glob on a missing directory is empty, so the reload below needs no folder.
         for f in SESSIONS_DIR.glob("*.json"):  # reload persisted sessions
+            # _carry_path writes <key>.carry.json into the SAME folder, and Path.stem
+            # leaves "x.carry" from it - so the glob handed back every carry sidecar as a
+            # session too. Nothing iterates histories today, but search_sessions already
+            # had to special-case this shape of file; keep it out of the map entirely.
+            if f.name.endswith(".carry.json"):
+                continue
             try:
                 self.histories[f.stem] = json.loads(
                     f.read_text(encoding="utf-8"))
@@ -14670,6 +14675,14 @@ class Agent:
         reset_scan_spend(session_key)
         self.histories.pop(session_key, None)
         self.model_overrides.pop(session_key, None)
+        # A lock key was only ever set (self._lock), never removed, so every session key
+        # this process touched - including the throwaway sub-<epoch> sessions delegate_task
+        # mints and resets - left a Lock behind for the life of the process. Drop ours on
+        # reset, but never out from under a holder: an abandoned worker may still be inside
+        # its run and would then hand its lock to a second holder.
+        lock = self.locks.get(session_key)
+        if lock is not None and not lock.locked():
+            self.locks.pop(session_key, None)
         _carry_reset(session_key)
         _run_state_reset(session_key)
         # A reveal is per-SESSION rent, so a cleared conversation pays it again: measured

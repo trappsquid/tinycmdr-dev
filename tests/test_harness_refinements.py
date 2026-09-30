@@ -53,6 +53,33 @@ class TestHarnessRefinements(unittest.TestCase):
         self.assertNotIn(key, _CARRY)
         self.assertFalse(carry_file.exists())
 
+    def test_session_loader_skips_carry_sidecars(self):
+        """A *carry.json sidecar in sessions/ must not load as a <key>.carry session."""
+        sidecar = _fb.SESSIONS_DIR / "reload-probe.carry.json"
+        sidecar.write_text('{"run": 1, "entries": []}', encoding="utf-8")
+        try:
+            fresh = _fb.Agent()
+            self.assertNotIn("reload-probe.carry", fresh.histories)
+        finally:
+            sidecar.unlink(missing_ok=True)
+
+    def test_reset_reclaims_but_never_steals_session_locks(self):
+        """AGENT.reset drops the session's lock, but leaves one a worker still holds."""
+        key = "test-reset-lock-key"
+        AGENT._lock(key)                       # mint it, as a run would
+        self.assertIn(key, AGENT.locks)
+        AGENT.reset(key)
+        self.assertNotIn(key, AGENT.locks)
+
+        held_key = "test-reset-held-lock-key"
+        held = AGENT._lock(held_key)
+        held.acquire()
+        try:
+            AGENT.reset(held_key)
+            self.assertIn(held_key, AGENT.locks)
+        finally:
+            held.release()
+
     def test_tool_task_no_open_tasks_done_notice(self):
         """When ledger has no open tasks, task action=done must return notice to report, not ERROR: use action=add."""
         t = load_tasks()
