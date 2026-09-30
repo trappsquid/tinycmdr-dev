@@ -115,6 +115,11 @@ own scrollback is not there while it runs - the app's keys are the way back up. 
 scrolls the transcript too, but only with capture on: `TINYCMDR_APP_MOUSE=1 tinycmdr`. Capture is
 off by default so native selection and copy keep working without a modifier key.
 
+`/tinycmdr model` opens the same picker inside the app: the list of models this install can route
+to, the one in use marked, `↑`/`↓` to move, typing to filter, Enter to switch. If the endpoint itself
+is wrong, `/tinycmdr model endpoint <url>` reads or replaces it - it is refused unless it answers
+(`--force` overrides) - and then offers that endpoint's models to pick from.
+
 To take an item OUT of the app, `Ctrl-Y` copies the newest one - the answer, a tool call, a tool
 result, a question - as its own text rather than the frame it was painted in, and pressing it again
 walks back through the transcript an item at a time; the status line names what landed and where it
@@ -143,8 +148,9 @@ and in chat:
 | `status` | version, folder, model, endpoint, context, log, instance |
 | `doctor` | check this install and name what is wrong (exit 1 when something is) |
 | `health` | one line and an exit code, no network — for scripts |
-| `model` | the models this install can route to (asks the endpoints) |
+| `model` | pick a model from a list you move through (↑↓, type to filter, Enter) |
 | `model use <name>` · `model add <url>` · `model remove <x>` | switch, add or drop an endpoint |
+| `model endpoint [<url>]` | read the endpoint, or correct it - a typo is refused unless `--force` |
 | `tasks [--all]` | the task ledger: open, in progress, recently done |
 | `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
 | `update` | pull the published build (`update <file\|zip\|folder>` puts one in place by hand) |

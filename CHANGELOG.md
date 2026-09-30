@@ -7,7 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Changed
+- **`model` is a picker, not a page of instructions.** Bare `tinycmdr model` (and `/tinycmdr model`
+  in the app) used to print a Model Status box with a Commands list: to switch you retyped the whole
+  command with an exact name you had to already know. It now opens the list you move through -
+  `↑`/`↓` to move, typing to filter, Enter to switch, Esc to leave - with the model in use marked and
+  each row naming its endpoint (and the id an alias really sends). Same picker in both doors: the
+  app draws it in its own window, the shell runs it on its own terminal, and a pipe still gets the
+  plain list a script greps. `model add <url>` with several advertised ids and the setup wizard's
+  model step use the same list.
+- **The endpoint can be corrected without editing config.json by hand.** `model endpoint` reads the
+  primary endpoint and whether it answers; `model endpoint <url>` probes it, refuses a URL that does
+  not answer (naming `--force` for a server that is not up yet), writes it, and then offers the
+  models that endpoint advertises to pick from. A picker that cannot reach any endpoint says so and
+  points here.
+
 Fixed
+- **The interactive installers probe the model endpoint before carrying on.** They used to ask for
+  the URL and the model id as free text and write both without a single request - so a typo (wrong
+  host, wrong port) was invisible until the first call failed, on a box whose install had just
+  reported success. Both Unix doors now ask, probe `/v1/models`, report what came back, re-ask while
+  a *typed* URL fails (three tries), then keep it with the command that fixes it later
+  (`tinycmdr model endpoint <url>`) rather than becoming a wall - and the model id is offered as a
+  numbered list of what the endpoint advertised, because typing one from memory is how a box ends up
+  configured for a model it does not serve. `tinycmdr setup` does the same, and refuses to run inside
+  `--app`, where its `input()` would fight the app for the terminal. The Windows installer keeps its
+  existing post-install check (`NOT VERIFIED`, exit 3).
 - **`--app` scrolls: the keys it advertised, and the wheel off Windows.** The rail showed
   `↑↓ PgUp/PgDn scroll` while `↑` and `↓` were bound to nothing - only the page keys moved the pane -
   and the wheel was dead on macOS and Linux even with mouse capture on, because a POSIX terminal

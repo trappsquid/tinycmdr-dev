@@ -48,6 +48,7 @@ launchd `com.tinycmdr.agent`):
     python tests/test_installer_unix.py
 """
 import hashlib
+import json
 import os
 import pathlib
 import re
@@ -732,6 +733,135 @@ def case_archive_and_python(sb, pkg, bindir, user, py):
 sandbox_home_env.py = ""      # filled in main(), read by the helper above
 
 
+def serve_models(ids):
+    """A stub /v1/models on a loopback port - what the installer's probe is aimed at."""
+    import http.server
+    import json as _json
+    import socketserver
+    import threading
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.rstrip("/").endswith("/models"):
+                body = _json.dumps({"data": [{"id": i} for i in ids]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = socketserver.TCPServer(("127.0.0.1", 0), _H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv.server_address[1], srv
+
+
+def run_with_stdin(cmd, env, cwd, stdin_text):
+    return subprocess.run([str(c) for c in cmd], env=env, cwd=str(cwd), text=True,
+                          capture_output=True, input=stdin_text, timeout=300)
+
+
+def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
+    """The interactive installer asks, PROBES, and offers what it advertised.
+
+    Operator, 2026-09-30: "there should be a point in the interactive installer that checks
+    if your link is even reachable before it continues on with the rest of the install" - and
+    a typo at this one question used to be invisible until the first request failed. Two
+    runs: a live stub endpoint (reachable, and the model chosen by NUMBER from its list) and
+    a dead one typed three times (kept, with the command that fixes it). TINYCMDR_ASK=1 is
+    what turns the questions on with a pipe; every later answer is empty, so it takes its
+    defaults and the install still completes.
+    """
+    port, srv = serve_models(["qwen3-14b", "glm-4.6"])
+    try:
+        inst = sb / "probe-inst"
+        fake_venv(inst, py)
+        log = sb / "logs" / "probe.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        env = sandbox_home_env(sb, bindir, log, user, extra={"TINYCMDR_ASK": "1"})
+        url = "http://127.0.0.1:%d/v1" % port
+        # The interactive order, with the chat token given as a flag: Mattermost server,
+        # Mattermost user id, Telegram lane, THEN the endpoint and its model. Empty lines
+        # take the defaults, which is what the later questions get too.
+        answers = "\n".join(["", "", "n", url, "2"] + [""] * 8) + "\n"
+        got = run_with_stdin(
+            ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+             "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst],
+            env, pkg, answers)
+        written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
+        check("P1 a live endpoint is reported reachable, with what it advertises",
+              "reachable" in got.stdout and "qwen3-14b" in got.stdout
+              and "glm-4.6" in got.stdout,
+              f"rc={got.returncode}; tail: {got.stdout[-600:]}{got.stderr[-300:]}")
+        check("P1 ...and the model id can be given as a NUMBER in that list",
+              written["llm"]["model"] == "glm-4.6" and written["llm"]["base_url"] == url,
+              f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
+
+        inst2 = sb / "probe-inst-dead"
+        fake_venv(inst2, py)
+        log2 = sb / "logs" / "probe-dead.log"
+        env2 = sandbox_home_env(sb, bindir, log2, user, extra={"TINYCMDR_ASK": "1"})
+        dead = "http://127.0.0.1:9/v1"
+        answers2 = "\n".join(["", "", "n", dead, dead, dead] + [""] * 8) + "\n"
+        got2 = run_with_stdin(
+            ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+             "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst2],
+            env2, pkg, answers2)
+        check("P2 an endpoint that does not answer is checked again, three times",
+              got2.stdout.count("no answer from") == 3, got2.stdout[-600:])
+        check("P2 ...then kept, naming the command that fixes it later",
+              "keeping it anyway" in got2.stdout and "tinycmdr model endpoint" in got2.stdout,
+              got2.stdout[-400:])
+        written2 = json.loads((inst2 / "config.json").read_text(encoding="utf-8"))
+        check("P2 ...and the install still completes rather than becoming a wall",
+              got2.returncode == 0 and written2["llm"]["base_url"] == dead,
+              f"rc={got2.returncode}; url={written2['llm'].get('base_url')}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def case_macos_probes_endpoint(sb, pkg, bindir, user, py):
+    """The same probe on the macOS door, which asks the same question the same way.
+
+    The two installers are separate scripts with their own ask_text, so a fix in one is not
+    a fix in the other - and this is the door a Mac user actually runs.
+    """
+    port, srv = serve_models(["qwen3-14b", "glm-4.6"])
+    try:
+        inst = sb / "mac-probe"
+        fake_venv(inst, py)
+        log = sb / "logs" / "mac-probe.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        env = sandbox_home_env(sb, bindir, log, user,
+                               {"TINYCMDR_PYTHON": py, "TINYCMDR_ASK": "1"})
+        on_mac = os.uname().sysname == "Darwin"
+        args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-start",
+                "--no-path", "--python", py, "--label", "com.tinycmdr.probetest",
+                "--mattermost-url", "chat.invalid",
+                "--token", "0123456789abcdef0123456789abcdef", "--allowed-user", "u1",
+                "--install-dir", inst]
+        if not on_mac:
+            args.append("--no-launchd")
+        url = "http://127.0.0.1:%d/v1" % port
+        got = run_with_stdin(args, env, pkg, "\n".join(["", "", "n", url, "2"] + [""] * 8) + "\n")
+        written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
+        check("P3 the macOS installer probes too, and says what it found",
+              "reachable" in got.stdout and "qwen3-14b" in got.stdout,
+              f"rc={got.returncode}; tail: {got.stdout[-600:]}{got.stderr[-300:]}")
+        check("P3 ...and its model id can come from that list by number",
+              written["llm"]["model"] == "glm-4.6" and written["llm"]["base_url"] == url,
+              f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 def main():
     if os.name == "nt":
         # This suite drives the UNIX installer under bash and inspects systemd semantics and
@@ -773,6 +903,8 @@ def main():
         case_help_and_footer(sb, pkg, bindir, user, py)
         case_download_sums(sb, pkg, bindir, user, py)
         case_archive_and_python(sb, pkg, bindir, user, py)
+        case_installer_probes_endpoint(sb, pkg, bindir, user, py)
+        case_macos_probes_endpoint(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print()

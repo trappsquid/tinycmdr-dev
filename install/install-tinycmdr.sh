@@ -557,6 +557,60 @@ ask_secret() {   # ask_secret <prompt> -> prints what was typed, hidden, may be 
     printf '%s' "$a"
 }
 
+probe_endpoint() {   # probe_endpoint <url> -> "OK <id> <id>..." or "NO <why>"
+    # The installer's own reachability check, using the python it already requires: one
+    # GET /models, 8s, metadata only - never a completion. An endpoint that answers with no
+    # list is still REACHABLE; what this catches is the typo (wrong host, wrong port) and
+    # the server that is not up yet, neither of which the rest of the install can see.
+    "$PY" - "$1" <<'PY'
+import json, sys, urllib.request
+url = sys.argv[1].rstrip("/")
+try:
+    req = urllib.request.Request(url + "/models",
+                                 headers={"Accept": "application/json",
+                                          "User-Agent": "tinycmdr-install"})
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.loads(r.read().decode("utf-8", "replace"))
+except Exception as e:
+    print("NO %s" % str(e)[:160])
+    raise SystemExit(0)
+ids = []
+for item in (data.get("data") or data.get("models") or []):
+    if isinstance(item, str):
+        ids.append(item)
+    elif isinstance(item, dict) and (item.get("id") or item.get("name")):
+        ids.append(str(item.get("id") or item.get("name")))
+print("OK%s" % ((" " + " ".join(ids)) if ids else ""))
+PY
+}
+
+ask_model_id() {   # ask_model_id "<ids>" [default] -> the id, or its NUMBER in the list
+    # The list the endpoint just advertised, offered as numbers: a reader typing the id
+    # from memory is how a box ends up configured for a model it does not serve. Nothing to
+    # offer (no answer, or a server that lists nothing) keeps the plain typed answer.
+    local ids="$1" dflt="${2:-}" a="" n=0 pick="" id=""
+    if [ -z "$ids" ]; then
+        ask_text "Model id" "$dflt"
+        return 0
+    fi
+    printf '    models it advertises:\n' >&2
+    for id in $ids; do
+        n=$((n + 1))
+        printf '      %2d) %s\n' "$n" "$id" >&2
+    done
+    a="$(ask_text "Model id (number or name)" "$dflt")"
+    case "$a" in
+        ''|*[!0-9]*) printf '%s' "$a"; return 0 ;;
+    esac
+    n=0
+    for id in $ids; do
+        n=$((n + 1))
+        if [ "$n" = "$a" ]; then printf '%s' "$id"; return 0; fi
+    done
+    warn "no model numbered $a - keeping what you typed"
+    printf '%s' "$a"
+}
+
 ask_yes() {   # ask_yes <question> [y|n] -> 0 = yes
     local a="" dflt="${2:-y}"
     case "$dflt" in y|Y) printf '    %s [Y/n] ' "$1" >&2 ;; *) printf '    %s [y/N] ' "$1" >&2 ;; esac
@@ -705,8 +759,31 @@ case "$MODEL_DFLT" in my-model-name) MODEL_DFLT="" ;; esac
 if [ "$ASK_Q" = 1 ]; then
     info "the endpoint is any OpenAI-compatible /v1 root: llama.cpp, Ollama, vLLM,"
     info "or a hosted provider. Enter takes a llama.cpp on this machine."
-    MODEL_BASE_URL="$(ask_text "Model endpoint" "$MODEL_BASE_DFLT")"
-    MODEL="$(ask_text "Model id" "$MODEL_DFLT")"
+    # Ask, PROBE, and offer what it advertises. Every other answer in this installer can
+    # be corrected later in a file; this one cannot be checked until the first request
+    # fails, so a typo here used to be invisible for the whole install. Three tries, then
+    # it keeps the URL and names the command that fixes it - a box whose server is not up
+    # yet is normal, and the installer must not become a wall.
+    _url_tries=0
+    while :; do
+        MODEL_BASE_URL="$(ask_text "Model endpoint" "$MODEL_BASE_DFLT")"
+        _probe="$(probe_endpoint "$MODEL_BASE_URL")"
+        if [ "${_probe%% *}" = "OK" ]; then
+            _ids="$(printf '%s' "${_probe#OK}")"
+            _ids="$(trim "$_ids")"
+            info "reachable${_ids:+ - it advertises:}${_ids:+$_ids}"
+            break
+        fi
+        warn "no answer from $MODEL_BASE_URL: ${_probe#NO }"
+        _url_tries=$((_url_tries + 1))
+        if [ "$_url_tries" -ge 3 ]; then
+            info "keeping it anyway - fix it later with: tinycmdr model endpoint <url>"
+            _ids=""
+            break
+        fi
+        info "check the host and port (the server may not be running yet)."
+    done
+    MODEL="$(ask_model_id "$_ids" "$MODEL_DFLT")"
     # A hosted endpoint wants a key. The primary's key is not env-resolved (only
     # fallback entries have api_key_env), so it lives in llm.api_key - the same home
     # the Windows installer gives it. Loopback is never asked about.

@@ -864,6 +864,87 @@ if HAVE_APP:
             fb.COPY_FILE, fb.copy_via_host_tool = _saved_copy_file, _saved_helper
             shutil.rmtree(_copy_dir, ignore_errors=True)
 
+        # the model picker: hermes' list-you-move-through, drawn INSIDE this Application
+        # (a second prompt_toolkit Application cannot own this terminal). Driven through the
+        # app's own key pipe, because the binding is exactly what was missing: bare /model
+        # used to print a Commands box and the reader retyped an exact name.
+        _pick_rows = [("qwen3-14b", "local http://127.0.0.1:8081/v1", True),
+                      ("deepseek-v4-flash", "http://10.0.0.5:8081/v1", False),
+                      ("glm-4.6", "http://10.0.0.5:8081/v1", False)]
+        _picked = []
+        _appp = fb.AppScreen(colour=False, tier="truecolor")
+        _appp.app.output = _DummyOutput()
+
+        def _pick_state():
+            return fb.ModelPick(_pick_rows, current="qwen3-14b", title="Select model",
+                                scope="ENTER switches this session")
+
+        with _pipe_input() as _k5:
+            _appp.app.input = _k5
+            _st = _pick_state()
+
+            def _feed_pick():
+                _time.sleep(0.5)
+                _appp.open_model_pick(_st, lambda name: _picked.append(name))
+                _time.sleep(0.3)
+                _k5.send_text("gl")              # type to filter
+                _time.sleep(0.4)
+                _picked.append(("typed", _st.filter, _appp.input.text, _appp.status))
+                _k5.send_text("\r")              # ENTER takes it
+                _time.sleep(0.4)
+                _k5.send_text("\x11")            # c-q: leave
+                _time.sleep(0.3)
+
+            _threading.Thread(target=_feed_pick, daemon=True).start()
+            _appp.app.run()
+        check("--app: typing in the picker filters it and never reaches the composer",
+              _picked[0][:3] == ("typed", "gl", ""), _picked[0])
+        check("--app: ENTER hands over the filtered model",
+              _picked[1:] == ["glm-4.6"], _picked)
+        check("--app: the picker is gone once it closes", _appp.pick is None
+              and _appp._pick_text() == [], _appp.pick)
+        check("--app: the status line said what the keys do while it was open",
+              "ESC leaves it" in _picked[0][3] and "ENTER takes it" in _picked[0][3],
+              _picked[0][3])
+
+        _cancel = []
+        _appp2 = fb.AppScreen(colour=False, tier="truecolor")
+        _appp2.app.output = _DummyOutput()
+        _alive = []
+        with _pipe_input() as _k6:
+            _appp2.app.input = _k6
+            _st2 = _pick_state()
+
+            def _feed_esc():
+                _time.sleep(0.5)
+                _appp2.open_model_pick(_st2, lambda name: _cancel.append(name))
+                _time.sleep(0.3)
+                _k6.send_text("\x1b")            # ESC: leave the model alone
+                _time.sleep(0.6)
+                _alive.append(_appp2.app.is_running)
+                _k6.send_text("\x11")
+                _time.sleep(0.3)
+
+            _threading.Thread(target=_feed_esc, daemon=True).start()
+            _appp2.app.run()
+        check("--app: ESC leaves the model alone", _cancel == [None] and _appp2.pick is None,
+              _cancel)
+        check("--app: ...and does not leave the app (the exit key still does)",
+              _alive == [True] and fb._CLI.get("leave") is True,
+              (_alive, fb._CLI.get("leave")))
+
+        # the shell door's host: its own Application, real bytes, injected input/output
+        for _label, _keys, _want in (("down+ENTER", "\x1b[B\r", "deepseek-v4-flash"),
+                                     ("typed+ENTER", "gl\r", "glm-4.6"),
+                                     ("ESC", "\x1b", None)):
+            _host_state = _pick_state()
+            with _pipe_input() as _k7:
+                _threading.Thread(
+                    target=lambda k=_k7, s=_keys: (_time.sleep(0.4), k.send_text(s)),
+                    daemon=True).start()
+                _got = fb.run_model_pick(_host_state, input=_k7, output=_DummyOutput())
+            check("the shell picker: %s -> %r" % (_label, _want), _got == _want, _got)
+
         # all the console's prints land in the pane, never at the real stdout
         _sink = fb._AppStdout(app_screen_tmp)
         _sink.write("one\n")

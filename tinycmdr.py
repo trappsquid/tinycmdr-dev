@@ -17200,6 +17200,36 @@ class AppScreen(TuiScreen):
         if self._final.strip():
             print(answer_block(self._final))
 
+    # -- the model picker, inside this Application ---------------------------
+    def _pick_text(self):
+        """The picker's lines. It spans the window, not the transcript pane."""
+        if self.pick is None:
+            return []
+        try:
+            from prompt_toolkit.application import get_app
+            width = get_app().output.get_size().columns - 6
+        except Exception:                                            # noqa: BLE001
+            width = self._pane_width()
+        return self.pick.render(width=max(40, width))
+
+    def open_model_pick(self, state, on_pick):
+        """Open the picker in THIS Application: a second one cannot own the terminal.
+
+        Called from the console's worker thread; the keys are handled on the app's thread and
+        the callback runs there, so it does file I/O and prints to the pane - never a run.
+        """
+        self.pick = state
+        self._pick_done = on_pick
+        self.status = "choose a model: \u2191\u2193 move \u00b7 type to filter \u00b7 ENTER takes it \u00b7 ESC leaves it"
+        self._invalidate()
+
+    def close_model_pick(self, value=None):
+        on_pick, self._pick_done = self._pick_done, None
+        self.pick = None
+        self._invalidate()
+        if on_pick is not None:
+            on_pick(value)
+
     # -- taking an item OUT of the pane -------------------------------------
     def _copy_targets(self):
         """The items a reader can copy: the plain text each one was drawn from.
@@ -17481,7 +17511,11 @@ class AppScreen(TuiScreen):
 
     def _app_style(self):
         """The app's own surface colours. One table, tier-aware: a 16-colour terminal
-        keeps the layering with reverse video instead of losing the rails."""
+        keeps the layering with reverse video instead of losing the rails.
+
+        model_pick_styles() joins it here and in the shell host, so the picker reads the
+        same in both doors - one table, two hosts.
+        """
         if self.tier in ("truecolor", "256"):
             return {
                 "app.frame": "bg:#0b0e13",
@@ -17498,6 +17532,7 @@ class AppScreen(TuiScreen):
                 "line": "#232a34 bg:#0b0e13",
                 "textarea": "#e6e6e6 bg:#12161c",
                 "prompt": "bold #5fbfbf bg:#12161c",
+                **model_pick_styles(self.palette),
             }
         if self.tier == "16":
             return {
@@ -17509,14 +17544,16 @@ class AppScreen(TuiScreen):
                 "app.hint": "dim",
                 "textarea": "",
                 "prompt": "bold cyan",
+                **model_pick_styles(self.palette),
             }
         return {}
 
     def _build(self):
         from prompt_toolkit.application import Application
+        from prompt_toolkit.filters import Condition
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
+        from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, VSplit, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.dimension import Dimension
         from prompt_toolkit.styles import Style
@@ -17544,16 +17581,73 @@ class AppScreen(TuiScreen):
         ], height=1)
         self.composer = Frame(self.input, title=self._composer_title(),
                               style="class:app.composer")
+        # The model picker takes the composer's place while it is open: it is the same row,
+        # and a reader who is choosing a model is not typing a message (hermes' picker is the
+        # model for this, and `--app` cannot run a second Application on this terminal).
+        self.pick = None
+        self._pick_done = None
+        self.pick_window = Window(FormattedTextControl(self._pick_text), wrap_lines=False,
+                                  always_hide_cursor=True, style="class:app.body")
+        picker = ConditionalContainer(
+            Frame(self.pick_window, title="model", style="class:app.composer"),
+            filter=Condition(lambda: self.pick is not None))
         shell = Frame(
             HSplit([
                 VSplit([rail, VerticalLine(), self.body]),
                 HorizontalLine(),
                 status,
-                self.composer,
+                picker,
+                ConditionalContainer(self.composer,
+                                     filter=Condition(lambda: self.pick is None)),
             ]),
             title=self._frame_title(), style="class:app.frame")
         kb = KeyBindings()
-        from prompt_toolkit.filters import Condition
+        from prompt_toolkit.keys import Keys
+        # While the picker is open it owns these keys; the transcript's bindings above are
+        # filtered out by not_picking, so nothing is handled twice.
+        not_picking = Condition(lambda: self.pick is None)
+        picking = Condition(lambda: self.pick is not None)
+
+        @kb.add("up", filter=picking)
+        def _(event):
+            self.pick.move(-1)
+
+        @kb.add("down", filter=picking)
+        def _(event):
+            self.pick.move(1)
+
+        @kb.add("pageup", filter=picking)
+        def _(event):
+            self.pick.move(-MODEL_PICK_VIEW)
+
+        @kb.add("pagedown", filter=picking)
+        def _(event):
+            self.pick.move(MODEL_PICK_VIEW)
+
+        @kb.add("enter", filter=picking)
+        def _(event):
+            # A filter matching nothing cannot be taken: ENTER does nothing until the list
+            # has a row under the cursor again (ESC is the way out).
+            name = self.pick.picked()
+            if name:
+                self.close_model_pick(name)
+
+        @kb.add("escape", filter=picking)
+        def _(event):
+            self.close_model_pick(None)
+
+        @kb.add("c-c", filter=picking)
+        def _(event):
+            self.close_model_pick(None)
+
+        @kb.add("backspace", filter=picking)
+        def _(event):
+            self.pick.backspace()
+
+        @kb.add(Keys.Any, filter=picking)
+        def _(event):
+            if event.data and event.data.isprintable() and event.data != "\t":
+                self.pick.typed(event.data)
 
         # The arrows move the pane one line at a time, but only while the composer is
         # EMPTY: with text in it the arrows are the caret, and a multi-line paste has to
@@ -17561,23 +17655,23 @@ class AppScreen(TuiScreen):
         # way to do it - prompt_toolkit's). Measured 2026-09-30 on a real pty: the rail
         # advertised "↑↓ PgUp/PgDn scroll" while ↑ and ↓ were bound to nothing, so the
         # app read as unscrollable from the keyboard although PgUp/PgDn always worked.
-        @kb.add("up", filter=Condition(lambda: not self.input.text))
+        @kb.add("up", filter=Condition(lambda: self.pick is None and not self.input.text))
         def _(event):
             self.scroll_lines(-1)
 
-        @kb.add("down", filter=Condition(lambda: not self.input.text))
+        @kb.add("down", filter=Condition(lambda: self.pick is None and not self.input.text))
         def _(event):
             self.scroll_lines(1)
 
-        @kb.add("pageup")
+        @kb.add("pageup", filter=not_picking)
         def _(event):
             self.scroll(-1)
 
-        @kb.add("pagedown")
+        @kb.add("pagedown", filter=not_picking)
         def _(event):
             self.scroll(1)
 
-        @kb.add("c-home")
+        @kb.add("c-home", filter=not_picking)
         def _(event):
             self._scroll_to(0)
 
@@ -17594,12 +17688,12 @@ class AppScreen(TuiScreen):
         def _(event):
             self.copy_transcript()
 
-        @kb.add("c-end")
+        @kb.add("c-end", filter=not_picking)
         def _(event):
             self.autofollow = True
             self._invalidate()
 
-        @kb.add("escape")
+        @kb.add("escape", filter=not_picking)
         def _(event):
             self.request_exit()
 
@@ -17607,16 +17701,16 @@ class AppScreen(TuiScreen):
         def _(event):
             self.request_exit()
 
-        @kb.add("enter")
+        @kb.add("enter", filter=not_picking)
         def _(event):
             # multiline=True would insert a newline on Enter; a chat box sends.
             self._submit(self.input.buffer)
 
-        @kb.add("c-j")
+        @kb.add("c-j", filter=not_picking)
         def _(event):
             self.input.buffer.insert_text("\n")
 
-        @kb.add("c-c")
+        @kb.add("c-c", filter=not_picking)
         def _(event):
             self._interrupt()
 
@@ -20795,6 +20889,13 @@ def _cli_render_box(title, lines, width=74):
 
 def run_setup(rest=None):
     """Guided interactive setup wizard: model endpoint, chat gateways, web search."""
+    if _CLI.get("app") is not None:
+        # The app owns stdin as well as the screen, and a raw input() competes with its
+        # input box for the same bytes - the prompts and the app's frame scribble over each
+        # other. Say so, and point at the door that works.
+        print(red("  setup needs the terminal to itself: run `tinycmdr setup` in a shell, "
+                  "not from inside --app."), file=sys.stderr)
+        return 1
     if not sys.stdin.isatty():
         print("tinycmdr setup requires an interactive terminal.\n"
               "For non-interactive: tinycmdr config set <key> <val> and tinycmdr token set <NAME>",
@@ -20821,24 +20922,59 @@ def run_setup(rest=None):
     cur_model = llm.get("model") or "main"
 
     print(bold("1. LLM Endpoint & Model"))
-    ans_url = input("   Endpoint URL [%s]: " % cur_url).strip()
-    new_url = ans_url if ans_url else cur_url
-    if not new_url.lower().startswith(("http://", "https://")):
-        print(red("   URL must start with http:// or https://"))
-        return 1
+    # Ask, PROBE, and only then move on. A typo here writes no error until the first
+    # request, and the rest of this wizard - and the whole install - is built on this one
+    # answer. Three tries, then it keeps the URL and says how to fix it later: a box whose
+    # server is not up yet is normal, and the wizard must not become a wall.
+    new_url, ids, typed_tries = "", None, 0
+    while True:
+        ans_url = input("   Endpoint URL [%s]: " % (new_url or cur_url)).strip()
+        new_url = ans_url or new_url or cur_url
+        if not new_url.lower().startswith(("http://", "https://")):
+            print(red("   URL must start with http:// or https://"))
+            if not ans_url:
+                return 1                      # the stored value is not a URL: stop, don't write it
+            continue
+        ids = _probe_model_ids(new_url)
+        if ids is not None:
+            print(green("   \u2713 reachable%s" % (" - models: %s" % ", ".join(ids[:8])
+                                                  if ids else " (no model list advertised)")))
+            break
+        print(red("   \u2717 no answer from %s - wrong host or port, or the server is not up."
+                  % new_url))
+        if not ans_url:
+            # They pressed Enter on the URL that was already there: say what is wrong, name
+            # the command that fixes it, and let the wizard get on with the rest. The retry
+            # loop is for someone correcting a typo they just typed.
+            print(dim("   keeping it: fix it later with `tinycmdr model endpoint <url>`"))
+            break
+        typed_tries += 1
+        if typed_tries >= 3:
+            print(dim("   keeping it anyway: fix it later with `tinycmdr model endpoint <url>`"))
+            break
+        print(dim("   check the host and port (the server may not be running yet)."))
     llm["base_url"] = new_url
 
-    ids = _probe_model_ids(new_url)
-    if ids:
-        print(green("   Endpoint online. Found models: %s" % ", ".join(ids[:8])))
-        default_choice = cur_model if cur_model in ids else ids[0]
+    # The loop above already asked, and said what came back - this only decides the default.
+    default_choice = cur_model if (ids and cur_model in ids) else (ids[0] if ids else cur_model)
+    if not ids:
+        print(dim("   Note: no model list came back, so the model id is whatever you type"))
+
+    # This step used to be "Model name [main]:" straight after printing the ids the endpoint
+    # had just advertised - the reader typed one of the names they had been shown. Same list
+    # now, but a picker; with no ids (offline, custom path) the plain prompt stays.
+    if ids and pick_terminal_ready():
+        state = ModelPick(
+            [(i, "advertised by %s" % new_url, i == default_choice) for i in ids],
+            current=default_choice, title="Which model? (%d advertised)" % len(ids),
+            scope="ENTER sets llm.model - ESC keeps %s" % default_choice)
+        picked = run_model_pick(state)
+        llm["model"] = picked or default_choice
+        if not picked:
+            print(dim("   kept %s" % default_choice))
     else:
-        print(dim("   Note: endpoint did not return model list (offline or custom path)"))
-        default_choice = cur_model
-
-    ans_model = input("   Model name [%s]: " % default_choice).strip()
-    llm["model"] = ans_model if ans_model else default_choice
-
+        ans_model = input("   Model name [%s]: " % default_choice).strip()
+        llm["model"] = ans_model if ans_model else default_choice
     ans_key = input("   API key (leave empty if none / local): ").strip()
     if ans_key:
         _env_set("TINYCMDR_LLM_API_KEY", ans_key)
@@ -20937,7 +21073,296 @@ def run_setup(rest=None):
 
 
 
-def _cli_model(rest):
+MODEL_PICK_VIEW = 12      # rows on screen at once; the list scrolls under the cursor
+
+
+def model_pick_rows(entries, current):
+    """[(name, detail, is_current)] for the picker, from model_catalog()'s entries.
+
+    The detail is what tells two rows with the same name apart: the endpoint behind it, and
+    the id it actually sends when the name is an alias.
+    """
+    rows = []
+    for e in entries:
+        name = str(e.get("name") or "").strip()
+        if not name:
+            continue
+        bits = []
+        if e.get("send_as") and str(e["send_as"]) != name:
+            bits.append("sends as %s" % e["send_as"])
+        if e.get("url"):
+            bits.append("%s%s" % ("local " if e.get("local") else "", e["url"]))
+        rows.append((name, " · ".join(bits), name.lower() == str(current or "").lower()))
+    return rows
+
+
+def model_pick_styles(palette):
+    """The picker's style classes, from the ONE palette table both hosts already use."""
+    return {
+        "pick.title": palette.get("title", ""),
+        "pick.hint": palette.get("dim", ""),
+        "pick.row": palette.get("body", ""),
+        "pick.sel": (palette["accent"] + " reverse") if palette.get("accent") else "reverse",
+        "pick.cur": palette.get("result", ""),
+        "pick.filter": palette.get("accent", ""),
+    }
+
+
+class ModelPick:
+    """The model list as something you MOVE through - hermes' picker on this install's data.
+
+    One state machine and one renderer, two hosts: `--app` draws it inside its own
+    Application (a second prompt_toolkit Application cannot own the terminal the first one
+    holds), and the shell verb runs it as a small Application of its own. Every key means
+    the same thing in both, because the meaning lives here.
+
+    It replaces what bare `model` used to be: a Commands box telling the reader to retype
+    the whole command with an exact name they had to already know.
+    """
+
+    def __init__(self, rows, current="", title="Select model", scope=""):
+        self.rows = list(rows)
+        self.current = current
+        self.title = title
+        self.scope = scope                       # what ENTER does here, said out loud
+        self.filter = ""
+        self.cursor = next((i for i, r in enumerate(self.rows) if r[2]), 0)
+        self.top = 0
+        self._clamp()
+
+    def visible(self):
+        q = self.filter.lower()
+        if not q:
+            return list(range(len(self.rows)))
+        return [i for i, r in enumerate(self.rows)
+                if q in r[0].lower() or q in r[1].lower()]
+
+    def _clamp(self):
+        shown = self.visible()
+        if not shown:
+            self.cursor = self.top = 0
+            return
+        self.cursor = max(0, min(self.cursor, len(shown) - 1))
+        self.top = min(self.top, self.cursor)
+        if self.cursor >= self.top + MODEL_PICK_VIEW:
+            self.top = self.cursor - MODEL_PICK_VIEW + 1
+
+    def move(self, delta):
+        shown = self.visible()
+        if shown:
+            self.cursor = max(0, min(self.cursor + delta, len(shown) - 1))
+        self._clamp()
+        return self
+
+    def typed(self, text):
+        self.filter += str(text)
+        self.cursor = 0
+        self._clamp()
+        return self
+
+    def backspace(self):
+        self.filter = self.filter[:-1]
+        self._clamp()
+        return self
+
+    def picked(self):
+        shown = self.visible()
+        return self.rows[shown[self.cursor]][0] if shown else None
+
+    def footer(self):
+        """What ENTER will do, and where the cursor is - the line both hosts show."""
+        return self.scope
+
+    def render(self, width=80):
+        """The hermes shape: a title, the key hint, the list with ONE cursor row, the filter.
+
+        Returns [(style, text)] with a newline between rows: a FormattedTextControl splits
+        lines on "\\n" INSIDE a piece, so rows handed over as separate pieces and no newline
+        render as one long line (measured on a pty, 2026-09-30).
+        """
+        out = [("class:pick.title", " " + self.title)]
+        out.append(("class:pick.hint",
+                    " \u2191\u2193 navigate  ENTER select  ESC cancel  \u00b7 type to filter"))
+        shown = self.visible()
+        limit = max(8, int(width) - 2)
+        if self.top:
+            out.append(("class:pick.hint", " \u2191 %d more" % self.top))
+        for pos in range(self.top, min(self.top + MODEL_PICK_VIEW, len(shown))):
+            name, detail, is_current = self.rows[shown[pos]]
+            here = pos == self.cursor
+            line = "%s (%s) %s" % ("\u2192" if here else " ",
+                                   "\u25cf" if (here or is_current) else "\u25cb", name)
+            if detail:
+                line += "  " + detail
+            if is_current:
+                line += "  \u2190 current"
+            out.append(("class:pick.sel" if here else "class:pick.row", " " + line[:limit]))
+        below = len(shown) - (self.top + MODEL_PICK_VIEW)
+        if below > 0:
+            out.append(("class:pick.hint", " \u2193 %d more" % below))
+        if not shown:
+            out.append(("class:pick.hint",
+                        " nothing matches %r - Backspace to widen" % self.filter))
+        if self.filter:
+            out.append(("class:pick.filter",
+                        " Filter: %s\u258f  (%d/%d match - type to narrow, Backspace to clear)"
+                        % (self.filter, len(shown), len(self.rows))))
+        if self.scope:
+            out.append(("class:pick.hint", " " + self.scope))
+        last = len(out) - 1
+        return [(style, text + ("\n" if i < last else ""))
+                for i, (style, text) in enumerate(out)]
+
+
+def run_model_pick(state, input=None, output=None):
+    """The shell door's host: the picker as its own Application over an OWNED terminal.
+
+    Only a lane that owns the terminal may call this. `--app` must not - its Application is
+    already on that terminal, so it draws the picker inside itself
+    (AppScreen.open_model_pick) - and neither may the inline console, whose reader holds
+    stdin in a prompt. Returns the chosen name, or None when it was cancelled.
+    """
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.keys import Keys
+    from prompt_toolkit.layout import Layout, Window
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.styles import Style
+
+    kb = KeyBindings()
+    app = None
+    done = {}
+
+    def finish(value):
+        done["value"] = value
+        if app is not None and app.is_running:
+            app.exit()
+
+    @kb.add("up")
+    def _(event):
+        state.move(-1)
+
+    @kb.add("down")
+    def _(event):
+        state.move(1)
+
+    @kb.add("pageup")
+    def _(event):
+        state.move(-MODEL_PICK_VIEW)
+
+    @kb.add("pagedown")
+    def _(event):
+        state.move(MODEL_PICK_VIEW)
+
+    @kb.add("enter")
+    def _(event):
+        # Nothing under the cursor (an empty filter): ENTER stays put, ESC is the way out.
+        name = state.picked()
+        if name:
+            finish(name)
+
+    @kb.add("escape")
+    def _(event):
+        finish(None)
+
+    @kb.add("c-c")
+    def _(event):
+        finish(None)
+
+    @kb.add("backspace")
+    def _(event):
+        state.backspace()
+
+    @kb.add(Keys.Any)
+    def _(event):
+        if event.data and event.data.isprintable() and event.data != "\t":
+            state.typed(event.data)
+
+    def _width():
+        try:
+            return app.output.get_size().columns
+        except Exception:                                        # noqa: BLE001
+            return 80
+
+    app = Application(
+        layout=Layout(Window(FormattedTextControl(lambda: state.render(_width())),
+                             wrap_lines=False)),
+        key_bindings=kb, full_screen=False, erase_when_done=True, mouse_support=False,
+        style=Style.from_dict(model_pick_styles(TUI_PALETTE[tui_colour_tier()])))
+    if input is not None:
+        app.input = input
+    if output is not None:
+        app.output = output
+    app.run()
+    return done.get("value")
+
+
+def pick_terminal_ready():
+    """Can a shell verb open the picker? A terminal, and not the plain-lines lane."""
+    if os.environ.get("TINYCMDR_PLAIN"):
+        return False
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:                                            # noqa: BLE001
+        return False
+
+
+def _cli_pick_available():
+    """Can THIS door show the picker? Only `--app`: it owns the terminal, so the picker is
+    drawn inside its own Application. The inline console's reader holds stdin in a prompt
+    and chat has no arrow keys at all, so both keep the printed list."""
+    return _CLI.get("app") is not None
+
+
+def _cli_model_pick(is_global):
+    """Bare `/model` on a door that can host the picker: choose a model, then switch.
+
+    The catalog is fetched HERE, off the app's main thread, so ENTER costs nothing more
+    than the switch itself. Returns True when the picker took the command over.
+    """
+    try:
+        entries = model_catalog(force=True)
+    except Exception as e:                                       # noqa: BLE001
+        print(red("  could not ask the endpoints for their model list: %s" % e))
+        print(dim("  fix a wrong or dead endpoint with: /tinycmdr model endpoint <url>"))
+        return False
+    if not entries:
+        print(dim("  no models advertised by any endpoint."))
+        print(dim("  check it with `/tinycmdr model endpoint`, or set one with "
+                  "`/tinycmdr model endpoint <url>`"))
+        return False
+    current = AGENT.model_overrides.get(_cli_key()) or CONFIG["llm"]["model"]
+    state = ModelPick(
+        model_pick_rows(entries, current), current=current, title="Select model",
+        scope=("ENTER sets the default in config.json" if is_global
+               else "ENTER switches this session (%s to persist)" % "/tinycmdr model --global"))
+    screen = _CLI.get("app")
+    screen.open_model_pick(state, lambda name: _cli_model_apply(name, is_global))
+    return True
+
+
+def _cli_model_apply(name, is_global):
+    """What the picker's ENTER does: exactly what a typed name does, same lines and all."""
+    if not name:
+        print(dim("  model unchanged"))
+        return
+    _cli_model(("%s --global" % name) if is_global else name)
+
+
+def _switch_global_model(name):
+    """Set the default model and say so the same way `model use` does (one path, two doors)."""
+    prev, err = set_global_model(str(name))
+    if err:
+        print("could not write config.json: %s" % err, file=sys.stderr)
+        return 1
+    print("default model: %s -> %s" % (prev, name))
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: use /model in chat, "
+              "or run `tinycmdr restart`.")
+    return 0
+
+
+def _cli_model(rest, pick=False):
     tokens = (rest or "").strip().split()
     sub = tokens[0].lower() if tokens else ""
     is_global = any(t.lstrip("-").lower() in ("global", "g", "all")
@@ -20950,9 +21375,12 @@ def _cli_model(rest):
     base_url = CONFIG["llm"]["base_url"]
     budget = AGENT._context_budget()
 
-    # 1. Bare /model: show status box
-    if not tokens:
-        scope = "session override" if _cli_key() in AGENT.model_overrides else "config default"
+    # 1. Bare /model: the picker where the door can host one, else the status box
+    if not tokens or (is_global and not clean_tokens):
+        if pick and _cli_pick_available() and _cli_model_pick(is_global):
+            return
+        scope = ("session override" if _cli_key() in AGENT.model_overrides
+                 else "config default")
         box = _cli_render_box("Model Status", [
             "Active:   %s (%s)" % (current, scope),
             "Endpoint: %s" % base_url,
@@ -21084,6 +21512,27 @@ def _cli_model(rest):
         print(green("  ✓ %s" % line))
         return
 
+    # 4b. The endpoint itself: read it, or correct a typo in it, then pick from what it
+    # advertises. This is where a wrong URL from install time gets fixed.
+    if sub in ("endpoint", "url", "host"):
+        urls = [t for t in clean_tokens[1:] if t]
+        if not urls:
+            for line in endpoint_report():
+                print("  " + line)
+            return
+        rc, ids, lines = set_primary_endpoint(urls[0], force)
+        for line in lines:
+            print(red("  " + line) if rc else "  " + line)
+        if rc == 0 and ids and _cli_pick_available():
+            state = ModelPick(
+                [(i, "advertised by %s" % urls[0], False) for i in ids],
+                title="Which model does %s serve? (%d advertised)" % (urls[0], len(ids)),
+                scope="ENTER saves it to config.json")
+            _CLI["app"].open_model_pick(state, lambda name: _cli_model_apply(name, True))
+        elif rc == 0 and ids:
+            print(dim("  choose one with `/tinycmdr model <name> --global`"))
+        return
+
     # 5. Remove endpoint
     if sub in ("remove", "rm"):
         args = clean_tokens[1:]
@@ -21187,7 +21636,7 @@ def _cli_command(text):
         run_setup()
         return True
     if verb == "/model":
-        _cli_model(rest)
+        _cli_model(rest, pick=True)
         return True
     if verb in ("/sessions", "/conversations"):
         _cli_sessions()
@@ -23025,6 +23474,105 @@ def _verb_model_endpoints(rest):
     return _verb_model_add(opts, positional)
 
 
+def endpoint_report():
+    """The primary endpoint, and whether it answers - the sentence a reader needs.
+
+    Written for the two ways this goes wrong: a typo at install time (invisible until the
+    first call fails) and a box that is simply not up yet. Both end at the same command.
+    """
+    cur = str(CONFIG["llm"].get("base_url") or "")
+    lines = ["primary endpoint: %s" % (cur or "(none set)")]
+    if not cur:
+        lines.append("set it with: tinycmdr model endpoint <url>")
+        return lines
+    ids = _probe_model_ids(cur)
+    if ids is None:
+        lines.append("it did NOT answer (wrong host or port, or the server is not up yet)")
+        lines.append("fix a typo with: tinycmdr model endpoint <url>")
+    elif ids:
+        lines.append("it answers, and advertises: %s" % ", ".join(ids[:12]))
+    else:
+        lines.append("it answers, but advertises no model list")
+    return lines
+
+
+def set_primary_endpoint(url, force=False):
+    """Point llm.base_url at `url`, after asking it for its model list.
+
+    Returns (rc, ids, lines): the caller prints the lines, and a door that can host the
+    picker offers the ids as a choice. A URL that does not answer is REFUSED unless --force
+    - a wrong endpoint writes no error until the first request, which is exactly why this
+    command exists and why the setup wizard probes before it moves on.
+    """
+    url = str(url or "").strip().rstrip("/")
+    if not url.lower().startswith(("http://", "https://")):
+        return 2, [], ["a base_url starts with http:// or https:// "
+                       "(e.g. http://<lan-box>:8081/v1)"]
+    ids = _probe_model_ids(url)
+    if ids is None and not force:
+        return 1, [], ["%s did not answer its model list." % url,
+                       "Check the host and port (the server may not be running yet), or write "
+                       "it anyway with --force."]
+    raw, err = _config_raw()
+    if err:
+        return 1, [], [err]
+    prev = str((raw.get("llm") or {}).get("base_url") or "")
+    raw.setdefault("llm", {})["base_url"] = url
+    err = _config_write_raw(raw)
+    if err:
+        return 1, [], [err]
+    err = _config_take_effect()
+    if err:
+        return 1, [], [err]
+    lines = ["primary endpoint: %s -> %s" % (prev or "(none)", url)]
+    if ids is None:
+        lines.append("note: %s did not answer - it is in config.json unverified" % url)
+    elif ids:
+        lines.append("it advertises: %s" % ", ".join(ids[:12]))
+    else:
+        lines.append("it answered, but advertises no model list")
+    return 0, list(ids or []), lines
+
+
+def _verb_model_endpoint(args):
+    """`model endpoint [<url>]`: read the endpoint, or correct it (then pick a model)."""
+    force = any(a.lstrip("-").lower() in ("force", "f") for a in args)
+    urls = [a for a in args if not a.startswith("-")]
+    if not urls:
+        lines = endpoint_report()
+        print("\n".join(lines))
+        return 0 if "it answers" in lines[1] else 1
+    rc, ids, lines = set_primary_endpoint(urls[0], force)
+    for line in lines:
+        print(line, file=sys.stderr if rc else sys.stdout)
+    if rc or not ids:
+        return rc
+    if pick_terminal_ready():
+        state = ModelPick([(i, "advertised by %s" % urls[0], False) for i in ids],
+                          title="Which model does %s serve? (%d advertised)"
+                                % (urls[0], len(ids)),
+                          scope="ENTER sets llm.model")
+        picked = run_model_pick(state)
+        if picked:
+            print()
+            return _switch_global_model(picked)
+        print("model unchanged - choose one later with: tinycmdr model use <name>")
+    else:
+        print("choose one with: tinycmdr model use <name>")
+    return 0
+
+
+def _pick_advertised_model(url, ids):
+    """A new endpoint advertising several ids: move through them, or "" to let the caller
+    explain. Typing an id you just saw printed is the step hermes' picker exists to remove."""
+    if not pick_terminal_ready():
+        return ""
+    state = ModelPick([(i, "advertised by %s" % url, False) for i in ids],
+                      title="Which model does %s serve? (%d advertised)" % (url, len(ids)),
+                      scope="ENTER writes it into config.json - ESC cancels")
+    return run_model_pick(state) or ""
+
+
 def _verb_model_add(opts, positional):
     if not positional:
         print(MODEL_ADD_HELP, file=sys.stderr)
@@ -23082,6 +23630,8 @@ def _verb_model_add(opts, positional):
             if len(ids) == 1:
                 want = ids[0]
             else:
+                want = _pick_advertised_model(url, ids)
+            if not want:
                 print("which model? %s advertises:\n  %s\npass --model <name>"
                       % (url, "\n  ".join(ids[:12])), file=sys.stderr)
                 return 2
@@ -23177,6 +23727,8 @@ def _verb_model_remove(positional):
 def _verb_model(rest):
     if rest and rest[0] in ("add", "remove", "rm"):
         return _verb_model_endpoints(rest)
+    if rest and rest[0] in ("endpoint", "url", "host"):
+        return _verb_model_endpoint(rest[1:])
     if rest and rest[0] in ("use", "set"):
         if len(rest) < 2:
             print("model use <name> — which model? (tinycmdr model lists them)",
@@ -23206,7 +23758,30 @@ def _verb_model(rest):
             print("a running bot reads config.json at start: use /model in chat, "
                   "or run `tinycmdr restart`.")
         return 0
-    entries = model_catalog(force=True)
+    try:
+        entries = model_catalog(force=True)
+    except Exception as e:                                       # noqa: BLE001
+        print("could not ask the endpoints for their model list: %s" % e,
+              file=sys.stderr)
+        return 1
+    # Bare `model`: the picker, exactly as hermes opens one - ↑↓ to move, type to filter,
+    # ENTER to switch, ESC to leave. It needs a terminal nobody else is reading, and a
+    # pipe (a script, a cron job, CI) still gets the plain list it greps.
+    if entries and pick_terminal_ready():
+        current = CONFIG["llm"]["model"]
+        state = ModelPick(model_pick_rows(entries, current), current=current,
+                          title="Select model (%d available)" % len(entries),
+                          scope="ENTER sets the default in config.json - ESC leaves it alone")
+        picked = run_model_pick(state)
+        if picked:
+            print()
+            return _switch_global_model(picked)
+        print("cancelled - nothing changed")
+        return 0
+    return _print_model_catalog(entries)
+
+
+def _print_model_catalog(entries):
     print("models this install can route to (%d):" % len(entries))
     for e in entries:
         bits = [str(e.get("name"))]

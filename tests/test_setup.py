@@ -102,6 +102,68 @@ def main():
             check(written["search"]["allow_cloud_egress"] is current,
                   f"Enter keeps the current value ({current})",
                   json.dumps(written.get("search")))
+
+        # ---- the endpoint is PROBED before the wizard moves on --------------------
+        # Operator, 2026-09-30: "there should be a point in the interactive installer that
+        # checks if your link is even reachable before it continues". The staged URL is
+        # 127.0.0.1:9 - a real, refused port - so this is the real probe, not a stub.
+        d = stage(work / "reach", False)
+        rc, out, written, mod = drive(d, "")
+        check("\u2717 no answer from http://127.0.0.1:9/v1" in out
+              and "tinycmdr model endpoint" in out,
+              "a stored endpoint that does not answer is named, once, and pointed at the fix",
+              out[-600:])
+        check(rc == 0 and written["llm"]["base_url"] == "http://127.0.0.1:9/v1",
+              "...and the wizard still finishes: the rest of the install has work to do", rc)
+
+        # a TYPED url that fails is re-asked: someone correcting a typo is in the loop
+        d = stage(work / "typed", False)
+        spec = importlib.util.spec_from_file_location("setup_typed", d / "tinycmdr.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        answers = ["http://127.0.0.1:9/v1", "http://127.0.0.1:9/v2", "http://127.0.0.1:9/v3",
+                   "", "", "", "", ""]               # model, key, Mattermost, Telegram, egress
+        old_in = sys.stdin
+        sys.stdin = FakeTTY("\n".join(answers) + "\n")
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = mod.run_setup()
+        finally:
+            sys.stdin = old_in
+        out = buf.getvalue()
+        written = json.loads((d / "config.json").read_text(encoding="utf-8"))
+        check(out.count("\u2717 no answer from") == 3,
+              "a typed URL is checked every time it is typed", out[-800:])
+        check("keeping it anyway" in out and written["llm"]["base_url"] == "http://127.0.0.1:9/v3",
+              "...and after three tries it keeps the last one and says how to fix it",
+              (written["llm"]["base_url"], out[-400:]))
+
+        # an endpoint that DOES answer reports what it advertised, and its ids become the
+        # default model (the numbered list is the picker's shell form)
+        d = stage(work / "live", False)
+        spec = importlib.util.spec_from_file_location("setup_live", d / "tinycmdr.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        mod._probe_model_ids = lambda url, key=None: ["qwen3-14b", "glm-4.6"]
+        answers = ["http://127.0.0.1:8081/v1", "2", "", "", "", "", ""]
+        old_in = sys.stdin
+        sys.stdin = FakeTTY("\n".join(answers) + "\n")
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = mod.run_setup()
+        finally:
+            sys.stdin = old_in
+        out = buf.getvalue()
+        written = json.loads((d / "config.json").read_text(encoding="utf-8"))
+        check("\u2713 reachable" in out and "qwen3-14b" in out and "glm-4.6" in out,
+              "a reachable endpoint says so, and lists what it advertises", out[:600])
+        check(written["llm"]["model"] == "2",
+              "...and the wizard keeps the typed model id when no picker can run here",
+              written["llm"]["model"])
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -238,6 +238,151 @@ def main():
               written["llm"]["model"])
         check("...and prints no secret", "fixture-token" not in out, out[:200])
 
+        # ---- the model picker: the list you MOVE through ------------------------
+        # Operator, 2026-09-30: "the /tinycmdr model 'wizard' ... is fucking terrible".
+        # It was a Commands box: to switch you retyped the whole command with an exact name
+        # you had to already know. hermes opens a list you move through; this is that list.
+        pick_rows = fb.model_pick_rows(
+            [{"name": "main", "send_as": "main", "url": "http://127.0.0.1:8081/v1",
+              "local": True},
+             {"name": "tower", "send_as": "tower-27b", "alias": True,
+              "url": "http://10.0.0.5:8081/v1"},
+             {"name": "qwen3-14b", "send_as": "qwen3-14b",
+              "url": "http://10.0.0.5:8081/v1"}],
+            "tower")
+        p = fb.ModelPick(pick_rows, current="tower", title="Select model",
+                         scope="ENTER switches this session")
+        check("the picker opens ON the model in use", p.picked() == "tower", p.picked())
+        check("...and a row names the endpoint and the id an alias really sends",
+              pick_rows[1][1] == "sends as tower-27b · http://10.0.0.5:8081/v1",
+              pick_rows[1][1])
+        check("down moves the cursor", p.move(1).picked() == "qwen3-14b", p.picked())
+        check("...and it stops at the first row", p.move(-9).picked() == "main", p.picked())
+        check("typing narrows the list to the match",
+              p.typed("qwen").picked() == "qwen3-14b" and len(p.visible()) == 1, p.visible())
+        drawn = "".join(text for _style, text in p.render(70))
+        check("...and the filter line counts what is left",
+              "Filter: qwen" in drawn and "(1/3 match" in drawn, drawn[:200])
+        check("backspace widens it again",
+              p.backspace().backspace().backspace().backspace().picked() == "main"
+              and not p.filter, (p.filter, p.visible()))
+        p.typed("nothingmatchesthis")
+        check("no match is said out loud, not drawn blank",
+              any("nothing matches" in t for _s, t in p.render(70)), p.render(70))
+        check("...and ENTER then picks nothing at all", p.picked() is None, p.picked())
+        fresh = fb.ModelPick(pick_rows, current="tower")
+        lines = [t for _s, t in fresh.render(70)]
+        check("the cursor row is marked and the model in use is named",
+              any(t.strip().startswith("\u2192 (\u25cf) tower") and "\u2190 current" in t
+                  for t in lines), lines)
+        check("the list scrolls rather than overflowing, and says how much is left",
+              len(fb.ModelPick([(str(i), "", False) for i in range(40)]).render(70))
+              <= fb.MODEL_PICK_VIEW + 6,
+              len(fb.ModelPick([(str(i), "", False) for i in range(40)]).render(70)))
+
+        # bare `model` on a pipe (a script, a cron job, CI) is still the plain list
+        rc, out, err = call(fb, ["model"])
+        check("bare model on a pipe still prints the list a script greps",
+              rc == 0 and "models this install can route to" in out, out[:200])
+
+        # a door that cannot host the picker keeps the status box it always had
+        out_buf = io.StringIO()
+        with contextlib.redirect_stdout(out_buf):
+            fb._cli_model("", pick=True)
+        check("chat and the inline console keep the Model Status box",
+              "Model Status" in out_buf.getvalue(), out_buf.getvalue()[:200])
+
+        # `--app`'s bare /model opens the picker instead (the app draws it; the console
+        # worker only hands over the state)
+        class _FakeScreen:
+            def __init__(self):
+                self.opened = []
+
+            def open_model_pick(self, state, on_pick):
+                self.opened.append((state, on_pick))
+
+        fb.AGENT.model_overrides.pop(fb._cli_key(), None)
+        fb._CLI["app"] = _FakeScreen()
+        try:
+            out_buf = io.StringIO()
+            with contextlib.redirect_stdout(out_buf):
+                fb._cli_model("", pick=True)
+            state, on_pick = fb._CLI["app"].opened[0]
+            check("--app's bare model opens the picker, printing no command list",
+                  not out_buf.getvalue().strip() and isinstance(state, fb.ModelPick),
+                  out_buf.getvalue()[:120])
+            check("...on the model in use, saying what ENTER does",
+                  state.picked() == written["llm"]["model"] and "ENTER" in state.scope,
+                  (state.picked(), state.scope))
+            on_pick("tower")                      # what the app calls when ENTER lands
+        finally:
+            fb._CLI.pop("app", None)
+        check("...and ENTER takes the same path a typed name takes",
+              fb.AGENT.model_overrides.get(fb._cli_key()) == "tower",
+              fb.AGENT.model_overrides)
+        fb.AGENT.model_overrides.pop(fb._cli_key(), None)
+
+        # the setup wizard refuses the door where its raw input() would fight the app
+        fb._CLI["app"] = _FakeScreen()
+        try:
+            rc, out, err = call(fb, ["setup"])
+        finally:
+            fb._CLI.pop("app", None)
+        check("setup names the app as the wrong door instead of scribbling",
+              rc == 1 and "not from inside --app" in err, (rc, err[:200]))
+
+        # ---- model endpoint: read it, and CORRECT it ---------------------------
+        # Operator, 2026-09-30: the picker "should also allow you to edit your incorrectly
+        # entered endpoint if that happened to a user when they set it up". The probe is the
+        # real `_probe_model_ids`, stubbed per URL, so a dead URL is refused and a live one
+        # is written - and a wrong endpoint stops being a hand-edit of config.json.
+        live = {"http://10.0.0.9:8081/v1": ["qwen3-14b", "glm-4.6"]}
+        fb._probe_model_ids = lambda url, key=None: live.get(str(url).rstrip("/"))
+
+        rc, out, err = call(fb, ["model", "endpoint"])
+        check("model endpoint reads the endpoint and whether it answers",
+              rc == 1 and "primary endpoint:" in out and "did NOT answer" in out, out[:300])
+        check("...and names the command that fixes it",
+              "model endpoint <url>" in out, out[:300])
+
+        rc, out, err = call(fb, ["model", "endpoint", "http://10.0.0.9:8081/v1"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("model endpoint writes a URL that answers, and says what it advertises",
+              rc == 0 and written["llm"]["base_url"] == "http://10.0.0.9:8081/v1"
+              and "qwen3-14b" in out, (rc, written["llm"]["base_url"], out[:200]))
+
+        rc, out, err = call(fb, ["model", "endpoint", "http://10.0.0.9:9999/v1"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("a URL that does not answer is REFUSED, not written",
+              rc == 1 and written["llm"]["base_url"] == "http://10.0.0.9:8081/v1"
+              and "did not answer" in err, (rc, written["llm"]["base_url"], err[:200]))
+        check("...and the refusal names --force for a server that is not up yet",
+              "--force" in err, err[:200])
+
+        rc, out, err = call(fb, ["model", "endpoint", "http://10.0.0.9:9999/v1", "--force"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("--force writes it and says it is unverified",
+              rc == 0 and written["llm"]["base_url"] == "http://10.0.0.9:9999/v1"
+              and "unverified" in out, (rc, out[:200]))
+
+        rc, out, err = call(fb, ["model", "endpoint", "not-a-url"])
+        check("a URL without a scheme is refused before anything is probed",
+              rc == 2 and "http://" in err, (rc, err[:200]))
+
+        # the console door: the same command, and the app is handed the picker over the new
+        # endpoint's ids rather than printing a list to retype
+        fb._CLI["app"] = _FakeScreen()
+        try:
+            out_buf = io.StringIO()
+            with contextlib.redirect_stdout(out_buf):
+                fb._cli_model("endpoint http://10.0.0.9:8081/v1", pick=True)
+            opened = fb._CLI["app"].opened
+            check("--app: `model endpoint <url>` opens the picker on the new endpoint's models",
+                  opened and isinstance(opened[0][0], fb.ModelPick)
+                  and opened[0][0].picked() == "qwen3-14b", out_buf.getvalue()[:200])
+        finally:
+            fb._CLI.pop("app", None)
+
         # ---- model add / remove: an endpoint has a route of its own -----------
         # (operator, 2026-09-22: "your solution to wire in another endpoint is to rerun
         # the installer?" - it never was one. Hand-editing config.json was the only way
