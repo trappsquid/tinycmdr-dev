@@ -23,6 +23,12 @@ Changed
   points here.
 
 Fixed
+- **A session no longer dead-ends a verb it cannot run.** Typing `/update` (or `/doctor`,
+  `/logs`, `/version`, `/clean`, `/config`, `/token`, `/health`, `/proc`) into a `tinycmdr` session
+  answered "`/update` is not a command - `/tinycmdr help` lists them", and that list has no update
+  verb in it. Those verbs are the shell's and the chat lane's, so the console now says which door
+  has them - and `update` names both steps, because it is the one that arrives as "how do I
+  update?": `tinycmdr update` pulls the build, then `tinycmdr restart` starts running it.
 - **The interactive installers probe the model endpoint before carrying on.** They used to ask for
   the URL and the model id as free text and write both without a single request - so a typo (wrong
   host, wrong port) was invisible until the first call failed, on a box whose install had just

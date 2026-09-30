@@ -21702,6 +21702,23 @@ def _cli_command(text):
     if verb == "/usage":
         _cli_usage_line(force=True)
         return True
+    # A MANAGEMENT verb the session cannot run still has an answer: say which door has it.
+    # Measured 2026-09-30 - the operator asked how to update from the CLI, typed /update in a
+    # session and got "not a command - /tinycmdr help lists them", where the list has no
+    # update verb in it. `update` is the one that arrives as "how do I update?", so it names
+    # both steps.
+    bare = verb.lstrip("/")
+    if bare == "update":
+        print(dim("  `update` runs in a shell on the host: `tinycmdr update` pulls the build, "
+                  "then `tinycmdr restart` starts running it."))
+        return True
+    if bare == "restart":
+        print(dim("  `restart` runs in a shell on the host: `tinycmdr restart`"))
+        return True
+    if bare in VERBS:
+        print(dim("  `%s` is a shell verb on this host: run `tinycmdr %s` there, "
+                  "or `%s%s` from chat." % (bare, bare, CMDR, bare)))
+        return True
     print(dim("  %s is not a command - %s help lists them" % (verb, CMDR)))
     return True
 

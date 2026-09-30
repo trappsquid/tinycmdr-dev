@@ -219,6 +219,24 @@ def test_console_lane():
     check("an unknown console verb says so",
           "not a command" in out.getvalue(), out.getvalue()[:120])
 
+    # A management verb the session cannot run gets the door that has it, not "not a
+    # command": the operator asked how to update, typed /update here, and the list it named
+    # has no update verb in it (2026-09-30).
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        fb._cli_command("/tinycmdr update")
+    said = out.getvalue()
+    check("/update in a session names the shell, both steps, instead of dead-ending",
+          "not a command" not in said and "tinycmdr update" in said
+          and "tinycmdr restart" in said, said[:200])
+
+    out = io.StringIO()
+    with contextlib.redirect_stdout(out):
+        fb._cli_command("/tinycmdr doctor")
+    said = out.getvalue()
+    check("...and another shell-only verb names itself the same way",
+          "not a command" not in said and "tinycmdr doctor" in said, said[:200])
+
     check("the console help text documents the prefix",
           "/tinycmdr help" in fb.HELP_TEXT, fb.HELP_TEXT[:80])
 
