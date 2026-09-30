@@ -502,7 +502,7 @@
         "expect": "untagged"
       },
       "detail": "Fixed 2026-09-29 (8abdb49). Reproduced before the fix: streaming an answer containing a markdown table drew a dim whitespace-collapsed pipe line, an 'answer' card made from that draft (flattened pipes, truncated at checkin_note_chars with a trailing ellipsis), and the rendered card. RunReporter.narration collapses whitespace and caps at 400 chars; CliDestination.drop() drew a card from that text; and the console loop's dedupe (answer.startswith(shown), shown.startswith(answer)) can never match an intact answer against the mangled draft. drop() now only records the draft, for the plain path's single-print, and the console loop draws the whole answer exactly once whenever a screen exists. tests/test_tui.py reproduces the table case and asserts one answer card, no flattened copy on the screen and no truncation glyph.",
-      "gate": "done - committed on the tui/brief-answer-card-and-app branch; maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
+      "gate": "done - committed to main (gate 68/68 green); maintenance/ledger-tag.py states the release claim on this anchor when the next tag exists"
     },
     {
       "id": "console-palette-forked-per-kind",
@@ -513,7 +513,7 @@
         "expect": "untagged"
       },
       "detail": "Fixed 2026-09-29 (8abdb49). TUI_KINDS carried a literal colour per kind and cli_banner() hardcoded border_style=\"blue\"; rich's named blue is ANSI 4, which dark themes render blue-violet, and the reviewer's own screenshot showed the answer frame as purple while the answer, the tool lines and the narration all competed for the eye. There is now one TUI_PALETTE table (accent #5fbfbf / cyan, result #5fbf7f / green, failure red bold, question magenta bold, answer frame bright_black, ambient dim) and one tui_colour_tier() that picks truecolor/256/16/none once per process from COLORTERM, TERM, WT_SESSION, with NO_COLOR winning and TINYCMDR_COLOR forcing a tier for a screenshot or a test. TUI_KINDS names a ROLE, so a lane or a kind cannot fork the palette again. tests/test_tui.py grades all four tiers by their SGR bytes and asserts no tier paints anything blue.",
-      "gate": "done - committed on the tui/brief-answer-card-and-app branch; the next tag carries it"
+      "gate": "done - committed to main (gate 68/68 green); the next tag carries it"
     },
     {
       "id": "console-has-no-app-mode",
@@ -524,7 +524,7 @@
         "expect": "untagged"
       },
       "detail": "Fixed 2026-09-29 (8abdb49). `tinycmdr --app` is the same session in an alternate-screen app: header with model/endpoint/context, a repaintable transcript pane, a status bar, an always-focused input and key hints. No port, no server and no browser (the removed web lane stays removed) and no new dependency - prompt_toolkit already owns smcup/rmcup and the Windows console glue. AppScreen is a TuiScreen subclass, so the palette and the cards are the same code; the streamed draft is one item the answer card REPLACES, which is what makes the three-render defect unreachable there. The console loop runs in a worker thread (the app owns the main thread) and stdout is swapped so the banner, /help and /status become transcript lines; on exit the terminal is restored and the session's last answer is reprinted inline. tests/test_tui.py drives the real Application headlessly (key pipe, dummy output) and asserts one answer card, the draft replaced rather than stacked, no stats in the transcript, /exit leaving both, and no NETWORK socket opened during the run.",
-      "gate": "done - committed on the tui/brief-answer-card-and-app branch. The reviewer still has to look at it on macOS/Linux/Windows terminals (the brief's platform matrix) before it is called shipped"
+      "gate": "done - committed to main (gate 68/68 green). The reviewer still has to look at it on macOS/Linux/Windows terminals (the brief's platform matrix) before it is called shipped"
     },
     {
       "id": "console-tool-card-collapse",
