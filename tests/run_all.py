@@ -265,12 +265,26 @@ def _looks_failed(line):
 
 
 def _check_tail(stdout):
-    """The suite's own "N passed, M failed" line, when it prints one."""
+    """The suite's own summary line, when it prints one.
+
+    Two shapes are in the tree and BOTH are summaries: "N passed, M failed[, K skipped]" (most
+    suites) and "N check(s) failed" (the check()-only suites - 22 of them, e.g. test_plan,
+    test_digest, test_envelope). Only the first was recognised, so a red in one of the second
+    kind was reported as "[died before its own summary: no count line]" - which tells the reader
+    the suite aborted mid-run and left checks ungraded, when it had in fact graded all of them
+    and said how many failed. Measured 2026-09-30: test_plan's own date-rot red (CI run
+    36778872020) read exactly that way. What this looks for is the summary, not one spelling.
+    """
     for line in reversed(stdout.splitlines()):
         m = re.match(r"^\s*(\d+) passed, (\d+) failed(?:, (\d+) skipped)?\s*$", line)
         if m:
             skipped = ", %s skipped" % m.group(3) if m.group(3) else ""
             return "%s passed, %s failed%s" % (m.group(1), m.group(2), skipped)
+        # ...and it can carry the names inline ("1 check(s) failed: a, b"), so only the head
+        # of the line is matched.
+        m = re.match(r"^\s*(\d+) check\(s?\) failed\b", line)
+        if m:
+            return "%s check(s) failed" % m.group(1)
     return ""
 
 
