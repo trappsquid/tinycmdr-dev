@@ -239,17 +239,23 @@ def main():
         sent2 = names(seen[0].get("tools") or [])
         check(EX in sent2, "the revealed tool rides in the next request")
 
-        # ---- the banner reports what the REQUEST carries --------------------
+        # ---- the banner and /status report what the REQUEST carries ---------
         # (audit, 2026-09-22: it counted REGISTRY.openai_schemas(), so a real
         # install read "34 tool schemas" while its requests carried 14 - the
         # number a reader checks the ~4k-token claim against was the wrong one.)
+        # The banner now shows three rows and folds the arithmetic into /status
+        # (brief T-04); both read envelope_facts(), so they cannot disagree.
         import contextlib
         import io
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             fb.cli_banner()
-        lines = [l for l in buf.getvalue().splitlines() if "prompt overhead" in l]
-        check(bool(lines), "the banner prints an overhead line")
+            fb._cli_command("/status")
+        banner = buf.getvalue()
+        check(sum(1 for l in banner.splitlines() if l.startswith(("\u2502", "|"))) <= 5,
+              "the banner fits in four rows of content")
+        lines = [l for l in banner.splitlines() if "prompt overhead" in l]
+        check(bool(lines), "the status output carries the overhead line the banner folded")
         if lines:
             text = lines[0]
             visible = fb.select_tool_schemas(None)

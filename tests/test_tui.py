@@ -14,6 +14,7 @@ that do not need them.
 import importlib.util
 import io
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -56,6 +57,13 @@ if not HAVE:
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else SKIP_EXIT)
 
+# The harness that runs this suite may export NO_COLOR=1 and TERM=dumb (a CI runner,
+# a pipe). The renderer still has to be graded, so the colour environment here is
+# STATED, not inherited - otherwise the tier checks below grade a colourless screen
+# and pass or fail for the wrong reason.
+os.environ.pop("NO_COLOR", None)
+os.environ.setdefault("COLORTERM", "truecolor")
+
 screen = fb.TuiScreen(out=io.StringIO(), width=100)
 screen.banner("tinycmdr 1.0.0", [("model", "main at http://127.0.0.1:8081"),
                                 ("folder", str(BASE))], hint="type /help")
@@ -69,21 +77,60 @@ check("...carrying the facts the plain banner prints",
 screen.card("tool", "shell(ls -la)")
 p = screen.shown[-1]
 check("a call is a card titled call", str(p.title).strip() == "call"
-      and p.border_style == "cyan", str(p.title))
+      and p.border_style == screen.style("call"), str(p.title))
 screen.card("tool_done", "shell ls -la · 0.4s")
 p = screen.shown[-1]
-check("a result is green", str(p.title).strip() == "result"
-      and p.border_style == "#5fbf7f", str(p.title))
+check("a result carries the palette's result colour", str(p.title).strip() == "result"
+      and p.border_style == screen.style("result"), str(p.title))
 screen.card("tool_fail", "shell docker ps · [exit 1]")
 p = screen.shown[-1]
-check("a failure is red", str(p.title).strip() == "failed"
-      and p.border_style == "red", str(p.title))
-screen.card("final", "# Heading\n\n- a\n- b")
+check("a failure carries the failure style", str(p.title).strip() == "failed"
+      and p.border_style == screen.style("fail"), str(p.title))
+screen.card("final", "\n\n# Heading\n\n- a\n- b\n\n")
 p = screen.shown[-1]
-check("the answer is the accent card", str(p.title).strip() == "answer"
-      and p.border_style == "blue", str(p.title))
+check("the answer is titled on the quiet frame", str(p.title).strip() == "answer"
+      and p.border_style == screen.style("frame"), str(p.title))
+check("...and its title is the one accent",
+      screen.style("title") in str(p.title.style), str(p.title.style))
 check("...and it is rendered as markdown, not raw text",
       type(p.renderable).__name__ == "Markdown")
+check("...with its blank band stripped", "\n\n\n" not in str(p.renderable.markup),
+      repr(str(p.renderable.markup)[:60]))
+check("no tier paints anything blue",
+      not any("blue" in str(value) for tier in fb.TUI_PALETTE.values()
+              for value in tier.values()),
+      fb.TUI_PALETTE)
+check("the final kind is not the old blue card",
+      fb.TUI_KINDS["final"][1] != "blue", fb.TUI_KINDS["final"])
+check("every tier carries every role",
+      all(set(tier) == set(fb.TUI_PALETTE["truecolor"])
+          for tier in fb.TUI_PALETTE.values()))
+check("the tier is decided from the environment, not guessed",
+      fb.tui_colour_tier({"TERM": "xterm-256color"}) == "256"
+      and fb.tui_colour_tier({"COLORTERM": "truecolor"}) == "truecolor"
+      and fb.tui_colour_tier({"TERM": "xterm", "WT_SESSION": "1"}) == "truecolor"
+      and fb.tui_colour_tier({"TERM": "xterm"}) == "16"
+      and fb.tui_colour_tier({"TERM": "xterm", "NO_COLOR": "1"}) == "none"
+      and fb.tui_colour_tier({"TERM": "xterm-256color", "TINYCMDR_COLOR": "16"}) == "16",
+      [fb.tui_colour_tier({"TERM": t}) for t in ("xterm", "xterm-256color")])
+tiers = {}
+for tier in ("truecolor", "256", "16", "none"):
+    tiers[tier] = fb.TuiScreen(out=io.StringIO(), width=90, tier=tier)
+    tiers[tier]._plain_fallback = True      # a StringIO is not a tty: ask for the bytes
+    tiers[tier].card("final", "# a\n\n| x | y |\n|---|---|\n| 1 | 2 |\n")
+check("a truecolor console gets 24-bit SGR for the accent",
+      "38;2;95;191;191" in tiers["truecolor"].out.getvalue(),
+      repr(tiers["truecolor"].out.getvalue()[:120]))
+check("a 256-colour console gets the 256 form of it",
+      "38;5;73" in tiers["256"].out.getvalue(),
+      repr(tiers["256"].out.getvalue()[:120]))
+check("a 16-colour console gets a named colour instead of hex",
+      "38;2;" not in tiers["16"].out.getvalue()
+      and "38;5;" not in tiers["16"].out.getvalue(),
+      tiers["16"].out.getvalue()[:120])
+check("a no-colour console gets no SGR at all",
+      "\x1b[" not in tiers["none"].out.getvalue(),
+      tiers["none"].out.getvalue()[:120])
 n = len(screen.shown)
 screen.card("checkin", "· working · 12s")
 check("the run's own line is text, not a card",
@@ -110,7 +157,7 @@ scr2 = fb.TuiScreen(out=io.StringIO(), width=100)
 scr2._plain_fallback = True
 scr2.card("tool_fail", "boom")
 text = scr2.out.getvalue()
-check("the printed card carries real SGR escapes", "\x1b[" in text)
+check("the printed card carries real SGR escapes", "\x1b[" in text, repr(text[:160]))
 check("...and no rich markup leaked into the output",
       "[bold]" not in text and "[/" not in text)
 
@@ -231,11 +278,197 @@ check("without a screen the text still goes to stdout",
 
 scr9 = fb.TuiScreen(out=io.StringIO(), width=90)
 dest10 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr9)
+seen10 = []
+dest10.on_drop = seen10.append
 ref10 = dest10.line("narration", "host.lan")
 dest10.drop(ref10)
-_titles = [str(getattr(r, "title", "")).strip() for r in scr9.shown]
-check("a dropped draft that WAS the answer still gets the answer card",
-      "answer" in _titles, _titles)
+check("a dropped draft draws nothing itself (the console prints the card once)",
+      not any(str(getattr(r, "title", "")).strip() == "answer" for r in scr9.shown),
+      [str(getattr(r, "title", "")) for r in scr9.shown])
+check("...and hands the draft text to the caller", seen10 == ["host.lan"], seen10)
+
+# --- T-01: the words of an answer appear once, as the bright card --------------
+# Reproduced before the fix: a streamed markdown table produced a dim pipe-flattened
+# line, a mangled card ending "acr…", and the rendered card - the same answer three
+# times over. Now the draft is one dim pulse and the console prints one card.
+ANSWER = "# Disk\n\n| Field | Value |\n|---|---|\n| capacity | 8GB x4 |\n| type | DDR4 |\n"
+scr11 = fb.TuiScreen(out=io.StringIO(), width=90)
+dest11 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr11)
+dest11.on_drop = lambda t: fb._CLI.__setitem__("streamed_answer", t)
+ref11 = dest11.line("narration", "")
+flat = fb.scrub(" ".join(ANSWER.split()))
+dest11.update(ref11, "narration", "\U0001F4AC " + flat[:400]
+               + ("\u2026" if len(flat) > 400 else ""))
+dest11.drop(ref11)
+draft = scr11.out.getvalue()
+check("a table draft becomes one dim pulse, not raw pipes",
+      "drafting answer" in draft and "| Field | Value |" not in draft, draft[:160])
+scr11.card("final", ANSWER)          # exactly what run_cli does, unconditionally
+raw11 = scr11.out.getvalue()
+check("the answer is drawn as a card exactly once",
+      sum(1 for r in scr11.shown
+          if str(getattr(r, "title", "")).strip() == "answer") == 1)
+check("...the table survives as a table",
+      "Field" in raw11 and "capacity" in raw11 and "8GB x4" in raw11)
+check("...no mid-word truncation glyph inside the answer", "acr\u2026" not in raw11)
+check("...and no flattened copy of the answer is anywhere on the screen",
+      "| Field | Value |" not in raw11 and "capacity | 8GB x4" not in raw11)
+
+# --- T-02: a structured draft never streams its own pipes ---------------------
+scr12 = fb.TuiScreen(out=io.StringIO(), width=90)
+dest12 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr12)
+r12 = dest12.line("narration", "")
+dest12.update(r12, "narration", "\U0001F4AC | a | b |\n|---|---|")
+dest12.update(r12, "narration", "\U0001F4AC | a | b |\n|---|---|\n| 1 | 2 |")
+pulse = scr12.out.getvalue()
+check("a second chunk does not re-print the draft",
+      pulse.count("drafting answer") == 1, pulse[:200])
+check("...and the raw table never reaches the screen",
+      "|---|---|" not in pulse, pulse[:200])
+
+# --- T-03: with a toolbar the transcript prints no stats line -----------------
+_saved_usage = fb.AGENT.last_usage.get("cli")
+_saved_stdout = sys.stdout
+buf3 = io.StringIO()
+try:
+    fb.AGENT.last_usage["cli"] = {"calls": 2, "prompt": 1000, "completion": 50,
+                                  "llm_secs": 1.0, "steps": 2, "secs": 4.0}
+    fb._CLI["prompt"] = object()          # a live prompt_toolkit toolbar
+    sys.stdout = buf3
+    fb._cli_usage_line()
+    check("with a toolbar the run's stats stay out of the transcript",
+          buf3.getvalue() == "", buf3.getvalue()[:120])
+    fb._CLI.pop("prompt", None)
+    fb._cli_usage_line(force=True)
+    check("...and /usage still asks for them explicitly",
+          "tok over" in buf3.getvalue(), buf3.getvalue()[:160])
+finally:
+    sys.stdout = _saved_stdout
+    fb._CLI.pop("prompt", None)
+    if _saved_usage is None:
+        fb.AGENT.last_usage.pop("cli", None)
+    else:
+        fb.AGENT.last_usage["cli"] = _saved_usage
+
+# --- `--app`: the alternate-screen mode (brief §10) ---------------------------
+# Headless: a pipe for keys, DummyOutput for the screen. The point is the LOGIC -
+# one answer card, status only in the status bar, no socket, a clean exit.
+try:
+    from prompt_toolkit.input import create_pipe_input as _pipe_input
+    from prompt_toolkit.output import DummyOutput as _DummyOutput
+    HAVE_APP = True
+except Exception:
+    HAVE_APP = False
+
+check("--app wants a real terminal only", fb.app_wanted() is False
+      or fb.app_wanted() is True)          # both are valid here; it must not raise
+_saved_plain = os.environ.get("TINYCMDR_PLAIN")
+os.environ["TINYCMDR_PLAIN"] = "1"
+check("--app refuses a pipe or TINYCMDR_PLAIN=1", fb.app_wanted() is False)
+if _saved_plain is None:
+    del os.environ["TINYCMDR_PLAIN"]
+else:
+    os.environ["TINYCMDR_PLAIN"] = _saved_plain
+
+if HAVE_APP:
+    import queue as _queue
+    import threading as _threading
+    import time as _time
+
+    app_screen = fb.AppScreen(colour=False, tier="truecolor")
+    _saved_cli = dict(fb._CLI)
+    _saved_drive = fb.drive_run
+    try:
+        fb._CLI.update({"app": app_screen, "screen": app_screen, "colour": False,
+                        "inbox": _queue.Queue(), "steer": _queue.Queue(),
+                        "leave": False, "reader": False, "stop": None})
+
+        def _stub_run(key, text, reporter, **kw):
+            r = reporter.dest.line("tool", "`shell` echo %s" % text)
+            reporter.dest.update(r, "tool_done", "echo · 0.1s")
+            rn = reporter.dest.line("narration", "")
+            reporter.dest.update(rn, "narration", "drafting the answer")
+            reporter.dest.drop(rn)
+            reporter.dest.update(r, "status", "working · 1.2K tok")
+            return "# Answer\n\n| Field | Value |\n|---|---|\n| %s | 1 |\n" % text
+
+        fb.drive_run = _stub_run
+        _sockets = []
+        _real_socket = fb.socket.socket
+
+        class _NoNetSocket(_real_socket):
+            """asyncio's event loop makes an AF_UNIX socketpair for its own wakeup;
+            what --app must never do is open a NETWORK socket (a port)."""
+
+            def __init__(self, family=-1, *a, **kw):
+                if family in (fb.socket.AF_INET, fb.socket.AF_INET6):
+                    _sockets.append(family)
+                super().__init__(family, *a, **kw)
+
+        fb.socket.socket = _NoNetSocket
+        try:
+            def _worker():
+                fb._cli_console_loop()
+                app_screen.request_exit()
+
+            _threading.Thread(target=_worker, daemon=True).start()
+            with _pipe_input() as _keys:
+                app_screen.app.input = _keys
+                app_screen.app.output = _DummyOutput()
+
+                def _feed():
+                    _time.sleep(0.3)
+                    _keys.send_text("hello there\r")
+                    _time.sleep(1.2)
+                    _keys.send_text("/exit\r")
+
+                _threading.Thread(target=_feed, daemon=True).start()
+                app_screen.app.run()
+            _time.sleep(0.2)
+        finally:
+            fb.socket.socket = _real_socket
+
+        _lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in app_screen.lines(79)]
+        _answer_cards = [i for i, l in enumerate(_lines) if "─ answer ─" in l]
+        check("--app: the run draws exactly one answer card",
+              len(_answer_cards) == 1, _lines)
+        check("--app: the answer card replaces the draft, it does not stack on it",
+              not any("drafting the answer" in l for l in _lines), _lines)
+        check("--app: the run's stats stay in the status bar, not the transcript",
+              not any("tok" in l for l in _lines)
+              and "Done" in app_screen.status, (app_screen.status, _lines))
+        check("--app: /exit leaves the loop and the app", fb._CLI["leave"] is True)
+        check("--app opens no NETWORK socket", not _sockets, _sockets)
+
+        # scrolling: auto-follow at the bottom, and a page up suspends it
+        _full = fb.AppScreen(colour=False, tier="truecolor")
+        for _i in range(80):
+            _full.card("tool", "shell step %d" % _i)
+        app_screen_tmp = app_screen
+        fb._CLI["app"] = _full
+        _full.app.output = _DummyOutput()
+        _full.autofollow = True
+        _before = _full._pane_text()
+        _full.scroll(-1)
+        check("--app: a page up stops following the tail", _full.autofollow is False)
+        _full.scroll(1)
+        check("--app: scrolling back to the bottom follows again",
+              _full.autofollow is True)
+        fb._CLI["app"] = app_screen_tmp
+
+        # all the console's prints land in the pane, never at the real stdout
+        _sink = fb._AppStdout(app_screen_tmp)
+        _sink.write("one\n")
+        _sink.write("two ")
+        _sink.write("three\n\n")
+        _sink.flush()
+        _tail = app_screen_tmp.lines(79)[-3:]
+        check("--app: printed lines become transcript lines",
+              "one" in _tail and "two three" in _tail, _tail)
+    finally:
+        fb.drive_run = _saved_drive
+        fb._CLI.clear()
+        fb._CLI.update(_saved_cli)
 
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

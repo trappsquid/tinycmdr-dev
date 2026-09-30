@@ -8,12 +8,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Added
+- **`tinycmdr --app`: the same console as a full-screen terminal app.** The inline console cannot
+  take a printed line back, which is the whole reason the drop()/prefix-dedupe machinery existed -
+  and the reason one answer could render three times. In an alternate-screen app the transcript is
+  repainted, so the streamed draft is ONE item the answer card replaces in place, the run's stats
+  live only in the status bar, and scrolling is in-pane (PgUp/PgDn, Ctrl-Home/End, tail-follow until
+  the operator scrolls up). It is the SAME palette and the same cards as the inline screen - one
+  `TuiScreen` subclass changes where the text goes - and there is no port, no server and no browser
+  (the removed web lane stays removed): prompt_toolkit already owns the alternate screen (smcup/
+  rmcup) and the Windows console glue, so `requirements.txt` is unchanged. stdout is swapped for the
+  duration so the banner, `/help` and `/status` land in the pane instead of painting over it; on
+  exit the prior terminal content is restored and the session's last answer is reprinted inline.
+  Mouse capture is off by default so native selection/copy keeps working (`TINYCMDR_APP_MOUSE=1`
+  turns the wheel on); a terminal that cannot host the app falls back to the inline cards with one
+  dim note, never an error. `tests/test_tui.py` drives the real Application headlessly (a key pipe
+  and a dummy output): exactly one answer card, the draft replaced rather than stacked, no stats in
+  the transcript, `/exit` leaves both the loop and the app, and no NETWORK socket is opened (the
+  socket class is watched during the run; asyncio's own AF_UNIX wakeup pair is not a port).
 - **`maintenance/where.py` says how far the tree is past its last release.** `git describe` names the
   newest tag HEAD can *reach*, so a tree several commits past a release still printed that release's
   name and looked current - and "is what I am looking at released?" is the first question whoever
   drops in cold has to answer. The ORIGIN block now carries
   `this tree  <sha> - N commit(s) past v1.0.42 (UNRELEASED)`, read from local refs only;
   `--remote` still answers what GitHub has now.
+
+Changed
+- **The console palette is one table, chosen once per process, and blue is gone.** `TUI_KINDS` used
+  to carry a colour per kind and the banner hardcoded `border_style="blue"`; rich's named `blue` is
+  ANSI 4, which dark themes render blue-violet, and on macOS Terminal's default profile the answer
+  frame read as purple. The kind -> (title, palette ROLE) table now resolves through `TUI_PALETTE`
+  for the tier `tui_colour_tier()` picks from the environment (truecolor / 256 / 16 / none, with
+  `NO_COLOR` and `TINYCMDR_COLOR` honoured), so hex is never load-bearing: every role carries the
+  named 16-colour fallback that means the same thing, and the answer's frame became `bright_black`
+  so the words are the brightest thing on the screen. `tests/test_tui.py` grades all four tiers by
+  their SGR (24-bit, 256, named, none).
+- **The answer is drawn exactly once, as one bright card (T-01).** It used to be three renders: a
+  dim whitespace-collapsed pipe line, a card made from that 400-char-capped draft ending `acr…`,
+  and the rendered card - because `CliDestination.drop()` drew a card from the mangled draft and the
+  console loop then tried to skip its own print by prefix-matching text that could never match.
+  `drop()` now only records what the draft said (the plain path still uses that to stay
+  single-print), and the console loop draws the whole answer, once, whenever a screen exists.
+  Reproduced before the fix and pinned in `tests/test_tui.py`.
+- **A table or a long draft is one dim pulse, not a stream of raw pipes (T-02).** The narration
+  preview showed `| Field | Value | |---|---| …` while the answer streamed; the CLI lane now prints
+  `… drafting answer · N chars` once and lets the card deliver the words. The plain path's transcript
+  is unchanged except for this and the tone below.
+- **The run's stats line leaves the transcript when a toolbar owns it (T-03).** `_cli_usage_line()`
+  printed the same token string the prompt_toolkit toolbar was already showing under the input; it
+  now prints only when no toolbar and no app is up, and `/usage` still prints it on demand.
+- **The banner is three rows; its folded arithmetic lives in `/status` (T-04).** model, folder and
+  one merged context line, instead of five; `envelope_facts()` is one source read by the banner's
+  short form and `/status`'s long form, so they cannot disagree.
+- **The answer card loses its dead band (T-05).** Leading/trailing blank lines and three-or-more
+  newline runs are stripped before the markdown is wrapped in the panel (a markdown rule already
+  renders as one dim line).
+- **The plain path's done line is dim, not dim green.** `TONES["final"]` was `2;32` while green is
+  the palette's tool-result colour; the two paths now read one spec.
+
+Fixed
+- A console on a code page that cannot carry `▸ ✔ ✘ …` now gets the ASCII set (`> + x *`), and the
+  plain banner box draws in `+ - |`; `TINYCMDR_ASCII=1` forces it. UTF-8 consoles are byte-identical
+  to before (`PYTHONIOENCODING=cp437` is covered by `tests/test_stall.py`'s legacy-code-page check).
 
 ## [1.0.42] - 2026-09-30
 
