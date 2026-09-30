@@ -19941,11 +19941,15 @@ def cli_banner():
     name = "tinycmdr %s" % VERSION
     if "BUILD" in globals():          # the console build sets BUILD; the bot does not
         name += " (%s build)" % BUILD
+    # The screen is taken FIRST, before anything measures or logs: tui_screen() is
+    # what detaches the console log handler, and envelope_facts() logs a line
+    # ("context: server reports ...") whose INFO record otherwise lands above the
+    # banner as the very first thing a session shows (measured 2026-09-30 on a pty).
+    screen = tui_screen()
     f = envelope_facts()
     model = "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])
     context = ("~%s usable per turn \u00b7 prompt %s"
                % (fmt_tokens(f["env"]["budget"]), f["prompt"]))
-    screen = tui_screen()
     if screen is not None:
         # Three content rows, not seven: the envelope and the prompt arithmetic
         # live in /status now (brief T-04). The frame carries the one accent.
@@ -20943,8 +20947,16 @@ def run_cli(once=None, app=False):
     # said nothing about what it could enforce (found after the fleet push).
     if once:
         reporter = _cli_new_reporter()
-        print(answer_block(drive_run(_cli_key(), once, reporter,
-                                     ask_door=reporter.dest)))
+        answer = drive_run(_cli_key(), once, reporter, ask_door=reporter.dest)
+        screen = tui_screen()
+        if screen is not None:
+            # The same answer card the interactive lane draws. `--once` used to print
+            # the raw markdown under a dim rule, so a one-shot run showed the answer's
+            # pipes and headings where the session showed a rendered card (measured on
+            # a pty, 2026-09-30). The plain path is unchanged: no screen, no card.
+            screen.card("final", answer)
+        else:
+            print(answer_block(answer))
         _cli_usage_line()
         return
     return _cli_console_loop()

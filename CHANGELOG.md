@@ -39,6 +39,15 @@ Added
   `--remote` still answers what GitHub has now.
 
 Changed
+- **`--once` draws the same answer card the interactive session does.** A one-shot run printed the
+  answer verbatim under a dim rule, so `tinycmdr --once "…"` showed the model's pipes and heading
+  markers where a session showed a rendered card (seen on a live screenshot of the real CLI,
+  2026-09-30). With a screen it now calls `screen.card("final", answer)`; with no screen - a pipe,
+  `TINYCMDR_PLAIN=1` - the plain path is byte-identical to before.
+- **A session's first line is the banner, not a log record.** `cli_banner()` computed the envelope
+  (which logs `context: server reports …`) before `tui_screen()` had detached the console log
+  handler, so the first thing a session showed was a raw INFO line above its own banner. The screen
+  is taken first now; nothing else about the logging changed.
 - **The console palette is one table, chosen once per process, and blue is gone.** `TUI_KINDS` used
   to carry a colour per kind and the banner hardcoded `border_style="blue"`; rich's named `blue` is
   ANSI 4, which dark themes render blue-violet, and on macOS Terminal's default profile the answer
