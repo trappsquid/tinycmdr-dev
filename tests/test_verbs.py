@@ -159,6 +159,31 @@ def main():
               "did not answer" in err and fb.CONFIG["llm"]["base_url"] in err, err[:300])
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
+
+        # A run parked on a legitimate question must not be abandoned as a stall first.
+        # Nothing compared the pair: with the ask cap at 900 s and abandon at 10 min,
+        # `_stall_tick` set the cancel event and ask_operator returned "stopped" instead
+        # of the answer. Doctor has to name the pair, and stay silent when the watchdog
+        # is off (0) - there is nothing to compare against.
+        fb._detect_window = lambda url, headers=None: 131072
+        forget_probes()
+        agent_cfg = fb.CONFIG["agent"]
+        saved_ask = agent_cfg.get("ask_user_wait_seconds")
+        saved_abandon = agent_cfg.get("stall_abandon_minutes")
+        agent_cfg["ask_user_wait_seconds"] = 900
+        agent_cfg["stall_abandon_minutes"] = 10
+        rc, out, err = call(fb, ["doctor"])
+        check("doctor flags an ask cap longer than the abandon window",
+              rc == 1 and "stall_abandon_minutes" in err, (rc, err[-300:]))
+        agent_cfg["stall_abandon_minutes"] = 0     # the watchdog is off
+        rc, out, err = call(fb, ["doctor"])
+        check("...and stays silent with the watchdog disabled",
+              rc == 0 and "stall_abandon_minutes" not in err, (rc, err[-300:]))
+        agent_cfg["ask_user_wait_seconds"] = saved_ask
+        agent_cfg["stall_abandon_minutes"] = saved_abandon
+        rc, out, err = call(fb, ["doctor"])
+        check("...and stays silent on the default pair",
+              rc == 0 and "stall_abandon_minutes" not in err, (rc, err[-300:]))
         fb._detect_window = saved_detect
 
         # ---- model: list, refuse, and set through the config writer ----------

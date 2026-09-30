@@ -4491,6 +4491,11 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     """
     run_dir = Path(tempfile.gettempdir()) / "tinycmdr-runs"
     run_dir.mkdir(parents=True, exist_ok=True)
+    # On a shared Linux host gettempdir() is the world-readable /tmp, where the default
+    # umask leaves this 0755 and every run's stdout/stderr 0644 - any local user can read
+    # them, and an oversized output is kept here for a full day. macOS hides the leak
+    # ($TMPDIR is already 0700), which is why it went unnoticed until the audit.
+    os.chmod(run_dir, 0o700)
     stem = f"{int(time.time())}-{os.getpid()}-{threading.get_ident()}"
     out_path = run_dir / f"{stem}.out"
     err_path = run_dir / f"{stem}.err"
@@ -20584,6 +20589,22 @@ def _verb_doctor():
         print("  config    : %s" % _drift)
         notes.append(_drift)
 
+    # A run parked on a legitimate question must not be abandoned as a stall first:
+    # _ask_wait_cap() reaches 900 s, so an abandon window under that cancels the
+    # question and the operator gets "stopped" instead of an answer. Only meaningful
+    # while the watchdog is on - 0 (or less) disables it, and there is nothing to
+    # compare against.
+    try:
+        _abandon_m = float(CONFIG["agent"].get("stall_abandon_minutes", 20) or 0)
+    except (TypeError, ValueError):
+        _abandon_m = 0.0
+    _ask_cap = _ask_wait_cap()
+    if _abandon_m > 0 and _ask_cap > _abandon_m * 60:
+        problems.append(
+            "agent.stall_abandon_minutes (%gm) is shorter than the ask cap (%gs): a run "
+            "parked on a question would be abandoned as a stall; raise the abandon window "
+            "above %g minutes or lower agent.ask_user_wait_seconds"
+            % (_abandon_m, _ask_cap, _ask_cap / 60))
 
     for n in notes:
         print("  note      : %s" % n)

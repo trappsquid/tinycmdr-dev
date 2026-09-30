@@ -193,6 +193,21 @@ def test_small_output_passes_through_untouched():
     check("a small result is not kept on disk", after == before, sorted(after - before))
 
 
+def test_run_capture_directory_is_private():
+    """Every run's stdout/stderr lands here, and an oversized output is kept for a
+    full day. On a shared Linux host gettempdir() is the world-readable /tmp, where
+    the default umask left this 0755 - any local user could read them. macOS's
+    per-user 0700 $TMPDIR hid exactly that, so the mode is the fix and the mode is
+    what is checked."""
+    if os.name != "posix":
+        skip("run dir is 0700", "the mode is not POSIX-testable on Windows")
+        return
+    fb.run_capture([PY, "-c", "pass"], 30)
+    runs = Path(tempfile.gettempdir()) / "tinycmdr-runs"
+    mode = os.stat(runs).st_mode & 0o777
+    check("the run dir is private (0700)", mode == 0o700, oct(mode))
+
+
 def test_read_file_is_capped_and_says_so():
     """read_file read whole files into RAM before slicing (2-3x their size with
     splitlines()). a bot account died at its 32 GiB cgroup cap doing log forensics."""
