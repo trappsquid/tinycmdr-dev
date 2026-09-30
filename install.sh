@@ -33,6 +33,36 @@ say "tinycmdr: fetching $asset"
 curl -fL --retry 3 --connect-timeout 15 -o "$tmp/$asset" "$BASE/$asset" \
     || die "could not download $BASE/$asset"
 
+say "verifying the download"
+# SHA256SUMS covers all eight published files (checked against the v1.0.40 release: the
+# three versioned archives, the three stable alias names, install.sh and install.ps1), so
+# this checks the ONE file this run fetched rather than trusting the transfer. The README
+# documents the same check by hand, but the pipe-to-bash path - the one the README leads
+# with - is where a truncated download does the most damage, and it had none at all
+# (measured 2026-09-29: neither this script nor install/install-tinycmdr.sh mentioned
+# SHA256SUMS, sha256 or shasum anywhere).
+sums="$tmp/SHA256SUMS"
+if curl -fL --retry 3 --connect-timeout 15 -o "$sums" "$BASE/SHA256SUMS"; then
+    # Pick this asset's own line: "$NF == a" covers a plain name, "*" a binary-mode one.
+    awk -v a="$asset" '$NF == a || $NF == "*" a' "$sums" > "$tmp/one.sum"
+    [ -s "$tmp/one.sum" ] || die "SHA256SUMS does not cover $asset - the release is broken, and nothing was unpacked"
+    if command -v sha256sum >/dev/null 2>&1; then
+        ( cd "$tmp" && sha256sum -c one.sum ) \
+            || die "the download does not match SHA256SUMS - a corrupted or truncated transfer. Nothing was unpacked."
+    elif command -v shasum >/dev/null 2>&1; then
+        ( cd "$tmp" && shasum -a 256 -c one.sum ) \
+            || die "the download does not match SHA256SUMS - a corrupted or truncated transfer. Nothing was unpacked."
+    else
+        printf '    (no sha256sum or shasum on this host: the download is unchecked)\n'
+    fi
+    printf '    the download matches SHA256SUMS. Releases are unsigned, so this catches a\n'
+    printf '    corrupted or truncated transfer, not a release that was replaced.\n'
+elif [ "${TINYCMDR_NO_SUMS:-}" = "1" ]; then
+    printf '    (SHA256SUMS could not be fetched, and TINYCMDR_NO_SUMS=1 says carry on)\n'
+else
+    die "could not fetch $BASE/SHA256SUMS, so this download cannot be checked. Re-run it, or set TINYCMDR_NO_SUMS=1 to skip the check deliberately."
+fi
+
 say "unpacking"
 case "$asset" in
     *.tar.gz) tar -xzf "$tmp/$asset" -C "$tmp" ;;

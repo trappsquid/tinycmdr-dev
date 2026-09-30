@@ -47,6 +47,7 @@ launchd `com.tinycmdr.agent`):
 
     python tests/test_installer_unix.py
 """
+import hashlib
 import os
 import pathlib
 import re
@@ -157,6 +158,17 @@ def stub_env(bindir, log, extra=None):
 def run(cmd, env, cwd):
     return subprocess.run([str(c) for c in cmd], env=env, cwd=str(cwd), text=True,
                           capture_output=True, stdin=subprocess.DEVNULL, timeout=300)
+
+
+def release_sums(dist, asset):
+    """The SHA256SUMS a release ships beside its archives, for the one asset staged here.
+
+    A real release carries all eight published files (checked against v1.0.40), but these
+    cases stage one archive, so one line is what the door has to find and check.
+    """
+    digest = hashlib.sha256((dist / asset).read_bytes()).hexdigest()
+    (dist / "SHA256SUMS").write_text("%s  %s\n" % (digest, asset), encoding="utf-8")
+    return digest
 
 
 def sandbox_home_env(sb, bindir, log, user, extra=None):
@@ -594,6 +606,10 @@ def case_help_and_footer(sb, pkg, bindir, user, py):
         import tarfile
         with tarfile.open(dist / asset, "w:gz") as t:
             t.add(stage, arcname=f"tinycmdr-{ver}")
+    # A release directory is the archive PLUS its SHA256SUMS: install.sh checks the
+    # download against it before unpacking anything (F-22), so a fixture without the sums
+    # file is not the door under test - it is a broken release, and the run stops there.
+    release_sums(dist, asset)
     got = run(["bash", pkg / "install.sh", "--help"],
               stub_env(bindir, sb / "logs" / "installsh.log",
                        {"HOME": str(sb / "home"), "TINYCMDR_URL": f"file://{dist}"}), pkg)
@@ -607,6 +623,59 @@ def case_help_and_footer(sb, pkg, bindir, user, py):
         check("D2 install.sh's footer does not offer the Linux installer on macOS",
               "bash ~/tinycmdr/install/install-tinycmdr.sh " not in got.stdout,
               "the Linux installer is still printed on macOS")
+
+
+# ---------------------------------------------------------------------------- F-22 ---
+def case_download_sums(sb, pkg, bindir, user, py):
+    """F-22: the one-line door checks the download against the SHA256SUMS it ships beside.
+
+    The README documents this by hand, and the pipe-to-bash path - the door the README
+    leads with - had no check at all (measured 2026-09-29: neither install.sh nor
+    install/install-tinycmdr.sh mentioned SHA256SUMS, sha256 or shasum anywhere). Nothing
+    here can reach an installer: the archive is a stub, so every run stops at the download
+    checks or at the package checks just after them.
+    """
+    dist = sb / "dist-sums"
+    dist.mkdir(parents=True, exist_ok=True)
+    asset = "tinycmdr-macos.zip" if os.uname().sysname == "Darwin" else "tinycmdr-linux.tar.gz"
+    (dist / asset).write_text("not really an archive\n", encoding="utf-8")
+    real = hashlib.sha256((dist / asset).read_bytes()).hexdigest()
+
+    def door(extra=None):
+        return run(["bash", pkg / "install.sh"],
+                   stub_env(bindir, sb / "logs" / "sums.log",
+                            {"HOME": str(sb / "home"), "TINYCMDR_URL": f"file://{dist}",
+                             **(extra or {})}), pkg)
+
+    (dist / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, asset), encoding="utf-8")
+    got = door()
+    both = got.stdout + got.stderr
+    check("F-22 a download that does not match SHA256SUMS is refused",
+          got.returncode != 0 and "does not match SHA256SUMS" in both, both[-300:])
+    check("F-22 ...and nothing is unpacked when it is",
+          "unpacking" not in both, both[-300:])
+
+    (dist / "SHA256SUMS").write_text("%s  %s\n" % (real, "tinycmdr-win.zip"), encoding="utf-8")
+    got = door()
+    both = got.stdout + got.stderr
+    check("F-22 a SHA256SUMS that does not cover this asset is refused",
+          "does not cover" in both, both[-300:])
+
+    (dist / "SHA256SUMS").unlink()
+    got = door()
+    both = got.stdout + got.stderr
+    check("F-22 a release with no SHA256SUMS at all is refused",
+          got.returncode != 0 and "cannot be checked" in both, both[-300:])
+    got = door({"TINYCMDR_NO_SUMS": "1"})
+    both = got.stdout + got.stderr
+    check("F-22 ...and TINYCMDR_NO_SUMS=1 is the deliberate way past that",
+          "TINYCMDR_NO_SUMS=1 says carry on" in both, both[-300:])
+
+    release_sums(dist, asset)
+    got = door()
+    both = got.stdout + got.stderr
+    check("F-22 a matching download gets past verification",
+          "matches SHA256SUMS" in both, both[-300:])
 
 
 # ------------------------------------------------------------------------ D3/D4/D7 ---
@@ -702,6 +771,7 @@ def main():
         case_macos_uninstall(sb, pkg, bindir, user, py, mac_inst)
         case_macos_secrets_lane(sb, pkg, bindir, user, py)
         case_help_and_footer(sb, pkg, bindir, user, py)
+        case_download_sums(sb, pkg, bindir, user, py)
         case_archive_and_python(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
