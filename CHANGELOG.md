@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.40] - 2026-09-29
+
+The day's audit batch, plus two things the operator found by using it. A dropped-in manifest could
+carry a recursive delete past the guard, and a single-target delete of real content now asks first;
+the context window is identified instead of guessed from whichever model the endpoint happened to
+list first; a file's CONTENTS no longer decide whether the CALL that read it succeeded; and `/stop`
+now reaches the sub-agents, which it previously could not reach at all. For the operator:
+`tinycmdr tasks` shows the same age and staleness the prompt shows the model, and the harness asks
+about items an earlier session left open rather than trusting a prompt line to make a weak model
+do it. Written up across three audits - the proxy audit, the low-stakes tail, and what watching the
+live run found - all of it in this section.
+
 Fixed
 - **A `/stop` now reaches the SUB-AGENTS, not only the run parked on them.** `delegate_task`
   called `AGENT.run` for each subtask with the reporting callbacks and nothing else, so a
