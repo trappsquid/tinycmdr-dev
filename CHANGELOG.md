@@ -39,6 +39,34 @@ Added
   `--remote` still answers what GitHub has now.
 
 Changed
+- **A bare `tinycmdr` now opens the app, on every OS.** The POSIX and Windows shims passed
+  `--cli` when nothing was given; they pass `--app` now, so typing `tinycmdr` in Terminal, cmd or
+  PowerShell opens the full-screen session, and a console that cannot host it still falls back to
+  the inline cards with one dim note. `--cli` still spells the inline lane out, and the supervised
+  bot is untouched: the scheduled task, the systemd unit and the launchd plist name `tinycmdr.py`
+  directly and never go through a shim. `tests/test_shim.py` grades the mapping for both shims, and
+  the installer output, README and `--help` name the new door.
+- **`--app` is a window, not a prompt.** The full-screen mode now draws what a desktop app
+  would: a frame with the app name, the session and a live clock in its title bar; a left rail
+  carrying the session, a context gauge, the last run's calls and tok/s, the model and the keys; the
+  transcript's cards **on a surface** (a filled panel, not text between two rules); a status bar
+  whose spinner, clock and gauge tick while a run is in flight; and a labeled `ask` composer box at
+  the bottom. Same palette table, same cards, no new dependency, still no port and no server. Mouse
+  capture stays OFF by default (brief §10) so native selection and copy keep working;
+  `TINYCMDR_APP_MOUSE=1` adds the wheel. `TINYCMDR_APP=1` makes a bare `tinycmdr` prefer the app
+  (`--cli` still spells the inline lane out, `--app` overrides either way), and a terminal that
+  cannot host it still falls back to inline cards with one dim note.
+- **A streamed narration line now GROWS instead of stair-stepping (T-06).** `_write` routed
+  painted text to `raw_ansi` → `print_formatted_text`, whose default `end="\n"` put every delta on
+  its own line, and the old `if text.strip()` guard silently dropped the newline that ends the line.
+  Open-line writes pass `end=""` and flush; the close writes one real newline.
+- **The opening of a narration line is held back, so a threshold can never leak (T-02 residual).**
+  The structure test ran on text already printed, which left the prose before the first pipe on
+  screen for good (`… The only Apple machine that hits 800+ GB/s is the **M4 Ultra** — …`). The
+  first ~200 characters or 1.5 s of a line are now buffered and the decision is made *before* the
+  first character lands: short chatter commits as prose, a long or structured draft commits as the
+  one dim pulse. Dim previews also lose markdown emphasis (`**bold**`, `*i*`, pipes); the answer
+  text itself is never touched.
 - **`--app` detaches the console log before it draws.** Installing the app's screen directly
   skipped the `log_console_off()` that `tui_screen()` does, so every INFO record kept going to the
   console and painted over the alternate screen - seen in a live screenshot of `--app` on
@@ -86,6 +114,11 @@ Changed
   the palette's tool-result colour; the two paths now read one spec.
 
 Fixed
+- **No `you>` between the draft pulse and the answer card (T-07).** The console loop cleared
+  `_CLI["stop"]` in its `finally`, and that flag is what the reader thread gates `session.prompt()`
+  on - so the prompt repainted while the run's card had not been drawn yet, and a bare `you>` landed
+  between them (reproduced in both turns of the round-2 review). The flag is now cleared after the
+  card and the usage line are on screen, so nothing prompt-shaped can appear inside a run's output.
 - A console on a code page that cannot carry `▸ ✔ ✘ …` now gets the ASCII set (`> + x *`), and the
   plain banner box draws in `+ - |`; `TINYCMDR_ASCII=1` forces it. UTF-8 consoles are byte-identical
   to before (`PYTHONIOENCODING=cp437` is covered by `tests/test_stall.py`'s legacy-code-page check).

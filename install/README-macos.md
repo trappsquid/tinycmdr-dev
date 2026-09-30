@@ -4,7 +4,8 @@ tinycmdr is one Python file plus three dependencies. On macOS, with a chat accou
 (a Mattermost or Telegram bot token), it runs as a per-user launchd agent that starts
 when you log in and comes back if it dies. With no chat token there is nothing remote to
 serve: the files are installed but no agent is registered, and you drive it with
-`--cli` / `--once`. Nothing here needs `sudo`.
+`--app` (the full-screen session a bare `tinycmdr` opens), `--cli` (the same session as
+inline cards) / `--once`. Nothing here needs `sudo`.
 
 ## 1. Python 3.10-3.12
 

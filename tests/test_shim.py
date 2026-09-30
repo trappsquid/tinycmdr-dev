@@ -1,14 +1,16 @@
-"""`tinycmdr` with nothing after it opens a session - in both shims, without breaking anything else.
+"""`tinycmdr` with nothing after it opens the app - in both shims, without breaking anything else.
 
 Operator, 2026-09-22: "so I can open a terminal/cmd/powershell window on the Windows bed now and
 type tinycmdr and it will open a cli instance?"
 
 It could not: the shims passed their arguments through and the build's no-argument case is
 the BOT lane, which on a supervised box answers "already running from this folder". The
-session was `--cli`. The shims now add `--cli` when there is nothing to pass, and these
+session was `--cli`. The shims then added `--cli` when there was nothing to pass, and as of
+2026-09-30 the human door opens the full-screen app instead (`--app`, which falls back to the
+inline cards on a console that cannot host it); `--cli` is the inline lane spelled out. These
 checks hold that mapping to the letter:
 
-  * no arguments -> ["--cli"], in `tinycmdr.cmd` (Windows) and `tinycmdr` (POSIX)
+  * no arguments -> ["--app"], in `tinycmdr.cmd` (Windows) and `tinycmdr` (POSIX)
   * a verb, `--once "<task>"` and a multi-word verb pass through untouched
   * the BOT keeps starting the way it always has: `python tinycmdr.py` with no flags still
     runs the supervised lanes, because the scheduled task, the systemd unit and the VBS
@@ -109,21 +111,21 @@ def check_pass_through(runner, label, args, want):
 def main():
     print("== the decision each shim makes ==")
     for runner, label in (((run_windows, "windows"),) if os.name == "nt" else ()):
-        check_pass_through(runner, label, [], ["--cli"])
+        check_pass_through(runner, label, [], ["--app"])
         check_pass_through(runner, label, ["status"], ["status"])
         check_pass_through(runner, label, ["--once", "reply with READY"], ["--once", "reply with READY"])
         check_pass_through(runner, label, ["model", "use", "main"], ["model", "use", "main"])
         check_pass_through(runner, label, ["help"], ["help"])
 
     if os.name == "posix":
-        for args, want in (([], ["--cli"]), (["status"], ["status"]),
+        for args, want in (([], ["--app"]), (["status"], ["status"]),
                            (["--once", "reply with READY"], ["--once", "reply with READY"]),
                            (["model", "use", "main"], ["model", "use", "main"])):
             check_pass_through(run_posix, "posix", args, want)
     else:
         sh = open(os.path.join(ROOT, "tinycmdr"), encoding="utf-8").read()
-        check("posix: nothing -> --cli (checked as text on Windows; MSYS rewrites $0)",
-              'if [ "$#" -eq 0 ]; then\n    exec "$PY" "$HERE/tinycmdr.py" --cli\nfi' in sh, sh[-220:])
+        check("posix: nothing -> --app (checked as text on Windows; MSYS rewrites $0)",
+              'if [ "$#" -eq 0 ]; then\n    exec "$PY" "$HERE/tinycmdr.py" --app\nfi' in sh, sh[-220:])
         check("posix: real arguments still pass through",
               'exec "$PY" "$HERE/tinycmdr.py" "$@"' in sh, sh[-220:])
 

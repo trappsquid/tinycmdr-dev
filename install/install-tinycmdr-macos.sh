@@ -740,7 +740,7 @@ if [ "$ASK" = 1 ]; then
     elif [ -n "$TG_TOKEN" ]; then
         info "how you talk : Telegram DMs"
     else
-        info "how you talk : nothing remote - --cli and --once only (no token given)"
+        info "how you talk : nothing remote - --app (or --cli inline) and --once (no token given)"
     fi
     info "model        : $MODEL at $MODEL_BASE_URL"
     if [ -n "$MODEL_KEY" ]; then
@@ -926,7 +926,8 @@ elif [ -z "$TOKEN" ]; then
     info "supported way to run it. Nothing remote is served, and no launchd agent"
     info "is registered (an agent with no lane would exit at once and KeepAlive loop)."
     info "this host has two doors, both work right now:"
-    info "  a session : $VPY $INSTALL_DIR/tinycmdr.py --cli"
+    info "  the app   : $VPY $INSTALL_DIR/tinycmdr.py --app"
+    info "  inline    : $VPY $INSTALL_DIR/tinycmdr.py --cli"
     info "  one task  : $VPY $INSTALL_DIR/tinycmdr.py --once \"<task>\""
     info "add a chat account later, no reinstall of the app needed:"
     info "  re-run with --token-file <file>            (Mattermost)"
@@ -1140,7 +1141,7 @@ fi
 if [ -z "$TOKEN" ] && [ -z "$TG_TOKEN" ]; then
     # Nothing on a token-less install reads mattermost.url, so a missing host is not a
     # problem to report (the Linux installer states the same rule).
-    info "no chat account: nothing remote to serve (only --cli / --once on this host)"
+    info "no chat account: nothing remote to serve (only --app / --cli / --once here)"
 elif [ -z "$TOKEN" ] && [ -z "$MM_URL_ARG" ]; then
     # Read the file that was just written: on an UPDATE the host already has its own
     # mattermost.url, and warning about a missing one there is a false alarm on the
@@ -1292,7 +1293,7 @@ if [ "$HAS_LANE" = 0 ]; then
     say "no agent"
     info "no chat account: the launchd agent is not registered - an agent with no lane"
     info "would exit at once and KeepAlive would loop it forever. The files and the verb"
-    info "above are in place; a session (--cli) and a one-shot (--once) work now."
+    info "above are in place; the app (--app), the inline lane (--cli) and a one-shot (--once) work now."
     info "add a chat token and re-run to register the agent:"
     info "  --token-file <file>  (Mattermost)  |  --telegram-token <t> --telegram-ids <id>"
 else

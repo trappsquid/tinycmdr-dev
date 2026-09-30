@@ -102,8 +102,8 @@ Day-to-day notes for a Mac: [`install/README-macos.md`](install/README-macos.md)
 
 ```bash
 tinycmdr setup        # once: endpoint, chat gateways, search consent
-tinycmdr              # terminal session
-tinycmdr --app        # the same session as a full-screen terminal app
+tinycmdr              # the session as a full-screen terminal app
+tinycmdr --cli        # the same session, inline cards in the scrollback
 tinycmdr --once "…"   # one task, then exit
 ```
 

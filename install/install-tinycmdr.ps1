@@ -1443,7 +1443,8 @@ if (-not $SkipTask -and -not $RegisterTask) {
     Head "autostart: skipped"
     Say "no chat account, so there is nothing to keep running in the background. A host"
     Say "with no chat token has only these two doors, from a shell:"
-    Say "  python tinycmdr.py --cli                (a session in this window)"
+    Say "  python tinycmdr.py --app                (the session, full screen)"
+    Say "  python tinycmdr.py --cli                (the same session, inline cards)"
     Say "  python tinycmdr.py --once `"<task>`"     (one task, then exit)"
     Say "Add a chat account later - re-run with -MattermostTokenFile <file>, or"
     Say "  -TelegramToken <token> -TelegramIds <your numeric id>"
@@ -1575,7 +1576,8 @@ if ($TgLane -and -not $ChatLane) {
     Say "This install has NO chat account, which is a supported way to run it. Nothing"
     Say "runs in the background and nothing remote is served; from a shell:"
     Say ""
-    Say "  a session   :  cd $InstallDir ; python tinycmdr.py --cli"
+    Say "  the app     :  cd $InstallDir ; python tinycmdr.py --app"
+    Say "  inline too  :  cd $InstallDir ; python tinycmdr.py --cli"
     Say "  one task    :  cd $InstallDir ; python tinycmdr.py --once `"<task>`""
     Say ""
     Say "Add a Mattermost account whenever you want one:"
@@ -1599,15 +1601,15 @@ if ($todo.Count -gt 0 -and $RegisterTask) {
         Say "after editing, restart:  tinycmdr restart   (or delete/restore the Startup shortcut)"
     }
 }
-if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --cli" }
+if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --app" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
     if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }
     if ($WantCli) {
-        Say "a session needs nothing running:  cd $InstallDir ; python tinycmdr.py --cli"
+        Say "a session needs nothing running:  cd $InstallDir ; python tinycmdr.py --app (or --cli)"
         if (Ask-Yes "Open a session now?" $false) {
             Say "starting a session - type your task, Ctrl-C to leave"
-            try { & $py.Path (Join-Path $InstallDir "tinycmdr.py") "--cli" } catch { }
+            try { & $py.Path (Join-Path $InstallDir "tinycmdr.py") "--app" } catch { }
         }
     }
     if ($WantTg) {
@@ -1629,7 +1631,7 @@ if ($SearchEgress -eq "true") {
     Say "            search.allow_cloud_egress=true. A provider on this LAN never"
     Say "            needs it: tinycmdr config set search.providers '<json>'"
 }
-Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: python tinycmdr.py --cli)"
+Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: --app, or --cli inline)"
 Say "redo   : install-tinycmdr.cmd -Force"
 # The wrapper is the line to give a reader (audit W5): a stock Restricted execution
 # policy refuses the -File form, and the -File form used to hardcode the default folder

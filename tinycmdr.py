@@ -15,7 +15,7 @@ Custom tools:  drop .py files into ./tools/ (the agent also writes its own
 Run as bot:    python tinycmdr.py
 Run in a terminal:  tinycmdr            (the shim: no verb means a session)
                python tinycmdr.py --cli  the same thing in the open
-Full-screen terminal app: python tinycmdr.py --app
+The app (the default door): python tinycmdr.py --app
 One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
 
@@ -16348,6 +16348,7 @@ class TuiScreen:
         self._status_at = 0.0
         self._plain_fallback = False
         self._last_was_panel = False   # cards stack; a new group gets a blank
+        self.surface = ""              # a card's background fill ("" = transparent)
 
     def style(self, role):
         """The active tier's style for one palette role."""
@@ -16371,16 +16372,16 @@ class TuiScreen:
         self.shown.append(renderable)
         return buf.getvalue().rstrip("\n")
 
-    def _put(self, ansi):
+    def _put(self, ansi, end="\n"):
         if not self._plain_fallback:
             try:
                 from prompt_toolkit import print_formatted_text
                 from prompt_toolkit.formatted_text import ANSI
-                print_formatted_text(ANSI(ansi), file=self.out)
+                print_formatted_text(ANSI(ansi), file=self.out, end=end, flush=True)
                 return
             except Exception:
                 self._plain_fallback = True
-        print(ansi, file=self.out, flush=True)
+        print(ansi, file=self.out, end=end, flush=True)
 
     def _draw(self, renderable):
         """One renderable, drawn. The inline screen paints it and hands it to the
@@ -16399,7 +16400,8 @@ class TuiScreen:
         if foot:
             head.append("   " + foot, style="dim")
         self._draw(Panel(body, title=head, title_align="left",
-                         border_style=border_style, box=self.box, padding=(0, 1)))
+                         border_style=border_style, box=self.box, padding=(0, 1),
+                         style=self.surface))
 
     # -- the pieces the console asks for -----------------------------------
     def banner(self, title, rows, hint=""):
@@ -16477,10 +16479,20 @@ class TuiScreen:
         self._draw(Text("  " + str(text), style=style))
 
     def raw_ansi(self, text):
-        """Text that is ALREADY painted (the streamed narration, the closing blank):
-        straight through, so a growing line keeps growing in the screen too."""
-        if text.strip():
-            self._put(text)
+        """Text that is ALREADY painted (the streamed narration, the closing newline).
+
+        A growing line has to GROW: the caller hands over the tail with no trailing
+        newline, so this writes it with end="" and flushes. The default newline per
+        call is what stair-stepped one streamed sentence into one line per delta
+        (T-06), and the old `if text.strip()` guard silently dropped the newline that
+        ends the line, so nothing ever closed it.
+        """
+        if text == "":
+            return
+        if not text.strip():          # the end of the line: a real newline, once
+            self._put("", end="\n")
+            return
+        self._put(text, end="")
 
     # -- for review and for the tests --------------------------------------
     def export_svg(self, path, title="tinycmdr console"):
@@ -16546,6 +16558,7 @@ class CliDestination(Destination):
         self._refs = {}          # ref -> the text already printed for it
         self._open = False       # a line printed without its newline yet
         self._pulsed = set()     # drafts already reduced to one dim pulse
+        self._hold = {}          # ref -> (text, when) while a line's opening is held
         self.glyphs = tui_glyphs()
         self.ellipsis = "..." if tui_ascii_only() else "\u2026"
 
@@ -16555,6 +16568,51 @@ class CliDestination(Destination):
         body? Then it is not the model thinking out loud, and previewing it as a
         growing line is the raw-pipe noise the brief calls T-02."""
         return len(text) > 200 or "|" in text or "```" in text
+
+    # The hold window: how long a line's opening is buffered before it is committed.
+    # A streaming answer is unknown until it grows, and an inline terminal cannot
+    # take a line back, so the decision has to come before the first character lands.
+    HOLD_CHARS = 200
+    HOLD_SECONDS = 1.5
+
+    @staticmethod
+    def _body_of(text):
+        """The text without the reporter's chat marker (💬 ): the marker is transport,
+        not content, and the structure test must look at what the line says."""
+        return text[2:] if text.startswith("\U0001F4AC ") else text
+
+    @staticmethod
+    def _bare(text):
+        """A narration PREVIEW: the chat marker and the markdown emphasis come off, so
+        a dim line reads as prose rather than as source. The answer text itself is
+        never touched - it goes to the card verbatim. Never use this to DECIDE: the
+        pipes it strips are what make a table a table."""
+        text = CliDestination._body_of(text)
+        text = re.sub(r"`([^`]*)`", r"\1", text)
+        text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = re.sub(r"__([^_]+)__", r"\1", text)
+        text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"\1", text)
+        return text.replace("|", " ")
+
+    def _hold_ready(self, ref, text):
+        """Enough seen to decide: it is structured, it is long, or the window closed."""
+        if self._looks_structured(self._body_of(text)):
+            return True
+        if len(self._bare(text)) >= self.HOLD_CHARS:
+            return True
+        at = self._hold.get(ref, (text, time.time()))[1]
+        return (time.time() - at) >= self.HOLD_SECONDS
+
+    def _pulse(self, ref, text):
+        """ONE dim pulse for a draft that is the answer's body: the card will deliver
+        the words, and this is the only thing the terminal gets to keep."""
+        if ref in self._pulsed:
+            return
+        self._pulsed.add(ref)
+        self._write(self._paint(
+            "  " + self.ellipsis + "  drafting answer \u00b7 %d chars"
+            % len(self._bare(text).strip()), self.TONES["narration"]))
+        self._open = True
 
     def _paint(self, text, code):
         return f"\033[{code}m{text}\033[0m" if self.colour else text
@@ -16579,10 +16637,30 @@ class CliDestination(Destination):
         self._write(text + "\n")
 
     def _close(self):
-        """Finish an open streamed line before anything else is printed."""
+        """Finish any open streamed line before anything else is printed."""
+        self._commit_hold()
         if self._open:
             self._emit("")
             self._open = False
+
+    def _commit_hold(self):
+        """A held opening must not be LOST when its line is interrupted.
+
+        The hold exists so a decision is made before anything is printed; but a tool
+        call, a card or a question can arrive before the line ever commits, and the
+        held text would then never be drawn (found reviewing this change: nothing
+        closed it). Anything about to print commits it first, exactly as the end of
+        the line would have.
+        """
+        for ref in list(self._hold):
+            held_text = self._refs.get(ref, "")
+            if self._looks_structured(self._body_of(held_text)):
+                self._pulse(ref, held_text)
+            elif self._bare(held_text).strip():
+                self._write(self._paint("  " + self.ellipsis + "  " + self._bare(held_text),
+                                        self.TONES["narration"]))
+                self._open = True
+        self._hold.clear()
 
     def line(self, kind, text, src="main"):
         if kind == "status":
@@ -16608,26 +16686,33 @@ class CliDestination(Destination):
         if kind == "narration":
             prev = self._refs.get(ref, "")
             shown = prev if text.startswith(prev) else ""
+            if not shown or ref in self._hold:
+                # HOLD the opening of a line until it is clearly chatter or clearly the
+                # answer's body. A threshold checked AFTER printing leaks the prose
+                # that came before the first pipe, and a terminal cannot unprint it
+                # (the round-2 review caught `… The` and `… The only Apple machine
+                # that hits 800+ GB/s is the **M4 Ultra** — …` on screen, T-02
+                # residual). So: decide first, then print.
+                self._refs[ref] = text
+                if not self._hold_ready(ref, text):
+                    self._hold.setdefault(ref, (text, time.time()))
+                    return ref
+                self._hold.pop(ref, None)
+                if self._looks_structured(self._body_of(text)):
+                    self._pulse(ref, text)
+                else:
+                    self._write(self._paint(
+                        "  " + self.ellipsis + "  " + self._bare(text),
+                        self.TONES["narration"]))
+                    self._open = True
+                return ref
             tail = text[len(shown):]
             if tail:
-                body = text[2:] if text.startswith("\U0001F4AC ") else text
-                if self._looks_structured(body):
-                    # A table or a long draft is the ANSWER's body arriving, not
-                    # narration. A terminal cannot rewrite a line it has already
-                    # printed, so stream it raw and it becomes the mangled first
-                    # "answer" of the triple render (T-01/T-02): ONE dim pulse
-                    # instead, and the bright card below delivers the words.
-                    if ref not in self._pulsed:
-                        self._pulsed.add(ref)
-                        self._write(self._paint(
-                            "  " + self.ellipsis + "  drafting answer \u00b7 %d chars"
-                            % len(body.strip()), self.TONES["narration"]))
-                        self._open = True
-                    self._refs[ref] = text
-                    return ref
-                self._write(self._paint(("  " + self.ellipsis + "  " if not shown else "")
-                                        + tail, self.TONES["narration"]))
-                self._open = True
+                if self._looks_structured(self._body_of(text)):
+                    self._pulse(ref, text)
+                else:
+                    self._write(self._paint(self._bare(tail), self.TONES["narration"]))
+                    self._open = True
                 self._refs[ref] = text
             return ref
         self._close()
@@ -16655,6 +16740,15 @@ class CliDestination(Destination):
         `acr…`, and the rendered card (brief T-01, reproduced before this change).
         A screen cannot unprint the dim draft; the card is unconditional instead,
         and the plain path uses what is recorded here to stay single-print."""
+        if ref in self._hold:                 # never decided: the run ended first
+            held_text = self._refs.get(ref, "")
+            self._hold.pop(ref, None)
+            if self._looks_structured(self._body_of(held_text)):
+                self._pulse(ref, held_text)
+            elif self._bare(held_text).strip():
+                self._write(self._paint("  " + self.ellipsis + "  " + self._bare(held_text),
+                                        self.TONES["narration"]))
+                self._open = True
         self._close()
         body = self._refs.get(ref, "")
         if body.startswith("\U0001F4AC "):
@@ -16727,6 +16821,12 @@ class AppScreen(TuiScreen):
     def __init__(self, colour=True, tier=None):
         super().__init__(out=io.StringIO(), width=None, tier=tier)
         self.colour = bool(colour)
+        # The app draws cards on its own surface (a slightly lighter panel than the
+        # body), which is what makes them read as cards rather than as text between
+        # two rules. The inline lane keeps a transparent surface - a terminal there
+        # has no background of ours to sit on.
+        self.surface = "on #12161c" if self.tier in ("truecolor", "256") else ""
+        self.RAIL_WIDTH = 26
         self.items = []            # ("r", renderable) | ("ansi", painted lines)
         self._rendered = []        # item index -> lines, for the current width
         self._flat = []            # the transcript, flattened
@@ -16751,16 +16851,19 @@ class AppScreen(TuiScreen):
 
     def _pane_width(self):
         try:
-            return max(40, self.app.output.get_size().columns)
+            cols = self.app.output.get_size().columns
         except Exception:
-            return self.width
+            cols = self.width
+        # the window frame (2) + the rail and its rule
+        return max(24, cols - self.RAIL_WIDTH - 3)
 
     def _pane_height(self):
         try:
             rows = self.app.output.get_size().rows
         except Exception:
             rows = 24
-        return max(3, rows - 4)    # header, status, input, footer
+        # window top + rule + status + composer (3) + window bottom
+        return max(3, rows - 7)
 
     def _render_item(self, item, width):
         kind, payload = item
@@ -16922,56 +17025,155 @@ class AppScreen(TuiScreen):
         except Exception:
             log.debug("app exit failed", exc_info=True)
 
-    def _chrome_style(self):
-        if self.tier in ("truecolor", "256"):
-            return "bg:#1b1f27 #8b939e"
-        if self.tier == "16":
-            return "reverse"          # 16 colours: reverse video, same contrast
-        return ""
-
-    def _header_text(self):
-        from prompt_toolkit.formatted_text import FormattedText
+    def _frame_title(self):
+        """The window title in the frame's top border: the app's name, the session,
+        and a live clock, so the surface reads as a window rather than a prompt."""
+        from prompt_toolkit.formatted_text import HTML
         try:
-            model = "%s @ %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])
+            session = _cli_key()
         except Exception:
-            model = "model?"
+            session = "cli"
+        return HTML(" <b>tinycmdr</b> <style fg='#6b7480'>\u00b7</style> "
+                    "<style fg='#c9d1d9'>%s</style> "
+                    "<style fg='#6b7480'>\u00b7 %s</style> " % (session, self._clock()))
+
+    def _clock(self):
+        try:
+            return time.strftime("%H:%M")
+        except Exception:
+            return ""
+
+    SPINNER = "\u280b\u2819\u2839\u2838\u283c\u2834\u2826\u2827\u2807\u280f"
+
+    def _sidebar_text(self):
+        """The rail: what an app window would show in its sidebar - session, context
+        gauge, last run, model - all read live from the agent, never a second store."""
+        from prompt_toolkit.formatted_text import FormattedText
+        rows = []
+
+        def title(text=""):
+            rows.append(("class:app.rail.title", " " + text + "\n"))
+
+        def value(text):
+            rows.append(("class:app.rail.value", " " + text + "\n"))
+
         try:
             s = AGENT.stats(_cli_key())
             budget = AGENT._context_budget()
-            ctx = "ctx %s/%s (%d%%)" % (fmt_tokens(s["est_tokens"]), fmt_tokens(budget),
-                                        100 * s["est_tokens"] // max(1, budget))
+            used = s["est_tokens"]
+            pct = min(100, 100 * used // max(1, budget))
+            bar_w = max(6, self.RAIL_WIDTH - 8)
+            filled = int(bar_w * pct / 100)
+            bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
+            title("SESSION")
+            value(_cli_key())
+            value("%d exchange(s)" % s["exchanges"])
+            title()
+            title("CONTEXT")
+            value("%s / %s" % (fmt_tokens(used), fmt_tokens(budget)))
+            value("%s %d%%" % (bar, pct))
+            u = AGENT.last_usage.get(_cli_key()) or {}
+            title()
+            title("LAST RUN")
+            if u.get("calls"):
+                value("%d call(s)" % u["calls"])
+                value("%s tok" % fmt_tokens(u["prompt"] + u["completion"]))
+                tps = (u["completion"] / u["llm_secs"]) if u.get("llm_secs") else 0
+                value("%d tok/s \u00b7 %ss" % (tps, int(u.get("secs") or 0)))
+            else:
+                value("-")
+            title()
+            title("MODEL")
+            value(CONFIG["llm"]["model"])
+            title()
+            title("KEYS")
+            value("\u2191\u2193 PgUp/PgDn  scroll")
+            value("Ctrl-C  stop a run")
+            value("Ctrl-Q  quit")
         except Exception:
-            ctx = ""
-        return FormattedText([("class:app.chrome",
-                               " tinycmdr %s  \u00b7  %s  \u00b7  %s"
-                               % (VERSION, model, ctx))])
+            value("(no session yet)")
+        return FormattedText(rows)
 
     def _status_text(self):
         from prompt_toolkit.formatted_text import FormattedText
-        return FormattedText([("class:app.status", " " + (self.status or "ready"))])
+        busy = _CLI.get("stop") is not None
+        if busy:
+            spin = self.SPINNER[int(time.time() * 8) % len(self.SPINNER)]
+            return FormattedText([("class:app.status.hot",
+                                   "  %s  %s" % (spin, self.status or "working\u2026"))])
+        return FormattedText([("class:app.hint", "  " + (self.status or "ready"))])
 
-    def _footer_text(self):
+    def _hints_text(self):
         from prompt_toolkit.formatted_text import FormattedText
-        return FormattedText([("class:app.chrome",
-                               " /help commands \u00b7 /stop cancels a run \u00b7 "
-                               "Ctrl-C stops \u00b7 PgUp/PgDn scroll \u00b7 Ctrl-Q quits")])
+        return FormattedText([("class:app.hint",
+                               "/help  \u00b7  /stop  \u00b7  /exit  \u00b7  "
+                               "\u23ce send  ")])
+
+    def _app_style(self):
+        """The app's own surface colours. One table, tier-aware: a 16-colour terminal
+        keeps the layering with reverse video instead of losing the rails."""
+        if self.tier in ("truecolor", "256"):
+            return {
+                "app.frame": "bg:#0b0e13",
+                "frame.border": "#2f3946 bg:#0b0e13",
+                "frame.label": "bg:#0b0e13",
+                "app.rail": "bg:#12161c",
+                "app.rail.title": "bg:#12161c bold #5fbfbf",
+                "app.rail.value": "bg:#12161c #a8b1bd",
+                "app.body": "bg:#0e1116",
+                "app.status": "bg:#12161c",
+                "app.status.hot": "bg:#12161c bold #5fbfbf",
+                "app.hint": "bg:#12161c #6b7480",
+                "app.composer": "bg:#12161c",
+                "line": "#232a34 bg:#0b0e13",
+                "textarea": "#e6e6e6 bg:#12161c",
+                "prompt": "bold #5fbfbf bg:#12161c",
+            }
+        if self.tier == "16":
+            return {
+                "app.rail": "bg:#12161c",
+                "app.rail.title": "bg:#12161c bold cyan",
+                "app.rail.value": "bg:#12161c",
+                "app.body": "bg:#0e1116",
+                "app.status.hot": "bold cyan",
+                "app.hint": "dim",
+                "textarea": "",
+                "prompt": "bold cyan",
+            }
+        return {}
 
     def _build(self):
         from prompt_toolkit.application import Application
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
-        from prompt_toolkit.layout import HSplit, Layout, Window
+        from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
         from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.dimension import Dimension
         from prompt_toolkit.styles import Style
-        from prompt_toolkit.widgets import TextArea
+        from prompt_toolkit.widgets import Frame, HorizontalLine, TextArea, VerticalLine
 
         self.input = TextArea(height=Dimension.exact(1), multiline=False,
-                              prompt="you> ", accept_handler=self._submit,
+                              prompt="  \u203a ", accept_handler=self._submit,
                               history=InMemoryHistory())
         self.body = Window(FormattedTextControl(text=self._pane_text),
-                           wrap_lines=False, always_hide_cursor=True)
-        chrome = self._chrome_style()
+                           wrap_lines=False, always_hide_cursor=True,
+                           style="class:app.body")
+        rail = Window(FormattedTextControl(text=self._sidebar_text),
+                      width=Dimension.exact(self.RAIL_WIDTH), style="class:app.rail")
+        status = VSplit([
+            Window(FormattedTextControl(text=self._status_text), style="class:app.status"),
+            Window(FormattedTextControl(text=self._hints_text), align="right",
+                   dont_extend_width=True, style="class:app.status"),
+        ], height=1)
+        self.composer = Frame(self.input, title=" ask ", style="class:app.composer")
+        shell = Frame(
+            HSplit([
+                VSplit([rail, VerticalLine(), self.body]),
+                HorizontalLine(),
+                status,
+                self.composer,
+            ]),
+            title=self._frame_title(), style="class:app.frame")
         kb = KeyBindings()
 
         @kb.add("pageup")
@@ -16982,7 +17184,7 @@ class AppScreen(TuiScreen):
         def _(event):
             self.scroll(1)
 
-        @kb.add("<scroll-up>")        # only when mouse capture is on
+        @kb.add("<scroll-up>")        # the wheel, when mouse capture is on
         def _(event):
             self.scroll(-1)
 
@@ -17018,22 +17220,15 @@ class AppScreen(TuiScreen):
             if not self.input.text:
                 self.request_exit()
 
-        root = HSplit([
-            Window(FormattedTextControl(text=self._header_text), height=1,
-                   style="class:app.chrome"),
-            self.body,
-            Window(FormattedTextControl(text=self._status_text), height=1,
-                   style="class:app.status"),
-            self.input,
-            Window(FormattedTextControl(text=self._footer_text), height=1,
-                   style="class:app.chrome"),
-        ])
+        # Mouse capture stays OFF by default (brief §10): with it on, the terminal
+        # stops doing native selection/copy without a modifier key. The wheel is the
+        # opt-in - TINYCMDR_APP_MOUSE=1 - for a box where selection does not matter.
+        mouse = os.environ.get("TINYCMDR_APP_MOUSE", "0") == "1"
         self.app = Application(
-            layout=Layout(root, focused_element=self.input), key_bindings=kb,
-            full_screen=True, erase_when_done=False,
-            mouse_support=bool(os.environ.get("TINYCMDR_APP_MOUSE")),
-            style=Style.from_dict({"app.chrome": chrome, "app.status": chrome,
-                                   "app.body": "", "prompt": "ansicyan bold"}))
+            layout=Layout(shell, focused_element=self.input), key_bindings=kb,
+            full_screen=True, erase_when_done=False, mouse_support=mouse,
+            refresh_interval=0.4,       # the spinner, the clock and the gauge tick
+            style=Style.from_dict(self._app_style()))
         self.width = self._pane_width()      # cards are rendered for this pane
 
     def run(self):
@@ -21033,44 +21228,49 @@ def _cli_console_loop():
         failed = False
         reporter = _cli_new_reporter()
         try:
-            answer = drive_run(_cli_key(), text, reporter, cancel_event=cancel,
-                               steer_cb=_cli_steer_queue, ask_door=reporter.dest)
-        except KeyboardInterrupt:
-            cancel.set()
-            cli_out(red("\n  (stopped)"))
-        except OperatorStop as e:
-            failed = True
-            cli_out(red("\n  (stopped: %s)" % e))
-        except Exception as e:
-            failed = True
-            cli_out(red("\n  run failed: %s: %s" % (type(e).__name__, e)))
-        finally:
-            _CLI["stop"] = None
+            try:
+                answer = drive_run(_cli_key(), text, reporter, cancel_event=cancel,
+                                   steer_cb=_cli_steer_queue, ask_door=reporter.dest)
+            except KeyboardInterrupt:
+                cancel.set()
+                cli_out(red("\n  (stopped)"))
+            except OperatorStop as e:
+                failed = True
+                cli_out(red("\n  (stopped: %s)" % e))
+            except Exception as e:
+                failed = True
+                cli_out(red("\n  run failed: %s: %s" % (type(e).__name__, e)))
             reporter.finish(ok=not failed)
-        while not _CLI["steer"].empty():    # typed too late for that run
-            _CLI["inbox"].put(_CLI["steer"].get())
-        if _CLI["leave"]:
-            return
-        if answer:
-            screen = tui_screen()
-            if screen is not None:
-                # The WHOLE answer, once, as the one bright card - always. The dim
-                # draft above it is narration a screen cannot take back, and
-                # prefix-matching that whitespace-collapsed, 400-char-capped draft
-                # is what rendered the answer three times (brief T-01). The
-                # streamed_answer note is the plain path's business only.
-                screen.card("final", answer)
-            else:
-                shown = (_CLI.pop("streamed_answer", "") or "").strip()
-                body = answer
-                if shown and answer.startswith(shown):
-                    body = answer[len(shown):]  # only what came after the streamed text
-                elif shown and shown.startswith(answer.strip()):
-                    body = ""                   # already on screen in full
-                if body.strip():
-                    print(answer_block(body))
-        _cli_usage_line()
-        print()
+            while not _CLI["steer"].empty():    # typed too late for that run
+                _CLI["inbox"].put(_CLI["steer"].get())
+            if _CLI["leave"]:
+                return
+            if answer:
+                screen = tui_screen()
+                if screen is not None:
+                    # The WHOLE answer, once, as the one bright card - always. The dim
+                    # draft above it is narration a screen cannot take back, and
+                    # prefix-matching that whitespace-collapsed, 400-char-capped draft
+                    # is what rendered the answer three times (brief T-01). The
+                    # streamed_answer note is the plain path's business only.
+                    screen.card("final", answer)
+                else:
+                    shown = (_CLI.pop("streamed_answer", "") or "").strip()
+                    body = answer
+                    if shown and answer.startswith(shown):
+                        body = answer[len(shown):]  # only after the streamed text
+                    elif shown and shown.startswith(answer.strip()):
+                        body = ""                   # already on screen in full
+                    if body.strip():
+                        print(answer_block(body))
+            _cli_usage_line()
+            print()
+        finally:
+            # The run is over only once its card is on screen. This flag is what the
+            # reader thread gates `session.prompt()` on, so clearing it earlier let the
+            # prompt paint `you> ` BETWEEN the draft pulse and the answer card (T-07,
+            # reproduced in both turns of the round-2 review).
+            _CLI["stop"] = None
 
 
 def _cli_app_worker():
@@ -21628,7 +21828,8 @@ In a chat window the same names are slash commands, and `/tinycmdr` is the prefi
 always gets through: `/tinycmdr model` lists them, `/tinycmdr status` is this host,
 `/tinycmdr help` lists every command.
 
-A bare `tinycmdr` from a shell is a session in this folder (the same as --cli).
+A bare `tinycmdr` from a shell opens the app in this folder (the same as --app); the
+inline lane is `--cli`, and a terminal that cannot host the app falls back to it.
 `tinycmdr --app` opens the same session as a full-screen terminal app (alternate
 screen, live status bar, in-pane scrolling); it falls back to inline cards when the
 terminal cannot host it. Both flags need no port, server or browser.
@@ -23091,7 +23292,10 @@ def main():
     elif "--app" in sys.argv:
         run_cli(app=True)
     elif "--cli" in sys.argv:
-        run_cli()
+        # TINYCMDR_APP=1 prefers the full-screen app for the human door; `--cli` still
+        # spells the inline lane out by hand, and `--app` overrides either way. The app
+        # falls back to the inline cards on a terminal that cannot host it.
+        run_cli(app=os.environ.get("TINYCMDR_APP") == "1")
     elif "--telegram" in sys.argv:
         lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
     else:

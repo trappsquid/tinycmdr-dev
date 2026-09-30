@@ -17,6 +17,8 @@ import os
 import re
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -215,11 +217,107 @@ check("the answer card is opened by a blank line",
 dest6 = fb.CliDestination(colour=False, out=io.StringIO())
 ref6 = dest6.line("narration", "")
 dest6.update(ref6, "narration", "Checking the lock:")
-check("a streamed thought line carries the render's label",
-      "  \u2026  Checking the lock:" in dest6.out.getvalue())
+check("a line's opening is HELD until it is knowable, not printed on sight",
+      "Checking the lock:" not in dest6.out.getvalue(), dest6.out.getvalue()[:80])
+dest6.drop(ref6)                     # the run ended: the held line is committed
+dest6._close()
+check("...and it is committed when the line ends, with the render's label",
+      "  \u2026  Checking the lock:" in dest6.out.getvalue(), dest6.out.getvalue()[:120])
 scr6.card("narration", "thinking aloud, quietly")
 check("...and so does the drawn one, dim as the render has it",
       "  \u2026  thinking aloud, quietly" in scr6.out.getvalue())
+
+# --- T-06: a streamed line GROWS; it does not stair-step one line per delta ------
+# print_formatted_text defaults to end="\n", so every delta used to land on its own
+# line and `_close()`'s newline was dropped by the old `if text.strip()` guard.
+scr6b = fb.TuiScreen(out=io.StringIO(), width=100)
+scr6b._plain_fallback = True
+dest6b = fb.CliDestination(colour=False, out=scr6b.out, screen=scr6b)
+ref6b = dest6b.line("narration", "")
+_accumulated = ""
+for _delta in ("Let me confirm", " the exact numbers", " for this box."):
+    _accumulated += _delta
+    dest6b.update(ref6b, "narration", "\U0001F4AC " + _accumulated)
+dest6b.drop(ref6b)
+dest6b._close()
+_out6b = scr6b.out.getvalue()
+_tail6b = _out6b[_out6b.find("Let me confirm"):]
+check("a multi-delta stream renders as ONE line (T-06)",
+      "Let me confirm the exact numbers for this box." in _tail6b
+      and _tail6b.count("\n") == 1 and _tail6b.endswith("\n"), repr(_tail6b[:120]))
+
+# --- T-02 residual: decide BEFORE printing, because a terminal cannot unprint ----
+scr6c = fb.TuiScreen(out=io.StringIO(), width=100)
+scr6c._plain_fallback = True
+dest6c = fb.CliDestination(colour=False, out=scr6c.out, screen=scr6c)
+ref6c = dest6c.line("narration", "")
+dest6c.update(ref6c, "narration",
+              "\U0001F4AC The only Apple machine that hits 800 GB/s is the")
+check("...a prose opening that may become a table is not printed on sight",
+      "The only Apple" not in scr6c.out.getvalue(), scr6c.out.getvalue()[:80])
+dest6c.update(ref6c, "narration",
+              "\U0001F4AC The only Apple machine that hits 800 GB/s is the M4 Ultra\n\n"
+              "| Chip | Bandwidth |\n|---|---|\n| M4 Ultra | 800 GB/s |\n")
+_out6c = scr6c.out.getvalue()
+check("...and when it turns out to be a table, zero raw draft reached the screen",
+      "The only Apple" not in _out6c and "drafting answer" in _out6c,
+      repr(_out6c[:120]))
+
+scr6d = fb.TuiScreen(out=io.StringIO(), width=100)
+scr6d._plain_fallback = True
+dest6d = fb.CliDestination(colour=False, out=scr6d.out, screen=scr6d)
+ref6d = dest6d.line("narration", "")
+dest6d.update(ref6d, "narration", "\U0001F4AC Checking the lock before I touch anything")
+dest6d.line("tool", "`shell` ls")        # a card interrupts: the held line commits first
+check("a held line is committed, never lost, when a card interrupts it",
+      "Checking the lock before I touch anything" in scr6d.out.getvalue(),
+      repr(scr6d.out.getvalue()[:160]))
+
+# --- T-07: the prompt must not paint between the draft pulse and the answer card --
+_final_stop = {}
+
+
+class _Recorder(fb.TuiScreen):
+    def card(self, kind, text, foot=""):
+        if kind == "final":
+            _final_stop["stop"] = fb._CLI.get("stop")
+        super().card(kind, text, foot)
+
+
+_saved_loop_cli = dict(fb._CLI)
+_saved_loop_drive = fb.drive_run
+try:
+    _rec = _Recorder(out=io.StringIO(), width=100, tier="truecolor")
+    fb._CLI.update({"screen": _rec, "app": None, "colour": False, "stop": None,
+                    "inbox": fb.queue.Queue(), "steer": fb.queue.Queue(),
+                    "leave": False, "reader": False, "ask": None})
+    fb.drive_run = lambda key, text, reporter, **kw: "answer text"
+    fb._CLI["inbox"].put("hello")
+    _loop = threading.Thread(target=fb._cli_console_loop, daemon=True)
+    _loop.start()
+    _deadline = time.time() + 8
+    while time.time() < _deadline and "stop" not in _final_stop:
+        time.sleep(0.05)
+    _loop.join(2)
+    check("the run flag is still set while the answer card is drawn (T-07)",
+          isinstance(_final_stop.get("stop"), threading.Event), _final_stop)
+    check("...and it is cleared once the run's card is on screen",
+          fb._CLI.get("stop") is None, fb._CLI.get("stop"))
+finally:
+    fb.drive_run = _saved_loop_drive
+    fb._CLI.clear()
+    fb._CLI.update(_saved_loop_cli)
+
+# --- the app's own chrome: a window, not a prompt ---------------------------------
+_app = fb.AppScreen(colour=True, tier="truecolor")
+_title = "".join(part for _, part in _app._frame_title().__pt_formatted_text__())
+_rail = "".join(part for _, part in _app._sidebar_text().__pt_formatted_text__())
+check("--app draws a window title with the session in it",
+      "tinycmdr" in _title and "cli" in _title, _title)
+check("--app draws a rail with a live context gauge",
+      "SESSION" in _rail and "CONTEXT" in _rail and "\u2588" in _rail, _rail[:120])
+check("--app's composer is a labeled box, not a bare prompt",
+      "ask" in str(_app.composer.title), str(_app.composer.title))
 
 # --- the run's key is a filename; the editing surface is not one (the Windows bed
 # measured 2026-09-22: a PromptSession in the key slot crashed _save() with
