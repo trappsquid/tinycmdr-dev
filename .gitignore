@@ -48,6 +48,10 @@ config.json
 jobs.json
 inbox/
 *.log
+# A rotated log keeps a numeric suffix, and `*` stops at the dot: the bot's own tinycmdr.log.1
+# (5 MB, rotated 2026-09-30 00:08) showed up as untracked, so `git add -A` in a live tree would
+# have committed a host log. Both names belong here for the same reason.
+*.log.*
 *.lock
 *.tmp
 skills/
