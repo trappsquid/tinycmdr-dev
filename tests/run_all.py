@@ -267,24 +267,40 @@ def _looks_failed(line):
 def _check_tail(stdout):
     """The suite's own summary line, when it prints one.
 
-    Two shapes are in the tree and BOTH are summaries: "N passed, M failed[, K skipped]" (most
-    suites) and "N check(s) failed" (the check()-only suites - 22 of them, e.g. test_plan,
-    test_digest, test_envelope). Only the first was recognised, so a red in one of the second
-    kind was reported as "[died before its own summary: no count line]" - which tells the reader
-    the suite aborted mid-run and left checks ungraded, when it had in fact graded all of them
-    and said how many failed. Measured 2026-09-30: test_plan's own date-rot red (CI run
-    36778872020) read exactly that way. What this looks for is the summary, not one spelling.
+    A suite's last word is its summary, and this tree spells it five ways - so the rule is
+    "does the suite report on itself", not "did it use the spelling I expected". Only the
+    first shape was recognised, and every other red was reported as "[died before its own
+    summary: no count line]", which tells the reader the suite aborted mid-run and left
+    checks ungraded. Measured 2026-09-30: test_plan's date-rot red (CI run 36778872020) and
+    test_measured_doc's stale-numbers red both read exactly that way, and the second cost a
+    detour into a crash that had not happened.
+
+    The spellings, and who prints each:
+      "N passed, M failed[, K skipped]"  most suites
+      "N check(s) failed[: names]"       the check()-only suites (22 of them)
+      "N failed: names"                  test_cross_process, test_profiles
+      "N FAILED: names" / "FAILED: N"    test_measured_doc, test_installer_parity,
+                                         test_llama_extensions, test_shim, test_atlas
+      "failed: names"                    test_ledger_journal, which prints no count at all
+    A traceback, or a run that stops after its FAIL lines, still matches nothing.
     """
     for line in reversed(stdout.splitlines()):
         m = re.match(r"^\s*(\d+) passed, (\d+) failed(?:, (\d+) skipped)?\s*$", line)
         if m:
             skipped = ", %s skipped" % m.group(3) if m.group(3) else ""
             return "%s passed, %s failed%s" % (m.group(1), m.group(2), skipped)
-        # ...and it can carry the names inline ("1 check(s) failed: a, b"), so only the head
-        # of the line is matched.
+        # The colon-less forms carry the failed names inline, so only the head is matched.
         m = re.match(r"^\s*(\d+) check\(s?\) failed\b", line)
         if m:
             return "%s check(s) failed" % m.group(1)
+        m = re.match(r"^\s*(\d+) failed\b", line)
+        if m:
+            return "%s failed" % m.group(1)
+        m = re.match(r"^\s*(?:(\d+) +)?FAILED\b", line)
+        if m:
+            return "%sFAILED" % (m.group(1) + " " if m.group(1) else "")
+        if re.match(r"^\s*failed:\s*\S", line):
+            return "failed"
     return ""
 
 
