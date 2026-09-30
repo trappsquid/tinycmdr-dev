@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Changed
+- **A chat lane whose host is unreachable is retried in-process, on a growing backoff.** The bot
+  exited on a failed lane start and left the restart policy to the platform - and the three
+  platforms disagreed. Windows ships `tinycmdr-supervise.py`, which backs off (5 s, 10, 20, 40,
+  60 …); Linux's unit and macOS's plist restart on a FIXED 10 s with no growth, because systemd's
+  `RestartSec` and launchd's `ThrottleInterval` cannot grow one, and the Linux unit additionally
+  ships `StartLimitIntervalSec=0`. So an unreachable lane - a laptop that woke up without wifi, an
+  ISP outage, the box holding the model switched off, a wrong host in config, a typo'd token -
+  cost a full startup every 10 s for as long as the condition lasted: measured once at 1654
+  startups in 4 h 45 m, each importing a 22k-line module. The lane start is now retried in this
+  process on the supervisor's own curve and reset rule, with one log line per state change, so
+  every platform behaves the same way and the process stays observable (`tinycmdr health`,
+  `logs/state.json`). What needs a human still exits: a missing token, a broken config and a token
+  the API refused pass `SystemExit` straight through, and `/restart` still exits 75. The unit and
+  the plist keep a fixed delay as the CRASH backstop (raised to 60 s), because a real crash still
+  needs the manager.
+
 ## [1.0.41] - 2026-09-30
 
 An outside code review - 22 findings, every one graded against this tree before it was acted on -
