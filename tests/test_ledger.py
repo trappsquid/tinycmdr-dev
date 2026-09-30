@@ -2292,8 +2292,15 @@ def test_a_restarted_endpoint_is_noticed_after_the_ttl():
                                              - first_env["reply"]), first_env)
         check("ttl: and it is not re-asked on every payload",
               fb.AGENT._context_budget() == first_env["budget"] and calls["n"] == 1, calls)
-        fb.AGENT.__dict__["_window_at"] = time.time() - (fb.WINDOW_TTL + 60)
-        _budget_clear()
+        # Back-date the entry itself, on the MONOTONIC clock the TTL is measured with, and
+        # drop only what the envelope memoises: _budget_clear() would also drop the window
+        # cache, so the TTL would not be what re-asks and this check would grade the clear.
+        # (A scalar `_window_at` is not read here - once the map exists, only its entries are.)
+        root = fb._endpoint_root(cfg["llm"]["base_url"])
+        at, val = fb.AGENT._window_cache[root]
+        fb.AGENT._window_cache[root] = (fb.now_mono() - (fb.WINDOW_TTL + 60), val)
+        fb.AGENT.__dict__.pop("_envelope_cache", None)
+        fb.AGENT.__dict__.pop("_budget_cache", None)
         second_env = fb.AGENT._envelope()
         check("ttl: past the TTL the endpoint is asked again, so a restarted box "
               "is noticed",

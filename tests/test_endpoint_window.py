@@ -273,14 +273,17 @@ def main():
 
         root = fb._endpoint_root(primary)
         at, val = fb.AGENT._window_cache[root]
-        fb.AGENT._window_cache[root] = (time.time() - (fb.WINDOW_TTL + 60), val)
+        # Back-date on the MONOTONIC clock: the TTL is measured with now_mono() since the
+        # clock fix (a suspend must not expire a live cache), so a time.time() value here
+        # would read as the far future and never expire.
+        fb.AGENT._window_cache[root] = (fb.now_mono() - (fb.WINDOW_TTL + 60), val)
         calls.clear()
         check("  and each endpoint's answer still expires on the TTL",
               fb.AGENT._endpoint_window(primary) == 32768
               and calls == [root], calls)
 
         fb.AGENT.__dict__["_window_cache"] = 12345       # stale scalar stub
-        fb.AGENT.__dict__["_window_at"] = time.time() - (fb.WINDOW_TTL + 60)
+        fb.AGENT.__dict__["_window_at"] = fb.now_mono() - (fb.WINDOW_TTL + 60)
         calls.clear()
         check("  a stale scalar stub is re-asked too, not trusted for ever",
               fb.AGENT._endpoint_window(primary) == 32768
