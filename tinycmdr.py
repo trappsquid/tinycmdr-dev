@@ -999,7 +999,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.43"
+VERSION = "1.0.44"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -16470,7 +16470,6 @@ class TuiScreen:
             self._last_was_panel = False
             return
         if title == "answer":
-            from rich.markdown import Markdown
             # No leading/trailing blank band and no run of empty lines inside: the
             # markdown's own spacing plus the panel padding was reading as dead
             # space (brief T-05).
@@ -16483,7 +16482,8 @@ class TuiScreen:
             # code_theme="native": monokai (rich's default) paints keywords MAGENTA,
             # and pygments' "bw" paints a white background - both outside the palette.
             # native is a quiet dark theme, so a fenced block reads as a code surface.
-            body = Markdown(text, code_theme="native")
+            # _TightMarkdown collapses the blank band rich leaves around a table.
+            body = _TightMarkdown(text, self.theme, self.tier)
         else:
             body = Text(text, style=style or "default")
         # the approved render's rhythm (tui-preview): call/result cards stack
@@ -16549,6 +16549,82 @@ class TuiScreen:
         path = Path(path)
         path.write_text(con.export_svg(title=title), encoding="utf-8")
         return path
+
+
+class _TightMarkdown:
+    """Markdown whose table bands are collapsed, at whatever width the parent gives it.
+
+    rich's Markdown renders a table and then its own newline on top of the paragraph
+    break, so a card shows TWO blank rows between a table and the next paragraph, and
+    one before the closing border when the answer ends in a table (T-05, still open
+    after the first pass because the source-level strip cannot reach a band the
+    renderer adds).
+
+    It has to happen here rather than on the markup: dropping blank SOURCE lines does
+    not remove the one rich emits after a table, and pre-rendering into a string would
+    bake the console width in. Rendering into this renderable's own console at
+    `options.max_width` keeps the wrapping the panel would have given it, and the
+    lines are filtered afterwards:
+
+      * blank lines directly AFTER a table are dropped (that is the band);
+      * a run of two or more blanks elsewhere collapses to one;
+      * leading and trailing blanks are dropped;
+      * a blank line that carries a background style is inside a code block and is
+        KEPT - the code surface's own spacing is not ours to edit.
+    """
+
+    # A rendered table is: a rule row of box-drawing dashes, then data rows with no
+    # borders of their own (rich draws markdown tables with box.SIMPLE). So the RULE
+    # row opens a table and the blank after the last data row is the band to drop.
+    _RULE_ROW = re.compile(r"^[\u2500\u2502\s]{8,}$")
+
+    def __init__(self, markup, theme, tier, code_theme="native"):
+        from rich.markdown import Markdown
+        self.markdown = Markdown(markup, code_theme=code_theme)
+        self.theme = theme
+        self.tier = tier
+
+    def __rich_console__(self, console, options):
+        from rich.console import Console
+        from rich.text import Text
+        buf = io.StringIO()
+        sub = Console(file=buf, force_terminal=True, width=options.max_width,
+                      color_system=TUI_COLOR_SYSTEM.get(self.tier, "truecolor"),
+                      highlight=False, theme=self.theme)
+        sub.print(self.markdown)
+        kept, pending, in_table, band = [], 0, False, False
+        for raw_line in buf.getvalue().rstrip("\n").split("\n"):
+            visible = re.sub(r"\x1b\[[0-9;]*m", "", raw_line).strip()
+            if not visible:
+                if "48;" in raw_line:              # inside a code surface: keep it
+                    kept.append(raw_line)
+                    pending = 0
+                    continue
+                if in_table or band:               # the WHOLE blank run after a table
+                    band = True
+                    continue
+                pending += 1
+                continue
+            pending = 0
+            if band:                               # the following block starts here
+                band = in_table = False
+            elif pending and kept:                 # one blank, never a band, never leading
+                kept.append("")
+            if self._RULE_ROW.match(visible):
+                in_table = True
+            kept.append(raw_line)
+        # Re-emit line by line, cropping anything wider than the box: a rule that fits
+        # rich's console can still be a cell too wide here, and a wrapped rule is
+        # exactly the kind of extra row this renderable exists to remove.
+        out = Text()
+        for i, line in enumerate(kept):
+            if i:
+                out.append("\n")
+            piece = Text.from_ansi(line)
+            if piece.cell_len > options.max_width:
+                piece.truncate(options.max_width, overflow="crop")
+            out.append_text(piece)
+        yield out
 
 
 class CliDestination(Destination):
@@ -16880,7 +16956,7 @@ class AppScreen(TuiScreen):
         self._flat_of = -1         # how many items _flat was built from
         self._width_cache = None
         self._open = False         # a streamed draft line is still growing
-        self._draft_last = None    # the transcript item that draft occupies
+        self._narration_from = None   # the run's draft region: items from here on
         self._top = 0              # first transcript line the pane shows
         self.autofollow = True
         self._final = ""           # the last answer, for the reprint on exit
@@ -16946,13 +17022,12 @@ class AppScreen(TuiScreen):
         self.shown.append(renderable)
         self.items.append(("r", renderable))
         self._open = False
-        self._draft_last = None
         self._invalidate()
 
     def _put(self, ansi):
         self.items.append(("ansi", ansi))
         self._open = False
-        self._draft_last = None
+        self._narration_from = None    # a finished line is not the run's draft region
         self._invalidate()
 
     def raw_ansi(self, text):
@@ -16965,9 +17040,10 @@ class AppScreen(TuiScreen):
             self.items[-1] = ("ansi", self.items[-1][1] + text)
             self._drop_rendered_tail()
         else:
+            if self._narration_from is None:
+                self._narration_from = len(self.items)
             self.items.append(("ansi", text))
             self._open = True
-            self._draft_last = len(self.items) - 1
         self._invalidate()
 
     def status_line(self, text):
@@ -16976,19 +17052,37 @@ class AppScreen(TuiScreen):
         self._invalidate()
 
     def card(self, kind, text, foot=""):
-        """A card. The answer REPLACES the streamed draft in place: this screen can
-        take a line back, which the inline one cannot. Only the LAST streamed draft
-        is replaced - that one is the answer's own text; an earlier one is narration
-        the tool cards came after, and it stays."""
-        if (kind == "final" and self._draft_last is not None
-                and self._draft_last == len(self.items) - 1):
-            self.items.pop()
-            self._drop_rendered_tail()
-            self._open = False
-            self._draft_last = None
+        """A card. On this screen the answer REPLACES the run's whole draft region.
+
+        The reporter draws a new narration line and only then streams deltas into it,
+        so that first draw is a committed line and the deltas are a second item - the
+        card has to drop the SPAN, not the last item, or the model's opening sentence
+        stays filed above the answer with its markdown characters intact (round-4
+        P-02 residual; the last survivor of the triple-render family). A real card in
+        between ends the region, so narration a tool call came after is history and
+        stays exactly where it is.
+        """
+        title, _role = TUI_KINDS.get(kind, (None, "body"))
+        if kind == "final":
+            self._drop_narration()
+        elif title is None and kind in ("narration", "checkin"):
+            if self._narration_from is None:
+                self._narration_from = len(self.items)
+        else:
+            self._narration_from = None
         super().card(kind, text, foot)
         if kind == "final":
             self._final = str(text)
+
+    def _drop_narration(self):
+        """Drop the run's draft region: the pane repaints, so nothing is filed."""
+        if self._narration_from is None:
+            return
+        del self.items[self._narration_from:]
+        del self._rendered[self._narration_from:]
+        self._flat_of = -1
+        self._narration_from = None
+        self._open = False
 
     def write_line(self, line):
         """One finished line from a plain print(): a print at stdout while an
@@ -16996,7 +17090,7 @@ class AppScreen(TuiScreen):
         nothing may exist only in the rich render."""
         self.items.append(("ansi", str(line)))
         self._open = False
-        self._draft_last = None
+        self._narration_from = None
         self._invalidate()
 
     def print_final_inline(self):
@@ -17071,6 +17165,38 @@ class AppScreen(TuiScreen):
                 app.exit()
         except Exception:
             log.debug("app exit failed", exc_info=True)
+
+    COMPOSER_MAX_ROWS = 6            # a paste has to be reviewable, to a ceiling
+
+    def _composer_rows(self):
+        """How many rows the composer needs: wrapped, capped."""
+        text = self.input.text
+        if not text:
+            return 1
+        width = max(20, self.width - 12)
+        rows = 0
+        for line in text.split("\n"):
+            rows += max(1, (len(line) + width - 1) // width)
+        return max(1, min(self.COMPOSER_MAX_ROWS, rows))
+
+    def _composer_title(self):
+        """The box's label: who is typing, how much, and what the keys do.
+
+        A pasted page used to be invisible - one row, horizontally scrolled, no size
+        anywhere - so the label reports the size and the box grows with it.
+        """
+        from prompt_toolkit.formatted_text import HTML
+        text = self.input.text
+        if not text:
+            return HTML(" <b>you</b> ")
+        keys = " \u23ce send, Ctrl-J newline" if self._composer_rows() > 1 else " \u23ce send"
+        return HTML(" <b>you</b> <style fg='#6b7480'>\u00b7 %s chars \u00b7%s</style> "
+                    % (format(len(text), ","), keys))
+
+    def _composer_changed(self, *args):
+        """Re-label as the text changes (the buffer fires this on every edit)."""
+        if self.composer is not None:
+            self.composer.title = self._composer_title()
 
     def _frame_title(self):
         """The window title in the frame's top border: the app's name, the session,
@@ -17195,9 +17321,15 @@ class AppScreen(TuiScreen):
         from prompt_toolkit.styles import Style
         from prompt_toolkit.widgets import Frame, HorizontalLine, TextArea, VerticalLine
 
-        self.input = TextArea(height=Dimension.exact(1), multiline=False,
-                              prompt="  \u203a ", accept_handler=self._submit,
-                              history=InMemoryHistory())
+        # Multiline so a paste keeps its newlines and the box can wrap and grow;
+        # Enter still sends (bound below), Ctrl-J inserts a newline.
+        self.input = TextArea(
+            height=lambda: Dimension(min=1, max=self.COMPOSER_MAX_ROWS,
+                                     preferred=self._composer_rows()),
+            multiline=True, wrap_lines=True, prompt="  \u203a ",
+            accept_handler=self._submit, history=InMemoryHistory())
+        self.input.buffer.on_text_changed.add_handler(self._composer_changed)
+        self.composer = None
         self.body = Window(FormattedTextControl(text=self._pane_text),
                            wrap_lines=False, always_hide_cursor=True,
                            style="class:app.body")
@@ -17209,7 +17341,8 @@ class AppScreen(TuiScreen):
         status = VSplit([
             Window(FormattedTextControl(text=self._status_text), style="class:app.status"),
         ], height=1)
-        self.composer = Frame(self.input, title=" you ", style="class:app.composer")
+        self.composer = Frame(self.input, title=self._composer_title(),
+                              style="class:app.composer")
         shell = Frame(
             HSplit([
                 VSplit([rail, VerticalLine(), self.body]),
@@ -17254,6 +17387,15 @@ class AppScreen(TuiScreen):
         @kb.add("c-q")
         def _(event):
             self.request_exit()
+
+        @kb.add("enter")
+        def _(event):
+            # multiline=True would insert a newline on Enter; a chat box sends.
+            self._submit(self.input.buffer)
+
+        @kb.add("c-j")
+        def _(event):
+            self.input.buffer.insert_text("\n")
 
         @kb.add("c-c")
         def _(event):

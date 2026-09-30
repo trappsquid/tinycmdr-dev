@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.44] - 2026-09-30
+
+The app's two remaining review items, and what happens when a page is pasted into it.
+
+Changed
+- **The composer reports what is in it, and grows to show it.** A pasted page used to be
+  invisible: one row, scrolled sideways, with nothing anywhere saying it was 200 KB. The label now
+  reads `you - 12,345 chars - send, Ctrl-J newline` whenever there is text, the box grows to six
+  wrapped rows (and scrolls beyond that) and collapses when it is sent or cleared, Enter sends, and
+  Ctrl-J inserts a newline. The box is multiline now, so a multi-line paste keeps its newlines
+  instead of being flattened into one line. Measured before the change: 200 KB pasted in ~0.1 s
+  arrived complete in the buffer and was sent as one request - the data path was never the problem.
+
+Fixed
+- **The app replaces the run's whole draft region (P-02 residual).** The reporter draws a narration
+  line and only then streams deltas into it, so the first draw is a committed item and every delta
+  another; the answer card dropped only the item it was told about, and the model's opening
+  sentence stayed filed above the card with its markdown characters intact - the last survivor of
+  the triple-render family. The card now drops the whole span since the last real card. Narration
+  that a tool call came after is history, not a draft, and it stays exactly where it is.
+- **An answer card no longer carries a blank band around a table (T-05).** rich renders a table and
+  then its own newline on top of the paragraph break, so a card showed TWO blank rows between a
+  table and the following paragraph and one before the closing border - and the source-level strip
+  could not reach either, because the renderer adds them. The answer body now goes through a
+  renderer that draws the markdown at whatever width the panel hands it, drops the whole blank run
+  after a table, collapses blank runs elsewhere to one, keeps the blank lines inside a code surface
+  (their background is the giveaway) and crops a rule that is wider than the box instead of letting
+  it wrap onto a second row.
+
 ## [1.0.43] - 2026-09-30
 
 The console stops looking like a prompt. `tinycmdr --app` is a full-screen window - a frame with
