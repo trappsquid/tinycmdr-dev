@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **`--app` scrolls: the keys it advertised, and the wheel off Windows.** The rail showed
+  `↑↓ PgUp/PgDn scroll` while `↑` and `↓` were bound to nothing - only the page keys moved the pane -
+  and the wheel was dead on macOS and Linux even with mouse capture on, because a POSIX terminal
+  delivers the wheel as a mouse event at a coordinate rather than as a key, so the app's own wheel
+  bindings could never fire there (measured in a headless Application, with the event landing in the
+  rail's cell while the pane never moved). The arrows move the pane a line now and stay the caret
+  while the composer has text, `Ctrl-Home`/`Ctrl-End` are named beside them, and the panes answer
+  the wheel themselves - three lines a notch, with `TINYCMDR_APP_MOUSE=1` as before. Paging, the
+  arrows and `Ctrl-Home` share one rule, so `_top` can no longer point past the tail. The app's
+  keys are documented in the README.
+
 ## [1.0.44] - 2026-09-30
 
 The app's two remaining review items, and what happens when a page is pasted into it.

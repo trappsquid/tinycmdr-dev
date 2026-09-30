@@ -721,6 +721,74 @@ if HAVE_APP:
               _full.autofollow is True)
         fb._CLI["app"] = app_screen_tmp
 
+        # ...and now the same through REAL keys and mouse bytes, because every check above
+        # called the handler DIRECTLY: ↑ and ↓ were advertised in the rail and bound to
+        # nothing, and the wheel was dead on macOS/Linux (a POSIX terminal delivers it as a
+        # mouse event at a coordinate, never as Keys.ScrollUp - only the Win32 driver makes
+        # that key), so both read as covered while neither worked (measured 2026-09-30 in
+        # this Application, headless, with a key pipe).
+        _saved_mouse = os.environ.get("TINYCMDR_APP_MOUSE")
+        os.environ["TINYCMDR_APP_MOUSE"] = "1"      # the wheel needs capture on
+        try:
+            _scr = fb.AppScreen(colour=False, tier="truecolor")
+        finally:
+            if _saved_mouse is None:
+                del os.environ["TINYCMDR_APP_MOUSE"]
+            else:
+                os.environ["TINYCMDR_APP_MOUSE"] = _saved_mouse
+        for _i in range(80):
+            _scr.card("tool", "shell step %d" % _i)
+        _scr._invalidate()
+        _scr.app.output = _DummyOutput()
+        _pane_h = _scr._pane_height()
+        _last = max(0, len(_scr.lines(_scr._pane_width())) - _pane_h)
+        _keys_sent = [("tail", None), ("up", "\x1b[A"), ("up2", "\x1b[A"), ("down", "\x1b[B"),
+                      ("pageup", "\x1b[5~"), ("pagedown", "\x1b[6~"),
+                      ("ctrl-home", "\x1b[1;5H"), ("ctrl-end", "\x1b[1;5F"),
+                      ("typed", "hi"), ("up-with-text", "\x1b[A"),
+                      ("pageup-with-text", "\x1b[5~"),
+                      ("wheel-up-body", "\x1b[<64;40;10M"),
+                      ("wheel-up-rail", "\x1b[<64;10;10M"),
+                      ("wheel-down-body", "\x1b[<65;40;10M")]
+        _observed = []
+
+        def _feed_scroll():
+            _time.sleep(0.5)
+            for _label, _raw in _keys_sent:
+                if _raw is not None:
+                    _keys3.send_text(_raw)
+                    _time.sleep(0.4)
+                _observed.append((_label, _scr._top, _scr.autofollow))
+            _keys3.send_text("\x11")                # c-q: leave
+            _time.sleep(0.3)
+
+        with _pipe_input() as _keys3:
+            _scr.app.input = _keys3
+            _threading.Thread(target=_feed_scroll, daemon=True).start()
+            _scr.app.run()
+        _walk = {label: (top, follow) for label, top, follow in _observed}
+        check("--app: the pane opens following the tail",
+              _walk["tail"] == (_last, True), _observed[:2])
+        check("--app: one ↑ moves one line and stops following (the rail's own hint)",
+              _walk["up"] == (_last - 1, False), _observed[:3])
+        check("--app: a second ↑ moves one more line, ↓ moves back",
+              _walk["up2"] == (_last - 2, False) and _walk["down"] == (_last - 1, False),
+              _observed[2:5])
+        check("--app: PgUp and PgDn move exactly a page, and leave following off",
+              _walk["pageup"] == (_last - 1 - _pane_h, False)
+              and _walk["pagedown"] == (_last - 1, False), _observed[4:6])
+        check("--app: Ctrl-Home and Ctrl-End are the two ends",
+              _walk["ctrl-home"] == (0, False) and _walk["ctrl-end"] == (_last, True),
+              _observed[6:8])
+        check("--app: with text in the composer the arrows are the caret, not the pane",
+              _walk["up-with-text"] == (_last, True)
+              and _walk["pageup-with-text"] == (_last - _pane_h, False), _observed[8:11])
+        check("--app: the wheel scrolls three lines a notch, from either pane",
+              _walk["wheel-up-body"] == (_last - _pane_h - 3, False)
+              and _walk["wheel-up-rail"] == (_last - _pane_h - 6, False), _observed[11:13])
+        check("--app: ...and back down a notch", _walk["wheel-down-body"] == (_last - _pane_h - 3, False),
+              _observed[13:])
+
         # all the console's prints land in the pane, never at the real stdout
         _sink = fb._AppStdout(app_screen_tmp)
         _sink.write("one\n")

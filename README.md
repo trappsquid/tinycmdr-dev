@@ -104,8 +104,16 @@ Day-to-day notes for a Mac: [`install/README-macos.md`](install/README-macos.md)
 tinycmdr setup        # once: endpoint, chat gateways, search consent
 tinycmdr              # the session as a full-screen terminal app
 tinycmdr --cli        # the same session, inline cards in the scrollback
-tinycmdr --once "…"   # one task, then exit
+`tinycmdr --once "…"   # one task, then exit
 ```
+
+A bare `tinycmdr` opens that session as a full-screen app in the terminal. Type and press Enter to
+send; `↑`/`↓` scroll a line, `PgUp`/`PgDn` a page, `Ctrl-Home`/`Ctrl-End` jump to either end;
+`Ctrl-C` stops the run in flight (and quits when nothing is running), `Ctrl-D`/`Ctrl-Q`/`Esc` quit,
+leaving the last answer in the scrollback. The app draws in an alternate screen, so the terminal's
+own scrollback is not there while it runs - the app's keys are the way back up. The mouse wheel
+scrolls the transcript too, but only with capture on: `TINYCMDR_APP_MOUSE=1 tinycmdr`. Capture is
+off by default so native selection and copy keep working without a modifier key.
 
 A chat lane is where a working agent is easiest to watch: tool calls stream in as they happen,
 and a message sent mid-run steers the run instead of queueing behind it. Neither lane is

@@ -16922,6 +16922,38 @@ class CliDestination(Destination):
         self._row = None
 
 
+def pane_control(text, scroll):
+    """A FormattedTextControl for `--app`'s panes that answers the wheel itself.
+
+    A POSIX terminal delivers the wheel as a MOUSE EVENT at a coordinate, and prompt_toolkit
+    hands that event to the control under the pointer - the only WHEEL KEY it produces is
+    Keys.Vt100MouseEvent, while Keys.ScrollUp comes from the Win32 driver alone. So an
+    app-level `<scroll-up>` binding cannot fire on macOS or Linux, and the window's own
+    fallback scrolls a Window it can scroll (vertical_scroll) - this pane draws exactly the
+    visible lines, so it has none. Measured 2026-09-30 in a headless Application with mouse
+    capture on: the event landed in the rail's cell and the pane never moved, which is what
+    the app's two `<scroll-up>` bindings had always been - dead code on the two platforms
+    the app calls home. The wheel scrolls the transcript from either pane now, three lines
+    per notch (the X11 convention), and only while capture is on (TINYCMDR_APP_MOUSE=1).
+    """
+    from prompt_toolkit.layout.controls import FormattedTextControl
+    from prompt_toolkit.mouse_events import MouseEventType
+
+    class _PaneControl(FormattedTextControl):
+        STEP = 3
+
+        def mouse_handler(self, mouse_event):
+            if mouse_event.event_type == MouseEventType.SCROLL_UP:
+                scroll(-self.STEP)
+            elif mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+                scroll(self.STEP)
+            else:
+                return NotImplemented
+            return None
+
+    return _PaneControl(text=text)
+
+
 class AppScreen(TuiScreen):
     """`--app`: the same cards, in an alternate-screen app with a live status bar.
 
@@ -16936,7 +16968,9 @@ class AppScreen(TuiScreen):
     prompt_toolkit already owns the alternate screen (smcup/rmcup) and the Windows
     console glue, so the dependency budget does not change either. Mouse capture is
     OFF by default so native selection and copy keep working without modifier keys;
-    TINYCMDR_APP_MOUSE=1 turns the wheel on, at the cost of that. On exit the prior
+    TINYCMDR_APP_MOUSE=1 turns the wheel on, at the cost of that - and with capture on
+    the wheel scrolls the transcript (three lines a notch, from either pane), because a
+    POSIX terminal delivers it as a mouse event rather than as a key. On exit the prior
     terminal content is restored and the session's last answer is reprinted inline.
     """
 
@@ -17104,7 +17138,7 @@ class AppScreen(TuiScreen):
         from prompt_toolkit.formatted_text import ANSI
         lines = self.lines(self._pane_width())
         height = self._pane_height()
-        bottom = max(0, len(lines) - height)
+        bottom = self._tail_top(len(lines), height)
         top = bottom if self.autofollow else max(0, min(self._top, bottom))
         self._top = top
         window = lines[top:top + height]
@@ -17112,13 +17146,30 @@ class AppScreen(TuiScreen):
             window = window + [""] * (height - len(window))
         return ANSI("\n".join(window))
 
-    def scroll(self, pages):
-        """Pages of transcript. Landing back at the bottom resumes auto-follow."""
-        self._top = max(0, self._top + int(pages * self._pane_height()))
-        self.autofollow = False
-        if self._top >= max(0, len(self.lines(self._pane_width())) - self._pane_height()):
-            self.autofollow = True
+    def _scroll_to(self, top):
+        """Put the pane's first line at `top`, clamped to the transcript, following at the tail.
+
+        One rule, so the page keys, the arrow keys and Ctrl-Home cannot disagree about where
+        the tail is or about what leaves auto-follow on - and `_top` can never point past the
+        end, which a page or a wheel from just above it could (2026-09-30).
+        """
+        bottom = self._tail_top(len(self.lines(self._pane_width())), self._pane_height())
+        self._top = max(0, min(int(top), bottom))
+        self.autofollow = self._top >= bottom
         self._invalidate()
+
+    @staticmethod
+    def _tail_top(total_lines, height):
+        """The first transcript line the pane shows when it follows the tail."""
+        return max(0, total_lines - height)
+
+    def scroll(self, pages):
+        """Pages of transcript - PgUp/PgDn and the wheel."""
+        self._scroll_to(self._top + int(pages * self._pane_height()))
+
+    def scroll_lines(self, count):
+        """Lines of transcript - the arrow keys, so one press moves one row."""
+        self._scroll_to(self._top + int(count))
 
     def _submit(self, buff):
         line = buff.text.strip()
@@ -17263,6 +17314,8 @@ class AppScreen(TuiScreen):
             title()
             title("KEYS")
             value("\u2191\u2193 PgUp/PgDn  scroll")
+            value("Ctrl-Home/End  top/bottom")
+            value("wheel needs APP_MOUSE=1")
             value("Ctrl-C  stop a run")
             value("Ctrl-Q  quit")
         except Exception:
@@ -17330,10 +17383,10 @@ class AppScreen(TuiScreen):
             accept_handler=self._submit, history=InMemoryHistory())
         self.input.buffer.on_text_changed.add_handler(self._composer_changed)
         self.composer = None
-        self.body = Window(FormattedTextControl(text=self._pane_text),
+        self.body = Window(pane_control(self._pane_text, self.scroll_lines),
                            wrap_lines=False, always_hide_cursor=True,
                            style="class:app.body")
-        rail = Window(FormattedTextControl(text=self._sidebar_text),
+        rail = Window(pane_control(self._sidebar_text, self.scroll_lines),
                       width=Dimension.exact(self.RAIL_WIDTH), style="class:app.rail")
         # The footer is the run's own status and nothing else: the keys live in the
         # rail's KEYS section, and sharing the line cut the usage tuple in half at
@@ -17352,6 +17405,21 @@ class AppScreen(TuiScreen):
             ]),
             title=self._frame_title(), style="class:app.frame")
         kb = KeyBindings()
+        from prompt_toolkit.filters import Condition
+
+        # The arrows move the pane one line at a time, but only while the composer is
+        # EMPTY: with text in it the arrows are the caret, and a multi-line paste has to
+        # stay navigable, so the binding is filtered rather than forwarded by hand (one
+        # way to do it - prompt_toolkit's). Measured 2026-09-30 on a real pty: the rail
+        # advertised "↑↓ PgUp/PgDn scroll" while ↑ and ↓ were bound to nothing, so the
+        # app read as unscrollable from the keyboard although PgUp/PgDn always worked.
+        @kb.add("up", filter=Condition(lambda: not self.input.text))
+        def _(event):
+            self.scroll_lines(-1)
+
+        @kb.add("down", filter=Condition(lambda: not self.input.text))
+        def _(event):
+            self.scroll_lines(1)
 
         @kb.add("pageup")
         def _(event):
@@ -17361,19 +17429,9 @@ class AppScreen(TuiScreen):
         def _(event):
             self.scroll(1)
 
-        @kb.add("<scroll-up>")        # the wheel, when mouse capture is on
-        def _(event):
-            self.scroll(-1)
-
-        @kb.add("<scroll-down>")
-        def _(event):
-            self.scroll(1)
-
         @kb.add("c-home")
         def _(event):
-            self.autofollow = False
-            self._top = 0
-            self._invalidate()
+            self._scroll_to(0)
 
         @kb.add("c-end")
         def _(event):
