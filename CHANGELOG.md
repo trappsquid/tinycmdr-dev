@@ -57,7 +57,9 @@ Fixed
   now says whether this box runs the shipped seed, an edit, or the built-in default, and
   `update` copies an edited file aside (`soul.md.bak-update-<stamp>`) before its `git pull` -
   which otherwise either refuses over that edit or loses it to the next `git reset --hard`.
-  The persona is read once per process, so a restart applies an edit.
+  The copies are bounded: one is written only when the persona differs from the newest copy
+  already there, and the newest three are kept, so a routine `update` that finds nothing to
+  do does not add a file. The persona is read once per process, so a restart applies an edit.
 
 Changed
 - **`model` is a picker, not a page of instructions.** Bare `tinycmdr model` (and `/tinycmdr model`

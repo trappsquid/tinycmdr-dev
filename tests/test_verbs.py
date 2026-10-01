@@ -193,6 +193,20 @@ def main():
             check("...the backup lands beside it, named for the update",
                   bool(backup) and Path(backup).name == "soul.md.bak-update-20260930-000000",
                   backup)
+            # `update` is routine, so the copies must be bounded by DISTINCT personas, not
+            # by the number of times it ran: a second run with nothing edited adds nothing.
+            check("...and an update that changed nothing adds no second copy",
+                  fb.preserve_edited_soul("20260930-000001") == ""
+                  and len(list(workdir.glob("soul.md.bak-update-*"))) == 1,
+                  sorted(p.name for p in workdir.glob("soul.md.bak-update-*")))
+            for n in range(2, 6):                      # four more distinct personas
+                soul.write_text("persona v%d" % n, encoding="utf-8")
+                fb.preserve_edited_soul("20260930-00000%d" % n)
+            kept = sorted(p.name for p in workdir.glob("soul.md.bak-update-*"))
+            check("...and older copies are pruned, so the set stays bounded by the cap",
+                  len(kept) == fb._SOUL_BACKUPS_KEEP, kept)
+            check("...keeping the NEWEST persona, not the oldest",
+                  Path(workdir / kept[-1]).read_text(encoding="utf-8") == "persona v5", kept)
             soul.write_text(fb.DEFAULT_SOUL, encoding="utf-8")
             check("...and the shipped seed is not backed up: nothing to lose",
                   fb.preserve_edited_soul("x") == "", "")

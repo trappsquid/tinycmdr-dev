@@ -11914,6 +11914,9 @@ def _load_soul():
 _SOUL = _load_soul()
 
 
+_SOUL_BACKUPS_KEEP = 3
+
+
 def preserve_edited_soul(stamp):
     """Copy an EDITED soul.md aside, before an update pulls over it.
 
@@ -11925,7 +11928,16 @@ def preserve_edited_soul(stamp):
     `git checkout -- .`) takes the persona with nothing to restore it from. A backup beside
     itself is the same answer `update` already gives tinycmdr.py.
 
-    Returns the backup path, or "" when soul.md is absent or is still the shipped seed.
+    BOUNDED, because this runs on `update`, which is routine and usually finds nothing to
+    do: a copy is written only when the persona differs from the newest copy already beside
+    it, and older copies are pruned past _SOUL_BACKUPS_KEEP. So the set is bounded by the
+    number of DISTINCT personas edited on this host (capped), not by the number of times
+    `update` was run - the first cut wrote one per run, which is one 3 KB file per `update`
+    for ever, with only `clean --yes` to sweep them. The build path has the same shape: it
+    skips the backup entirely when the bytes on disk already match the candidate.
+
+    Returns the backup path, or "" when soul.md is absent, is still the shipped seed, or is
+    already preserved as the newest copy.
     """
     import shutil
     try:
@@ -11934,12 +11946,25 @@ def preserve_edited_soul(stamp):
         return ""
     if text.strip() == DEFAULT_SOUL.strip():
         return ""                      # the shipped seed, not somebody's persona
+    # The stamp is %Y%m%d-%H%M%S, so the name sorts oldest-first and newest is last.
+    older = sorted(SOUL_FILE.parent.glob(SOUL_FILE.name + ".bak-update-*"))
+    if older:
+        try:
+            if older[-1].read_text(encoding="utf-8", errors="replace") == text:
+                return ""              # already preserved: this update changed nothing
+        except OSError:
+            pass
     backup = SOUL_FILE.with_name(SOUL_FILE.name + ".bak-update-" + stamp)
     try:
         shutil.copy2(SOUL_FILE, backup)
     except OSError as e:
         log.warning("could not back up the edited soul.md: %s", e)
         return ""
+    for stale in older[:max(0, len(older) + 1 - _SOUL_BACKUPS_KEEP)]:
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     return str(backup)
 
 
