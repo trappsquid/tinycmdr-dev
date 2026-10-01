@@ -28,6 +28,7 @@ import logging
 import shutil
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import requests
@@ -386,6 +387,27 @@ check("main() retries the Mattermost lane and RETURNS - it does not exit the pro
 check("...and the `--telegram` branch is retried the same way",
       _returned_tg and len(_tg_tries) == 2 and _tg_slept == [5],
       (_returned_tg, _raised_tg, _tg_tries, _tg_slept))
+
+# Both tokens, no flag: ONE process serves both lanes. The old rule refused here, so a
+# Telegram token added to a Mattermost install never started.
+_dual_bot, _dual_bot_lane = _stub_lane(0)
+_tg_started = threading.Event()
+
+
+def _dual_tg():
+    _tg_started.set()
+
+
+_dual_ret, _dual_raised = _run_main(
+    ["tinycmdr.py"],                                                  # no flag
+    run_bot=_dual_bot_lane, run_telegram=_dual_tg,
+    validate_startup_config=lambda: "", acquire_single_instance_lock=lambda: True,
+    _mm_token_configured=lambda: True, _tg_token_configured=lambda: True,
+    _lane_wait=lambda s: None)
+_dual_got = _tg_started.wait(5)
+check("both tokens: main() starts Mattermost AND Telegram in one process",
+      _dual_ret and _dual_got and _dual_bot == [1],
+      (_dual_ret, _dual_raised, _dual_got, _dual_bot))
 
 print()
 if FAILS:
