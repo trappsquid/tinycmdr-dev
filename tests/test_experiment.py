@@ -151,6 +151,29 @@ def main():
         v = fb.volatile_context(session_key=None)
         check("the ledger index is in the prompt block", "experiment ledger" in v,
               v[-300:])
+
+        # ---- an arm nobody came back to stops riding the prompt -------------------
+        # The index is re-sent every call, and an `open` record kept its question, its
+        # keys and its body in it for ever while a finished verdict read identically
+        # (measured 2026-09-30: `#1 [open]` dated 2026-09-28 rode two days, 149 est
+        # tokens, with nothing in the line to say it was never closed).
+        abandoned = json.loads(lines()[0])
+        abandoned.update({"id": 90, "status": "open", "verdict": "", "body": "",
+                          "keys": ["abandoned"], "exact_config": "",
+                          "question": "an arm nobody came back to",
+                          "date": fb.time.strftime(
+                              "%Y-%m-%d", fb.time.localtime(fb.time.time() - 5 * 86400))})
+        path.write_text(path.read_text(encoding="utf-8") + json.dumps(abandoned) + "\n",
+                        encoding="utf-8")
+        block = fb.render_experiment_prompt()
+        check("an abandoned open arm renders as a marker, not its text",
+              "an arm nobody came back to" not in block and "#90 [open]" in block
+              and "never closed" in block, block[-300:])
+        check("...and a record that is not stale still shows its question",
+              "Does MTP pay off at 38k?" in block, block[:300])
+        check("...and action=index still prints the abandoned one in full",
+              "an arm nobody came back to" in fb.tool_experiment({"action": "index"}, {}),
+              "")
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

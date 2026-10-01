@@ -2479,6 +2479,108 @@ def test_lan_permission_hint():
 
 
 
+def test_a_deliberate_clear_is_not_read_as_corruption():
+    """`clear` is the only path that removes items, and every clear used to log the
+    sentence reserved for a suspect write path.
+
+    Measured 2026-09-30, clear -> load in one process against a copy of a real ledger:
+    "ledger lost items between reads: 9 -> 1 (revision 43). If that was not deliberate,
+    the write path is suspect." The revision-drop branch never fired - the count branch
+    did, because save_tasks increments the revision even when it drops items.
+    """
+    redirect_files()
+    records = []
+    log = fb.logging.getLogger()
+    handler = fb.logging.Handler()
+    handler.emit = lambda rec: records.append(rec.getMessage())
+    try:
+        fb.tool_task({"action": "add", "task": "keep me"}, {})
+        fb.tool_task({"action": "add", "task": "one"}, {})
+        fb.tool_task({"action": "add", "task": "two"}, {})
+        fb.tool_task({"action": "done", "id": 2, "note": "probe evidence"}, {})
+        fb.tool_task({"action": "done", "id": 3, "note": "probe evidence"}, {})
+        log.addHandler(handler)
+        fb.load_tasks()                       # the read every prompt build does
+        records.clear()
+        fb.tool_task({"action": "clear"}, {})
+        fb.load_tasks()                       # the next prompt build
+        check("a deliberate clear raises no lost-items warning",
+              not any("lost items" in m or "BACKWARDS" in m for m in records), records)
+
+        # ...and the guard still catches a ledger that really shrank behind its back.
+        # (Seeded with three items first: after the clear only one is left, so a 1 -> 1
+        # rewrite is not a shrink and would have proved nothing.)
+        big = {"items": [{"id": i, "status": "open", "desc": "t%d" % i, "note": ""}
+                         for i in (1, 2, 3)], "next_id": 4}
+        fb.TASKS_FILE.write_text(json.dumps(big), encoding="utf-8")
+        fb.load_tasks()                       # seed the guard with 3 items
+        records.clear()
+        big["items"] = big["items"][:1]
+        big["revision"] = 99                  # as a foreign writer that rewrote the file
+        fb.TASKS_FILE.write_text(json.dumps(big), encoding="utf-8")
+        fb.load_tasks()
+        check("...while a shrink nobody marked still warns",
+              any("lost items" in m for m in records), records)
+    finally:
+        log.removeHandler(handler)
+
+
+def test_a_zero_config_means_zero():
+    """`CONFIG["agent"].get(k) or default` cannot express 0, so three caps ignored it.
+
+    Measured 2026-09-30 on the shipped defaults: `tasks_done_keep: 0` ("show no finished
+    rows") kept 3, `ledger_stale_hours: 0` read as 12h, `tasks_max_open: 0` allowed 15.
+    """
+    redirect_files()
+    fb.TASKS_FILE.write_text(json.dumps({
+        "items": [{"id": 1, "status": "open", "desc": "open one", "note": ""},
+                  {"id": 2, "status": "done", "desc": "closed one", "note": ""}],
+        "next_id": 3}), encoding="utf-8")
+    saved = copy.deepcopy(fb.CONFIG["agent"])
+    try:
+        fb.CONFIG["agent"]["tasks_done_keep"] = 0
+        check("tasks_done_keep=0 shows no finished rows",
+              "closed one" not in fb.render_task_prompt(), fb.render_task_prompt())
+        fb.CONFIG["agent"]["tasks_done_keep"] = 2
+        check("...and a positive value still shows them",
+              "closed one" in fb.render_task_prompt(), fb.render_task_prompt())
+
+        fb.CONFIG["agent"]["ledger_stale_hours"] = 0
+        check("ledger_stale_hours=0 is the threshold, not the 12h default",
+              fb.ledger_stale_seconds() == 0.0, fb.ledger_stale_seconds())
+
+        fb.CONFIG["agent"]["tasks_max_open"] = 0
+        check("tasks_max_open=0 refuses the first add",
+              fb.tool_task({"action": "add", "task": "nope"}, {}).startswith("ERROR"),
+              fb.tool_task({"action": "add", "task": "nope"}, {}))
+    finally:
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved)
+
+
+def test_tasks_md_mirrors_a_bounded_view():
+    """The human mirror grew with every item ever closed - monotone, no prune, 1,541
+    chars for 8 items and rising (measured 2026-09-30). It mirrors what the prompt shows
+    now: every active item, the same tail of finished ones, and a count for the rest.
+    Nothing is lost - tasks.json and the journal hold every item, and `tinycmdr tasks`
+    prints the lot."""
+    redirect_files()
+    fb.CONFIG["agent"]["tasks_done_keep"] = 2
+    for n in range(1, 7):
+        fb.tool_task({"action": "add", "task": "job %d" % n}, {})
+    fb.tool_task({"action": "add", "task": "still open"}, {})
+    for tid in range(1, 7):
+        fb.tool_task({"action": "done", "id": tid, "note": "evidence"}, {})
+    doc = (TMP / "tasks.md").read_text(encoding="utf-8")
+    check("tasks.md keeps every open item", "still open" in doc, doc)
+    check("...and only the tail of finished ones",
+          "job 6" in doc and "job 1" not in doc, doc)
+    check("...and says how many it did not mirror",
+          "4 closed item(s) not mirrored here" in doc, doc)
+    check("...while the ledger itself still holds all 7",
+          len(json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))["items"]) == 7, doc)
+
+
 def main():
     # The chat-only tests are skipped when this build has no chat layer at all.
     CHATLESS = not hasattr(fb, "MattermostDispatcher")

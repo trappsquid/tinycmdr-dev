@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **A failure on the app's own thread no longer leaves the terminal sitting in the app's frame.**
+  A key handler, the composer's submit, the picker's callback or a render task that raises never
+  leaves `Application.run()` - asyncio hands it to the event loop's exception handler - and
+  prompt_toolkit's own handler printed the traceback with `print()`, which under `--app` is the
+  pane, then waited for ENTER inside the alternate screen. The app was still running, the report was
+  invisible, and the window stayed open on a frame that never moved (measured on a pty, 2026-09-30).
+  The app installs its own handler now: the traceback goes to `tinycmdr.log` and to the real stream
+  once the alternate screen is gone, and the exit is the same one ask every other exit uses. A
+  failure out of `Application.run()` itself reports the same way and exits 1, and the last answer is
+  reprinted on that path too - `print_final_inline()` sat after the teardown and was skipped.
+- **A stale ledger item keeps its age in the prompt, not its text.** The state block rides every
+  call as a trailing message, so an open item nobody had touched in `ledger_stale_hours` carried
+  its full description - and that text reads as a standing order - for ever. The row now renders
+  as `#id [status] (3d, stale)`: the age is what makes "this is not your plan" checkable from the
+  prompt alone (the 2026-09-27 incident), and the text stays in the ledger, one `task` call away
+  (`action=list`), with the footer saying how many rows were folded. Nothing is deleted, and the
+  operator's `tinycmdr tasks` view is unchanged.
+- **`--app` starts on a 256-colour terminal again.** The palette's 256 tier used rich's
+  `color(73)`/`color(78)` spellings, which prompt_toolkit's `Style.from_dict` rejects, so
+  `AppScreen.__init__` raised `ValueError: Wrong color format 'color(73)'` before any screen
+  existed - on `TERM=*256color` with no `COLORTERM` (stock Terminal.app), where `app_wanted()`
+  is true and there is no inline fallback. The tier now carries the same two colours in hex.
+- **`clear` no longer logs the sentence reserved for a corrupt ledger.** `ledger_check` warns
+  on any item-count drop, and `clear` is the only path that removes items - so every cleanup
+  logged "ledger lost items between reads: 9 -> 1 ... the write path is suspect" (measured
+  2026-09-30: clear then load, one process, against a copy of a real ledger). A deliberate
+  prune now carries an explicit marker; a shrink nobody marked still warns.
+- **A config of 0 means 0 for the three ledger caps.** `CONFIG["agent"].get(key) or default`
+  cannot express 0, so `tasks_done_keep: 0` still kept 3, `ledger_stale_hours: 0` still read as
+  12h and `tasks_max_open: 0` still allowed 15. (`tasks_done_keep: 0` also hit `done[-0:]`,
+  which is the whole list, not none of it.)
+- **`tasks.md` mirrors a bounded view.** The human-readable file grew with every item ever
+  closed (monotone, no prune: 1,541 chars for 8 items and rising). It mirrors what the prompt
+  shows - every active item, the same tail of finished ones - and counts the rest; tasks.json,
+  the journal and `tinycmdr tasks` still hold everything.
+- **An experiment left `open` stops riding the prompt.** The index is re-sent every call, and
+  an abandoned record kept its question, its keys and its body in it for ever while a finished
+  verdict read identically (`#1 [open]` dated 2026-09-28 rode two days on this box). Past 48h
+  an open record renders as a marker with its id, date and age; `action=index` still prints it
+  in full.
+- **`--app` catches SIGTERM and SIGHUP.** A kill mid-event-loop ended the process with the
+  alternate screen still active, leaving the terminal inside the app's frame with no way back.
+  Both now leave through the same one ask as Ctrl-Q, so prompt_toolkit runs its own teardown
+  and the last answer is still reprinted.
+
 Changed
 - **`model` is a picker, not a page of instructions.** Bare `tinycmdr model` (and `/tinycmdr model`
   in the app) used to print a Model Status box with a Commands list: to switch you retyped the whole

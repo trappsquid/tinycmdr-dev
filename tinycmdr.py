@@ -35,6 +35,7 @@ import os
 import platform
 import queue
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -43,6 +44,7 @@ import tempfile
 import threading
 import functools
 import time
+import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -3263,6 +3265,96 @@ def field_notes():
     return _FIELD_NOTES_CACHE["entries"]
 
 
+# The library's own rule is "If an entry fires and does not help, delete it" - which needs a
+# count, and there was none: nothing counted or logged a match on a real run (measured
+# 2026-09-30; only the EVAL harness counted fires, per run, with no idea WHICH entry). So the
+# library could only accrete by hand and could only be pruned by someone who happened to
+# remember every failure. These counters are that missing half: which entries fire on this
+# box, and which failures keep arriving with NO entry - the second list is where a new entry
+# comes from, instead of from memory. Bounded like everything else that accumulates here:
+# one counter per entry (the library is the bound) and the top candidates only.
+_FIELD_NOTES_CANDIDATE_MAX = 40
+
+
+def _field_notes_stats_path():
+    """The counters, beside the library and named after it."""
+    path = _field_notes_path()
+    return path.with_name((path.stem or "field-notes") + "-hits.json")
+
+
+def field_notes_stats():
+    """The persisted counters: {"entries": {...}, "unmatched": {...}}. {} when absent."""
+    try:
+        data = json.loads(_field_notes_stats_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _failure_signature(text):
+    """A coarse signature for a failure the library has no entry for.
+
+    The parts that differ run to run - paths, numbers, pids, hex - are squeezed out, so the
+    same failure on two days lands on one key instead of two. Deliberately dumb: it is a
+    grouping hint for a human deciding what to write, never a matcher.
+    """
+    line = ""
+    for raw in text.splitlines():
+        s = raw.strip()
+        if s and not s.startswith(("[HARNESS", "exit_code=")):
+            line = s
+            break
+    if not line:
+        return ""
+    line = line.lower()
+    line = re.sub(r"0x[0-9a-f]+", "x", line)
+    line = re.sub(r"\b[0-9a-f]{8,}\b", "x", line)
+    line = re.sub(r"(/[\w.\-]+){2,}", "p", line)
+    line = re.sub(r"\d+", "n", line)
+    return re.sub(r"\s+", " ", line).strip()[:120]
+
+
+def _field_notes_record(fired, text):
+    """Count one failure: what fired, or that nothing did.
+
+    Best-effort and never fatal - the caller wraps it - because a bookkeeping write must not
+    be able to break the run it is measuring, and a stored number that failed to land costs
+    one tally, not a turn.
+    """
+    path = _field_notes_stats_path()
+    now = time.strftime("%Y-%m-%d %H:%M")
+    with _path_lock(str(path)):
+        stats = field_notes_stats()
+        # When counting STARTED, because "this entry never fired" is a claim about a window -
+        # and a counter file written today must not read as 12 entries that have never fired
+        # in the history of the box.
+        stats.setdefault("since", now)
+        entries = stats.get("entries") if isinstance(stats.get("entries"), dict) else {}
+        for e in fired:
+            slot = entries.setdefault(e["title"], {"fired": 0, "last": ""})
+            slot["fired"] = int(slot.get("fired") or 0) + 1
+            slot["last"] = now
+            log.info("field note fired: %s", e["title"])
+        unmatched = stats.get("unmatched") if isinstance(stats.get("unmatched"), dict) else {}
+        if not fired:
+            sig = _failure_signature(text)
+            if sig:
+                slot = unmatched.setdefault(
+                    sig, {"fails": 0, "first": now, "last": "",
+                          "sample": " ".join(text.split())[:200]})
+                slot["fails"] = int(slot.get("fails") or 0) + 1
+                slot["last"] = now
+        if len(unmatched) > _FIELD_NOTES_CANDIDATE_MAX:
+            # The counters age out too, oldest-seen first: an unbounded log of "failures we
+            # have no note for" is the same disease this whole library is meant to avoid.
+            for stale in sorted(unmatched, key=lambda k: unmatched[k].get("last") or "")[
+                    :len(unmatched) - _FIELD_NOTES_CANDIDATE_MAX]:
+                del unmatched[stale]
+        stats["entries"] = entries
+        stats["unmatched"] = unmatched
+        atomic_write_text(path, json.dumps(stats, indent=2, ensure_ascii=False))
+
+
 def _platform_tag():
     if IS_WINDOWS:
         return "windows"
@@ -3313,19 +3405,32 @@ def _safe_search(pattern, text):
 
 
 def match_field_notes(text):
-    """Notes whose signature fires on this failure, capped at field_notes_max."""
+    """Notes whose signature fires on this failure, capped at field_notes_max.
+
+    Every failure is counted on the way through - what fired, or that nothing did - because
+    the library's deletion rule and its growth both need that number (see the counters
+    above). Only when there IS a library: with no file to curate, a list of unmatched
+    failures is bookkeeping nobody asked for.
+    """
     if not failed_output(text):
+        return []
+    entries = field_notes()
+    if not entries:
         return []
     plat = _platform_tag()
     limit = int(CONFIG["agent"].get("field_notes_max") or 2)
     out = []
-    for e in field_notes():
+    for e in entries:
         if e["scope"] not in ("any", plat):
             continue
         if any(_safe_search(p, text) for p in e["match"]):
             out.append(e)
             if len(out) >= limit:
                 break
+    try:
+        _field_notes_record(out, text)
+    except Exception:                     # noqa: BLE001 - telemetry never breaks a run
+        log.debug("field-note counters failed", exc_info=True)
     return out
 
 
@@ -5822,7 +5927,8 @@ def _endpoint_load_request(command):
 # measured (2026-09-25: a note inside a folder being cleaned ended its four steps with
 # `printf 'notes cleared by cleanup' > notes.md`, and the run did it - the bot's whole memory
 # replaced by a line from a file it had been asked to read). Reads are untouched.
-_SURFACE_FILES = ("notes.md", "tasks.json", "tasks.md", "atlas.md", "field-notes.md")
+_SURFACE_FILES = ("notes.md", "tasks.json", "tasks.md", "atlas.md", "field-notes.md",
+                  "field-notes-hits.json")
 _SURFACE_WRITE_RX = re.compile(
     r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:%s)"
     r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"
@@ -7728,27 +7834,32 @@ def journal_tasks(t):
         log.debug("could not append to the ledger journal: %s", e)
 
 
-def ledger_check(t):
+def ledger_check(t, deliberate=False):
     """A ledger that shrank between reads is a bug, not a tidy-up.
 
     The campaign's ledger was rebuilt from scratch 43 times and nobody could tell, because
     nothing ever compared the ledger it had with the ledger it has (audit, 2026-09-21).
+
+    `deliberate` is the marker for a prune the harness MEANT - `clear` is the only one:
+    the bookkeeping moves with it and the drop is not reported, so the sentence below
+    stays reserved for a write path that really did lose items.
     """
     rev, n = int(t.get("revision") or 0), len(t.get("items") or [])
     prev = dict(_LEDGER_SEEN)
-    if prev["rev"] and rev and rev < prev["rev"]:
-        log.error("ledger went BACKWARDS: revision %d -> %d, %d items -> %d. That is the "
-                  "shape of a fresh ledger taking over from a real one; find out why before "
-                  "trusting the plan.", prev["rev"], rev, prev["items"], n)
-    elif prev["items"] and n < prev["items"]:
-        log.warning("ledger lost items between reads: %d -> %d (revision %d). If that was "
-                    "not deliberate, the write path is suspect.", prev["items"], n, rev)
+    if not deliberate:
+        if prev["rev"] and rev and rev < prev["rev"]:
+            log.error("ledger went BACKWARDS: revision %d -> %d, %d items -> %d. That is the "
+                      "shape of a fresh ledger taking over from a real one; find out why before "
+                      "trusting the plan.", prev["rev"], rev, prev["items"], n)
+        elif prev["items"] and n < prev["items"]:
+            log.warning("ledger lost items between reads: %d -> %d (revision %d). If that was "
+                        "not deliberate, the write path is suspect.", prev["items"], n, rev)
     _LEDGER_SEEN["rev"] = max(rev, prev["rev"])
     _LEDGER_SEEN["items"] = n
     return t
 
 
-def save_tasks(t):
+def save_tasks(t, pruned=False):
     t["revision"] = int(t.get("revision") or 0) + 1
     atomic_write_text(TASKS_FILE,
                       json.dumps(t, indent=2, ensure_ascii=False))
@@ -7756,26 +7867,68 @@ def save_tasks(t):
     # was appended first, so a failed save left a revision in the history that never
     # landed - and the next save reused the number.
     journal_tasks(t)
+    if pruned:
+        # A deliberate prune is not the shrinkage ledger_check exists to catch, and
+        # `clear` is the ONLY path that removes items. Without this, every clear logged
+        # the sentence reserved for a suspect write path - "ledger lost items between
+        # reads: 9 -> 1 (revision 43). If that was not deliberate, the write path is
+        # suspect." (measured 2026-09-30, clear -> load in one process against a copy of
+        # a real ledger; the revision-drop branch never fired, the count branch did).
+        # The marker is explicit: only a caller that MEANT to drop items passes it, so a
+        # genuine shrink still warns.
+        ledger_check(t, deliberate=True)
     # Human-readable mirror: "what is this box in the middle of?" should be
-    # answerable by reading a file, not by asking the agent.
+    # answerable by reading a file, not by asking the agent. Bounded the way the prompt
+    # is: every ACTIVE item, the same tail of finished ones, and a count for the rest.
+    # It used to grow with every item ever closed - monotone, no prune, 1,541 chars for
+    # 8 items and rising (measured 2026-09-30). Nothing is lost by it: tasks.json and
+    # tasks.journal.jsonl hold every item, and `tinycmdr tasks` prints the lot - this is
+    # a mirror, never the source of truth.
     lines = ["# Task ledger", ""]
-    for i in t["items"]:
+    closed_tail = cfg_number("tasks_done_keep", 3)
+    mirrored = [i for i in t["items"] if i.get("status") in TASK_ACTIVE]
+    closed = [i for i in t["items"] if i.get("status") not in TASK_ACTIVE]
+    if closed_tail > 0:
+        mirrored += closed[-closed_tail:]
+    for i in mirrored:
         mark = TASK_MARKS.get(i.get("status"), " ")
         line = f"- [{mark}] #{i.get('id')} {i.get('desc', '')}"
         if i.get("note"):
             line += f" — {i['note']}"
         lines.append(line)
+    hidden = len(t["items"]) - len(mirrored)
+    if hidden:
+        lines.append(f"- ({hidden} closed item(s) not mirrored here; `tinycmdr tasks` "
+                     f"lists every one)")
     lines += ["", f"_updated {time.strftime('%Y-%m-%d %H:%M')}_", ""]
     atomic_write_text(TASKS_DOC, "\n".join(lines))
+
+
+def cfg_number(key, default, cast=int):
+    """An agent config number, with an EXPLICIT 0 kept.
+
+    `CONFIG["agent"].get(key) or default` cannot express 0, so three caps silently
+    ignored it (measured 2026-09-30: `tasks_done_keep: 0` - "show no finished rows" -
+    still kept 3, `ledger_stale_hours: 0` still read as 12h, `tasks_max_open: 0` still
+    allowed 15). Absent means the default; 0 means 0.
+    """
+    raw = CONFIG["agent"].get(key)
+    if raw is None:
+        return cast(default)
+    try:
+        return cast(raw)
+    except (TypeError, ValueError):
+        return cast(default)
 
 
 def ledger_stale_seconds():
     """The staleness threshold in seconds - the ONE source for it.
 
-    task_age() decides with it and the prompt footer states it; a second literal
-    is how the stated number and the applied one drift apart.
+    task_age() decides with it, and the prompt footer names it whenever it folds
+    stale rows out; a second literal is how the stated number and the applied one
+    drift apart.
     """
-    return float(CONFIG["agent"].get("ledger_stale_hours") or 12) * 3600.0
+    return cfg_number("ledger_stale_hours", 12, float) * 3600.0
 
 
 def notice_stale_tasks(reporter, session_key=None, depth=0):
@@ -7875,20 +8028,34 @@ def render_task_prompt():
     items = t["items"]
     active = [i for i in items if i.get("status") in TASK_ACTIVE]
     done = [i for i in items if i.get("status") == "done"]
-    keep_done = int(CONFIG["agent"].get("tasks_done_keep") or 3)
+    keep_done = cfg_number("tasks_done_keep", 3)
     if not active and not done:
         return ""
     now = time.time()
 
     rows = []
+    folded = 0
     for i in active:
         human, stale = task_age(i, now)
-        age = (" (%s%s)" % (human, ", stale" if stale else "")) if human else ""
+        if stale:
+            # The age STAYS, the text goes. The age is what makes "this is not your
+            # plan" checkable from the prompt alone (2026-09-27: an inherited item
+            # drove a 26-step run nobody asked for BECAUSE the block never showed how
+            # old it was), so it is not the part to trade away. The text is: this
+            # block is re-sent as a trailing message on every call, and an untouched
+            # item's text reads as a standing order - the same incident class as the
+            # done-item fix below, one status over. `action=list` is the door to it.
+            folded += 1
+            rows.append(f"- #{i['id']} [{i.get('status')}] ({human}, stale)"[:260])
+            continue
+        age = (" (%s)" % human) if human else ""
         row = f"- #{i['id']} [{i.get('status')}]{age} {i.get('desc', '')}"
         if i.get("note"):
             row += f" (note: {i['note']})"
         rows.append(row[:260])
-    for i in done[-keep_done:]:
+    # `done[-keep_done:]` with keep_done 0 is `done[0:]` - the WHOLE list - so the
+    # explicit-zero config would have shown every finished item instead of none.
+    for i in (done[-keep_done:] if keep_done > 0 else []):
         # Finished items go in as bare labels. Their full text (and the evidence
         # note) reads like an instruction — "read X, confirm Y" — and this block
         # is re-sent as a trailing user message on EVERY call, so a done item
@@ -7900,6 +8067,11 @@ def render_task_prompt():
         row = f"- #{i['id']} [done, no action] {i.get('desc', '')[:90]}"
         rows.append(row)
     open_n = len(active)
+    folded_line = ""
+    if folded:
+        folded_line = (f"{folded} of them are untouched for over "
+                       f"{int(ledger_stale_seconds() // 3600)}h: their age is shown, "
+                       f"their text is not - `action=list` shows every item. ")
     # Open items are NOT automatically the current conversation's work. The ledger is
     # durable, so a fresh session inherits whatever the last one left - and calling that
     # "the to-do list" here made a new session adopt an ended session's thread and act on
@@ -7909,8 +8081,8 @@ def render_task_prompt():
     return (f"ledger: {open_n} open, {len(done)} done. Open items were left by an "
             f"earlier run (or this one) - they are NOT a plan for the current "
             f"conversation: ask the operator before resuming one, and close what they "
-            f"do not want. `stale` marks an item untouched for over "
-            f"{int(ledger_stale_seconds() // 3600)}h. `[done, no action]` rows are history. Curate "
+            f"do not want. " + folded_line +
+            f"`[done, no action]` rows are history. Curate "
             f"with the `task` tool - mark, don't append.\n" + "\n".join(rows))
 
 
@@ -7922,7 +8094,7 @@ def tool_task(args, ctx):
     passes over one JSON file, and without the lock the second save wins and the
     first mutation is gone (see serialized_on for the measurement)."""
     action = str(args.get("action") or "list").strip().lower()
-    cap = int(CONFIG["agent"].get("tasks_max_open") or 15)
+    cap = cfg_number("tasks_max_open", 15)
     desc = " ".join(str(args.get("task") or "").split())
     note = " ".join(str(args.get("note") or "").split())[:300]
     t = load_tasks()
@@ -8041,7 +8213,7 @@ def tool_task(args, ctx):
         keep = [i for i in items if i.get("status") in TASK_ACTIVE]
         removed = len(items) - len(keep)
         t["items"] = items = keep
-        save_tasks(t)
+        save_tasks(t, pruned=True)
         return (f"OK: cleared {removed} finished/dropped task(s); "
                 f"{len(keep)} still open.")
 
@@ -8079,6 +8251,7 @@ EXPERIMENT_FIELDS = ("id", "date", "agent", "status", "question", "keys",
                      "contamination_check", "verdict", "artifacts", "body",
                      "supersedes", "superseded_by", "next_trigger")
 EXPERIMENT_INDEX_MAX = 8        # records the prompt shows, newest last
+EXPERIMENT_OPEN_STALE_HOURS = 48   # an `open` record older than this shows as a marker
 EXPERIMENT_BODY_MAX = 4000      # chars kept of one body
 
 
@@ -8153,6 +8326,30 @@ def _experiment_match(recs, keys, exact_config):
     return None
 
 
+def _experiment_age_days(rec, now=None):
+    """Days since a record's date, or None when it has no date we can read."""
+    try:
+        when = time.mktime(time.strptime(str(rec.get("date") or "")[:10], "%Y-%m-%d"))
+    except Exception:
+        return None
+    return max(0, int(((time.time() if now is None else now) - when) // 86400))
+
+
+def _experiment_open_line(rec, days):
+    """An arm nobody came back to: the marker, not the text.
+
+    The index rides every call, and an `open` record kept its question, its keys and its
+    body in it for ever - while a finished verdict and an abandoned question read exactly
+    the same way (measured 2026-09-30: `#1 [open]` dated 2026-09-28 rode two days, 149
+    est tokens on this box, indistinguishable from a closed line). The id, the date and
+    the age are what say "this one was never closed"; the record is one call away, and
+    `action=index` still prints every field.
+    """
+    return ("#%s [open] %s (%dd) - never closed, no verdict; ask the operator before "
+            "running it (`experiment` action=show id=%s)"
+            % (rec.get("id"), rec.get("date") or "no date", days, rec.get("id")))
+
+
 def _experiment_line(rec, with_body=True):
     """One record as ONE line: what the prompt shows, and what action=index prints."""
     keys = ",".join(str(k) for k in (rec.get("keys") or []) if str(k).strip())
@@ -8178,7 +8375,15 @@ def render_experiment_prompt():
     if not recs:
         return ""
     shown = recs[-EXPERIMENT_INDEX_MAX:]
-    rows = [_experiment_line(r) for r in shown]
+    now = time.time()
+    rows = []
+    for r in shown:
+        days = _experiment_age_days(r, now)
+        if (str(r.get("status") or "").lower() == "open" and days is not None
+                and days * 24 >= EXPERIMENT_OPEN_STALE_HOURS):
+            rows.append(_experiment_open_line(r, days))
+        else:
+            rows.append(_experiment_line(r))
     if len(recs) > len(shown):
         rows.insert(0, "(%d older experiment(s) not listed here; `experiment` "
                        "action=index lists them all)" % (len(recs) - len(shown)))
@@ -16222,9 +16427,16 @@ TUI_PALETTE = {
     "truecolor": {"accent": "#5fbfbf", "frame": "bright_black", "call": "cyan",
                   "result": "#5fbf7f", "fail": "bold red", "ask": "bold magenta",
                   "dim": "dim", "body": "default", "title": "bold #5fbfbf"},
-    "256":       {"accent": "color(73)", "frame": "bright_black", "call": "cyan",
-                  "result": "color(78)", "fail": "bold red", "ask": "bold magenta",
-                  "dim": "dim", "body": "default", "title": "bold color(73)"},
+    # The 256 tier used rich's `color(N)` spellings, which prompt_toolkit's
+    # Style.from_dict does not accept - so `--app` could not even be CONSTRUCTED on a
+    # TERM=*256color terminal with no COLORTERM (stock Terminal.app, no COLORTERM set):
+    # ValueError "Wrong color format 'color(73)'" out of AppScreen.__init__, before a
+    # screen existed, with no inline fallback because app_wanted() is true there
+    # (measured 2026-09-30 on a pty). These are the same two colours - xterm-256 73 and
+    # 78 - written the one way both hosts read.
+    "256":       {"accent": "#5fafaf", "frame": "bright_black", "call": "cyan",
+                  "result": "#5fd787", "fail": "bold red", "ask": "bold magenta",
+                  "dim": "dim", "body": "default", "title": "bold #5fafaf"},
     "16":        {"accent": "cyan", "frame": "bright_black", "call": "cyan",
                   "result": "green", "fail": "bold red", "ask": "bold magenta",
                   "dim": "dim", "body": "default", "title": "bold cyan"},
@@ -17056,6 +17268,7 @@ class AppScreen(TuiScreen):
         self._top = 0              # first transcript line the pane shows
         self.autofollow = True
         self._final = ""           # the last answer, for the reprint on exit
+        self._crash = ""           # a failure on the app's thread, for _run_cli_app
         self._exit_requested = False
         self.app = None
         self._build()
@@ -17754,10 +17967,51 @@ class AppScreen(TuiScreen):
             full_screen=True, erase_when_done=False, mouse_support=mouse,
             refresh_interval=0.4,       # the spinner, the clock and the gauge tick
             style=Style.from_dict(self._app_style()))
+        # prompt_toolkit's OWN loop exception handler is wrong for this app: it prints
+        # the traceback with print() - which, under --app, is _AppStdout - and then
+        # waits for ENTER inside the alternate screen. A key handler, the composer's
+        # submit, the picker's callback or a render task that raises never leaves
+        # Application.run(); asyncio hands it to this handler and the app keeps
+        # running. So the crash looked like a frozen frame, the report went into the
+        # pane, and the process never ended (measured on a pty, 2026-09-30). Ours
+        # records the traceback and uses the SAME ONE ask - request_exit() - that
+        # every other exit already uses.
+        self.app._handle_exception = self._app_exception
         self.width = self._pane_width()      # cards are rendered for this pane
 
     def run(self):
         self.app.run()
+
+    # -- a failure on the app's own thread ----------------------------------
+    def _app_exception(self, loop, context):
+        """The event loop's exception handler while `--app` owns the terminal.
+
+        Nothing is printed here: the traceback is kept for _run_cli_app to write to
+        the real stream once the alternate screen is gone, and the exit goes through
+        request_exit() like every other one. Printing here would land in the pane (a
+        print while the app is up is _AppStdout), which is the bug this replaces.
+        """
+        exc = context.get("exception")
+        message = context.get("message") or "exception in the app's event loop"
+        if exc is not None:
+            text = message + "\n" + "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__))
+        else:
+            text = message
+        self._crash = text
+        log.error("app event loop failed: %s", text)
+        self.request_exit()
+
+    def note_crash(self, text):
+        """A failure that came out of `Application.run()` itself - a renderer or
+        layout error, or a closed stdin. Kept, not printed: a print before the
+        alternate screen is gone dies with the screen's own buffer."""
+        self._crash = text
+
+    def take_crash(self):
+        """The recorded failure, once - the caller reports it and exits."""
+        text, self._crash = self._crash, ""
+        return text
 
 
 class _AppStdout:
@@ -22260,9 +22514,39 @@ def _run_cli_app():
     sys.stdout = _AppStdout(screen, real_stdout)
     worker = threading.Thread(target=_cli_app_worker, daemon=True,
                               name="tinycmdr-app-console")
+
+    def _terminated(signum, frame):
+        """SIGTERM/SIGHUP: leave the app the way Ctrl-Q does.
+
+        A kill mid-event-loop used to end the process with the alternate screen still
+        active, so the terminal was left inside the app's frame with no way back.
+        request_exit() is the same one ask every other exit uses, so prompt_toolkit
+        runs its own teardown (smcup/rmcup) and the last answer is still reprinted.
+        """
+        log.warning("app: signal %s - leaving", signum)
+        screen.request_exit()
+
+    saved_signals = {}
+    for _name in ("SIGTERM", "SIGHUP"):
+        _sig = getattr(signal, _name, None)
+        if _sig is None:                      # Windows has neither
+            continue
+        try:
+            saved_signals[_sig] = signal.signal(_sig, _terminated)
+        except (ValueError, OSError, RuntimeError):
+            pass                              # not the main thread, or refused
+
     try:
         worker.start()
-        screen.run()                    # returns on /exit, ESC, Ctrl-Q or Ctrl-D
+        try:
+            screen.run()                # returns on /exit, ESC, Ctrl-Q or Ctrl-D
+        except Exception:
+            # A failure that came out of Application.run() itself: prompt_toolkit's
+            # inner finally has already restored the alternate screen (its teardown
+            # is in a finally and is not skippable), so this reports on the real
+            # stream below, with the last answer.
+            log.exception("app screen failed")
+            screen.note_crash("".join(traceback.format_exception(*sys.exc_info())))
     finally:
         sys.stdout = real_stdout
         _CLI["leave"] = True
@@ -22273,9 +22557,23 @@ def _run_cli_app():
         worker.join(timeout=5)
         _CLI["app"] = None
         _CLI["screen"] = None
-    # the alternate screen is gone (smcup/rmcup restored the terminal): put the
-    # session's last answer back in the scrollback so nothing is lost on exit.
-    screen.print_final_inline()
+        for _sig, _prev in saved_signals.items():
+            try:
+                signal.signal(_sig, _prev)
+            except (ValueError, OSError, RuntimeError):
+                pass
+        # The alternate screen is gone (smcup/rmcup restored the terminal): put the
+        # session's last answer back in the scrollback so nothing is lost on exit.
+        # In the finally, so the crash paths get the reprint too - after the block, a
+        # failure past screen.run() lost the answer.
+        screen.print_final_inline()
+    crash = screen.take_crash()
+    if crash:
+        # On the REAL stream: while the app is up, stdout is _AppStdout, so a report
+        # printed then landed in the pane - invisible, and the reason a crash used to
+        # leave the terminal sitting in the app's frame.
+        print(crash, file=sys.stderr, flush=True)
+        raise SystemExit(1)
 
 
 def _cli_sigint(signum, frame):
@@ -22492,7 +22790,7 @@ def user_is_allowed(sender, user_id):
 #     on one token came from.
 
 VERBS = ("status", "doctor", "health", "tasks", "model", "config", "setup", "logs", "proc",
-         "restart", "update", "clean", "token", "version", "run", "help")
+         "restart", "update", "clean", "token", "version", "run", "help", "failures")
 
 # Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
 # (Windows installs by default, and a fleet Windows box had no git at all on 2026-09-24).
@@ -22756,6 +23054,8 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   health             one line + exit code: up, lane, model (no network, for scripts)
   tasks [--all]      the task ledger: what is open, in progress and recently done
                      (--json prints the file itself; never a model call)
+  failures           the known-failure library: which entries have EVER fired on this
+                     box, and which failures keep arriving with no entry (-c, --json)
   version            the version alone
   proc               the processes running from THIS folder
   update             pull the published build (git; adopts the checkout on a fresh install)
@@ -24108,6 +24408,59 @@ def verb_from_chat(argv_line):
     return "```\n%s\n```\n(exit %s)" % (out, code)
 
 
+def _verb_failures(rest):
+    """What this box has already failed at, and what the library knows about it.
+
+    Read-only, and the answer to two questions the library could not answer about itself:
+    which entries have EVER fired here (so the header's "delete an entry that does not help"
+    can be acted on), and which failures keep arriving with no entry at all - the candidates
+    a new entry is written from. `--json` prints the counters; `--candidates` only the
+    second list.
+    """
+    stats = field_notes_stats()
+    if "--json" in rest:
+        print(json.dumps(stats, indent=2, ensure_ascii=False))
+        return 0
+    path = _field_notes_path()
+    entries = field_notes()
+    hits = stats.get("entries") or {}
+    unmatched = stats.get("unmatched") or {}
+    only_candidates = any(a in ("--candidates", "-c") for a in rest)
+    if not path.exists():
+        print("no known-failure library at %s" % path)
+        return 1
+    if not only_candidates:
+        fired_rows = sorted(entries,
+                            key=lambda e: -(int((hits.get(e["title"]) or {}).get("fired") or 0)))
+        since = stats.get("since") or "never counted"
+        print("known-failure library: %s (%d entries, counting since %s)"
+              % (path, len(entries), since))
+        for e in fired_rows:
+            slot = hits.get(e["title"]) or {}
+            n = int(slot.get("fired") or 0)
+            print("  %-56s %s" % (e["title"][:56],
+                                  ("fired %d, last %s" % (n, slot.get("last")))
+                                  if n else "never fired since counting began"))
+        never = [e["title"] for e in entries if not (hits.get(e["title"]) or {}).get("fired")]
+        if never:
+            print("\n  %d of %d have not fired since %s. The header's rule: an entry that"
+                  % (len(never), len(entries), since))
+            print("  fires and does not help gets deleted - so these are the first to review,"
+                  " not the first to trust.")
+    if unmatched:
+        print("\n  failures with NO entry (%d signature(s)) - newest first, top 10:"
+              % len(unmatched))
+        for sig, slot in sorted(unmatched.items(),
+                                key=lambda kv: -(int(kv[1].get("fails") or 0)))[:10]:
+            print("    %3dx  %s" % (int(slot.get("fails") or 0), sig[:92]))
+        print("  Add an entry only when one of these repeats AND its signature always means"
+              " one cause:")
+        print("  an ambiguous note costs more than no note (4x steps, 3.6x tokens, measured).")
+    elif not only_candidates:
+        print("\n  no unmatched failures recorded yet.")
+    return 0
+
+
 def run_verb(argv):
     """Dispatch one management verb. Returns the process exit code."""
     verb = (argv[0] or "").strip().lower()
@@ -24128,6 +24481,8 @@ def run_verb(argv):
         return _verb_health()
     if verb == "tasks":
         return _verb_tasks(rest)
+    if verb == "failures":
+        return _verb_failures(rest)
     if verb == "version":
         return _verb_version()
     if verb == "proc":

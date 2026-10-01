@@ -12,6 +12,7 @@ Without rich/prompt_toolkit it exits 77 (SKIP, never a green 0) after the two ch
 that do not need them.
 """
 import importlib.util
+import contextlib
 import io
 import base64
 import os
@@ -109,6 +110,9 @@ check("the final kind is not the old blue card",
 check("every tier carries every role",
       all(set(tier) == set(fb.TUI_PALETTE["truecolor"])
           for tier in fb.TUI_PALETTE.values()))
+check("no tier uses a rich-only colour spelling",
+      not any("color(" in str(value) for tier in fb.TUI_PALETTE.values()
+              for value in tier.values()), fb.TUI_PALETTE)
 check("the tier is decided from the environment, not guessed",
       fb.tui_colour_tier({"TERM": "xterm-256color"}) == "256"
       and fb.tui_colour_tier({"COLORTERM": "truecolor"}) == "truecolor"
@@ -1009,6 +1013,148 @@ if HAVE_APP:
         app_screen_tmp.request_exit()
         app_screen_tmp.app = _real_app
         check("--app: the exit is asked for once, never twice", _exits == [1], _exits)
+
+        # A failure on the app's OWN thread never leaves Application.run(): asyncio
+        # hands it to the loop's exception handler, and prompt_toolkit's own handler
+        # printed the traceback with print() - the pane, under --app - then waited
+        # for ENTER inside the alternate screen. That is the "crash" that left the
+        # terminal open on a frozen frame (measured on a pty, 2026-09-30), so the app
+        # installs its own handler: record, log, and ask the ONE exit.
+        # A 256-colour terminal with no COLORTERM (stock Terminal.app) used to crash
+        # `--app` at CONSTRUCTION: the palette's rich-only `color(73)` spelling reached
+        # prompt_toolkit's Style.from_dict, which raised before any screen existed, and
+        # app_wanted() is true there so there was no inline fallback. Building the
+        # screen at that tier IS the assertion.
+        try:
+            _tier256 = fb.AppScreen(colour=False, tier="256")
+            _built, _built_err = _tier256.app is not None, ""
+        except Exception as _e:                                   # noqa: BLE001
+            _built, _built_err = False, "%s: %s" % (type(_e).__name__, _e)
+        check("--app can be CONSTRUCTED on a 256-colour terminal (no COLORTERM)",
+              _built, _built_err)
+
+        _crash_scr = fb.AppScreen(colour=False, tier="truecolor")
+        _handler = getattr(_crash_scr.app, "_handle_exception", None)
+        check("--app hands the event loop its own exception handler",
+              getattr(_handler, "__self__", None) is _crash_scr
+              and getattr(_handler, "__func__", None) is fb.AppScreen._app_exception,
+              _handler)
+
+        _exits2 = []
+
+        class _FakeApp2:
+            is_done = False
+            loop = None
+
+            @staticmethod
+            def exit():
+                _exits2.append(1)
+
+        _real_app2 = _crash_scr.app
+        _crash_scr.app = _FakeApp2()
+        _crash_scr._exit_requested = False
+        _printed = io.StringIO()
+        with contextlib.redirect_stdout(_printed):
+            _crash_scr._app_exception(
+                None, {"exception": RuntimeError("BOOM handler"),
+                       "message": "Exception in callback boom()"})
+        _crash_scr.app = _real_app2
+        _text = _crash_scr.take_crash()
+        check("--app: a loop failure is recorded, never printed into the pane",
+              _printed.getvalue() == "" and "BOOM handler" in _text
+              and "Exception in callback boom()" in _text, _printed.getvalue()[:80])
+        check("--app: ...it asks the one exit, and the record is taken once",
+              _exits2 == [1] and _crash_scr.take_crash() == "", (_exits2, _text[:60]))
+
+        # A failure out of Application.run() itself (a renderer or layout error, a
+        # closed stdin) used to skip the reprint entirely: print_final_inline() sat
+        # after the try/finally. It reports on the REAL stream and exits non-zero.
+        _reprints = []
+
+        class _DeadScreen:
+            def __init__(self, colour=True, tier=None):
+                self._crash = ""
+
+            def run(self):
+                raise RuntimeError("BOOM run")
+
+            def note_crash(self, text):
+                self._crash = text
+
+            def take_crash(self):
+                text, self._crash = self._crash, ""
+                return text
+
+            def print_final_inline(self):
+                _reprints.append(1)
+
+            def write_line(self, line):
+                pass
+
+        _saved_screen_cls = fb.AppScreen
+        _saved_worker = fb._cli_app_worker
+        _saved_console_off = fb.log_console_off
+        _saved_cli_here = dict(fb._CLI)
+        fb.AppScreen = _DeadScreen
+        fb._cli_app_worker = lambda: None
+        fb.log_console_off = lambda: None
+        _stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(_stderr):
+                try:
+                    fb._run_cli_app()
+                except SystemExit as _exit:
+                    _code = _exit.code
+                else:
+                    _code = None
+        finally:
+            fb.AppScreen = _saved_screen_cls
+            fb._cli_app_worker = _saved_worker
+            fb.log_console_off = _saved_console_off
+            fb._CLI.clear()
+            fb._CLI.update(_saved_cli_here)
+        check("--app: a failure out of screen.run() reports on the real stream, rc=1",
+              _code == 1 and "BOOM run" in _stderr.getvalue(),
+              (_code, _stderr.getvalue()[:100]))
+        check("--app: ...and the last answer is still reprinted", _reprints == [1], _reprints)
+
+        # A kill mid-event-loop used to end the process with the alternate screen still
+        # active: the terminal was left inside the app's frame with no way back. The
+        # handlers are installed for the app's lifetime and put back after.
+        class _SigStub:
+            SIGTERM, SIGHUP = 15, 1
+
+            def __init__(self):
+                self.calls = []
+
+            def signal(self, sig, handler):
+                self.calls.append((sig, handler))
+                return None
+
+        _sig = _SigStub()
+        _real_signal_mod = fb.signal
+        _reprints2 = []
+
+        class _SigScreen(_DeadScreen):
+            def run(self):
+                return None
+
+        _saved_screen_cls2 = fb.AppScreen
+        fb.AppScreen = _SigScreen
+        fb.signal = _sig
+        _saved_cli_sig = dict(fb._CLI)
+        try:
+            fb._run_cli_app()
+        finally:
+            fb.AppScreen = _saved_screen_cls2
+            fb.signal = _real_signal_mod
+            fb._CLI.clear()
+            fb._CLI.update(_saved_cli_sig)
+        _installed = [s for s, h in _sig.calls if callable(h)]
+        _restored = [s for s, h in _sig.calls if not callable(h)]
+        check("--app catches SIGTERM and SIGHUP while it owns the terminal",
+              _installed == [_SigStub.SIGTERM, _SigStub.SIGHUP], _sig.calls)
+        check("...and puts the previous handlers back", _restored == _installed, _sig.calls)
     finally:
         fb.drive_run = _saved_drive
         fb._CLI.clear()

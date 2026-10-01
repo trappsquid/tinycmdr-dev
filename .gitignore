@@ -31,6 +31,8 @@ skills/.imported-unused/
 # Every name here is a file a host writes for itself, or a scratch artifact.
 # Deviations from the plan's list are listed in the stage-1 report.
 field-notes.md
+# the field-note hit counters: per-host state, written on every failure the harness sees
+field-notes-hits.json
 notes-archive.md
 notes-authored.json
 tasks.md

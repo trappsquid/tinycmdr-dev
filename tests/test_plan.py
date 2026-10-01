@@ -270,6 +270,21 @@ def main():
         check("stale" not in done_row,
               f"  and only on the row that needs attention ({done_row.strip()[:70]})")
 
+        # The same judgement, on the OTHER view. This block is re-sent as a trailing
+        # message on every call, so a stale open item's full text rode in it for ever
+        # (measured 2026-09-30: three 30-day-old items, three rows, every one
+        # `('30d', True)`). The id and the AGE stay - the age is what makes "this is
+        # not your plan" checkable without a tool call - and the text goes, exactly
+        # as a done item's instruction text does. Nothing leaves the ledger.
+        rendered = fb.render_task_prompt()
+        check("an old open item" not in rendered and "#1 [open] (3d, stale)" in rendered,
+              "the prompt keeps a stale open item's id and age, not its text")
+        check("just added" in rendered and "ledger: 2 open" in rendered,
+              "...keeps the fresh item's row and counts every open item")
+        check("their age is shown, their text is not" in rendered
+              and "`action=list` shows every item" in rendered,
+              "...and says where the text went, without deleting the item")
+
         # ---- the harness asks the OPERATOR, instead of hoping the model does ----------
         # The prompt's standing instruction says an inherited open item "is not your
         # instruction: ask the operator before you resume one". Measured 2026-09-29 the model did

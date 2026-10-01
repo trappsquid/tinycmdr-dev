@@ -7,6 +7,9 @@ in behaviour is a change in the regexes, not in the mood of a model.
     python tests/test_digest.py
 """
 import importlib.util
+import contextlib
+import io
+import json
 import os
 import shutil
 import sys
@@ -285,6 +288,67 @@ def main():
         check(fb.annotate_failure("shell", {}, "exit_code=0\nall good")
               == "exit_code=0\nall good",
               "annotate_failure is a no-op on a successful result")
+
+        # ---- the counters: what fired, and what fired nothing ---------------------
+        # The library's rule is "if an entry fires and does not help, delete it", which needs
+        # a count - and there was none: nothing counted or logged a match on a REAL run
+        # (measured 2026-09-30; only the eval harness counted fires, per run, with no idea
+        # WHICH entry). Without it the library can only grow by hand and can only be pruned by
+        # whoever remembers every failure it ever had.
+        stats_file = workdir / "field-notes-hits.json"
+        stats_file.unlink(missing_ok=True)
+        check(not stats_file.exists(), "no counters until a failure is seen")
+
+        full = "exit_code=1\nwrite failed: No space left on device"
+        fb.match_field_notes(full)              # an any-scoped entry the library HAS
+        hits = json.loads(stats_file.read_text(encoding="utf-8"))
+        fired = hits.get("entries") or {}
+        check(any("filesystem" in k for k in fired),
+              f"the entry that fired is counted by title ({fired})")
+        check(bool(hits.get("since")),
+              f"the window is recorded: 'never fired' is a claim about a window ({hits})")
+        check(not (hits.get("unmatched") or {}),
+              f"...and a failure that matched is not also a candidate ({hits.get('unmatched')})")
+
+        novel_a = "exit_code=1\nbackup failed for /a/b/c at 12:00 pid 4711"
+        novel_b = "exit_code=1\nbackup failed for /x/y/z at 09:30 pid 90210"
+        fb.match_field_notes(novel_a)
+        fb.match_field_notes(novel_b)
+        cand = json.loads(stats_file.read_text(encoding="utf-8")).get("unmatched") or {}
+        check(len(cand) == 1 and list(cand.values())[0]["fails"] == 2,
+              f"a failure with no entry becomes ONE candidate across paths and numbers ({cand})")
+
+        before = stats_file.read_text(encoding="utf-8")
+        fb.match_field_notes("exit_code=0\nall fine here")
+        check(stats_file.read_text(encoding="utf-8") == before,
+              "a successful result is never counted as a failure")
+
+        # Bookkeeping must never be able to break the run it measures: a counter that cannot
+        # be written costs one tally, not a turn.
+        real_stats = fb._field_notes_stats_path
+        fb._field_notes_stats_path = lambda: Path("/proc/definitely/not/writable.json")
+        try:
+            unwritable = None
+            try:
+                unwritable = fb.match_field_notes(full)
+            except Exception as e:              # noqa: BLE001 - the point of the check
+                unwritable = f"raised {type(e).__name__}: {e}"
+        finally:
+            fb._field_notes_stats_path = real_stats
+        check(isinstance(unwritable, list) and bool(unwritable),
+              f"a counter that cannot be written never breaks the run ({unwritable})")
+
+        # The operator's half: which entries have EVER fired here, and what keeps failing
+        # with no entry - the list a new entry is written from.
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = fb._verb_failures([])
+        shown = buf.getvalue()
+        check(rc == 0 and "known-failure library" in shown and "counting since" in shown
+              and "never fired since counting began" in shown,
+              f"the failures verb names the entries that never fire ({shown[:170]})")
+        check("backup failed for p at n:n pid n" in shown,
+              f"...and the candidates an entry is written from ({shown[-260:]})")
 
         # a broken library must not break a run
         (workdir / "field-notes.md").write_text(
