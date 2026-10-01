@@ -52,6 +52,12 @@ Fixed
   alternate screen still active, leaving the terminal inside the app's frame with no way back.
   Both now leave through the same one ask as Ctrl-Q, so prompt_toolkit runs its own teardown
   and the last answer is still reprinted.
+- **An edited `soul.md` is visible and protected.** `soul.md` is the one tracked file an
+  operator is invited to edit, so a persona lives as an uncommitted modification: `doctor`
+  now says whether this box runs the shipped seed, an edit, or the built-in default, and
+  `update` copies an edited file aside (`soul.md.bak-update-<stamp>`) before its `git pull` -
+  which otherwise either refuses over that edit or loses it to the next `git reset --hard`.
+  The persona is read once per process, so a restart applies an edit.
 
 Changed
 - **`model` is a picker, not a page of instructions.** Bare `tinycmdr model` (and `/tinycmdr model`

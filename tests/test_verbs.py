@@ -160,6 +160,47 @@ def main():
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
 
+        # ---- the persona: which soul this agent is actually running ----------------
+        # soul.md is the one TRACKED file an operator is invited to edit, so a persona is an
+        # uncommitted modification to a tracked file: nothing used to say whether a box ran
+        # the shipped identity or somebody's edit, and `update` (a git pull) either refuses
+        # over that edit or has it discarded by the next `git reset --hard`.
+        soul = workdir / "soul.md"
+        saved_soul = fb.SOUL_FILE
+        fb.SOUL_FILE = soul
+        try:
+            soul.unlink(missing_ok=True)
+            rc, out, err = call(fb, ["doctor"])
+            check("doctor names the built-in default when there is no soul.md",
+                  "persona" in out and "built-in default" in out, out[:400])
+
+            soul.write_text(fb.DEFAULT_SOUL, encoding="utf-8")
+            rc, out, err = call(fb, ["doctor"])
+            check("...the shipped seed when soul.md is untouched",
+                  "the shipped seed" in out, out[:400])
+
+            soul.write_text("You are a laconic mainframe operator.", encoding="utf-8")
+            rc, out, err = call(fb, ["doctor"])
+            check("...and an edit when somebody re-persona'd this box",
+                  "edited on this host" in out, out[:400])
+            check("...with a note that update protects the edit and a hard reset would not",
+                  "uncommitted edit" in out and "reset --hard" in out, out[-300:])
+
+            backup = fb.preserve_edited_soul("20260930-000000")
+            check("an edited persona is copied aside before an update",
+                  bool(backup) and Path(backup).read_text(encoding="utf-8")
+                  == "You are a laconic mainframe operator.", backup)
+            check("...the backup lands beside it, named for the update",
+                  bool(backup) and Path(backup).name == "soul.md.bak-update-20260930-000000",
+                  backup)
+            soul.write_text(fb.DEFAULT_SOUL, encoding="utf-8")
+            check("...and the shipped seed is not backed up: nothing to lose",
+                  fb.preserve_edited_soul("x") == "", "")
+            soul.unlink()
+            check("...nor is a missing soul.md", fb.preserve_edited_soul("x") == "", "")
+        finally:
+            fb.SOUL_FILE = saved_soul
+
         # ---- F-19: a cloud endpoint on an ASSUMED window is told the lever --------
         # /v1/models on a hosted API carries no max_model_len and there is no /props,
         # /api/ps or /get_server_info, so _detect_window returns 0 and the envelope assumes

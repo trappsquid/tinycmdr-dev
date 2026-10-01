@@ -11914,6 +11914,35 @@ def _load_soul():
 _SOUL = _load_soul()
 
 
+def preserve_edited_soul(stamp):
+    """Copy an EDITED soul.md aside, before an update pulls over it.
+
+    soul.md is the one tracked file an operator is invited to edit (docs/development.md
+    calls it "the seed the agent's workspace starts from"), which means a persona lives as
+    an uncommitted modification to a tracked file. `update` in a checkout is a git pull, so
+    an upstream change to soul.md makes the fast-forward REFUSE - the update stops until the
+    operator deals with it - and anything that discards local changes (`git reset --hard`,
+    `git checkout -- .`) takes the persona with nothing to restore it from. A backup beside
+    itself is the same answer `update` already gives tinycmdr.py.
+
+    Returns the backup path, or "" when soul.md is absent or is still the shipped seed.
+    """
+    import shutil
+    try:
+        text = SOUL_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if text.strip() == DEFAULT_SOUL.strip():
+        return ""                      # the shipped seed, not somebody's persona
+    backup = SOUL_FILE.with_name(SOUL_FILE.name + ".bak-update-" + stamp)
+    try:
+        shutil.copy2(SOUL_FILE, backup)
+    except OSError as e:
+        log.warning("could not back up the edited soul.md: %s", e)
+        return ""
+    return str(backup)
+
+
 def soul_text():
     """Who this agent is, for the head of the system prompt."""
     return _SOUL
@@ -23200,6 +23229,25 @@ def _verb_doctor():
         problems.append("python %s is older than this build supports"
                         % sys.version.split()[0])
 
+    # The persona is invisible state: nothing else in this output says whether the agent is
+    # running the shipped identity or one somebody edited here. (`update` copies an edited
+    # file aside before pulling; see preserve_edited_soul.)
+    try:
+        _soul_edited = (SOUL_FILE.read_text(encoding="utf-8").strip()
+                        != DEFAULT_SOUL.strip()) if SOUL_FILE.exists() else None
+    except OSError:
+        _soul_edited = None
+    if _soul_edited is None:
+        print("  persona   : the built-in default (no soul.md on this host)")
+    else:
+        print("  persona   : soul.md (%s)"
+              % ("edited on this host" if _soul_edited else "the shipped seed"))
+        if _soul_edited:
+            notes.append("soul.md is an uncommitted edit to a tracked file: `update` "
+                         "copies it aside before pulling, but anything that discards "
+                         "local changes (git reset --hard) would take it. The persona is "
+                         "read once per process, so restart after editing it")
+
     drift = guard_list_drift()
     if drift:
         missing = sum(len(m) for _k, m, _e in drift)
@@ -23669,6 +23717,11 @@ def _verb_update(rest):
                     _build_hash())
 
         head_before, file_before = head_of()
+        _stamp = time.strftime("%Y%m%d-%H%M%S")
+        _kept = preserve_edited_soul(_stamp)
+        if _kept:
+            print("your persona is a local edit to a tracked file, so a pull can refuse it"
+                  " - copied to %s first" % Path(_kept).name)
         rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "pull", "--ff-only"], 120)
         if rc != 0:
             print("git pull failed: %s" % ((err or out).strip()[:600]), file=sys.stderr)
