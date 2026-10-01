@@ -148,9 +148,10 @@ and in chat:
 | `status` | version, folder, model, endpoint, context, log, instance |
 | `doctor` | check this install and name what is wrong (exit 1 when something is) |
 | `health` | one line and an exit code, no network — for scripts |
-| `model` | pick a model from a list you move through (↑↓, type to filter, Enter) |
-| `model use <name>` · `model add <url>` · `model remove <x>` | switch, add or drop an endpoint |
-| `model endpoint [<url>]` | read the endpoint, or correct it - a typo is refused unless `--force` |
+| `model` | pick a model from a list you move through (↑↓, type to filter, Enter; the first row adds an endpoint); a dead or refused endpoint offers the wizard |
+| `model setup` | the model wizard: local or cloud, the key, the link, the bearer `GET /models`, then the models it serves to choose from |
+| `model use <name>` · `model add [<url>]` · `model remove <x>` | switch; add an endpoint (no URL: it asks local/cloud, the key and the link, proves the key with a bearer `GET /models`, then offers the models to choose from); or drop one |
+| `model endpoint [<url>]` | read the endpoint or fix it - a `401` asks for the key (saved to `.env`), a typo is refused unless it answers (`--force` writes an unverified one) |
 | `tasks [--all]` | the task ledger: open, in progress, recently done |
 | `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
 | `update` | pull the published build (`update <file\|zip\|folder>` puts one in place by hand) |

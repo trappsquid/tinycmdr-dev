@@ -733,8 +733,11 @@ def case_archive_and_python(sb, pkg, bindir, user, py):
 sandbox_home_env.py = ""      # filled in main(), read by the helper above
 
 
-def serve_models(ids):
-    """A stub /v1/models on a loopback port - what the installer's probe is aimed at."""
+def serve_models(ids, key=None):
+    """A stub /v1/models on a loopback port - what the installer's probe is aimed at.
+
+    With `key`, the handler REQUIRES `Authorization: Bearer <key>` and answers 401
+    otherwise, so a test can stand in for a hosted provider that authenticates /models."""
     import http.server
     import json as _json
     import socketserver
@@ -743,6 +746,11 @@ def serve_models(ids):
     class _H(http.server.BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path.rstrip("/").endswith("/models"):
+                if key and self.headers.get("Authorization") != "Bearer " + key:
+                    self.send_response(401)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 body = _json.dumps({"data": [{"id": i} for i in ids]}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -786,9 +794,9 @@ def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
         env = sandbox_home_env(sb, bindir, log, user, extra={"TINYCMDR_ASK": "1"})
         url = "http://127.0.0.1:%d/v1" % port
         # The interactive order, with the chat token given as a flag: Mattermost server,
-        # Mattermost user id, Telegram lane, THEN the endpoint and its model. Empty lines
-        # take the defaults, which is what the later questions get too.
-        answers = "\n".join(["", "", "n", url, "2"] + [""] * 8) + "\n"
+        # Mattermost user id, Telegram lane, THEN the endpoint kind (local/cloud) and its
+        # model. Empty lines take the defaults, which is what the later questions get too.
+        answers = "\n".join(["", "n", "", url, "2"] + [""] * 8) + "\n"
         got = run_with_stdin(
             ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
              "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst],
@@ -807,7 +815,7 @@ def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
         log2 = sb / "logs" / "probe-dead.log"
         env2 = sandbox_home_env(sb, bindir, log2, user, extra={"TINYCMDR_ASK": "1"})
         dead = "http://127.0.0.1:9/v1"
-        answers2 = "\n".join(["", "", "n", dead, dead, dead] + [""] * 8) + "\n"
+        answers2 = "\n".join(["", "n", "", dead, dead, dead] + [""] * 8) + "\n"
         got2 = run_with_stdin(
             ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
              "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst2],
@@ -849,7 +857,7 @@ def case_macos_probes_endpoint(sb, pkg, bindir, user, py):
         if not on_mac:
             args.append("--no-launchd")
         url = "http://127.0.0.1:%d/v1" % port
-        got = run_with_stdin(args, env, pkg, "\n".join(["", "", "n", url, "2"] + [""] * 8) + "\n")
+        got = run_with_stdin(args, env, pkg, "\n".join(["", "", "n", "", url, "2"] + [""] * 8) + "\n")
         written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
         check("P3 the macOS installer probes too, and says what it found",
               "reachable" in got.stdout and "qwen3-14b" in got.stdout,
@@ -857,6 +865,90 @@ def case_macos_probes_endpoint(sb, pkg, bindir, user, py):
         check("P3 ...and its model id can come from that list by number",
               written["llm"]["model"] == "glm-4.6" and written["llm"]["base_url"] == url,
               f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def case_installer_cloud_key(sb, pkg, bindir, user, py):
+    """A CLOUD endpoint: the key is asked first, carried on the bearer probe, and lands in
+    .env - never config.json.
+
+    The defect this exists for: the installer asked for the URL, probed it with NO key so a
+    hosted provider's 401 read as "not reachable", and only then asked for a key it never
+    used - which it wrote into config.json's llm.api_key, a file the agent reads into a
+    prompt. The stub answers /models only for the right bearer, so a wrong key is a real 401.
+    """
+    port, srv = serve_models(["cloud-a", "cloud-b"], key="sk-good")
+    try:
+        inst = sb / "cloud-inst"
+        fake_venv(inst, py)
+        log = sb / "logs" / "cloud.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        env = sandbox_home_env(sb, bindir, log, user, extra={"TINYCMDR_ASK": "1"})
+        url = "http://127.0.0.1:%d/v1" % port
+        # token, telegram, KIND=cloud, key (wrong -> 401), url, key again (right), model
+        # NUMBER, then the empty defaults (fallback, egress, confirm).
+        answers = "\n".join(["", "n", "2", "sk-bad", url, "sk-good", "1"] + [""] * 8) + "\n"
+        got = run_with_stdin(
+            ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+             "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst],
+            env, pkg, answers)
+        out = got.stdout + got.stderr
+        written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
+        env_text = (inst / ".env").read_text(encoding="utf-8")
+        check("cloud: a wrong key is named as a KEY refusal, not a dead host",
+              "refused that key" in out and "401" in out, out[-800:])
+        check("cloud: the bearer probe returns the provider's own model list",
+              "reachable" in out and "cloud-a" in out and "cloud-b" in out, out[-800:])
+        check("cloud: the chosen model (by NUMBER) and endpoint are in config.json",
+              written["llm"]["model"] == "cloud-a"
+              and written["llm"]["base_url"] == url,
+              f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
+        check("cloud: the key lands in .env as TINYCMDR_LLM_API_KEY",
+              "TINYCMDR_LLM_API_KEY=sk-good" in env_text,
+              env_text[:400])
+        check("cloud: the key is NEVER in config.json",
+              "sk-good" not in json.dumps(written) and "sk-bad" not in json.dumps(written),
+              json.dumps(written.get("llm")))
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def case_macos_cloud_key(sb, pkg, bindir, user, py):
+    """The same cloud conversation on the macOS door, whose .env writer is its own script."""
+    port, srv = serve_models(["mac-a", "mac-b"], key="sk-good")
+    try:
+        inst = sb / "mac-cloud"
+        fake_venv(inst, py)
+        log = sb / "logs" / "mac-cloud.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        env = sandbox_home_env(sb, bindir, log, user,
+                               {"TINYCMDR_PYTHON": py, "TINYCMDR_ASK": "1"})
+        args = ["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-start",
+                "--no-path", "--python", py, "--label", "com.tinycmdr.cloudtest",
+                "--mattermost-url", "chat.invalid",
+                "--token", "0123456789abcdef0123456789abcdef", "--allowed-user", "u1",
+                "--install-dir", inst]
+        if os.uname().sysname != "Darwin":
+            args.append("--no-launchd")
+        url = "http://127.0.0.1:%d/v1" % port
+        # MM server, MM user id, telegram, KIND=cloud, key (wrong), url, key (right), model
+        answers = "\n".join(["", "", "n", "2", "sk-bad", url, "sk-good", "2"] + [""] * 8) + "\n"
+        got = run_with_stdin(args, env, pkg, answers)
+        out = got.stdout + got.stderr
+        written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
+        env_text = (inst / ".env").read_text(encoding="utf-8")
+        check("cloud (macOS): the key is refused by name and re-asked",
+              "refused that key" in out and "mac-a" in out, out[-700:])
+        check("cloud (macOS): the model NUMBER lands in config.json",
+              written["llm"]["model"] == "mac-b" and written["llm"]["base_url"] == url,
+              (written["llm"].get("model"), written["llm"].get("base_url")))
+        check("cloud (macOS): the key is .env's TINYCMDR_LLM_API_KEY, not config.json's",
+              "TINYCMDR_LLM_API_KEY=sk-good" in env_text
+              and "api_key" not in written["llm"],
+              (env_text[-160:], written["llm"]))
     finally:
         srv.shutdown()
         srv.server_close()
@@ -905,6 +997,8 @@ def main():
         case_archive_and_python(sb, pkg, bindir, user, py)
         case_installer_probes_endpoint(sb, pkg, bindir, user, py)
         case_macos_probes_endpoint(sb, pkg, bindir, user, py)
+        case_installer_cloud_key(sb, pkg, bindir, user, py)
+        case_macos_cloud_key(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print()

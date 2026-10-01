@@ -15237,7 +15237,7 @@ def model_catalog(force=False):
             and time.time() - _MODEL_CACHE["at"] < 60):
         return _MODEL_CACHE["entries"]
     primary = CONFIG["llm"]["base_url"].rstrip("/")
-    primary_key = CONFIG["llm"].get("api_key", "none")
+    primary_key = _primary_api_key() or "none"
 
     def _ids(url, key):
         try:
@@ -21221,6 +21221,133 @@ def _cli_render_box(title, lines, width=74):
     return "\n".join([top] + body + [bottom])
 
 
+MODEL_ENDPOINT_DEFAULT = "http://127.0.0.1:8081/v1"
+
+
+def _ask_endpoint_kind(default_url, prompt="   Is the endpoint local or cloud? [%s]: "):
+    """Local or hosted? The first model question, with the current URL as the default.
+
+    The question that was missing: the wizard asked for a URL, probed it WITHOUT the key
+    (so a hosted provider's 401 read as "not reachable"), and only then asked for a key -
+    after the model list it needed that key to fetch had already failed. Ask this first,
+    so a cloud endpoint carries its key into the probe."""
+    local_default = "local" if _is_local_url(default_url) else "cloud"
+    print(dim("   local: this machine or your LAN (llama.cpp, Ollama, vLLM - no key)"))
+    print(dim("   cloud: a hosted OpenAI-compatible provider (answers only with a key)"))
+    while True:
+        ans = input(prompt % local_default).strip().lower()
+        if not ans:
+            return local_default
+        if ans in ("l", "local", "lan", "1", "on-prem", "on prem", "this machine"):
+            return "local"
+        if ans in ("c", "cloud", "hosted", "remote", "2", "provider"):
+            return "cloud"
+        print(red("   answer local or cloud"))
+
+
+def _choose_one_model(url, ids, default=""):
+    """The model an endpoint serves: pick from what it advertised, or type an id.
+
+    A picker when the terminal can host one, a NUMBER-able list otherwise, and the plain
+    prompt when the endpoint advertised nothing (offline, or a custom path). The number
+    resolution matches the installer's own ask_model_id, so "2" means the same thing in
+    every door."""
+    if not ids:
+        print(dim("   no model list came back, so the model id is whatever you type"))
+        ans = input("   Model id [%s]: " % default).strip()
+        return ans or default
+    if default not in ids:
+        default = ids[0]
+    if pick_terminal_ready():
+        state = ModelPick([(i, "advertised by %s" % url, i == default) for i in ids],
+                          current=default, title="Which model? (%d advertised)" % len(ids),
+                          scope="ENTER sets the model - ESC keeps %s" % default)
+        picked = run_model_pick(state)
+        if not picked:
+            print(dim("   kept %s" % default))
+        return picked or default
+    print("   models it advertises:")
+    for n, i in enumerate(ids, 1):
+        print("     %2d) %s" % (n, i))
+    ans = input("   Model id (number or name) [%s]: " % default).strip()
+    if not ans:
+        return default
+    if ans.isdigit() and 1 <= int(ans) <= len(ids):
+        return ids[int(ans) - 1]
+    return ans
+
+
+def _ask_model_target(default_url="", default_model="", default_key=""):
+    """Ask where a model lives, prove the key, and choose from what the endpoint serves.
+
+    THE one model-adding conversation: `setup` (the primary) and `model add` (an endpoint
+    added later) both call it, so both ask the same things in the same order - local or
+    cloud, then the key and the endpoint link, then the model list the endpoint actually
+    returns. A cloud answer sends its key as a bearer on GET /models BEFORE a model is
+    chosen, so a wrong key is named here (HTTP 401) instead of surfacing as a failed first
+    message; a local answer sends none.
+
+    Returns {"url", "model", "key"} (key "" for local), or None when there is no endpoint
+    to write.
+    """
+    default_url = str(default_url or MODEL_ENDPOINT_DEFAULT).strip().rstrip("/")
+    kind = _ask_endpoint_kind(default_url)
+    key = ""
+    if kind == "cloud":
+        if default_key:
+            print(dim("   a key is already set for this endpoint (Enter keeps it)"))
+        key = input("   API key (leave empty if it needs none): ").strip() or default_key
+    url, ids, url_tries = "", None, 0
+    while True:
+        label = ("Endpoint (e.g. https://api.provider.com/v1)" if kind == "cloud"
+                 else "Endpoint")
+        ans = input("   %s [%s]: " % (label, url or default_url)).strip()
+        url = (ans or url or default_url)
+        if not url.lower().startswith(("http://", "https://")):
+            print(red("   URL must start with http:// or https://"))
+            if not ans:
+                return None
+            continue
+        # The key changed on a 401 without the URL changing: re-probe the same link
+        # rather than making the reader re-type it. Bounded - three refusals means the
+        # provider is not going to take it, and the rest of the wizard has work to do.
+        key_tries = 0
+        while True:
+            res = probe_endpoint(url, key, timeout=10)
+            if res["status"] in (401, 403) and kind == "cloud":
+                key_tries += 1
+                if key_tries >= 3:
+                    print(dim("   the provider still refuses the key - keeping %s "
+                              "unverified" % url))
+                    break
+                print(red("   \u2717 the provider refused that key (HTTP %d)"
+                          % res["status"]))
+                key = input("   API key (try again): ").strip() or key
+                continue
+            break
+        if res["ok"]:
+            ids = res["ids"]
+            print(green("   \u2713 reachable%s"
+                        % (" - models: %s" % ", ".join(ids[:8]) if ids
+                           else " (no model list advertised)")))
+            break
+        print(red("   \u2717 %s" % probe_sentence(url, res)))
+        if not ans:
+            # Enter on the URL that was already there: say what is wrong, name the command
+            # that fixes it, and let the rest of the wizard run. The retry loop is for a
+            # typo somebody just typed.
+            print(dim("   keeping it: fix it later with `tinycmdr model endpoint <url>`"))
+            break
+        url_tries += 1
+        if url_tries >= 3:
+            print(dim("   keeping it anyway: fix it later with "
+                      "`tinycmdr model endpoint <url>`"))
+            break
+        print(dim("   check the host and port (the server may not be running yet)."))
+    model = _choose_one_model(url, ids or [], default_model)
+    return {"url": url, "model": model, "key": key}
+
+
 def run_setup(rest=None):
     """Guided interactive setup wizard: model endpoint, chat gateways, web search."""
     if _CLI.get("app") is not None:
@@ -21256,63 +21383,21 @@ def run_setup(rest=None):
     cur_model = llm.get("model") or "main"
 
     print(bold("1. LLM Endpoint & Model"))
-    # Ask, PROBE, and only then move on. A typo here writes no error until the first
-    # request, and the rest of this wizard - and the whole install - is built on this one
-    # answer. Three tries, then it keeps the URL and says how to fix it later: a box whose
-    # server is not up yet is normal, and the wizard must not become a wall.
-    new_url, ids, typed_tries = "", None, 0
-    while True:
-        ans_url = input("   Endpoint URL [%s]: " % (new_url or cur_url)).strip()
-        new_url = ans_url or new_url or cur_url
-        if not new_url.lower().startswith(("http://", "https://")):
-            print(red("   URL must start with http:// or https://"))
-            if not ans_url:
-                return 1                      # the stored value is not a URL: stop, don't write it
-            continue
-        ids = _probe_model_ids(new_url)
-        if ids is not None:
-            print(green("   \u2713 reachable%s" % (" - models: %s" % ", ".join(ids[:8])
-                                                  if ids else " (no model list advertised)")))
-            break
-        print(red("   \u2717 no answer from %s - wrong host or port, or the server is not up."
-                  % new_url))
-        if not ans_url:
-            # They pressed Enter on the URL that was already there: say what is wrong, name
-            # the command that fixes it, and let the wizard get on with the rest. The retry
-            # loop is for someone correcting a typo they just typed.
-            print(dim("   keeping it: fix it later with `tinycmdr model endpoint <url>`"))
-            break
-        typed_tries += 1
-        if typed_tries >= 3:
-            print(dim("   keeping it anyway: fix it later with `tinycmdr model endpoint <url>`"))
-            break
-        print(dim("   check the host and port (the server may not be running yet)."))
-    llm["base_url"] = new_url
-
-    # The loop above already asked, and said what came back - this only decides the default.
-    default_choice = cur_model if (ids and cur_model in ids) else (ids[0] if ids else cur_model)
-    if not ids:
-        print(dim("   Note: no model list came back, so the model id is whatever you type"))
-
-    # This step used to be "Model name [main]:" straight after printing the ids the endpoint
-    # had just advertised - the reader typed one of the names they had been shown. Same list
-    # now, but a picker; with no ids (offline, custom path) the plain prompt stays.
-    if ids and pick_terminal_ready():
-        state = ModelPick(
-            [(i, "advertised by %s" % new_url, i == default_choice) for i in ids],
-            current=default_choice, title="Which model? (%d advertised)" % len(ids),
-            scope="ENTER sets llm.model - ESC keeps %s" % default_choice)
-        picked = run_model_pick(state)
-        llm["model"] = picked or default_choice
-        if not picked:
-            print(dim("   kept %s" % default_choice))
-    else:
-        ans_model = input("   Model name [%s]: " % default_choice).strip()
-        llm["model"] = ans_model if ans_model else default_choice
-    ans_key = input("   API key (leave empty if none / local): ").strip()
-    if ans_key:
-        _env_set("TINYCMDR_LLM_API_KEY", ans_key)
-        print(dim("   API key saved to .env as TINYCMDR_LLM_API_KEY"))
+    cur_key = _primary_api_key()
+    target = _ask_model_target(cur_url, cur_model, cur_key)
+    if target is None:
+        print(red("   no endpoint written"), file=sys.stderr)
+        return 1
+    llm["base_url"], llm["model"] = target["url"], target["model"]
+    if target["key"]:
+        if target["key"] != cur_key:
+            _env_set("TINYCMDR_LLM_API_KEY", target["key"])
+            print(dim("   API key saved to .env as TINYCMDR_LLM_API_KEY"))
+        # The running process must see it NOW, not after a restart: model_catalog and every
+        # later probe read _primary_api_key(), which prefers config.json and falls back to
+        # this variable. (The wizard used to save the key and then drop it from the live
+        # CONFIG when it wrote the file back.)
+        os.environ["TINYCMDR_LLM_API_KEY"] = target["key"]
     # A hosted endpoint says nothing about its window (/v1/models carries no max_model_len
     # and there is no /props to ask), so the harness would run it on an assumed 8000 and clip
     # replies at 2048. Setup is where the endpoint is being named, so it is where the one key
@@ -21408,6 +21493,11 @@ def run_setup(rest=None):
 
 
 MODEL_PICK_VIEW = 12      # rows on screen at once; the list scrolls under the cursor
+
+# The picker's first row: the way to ADD or CHANGE an endpoint without typing a command.
+# It is a row NAME the shell verb intercepts (never a real model id), so it goes through
+# the same ↑↓/filter/ENTER machinery as everything else.
+MODEL_PICK_ADD = "\u2795 add or change the endpoint\u2026"
 
 
 def model_pick_rows(entries, current):
@@ -21780,10 +21870,17 @@ def _cli_model(rest, pick=False):
         return
 
     # 4. Add endpoint
+    if sub in ("setup", "wizard", "new", "change"):
+        # The wizard asks for an API key with the echo off, which only a shell can do.
+        print(dim("  the model wizard asks for a key, so run it in a shell: "
+                  "tinycmdr model setup"))
+        return
     if sub == "add":
         args = tokens[1:]
         if not args:
-            print(dim("  usage: /tinycmdr model add <url> [--model NAME] [--alias ALIAS] [--key-env VAR] [--primary] [--force]"))
+            print(dim("  usage: /tinycmdr model add <url> [--model NAME] [--alias ALIAS] "
+                      "[--key-env VAR] [--primary] [--force]"))
+            print(dim("  (or run `tinycmdr model setup` in a shell to be asked)"))
             return
         opts, pos, idx = {}, [], 0
         while idx < len(args):
@@ -22757,6 +22854,27 @@ def _env_file_keys():
     return keys
 
 
+def _env_file_value(name):
+    """The value of NAME in .env, or "" - how a verb sees a key `token set` wrote but
+    this process never inherited (a fresh CLI is not the service's environment)."""
+    try:
+        for line in ENV_FILE.read_text(encoding="utf-8-sig").splitlines():
+            line = line.strip()
+            if line.startswith(name + "="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def _endpoint_key(name):
+    """A key from the environment or from .env, whichever has it. Never printed."""
+    name = str(name or "").strip()
+    if not name:
+        return None
+    return os.environ.get(name) or _env_file_value(name) or None
+
+
 def _spawn_replacement():
     """Start a fresh instance, detached, then the caller exits.
 
@@ -23096,11 +23214,16 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      type it with no verb, and the same as --cli below
   status             version, folder, model, endpoint, context, log, instance
   doctor             check this install and name what is wrong (exit 1 when it is)
-  model              the models this install can route to (asks the endpoints)
+  model              pick the model this install uses; when the endpoint is dead or wrong
+                     it offers the setup wizard instead of a dead end
+  model setup        the model wizard: local or cloud, the key, the link, the bearer
+                     check, then the models the endpoint serves to choose from
   model use <name>   set the default model in config.json, catalog-checked
-  model add <url>    add an endpoint this install can route to (a fallback entry;
-                     --primary makes it the one that answers, --model NAME,
+  model add [<url>]  add an endpoint this install can route to (no <url> asks; a fallback
+                     entry unless --primary makes it the one that answers; --model NAME,
                      --alias A, --key-env VAR, --force to add it unverified)
+  model endpoint [<url>]
+                     read the primary endpoint, or fix it - a 401 asks for the key
   model remove <x>   drop a fallback entry (by model name, alias or url)
   setup              interactive wizard: model, Mattermost, Telegram, web search
   config get|set|unset <dotted.key> [value]
@@ -23418,16 +23541,23 @@ def _verb_doctor():
 # serious?"). Nothing here runs the agent or spends a token: the one request is a
 # /v1/models GET, for the id check.
 
-MODEL_ADD_HELP = """tinycmdr model add <url> [--model NAME] [--alias A] [--key-env VAR]
+MODEL_ADD_HELP = """tinycmdr model add [<url>] [--model NAME] [--alias A] [--key-env VAR]
                    [--primary] [--force]
 
-  The endpoint goes into llm.fallbacks, or becomes the one that answers with
-  --primary (the LAN-box case). A hosted PRIMARY needs llm.api_key in config.json -
-  a file the agent can read - so prefer a fallback with --key-env.
-  The model id is checked against what the endpoint advertises (one /v1/models GET,
-  metadata only). --force writes it when the endpoint is not reachable yet.
+  With no <url> it asks: local or cloud, then the API key (cloud) and the endpoint
+  link, proves the key with a bearer GET /v1/models, and offers the models that come
+  back to choose from.
 
-  The KEY stays out of here: --key-env records the NAME of a .env variable, and
+  With a <url> it takes the endpoint from the command line and checks the model id
+  against what the endpoint advertises (one /v1/models GET, metadata only). --force
+  writes it when the endpoint is not reachable yet.
+
+  A cloud endpoint added here goes into llm.fallbacks and its key into .env under a
+  generated TINYCMDR_ENDPOINT<n>_API_KEY the entry points at with api_key_env; a
+  cloud PRIMARY keeps its key in .env as TINYCMDR_LLM_API_KEY. Never config.json -
+  that is a file the agent reads into a prompt.
+
+  The KEY is never a command-line value: --key-env names the .env variable, and
   `tinycmdr token set <NAME>` reads the value from stdin.
 
   A running bot reads config.json at start, so `tinycmdr restart` afterwards.
@@ -23436,23 +23566,40 @@ tinycmdr model remove <name|alias|url>    drop a fallback entry
 """
 
 
-def _probe_model_ids(url, key=None):
-    """The model ids one endpoint advertises, or None when it did not answer.
+def probe_endpoint(url, key=None, timeout=20):
+    """Ask an OpenAI-compatible endpoint which models it serves.
 
-    Metadata only: one /v1/models GET, never a completion - the same rule `status`
-    and `doctor` follow, so a management verb cannot spend a token."""
+    One GET /models, metadata only - never a completion, so no verb that calls this can
+    spend a token. The bearer key is sent when there is one: a hosted provider answers
+    /v1/models with 401 unless it is authenticated, and the old probe sent no
+    Authorization header at all, so every cloud endpoint read as "down" and its model
+    list never came back. That is the bug this shape exists to end.
+
+    Returns {"ok": bool, "ids": [...], "status": int|None, "error": str}. `ok` is True
+    only for a 2xx answer - an endpoint that answers with no list is still reachable.
+    `status` is the HTTP code when a response came back, so a caller can tell 401 (the
+    key) from a dead host; `error` is a short reason when something went wrong.
+    """
     headers = {"Accept": "application/json", "User-Agent": "tinycmdr"}
     if key:
         headers["Authorization"] = "Bearer " + str(key)
     try:
-        r = requests.get(url.rstrip("/") + "/models", headers=headers, timeout=20)
-        if r.status_code >= 400:
-            log.debug("model add: /models on %s answered %s", url, r.status_code)
-            return None
+        r = requests.get(str(url).rstrip("/") + "/models", headers=headers,
+                         timeout=timeout)
+    except Exception as e:
+        log.debug("probe: /models on %s failed: %s", url, e)
+        return {"ok": False, "ids": [], "status": None,
+                "error": " ".join(str(e).split())[:160]}
+    if r.status_code >= 400:
+        log.debug("probe: /models on %s answered %s", url, r.status_code)
+        return {"ok": False, "ids": [], "status": r.status_code,
+                "error": "HTTP %d" % r.status_code}
+    try:
         data = r.json()
     except Exception as e:
-        log.debug("model add: /models on %s failed: %s", url, e)
-        return None
+        log.debug("probe: /models on %s was not JSON: %s", url, e)
+        return {"ok": False, "ids": [], "status": r.status_code,
+                "error": "not JSON: %s" % " ".join(str(e).split())[:80]}
     out = []
     for item in (data.get("data") or data.get("models") or []):
         if isinstance(item, str):
@@ -23461,7 +23608,40 @@ def _probe_model_ids(url, key=None):
             mid = item.get("id") or item.get("name") or item.get("model")
             if mid:
                 out.append(str(mid))
-    return out
+    return {"ok": True, "ids": out, "status": r.status_code, "error": ""}
+
+
+def _probe_model_ids(url, key=None):
+    """The model ids one endpoint advertises, or None when it did not answer.
+
+    The thin compatibility wrapper around probe_endpoint(): callers that only need the
+    list keep their None-means-no-answer contract; a caller that must tell 401 from a
+    dead host (the setup wizard, `model add`) reads probe_endpoint() directly."""
+    res = probe_endpoint(url, key)
+    return list(res["ids"]) if res["ok"] else None
+
+
+def _primary_api_key():
+    """The key the PRIMARY endpoint authenticates with, from wherever it lives.
+
+    `llm.api_key` in config.json (the old home), or TINYCMDR_LLM_API_KEY in .env/the
+    environment, which is the home the wizard now writes. The shipped `"api_key": "none"`
+    sentinel means "no key" and comes back empty, so a local box is not mistaken for a
+    keyed one."""
+    val = (str(CONFIG["llm"].get("api_key") or "").strip()
+           or os.environ.get("TINYCMDR_LLM_API_KEY", "").strip())
+    return "" if val.lower() == "none" else val
+
+
+def probe_sentence(url, res):
+    """One line saying what a probe found, written for the two ways it goes wrong: a
+    key the provider refuses, and a host that is not answering."""
+    if res["ok"]:
+        return ("it answers, and advertises: %s" % ", ".join(res["ids"][:12]) if res["ids"]
+                else "it answers, but advertises no model list")
+    if res["status"] in (401, 403):
+        return "the provider refused that key (HTTP %d)" % res["status"]
+    return "no answer from %s (%s)" % (url, res["error"])
 
 
 def _config_raw():
@@ -23487,6 +23667,14 @@ def _config_take_effect():
     if err:
         return err
     CONFIG["llm"] = back.get("llm") or CONFIG["llm"]
+    # Resolve each fallback's api_key_env against the environment AND .env, exactly as
+    # load_config does at import: a key `model add` just wrote to .env has to reach
+    # model_catalog in THIS process, or the new endpoint cannot answer until a restart.
+    for _fb in CONFIG["llm"].get("fallbacks", []):
+        if isinstance(_fb, dict) and _fb.get("api_key_env"):
+            _val = _endpoint_key(_fb["api_key_env"])
+            if _val:
+                _fb["api_key"] = _val
     _MODEL_CACHE["at"] = 0.0
     # A key added after import was not in the sweep, so it reached the transcript, the
     # log and the chat unmasked. Re-derive it with the config (audit, 2026-09-29).
@@ -23937,32 +24125,40 @@ def endpoint_report():
     if not cur:
         lines.append("set it with: tinycmdr model endpoint <url>")
         return lines
-    ids = _probe_model_ids(cur)
-    if ids is None:
-        lines.append("it did NOT answer (wrong host or port, or the server is not up yet)")
-        lines.append("fix a typo with: tinycmdr model endpoint <url>")
-    elif ids:
-        lines.append("it answers, and advertises: %s" % ", ".join(ids[:12]))
+    res = probe_endpoint(cur, _primary_api_key())
+    if not res["ok"]:
+        if res["status"] in (401, 403):
+            lines.append("it did NOT answer: the provider refused that key (HTTP %d)"
+                         % res["status"])
+            lines.append("fix the link or the key with: tinycmdr model endpoint <url>")
+        else:
+            lines.append("it did NOT answer: %s" % res["error"])
+            lines.append("fix a typo with: tinycmdr model endpoint <url>")
+    elif res["ids"]:
+        lines.append("it answers, and advertises: %s" % ", ".join(res["ids"][:12]))
     else:
         lines.append("it answers, but advertises no model list")
     return lines
 
 
-def set_primary_endpoint(url, force=False):
+def set_primary_endpoint(url, force=False, key=None, clear_api_key=False):
     """Point llm.base_url at `url`, after asking it for its model list.
 
     Returns (rc, ids, lines): the caller prints the lines, and a door that can host the
     picker offers the ids as a choice. A URL that does not answer is REFUSED unless --force
     - a wrong endpoint writes no error until the first request, which is exactly why this
-    command exists and why the setup wizard probes before it moves on.
+    command exists and why the setup wizard probes before it moves on. The probe carries
+    the primary key (TINYCMDR_LLM_API_KEY / llm.api_key), so a hosted endpoint is checked
+    authenticated rather than reported down.
     """
     url = str(url or "").strip().rstrip("/")
     if not url.lower().startswith(("http://", "https://")):
         return 2, [], ["a base_url starts with http:// or https:// "
                        "(e.g. http://<lan-box>:8081/v1)"]
-    ids = _probe_model_ids(url)
+    res = probe_endpoint(url, _primary_api_key() if key is None else key)
+    ids = list(res["ids"]) if res["ok"] else None
     if ids is None and not force:
-        return 1, [], ["%s did not answer its model list." % url,
+        return 1, [], ["%s did not answer its model list (%s)." % (url, res["error"]),
                        "Check the host and port (the server may not be running yet), or write "
                        "it anyway with --force."]
     raw, err = _config_raw()
@@ -23970,6 +24166,11 @@ def set_primary_endpoint(url, force=False):
         return 1, [], [err]
     prev = str((raw.get("llm") or {}).get("base_url") or "")
     raw.setdefault("llm", {})["base_url"] = url
+    if clear_api_key:
+        # The key this run just put in .env must not ALSO sit in config.json - that copy is
+        # the one the agent can read into a prompt, and it would shadow nothing (env wins)
+        # while still being quotable.
+        raw.setdefault("llm", {}).pop("api_key", None)
     err = _config_write_raw(raw)
     if err:
         return 1, [], [err]
@@ -23986,23 +24187,80 @@ def set_primary_endpoint(url, force=False):
     return 0, list(ids or []), lines
 
 
+def _ask_secret(prompt):
+    """Read a secret at the terminal without echoing it; a plain line on a pipe.
+
+    Kept in one place so the fix doors share it and a test can replace the ASKING
+    without replacing the flow."""
+    import getpass
+    try:
+        if sys.stdin.isatty():
+            return getpass.getpass(prompt).strip()
+    except Exception:                                            # noqa: BLE001
+        pass
+    return (sys.stdin.readline() or "").strip()
+
+
 def _verb_model_endpoint(args):
-    """`model endpoint [<url>]`: read the endpoint, or correct it (then pick a model)."""
+    """`model endpoint [<url>]`: read the endpoint, or correct it - KEY included.
+
+    A cloud primary has TWO things that can be wrong and look like one: the link and the
+    key. A refusal (HTTP 401/403) asks for the key HERE, writes it to .env and re-probes,
+    so a mistyped link or a stale key is repaired from this door instead of by hand-editing
+    config.json - and the report above names the same command, so the way out is always
+    reachable."""
     force = any(a.lstrip("-").lower() in ("force", "f") for a in args)
     urls = [a for a in args if not a.startswith("-")]
     if not urls:
         lines = endpoint_report()
         print("\n".join(lines))
-        return 0 if "it answers" in lines[1] else 1
-    rc, ids, lines = set_primary_endpoint(urls[0], force)
+        ok = "it answers" in lines[1]
+        if not ok and pick_terminal_ready():
+            ans = input("  Set it up now? [Y/n]: ").strip().lower()
+            if ans in ("", "y", "yes"):
+                return _model_setup_wizard()
+        return 0 if ok else 1
+    url = urls[0].strip().rstrip("/")
+    if not url.lower().startswith(("http://", "https://")):
+        print("a base_url starts with http:// or https:// "
+              "(e.g. http://<lan-box>:8081/v1)", file=sys.stderr)
+        return 2
+    key = _primary_api_key()
+    typed_key = False
+    key_tries = 0
+    interactive = sys.stdin.isatty() and _CLI.get("app") is None
+    while True:
+        res = probe_endpoint(url, key)
+        if res["ok"] or res["status"] not in (401, 403) or not interactive:
+            break
+        key_tries += 1
+        if key_tries >= 3:
+            print("the provider still refuses the key - nothing was written",
+                  file=sys.stderr)
+            return 1
+        print(red("  the provider refused that key (HTTP %d)" % res["status"]))
+        ans = _ask_secret("  API key (input hidden, try again): ")
+        if not ans:
+            print("nothing written - the key was empty", file=sys.stderr)
+            return 1
+        key, typed_key = ans, True
+    rc, ids, lines = set_primary_endpoint(url, force, key=key, clear_api_key=typed_key)
     for line in lines:
         print(line, file=sys.stderr if rc else sys.stdout)
-    if rc or not ids:
+    if rc:
         return rc
+    if typed_key:
+        _env_set("TINYCMDR_LLM_API_KEY", key)
+        os.environ["TINYCMDR_LLM_API_KEY"] = key
+        CONFIG["llm"]["api_key"] = key
+        print("key saved to %s as TINYCMDR_LLM_API_KEY" % ENV_FILE.name)
+    if not ids:
+        print("choose one with: tinycmdr model use <name>")
+        return 0
     if pick_terminal_ready():
-        state = ModelPick([(i, "advertised by %s" % urls[0], False) for i in ids],
+        state = ModelPick([(i, "advertised by %s" % url, False) for i in ids],
                           title="Which model does %s serve? (%d advertised)"
-                                % (urls[0], len(ids)),
+                                % (url, len(ids)),
                           scope="ENTER sets llm.model")
         picked = run_model_pick(state)
         if picked:
@@ -24025,8 +24283,110 @@ def _pick_advertised_model(url, ids):
     return run_model_pick(state) or ""
 
 
+def _next_endpoint_env(fbs):
+    """The first free TINYCMDR_ENDPOINT<n>_API_KEY, so a new key never lands on an
+    existing entry's variable."""
+    used = {str(fb.get("api_key_env") or "") for fb in fbs if isinstance(fb, dict)}
+    n = 1
+    while ("TINYCMDR_ENDPOINT%d_API_KEY" % n) in used:
+        n += 1
+    return "TINYCMDR_ENDPOINT%d_API_KEY" % n
+
+
+def _verb_model_add_interactive(opts):
+    """`model add` with no URL: the same cloud-or-local conversation `setup` runs.
+
+    Adds a FALLBACK by default (the endpoint the bot already uses keeps answering), or
+    becomes the primary with --primary. The key is asked here, proved against the
+    provider with a bearer GET /models, and written to .env - never to config.json."""
+    print(bold("Add a model endpoint"))
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    llm = raw.setdefault("llm", {})
+    fbs = llm.setdefault("fallbacks", [])
+    if not isinstance(fbs, list):
+        print("llm.fallbacks in config.json is not a list - fix that first",
+              file=sys.stderr)
+        return 1
+    primary = bool(opts.get("primary"))
+    target = _ask_model_target(default_url=str(llm.get("base_url") or "") if primary else "",
+                               default_model=str(llm.get("model") or "") if primary else "",
+                               default_key=_primary_api_key() if primary else "")
+    if target is None:
+        print("nothing added", file=sys.stderr)
+        return 1
+    url, want, key = target["url"], target["model"], target["key"]
+    if not primary and url.lower() == str(llm.get("base_url") or "").rstrip("/").lower():
+        print("%s IS the primary already - pass --primary to change the primary's URL "
+              "or model" % url, file=sys.stderr)
+        return 2
+    route = want
+    if primary:
+        if not _is_local_url(url) and not key:
+            # The probe above already proved /models answers; a missing key is worth SAYING,
+            # not refusing over (a provider can serve /models anonymously while chat needs
+            # the key, and the reader can add it later). The scripted door, which never
+            # probed, still refuses.
+            print(dim("   note: no key given for %s - if chat needs one, put it in %s as\n"
+                      "   TINYCMDR_LLM_API_KEY with `tinycmdr token set TINYCMDR_LLM_API_KEY`."
+                      % (url, ENV_FILE.name)))
+        llm["base_url"], llm["model"] = url, want
+        if key:
+            _env_set("TINYCMDR_LLM_API_KEY", key)
+            os.environ["TINYCMDR_LLM_API_KEY"] = key
+        line = "primary: %s -> %s%s" % (url, want,
+                                        " (key in .env as TINYCMDR_LLM_API_KEY)" if key else "")
+    else:
+        for fb in fbs:
+            if (isinstance(fb, dict)
+                    and str(fb.get("base_url") or "").rstrip("/").lower() == url.lower()):
+                print("%s is already there (alias %r)" % (url, fb.get("alias") or ""),
+                      file=sys.stderr)
+                return 2
+        alias = input("   Alias, so `/model <alias>` switches to it (blank = none): ").strip()
+        if alias and any(str(fb.get("alias") or "").lower() == alias.lower()
+                         for fb in fbs if isinstance(fb, dict)):
+            print("alias %r is already taken" % alias, file=sys.stderr)
+            return 2
+        entry = {"base_url": url, "model": want}
+        if alias:
+            entry["alias"] = alias
+            route = alias
+        if key:
+            key_env = _next_endpoint_env(fbs)
+            entry["api_key_env"] = key_env
+            _env_set(key_env, key)
+            os.environ[key_env] = key
+        fbs.append(entry)
+        line = "fallback: %s -> %s%s%s" % (
+            url, want, " (alias %s)" % alias if alias else "",
+            " (key in .env as %s)" % entry.get("api_key_env") if key else "")
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    print(line)
+    if not primary and not _is_local_url(url):
+        print("note: %s is off-LAN, so automatic failover only reaches it while "
+              "llm.allow_cloud_fallback is true; `/model %s` routes there explicitly."
+              % (url, route))
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
+
+
 def _verb_model_add(opts, positional):
     if not positional:
+        # No URL: ask, the same way `setup` does. A pipe or a script still gets the usage
+        # text, because a prompt there would read EOF and look like a hang.
+        if sys.stdin.isatty() and _CLI.get("app") is None:
+            return _verb_model_add_interactive(opts)
         print(MODEL_ADD_HELP, file=sys.stderr)
         return 2
     url = positional[0].strip().rstrip("/")
@@ -24050,7 +24410,8 @@ def _verb_model_add(opts, positional):
         print("llm.fallbacks in config.json is not a list - fix that first",
               file=sys.stderr)
         return 1
-    if url.lower() == str(llm.get("base_url") or "").rstrip("/").lower():
+    if url.lower() == str(llm.get("base_url") or "").rstrip("/").lower() \
+            and not opts.get("primary"):
         print("%s IS the primary already" % url, file=sys.stderr)
         return 2
     for fb in fbs:
@@ -24065,7 +24426,7 @@ def _verb_model_add(opts, positional):
                   file=sys.stderr)
             return 2
     want = str(opts.get("model") or "").strip()
-    ids = _probe_model_ids(url, os.environ.get(key_env) if key_env else None)
+    ids = _probe_model_ids(url, _endpoint_key(key_env))
     if ids is None:
         if not opts.get("force"):
             print("the endpoint at %s did not answer its model list, so the model id "
@@ -24091,11 +24452,13 @@ def _verb_model_add(opts, positional):
         print("a fallback entry needs a model id: pass --model <name>", file=sys.stderr)
         return 2
     if opts.get("primary"):
-        if not _is_local_url(url) and not key_env and not opts.get("force"):
-            print("a hosted endpoint as the PRIMARY needs llm.api_key in config.json "
-                  "(the primary has no api_key_env), and config.json is a file the "
-                  "agent can read into a prompt.\nKeep it a fallback with --key-env, "
-                  "or override with --force.", file=sys.stderr)
+        if not _is_local_url(url) and not _primary_api_key() and not opts.get("force"):
+            print("a hosted endpoint as the PRIMARY needs its API key, and the primary's\n"
+                  "key lives in %s as TINYCMDR_LLM_API_KEY (the one file the agent\n"
+                  "cannot read into a prompt). Put it there with:\n"
+                  "  tinycmdr token set TINYCMDR_LLM_API_KEY\n"
+                  "or write the endpoint unverified with --force."
+                  % ENV_FILE.name, file=sys.stderr)
             return 1
         llm["base_url"], llm["model"] = url, want
         line = "primary: %s -> %s" % (url, want)
@@ -24176,9 +24539,26 @@ def _verb_model_remove(positional):
     return 0
 
 
+def _model_setup_wizard():
+    """The model-change wizard, in one call: local/cloud, key, link, probe, model list.
+
+    It targets the PRIMARY - "change my model" is the one the bot answers with - and is
+    reachable three ways, so nobody has to remember a command: `model setup`, the first row
+    of the picker, and `model` itself when the endpoint is not usable. A door that cannot
+    host the prompts (a pipe, --app, chat) gets the usage text instead of a hang."""
+    if not (sys.stdin.isatty() and _CLI.get("app") is None):
+        print("model setup needs a terminal to ask on: run `tinycmdr model setup` in a "
+              "shell.", file=sys.stderr)
+        print(MODEL_ADD_HELP, file=sys.stderr)
+        return 2
+    return _verb_model_add_interactive({"primary": True})
+
+
 def _verb_model(rest):
     if rest and rest[0] in ("add", "remove", "rm"):
         return _verb_model_endpoints(rest)
+    if rest and rest[0] in ("setup", "wizard", "new", "change"):
+        return _model_setup_wizard()
     if rest and rest[0] in ("endpoint", "url", "host"):
         return _verb_model_endpoint(rest[1:])
     if rest and rest[0] in ("use", "set"):
@@ -24216,15 +24596,32 @@ def _verb_model(rest):
         print("could not ask the endpoints for their model list: %s" % e,
               file=sys.stderr)
         return 1
-    # Bare `model`: the picker, exactly as hermes opens one - ↑↓ to move, type to filter,
-    # ENTER to switch, ESC to leave. It needs a terminal nobody else is reading, and a
-    # pipe (a script, a cron job, CI) still gets the plain list it greps.
+    current = CONFIG["llm"]["model"]
+    # Bare `model` does BOTH jobs now: pick among what answers, or get the wizard. When the
+    # endpoint that must answer does not, a one-row list is useless - say what is wrong and
+    # offer the wizard, so a wrong or dead endpoint is never a dead end. (tty only; a pipe
+    # still gets the plain list it greps.)
+    primary_url = CONFIG["llm"]["base_url"].rstrip("/")
+    primary = probe_endpoint(primary_url, _primary_api_key(), timeout=10)
+    if not primary["ok"] and pick_terminal_ready():
+        print(red("  the model endpoint is not usable: %s"
+                  % probe_sentence(primary_url, primary)))
+        ans = input("  Set up a local or cloud model now? [Y/n]: ").strip().lower()
+        if ans in ("", "y", "yes"):
+            return _model_setup_wizard()
+    # The picker, exactly as hermes opens one - ↑↓ to move, type to filter, ENTER to switch,
+    # ESC to leave. Its first row is the way to ADD or CHANGE an endpoint, so the wizard is
+    # one ENTER away instead of a command to remember.
     if entries and pick_terminal_ready():
-        current = CONFIG["llm"]["model"]
-        state = ModelPick(model_pick_rows(entries, current), current=current,
+        rows = model_pick_rows(entries, current)
+        rows.insert(0, (MODEL_PICK_ADD,
+                        "local or cloud, the key, then the models it serves", False))
+        state = ModelPick(rows, current=current,
                           title="Select model (%d available)" % len(entries),
                           scope="ENTER sets the default in config.json - ESC leaves it alone")
         picked = run_model_pick(state)
+        if picked == MODEL_PICK_ADD:
+            return _model_setup_wizard()
         if picked:
             print()
             return _switch_global_model(picked)

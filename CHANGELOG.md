@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Fixed
+- **Pointing tinycmdr at a cloud model is one conversation again, and the key never lands in
+  `config.json`.** Every model-adding door - the three installers, `tinycmdr setup`, and
+  `tinycmdr model add` with no URL - now asks the same things in the same order: is the endpoint
+  local (this machine / the LAN, no key) or cloud (a hosted provider)? then the API key and the
+  endpoint link, then it proves the key with a bearer `GET /v1/models` and offers the models that
+  come back to choose from. Before, the URL was asked first and probed with NO key, so a hosted
+  provider's `401` read as "not reachable", the model list it needed never arrived, and the key -
+  asked last, after that failed probe - was written to `llm.api_key` in `config.json`, the one file
+  the agent reads into a prompt (the installer said so in the same breath as telling you to do it).
+  A `401`/`403` is now named as a key refusal and re-asks the key, not the host. The primary's key
+  lives in `.env` as `TINYCMDR_LLM_API_KEY`; an added fallback's key gets its own
+  `TINYCMDR_ENDPOINT<n>_API_KEY`.
+- **The masked secret prompts take a paste.** The Mattermost bot-token field (and every other
+  secret field) used `Read-Host -AsSecureString` on Windows, which is blank in some hosts and drops
+  a pasted token in others, and `read -s` on unix, which shows nothing at all. All of them now echo
+  one `*` per character, whether the characters come from typing or a paste, with working
+  backspace.
+- **`model endpoint <url>` is a real fix door.** A cloud primary has two faults that look like one -
+  the link and the key - and the door that corrects a mistyped link could not fix a stale key: it
+  probed with the key already in the config, and a `401` was refused with nowhere to type the key,
+  so a wrong key was a dead end short of hand-editing `.env`. It now asks for the key on a
+  `401`/`403`, writes it to `.env` as `TINYCMDR_LLM_API_KEY`, clears any stale copy out of
+  `config.json`, and re-probes; a key that is still refused after three tries writes nothing.
+  `model endpoint` with no URL names the same command when it reports the refusal.
+- **The model wizard is one short command, and the obvious one.** Changing the model meant
+  remembering `model add`/`model endpoint <url>`: bare `model` showed a picker and nothing else,
+  and a dead or refused primary left a one-row list with no way forward. Now `tinycmdr model setup`
+  runs the wizard, the picker's FIRST row is "add or change the endpoint" (one ENTER, no command to
+  remember), and bare `model` offers the wizard whenever the endpoint is not usable. In chat and
+  `--app` those doors say to run it in a shell, where a key can be typed with the echo off.
+
 - **A failure on the app's own thread no longer leaves the terminal sitting in the app's frame.**
   A key handler, the composer's submit, the picker's callback or a render task that raises never
   leaves `Application.run()` - asyncio hands it to the event loop's exception handler - and

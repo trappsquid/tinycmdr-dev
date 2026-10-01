@@ -57,7 +57,7 @@ def drive(dirpath, answer):
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
-    # 6 prompts in order: url, model, api-key, Mattermost?, Telegram?, egress.
+    # 6 prompts in order: local/cloud, url, model, Mattermost?, Telegram?, egress.
     mod.__dict__["_ANSWERS"] = ["", "", "", "", "", answer]
     old_in = sys.stdin
     sys.stdin = FakeTTY("\n".join(mod.__dict__["_ANSWERS"]) + "\n")
@@ -122,8 +122,8 @@ def main():
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
-        answers = ["http://127.0.0.1:9/v1", "http://127.0.0.1:9/v2", "http://127.0.0.1:9/v3",
-                   "", "", "", "", ""]               # model, key, Mattermost, Telegram, egress
+        answers = ["", "http://127.0.0.1:9/v1", "http://127.0.0.1:9/v2",
+                   "http://127.0.0.1:9/v3", "", "", "", ""]  # kind, urls, model, MM, TG
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -141,14 +141,16 @@ def main():
               (written["llm"]["base_url"], out[-400:]))
 
         # an endpoint that DOES answer reports what it advertised, and its ids become the
-        # default model (the numbered list is the picker's shell form)
+        # model to choose from (the numbered list is the picker's shell form)
         d = stage(work / "live", False)
         spec = importlib.util.spec_from_file_location("setup_live", d / "tinycmdr.py")
         mod = importlib.util.module_from_spec(spec)
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
-        mod._probe_model_ids = lambda url, key=None: ["qwen3-14b", "glm-4.6"]
-        answers = ["http://127.0.0.1:8081/v1", "2", "", "", "", "", ""]
+        mod.probe_endpoint = lambda url, key=None, **kw: {
+            "ok": True, "ids": ["qwen3-14b", "glm-4.6"], "status": 200, "error": ""}
+        # kind (local), url, model NUMBER, Mattermost, Telegram, egress
+        answers = ["", "http://127.0.0.1:8081/v1", "2", "", "", ""]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -161,9 +163,57 @@ def main():
         written = json.loads((d / "config.json").read_text(encoding="utf-8"))
         check("\u2713 reachable" in out and "qwen3-14b" in out and "glm-4.6" in out,
               "a reachable endpoint says so, and lists what it advertises", out[:600])
-        check(written["llm"]["model"] == "2",
-              "...and the wizard keeps the typed model id when no picker can run here",
+        check(written["llm"]["model"] == "glm-4.6",
+              "...and a NUMBER in that list resolves to the model it names",
               written["llm"]["model"])
+
+        # ---- a CLOUD endpoint: key first, bearer probe, then the provider's list ----
+        # The bug this exists for: the wizard probed with NO key, so a hosted provider's
+        # 401 read as "not reachable" and the model list never came back. Now the key is
+        # asked BEFORE the link and carried on GET /models.
+        d = stage(work / "cloud", False)
+        spec = importlib.util.spec_from_file_location("setup_cloud", d / "tinycmdr.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        seen = {}
+
+        def fake_probe(url, key=None, **kw):
+            seen["key"] = key
+            if key == "sk-good":
+                return {"ok": True, "ids": ["deepseek-v4-flash", "deepseek-reasoner"],
+                        "status": 200, "error": ""}
+            return {"ok": False, "ids": [], "status": 401, "error": "HTTP 401"}
+
+        mod.probe_endpoint = fake_probe
+        # no real DNS, no real window probe: the wizard's cloud path calls both
+        mod._is_local_url = lambda url: False
+        mod._detect_window = lambda url, headers=None: 0
+        # kind (cloud), key (wrong), url, key again (right), model NUMBER, MM, TG, egress
+        answers = ["cloud", "sk-bad", "https://api.example.com/v1", "sk-good", "1",
+                   "", "", ""]
+        old_in = sys.stdin
+        sys.stdin = FakeTTY("\n".join(answers) + "\n")
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = mod.run_setup()
+        finally:
+            sys.stdin = old_in
+        out = buf.getvalue()
+        written = json.loads((d / "config.json").read_text(encoding="utf-8"))
+        env = (d / ".env").read_text(encoding="utf-8")
+        check("refused that key" in out,
+              "a cloud 401 is named as a KEY refusal, not a dead host", out[:800])
+        check(seen.get("key") == "sk-good",
+              "...and the retry carries the corrected key on the bearer probe", seen)
+        check(written["llm"]["base_url"] == "https://api.example.com/v1"
+              and written["llm"]["model"] == "deepseek-v4-flash",
+              "the cloud endpoint and its chosen model are written", json.dumps(written.get("llm")))
+        check("TINYCMDR_LLM_API_KEY=sk-good" in env,
+              "...and the key goes to .env, never config.json", env[-200:])
+        check("sk-good" not in json.dumps(written) and "sk-bad" not in json.dumps(written),
+              "...the key never reaches config.json", json.dumps(written.get("llm")))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -301,6 +301,37 @@ def main():
           and "python tinycmdr.py --cli" in install and "python tinycmdr.py --once" in install,
           "the no-lane branch is missing or silent")
 
+    print("\n== the model setup is the cloud-or-local conversation, and the key stays out of config ==")
+    # The defect: the URL was asked first and probed with NO key, so a hosted provider's 401
+    # read as "not reachable" and its model list never came back; the key, asked last, went to
+    # config.json's llm.api_key - a file the agent reads into a prompt. And the secret prompts
+    # used Read-Host -AsSecureString, blank in some hosts and dropping a paste in others.
+    check("a paste-capable masked reader exists",
+          "function Read-Secret {" in install and "[Console]::ReadKey($true)" in install,
+          "Read-Secret missing")
+    check("Ask-Text's secret branch no longer calls Read-Host -AsSecureString",
+          "Read-Host $shown -AsSecureString" not in install,
+          "a prompt still masks itself with Read-Host -AsSecureString")
+    check("the Mattermost token field uses it too (the field that would not paste)",
+          "Read-Secret \"Mattermost bot token" in install,
+          "the Mattermost token prompt is still a raw Read-Host")
+    check("the model probe sends the bearer key",
+          'Authorization"] = "Bearer $Key"' in install, "Test-EndpointModels sends no key")
+    check("the model question asks local or cloud first",
+          "function Ask-Choose {" in install and "Which kind of endpoint is it?" in install,
+          "no local/cloud question")
+    check("a wrong key is re-asked, bounded (no infinite loop at EOF)",
+          "$keyTries -ge 3" in install and "$fbKeyTries -ge 3" in install,
+          "the auth retry has no cap")
+    check("the primary's key is NOT written to config.json",
+          "$cfg.llm.api_key = $ModelKey" not in install
+          and '$cfg.llm.PSObject.Properties.Remove("api_key")' in install,
+          "config.json still carries llm.api_key")
+    check("it goes to .env as TINYCMDR_LLM_API_KEY, replacing any older line",
+          '"TINYCMDR_LLM_API_KEY", "TAVILY_API_KEY"' in install
+          and '$managed += "TINYCMDR_LLM_API_KEY"' in install,
+          "the .env writer never carries the primary key")
+
     print("\n== the emitted install is still the repo's own shape ==")
     check("the uninstall branch still comes before the installer preamble",
           install.index("if ($Uninstall) {") < install.index("Head \"tinycmdr installer\""))

@@ -39,12 +39,19 @@ def check(name, cond, detail=""):
         print(f"FAIL {name}: {detail}")
 
 
-def call(fb, argv, stdin=None):
+class FakeTTY(io.StringIO):
+    """A stdin that isatty()s - for the verbs that ask a question only a person answers."""
+
+    def isatty(self):
+        return True
+
+
+def call(fb, argv, stdin=None, tty=False):
     """Run one verb, with both streams captured and stdin faked when asked."""
     out, err = io.StringIO(), io.StringIO()
     saved = sys.stdin
     if stdin is not None:
-        sys.stdin = io.StringIO(stdin)
+        sys.stdin = FakeTTY(stdin) if tty else io.StringIO(stdin)
     try:
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             rc = fb.run_verb(list(argv))
@@ -389,10 +396,18 @@ def main():
         # ---- model endpoint: read it, and CORRECT it ---------------------------
         # Operator, 2026-09-30: the picker "should also allow you to edit your incorrectly
         # entered endpoint if that happened to a user when they set it up". The probe is the
-        # real `_probe_model_ids`, stubbed per URL, so a dead URL is refused and a live one
+        # real `probe_endpoint`, stubbed per URL, so a dead URL is refused and a live one
         # is written - and a wrong endpoint stops being a hand-edit of config.json.
         live = {"http://10.0.0.9:8081/v1": ["qwen3-14b", "glm-4.6"]}
-        fb._probe_model_ids = lambda url, key=None: live.get(str(url).rstrip("/"))
+
+        def _fake_probe(url, key=None):
+            got = live.get(str(url).rstrip("/"))
+            return ({"ok": True, "ids": list(got), "status": 200, "error": ""}
+                    if got is not None
+                    else {"ok": False, "ids": [], "status": None,
+                          "error": "connection refused"})
+
+        fb.probe_endpoint = _fake_probe
 
         rc, out, err = call(fb, ["model", "endpoint"])
         check("model endpoint reads the endpoint and whether it answers",
@@ -438,12 +453,92 @@ def main():
         finally:
             fb._CLI.pop("app", None)
 
+        # ---- the fix door: a 401 on the primary asks for the KEY ------------------
+        # Operator: "the user shouldn't be able to black hole themselves with a mistype."
+        # A cloud primary has two faults that look like one - the link and the key - so the
+        # door that fixes a link must be able to fix the key too, and write it to .env.
+        def _401_probe(url, key=None, timeout=20):
+            if key == "sk-fixed":
+                return {"ok": True, "ids": ["recovered-1"], "status": 200, "error": ""}
+            return {"ok": False, "ids": [], "status": 401, "error": "HTTP 401"}
+
+        fb.probe_endpoint = _401_probe
+        fb._ask_secret = lambda prompt: "sk-fixed"
+        os.environ.pop("TINYCMDR_LLM_API_KEY", None)
+        fb.CONFIG["llm"]["api_key"] = "none"
+        rc, out, err = call(fb, ["model", "endpoint", "https://api.fixed.example/v1"],
+                            stdin="", tty=True)
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        env_text = (workdir / ".env").read_text(encoding="utf-8")
+        check("a 401 at the fix door asks for the key and writes it to .env",
+              rc == 0 and "TINYCMDR_LLM_API_KEY=sk-fixed" in env_text
+              and written["llm"]["base_url"] == "https://api.fixed.example/v1"
+              and "api_key" not in written["llm"],
+              (rc, env_text[-160:], written["llm"]))
+        check("...and the re-probe reaches the provider's model list",
+              "recovered-1" in out, out[:300])
+        # a key the door cannot fix is NOT written over a working one
+        fb.probe_endpoint = lambda url, key=None, timeout=20: {
+            "ok": False, "ids": [], "status": 401, "error": "HTTP 401"}
+        fb._ask_secret = lambda prompt: "sk-still-bad"
+        rc, out, err = call(fb, ["model", "endpoint", "https://api.broken.example/v1"],
+                            stdin="", tty=True)
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("...and a key that is still refused writes nothing",
+              rc == 1 and written["llm"]["base_url"] == "https://api.fixed.example/v1",
+              (rc, written["llm"]["base_url"], err[:200]))
+        os.environ.pop("TINYCMDR_LLM_API_KEY", None)
+        fb.CONFIG["llm"]["api_key"] = ""
+
+        # ---- `model setup` is the wizard, and bare `model` offers it -----------------
+        # Operator: "A user has to type all that just to get the model change wizard to pop
+        # up?" The wizard is reachable three ways now: the verb, the picker's first row, and
+        # bare `model` when the endpoint is not usable.
+        fb.probe_endpoint = lambda url, key=None, timeout=20: {
+            "ok": True, "ids": ["w1", "w2"], "status": 200, "error": ""}
+        rc, out, err = call(fb, ["model", "setup"], stdin="local\nhttps://api.wiz.example/v1\n1\n",
+                            tty=True)
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("`model setup` runs the wizard and sets the primary",
+              rc == 0 and written["llm"]["base_url"] == "https://api.wiz.example/v1"
+              and written["llm"]["model"] == "w1",
+              (rc, written["llm"].get("base_url"), written["llm"].get("model")))
+        rc, out, err = call(fb, ["model", "setup"])
+        check("...and without a terminal it names the shell instead of hanging",
+              rc == 2 and "needs a terminal" in err, (rc, err[:200]))
+
+        # the picker's first row is the same wizard - one ENTER, no command to remember
+        saved_ready, saved_pick = fb.pick_terminal_ready, fb.run_model_pick
+        calls = []
+
+        def _capture_rows(state):
+            calls.append([r[0] for r in state.rows])
+            # The FIRST pick is the model list (choose the add-endpoint row); the wizard's
+            # own model picker is the second, and cancelling it keeps the wizard's default.
+            return fb.MODEL_PICK_ADD if len(calls) == 1 else None
+
+        fb.pick_terminal_ready = lambda: True
+        fb.run_model_pick = _capture_rows
+        fb.CONFIG["llm"]["base_url"] = "http://127.0.0.1:9/v1"   # dead, so catalog is clean
+        rc, out, err = call(fb, ["model"], stdin="local\nhttps://api.pick.example/v1\n1\n",
+                            tty=True)
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("the picker leads with an add/change-endpoint row",
+              (calls[0] if calls else [None])[0] == fb.MODEL_PICK_ADD,
+              calls[:1])
+        check("...and picking it runs the wizard",
+              rc == 0 and written["llm"]["base_url"] == "https://api.pick.example/v1",
+              (rc, written["llm"].get("base_url")))
+        fb.pick_terminal_ready, fb.run_model_pick = saved_ready, saved_pick
+
         # ---- model add / remove: an endpoint has a route of its own -----------
         # (operator, 2026-09-22: "your solution to wire in another endpoint is to rerun
         # the installer?" - it never was one. Hand-editing config.json was the only way
         # in, and `model use` can only pick among endpoints already written.)
         ids = ["deepseek-chat", "deepseek-reasoner"]
-        fb._probe_model_ids = lambda url, key=None: (ids if "api.deepseek" in url else None)
+        fb.probe_endpoint = lambda url, key=None: (
+            {"ok": True, "ids": ids, "status": 200, "error": ""} if "api.deepseek" in url
+            else {"ok": False, "ids": [], "status": None, "error": "connection refused"})
 
         rc, out, err = call(fb, ["model", "add", "https://api.deepseek.com/v1",
                                  "--model", "deepseek-chat", "--alias", "cloud",
@@ -487,8 +582,9 @@ def main():
               (rc, err[:160]))
         rc, out, err = call(fb, ["model", "add", "https://api.deepseek.com/v1/reasoner",
                                  "--primary", "--model", "deepseek-reasoner"])
-        check("a hosted PRIMARY without a key is refused (it has no api_key_env)",
-              rc == 1 and "api_key" in err, (rc, err[:200]))
+        check("a hosted PRIMARY without a key is refused, and names the .env fix",
+              rc == 1 and ("API key" in err or "TINYCMDR_LLM_API_KEY" in err),
+              (rc, err[:200]))
         rc, out, err = call(fb, ["model", "add", "http://the LAN model box:8081/v1", "--primary",
                                  "--model", "main", "--force"])
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))

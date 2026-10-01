@@ -7,11 +7,13 @@
 #   bash install-tinycmdr-macos.sh
 #
 # With no switches it ASKS for what the bot cannot work without - the Mattermost
-# server, your user id, a Telegram lane if you want one, the model endpoint and its
-# key, and "Add another endpoint?" for as many fallbacks as you like - and writes
-# nothing until you say yes.
-# Every answer has a switch; pass them (or -y) and it asks nothing. Tokens are read
-# at hidden prompts, so they never have to enter your shell history.
+# server, your user id, a Telegram lane if you want one, and where the model lives:
+# local (this Mac or your LAN) or cloud (a hosted provider), the key first for cloud.
+# It proves the key with a bearer GET /models and offers the models that come back,
+# and "Add another endpoint?" for as many fallbacks as you like - and writes nothing
+# until you say yes.
+# Every answer has a switch; pass them (or -y) and it asks nothing. Secrets are read
+# at masked prompts, so they never have to enter your shell history.
 #
 # It builds a venv, writes config.json from config.example.json (plus
 # install/fleet-defaults.json when it is present), keeps the bot token out of
@@ -222,28 +224,46 @@ ask_text() {   # ask_text <prompt> [default] -> prints the answer
     if [ -z "$a" ]; then printf '%s' "$dflt"; else printf '%s' "$a"; fi
 }
 
-ask_secret() {   # ask_secret <prompt> -> prints what was typed, hidden, may be empty
-    local a=""
+ask_secret() {   # ask_secret <prompt> -> prints what was typed, masked with *, may be empty
+    # ONE masked reader for every secret (bot tokens, provider keys). `read -s` shows
+    # NOTHING, so the Mattermost token read as a dead field and a paste into it was
+    # invisible; this echoes one * per character instead, whether the characters come
+    # from typing or a paste. Backspace rubs one out; Enter ends the value.
+    local a="" ch=""
     printf '    %s: ' "$1" >&2
-    read -rs a || a=""
-    echo >&2
+    while IFS= read -rsn1 ch; do
+        case "$ch" in
+            ""|$'\n'|$'\r') break ;;
+            $'\177'|$'\b')
+                if [ -n "$a" ]; then a="${a%?}"; printf '\b \b' >&2; fi ;;
+            *) a="${a}${ch}"; printf '*' >&2 ;;
+        esac
+    done
+    printf '\n' >&2
     printf '%s' "$a"
 }
 
-probe_endpoint() {   # probe_endpoint <url> -> "OK <id> <id>..." or "NO <why>"
+probe_endpoint() {   # probe_endpoint <url> [key] -> "OK <id>.." | "AUTH <status>" | "NO <why>"
     # The installer's own reachability check, using the python it already resolved: one
-    # GET /models, 8s, metadata only - never a completion. An endpoint that answers with no
-    # list is still REACHABLE; what this catches is the typo (wrong host, wrong port) and
-    # the server that is not up yet, neither of which the rest of the install can see.
-    "$PY" - "$1" <<'PY'
-import json, sys, urllib.request
+    # GET /models, 8s, metadata only - never a completion. The bearer key rides along when
+    # there is one, so a hosted provider is checked AUTHENTICATED: without it a cloud
+    # endpoint answers 401, the old probe called that "no answer", and the model list it
+    # needed never came back. 401/403 returns as AUTH, so the caller re-asks the KEY and
+    # not the link. An endpoint that answers with no list is still REACHABLE.
+    "$PY" - "$1" "${2:-}" <<'PY'
+import json, sys, urllib.error, urllib.request
 url = sys.argv[1].rstrip("/")
+key = sys.argv[2] if len(sys.argv) > 2 else ""
+hdrs = {"Accept": "application/json", "User-Agent": "tinycmdr-install"}
+if key:
+    hdrs["Authorization"] = "Bearer " + key
 try:
-    req = urllib.request.Request(url + "/models",
-                                 headers={"Accept": "application/json",
-                                          "User-Agent": "tinycmdr-install"})
+    req = urllib.request.Request(url + "/models", headers=hdrs)
     with urllib.request.urlopen(req, timeout=8) as r:
         data = json.loads(r.read().decode("utf-8", "replace"))
+except urllib.error.HTTPError as e:
+    print("AUTH %s" % e.code if e.code in (401, 403) else "NO HTTP %s" % e.code)
+    raise SystemExit(0)
 except Exception as e:
     print("NO %s" % str(e)[:160])
     raise SystemExit(0)
@@ -294,6 +314,26 @@ ask_yes() {   # ask_yes <question> [y|n] -> 0 = yes
         y|Y|yes|YES|Yes) return 0 ;;
         *) return 1 ;;
     esac
+}
+
+ask_choice() {   # ask_choice <prompt> <1|2 default> <label1> <label2> -> prints 1 or 2
+    # The local/cloud question every model endpoint is asked now. Local endpoints need no
+    # key; cloud ones do, and the answer decides whether a key is asked for and carried on
+    # the bearer probe. Prints "1" or "2" so the caller never re-parses prose.
+    local p="$1" dflt="$2" l1="$3" l2="$4" a=""
+    printf '    %s\n' "$p" >&2
+    printf '      1) %s\n      2) %s\n' "$l1" "$l2" >&2
+    while :; do
+        printf '    choice [%s]: ' "$dflt" >&2
+        read -r a || a=""
+        a="$(trim "$a")"
+        case "$a" in
+            "") printf '%s' "$dflt"; return 0 ;;
+            1|l|L|local|LOCAL|Local|lan|LAN) printf '1'; return 0 ;;
+            2|c|C|cloud|CLOUD|Cloud|hosted|remote) printf '2'; return 0 ;;
+            *) warn "answer 1 or 2" ;;
+        esac
+    done
 }
 
 IS_MAC=0
@@ -728,23 +768,50 @@ if [ "$USE_FLEET_MODEL" = 1 ]; then
     [ -n "$MODEL" ] || MODEL="$(jget "$DEFAULTS" model)"
 fi
 if [ "$ASK" = 1 ]; then
-    info "the endpoint is any OpenAI-compatible /v1 root: llama.cpp, Ollama, vLLM,"
-    info "or a hosted provider. Enter takes a llama.cpp on this machine."
-    # Ask, PROBE, and offer what it advertises: this question cannot be checked until the
-    # first request fails, so a typo here used to be invisible for the whole install. Three
-    # tries, then it keeps the URL and names the command that fixes it later - a server that
-    # is not up yet is normal, and the installer must not become a wall.
+    info "local (llama.cpp, Ollama, vLLM on this Mac or your LAN) or cloud"
+    info "(a hosted OpenAI-compatible provider, which needs an API key)."
+    _kind_dflt=1
+    case "${MODEL_BASE_URL:-$DEFAULT_MODEL_BASE}" in
+        *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*) ;;
+        *) _kind_dflt=2 ;;
+    esac
+    _kind="$(ask_choice "Which kind of endpoint is it?" "$_kind_dflt" \
+        "local / my LAN (no key)" "cloud / hosted (needs an API key)")"
+    MODEL_KEY=""
+    if [ "$_kind" = "2" ]; then
+        MODEL_KEY="$(ask_secret "API key for the provider (hidden)")"
+    fi
+    # Ask, PROBE with the key in hand, and offer what it advertises: this question cannot
+    # be checked until the first request fails, so a typo here used to be invisible for the
+    # whole install. Three tries, then it keeps the URL and names the command that fixes it
+    # later - a server that is not up yet is normal, and the installer must not become a wall.
     _url_tries=0
     while :; do
-        MODEL_BASE_URL="$(ask_text "Model endpoint" "${MODEL_BASE_URL:-$DEFAULT_MODEL_BASE}")"
-        _probe="$(probe_endpoint "$MODEL_BASE_URL")"
+        _lbl="Model endpoint"
+        [ "$_kind" = "2" ] && _lbl="Endpoint (e.g. https://api.provider.com/v1)"
+        MODEL_BASE_URL="$(ask_text "$_lbl" "${MODEL_BASE_URL:-$DEFAULT_MODEL_BASE}")"
+        _key_tries=0
+        while :; do
+            _probe="$(probe_endpoint "$MODEL_BASE_URL" "$MODEL_KEY")"
+            if [ "${_probe%% *}" = "AUTH" ] && [ "$_kind" = "2" ]; then
+                _key_tries=$((_key_tries + 1))
+                if [ "$_key_tries" -ge 3 ]; then
+                    warn "the provider still refuses the key - keeping $MODEL_BASE_URL unverified"
+                    break
+                fi
+                warn "the provider refused that key (HTTP ${_probe#AUTH })"
+                MODEL_KEY="$(ask_secret "API key (hidden, try again)")"
+                continue
+            fi
+            break
+        done
         if [ "${_probe%% *}" = "OK" ]; then
             _ids="$(printf '%s' "${_probe#OK}")"
             _ids="$(trim "$_ids")"
             info "reachable${_ids:+ - it advertises:}${_ids:+$_ids}"
             break
         fi
-        warn "no answer from $MODEL_BASE_URL: ${_probe#NO }"
+        warn "no answer from $MODEL_BASE_URL: ${_probe#* }"
         _url_tries=$((_url_tries + 1))
         if [ "$_url_tries" -ge 3 ]; then
             info "keeping it anyway - fix it later with: tinycmdr model endpoint <url>"
@@ -754,14 +821,8 @@ if [ "$ASK" = 1 ]; then
         info "check the host and port (the server may not be running yet)."
     done
     MODEL="$(ask_model_id "$_ids" "${MODEL:-$DEFAULT_MODEL}")"
-    # A hosted endpoint wants a key. It has no env var of its own (only fallback
-    # entries have api_key_env), so it lives in llm.api_key - the same home the
-    # Windows installer gives it, and the one the build looks at for a hosted
-    # PRIMARY. Loopback and untrusted names are never asked about.
-    case "$MODEL_BASE_URL" in
-        *//127.0.0.1:*|*//localhost:*|*"::1"*) ;;
-        *) MODEL_KEY="$(ask_secret "API key for it (blank if it needs none)")" ;;
-    esac
+    # The key is written to .env below as TINYCMDR_LLM_API_KEY, NOT to config.json: the
+    # primary's key used to land in llm.api_key, a file the agent reads into a prompt.
 fi
 
 # ---- more endpoints: llm.fallbacks, tried in order when the primary fails ----
@@ -774,16 +835,45 @@ if [ "$ASK" = 1 ]; then
     while :; do
         _fb_n=$((_fb_n + 1))
         if ! ask_yes "Add another endpoint?" n; then break; fi
-        _fb_url="$(ask_text "Endpoint #$_fb_n (OpenAI-compatible /v1 root)" "")"
+        # The same conversation as the primary: local or cloud, the key (cloud), then the
+        # link - probed WITH the key - then the model from what it advertises.
+        _fb_kind="$(ask_choice "Endpoint #$_fb_n: local or cloud?" 1 \
+            "local / my LAN (no key)" "cloud / hosted (needs an API key)")"
+        _fb_key=""
+        [ "$_fb_kind" = "2" ] && _fb_key="$(ask_secret "API key for it (hidden)")"
+        _fb_lbl="Endpoint #$_fb_n (OpenAI-compatible /v1 root)"
+        [ "$_fb_kind" = "2" ] && _fb_lbl="Endpoint #$_fb_n (e.g. https://api.provider.com/v1)"
+        _fb_url="$(ask_text "$_fb_lbl" "")"
         if [ -z "$_fb_url" ]; then
             warn "no address given - nothing added"
             _fb_n=$((_fb_n - 1))
             continue
         fi
-        _fb_model="$(ask_text "Model id for it" "")"
+        _fb_key_tries=0
+        while :; do
+            _fb_probe="$(probe_endpoint "$_fb_url" "$_fb_key")"
+            if [ "${_fb_probe%% *}" = "AUTH" ] && [ "$_fb_kind" = "2" ]; then
+                _fb_key_tries=$((_fb_key_tries + 1))
+                if [ "$_fb_key_tries" -ge 3 ]; then
+                    warn "the provider still refuses the key - adding it with an unchecked model"
+                    break
+                fi
+                warn "the provider refused that key (HTTP ${_fb_probe#AUTH })"
+                _fb_key="$(ask_secret "API key (hidden, try again)")"
+                continue
+            fi
+            break
+        done
+        _fb_ids=""
+        if [ "${_fb_probe%% *}" = "OK" ]; then
+            _fb_ids="$(trim "$(printf '%s' "${_fb_probe#OK}")")"
+            info "reachable${_fb_ids:+ - it advertises:}${_fb_ids:+$_fb_ids}"
+        else
+            warn "no answer from $_fb_url: ${_fb_probe#* } - the model id is unchecked"
+        fi
+        _fb_model="$(ask_model_id "$_fb_ids" "")"
         _fb_alias="$(ask_text "Alias, so /model <alias> switches to it (blank = none)" "")"
         _fb_name="TINYCMDR_ENDPOINT${_fb_n}_API_KEY"
-        _fb_key="$(ask_secret "API key for it (blank if it needs none)")"
         FALLBACK_SPECS="${FALLBACK_SPECS}${_fb_url}|${_fb_model}|${_fb_alias}|${_fb_name}
 "
         if [ -n "$_fb_key" ]; then
@@ -820,7 +910,7 @@ if [ "$ASK" = 1 ]; then
     fi
     info "model        : $MODEL at $MODEL_BASE_URL"
     if [ -n "$MODEL_KEY" ]; then
-        info "model key    : given (config.json, llm.api_key)"
+        info "model key    : given (.env, TINYCMDR_LLM_API_KEY)"
     fi
     _fb_count=0
     for _s in $FALLBACK_SPECS; do _fb_count=$((_fb_count + 1)); done
@@ -1088,12 +1178,11 @@ if os.environ.get("MODEL_BASE_GIVEN") or fresh:
     llm["base_url"] = os.environ["MODEL_BASE_URL"]
 if os.environ.get("MODEL_GIVEN") or fresh:
     llm["model"] = os.environ["MODEL"]
-_key = os.environ.get("MODEL_KEY", "")
-if _key:
-    # Only when one was given: an update with no switch keeps whatever this host
-    # already has (a model key is per host, and it is the only way to reach a
-    # hosted endpoint whose key config.json has to carry).
-    llm["api_key"] = _key
+if os.environ.get("MODEL_KEY"):
+    # The PRIMARY's key lives in .env as TINYCMDR_LLM_API_KEY (env_map resolves it into
+    # llm.api_key), never here: config.json is a file the agent reads into a prompt.
+    # Migrate any old copy away.
+    llm.pop("api_key", None)
 # Extra endpoints, only when this run was told about them: a scripted update keeps
 # the host's own llm.fallbacks. Each entry's key lives in .env, named by the entry's
 # api_key_env - the shape the build resolves for a fallback (never config.json).
@@ -1149,13 +1238,18 @@ SHARED_KEYS='^(TINYCMDR_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
 # --secrets-file dropped a working host's TAVILY/ANYSEARCH keys - the same loss the
 # config writer had, one file over. A secrets file still supplies them when the host
 # has none, and wins when it does (it is the fleet's canonical copy).
-MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN)='
+MANAGED_ALT='TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN'
 # The extra-endpoint keys are managed only when THIS run wrote them: on a scripted
 # update the host's own lines must be carried over, or an answered install would
-# drop the keys its own config.json still points at.
+# drop the keys its own config.json still points at. The primary's key is managed the
+# same way - a redo with no key keeps the host's own TINYCMDR_LLM_API_KEY line.
 if [ -n "$FB_ENV_LINES" ]; then
-    MANAGED_KEYS='^(TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_ENDPOINT[0-9]+_API_KEY)='
+    MANAGED_ALT="$MANAGED_ALT|TINYCMDR_ENDPOINT[0-9]+_API_KEY"
 fi
+if [ -n "$MODEL_KEY" ]; then
+    MANAGED_ALT="$MANAGED_ALT|TINYCMDR_LLM_API_KEY"
+fi
+MANAGED_KEYS="^($MANAGED_ALT)="
 # What the secrets file will actually supply, so nothing is written twice: a duplicate
 # line for a key the install already wrote is not harmless - the build keeps the FIRST
 # occurrence, so whichever copy landed first is the one the bot uses.
@@ -1185,6 +1279,11 @@ SKIPPED_KEYS="$SECRET_SKIPPED"
     printf 'TINYCMDR_MM_TOKEN=%s\n' "$TOKEN"
     if [ -n "$TG_TOKEN" ]; then
         printf 'TINYCMDR_TG_TOKEN=%s\n' "$TG_TOKEN"
+    fi
+    # The primary's key: only when THIS run resolved one (a switch or an answer). An
+    # empty value means "leave this host's own", and KEEP_ENV carries that line over.
+    if [ -n "$MODEL_KEY" ]; then
+        printf 'TINYCMDR_LLM_API_KEY=%s\n' "$MODEL_KEY"
     fi
     if [ -n "$FB_ENV_LINES" ]; then
         printf '%s' "$FB_ENV_LINES"
@@ -1261,7 +1360,7 @@ fi
 # check, not a gate (measured on a live install, 2026-09-27).
 if [ -x "$VPY" ] && [ -f "$INSTALL_DIR/config.json" ]; then
     say "model endpoint"
-    PROBE_OUT="$("$VPY" - "$INSTALL_DIR/config.json" <<'PROBEPY'
+    PROBE_OUT="$(TINYCMDR_LLM_API_KEY="$MODEL_KEY" "$VPY" - "$INSTALL_DIR/config.json" <<'PROBEPY'
 import json, os, re, sys
 
 try:
@@ -1275,7 +1374,9 @@ base = str(llm.get("base_url") or "").rstrip("/")
 if not base:
     raise SystemExit
 host = base.split("://", 1)[-1].split("/")[0].split("@")[-1].split(":")[0]
-key = str(llm.get("api_key") or "") or os.environ.get(str(llm.get("api_key_env") or ""), "")
+key = (str(llm.get("api_key") or "")
+       or os.environ.get(str(llm.get("api_key_env") or ""), "")
+       or os.environ.get("TINYCMDR_LLM_API_KEY", ""))
 hdr = {"Authorization": "Bearer %s" % key} if key else {}
 root = base[:-3] if base.endswith("/v1") else base
 window, err = 0, ""

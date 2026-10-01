@@ -100,6 +100,37 @@ $Source = Split-Path -Parent $PSScriptRoot       # package root (one level above
 # double-click ended up asking nothing.
 $Ask = (-not $NonInteractive) -and ((-not [Console]::IsInputRedirected) -or $env:TINYCMDR_ASK)
 
+function Read-Secret {
+    # A masked reader that ACCEPTS PASTE: one * per character, backspace works. The bot
+    # token field used Read-Host -AsSecureString, which is blank in some hosts and DROPS a
+    # pasted token in others - the Mattermost field would not take a paste at all. ReadKey()
+    # sees a paste as a burst of keypresses, so it is masked exactly like typing.
+    param([string] $Prompt)
+    if ([Console]::IsInputRedirected) {
+        $sec = Read-Host $Prompt -AsSecureString
+        return [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                   [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+    }
+    Write-Host -NoNewline $Prompt
+    $chars = New-Object System.Collections.Generic.List[char]
+    while ($true) {
+        $k = [Console]::ReadKey($true)
+        if ($k.Key -eq [ConsoleKey]::Enter) { Write-Host ""; return (-join $chars) }
+        if ($k.Key -eq [ConsoleKey]::Escape) { Write-Host ""; return "" }
+        if ($k.Key -eq [ConsoleKey]::Backspace) {
+            if ($chars.Count -gt 0) {
+                $chars.RemoveAt($chars.Count - 1)
+                Write-Host -NoNewline "`b `b"
+            }
+            continue
+        }
+        if ($k.KeyChar -and [int][char]$k.KeyChar -ge 32) {
+            [void]$chars.Add($k.KeyChar)
+            Write-Host -NoNewline "*"
+        }
+    }
+}
+
 function Ask-Text {
     param([string] $Prompt, [string] $Default = "", [switch] $Secret, [switch] $AllowBlank)
     # ${Prompt} - a bare "$Prompt:" reads as a scoped variable to PowerShell
@@ -107,9 +138,7 @@ function Ask-Text {
     if ($Secret -and -not $Default) { $shown = "${Prompt}: " }
     while ($true) {
         if ($Secret) {
-            $sec = Read-Host $shown -AsSecureString
-            $val = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-                       [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+            $val = Read-Secret $shown
         } else {
             $val = Read-Host $shown
         }
@@ -153,6 +182,72 @@ function Ask-Yes {
         if ($a -in @("n", "no")) { return $false }
         Write-Host "  Please answer y or n."
     }
+}
+
+function Ask-Choose {
+    # The local/cloud question every model endpoint is asked now. Local needs no key;
+    # cloud does, and the answer decides whether a key is asked for and carried on the
+    # bearer probe. Returns "1" or "2" so the caller never re-parses prose.
+    param([string] $Prompt, [string] $Default = "1", [string] $Label1, [string] $Label2)
+    Write-Host "    $Prompt"
+    Write-Host "      1) $Label1"
+    Write-Host "      2) $Label2"
+    while ($true) {
+        $a = (Read-Host "    choice [$Default]").Trim().ToLower()
+        if (-not $a) { return $Default }
+        if ($a -in @("1", "l", "local", "lan")) { return "1" }
+        if ($a -in @("2", "c", "cloud", "hosted", "remote")) { return "2" }
+        Write-Host "  Please answer 1 or 2."
+    }
+}
+
+function Test-EndpointModels {
+    # One GET /models with the bearer key when there is one, metadata only. Returns
+    # @{ Ok; Ids; Status; Error }. A 401/403 is Ok=$false WITH Status set, so the caller
+    # re-asks the KEY rather than the link - the old question never sent a key at all,
+    # so a hosted provider's refusal read as "down" and its model list never arrived.
+    param([string] $Url, [string] $Key = "")
+    $headers = @{ "Accept" = "application/json"; "User-Agent" = "tinycmdr-install" }
+    if ($Key) { $headers["Authorization"] = "Bearer $Key" }
+    try {
+        $resp = Invoke-WebRequest -Uri ($Url.TrimEnd("/") + "/models") -Headers $headers `
+                                  -TimeoutSec 8 -UseBasicParsing
+    } catch {
+        $code = 0
+        try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+        $msg = "$($_.Exception.Message)".Replace("`r", " ").Replace("`n", " ")
+        if ($msg.Length -gt 160) { $msg = $msg.Substring(0, 160) }
+        return @{ Ok = $false; Ids = @(); Status = $code; Error = $msg }
+    }
+    $ids = @()
+    try {
+        $data = $resp.Content | ConvertFrom-Json
+        foreach ($m in @($data.data) + @($data.models)) {
+            if ($null -eq $m) { continue }
+            if ($m -is [string]) { $ids += $m }
+            elseif ($m.id) { $ids += "$($m.id)" }
+            elseif ($m.name) { $ids += "$($m.name)" }
+        }
+    } catch { }
+    return @{ Ok = $true; Ids = @($ids); Status = 200; Error = "" }
+}
+
+function Ask-ModelId {
+    # The list the endpoint just advertised, offered as numbers; the plain prompt when
+    # there is nothing to offer.
+    param([string[]] $Ids, [string] $Default = "")
+    if (-not $Ids -or $Ids.Count -eq 0) {
+        $a = (Ask-Text "Model id" $Default -AllowBlank)
+        if ($a) { return $a }
+        return $Default
+    }
+    Write-Host "    models it advertises:"
+    for ($i = 0; $i -lt $Ids.Count; $i++) { Write-Host ("      {0,2}) {1}" -f ($i + 1), $Ids[$i]) }
+    $a = (Ask-Text "Model id (number or name)" $Default -AllowBlank)
+    if (-not $a) { return $Ids[0] }
+    $n = 0
+    if ([int]::TryParse($a, [ref] $n) -and $n -ge 1 -and $n -le $Ids.Count) { return $Ids[$n - 1] }
+    return $a
 }
 
 
@@ -824,32 +919,103 @@ if ($Ask) {
     }
 
     Write-Host ""
-    Write-Host "Which model should it use? Any OpenAI-compatible endpoint: llama.cpp, Ollama, vLLM,"
-    Write-Host "or a hosted provider."
+    Write-Host "Where does the model live? Any OpenAI-compatible endpoint: llama.cpp, Ollama,"
+    Write-Host "vLLM (local, no key) or a hosted provider (cloud, needs an API key)."
     $mb = if ($ModelBaseUrl) { $ModelBaseUrl } else { "http://127.0.0.1:8081/v1" }
-    $ModelBaseUrl = Ask-Text "Model endpoint" $mb
-    $Model = Ask-Text "Model id" $(if ($Model -and $Model -ne "main") { $Model } else { "main" })
-
-    $isLocal = $ModelBaseUrl -match "127\.0\.0\.1|localhost|10\.|192\.168\.|::1"
+    $kindDefault = if ($mb -match "127\.0\.0\.1|localhost|10\.|192\.168\.|::1") { "1" } else { "2" }
+    $kind = Ask-Choose "Which kind of endpoint is it?" $kindDefault `
+        "local / my LAN (no key)" "cloud / hosted (needs an API key)"
     $ModelKey = ""
-    if (-not $isLocal) {
-        Write-Host ""
-        Write-Host "  That endpoint is on the network, so it probably wants an API key."
-        $ModelKey = Ask-Text "API key for it (blank if it needs none)" -Secret
+    if ($kind -eq "2") {
+        $ModelKey = Ask-Text "API key for the provider (input hidden)" -Secret
     }
+    # Ask, PROBE with the key in hand, and offer what it advertises. A typo here writes no
+    # error until the first request, so it is checked with the operator watching. Three
+    # tries, then it keeps the URL and names the command that fixes it later.
+    $ids = @()
+    $urlTries = 0
+    while ($true) {
+        $lbl = if ($kind -eq "2") { "Endpoint (e.g. https://api.provider.com/v1)" } else { "Model endpoint" }
+        $ModelBaseUrl = Ask-Text $lbl $mb
+        $keyTries = 0
+        while ($true) {
+            $probe = Test-EndpointModels $ModelBaseUrl $ModelKey
+            if (-not $probe.Ok -and ($probe.Status -in @(401, 403)) -and $kind -eq "2") {
+                $keyTries++
+                if ($keyTries -ge 3) {
+                    Write-Host "  the provider still refuses the key - keeping $ModelBaseUrl unverified"
+                    break
+                }
+                Write-Host "  the provider refused that key (HTTP $($probe.Status))"
+                $ModelKey = Ask-Text "API key (input hidden, try again)" -Secret
+                continue
+            }
+            break
+        }
+        if ($probe.Ok) {
+            $ids = @($probe.Ids)
+            if ($ids.Count) {
+                Write-Host ("  OK reachable - it advertises: " + ($ids -join ", "))
+            } else {
+                Write-Host "  OK reachable (no model list advertised)"
+            }
+            break
+        }
+        Write-Host "  no answer from $ModelBaseUrl`: $($probe.Error)"
+        $urlTries++
+        if ($urlTries -ge 3) {
+            Write-Host "  keeping it anyway - fix it later with: tinycmdr model endpoint <url>"
+            $ids = @()
+            break
+        }
+        Write-Host "  check the host and port (the server may not be running yet)."
+    }
+    $modelDefault = if ($Model -and $Model -ne "main") { $Model } elseif ($ids.Count) { $ids[0] } else { "main" }
+    $Model = Ask-ModelId $ids $modelDefault
+    # The answer is THIS run's choice, so it must be written even over an existing
+    # config.json (an empty "was it given" marker means "keep what the host has").
+    $ModelBaseUrlGiven = $true
+    $ModelGiven = $true
 
-    # Extra endpoints: llm.fallbacks, tried in order when the primary fails. Each one is
-    # base_url + model (+ an optional /model alias), and its key goes to .env under a
-    # generated name the entry's api_key_env points at - the shape the build resolves for
-    # a fallback endpoint, and it keeps the key out of config.json.
+    # Extra endpoints: llm.fallbacks, tried in order when the primary fails. Each one gets
+    # the same conversation as the primary: local or cloud, the key (cloud), then the link
+    # - probed WITH the key - then the model from what it advertises. Its key goes to .env
+    # under a generated name the entry's api_key_env points at, never into config.json.
     while ($true) {
         if (-not (Ask-Yes "Add another endpoint?" $false)) { break }
         $n = $script:Fallbacks.Count + 1
-        $fbUrl = Ask-Text "Endpoint #$n (OpenAI-compatible /v1 root)"
+        $fbKind = Ask-Choose "Endpoint #$n: local or cloud?" "1" `
+            "local / my LAN (no key)" "cloud / hosted (needs an API key)"
+        $fbKey = ""
+        if ($fbKind -eq "2") { $fbKey = Ask-Text "API key for it (input hidden)" -Secret }
+        $fbLbl = if ($fbKind -eq "2") { "Endpoint #$n (e.g. https://api.provider.com/v1)" } `
+                 else { "Endpoint #$n (OpenAI-compatible /v1 root)" }
+        $fbUrl = Ask-Text $fbLbl
         if (-not $fbUrl) { Write-Host "  (no address given - nothing added)"; continue }
-        $fbModel = Ask-Text "Model id for it" -AllowBlank
+        $fbKeyTries = 0
+        while ($true) {
+            $fbProbe = Test-EndpointModels $fbUrl $fbKey
+            if (-not $fbProbe.Ok -and ($fbProbe.Status -in @(401, 403)) -and $fbKind -eq "2") {
+                $fbKeyTries++
+                if ($fbKeyTries -ge 3) {
+                    Write-Host "  the provider still refuses the key - adding it with an unchecked model"
+                    break
+                }
+                Write-Host "  the provider refused that key (HTTP $($fbProbe.Status))"
+                $fbKey = Ask-Text "API key (input hidden, try again)" -Secret
+                continue
+            }
+            break
+        }
+        $fbIds = @()
+        if ($fbProbe.Ok) {
+            $fbIds = @($fbProbe.Ids)
+            if ($fbIds.Count) { Write-Host ("  OK reachable - it advertises: " + ($fbIds -join ", ")) }
+        } else {
+            Write-Host "  no answer from $fbUrl`: $($fbProbe.Error) - the model id is unchecked"
+        }
+        $fbModel = Ask-ModelId $fbIds ""
         $fbAlias = Ask-Text "Alias, so /model <alias> switches to it (blank = none)" -AllowBlank
-        $fbKey   = Ask-Text "API key for it (blank if it needs none)" -Secret
         $script:Fallbacks += [pscustomobject]@{ Url = $fbUrl; Model = $fbModel
                                                 Alias = $fbAlias; Key = $fbKey
                                                 Env = "TINYCMDR_ENDPOINT${n}_API_KEY" }
@@ -884,7 +1050,7 @@ if ($Ask) {
     if ($WantCli) { $ways += "sessions you start by hand" }
     Write-Host ("  how you talk : {0}" -f ($ways -join " and "))
     Write-Host ("  model        : {0} at {1}" -f $Model, $ModelBaseUrl)
-    if ($ModelKey) { Write-Host "  model key    : given (stored in config.json's llm.api_key)" }
+    if ($ModelKey) { Write-Host "  model key    : given (.env, TINYCMDR_LLM_API_KEY)" }
     if ($SearchEgress -eq "true") {
         Write-Host "  web search   : on, and may leave this machine"
     } else {
@@ -932,9 +1098,7 @@ if ($MattermostToken) {
     # a scripted -NonInteractive run hung here forever waiting for a token nobody was
     # there to type (measured 2026-09-24: a CI-style install stalled at this line).
     if (-not $MattermostToken -and $Ask) {
-        $sec = Read-Host "Mattermost bot token (blank = set it in .env later)" -AsSecureString
-        $MattermostToken = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
-            [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec))
+        $MattermostToken = Read-Secret "Mattermost bot token (blank = set it in .env later): "
         if ($MattermostToken) { $tokenSource = "prompt" }
     }
 }
@@ -1111,10 +1275,10 @@ if ($ModelBaseUrlGiven) {
 }
 if ($ModelGiven -or $cfgFresh) { $cfg.llm.model = $Model }
 if ($ModelKey) {
-    # The primary's key is not env-resolved (only fallback entries have api_key_env), so a
-    # hosted endpoint that needs a key carries it here. A key in .env plus a fallback entry is
-    # the tidier shape - see README, "Model endpoints".
-    $cfg.llm.api_key = $ModelKey
+    # The PRIMARY's key goes to .env as TINYCMDR_LLM_API_KEY (env_map resolves it into
+    # llm.api_key), never config.json: that is a file the agent reads into a prompt.
+    # Remove any copy an older install left here.
+    $cfg.llm.PSObject.Properties.Remove("api_key")
 }
 # Extra endpoints: llm.fallbacks, in order, tried when the primary fails. The list is
 # injected into the JSON below rather than serialized here, because ConvertTo-Json
@@ -1221,8 +1385,12 @@ if (Test-Path $envPath) {
             # Only the keys THIS INSTALL owns are withheld. The search keys were in
             # this list too, so a re-run without -SecretsFile dropped a working
             # host's TAVILY/ANYSEARCH keys - the same loss the config writer had,
-            # one file over (measured 2026-09-24 on the macOS bed).
-            if ($v -and @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN") -notcontains $k) {
+            # one file over (measured 2026-09-24 on the macOS bed). The primary's
+            # key is withheld only when THIS run resolved one; otherwise the host's
+            # own TINYCMDR_LLM_API_KEY line is carried over like any other.
+            $managed = @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN")
+            if ($ModelKey) { $managed += "TINYCMDR_LLM_API_KEY" }
+            if ($v -and ($managed -notcontains $k)) {
                 $ownKeys[$k] = $v
             }
         }
@@ -1232,10 +1400,11 @@ Copy-Item (Join-Path $InstallDir ".env.example") $envPath -Force
 $envText = Get-Content $envPath -Raw
 $written = @()
 $refused = @()
-foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
+foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_LLM_API_KEY", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
     $val = ""
     if ($key -eq "TINYCMDR_MM_TOKEN") { $val = $MattermostToken }
     elseif ($key -eq "TINYCMDR_TG_TOKEN") { $val = $TelegramToken }
+    elseif ($key -eq "TINYCMDR_LLM_API_KEY") { $val = $ModelKey }
     else { $val = $secrets[$key] }
     if (-not $val) { continue }
     if ($val -match '^\s*<.*>\s*$' -or $val -match '(?i)redacted') {
