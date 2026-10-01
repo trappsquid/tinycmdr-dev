@@ -375,7 +375,7 @@ _tg_slept = []
 _returned, _raised = _run_main(
     ["tinycmdr.py", "--mattermost"],
     run_bot=_main_lane, validate_startup_config=lambda: "",
-    acquire_single_instance_lock=lambda: True, both_doors_note=lambda: "",
+    acquire_single_instance_lock=lambda: True, lanes_to_serve=lambda *a, **k: ["mattermost"],
     _mm_token_configured=lambda: True, _lane_wait=_main_slept.append)
 _returned_tg, _raised_tg = _run_main(
     ["tinycmdr.py", "--telegram"],

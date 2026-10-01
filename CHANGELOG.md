@@ -38,6 +38,13 @@ Fixed
   runs the wizard, the picker's FIRST row is "add or change the endpoint" (one ENTER, no command to
   remember), and bare `model` offers the wizard whenever the endpoint is not usable. In chat and
   `--app` those doors say to run it in a shell, where a key can be typed with the echo off.
+- **A Telegram token no longer leaves the bot serving nothing.** With BOTH a Mattermost and a
+  Telegram token configured, a bare start used to REFUSE ("neither lane is primary, so NO lane was
+  started") - and the installed service runs no flag, so adding a Telegram token to a working
+  Mattermost box either took the whole bot down or left Telegram permanently dark. One process now
+  serves both lanes: Mattermost on the main thread, Telegram on a daemon one. `--telegram` /
+  `--mattermost` still force a single lane, and the installers say so instead of telling you to
+  start a second process.
 
 - **A failure on the app's own thread no longer leaves the terminal sitting in the app's frame.**
   A key handler, the composer's submit, the picker's callback or a render task that raises never

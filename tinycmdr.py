@@ -23257,8 +23257,8 @@ screen, live status bar, in-pane scrolling); it falls back to inline cards when 
 terminal cannot host it. Both flags need no port, server or browser.
 
 A chat lane is chosen by the token that is set; when BOTH a Mattermost and a
-Telegram token are configured, neither lane starts on its own - pass --telegram or
---mattermost (neither lane is primary).
+Telegram token are configured, one process serves BOTH lanes. --telegram and
+--mattermost force a single lane when you want only one.
 
 With no verb this file is the agent itself, exactly as it has always been.
 """
@@ -25117,21 +25117,26 @@ def tg_token_only():
     return bool(_tg_token_configured()) and not _mm_token_configured()
 
 
-def both_doors_note():
-    """The refusal when BOTH doors are configured, or "" when they are not.
+def lanes_to_serve(argv=None):
+    """Which chat lanes THIS run serves: [] (CLI-only), one, or BOTH.
 
-    Mattermost used to win silently while the Telegram lane stayed down. Neither
-    lane is primary now: with both configured, a plain start serves NEITHER and
-    says so - the operator picks with `--telegram` or `--mattermost`, so no lane
-    is ever started (or left down) by accident. A function rather than an inline
-    branch so the suite can grade it without driving main() at a real Mattermost.
+    A flag forces one lane; otherwise every configured token gets its lane. Two tokens
+    used to be a refusal ("neither lane is primary"), and the service runs no flag - so a
+    box that added a Telegram token to a working Mattermost install served NOTHING, and
+    the lane that "does not work" had simply never been started. One process can poll
+    both, so it does; `--telegram` / `--mattermost` still force a single lane.
     """
-    if _tg_token_configured() and _mm_token_configured():
-        return ("both a Telegram and a Mattermost token are set, and neither lane "
-                "is primary, so NO lane was started. Pick one: `tinycmdr.py "
-                "--telegram` or `tinycmdr.py --mattermost`, or keep a single "
-                "token.")
-    return ""
+    args = list(sys.argv if argv is None else argv)
+    if "--telegram" in args:
+        return ["telegram"]
+    if "--mattermost" in args:
+        return ["mattermost"]
+    lanes = []
+    if _mm_token_configured():
+        lanes.append("mattermost")
+    if _tg_token_configured():
+        lanes.append("telegram")
+    return lanes
 
 
 def _root_warning():
@@ -25224,23 +25229,12 @@ def main():
             except Exception:
                 pass
             sys.exit(3)
-        _both = both_doors_note()
-        _want_mm = "--mattermost" in sys.argv
-        if _want_mm and not _mm_token_configured():
+        lanes = lanes_to_serve()
+        if "--mattermost" in sys.argv and not _mm_token_configured():
             print("--mattermost was given, but no Mattermost token is configured.",
                   file=sys.stderr)
             sys.exit(2)
-        if _both and not _want_mm:
-            # Neither lane is primary: with both configured there is nothing to guess.
-            log.critical("%s", _both)
-            print("\n*** tinycmdr cannot start ***\n%s\n" % _both, file=sys.stderr)
-            sys.exit(2)
-        if _want_mm or _mm_token_configured():
-            lane_with_retry(run_bot, "mattermost", _lane_report_mattermost)
-        elif _tg_token_configured():
-            # Telegram-only: this process IS the Telegram lane.
-            lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
-        else:
+        if not lanes:
             # A CLI-only install: no lane to serve and nothing remote to answer.
             # Not an abort - the install is complete, and --cli / --once are its doors.
             log.info("no chat lane configured: CLI-only install, nothing to serve")
@@ -25251,6 +25245,23 @@ def main():
                   "  tinycmdr --once \"<task>\"  (one task, then exit)\n"
                   "Add a chat account whenever you want one: re-run the installer "
                   "with a Mattermost or Telegram token.")
+        elif lanes == ["telegram"]:
+            # Telegram-only: this process IS the Telegram lane.
+            lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
+        elif lanes == ["mattermost"]:
+            lane_with_retry(run_bot, "mattermost", _lane_report_mattermost)
+        else:
+            # BOTH doors: serve them in ONE process (Mattermost on this thread, Telegram
+            # on a daemon one), so adding a Telegram token to a working Mattermost install
+            # does not leave the new lane dark.
+            log.info("both doors configured: serving Mattermost and Telegram")
+            print("serving Mattermost and Telegram in this one process.")
+            _tg_thread = threading.Thread(
+                target=lane_with_retry,
+                args=(run_telegram, "telegram", _lane_report_telegram),
+                daemon=True, name="telegram-lane")
+            _tg_thread.start()
+            lane_with_retry(run_bot, "mattermost", _lane_report_mattermost)
 
 
 if __name__ == "__main__":

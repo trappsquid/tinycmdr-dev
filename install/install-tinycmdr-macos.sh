@@ -756,8 +756,8 @@ if [ "$ASK" = 1 ] && [ -n "$TG_TOKEN" ]; then
 Message @userinfobot for your id and pass --telegram-ids 123456789"
     fi
     if [ -n "$TOKEN" ]; then
-        info "with both tokens set, Mattermost wins in the agent this installer starts:"
-        info "  the Telegram lane is a second process - $INSTALL_DIR/tinycmdr --telegram"
+        info "both tokens set: this agent serves BOTH - Mattermost and a Telegram lane"
+        info "  in the same process (no second job to start)."
     fi
 fi
 

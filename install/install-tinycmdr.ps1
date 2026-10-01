@@ -912,9 +912,8 @@ if ($Ask) {
         if ($tg) { $TelegramIds = $tg }
         if ($WantChat) {
             Write-Host ""
-            Write-Host "  NOTE: with BOTH tokens set, Mattermost wins and the Telegram lane does NOT"
-            Write-Host "        start in the background process. Run this for a Telegram-only side:"
-            Write-Host "        python tinycmdr.py --telegram"
+            Write-Host "  NOTE: with BOTH tokens set, this one agent serves BOTH lanes -"
+            Write-Host "        Mattermost and Telegram - in the same process."
         }
     }
 
@@ -1359,8 +1358,8 @@ if ($LoopbackModel) {
 if ($ChatLane) {
     if ($MattermostUrl -eq "CHANGE-ME.example.com") { Say "NOTE    : edit $cfgPath (mattermost.url) before the bot will connect" }
     if (-not $AllowedUser) { Say "NOTE    : add your Mattermost user id to mattermost.allowed_users, or the bot ignores your DMs" }
-    if ($TgLane) { Say "tg lane : a Telegram token is set too - Mattermost wins in this process,"
-                   Say "          so Telegram needs:  python tinycmdr.py --telegram" }
+    if ($TgLane) { Say "tg lane : a Telegram token is set too - this process serves both"
+                   Say "          Mattermost and Telegram, no second process needed" }
 } elseif ($TgLane) {
     Say "tg lane : Telegram only - allowlist $($tgIds -join ', '), starts by itself"
 } else {
@@ -1783,8 +1782,7 @@ if ($Ask) {
     }
     if ($WantTg) {
         Say "DM your Telegram bot and it will answer."
-        if ($WantChat) { Say "  (Mattermost wins in the background process, so run the Telegram"
-                         Say "   side as:  cd $InstallDir ; python tinycmdr.py --telegram)" }
+        if ($WantChat) { Say "  (both tokens are set: this one process serves Mattermost AND Telegram)" }
     }
     if (-not ($WantChat -or $WantTg -or $WantCli)) {
         Say "nothing selected - the harness is installed and does not run in the background."

@@ -129,14 +129,14 @@ and which tmux needs `set-clipboard on` for), and `tinycmdr-copy.txt` in the tem
 0600, because a terminal that refuses OSC 52 says nothing at all.
 
 A chat lane is where a working agent is easiest to watch: tool calls stream in as they happen,
-and a message sent mid-run steers the run instead of queueing behind it. Neither lane is
-primary: whichever token you configure is the lane that runs, and both share the same
-sessions, notes, tasks and skills as the terminal.
+and a message sent mid-run steers the run instead of queueing behind it. Each lane is its own
+door into the same agent: whichever token you configure is the lane that runs, and if both are
+configured one process serves both, sharing the same sessions, notes, tasks and skills.
 
 A chat account is optional. With **no** Mattermost and no Telegram token the install is a
 **CLI-only** one: `tinycmdr` opens a session and `tinycmdr --once "<task>"` runs one task,
-with nothing remote to serve. With **both** tokens set there is nothing to guess, so a bare
-start refuses and names `--telegram` / `--mattermost`.
+with nothing remote to serve. With **both** tokens set one process serves both lanes, so a bare
+start answers Mattermost and Telegram at once.
 
 ## Use it
 

@@ -467,15 +467,18 @@ _env_saved = {k: os.environ.pop(k) for k in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_T
 try:
     fb.CONFIG["telegram"]["token"] = "tg-token-here"
     fb.CONFIG["mattermost"]["token"] = "mm-token-here"
-    note = fb.both_doors_note()
-    check("both doors set is a STARTUP refusal, not a silent Mattermost win",
-          "neither lane" in note and "--telegram" in note and "--mattermost" in note,
-          note[:160])
+    check("both doors set serves BOTH (the old refusal left the new lane dark)",
+          fb.lanes_to_serve([]) == ["mattermost", "telegram"], fb.lanes_to_serve([]))
+    check("...and a flag still forces one lane",
+          fb.lanes_to_serve(["--telegram"]) == ["telegram"]
+          and fb.lanes_to_serve(["--mattermost"]) == ["mattermost"], None)
     fb.CONFIG["mattermost"]["token"] = ""
-    check("one door is not a warning", fb.both_doors_note() == "")
+    check("one door serves that door", fb.lanes_to_serve([]) == ["telegram"], None)
     fb.CONFIG["mattermost"]["token"] = "mm-token-here"
     fb.CONFIG["telegram"]["token"] = ""
-    check("and neither is none", fb.both_doors_note() == "")
+    check("...and the other", fb.lanes_to_serve([]) == ["mattermost"], None)
+    fb.CONFIG["mattermost"]["token"] = ""
+    check("no token serves none", fb.lanes_to_serve([]) == [], None)
 finally:
     fb.CONFIG["telegram"].update(_saved[0])
     fb.CONFIG["mattermost"].update(_saved[1])

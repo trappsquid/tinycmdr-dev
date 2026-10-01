@@ -7,8 +7,8 @@ The lane rules this grades, all of them visible only by RUNNING the file:
   * the shipped placeholders ("PASTE_BOT_TOKEN_HERE", "your-mattermost-user-id") are
     NOT a lane - counting them made a fresh install look like a Mattermost host with a
     broken URL, and `tinycmdr health` claimed a `mattermost` lane on a CLI-only box;
-  * BOTH tokens set starts NEITHER: neither lane is primary, so the operator picks with
-    `--telegram` / `--mattermost`;
+  * BOTH tokens set serves BOTH lanes in one process (Mattermost on the main thread,
+    Telegram on a daemon one), so adding a Telegram token never leaves that lane dark;
   * `--mattermost` with no token says so instead of guessing.
 
     python tests/test_lane_choice.py
@@ -111,14 +111,31 @@ def main():
               "and `health` reports no lane, not a placeholder one",
               (r.stdout + r.stderr)[-200:])
 
-        # -- both tokens: neither lane is primary --------------------------------
-        code, said = run(work / "both",
-                         tokens=[("TINYCMDR_MM_TOKEN", "mm-tok"),
-                                 ("TINYCMDR_TG_TOKEN", "tg-tok")],
-                         with_mm=True)
-        check(code == 2, f"both tokens and no flag refuses to guess, exit 2 ({code})")
-        check("neither lane" in said and "--telegram" in said and "--mattermost" in said,
-              "and names both flags", said[-400:])
+        # -- both tokens: BOTH lanes are served --------------------------------
+        # Graded in-process: actually RUNNING this would open a Mattermost connection and
+        # long-poll Telegram, so the config is staged as files and the rule read off the
+        # module. The old rule refused to guess (exit 2) and left a box that added a
+        # Telegram token serving NOTHING - the lane was never started.
+        (work / "both" / "config.json").write_text(json.dumps({
+            "llm": LLM,
+            "mattermost": {"url": "chat.invalid", "scheme": "https", "port": 443,
+                           "token": "", "allowed_users": ["u1"]},
+            "telegram": {"token": "", "allowed_users": ["4242"]},
+        }), encoding="utf-8")
+        (work / "both" / ".env").write_text(
+            "TINYCMDR_MM_TOKEN=mm-tok\nTINYCMDR_TG_TOKEN=tg-tok\n", encoding="utf-8")
+        saved = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("TINYCMDR_")}
+        try:
+            m = load(work / "both")
+            os.environ["TINYCMDR_MM_TOKEN"] = "mm-tok"
+            os.environ["TINYCMDR_TG_TOKEN"] = "tg-tok"
+            check(m.lanes_to_serve([]) == ["mattermost", "telegram"],
+                  "both tokens serve BOTH lanes in one process", m.lanes_to_serve([]))
+            check(m.lanes_to_serve(["--telegram"]) == ["telegram"]
+                  and m.lanes_to_serve(["--mattermost"]) == ["mattermost"],
+                  "a flag still forces a single lane", None)
+        finally:
+            os.environ.update(saved)
 
         # -- --mattermost with no token ------------------------------------------
         code, said = run(work / "mm_only", args=["--mattermost"])

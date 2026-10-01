@@ -777,8 +777,8 @@ if [ "$ASK_Q" = 1 ] && [ -n "$TG_TOKEN" ] && [ -z "$TG_IDS" ]; then
 Message @userinfobot for your id and pass --telegram-ids 123456789"
     fi
     if [ -n "$TOKEN" ]; then
-        info "with both tokens set, Mattermost wins in this service: the Telegram lane"
-        info "is a second process - $INSTALL_DIR/venv/bin/python $INSTALL_DIR/tinycmdr.py --telegram"
+        info "both tokens set: this service serves BOTH - Mattermost and a Telegram"
+        info "lane in the same process (no second unit to start)."
     fi
 fi
 
@@ -998,8 +998,8 @@ elif [ -z "$TOKEN" ]; then
     info "  re-run with --token-file <file>            (Mattermost)"
     info "  or with --telegram-token <t> --telegram-ids <id>   (Telegram)"
 elif [ "$TG_LANE" = 1 ]; then
-    info "both tokens are set: Mattermost wins in this process, so Telegram needs"
-    info "  $VENV_PY $INSTALL_DIR/tinycmdr.py --telegram   (its own unit, not this one)"
+    info "both tokens are set: this process serves Mattermost AND Telegram, so there is"
+    info "  no second unit to start - the one service answers both doors."
 fi
 
 # --------------------------------------------------------------- defaults ---
