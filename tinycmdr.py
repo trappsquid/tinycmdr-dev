@@ -14714,8 +14714,18 @@ def model_catalog(force=False):
                              headers={"Authorization": f"Bearer {key}",
                                       "Content-Type": "application/json"},
                              timeout=8)
-            return [str(m.get("id")) for m in (r.json().get("data") or [])
-                    if m.get("id")]
+            out = []
+            for m in (r.json().get("data") or []):
+                # id is what almost every provider sends; a gateway that only carries
+                # `name` (or `model`) is read the same way probe_endpoint reads it, or its
+                # models vanish from the picker with no error.
+                if isinstance(m, str):
+                    out.append(m)
+                elif isinstance(m, dict):
+                    mid = m.get("id") or m.get("name") or m.get("model")
+                    if mid:
+                        out.append(str(mid))
+            return out
         except Exception as e:
             log.debug("model catalog: /models on %s failed: %s", url, e)
             return []
@@ -20709,10 +20719,14 @@ def _choose_one_model(url, ids, default=""):
     if default not in ids:
         default = ids[0]
     if pick_terminal_ready():
-        state = ModelPick([(i, "advertised by %s" % url, i == default) for i in ids],
-                          current=default, title="Which model? (%d advertised)" % len(ids),
+        rows = [(i, "advertised by %s" % url, i == default) for i in ids]
+        rows.insert(0, (MODEL_PICK_CUSTOM, "an id the endpoint does not list", False))
+        state = ModelPick(rows, current=default, title="Which model? (%d advertised)" % len(ids),
                           scope="ENTER sets the model - ESC keeps %s" % default)
         picked = run_model_pick(state)
+        if picked == MODEL_PICK_CUSTOM:
+            ans = input("   Model id (exactly as the provider expects): ").strip()
+            return ans or default
         if not picked:
             print(dim("   kept %s" % default))
         return picked or default
@@ -20948,6 +20962,10 @@ MODEL_PICK_VIEW = 12      # rows on screen at once; the list scrolls under the c
 # It is a row NAME the shell verb intercepts (never a real model id), so it goes through
 # the same ↑↓/filter/ENTER machinery as everything else.
 MODEL_PICK_ADD = "\u2795 add or change the endpoint\u2026"
+
+# A provider can accept ids its /models does not list (Hermes shows them from a curated
+# catalogue). The picker must let the reader type one, or those models are unreachable.
+MODEL_PICK_CUSTOM = "\u270e type a model id the endpoint does not list\u2026"
 
 
 def model_pick_rows(entries, current):
@@ -22950,7 +22968,8 @@ MODEL_ADD_HELP = """tinycmdr model add [<url>] [--model NAME] [--alias A] [--key
 
   With a <url> it takes the endpoint from the command line and checks the model id
   against what the endpoint advertises (one /v1/models GET, metadata only). --force
-  writes it when the endpoint is not reachable yet.
+  writes it when the endpoint is not reachable yet - and also accepts a model id the
+  endpoint does not list, for a provider that serves ids its /models hides.
 
   A cloud endpoint added here goes into llm.fallbacks and its key into .env under a
   generated TINYCMDR_ENDPOINT<n>_API_KEY the entry points at with api_key_env; a
@@ -23836,9 +23855,13 @@ def _verb_model_add(opts, positional):
         print("note: %s did not answer - writing it unverified" % url)
     else:
         if want and want.lower() not in [x.lower() for x in ids]:
-            print("%s advertises %s - not %r"
-                  % (url, ", ".join(ids[:12]) or "nothing", want), file=sys.stderr)
-            return 2
+            if not opts.get("force"):
+                print("%s advertises %s - not %r. Pass --force to write it anyway: a "
+                      "provider can accept ids its /models does not list."
+                      % (url, ", ".join(ids[:12]) or "nothing", want), file=sys.stderr)
+                return 2
+            print("note: %s does not advertise %r - writing it anyway (--force)"
+                  % (url, want))
         if not want:
             if len(ids) == 1:
                 want = ids[0]
@@ -23978,14 +24001,17 @@ def _verb_model(rest):
                       if str(e.get("name")).lower() == want.lower()
                       or str(e.get("send_as", "")).lower() == want.lower()), None)
         if match is None:
-            print("no model named %r here. This install can route to: %s"
-                  % (want, ", ".join(names)), file=sys.stderr)
-            return 2
-        prev, err = set_global_model(str(match.get("name")))
+            # A provider can accept an id its /models never lists (Hermes shows several
+            # from a curated catalogue). Refusing outright made those models unreachable;
+            # say so and write it - the provider is the authority on what it accepts.
+            print("note: no endpoint advertises %r - writing it anyway. Advertised here: %s"
+                  % (want, ", ".join(names) or "(none)"), file=sys.stderr)
+        target = str(match.get("name")) if match else want
+        prev, err = set_global_model(target)
         if err:
             print("could not write config.json: %s" % err, file=sys.stderr)
             return 1
-        print("default model: %s -> %s" % (prev, match.get("name")))
+        print("default model: %s -> %s" % (prev, target))
         if _verb_running() is True:
             print("a running bot reads config.json at start: use /model in chat, "
                   "or run `tinycmdr restart`.")
@@ -24016,18 +24042,47 @@ def _verb_model(rest):
         rows = model_pick_rows(entries, current)
         rows.insert(0, (MODEL_PICK_ADD,
                         "local or cloud, the key, then the models it serves", False))
+        rows.insert(1, (MODEL_PICK_CUSTOM,
+                        "an id the endpoint does not list", False))
         state = ModelPick(rows, current=current,
                           title="Select model (%d available)" % len(entries),
                           scope="ENTER sets the default in config.json - ESC leaves it alone")
         picked = run_model_pick(state)
         if picked == MODEL_PICK_ADD:
             return _model_setup_wizard()
+        if picked == MODEL_PICK_CUSTOM:
+            name = input("  Model id (exactly as the provider expects): ").strip()
+            if name:
+                print()
+                return _switch_global_model(name)
+            print("cancelled - nothing changed")
+            return 0
         if picked:
             print()
             return _switch_global_model(picked)
         print("cancelled - nothing changed")
         return 0
     return _print_model_catalog(entries)
+
+
+def endpoint_advertises():
+    """[(url, ok, ids)] for the primary and every fallback: what each endpoint SAYS it
+    serves. The picker can only offer what these return, so "why does it show N" is
+    answerable without guessing which link the bot actually called."""
+    out = []
+    prim = str(CONFIG["llm"].get("base_url") or "").rstrip("/")
+    if prim:
+        res = probe_endpoint(prim, _primary_api_key())
+        out.append((prim, res["ok"], res["ids"]))
+    for fb in CONFIG["llm"].get("fallbacks") or []:
+        if not isinstance(fb, dict):
+            continue
+        url = str(fb.get("base_url") or "").rstrip("/")
+        if not url:
+            continue
+        res = probe_endpoint(url, fb.get("api_key") or _endpoint_key(fb.get("api_key_env")))
+        out.append((url, res["ok"], res["ids"]))
+    return out
 
 
 def _print_model_catalog(entries):
@@ -24042,6 +24097,29 @@ def _print_model_catalog(entries):
         # name - printing it read as "localtest ... alias True". The entry's own name
         # IS the alias, and "sends as" above already gives the route.
         print("  %s" % "  ".join(bits))
+    # What each endpoint advertised, so a short list is explainable: the picker only
+    # offers what GET /models returned for the link and key this install holds. A name
+    # that is configured but NOT in any advertised list is called out - that is the
+    # usual reason a list looks short (or wrong), and it is a config problem, not a cap.
+    eps = endpoint_advertises()
+    advertised = set()
+    for url, ok, ids in eps:
+        if not ok:
+            print("  endpoint %s did NOT answer GET /models - its models cannot appear"
+                  % url)
+        else:
+            print("  endpoint %s advertises %d: %s"
+                  % (url, len(ids), ", ".join(ids) or "(none)"))
+            advertised.update(str(i).lower() for i in ids)
+    if advertised:
+        phantom = sorted({str(e.get("send_as") or e.get("name"))
+                          for e in entries
+                          if not e.get("alias")
+                          and str(e.get("send_as") or e.get("name")).lower()
+                          not in advertised})
+        if phantom:
+            print("  configured but NOT advertised by any endpoint (a chat call to one "
+                  "may 404): %s" % ", ".join(phantom))
     return 0
 
 
