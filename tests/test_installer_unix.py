@@ -857,7 +857,7 @@ def case_macos_probes_endpoint(sb, pkg, bindir, user, py):
         if not on_mac:
             args.append("--no-launchd")
         url = "http://127.0.0.1:%d/v1" % port
-        got = run_with_stdin(args, env, pkg, "\n".join(["", "", "n", "", url, "2"] + [""] * 8) + "\n")
+        got = run_with_stdin(args, env, pkg, "\n".join(["", "", "", "n", "", url, "2"] + [""] * 8) + "\n")
         written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
         check("P3 the macOS installer probes too, and says what it found",
               "reachable" in got.stdout and "qwen3-14b" in got.stdout,
@@ -865,6 +865,9 @@ def case_macos_probes_endpoint(sb, pkg, bindir, user, py):
         check("P3 ...and its model id can come from that list by number",
               written["llm"]["model"] == "glm-4.6" and written["llm"]["base_url"] == url,
               f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
+        check("P3 ...and the Mattermost token step is offered even with --token given",
+              "Mattermost bot token (input hidden" in (got.stdout + got.stderr),
+              (got.stdout + got.stderr)[-500:])
     finally:
         srv.shutdown()
         srv.server_close()
@@ -916,6 +919,39 @@ def case_installer_cloud_key(sb, pkg, bindir, user, py):
         srv.server_close()
 
 
+def case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py):
+    """The token step is offered even when a token is known, and the allowlist default is
+    a plain id.
+
+    Two reported regressions: with a token already known (--token / .env) the installer
+    skipped the Mattermost token question entirely, so a reinstall could not change it;
+    and the user-id default was proposed as a Python list repr (`['w63fp...']`), which the
+    prompt wrapped again into `[['w63fp...']]`.
+    """
+    inst = sb / "allow-inst"
+    fake_venv(inst, py)
+    (inst / "config.json").write_text(json.dumps({
+        "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "main"},
+        "mattermost": {"url": "chat.invalid", "allowed_users": ["u1-fixture-user-id"]},
+    }), encoding="utf-8")
+    log = sb / "logs" / "allow.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    env = sandbox_home_env(sb, bindir, log, user, extra={"TINYCMDR_ASK": "1"})
+    # token (Enter keeps --token), MM server (Enter), MM user (Enter), Telegram n, kind, url, model
+    answers = "\n".join(["", "", "", "n", "", "http://127.0.0.1:9/v1", "main"] + [""] * 8) + "\n"
+    got = run_with_stdin(
+        ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
+         "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst,
+         "--token", "0123456789abcdef0123456789abcdef", "--mattermost-url", "chat.invalid"],
+        env, pkg, answers)
+    out = got.stdout + got.stderr
+    check("the Mattermost token step is offered even when a token is known",
+          "Mattermost bot token (input hidden" in out, out[-700:])
+    check("the allowlist default is a plain joined id, not a Python list repr",
+          "u1-fixture-user-id" in out and "['" not in out and "[[" not in out,
+          out[-700:])
+
+
 def case_macos_cloud_key(sb, pkg, bindir, user, py):
     """The same cloud conversation on the macOS door, whose .env writer is its own script."""
     port, srv = serve_models(["mac-a", "mac-b"], key="sk-good")
@@ -935,7 +971,7 @@ def case_macos_cloud_key(sb, pkg, bindir, user, py):
             args.append("--no-launchd")
         url = "http://127.0.0.1:%d/v1" % port
         # MM server, MM user id, telegram, KIND=cloud, key (wrong), url, key (right), model
-        answers = "\n".join(["", "", "n", "2", "sk-bad", url, "sk-good", "2"] + [""] * 8) + "\n"
+        answers = "\n".join(["", "", "", "n", "2", "sk-bad", url, "sk-good", "2"] + [""] * 8) + "\n"
         got = run_with_stdin(args, env, pkg, answers)
         out = got.stdout + got.stderr
         written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
@@ -999,6 +1035,7 @@ def main():
         case_macos_probes_endpoint(sb, pkg, bindir, user, py)
         case_installer_cloud_key(sb, pkg, bindir, user, py)
         case_macos_cloud_key(sb, pkg, bindir, user, py)
+        case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print()

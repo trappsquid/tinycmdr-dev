@@ -890,12 +890,13 @@ if ($Ask) {
             $MattermostToken = $secrets["TINYCMDR_MM_TOKEN"]
             $tokenSource = "the secrets file"
         }
-        if (-not $MattermostToken) {
-            $in = Ask-Text "Bot token (input hidden; paste and press Enter)" -Secret
-            if ($in) { $MattermostToken = $in; $tokenSource = "prompt" }
-        } else {
-            Write-Host "  (a token is already known from the package, the secrets file or .env - kept)"
+        # ASK even when a token is already known: Enter keeps it, and a reinstall can
+        # now change or add one (the question used to be skipped outright).
+        if ($MattermostToken) {
+            Write-Host "  (a token is already known from the package, the secrets file or .env)"
         }
+        $in = Ask-Text "Bot token (input hidden; paste, or Enter to keep what is known)" -Secret -AllowBlank
+        if ($in) { $MattermostToken = $in; $tokenSource = "prompt" }
         $u = Ask-Text "Your Mattermost user id (optional, but without it the bot ignores your DMs)"
         if ($u) { $AllowedUser = $u }
     }

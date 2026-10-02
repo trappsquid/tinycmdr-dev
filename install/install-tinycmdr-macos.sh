@@ -598,6 +598,8 @@ try:
 except Exception:
     sys.exit(0)
 v = d.get(sys.argv[2])
+if isinstance(v, list):
+    v = ", ".join(str(x) for x in v)
 print("" if v is None else v)
 PY
 }
@@ -706,10 +708,17 @@ if [ -z "$TG_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
     TG_TOKEN="$(grep -m1 '^TINYCMDR_TG_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)"
     if [ -n "$TG_TOKEN" ]; then info "reusing the Telegram token already in .env"; fi
 fi
-if [ "$ASK" = 1 ]; then say "a few questions"; fi
-if [ "$ASK" = 1 ] && [ -z "$TOKEN" ] && [ -z "$TG_TOKEN" ]; then
+if [ "$ASK" = 1 ]; then
+    say "a few questions"
     info "press Enter with no answer to take the value in brackets"
-    TOKEN="$(ask_secret "Mattermost bot token (input hidden, Enter to skip)")"
+    # ASK even when a token is already known (--token, --token-file, this install's .env):
+    # the question was skipped outright then, so a reinstall could not change or add a
+    # Mattermost token at all. Enter keeps what is already known.
+    if [ -n "$TOKEN" ]; then
+        info "a bot token is already known (a switch, --token-file or .env) - Enter keeps it"
+    fi
+    _tok="$(ask_secret "Mattermost bot token (input hidden, Enter to keep/skip)")"
+    [ -n "$_tok" ] && TOKEN="$_tok"
 fi
 
 # Where the bot lives and who may command it: fleet-defaults.json (a fleet

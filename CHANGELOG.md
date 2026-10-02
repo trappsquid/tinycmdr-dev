@@ -19,6 +19,14 @@ Removed
   unaffected.
 
 Fixed
+- **The installers ask for the Mattermost bot token even when one is already known, and the
+  user-id default is a plain id.** The token question was gated on "no token yet" (a switch,
+  the secrets file or an existing `.env`), so a reinstall SKIPPED it entirely - no way to change
+  or add a token, and nothing on screen saying one was being reused. It is now always offered
+  with the interactive questions, and Enter keeps the known value (all three installers). The
+  allowlist default was built from a Python list repr, so the prompt proposed
+  `[['u1-fixture-user-id']]`; `jget`/`cfgval` now join a JSON list into `a, b` before it
+  reaches the prompt.
 - **A short model list is now explainable.** The picker was never capped - it offers exactly
   what `GET <base_url>/models` returns for the link and key this install holds. The plain
   `tinycmdr model` list now prints what each endpoint actually advertised and flags any

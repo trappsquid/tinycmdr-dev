@@ -192,7 +192,7 @@ fi
 printf '\n########## install-tinycmdr.sh %s  (%s)\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(hostname)"
 
 DEFAULTS="$SRC/install/fleet-defaults.json"
-jget() {   # jget <json-file> <key> -> value or empty
+jget() {   # jget <json-file> <key> -> value or empty (a list joins, no repr)
     if [ ! -f "$1" ]; then return 0; fi
     "$PY" - "$1" "$2" <<'PY'
 import json, sys
@@ -201,6 +201,10 @@ try:
 except Exception:
     sys.exit(0)
 v = d.get(sys.argv[2], "")
+# A JSON list (fleet-defaults allowed_user) must read as "a, b", not as Python repr
+# "['a', 'b']" - that repr was proposed verbatim and the prompt wrapped it again.
+if isinstance(v, list):
+    v = ", ".join(str(x) for x in v)
 print("" if v is None else v)
 PY
 }
@@ -215,6 +219,8 @@ except Exception:
     sys.exit(0)
 for part in sys.argv[2].split("."):
     d = (d or {}).get(part) if isinstance(d, dict) else None
+if isinstance(d, list):
+    d = ", ".join(str(x) for x in d)
 print("" if d is None else d)
 PY
 }
@@ -725,9 +731,14 @@ ASK_Q=1
 if [ "$ASK_Q" = 1 ]; then
     say "a few questions"
     info "press Enter with no answer to take the value in brackets"
-    if [ -z "$TOKEN" ] && [ -z "$TG_TOKEN" ]; then
-        TOKEN="$(ask_secret "Mattermost bot token (input hidden, Enter to skip)")"
+    # ASK even when a token is already known (a switch, the secrets file, this
+    # install's .env): the question was skipped outright then, so a reinstall could not
+    # change or add a Mattermost token at all. Enter keeps what is already known.
+    if [ -n "$TOKEN" ]; then
+        info "a bot token is already known (a switch, the secrets file, or .env) - Enter keeps it"
     fi
+    _tok="$(ask_secret "Mattermost bot token (input hidden, Enter to keep/skip)")"
+    [ -n "$_tok" ] && TOKEN="$_tok"
 fi
 
 # Where the bot lives and who may command it: fleet-defaults.json (a fleet package),
