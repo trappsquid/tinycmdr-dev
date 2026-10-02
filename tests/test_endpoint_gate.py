@@ -331,7 +331,7 @@ def main():
         for path, want in ((str(fb.BASE_DIR / "notes.md"), True),
                            ("/home/user/acme/docs/notes.md", False),
                            ("/tmp/scratch/notes.md", False),
-                           ("/tmp/tasks.json", False)):
+                           ("/tmp/atlas.md", False)):
             got = bool(fb._surface_write_gate(path, "write_file", {}))
             check(f"surface path: {path} -> {want}", got == want, f"got {got}")
 

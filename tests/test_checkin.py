@@ -2,7 +2,7 @@
 harness-side per-tool lines (progress_done_cb).
 
 Run:  python tests/test_checkin.py            (the whole gate: python tests/run_all.py)
-Same shape as tests/test_ledger.py: imports the live tinycmdr.py as a module,
+Same shape as the other staged suites: imports the live tinycmdr.py as a module,
 redirects every file it writes into a temp dir, no Mattermost connection.
 """
 import copy
@@ -33,7 +33,7 @@ atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
 sys.path.insert(0, str(BASE / "tests"))
 import hermetic                                                          # noqa: E402
 
-# redirect_files() below covers the ledger's own four paths, but the app also writes its
+# redirect_files() below covers the data files it knows, but the app also writes its
 # journal, its state files and the tools-provenance record beside itself, and it writes them
 # from code this suite does not name per test: run_all.py's leak report named
 # tasks.journal.jsonl and tools-provenance.json for this suite. Rebind all of them into TMP.
@@ -68,14 +68,11 @@ def redirect_files():
     reset_config()
     fb.NOTES_FILE = TMP / "notes.md"
     fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
-    fb.TASKS_FILE = TMP / "tasks.json"
-    fb.TASKS_DOC = TMP / "tasks.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")
-    for f in (fb.NOTES_ARCHIVE_FILE, fb.TASKS_FILE, fb.TASKS_DOC):
-        if f.exists():
-            f.unlink()
+    if fb.NOTES_ARCHIVE_FILE.exists():
+        fb.NOTES_ARCHIVE_FILE.unlink()
 
 
 class FakeDispatcher:

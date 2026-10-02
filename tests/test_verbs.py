@@ -941,10 +941,8 @@ def main():
         shutil.rmtree(stage, ignore_errors=True)
 
     rc, out, err = call(fb, ["tasks"])
-    check("H1: `tasks` is a real verb", rc == 0 and "task ledger" in out, (rc, out[:120]))
-    rc, out, err = call(fb, ["tasks", "--json"])
-    check("H1: `tasks --json` prints the ledger file itself",
-          rc == 0 and "items" in out, (rc, out[:120]))
+    check("H1: `tasks` is no longer a verb (the ledger was removed)",
+          rc == 2 and "unknown verb" in err, (rc, err[:120]))
 
     print()
     _tail()

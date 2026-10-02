@@ -13,7 +13,7 @@ down, and no run started, no answer was posted and nothing was logged. The opera
 opinion of that is "the bot ate my message".
 
 It runs against a fake dispatcher and a fake driver, like tests/test_ask_user.py: no
-network, no model, no ledger.
+network, no model, no durable state.
 """
 import importlib.util
 import json

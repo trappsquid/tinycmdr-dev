@@ -135,10 +135,10 @@ def main():
         check(len(entries) == before + 1, "  and does not grow the list twice")
 
         # ---- internal bookkeeping tools are not carried ------------------------
-        for name in ("plan", "task", "remember", "list_tools", "find_tools"):
+        for name in ("plan", "remember", "list_tools", "find_tools"):
             fb.record_tool_result({"session_key": key}, name, {"action": "x"}, "noise")
         carried_tools = {e["tool"] for e in fb._carry_load(key)["entries"]}
-        check(not ({"plan", "task", "remember", "list_tools", "find_tools"} & carried_tools),
+        check(not ({"plan", "remember", "list_tools", "find_tools"} & carried_tools),
               f"internal tools stay out of the carry ({sorted(carried_tools)})")
 
         # ---- big results are truncated, small ones are not --------------------

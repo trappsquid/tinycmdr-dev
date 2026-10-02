@@ -25,10 +25,10 @@ REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
 
 # Repo-root data files tinycmdr.py writes next to itself. A suite that imports the tree's
-# own tinycmdr.py inherits BASE_DIR = the checkout, so its ledger, its sessions and its
+# own tinycmdr.py inherits BASE_DIR = the checkout, so its notes, its sessions and its
 # state land in the tree unless the suite moves them first (BUGREPORT T3).
 REPO_DATA_FILES = (
-    "NOTES_FILE", "NOTES_ARCHIVE_FILE", "TASKS_FILE", "TASKS_DOC", "TASKS_JOURNAL",
+    "NOTES_FILE", "NOTES_ARCHIVE_FILE",
     "EXPERIMENTS_FILE", "SESSIONS_DIR", "UPLOADS_DIR", "JOBS_FILE", "GLOBAL_STATE_FILE",
     "NOTES_AUTHORED_FILE", "PROC_CENSUS_FILE",
     "LANE_STATE_FILE",           # logs/state.json: what the lane surfaces read

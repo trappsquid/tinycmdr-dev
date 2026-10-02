@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Removed
+- **The task ledger is gone from the harness.** `volatile_context()` appended a "Task ledger for
+  this machine" block to EVERY model call, so an open item's text rode every request as a trailing
+  message and read as a standing order - a context poisoner, on the operator's call. The whole
+  feature is removed: the `task` tool and its schema, the prompt block and its standing
+  instruction, `render_task_prompt`, the stale-item notices (`ledger_notice`), the `tinycmdr tasks`
+  verb and `/tasks`, `tasks.json` / `tasks.md` / `tasks.journal.jsonl`, the `tasks_max_open` /
+  `tasks_done_keep` / `ledger_stale_hours` config keys, the result-time hint, and the ledger test
+  suites. `notes.md` (the `remember` tool) is the surviving durable memory; the plan tool is
+  unaffected.
+
 Fixed
 - **Pointing tinycmdr at a cloud model is one conversation again, and the key never lands in
   `config.json`.** Every model-adding door - the three installers, `tinycmdr setup`, and

@@ -7,7 +7,7 @@ verdict (0 pass / 1 fail), so pytest would report this file green whatever the c
 
 The audit's D1: every failure inside `atomic_write_text` - the temp write, the fsync or the
 rename - fell back to `p.open("w", ...)` on the DESTINATION, so a failed save truncated the
-file the function exists to protect (measured: a 20-item ledger -> 0 bytes, next load died
+file the function exists to protect (measured: a 20-item state file -> 0 bytes, next load died
 on JSONDecodeError, no .damaged-* copy). These cases pin the replacement's promises: the
 old file survives a failed rename and a failed write, the error reaches the caller, no temp
 is left behind, and the temp carries the destination's own mode (audit D4/B3).
@@ -28,7 +28,7 @@ SRC = BASE / (os.environ.get("TINYCMDR_TEST_APP")
 # Import a STAGED copy, not the checkout's own file. The module writes into BASE_DIR while
 # it is being imported - it creates sessions/ and its log before a suite gets a chance to
 # rebind anything - so importing the repo's file plants those in the repo. run_all.py's leak
-# report named sessions/ for this suite (CI, ubuntu, 2026-09-27); test_ledger.py stages for
+# report named sessions/ for this suite (CI, ubuntu, 2026-09-27); other suites stage for
 # the same reason.
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-atomic"
 STAGE.mkdir(parents=True, exist_ok=True)
@@ -108,26 +108,21 @@ def test_a_failed_write_keeps_the_old_file_and_raises():
           target.read_text(encoding="utf-8") == original,
           repr(target.read_text(encoding="utf-8")[:80]))
     check("...and the temp is cleaned up", not _temps(target), _temps(target))
-    # The same failure through the production caller: the ledger keeps the item it had.
-    ledger = TMP / "ledger"
-    ledger.mkdir()
-    fb.TASKS_FILE = ledger / "tasks.json"
-    fb.TASKS_DOC = ledger / "tasks.md"
-    fb.TASKS_JOURNAL = ledger / "tasks.journal.jsonl"
-    fb.save_tasks({"items": [{"id": 1, "desc": "keep me", "status": "open",
-                              "note": ""}], "next_id": 2})
+    # The same failure through a production caller: the file keeps what it had.
+    env = TMP / ".env"
+    env.write_text("KEEP=1\n", encoding="utf-8")
+    fb.ENV_FILE = env
     fb.os.fsync = lambda _fd: (_ for _ in ()).throw(OSError(28, "disk gone"))
     try:
-        fb.save_tasks({"items": [], "next_id": 1})
-        check("save_tasks reports the failure", False, "it returned as if it saved")
+        fb._env_set("ADDED", "2")
+        check("a failed env write reports the failure", False, "it returned as if it saved")
     except OSError:
-        check("save_tasks reports the failure", True)
+        check("a failed env write reports the failure", True)
     finally:
         fb.os.fsync = real_fsync
-    loaded = json.loads(fb.TASKS_FILE.read_text(encoding="utf-8"))
-    check("...and the ledger still holds the item it had",
-          len(loaded["items"]) == 1 and loaded["items"][0]["desc"] == "keep me",
-          loaded)
+    check("...and .env still holds exactly what it had",
+          env.read_text(encoding="utf-8") == "KEEP=1\n",
+          repr(env.read_text(encoding="utf-8")))
 
 
 def test_the_mode_of_the_destination_is_preserved():

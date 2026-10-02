@@ -135,7 +135,7 @@ def main():
         soft = fb.ENVELOPE_MIN_WINDOW
         floor = fb.ENVELOPE_MIN_BUDGET
         # The fixture config carries llm.max_context_tokens, which the harness treats as a
-        # CEILING on the messages budget (pinned in test_ledger). The expectation has to
+        # CEILING on the messages budget (pinned elsewhere). The expectation has to
         # model that: while the prompt was 5,237 tokens the ceiling never bound at 131,072
         # and this arithmetic passed by luck (2026-09-27, after the prompt was trimmed).
         ceiling = fb.CONFIG["llm"].get("max_context_tokens")

@@ -4,7 +4,7 @@ Run:  python tests/test_dropin_tools.py, or
       python tests/run_all.py --filter dropin_tools
 Not pytest, deliberately: `check()` records a failure and the suite's exit code is the
 verdict, so pytest would report this file green regardless of what the checks said.
-Same shape as tests/test_ledger.py: imports the build under test as a module
+Same shape as the other staged suites: imports the build under test as a module
 (TINYCMDR_TEST_APP or TINYCMDR_SRC picks the build; default tinycmdr.py), works
 in a temp tree, no network and no Mattermost connection.
 """

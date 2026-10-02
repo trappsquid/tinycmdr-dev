@@ -15,7 +15,7 @@ pins the third move and, more importantly, the ways it must NOT work:
   * one question per session at a time.
 
 It runs against a fake dispatcher exactly like tests/test_stall.py: no network, no model,
-and the ledger is never touched.
+and no durable state is touched.
 """
 import importlib.util
 import os

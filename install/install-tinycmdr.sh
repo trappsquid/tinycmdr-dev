@@ -1085,7 +1085,7 @@ say "files"
 keep=""
 if [ "$FORCE" = 1 ] && [ -d "$INSTALL_DIR" ]; then
     keep="$(mktemp -d)"
-    for f in .env config.json notes.md notes-archive.md tasks.json tasks.md \
+    for f in .env config.json notes.md notes-archive.md \
              jobs.json state.json sessions tools snapshots; do
         if [ -e "$INSTALL_DIR/$f" ]; then
             cp -a "$INSTALL_DIR/$f" "$keep/" 2>/dev/null || true

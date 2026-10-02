@@ -328,7 +328,7 @@ class FakeDispatcher(fb.MattermostDispatcher):
                 is_dm, gen=0):
         """Never let a test worker reach the real agent: the dispatcher tests
         are about queueing, and an unstubbed _handle would call the live model
-        and write the live ledger."""
+        and write the live notes file."""
         self.handled.append((channel_id, text))
 
 
@@ -415,7 +415,7 @@ class _RealHandleDispatcher(FakeDispatcher):
     """FakeDispatcher with the REAL _handle wired back in.
 
     Safe for the two lock tests below: the run under test returns before the model is
-    ever asked anything, so nothing here can reach the live LLM or the live ledger.
+    ever asked anything, so nothing here can reach the live LLM or the live notes file.
     Every other test in this suite wants the stub, which is why this is its own subclass.
     """
     _handle = fb.MattermostDispatcher._handle
@@ -787,14 +787,11 @@ def _scripted_run(scripted):
     """Run AGENT with a stubbed model; every file write goes to tmp/."""
     fb.NOTES_FILE = TMP / "notes.md"
     fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
-    fb.TASKS_FILE = TMP / "tasks.json"
-    fb.TASKS_DOC = TMP / "tasks.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")
-    for f in (fb.NOTES_ARCHIVE_FILE, fb.TASKS_FILE, fb.TASKS_DOC):
-        if f.exists():
-            f.unlink()
+    if fb.NOTES_ARCHIVE_FILE.exists():
+        fb.NOTES_ARCHIVE_FILE.unlink()
     fb.AGENT.histories.clear()
     fb.AGENT.model_overrides.clear()
     saved_chat = fb.AGENT._chat
@@ -1125,33 +1122,6 @@ def test_an_id_less_tool_call_gets_one_matching_id_everywhere():
           bool(asst) and bool(tools)
           and tools[0].get("tool_call_id") == asst[0]["tool_calls"][0]["id"],
           tools[0].get("tool_call_id") if tools else None)
-
-
-def test_done_ledger_items_are_not_re_issued_as_instructions():
-    """The state block is re-sent every call. A done task whose text says
-    'read X, confirm Y' acted as a standing order (task #4, 2026-09-10)."""
-    fb.TASKS_FILE = TMP / "tasks.json"
-    fb.TASKS_FILE.write_text(json.dumps({"items": [
-        {"id": 1, "status": "open", "desc": "Fix the thing", "note": ""},
-        {"id": 4, "status": "done",
-         "desc": "Verify post-flash state: read bios-postflash.log for "
-                 "SMBIOS=M2WKT65A and logical=12; confirm containers are up",
-         "note": "verified at 12:49: SMBIOS=M2WKT65A, HT Enabled, logical=12"},
-    ]}), encoding="utf-8")
-    rendered = fb.render_task_prompt()
-    check("ledger: open items keep their text",
-          "Fix the thing" in rendered, rendered)
-    check("ledger: done items are labelled no-action",
-          "[done, no action]" in rendered, rendered)
-    check("ledger: a done item's instruction text is curtailed",
-          "confirm containers are up" not in rendered, rendered)
-    check("ledger: a done item's evidence note is not re-sent",
-          "verified at 12:49" not in rendered, rendered)
-    # "to-do list" was the marker here; that phrase is what let a fresh session adopt an
-    # ended one's thread (2026-09-27). The requirement is that the block says what it is -
-    # history that takes no action, and inherited work that needs a yes.
-    check("ledger: it says what the block is for",
-          "no action" in rendered and "earlier run" in rendered, rendered)
 
 
 def test_no_run_ever_sends_sampling_parameters():
@@ -1533,7 +1503,7 @@ def test_the_state_block_never_lands_on_the_operator_request():
         return fb.AGENT._payload([dict(m) for m in msgs], state=state)
 
     # the block's content is irrelevant here, only its position is: stub it so
-    # the test does not depend on notes.md or the ledger existing on this box
+    # the test does not depend on notes.md existing on this box
     orig = fb.volatile_context
     _stub_n = [0]
 
@@ -1915,8 +1885,6 @@ def _redirect_state():
     """Every file write from a test goes to tmp/, never beside the package."""
     fb.NOTES_FILE = TMP / "notes.md"
     fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
-    fb.TASKS_FILE = TMP / "tasks.json"
-    fb.TASKS_DOC = TMP / "tasks.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")

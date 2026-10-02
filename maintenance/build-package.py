@@ -150,7 +150,7 @@ BACKUP_RE = re.compile(r"\.bak|\.pre-|(?<![a-z])pre[-_]?\d|\.orig$|\.rej$|~$", r
 
 # things that must never be inside the zip, even by accident
 FORBIDDEN_NAMES = {
-    ".env", "config.json", "state.json", "jobs.json", "tasks.json", "tasks.md",
+    ".env", "config.json", "state.json", "jobs.json",
     "notes.md", "notes-archive.md", "tinycmdr.log", "tinycmdr.lock",
     # The machine atlas is generated ON the host it describes (atlas.md: os, paths, ports,
     # and where things live). Shipping this box's map to another box is worse than shipping

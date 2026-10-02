@@ -16,6 +16,7 @@ capability is told so instead of being guessed at.
 """
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -306,9 +307,9 @@ check("prompt: the check must test the claim itself",
       "make the check test the claim itself" in sp)
 check("prompt: the exists-is-not-evidence case is named",
       "a file existing proves nothing about what is in it or who wrote it" in sp)
-check("prompt: the clause rides the ledger/check bullet",
+check("prompt: the clause rides the check bullet",
       [l for l in sp.splitlines() if "make the check test the claim itself" in l][:1]
-      and "Checking the work is the last ledger item" in
+      and "Checking the work is the last step" in
       [l for l in sp.splitlines() if "make the check test the claim itself" in l][0])
 
 # ---- a miss must name the RIGHT door (drive round 3, 2026-09-23) ---------------------
@@ -499,12 +500,14 @@ check("search_files: a missing path still errors", out.startswith("ERROR"), out[
 
 # ---- the disclosure answer cannot be misread as "nothing is hidden" -------------------
 # Measured 2026-09-25 driving the manager box (work order 5): asked which tools were NOT in its list,
-# the run called list_tools and find_tools(all=true) in ONE batch, read "22 of 22", and
+# the run called list_tools and find_tools(all=true) in ONE batch, read "N of N", and
 # answered "None are hidden" - the sibling call had already revealed them all.
 fresh = "wp5-fresh"
 out = fb.tool_list_tools({}, {"session_key": fresh})
+_m = re.search(r"Core tools: (\d+) of (\d+) are in your list", out)
 check("list_tools on a fresh session says part of the core set is missing",
-      " of 22 are in your list" in out and "answer when you call them by name" in out, out[:220])
+      _m is not None and _m.group(1) != _m.group(2)
+      and "answer when you call them by name" in out, out[:400])
 check("list_tools: a fresh session names no reveal", "revealed earlier" not in out, out[-160:])
 revealed_now = fb.tool_find_tools({"all": True}, {"session_key": fresh})
 check("find_tools all=true says which tools were NOT in the list",
@@ -512,7 +515,7 @@ check("find_tools all=true says which tools were NOT in the list",
 check("find_tools all=true still says every one of them is now in the list",
       "every remaining tool is now in your list" in revealed_now, revealed_now[:200])
 after = fb.tool_list_tools({}, {"session_key": fresh})
-check("list_tools after a reveal names the reveal, so 22 of 22 cannot read as 'none hidden'",
+check("list_tools after a reveal names the reveal, so N of N cannot read as 'none hidden'",
       "revealed earlier in THIS session" in after and "create_tool" in after, after[:300])
 check("find_tools all=true on an already-visible set says so, not an empty diff",
       fb.tool_find_tools({"all": True}, {"session_key": fresh})

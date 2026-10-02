@@ -30,7 +30,7 @@ atexit.register(lambda: shutil.rmtree(TMP, ignore_errors=True))
 sys.path.insert(0, str(BASE / "tests"))
 import hermetic                                                          # noqa: E402
 
-# This suite runs the agent, and the app writes its ledger journal, its state files and the
+# This suite runs the agent, and the app writes its state files and the
 # tools-provenance record beside itself: rebind every one of them into TMP instead of naming
 # three by hand (run_all.py's leak report named tools-provenance.json for this suite).
 hermetic.redirect_repo_files(fb, TMP)

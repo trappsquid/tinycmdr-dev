@@ -16,18 +16,14 @@ from tinycmdr import (
     _CARRY,
     _CARRY_LOCK,
     _carry_path,
-    tool_task,
-    load_tasks,
-    save_tasks,
     tool_edit_file,
     tool_execute_code
 )
 
 # --- this suite owns the files it grades ----------------------------------------------
-# Importing the app sets BASE_DIR to the checkout, so save_tasks() wrote tasks.json +
-# tasks.journal.jsonl into the repo and the session carry file created sessions/ beside it
-# (both named by run_all.py's leak report). Point every repo-root data file at a temp dir
-# this suite removes on the way out.
+# Importing the app sets BASE_DIR to the checkout, so a write through the app landed in the
+# repo and the session carry file created sessions/ beside it (both named by run_all.py's
+# leak report). Point every repo-root data file at a temp dir this suite removes on the way out.
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import hermetic                                                          # noqa: E402
 
@@ -79,23 +75,6 @@ class TestHarnessRefinements(unittest.TestCase):
             self.assertIn(held_key, AGENT.locks)
         finally:
             held.release()
-
-    def test_tool_task_no_open_tasks_done_notice(self):
-        """When ledger has no open tasks, task action=done must return notice to report, not ERROR: use action=add."""
-        t = load_tasks()
-        orig_items = t["items"]
-        try:
-            # Set ledger with 1 done task
-            t["items"] = [{"id": 99, "desc": "mock task", "status": "done", "note": "finished", "created": "", "updated": ""}]
-            save_tasks(t)
-
-            res = tool_task({"action": "done", "note": "everything completed"}, {})
-            self.assertNotIn("ERROR: no open tasks in the ledger", res)
-            self.assertIn("all tasks in the ledger are already closed", res)
-            self.assertIn("Deliver your final report", res)
-        finally:
-            t["items"] = orig_items
-            save_tasks(t)
 
     def test_tool_edit_file_full_line_deletion_exact(self):
         """Deleting a full line via edit_file exact match must not leave an empty line."""

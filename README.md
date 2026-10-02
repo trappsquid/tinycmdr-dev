@@ -131,7 +131,7 @@ and which tmux needs `set-clipboard on` for), and `tinycmdr-copy.txt` in the tem
 A chat lane is where a working agent is easiest to watch: tool calls stream in as they happen,
 and a message sent mid-run steers the run instead of queueing behind it. Each lane is its own
 door into the same agent: whichever token you configure is the lane that runs, and if both are
-configured one process serves both, sharing the same sessions, notes, tasks and skills.
+configured one process serves both, sharing the same sessions, notes and skills.
 
 A chat account is optional. With **no** Mattermost and no Telegram token the install is a
 **CLI-only** one: `tinycmdr` opens a session and `tinycmdr --once "<task>"` runs one task,
@@ -152,7 +152,6 @@ and in chat:
 | `model setup` | the model wizard: local or cloud, the key, the link, the bearer `GET /models`, then the models it serves to choose from |
 | `model use <name>` · `model add [<url>]` · `model remove <x>` | switch; add an endpoint (no URL: it asks local/cloud, the key and the link, proves the key with a bearer `GET /models`, then offers the models to choose from); or drop one |
 | `model endpoint [<url>]` | read the endpoint or fix it - a `401` asks for the key (saved to `.env`), a typo is refused unless it answers (`--force` writes an unverified one) |
-| `tasks [--all]` | the task ledger: open, in progress, recently done |
 | `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
 | `update` | pull the published build (`update <file\|zip\|folder>` puts one in place by hand) |
 | `clean` · `token` · `config get\|set <dotted.key>` | junk in this folder, where secrets live, edit config.json |
@@ -231,7 +230,7 @@ venv/bin/python tests/run_all.py           # non-zero if any suite fails
 ```
 
 A suite that cannot run exits 77 and counts as **red**, so a machine that grades nothing cannot
-report success. `--select 'tests/test_ledger*.py'` narrows the run while you work on one suite.
+report success. `--select 'tests/test_setup*.py'` narrows the run while you work on one suite.
 
 Before pushing, `bash maintenance/pre-push.sh` decides the cheap things - the leak gate, that the
 published numbers are still regenerated from the tree, and that the work ledger's anchors agree

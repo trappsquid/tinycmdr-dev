@@ -96,14 +96,14 @@ from a clone, and should not "restore" them:
 | :--- | :--- | :--- |
 | `.env`, `config.json` | tokens, endpoint, this box's identity | `.env.example`, `config.example.json` |
 | `sessions/`, `logs/`, `spill/`, `tinycmdr.log`, `state.json`, `jobs.json`, `tinycmdr.lock` | conversation and runtime state | - |
-| `notes.md`, `tasks.json`, `tasks.md`, `tasks.journal.jsonl`, `field-notes.md`, `atlas.md`, `experiments.jsonl`, `web-sessions.json` | this box's working memory and task ledger | created on the host (`tests/fixture-field-notes.md` is what the digest suite stages) |
+| `notes.md`, `field-notes.md`, `atlas.md`, `experiments.jsonl`, `web-sessions.json` | this box's working memory | created on the host (`tests/fixture-field-notes.md` is what the digest suite stages) |
 | `tools/`, `skills/` | drop-in tools and prose skills built on this host | `tools/` starter files, `skills/README.md` |
 | `maintenance/private_rules.py` | this fleet's leak patterns | `private_rules.example.py` |
 | `maintenance/where-roles.json` | this box's tree declaration | `ROLES` in `maintenance/where.py` |
 | `venv/`, `dist/` | the private environment, and built archives | built by `maintenance/build-package.py` |
 
-`maintenance/build-package.py` refuses to ship credentials, config, logs, session history, notes or
-ledger - a leak there is a leak onto every host. `soul.md` is the exception on that list: it is
+`maintenance/build-package.py` refuses to ship credentials, config, logs, session history or
+notes - a leak there is a leak onto every host. `soul.md` is the exception on that list: it is
 tracked, because it is the seed the agent's workspace starts from.
 
 That seed is also the one tracked file an operator is expected to EDIT, so a persona is an

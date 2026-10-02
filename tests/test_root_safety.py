@@ -5,8 +5,8 @@ Measured 2026-09-27 on the Mac, two ways in one evening:
   * `sudo tinycmdr config set search.allow_cloud_egress true` - `_write_config` REPLACES
     config.json, and a replacement takes the AUTHOR of the write, so the file came back
     root:staff 0600. The launchd agent runs as the install's own user, could not read it,
-    and exited 1 on every respawn. The same root run also left tasks.json (the ledger) and
-    sessions/cli.json owned by root, so the agent could not write its ledger and the CLI
+    and exited 1 on every respawn. The same root run also left
+    sessions/cli.json owned by root, so the agent could not write its session and the CLI
     lane could not load its session.
   * `sudo tinycmdr restart` - the macOS helper's `launchctl bootstrap` cannot enter the
     console user's GUI domain as root ("Bootstrap failed: 125"), and the agent had already

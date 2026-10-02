@@ -375,7 +375,7 @@ def run_task(task, budget, label, artifacts_dir=None, overrides=None):
         # categories are meant to measure.
         if artifacts_dir:
             artifacts_dir.mkdir(parents=True, exist_ok=True)
-            for name in ("tinycmdr.log", "notes.md", "tasks.json", "state.json"):
+            for name in ("tinycmdr.log", "notes.md", "state.json"):
                 src = workdir / name
                 if src.exists():
                     shutil.copy2(src, artifacts_dir / f"{task['id']}.{name}")

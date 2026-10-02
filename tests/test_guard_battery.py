@@ -292,13 +292,13 @@ def test_file_door_and_shell_door_agree():
         check("an ordinary file is written without a question",
               str(out2).startswith("OK") and len(asks) == 1, str(out2)[:100])
 
-        tasks = Path(fb.BASE_DIR) / "tasks.json"
-        tasks.write_text('{"items": []}\n', encoding="utf-8")
-        out3 = fb.tool_edit_file({"path": str(tasks), "old_string": "[]",
-                                  "new_string": "[1]"}, {"confirm_cb": door})
-        check("edit_file on tasks.json is gated too",
+        atlas = Path(fb.BASE_DIR) / "atlas.md"
+        atlas.write_text("host facts\n", encoding="utf-8")
+        out3 = fb.tool_edit_file({"path": str(atlas), "old_string": "host",
+                                  "new_string": "HOST"}, {"confirm_cb": door})
+        check("edit_file on the bot's own atlas.md is gated too",
               str(out3).startswith("DECLINED"), str(out3)[:140])
-        for leftover in (notes, tasks):
+        for leftover in (notes, atlas):
             try:
                 leftover.unlink()
             except OSError:

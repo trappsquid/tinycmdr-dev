@@ -11,14 +11,14 @@ projects is labelled with where it came from.
 
 Short version: tinycmdr is a single-file, single-process agent that lives on each machine and is driven
 from self-hosted Mattermost. It is an operator's agent, not a coding agent. Its distinguishing work is
-the runtime around the model call: budgets, a stall watchdog, a loop guard, a task ledger, check-ins,
+the runtime around the model call: budgets, a stall watchdog, a loop guard, check-ins,
 mid-run steering, truthful stop and restart semantics, and prose runbooks it reads on demand.
 
 ## 1. Measured surface
 
 <!-- measured:surface:start -->
 ```
-code                25,268 lines / 1.16 MB in ONE file, no package, no framework
+code                24,665 lines / 1.13 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -27,20 +27,20 @@ interfaces          Mattermost bot (DMs + @mentions), Telegram DM, `--once "task
                     and `tinycmdr` itself: a full-screen app (`--app`, the
                     default) or the same session as inline cards (`--cli`);
                     a host with no chat token is CLI-only
-core tools          22, of which 12 are always-on; the rest answer by name (section 2)
+core tools          21, of which 11 are always-on; the rest answer by name (section 2)
 custom tools        3 example tools ship in ./tools/ (native .py, register-style .py,
                     <name>.tool.json); a working box's own drop-ins load from the same
                     folder, and the agent writes its own with create_tool
-chat commands       17 CLI verbs, 10 chat verbs (section 3.1)
+chat commands       16 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               69 suites / 26,983 lines / 3,129 checks that need no model, plus a graded
+tests               66 suites / 23,516 lines / 2,734 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 5 blocks: llm 19, telegram 2, mattermost 6, search 3, agent 91
+config              config.json, 5 blocks: llm 19, telegram 2, mattermost 6, search 3, agent 87
                     (all of section 3 is configurable)
-state on disk       sessions/*.json (per channel), notes.md, tasks.json (ledger),
-                    jobs.json (cron), uploads/, logs
+state on disk       sessions/*.json (per channel), notes.md, jobs.json (cron),
+                    uploads/, logs
 ```
 <!-- measured:surface:end -->
 
@@ -58,7 +58,6 @@ web_search      configured provider chain (anysearch, tavily, searxng), off-LAN 
 create_tool     the agent writes a new tool; hot-loaded, live on the next call
 list_tools      list what exists, core and custom
 schedule        cron entries (croniter) for recurring jobs
-task            task ledger: add, list, complete, drop
 notes           long-term memory file, append with budgets and archiving
 remember        shorter-form memory write
 search_sessions past conversations, across channels
@@ -129,7 +128,6 @@ tool_output_max_chars 10000 what a tool may hand back into context
 max_context_tokens          context budget, with `context` reporting the fill
 history_exchanges           session depth kept in the prompt
 notes_max_chars / per-note / keep / archive_days   memory caps and rotation
-tasks_max_open / done_keep  ledger caps
 ```
 <!-- measured:budgets:end -->
 
@@ -140,7 +138,6 @@ loop guard          an identical (tool, args) call is refused after 2, the run s
                     any real mutation (write/edit/create_tool) clears the memory, because
                     "fix it, then run the same check again" is the legitimate case
 stall watchdog      warn at 8 minutes without progress, abandon the run at 20 and say so
-task ledger         tasks.json; open/done/abandoned, with a cap and an archive
 check-ins           every 5 minutes (or N steps) one status line, tool lines merged, colour-coded:
                     green = model narration, amber = tool ran, red ONLY on failure
 infrastructure      endpoint unreachable/rejecting files a red Done line instead of a fake answer
@@ -400,8 +397,7 @@ Two pieces of framing from that same literature describe this build better than 
 - Osmani's ratchet: anytime an agent makes a mistake, engineer a solution so that it cannot make that
   mistake again, with every rule traceable to a real failure and no rule added before one. Every guard
   in tinycmdr exists because something broke on a box first, and the changelog is the record: the loop
-  guard after a tool was re-issued eight times, /stop after it lied about an abandoned run, the task
-  ledger after work evaporated between turns.
+  guard after a tool was re-issued eight times, /stop after it lied about an abandoned run.
 - The break-even rule from that comparison: a harness earns its keep once there are around ten
   distinct jobs that can be described in markdown. This one clears it, and how far depends
   on the box: prose skills are per-host and read on demand, not shipped.
@@ -420,7 +416,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 25,268-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 24,665-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -432,17 +428,17 @@ provider coverage             OpenAI-compatible           multi-LLM routing     
 extensions                    .py tools hot-loaded,       MCP, SDK, custom       MCP, subagents,        config + models
                               prose skills                tools, microagents     hooks, plugins
 guardrails                    budgets, loop guard,        security analyzer,     permission model,      git diff before
-                              stall watchdog, ledger,     action confirmation    hooks, sandbox        apply, git commits
+                              stall watchdog,             action confirmation    hooks, sandbox        apply, git commits
                               check-ins, confirm gate
 sessions/memory               per-channel JSON,           conversation store,    session files,         chat history per
-                              notes.md, ledger,           context condenser      CLAUDE.md memory       repo
+                              notes.md,                   context condenser      CLAUDE.md memory       repo
                               search, no vectors
 sub-agents                    one level, throwaway        delegation in SDK      subagents (own         no
                               context                                            context, MCP access)
 interfaces                    Mattermost bot, --app,      web UI, CLI,           terminal, IDE,         terminal, IDE
                               --cli, --once, Telegram DM  IDE, API               headless mode
-ops features                  stall watchdog, task        runtime lifecycle      hooks for enforcing    git-native undo
-                              ledger, check-ins, live     control, security      workflow at commit     and diff review
+ops features                  stall watchdog,             runtime lifecycle      hooks for enforcing    git-native undo
+                              check-ins, live             control, security      workflow at commit     and diff review
                               steering, /stop, restart
 maturity signal               one operator, 2,614         large team, papers,    vendor-maintained      large OSS user
                               model-free assertions       funding, ecosystem     product                base, docs site
@@ -463,8 +459,8 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               25,268 lines, one file, no dependency tree to audit
-ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a
+readability               24,665 lines, one file, no dependency tree to audit
+ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
 prose skills              the runbooks are plain markdown an operator can read and edit mid-incident
@@ -486,7 +482,7 @@ For the post, the definition that survives comparison:
 > tinycmdr is a single-file agent harness embedded on each machine in my fleet, driven from my own
 > Mattermost server. It is not a coding agent and it does not try to be one. It is an operations agent:
 > it runs commands, reads logs, edits configs, schedules checks, and reports in chat, under a runtime
-> built around budgets, a stall watchdog, a loop guard, a task ledger, and honest stop and restart
+> built around budgets, a stall watchdog, a loop guard, and honest stop and restart
 > semantics. Where a team-maintained harness gives you a sandbox, an ecosystem, and a permission model,
 > this gives you 5,800 readable lines, three dependencies, and a runtime that assumes things will go
 > wrong on a box you cannot see.

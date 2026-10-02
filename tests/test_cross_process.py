@@ -7,7 +7,7 @@ Every lane is its own process - --cli, --once and each verb all skip the
 single-instance lock - and the path locks were a dict in ONE interpreter, so two lanes
 that each loaded, mutated and saved lost one of the updates. Measured (audit D2): three
 processes each ran `task add` with a barrier between the read and the save; all three
-answered "OK: task #1 added", all three got id 1, and the ledger held ONE item. The same
+answered "OK: task #1 added", all three got id 1, and the file held ONE entry. The same
 shape on the model overrides is D7 (one lane's save dropped the other's choice), and
 D5 is the single-instance lock handing a second bot the same token after `rm`.
 
@@ -47,12 +47,11 @@ def check(cond, what, detail=""):
 
 def stage():
     shutil.copy2(SRC, STAGE / "tinycmdr.py")
-    (STAGE / "config.json").write_text(json.dumps(
-        {"agent": {"tasks_file": str(STAGE / "tasks.json")}}), encoding="utf-8")
+    (STAGE / "config.json").write_text(json.dumps({"llm": {}}), encoding="utf-8")
 
 
 def reset_state():
-    for name in ("tasks.json", "tasks.md", "tasks.journal.jsonl", "state.json"):
+    for name in ("notes.md", "state.json"):
         p = STAGE / name
         if p.exists():
             p.unlink()
@@ -67,10 +66,10 @@ def load():
     return fb
 
 
-# One worker. `hold` widens the window between the ledger READ and the write it answers
+# One worker. `hold` widens the window between the notes READ and the write it answers
 # with, which is the interleaving that loses an update - and inside the fix it is eaten
-# by the lock, so the answer is the same.
-WORKER_TASK = r'''
+# by the note lock, so the answer is the same.
+WORKER_NOTE = r'''
 import importlib.util, sys, time
 from pathlib import Path
 stage = Path(sys.argv[1]); tag = sys.argv[2]; hold = float(sys.argv[3])
@@ -78,13 +77,13 @@ spec = importlib.util.spec_from_file_location("mp_worker", stage / "tinycmdr.py"
 fb = importlib.util.module_from_spec(spec)
 sys.modules["mp_worker"] = fb
 spec.loader.exec_module(fb)
-real = fb.load_tasks
-def slow():
-    t = real()
+real = fb._parse_notes
+def slow(raw):
+    doc = real(raw)
     time.sleep(hold)
-    return t
-fb.load_tasks = slow
-print(fb.tool_task({"action": "add", "task": "worker-" + tag}, {}))
+    return doc
+fb._parse_notes = slow
+print(fb.tool_remember({"note": "worker-" + tag}, {}))
 '''
 
 # A lane that sets ONE conversation's model choice and saves it, optionally waiting for
@@ -118,30 +117,23 @@ def spawn(code, args, timeout=180):
     return p.returncode, out.strip(), err.strip()
 
 
-def test_three_processes_adding_to_one_ledger():
-    """audit D2: the measured shape - three `task add`, one ledger, lost updates."""
+def test_three_processes_writing_one_memory():
+    """audit D2: the measured shape - three memory writes, one notes.md, lost updates."""
     reset_state()
     hold = 0.4
     procs = [subprocess.Popen(
-        [sys.executable, "-c", WORKER_TASK, str(STAGE), str(i), str(hold)],
+        [sys.executable, "-c", WORKER_NOTE, str(STAGE), str(i), str(hold)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for i in range(3)]
     outs = []
     for p in procs:
         out, err = p.communicate(timeout=180)
         outs.append((p.returncode, out.strip(), err.strip()))
     check(all(rc == 0 for rc, _o, _e in outs), "all three lanes exited 0", outs)
-    check(sum(1 for _rc, o, _e in outs if o.startswith("OK: task #")) == 3,
+    check(sum(1 for _rc, o, _e in outs if o.startswith("OK:")) == 3,
           "and all three answered OK (that was true before the fix too)", outs)
-    t = json.loads((STAGE / "tasks.json").read_text(encoding="utf-8"))
-    check(len(t["items"]) == 3, "all three adds are IN the ledger", t)
-    check(sorted(i["id"] for i in t["items"]) == [1, 2, 3],
-          "with distinct ids, in the order they were serialized", t)
-    check(t["next_id"] == 4, "and next_id moved with them", t)
-    rows = [json.loads(l) for l in
-            (STAGE / "tasks.journal.jsonl").read_text(encoding="utf-8").splitlines()
-            if l.strip()]
-    check([r["rev"] for r in rows] == [1, 2, 3],
-          "the journal has one line per landed save, no repeated revision", rows)
+    text = (STAGE / "notes.md").read_text(encoding="utf-8")
+    check(all(("worker-%d" % i) in text for i in range(3)),
+          "all three writes are IN notes.md", text)
 
 
 # A lane that bumps one counter in state.json with a deliberate pause between the read

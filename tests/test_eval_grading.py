@@ -126,8 +126,8 @@ def main():
                                  verify_failures=1)))
     # T09: both defaults, which are the values in tinycmdr.py
     positive.append((eval_tasks.BY_ID["T09_code_grounding"],
-                     metrics_for(BASE, "notes_max_chars is 4000 and tasks_max_open "
-                                       "is 15.")))
+                     metrics_for(BASE, "notes_max_chars is 8000 and notes_keep_entries "
+                                       "is 60.")))
     # T03 / T06
     positive.append((eval_tasks.BY_ID["T03_log_cause"],
                      metrics_for(BASE, "backupd is failing: disk quota exceeded")))

@@ -200,8 +200,8 @@ def render(name, f):
             "                    run_all.py is the gate)\n"
             "config              config.json, %d blocks: %s\n"
             "                    (all of section 3 is configurable)\n"
-            "state on disk       sessions/*.json (per channel), notes.md, tasks.json (ledger),\n"
-            "                    jobs.json (cron), uploads/, logs"
+            "state on disk       sessions/*.json (per channel), notes.md, jobs.json (cron),\n"
+            "                    uploads/, logs"
             % (f"{f['lines']:,}", f["mb"],
                len(req), ", ".join(req), len(op), len(f["deps"]),
                f["core"], f["always_on"], f["shipped_tools"],
@@ -217,8 +217,7 @@ def render(name, f):
             "tool_output_max_chars %-5s what a tool may hand back into context\n"
             "max_context_tokens          context budget, with `context` reporting the fill\n"
             "history_exchanges           session depth kept in the prompt\n"
-            "notes_max_chars / per-note / keep / archive_days   memory caps and rotation\n"
-            "tasks_max_open / done_keep  ledger caps"
+            "notes_max_chars / per-note / keep / archive_days   memory caps and rotation"
             % (a["max_steps"], a["max_minutes"], a["shell_timeout"],
                a["tool_output_max_chars"]))
     if name == "readability":
@@ -234,7 +233,7 @@ def render(name, f):
             "                          the endpoint's own tokenizer - section 4.1 has both legs and\n"
             "                          the command\n"
             "readability               %s lines, one file, no dependency tree to audit\n"
-            "ops runtime               stall watchdog, task ledger, periodic check-ins, live steering, and a\n"
+            "ops runtime               stall watchdog, periodic check-ins, live steering, and a\n"
             "                          /tinycmdr stop that reports the truth about three different states\n"
             "self-extension            a new tool is a .py file the agent writes itself, live on the next call\n"
             "prose skills              the runbooks are plain markdown an operator can read and edit mid-incident\n"

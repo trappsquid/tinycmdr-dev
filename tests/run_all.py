@@ -9,7 +9,7 @@ suites advertised, collected nothing but the printouts their check() left behind
 (a failing check was a line of text, not a failed test). This is that one command.
 
     python tests/run_all.py                  # every suite; 0 only if every one graded
-    python tests/run_all.py --select 'tests/test_ledger*.py'
+    python tests/run_all.py --select 'tests/test_setup*.py'
     python tests/run_all.py --allow-skips    # the developer case, never CI
     python tests/run_all.py --verbose        # stream each suite's own output
 
@@ -85,13 +85,13 @@ def _status_path(line):
 def tree_state():
     """Tracked status plus ignored/untracked files, as a set of lines.
 
-    Used to REPORT the leak G2 closes: the suites still write tasks.json, sessions/,
-    tinycmdr.log and friends into the checkout. This runner must not fail on that - it is
+    Used to REPORT the leak G2 closes: the suites still write sessions/, tinycmdr.log and
+    friends into the checkout. This runner must not fail on that - it is
     a measurement for the batch that makes them hermetic.
 
     Ignored/untracked entries also carry a size+mtime fingerprint, because `git status`
     alone cannot see a file that is REWRITTEN without changing its status: an ignored
-    tinycmdr.log, tasks.journal.jsonl or state.json looks identical before and after a suite
+    tinycmdr.log or state.json looks identical before and after a suite
     appended to it, and that is exactly how those writes stayed invisible.
     """
     try:
@@ -105,7 +105,7 @@ def tree_state():
     lines = set(out.stdout.splitlines())
     for line in list(lines):
         # IGNORED entries only: a rewritten ignored file is what `git status` cannot show
-        # (tinycmdr.log, tasks.journal.jsonl, tools-provenance.json all live in the
+        # (tinycmdr.log, tools-provenance.json all live in the
         # checkout unnoticed). An untracked file that is rewritten is somebody editing a
         # working file - the authors' notes/, a new suite under tests/ - and reporting that
         # as a leak made the report point at the run instead of at a suite.
@@ -281,7 +281,6 @@ def _check_tail(stdout):
       "N failed: names"                  test_cross_process, test_profiles
       "N FAILED: names" / "FAILED: N"    test_measured_doc, test_installer_parity,
                                          test_llama_extensions, test_shim, test_atlas
-      "failed: names"                    test_ledger_journal, which prints no count at all
     A traceback, or a run that stops after its FAIL lines, still matches nothing.
     """
     for line in reversed(stdout.splitlines()):
@@ -403,7 +402,7 @@ def main():
     # what the batch that owns each suite has to close, and this runner still exits 0 on a
     # green run with leaks in it.
     if leaks:
-        # Grouped by WHAT was written: one path (an ignored log, the ledger journal) is
+        # Grouped by WHAT was written: one path (an ignored log) is
         # usually written by many suites, and a reader needs the path first, the culprits
         # second.
         by_path = {}
