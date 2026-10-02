@@ -111,7 +111,8 @@ def main():
         # ---- the interactive `model add`: cloud, key first, then the list -------------
         mod2 = stage(work / "add")
         mod2._is_local_url = lambda url: False
-        answers = ["cloud", "sk-good", base, "2", "team-a"]  # kind, key, url, number, alias
+        # kind, key, url, number, alias, then the cloud-failover consent
+        answers = ["cloud", "sk-good", base, "2", "team-a", "y"]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -133,6 +134,8 @@ def main():
               "...and the key goes to .env under the entry's api_key_env", env[-200:])
         check("sk-good" not in json.dumps(cfg), "the key is NEVER in config.json",
               json.dumps(cfg.get("llm")))
+        check("adding an off-LAN endpoint asks about automatic failover, and y turns it on",
+              cfg["llm"].get("allow_cloud_fallback") is True, cfg.get("llm"))
         check("reachable" in out and "cloud-a" in out,
               "it says the endpoint is reachable and lists what it advertised", out[-500:])
 

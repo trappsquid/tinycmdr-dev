@@ -596,6 +596,20 @@ def main():
               fb.CONFIG["llm"]["base_url"] == "http://the LAN model box:8081/v1",
               fb.CONFIG["llm"]["base_url"])
 
+        # ---- model failover: the door that keeps operators out of config.json ------
+        rc, out, err = call(fb, ["model", "failover"])
+        check("model failover reports the flag", rc == 0 and "cloud failover:" in out, out[:160])
+        rc, out, err = call(fb, ["model", "failover", "on"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("model failover on writes llm.allow_cloud_fallback",
+              rc == 0 and written["llm"].get("allow_cloud_fallback") is True, (rc, err[:160]))
+        rc, out, err = call(fb, ["model", "failover", "off"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("...and off turns it back off",
+              rc == 0 and written["llm"].get("allow_cloud_fallback") is False, (rc, err[:160]))
+        rc, out, err = call(fb, ["model", "failover", "maybe"])
+        check("a bad value is refused", rc == 2, (rc, err[:120]))
+
         rc, out, err = call(fb, ["model", "remove", "cloud"])
         check("model remove drops the entry it names", rc == 0 and "removed" in out,
               (rc, err[:160]))

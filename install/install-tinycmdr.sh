@@ -106,6 +106,7 @@ FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
 SECRETS_FILE=""          # --secrets-file: KEY=VALUE lines, read BEFORE the lane is chosen
 YES=0                     # -y/--yes: ask nothing, take the switches and the defaults
 MODEL_KEY=""              # the model endpoint's key, when the reader gives one
+CLOUD_FALLBACK=false      # may automatic failover use an off-LAN endpoint?
 FALLBACK_SPECS=""         # extra endpoints, one "url|model|alias|env-name" per line
 FB_ENV_LINES=""           # their keys, as KEY=VALUE lines for .env
 SEARCH_EGRESS=""          # --search-egress true|false ("" = leave the host's own); an
@@ -887,6 +888,15 @@ if [ "$ASK_Q" = 1 ]; then
         _fb_lbl="Endpoint #$_fb_n (OpenAI-compatible /v1 root)"
         [ "$_fb_kind" = "2" ] && _fb_lbl="Endpoint #$_fb_n (e.g. https://api.provider.com/v1)"
         _fb_url="$(ask_text "$_fb_lbl" "")"
+        # An off-LAN endpoint just joined the chain: ask whether automatic failover
+        # may use it. Asked ONCE - the operator answered it for the whole chain.
+        case "$_fb_url" in
+            *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*) ;;
+            *) if [ "$CLOUD_FALLBACK" != "true" ]; then
+                   ask_yes "Allow automatic failover to off-LAN endpoints when the local one fails?" n \
+                       && CLOUD_FALLBACK=true
+               fi ;;
+        esac
         if [ -z "$_fb_url" ]; then
             warn "no address given - nothing added"
             _fb_n=$((_fb_n - 1))
@@ -1177,7 +1187,7 @@ info "requests : $("$INSTALL_DIR/venv/bin/python" -c 'import importlib.metadata 
 
 # ------------------------------------------------------------------- config ---
 say "config.json"
-"$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
+TINYCMDR_CLOUD_FALLBACK="$CLOUD_FALLBACK" "$PY" - "$INSTALL_DIR" "$SRC/config.example.json" \
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$FORCE" \
         "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" \
         "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$MODEL_KEY" \
@@ -1207,6 +1217,10 @@ if allowed or fresh:
 # placeholder and fail.
 mm["token"] = ""
 llm = cfg.setdefault("llm", {})
+# The operator's answer to the failover question, from the environment (the argv
+# list is already long). Absent/false leaves the shipped default in place.
+if os.environ.get("TINYCMDR_CLOUD_FALLBACK") == "true":
+    llm["allow_cloud_fallback"] = True
 # Only when the caller chose one: the defaults exist for a FIRST install, and
 # re-applying them over a working host is how a LAN endpoint became a cloud one.
 if base and (base_given or fresh):

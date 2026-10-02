@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.45] - 2026-10-02
+Added
+- **Cloud failover has a door.** `llm.allow_cloud_fallback` shipped `false` with no way to
+  change it except hand-editing config.json. There is now `tinycmdr model failover [on|off]`,
+  and the question is asked where an off-LAN endpoint is actually added: the model wizard,
+  `model add`, and the "Add another endpoint?" step of all three installers. OFF (the
+  default) means an off-LAN endpoint is reached only when you switch to it on purpose
+  (`model use`, `/model <alias>`); ON lets automatic failover use it when the local box
+  fails.
+
+
 Removed
 - **The task ledger is gone from the harness.** `volatile_context()` appended a "Task ledger for
   this machine" block to EVERY model call, so an open item's text rode every request as a trailing

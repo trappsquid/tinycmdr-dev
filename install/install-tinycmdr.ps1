@@ -977,6 +977,7 @@ if ($Ask) {
     $ModelBaseUrlGiven = $true
     $ModelGiven = $true
 
+    $CloudFallback = $false          # may automatic failover use an off-LAN endpoint?
     # Extra endpoints: llm.fallbacks, tried in order when the primary fails. Each one gets
     # the same conversation as the primary: local or cloud, the key (cloud), then the link
     # - probed WITH the key - then the model from what it advertises. Its key goes to .env
@@ -992,6 +993,13 @@ if ($Ask) {
                  else { "Endpoint #$n (OpenAI-compatible /v1 root)" }
         $fbUrl = Ask-Text $fbLbl
         if (-not $fbUrl) { Write-Host "  (no address given - nothing added)"; continue }
+        if ($fbUrl -notmatch "127\.0\.0\.1|localhost|::1|10\.|192\.168\.") {
+            if (-not $CloudFallback) {
+                if (Ask-Yes "Allow automatic failover to off-LAN endpoints when the local one fails?" $false) {
+                    $CloudFallback = $true
+                }
+            }
+        }
         $fbKeyTries = 0
         while ($true) {
             $fbProbe = Test-EndpointModels $fbUrl $fbKey
@@ -1274,6 +1282,7 @@ if ($ModelBaseUrlGiven) {
     $cfg.llm.base_url = "http://127.0.0.1:8081/v1"
 }
 if ($ModelGiven -or $cfgFresh) { $cfg.llm.model = $Model }
+if ($CloudFallback) { $cfg.llm.allow_cloud_fallback = $true }
 if ($ModelKey) {
     # The PRIMARY's key goes to .env as TINYCMDR_LLM_API_KEY (env_map resolves it into
     # llm.api_key), never config.json: that is a file the agent reads into a prompt.

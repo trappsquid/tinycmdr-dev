@@ -123,7 +123,7 @@ MM_URL_ARG=""; MM_PORT_ARG=""; SECRETS_FILE=""
 FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
 NO_LAUNCHD=0; FORCE_PYTHON=0; USE_FLEET_MODEL=0; INSTALL_PYTHON=0; YES=0
 # Filled by the questions (or the switches) and written into config.json.
-MODEL_KEY=""; VERB_PATH=""; PATH_ADDED=""
+MODEL_KEY=""; VERB_PATH=""; PATH_ADDED=""; CLOUD_FALLBACK=false
 SEARCH_EGRESS=""       # --search-egress true|false ("" = leave the host's own); an
                        # off-LAN search provider is refused, not called, while false
 # Extra endpoints (llm.fallbacks).
@@ -853,6 +853,13 @@ if [ "$ASK" = 1 ]; then
         _fb_lbl="Endpoint #$_fb_n (OpenAI-compatible /v1 root)"
         [ "$_fb_kind" = "2" ] && _fb_lbl="Endpoint #$_fb_n (e.g. https://api.provider.com/v1)"
         _fb_url="$(ask_text "$_fb_lbl" "")"
+        case "$_fb_url" in
+            *//127.0.0.1:*|*//localhost:*|*"::1"*|*//10.*|*//192.168.*) ;;
+            *) if [ "$CLOUD_FALLBACK" != "true" ]; then
+                   ask_yes "Allow automatic failover to off-LAN endpoints when the local one fails?" n \
+                       && CLOUD_FALLBACK=true
+               fi ;;
+        esac
         if [ -z "$_fb_url" ]; then
             warn "no address given - nothing added"
             _fb_n=$((_fb_n - 1))
@@ -1141,6 +1148,7 @@ fi
 umask 077
 
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \
+CLOUD_FALLBACK="$CLOUD_FALLBACK" \
 TG_IDS_CLEAN="$TG_IDS_CLEAN" \
 MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" \
 MODEL_BASE_GIVEN="$MODEL_BASE_GIVEN" MODEL_GIVEN="$MODEL_GIVEN" \
@@ -1180,6 +1188,8 @@ if _tg_ids or fresh:
     tg["allowed_users"] = _tg_ids
 cfg.setdefault("agent", {})["bot_name"] = os.environ["BOT_NAME"]
 llm = cfg.setdefault("llm", {})
+if os.environ.get("CLOUD_FALLBACK") == "true":
+    llm["allow_cloud_fallback"] = True
 # Only when the caller chose: --model-base-url/--use-fleet-model/--model. The
 # defaults exist for a FIRST install, and re-applying them over a working host is
 # how a LAN endpoint became a cloud one on an update.

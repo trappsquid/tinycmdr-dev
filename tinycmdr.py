@@ -971,7 +971,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.44"
+VERSION = "1.0.45"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -20868,6 +20868,20 @@ def run_setup(rest=None):
         print(dim("   8000-token conversation budget and clip replies at 2048. Set"))
         print(dim("   llm.max_context_tokens in config.json to the window your provider"))
         print(dim("   documents (hosted models are usually 32k-128k+)."))
+    # A cloud fallback is only reached automatically when the operator says so, and
+    # the flag shipped with no door (config.json only). Ask, but only when such an
+    # endpoint is actually configured - an install with no off-LAN endpoint has
+    # nothing to decide.
+    _cloud_fbs = [str(f.get("base_url")) for f in (llm.get("fallbacks") or [])
+                  if isinstance(f, dict) and f.get("base_url")
+                  and not _is_local_url(str(f["base_url"]))]
+    if _cloud_fbs:
+        _cur_cf = bool(llm.get("allow_cloud_fallback", False))
+        print(dim("   Off-LAN endpoint(s) configured: %s" % ", ".join(_cloud_fbs)))
+        ans_cf = input("   Allow automatic failover to them when the local one "
+                       "fails? [%s]: " % ("y" if _cur_cf else "n")).strip().lower()
+        llm["allow_cloud_fallback"] = (_cur_cf if not ans_cf
+                                       else ans_cf in ("y", "yes", "true", "1"))
     print()
 
     print(bold("2. Mattermost Gateway (Chat)"))
@@ -22678,6 +22692,9 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      --alias A, --key-env VAR, --force to add it unverified)
   model endpoint [<url>]
                      read the primary endpoint, or fix it - a 401 asks for the key
+  model failover [on|off]
+                     may automatic failover send to an off-LAN endpoint? (off by
+                     default: off-LAN endpoints are reached only when you switch)
   model remove <x>   drop a fallback entry (by model name, alias or url)
   setup              interactive wizard: model, Mattermost, Telegram, web search
   config get|set|unset <dotted.key> [value]
@@ -23774,6 +23791,19 @@ def _verb_model_add_interactive(opts):
         line = "fallback: %s -> %s%s%s" % (
             url, want, " (alias %s)" % alias if alias else "",
             " (key in .env as %s)" % entry.get("api_key_env") if key else "")
+        # A cloud endpoint just joined the chain. Whether automatic failover may use
+        # it is the operator's call, and this is the moment they are thinking about
+        # it - asking here is the door that keeps them out of config.json.
+        if not _is_local_url(url) and not llm.get("allow_cloud_fallback", False):
+            ans = input("   Allow automatic failover to this off-LAN endpoint when "
+                        "the local one fails? [y/N]: ").strip().lower()
+            if ans in ("y", "yes"):
+                llm["allow_cloud_fallback"] = True
+                print(dim("   cloud failover: on (change it later with "
+                         "`tinycmdr model failover off`)"))
+            else:
+                print(dim("   cloud failover: off - reach it on purpose with "
+                         "`/model %s` or `tinycmdr model failover on`" % (alias or want)))
     err = _config_write_raw(raw)
     if err:
         print(err, file=sys.stderr)
@@ -23950,6 +23980,56 @@ def _verb_model_remove(positional):
     return 0
 
 
+def _verb_model_failover(rest):
+    """`model failover [on|off]`: may a local failure re-send the conversation to an
+    off-LAN endpoint?
+
+    The flag shipped `false` with no interactive door - the only way to change it was
+    hand-editing config.json, which an operator should never have to do. OFF means an
+    off-LAN endpoint is reached only when you switch to it on purpose (`model use`,
+    `/model <alias>`); ON lets automatic failover use it when the local box fails.
+    """
+    want = (rest[0].strip().lower() if rest else "")
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    llm = raw.setdefault("llm", {})
+    cur = bool(llm.get("allow_cloud_fallback", False))
+    if not want:
+        print("cloud failover: %s" % ("on" if cur else "off"))
+        cloud = [str(f.get("base_url")) for f in (llm.get("fallbacks") or [])
+                 if isinstance(f, dict) and f.get("base_url")
+                 and not _is_local_url(str(f["base_url"]))]
+        if cloud:
+            print("  off-LAN endpoint(s): %s" % ", ".join(cloud))
+            if not cur:
+                print("  off = they are only reached when you pick them on purpose "
+                      "(`model use <alias>`, `/model <alias>`).")
+        else:
+            print("  no off-LAN endpoint is configured, so this changes nothing yet.")
+        print("  set it with: tinycmdr model failover on|off")
+        return 0
+    if want not in ("on", "off", "true", "false", "yes", "no", "1", "0"):
+        print("model failover on|off", file=sys.stderr)
+        return 2
+    val = want in ("on", "true", "yes", "1")
+    llm["allow_cloud_fallback"] = val
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    print("cloud failover: %s" % ("on" if val else "off"))
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `/model` uses the new value from "
+              "the next run; `tinycmdr restart` for the whole service.")
+    return 0
+
+
 def _model_setup_wizard():
     """The model-change wizard, in one call: local/cloud, key, link, probe, model list.
 
@@ -23972,6 +24052,8 @@ def _verb_model(rest):
         return _model_setup_wizard()
     if rest and rest[0] in ("endpoint", "url", "host"):
         return _verb_model_endpoint(rest[1:])
+    if rest and rest[0] in ("failover", "cloud-failover"):
+        return _verb_model_failover(rest[1:])
     if rest and rest[0] in ("use", "set"):
         if len(rest) < 2:
             print("model use <name> — which model? (tinycmdr model lists them)",
