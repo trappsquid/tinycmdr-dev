@@ -10,10 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Added
 - **Confirmations can be answered once, for the session, or for ever.** The confirm gate
   asked yes/no for every matching command, so a long run was an interrogation. It now
-  offers "yes, all commands this session" (this process, this conversation) and "yes,
-  always (never ask again)", which is written to `confirm-allow.json` (per-host state)
-  and survives a restart. `tinycmdr model failover`'s sibling for the gate: `tinycmdr
-  approvals` reports the state, `tinycmdr approvals clear` wipes it.
+  offers four short answers - `yes`, `no`, `session` (this conversation) and `always`
+  (never ask again, written to `confirm-allow.json`, a per-host file that survives a
+  restart). One word is a whole answer: a lane whose buttons report the option pressed,
+  a numbered reply ("4") and a typed sentence ("always please") all read the same, and
+  an explicit `no` outranks a scope word in the same sentence. The state is visible and
+  reversible: `tinycmdr approvals` reports it, `tinycmdr approvals clear` wipes it.
 
 Fixed
 - **A 1M-context cloud model is no longer sized as ~8000.** `_detect_window` read vLLM's

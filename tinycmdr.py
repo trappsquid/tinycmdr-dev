@@ -6244,11 +6244,24 @@ def steering_gap_note():
 
 
 # ---------------------------------------------------------------- approvals
-# The operator's answers to the confirm gate, beyond one command: "all of them for
-# this session", or "always, and stop asking" (persisted, so it survives a restart).
+# The operator's answers to the confirm gate, beyond one command: "session" (this
+# conversation) or "always" (persisted, so it survives a restart).
 # The per-command question is still the default; these are the ways OUT of being asked.
 CONFIRM_ALLOW_FILE = BASE_DIR / "confirm-allow.json"
 _CONFIRM_SESSION_ALLOW = set()
+# The gate's answers, as words. The options are four short ones - yes, no,
+# session, always - because the first cut made the operator retype a sentence
+# ("yes, all commands this session") to say one word (operator, 2026-10-02).
+_CONFIRM_CHOICES = ("yes", "no", "session", "always")
+_CONFIRM_YES = ("y", "yes", "yeah", "yep", "ok", "okay", "approve", "approved",
+                "run", "go", "confirm", "confirmed", "1", "true")
+_CONFIRM_NO = ("n", "no", "nope", "stop", "cancel", "deny", "denied", "never",
+               "0", "false")
+# A scope word ALONE is a whole answer: the button says exactly that.
+_CONFIRM_ALONE = {"session": "session", "all": "session", "always": "always",
+                  "permanent": "always", "forever": "always"}
+# ...and inside a sentence ("yes, always") it only sets the scope.
+_CONFIRM_SCOPE = dict(_CONFIRM_ALONE, never="always")
 
 
 def _confirm_allow_read():
@@ -6259,27 +6272,22 @@ def _confirm_allow_read():
         return {}
 
 
-def confirm_preapproved(session_key, subject=""):
-    """(True, reason) when the operator already approved this command, else (False, "")."""
+def confirm_preapproved(session_key):
+    """(True, reason) when the operator already approved this run, else (False, "")."""
     if session_key and session_key in _CONFIRM_SESSION_ALLOW:
         return True, "approved for this session"
-    d = _confirm_allow_read()
-    if d.get("all"):
+    if _confirm_allow_read().get("all"):
         return True, "approved permanently"
-    if subject and str(subject) in [str(s) for s in (d.get("subjects") or [])]:
-        return True, "approved permanently (this command)"
     return False, ""
 
 
 def confirm_allow_state():
-    d = _confirm_allow_read()
-    return {"all": bool(d.get("all")),
-            "subjects": [str(s) for s in (d.get("subjects") or [])],
+    return {"all": bool(_confirm_allow_read().get("all")),
             "sessions": sorted(_CONFIRM_SESSION_ALLOW)}
 
 
-def confirm_allow(action, session_key=None, subject=""):
-    """Grant or clear an approval. action: 'session' | 'always' | 'this' | 'clear'.
+def confirm_allow(action, session_key=None):
+    """Grant or clear an approval. action: 'session' | 'always' | 'clear'.
 
     'always' is the permanent, never-ask-again answer: it is written to
     confirm-allow.json (per-host state, gitignored) so it survives a restart.
@@ -6287,8 +6295,7 @@ def confirm_allow(action, session_key=None, subject=""):
     both the file and every session of this process."""
     if action == "clear":
         _CONFIRM_SESSION_ALLOW.clear()
-        atomic_write_text(CONFIRM_ALLOW_FILE,
-                          json.dumps({"all": False, "subjects": []}, indent=2))
+        atomic_write_text(CONFIRM_ALLOW_FILE, json.dumps({"all": False}, indent=2))
         return confirm_allow_state()
     if action == "session":
         if session_key:
@@ -6297,12 +6304,6 @@ def confirm_allow(action, session_key=None, subject=""):
     d = _confirm_allow_read()
     if action == "always":
         d["all"] = True
-    elif action == "this" and subject:
-        subs = [str(s) for s in (d.get("subjects") or [])]
-        if str(subject) not in subs:
-            subs.append(str(subject))
-        d["subjects"] = subs[-200:]
-    d.setdefault("subjects", [])
     atomic_write_text(CONFIRM_ALLOW_FILE, json.dumps(d, indent=2))
     return confirm_allow_state()
 
@@ -15737,15 +15738,16 @@ class RunReporter:
         permanent allowlist, so the operator is never asked again). The last two are
         what stop a long run being an interrogation.
         """
-        ok_pre, why = confirm_preapproved(self.session_key, command)
+        ok_pre, why = confirm_preapproved(self.session_key)
         if ok_pre:
             self._draw("system", f"✅ {why} - running")
             return True
         answer = self.ask(
             "⚠️ This command matches a confirm-pattern. Allow it?\n"
-            f"```\n{str(command)[:800]}\n```",
-            ["yes", "no", "yes, all commands this session",
-             "yes, always (never ask again)"],
+            f"```\n{str(command)[:800]}\n```\n"
+            "`session` = this conversation only · `always` = never ask again "
+            "(`tinycmdr approvals clear` to undo)",
+            list(_CONFIRM_CHOICES),
             wait, "this conversation")
         if answer is None:
             if not self.dest.has_human:
@@ -15757,21 +15759,36 @@ class RunReporter:
             self._draw("system", f"⏱ no answer within {int(wait)}s — that "
                                  f"command was skipped")
             return False
-        # The operator's first word decides, in every lane: a button that says
-        # "yes, run it" and a terminal that says "go" both mean yes, and one
-        # parser means one place to change what yes is.
-        low = str(answer).strip().lower()
-        first = re.sub(r"[^a-z0-9]", "", low.split()[0]) if low else ""
-        ok = first in ("y", "yes", "yeah", "ok", "okay", "approve", "approved",
-                       "run", "go", "confirm", "confirmed", "1", "true")
+        # The operator's answer is read by WORD, in every lane: a lane whose buttons
+        # report the option they pressed and a terminal where the operator types both
+        # come back as text, and one parser means one place to change what yes is.
+        # The options are four short words, so a single word is a whole answer; a
+        # sentence still works ("yes, run it"), scope word anywhere in it.
+        words = re.findall(r"[a-z0-9]+", str(answer).strip().lower())
+        if len(words) == 1 and words[0].isdigit():
+            # A lane that answers the NUMBERED list ("3") answered with the option it
+            # names - resolved here because the list is this function's own.
+            idx = int(words[0])
+            if 1 <= idx <= len(_CONFIRM_CHOICES):
+                words = re.findall(r"[a-z0-9]+", _CONFIRM_CHOICES[idx - 1])
+        first = words[0] if words else ""
+        scope = next((_CONFIRM_SCOPE[w] for w in words if w in _CONFIRM_SCOPE), None)
+        ok = False
+        if first in _CONFIRM_NO:
+            ok = False        # an explicit no outranks any scope word in the sentence
+        elif len(words) == 1 and first in _CONFIRM_ALONE:
+            ok = True         # "session" / "always" alone is the whole answer
+        elif first in _CONFIRM_YES:
+            ok = True         # "yes, always" and "yes" are not the same decision: the
+                              # scope above is read from the whole answer, not the first word
+        elif scope is not None:
+            ok = True         # "always please", "just this session"
         if ok:
-            # The wider scopes are recognised from the whole answer, not the first
-            # word ("yes, always" and "yes" must not be the same decision).
-            if "session" in low:
+            if scope == "session":
                 confirm_allow("session", session_key=self.session_key)
                 self._draw("system", "✅ confirmed for this session — not asking again "
                                      "(`tinycmdr approvals clear` to undo)")
-            elif "always" in low or "never" in low or "permanent" in low or "forever" in low:
+            elif scope == "always":
                 confirm_allow("always")
                 self._draw("system", "✅ confirmed permanently — not asking again "
                                      "(`tinycmdr approvals clear` to undo)")
@@ -24543,8 +24560,8 @@ def verb_from_chat(argv_line):
 def _verb_approvals(rest):
     """`approvals [clear]`: what the confirm gate has been told to stop asking about.
 
-    The operator's "all commands this session" and "always (never ask again)" answers
-    live here, so the state they set is visible and reversible without editing a file."""
+    The operator's "session" and "always" answers live here, so the state they set is
+    visible and reversible without editing a file."""
     if rest and rest[0] in ("clear", "reset", "off"):
         confirm_allow("clear")
         print("cleared: the confirm gate asks again for every command.")
@@ -24553,8 +24570,6 @@ def _verb_approvals(rest):
     print("confirm gate allowlist: %s" % CONFIRM_ALLOW_FILE)
     print("  every command, for ever : %s" % ("yes" if st["all"] else "no"))
     print("  this session            : %s" % (", ".join(st["sessions"]) or "none"))
-    if st["subjects"]:
-        print("  single commands         : %d" % len(st["subjects"]))
     print("  clear with: tinycmdr approvals clear")
     return 0
 

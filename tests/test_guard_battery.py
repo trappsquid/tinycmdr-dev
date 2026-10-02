@@ -432,23 +432,36 @@ class _ApprovalDest:
 
 
 def test_confirm_approval_scopes():
-    """The ways OUT of being asked: all for this session, or always (persisted)."""
+    """The ways OUT of being asked: this session, or always (persisted). Typed words."""
     fb.confirm_allow("clear")
-    d1 = _ApprovalDest("yes, all commands this session")
+    d1 = _ApprovalDest("session")
     r1 = fb.RunReporter(d1, "approve-s1")
-    check("'yes, all commands this session' approves it", r1.confirm("rm -rf /tmp/x") is True)
-    check("a confirm question offers the session and always scopes",
-          bool(d1.options) and any("session" in o for o in d1.options)
-          and any("always" in o for o in d1.options), d1.options)
+    check("a bare 'session' approves for the session", r1.confirm("rm -rf /tmp/x") is True)
+    check("the question offers four short answers, not a sentence",
+          tuple(d1.options) == ("yes", "no", "session", "always"), d1.options)
     check("...and the session is preapproved from then on",
           fb.confirm_preapproved("approve-s1")[0] is True)
     check("...but another session is not", fb.confirm_preapproved("approve-s2")[0] is False)
-    d2 = _ApprovalDest("yes, always (never ask again)")
+    d2 = _ApprovalDest("always")
     fb.RunReporter(d2, "approve-s2").confirm("rm -rf /tmp/y")
-    check("'yes, always' persists to the allowlist file",
+    check("a bare 'always' persists to the allowlist file",
           json.loads((STAGE / "confirm-allow.json").read_text(encoding="utf-8")).get("all") is True)
     check("...and every session is preapproved after it",
           fb.confirm_preapproved("anything")[0] is True)
+    # a lane that answers the NUMBERED list must land on the same option
+    fb.confirm_allow("clear")
+    check("answering the numbered list ('4') is the 'always' answer",
+          fb.RunReporter(_ApprovalDest("4"), "approve-s4").confirm("rm -rf /tmp/w") is True
+          and fb.confirm_preapproved("anything")[0] is True)
+    fb.confirm_allow("clear")
+    check("'no' wins over a scope word in the same sentence",
+          fb.RunReporter(_ApprovalDest("no, not this session"),
+                         "approve-s5").confirm("rm -rf /tmp/v") is False
+          and fb.confirm_preapproved("approve-s5")[0] is False)
+    check("a scope word inside a sentence still sets the scope",
+          fb.RunReporter(_ApprovalDest("always please"),
+                         "approve-s6").confirm("rm -rf /tmp/u") is True
+          and fb.confirm_preapproved("anything")[0] is True)
     fb.confirm_allow("clear")
     check("`confirm_allow clear` wipes the file and the sessions",
           fb.confirm_preapproved("approve-s1")[0] is False
