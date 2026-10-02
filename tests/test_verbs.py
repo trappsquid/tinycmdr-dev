@@ -786,6 +786,37 @@ def main():
             rc, out, err = call(fb, ["token", "set", "TINYCMDR_EMPTY"], stdin="\n")
             check("token set refuses an empty value", rc == 1
                   and "nothing written" in err, (rc, err[:120]))
+            # a value that can never work is REFUSED before it is written ([redacted],
+            # 2026-10-02: a token of one 0x16 byte sat in .env while `token` said "set")
+            rc, out, err = call(fb, ["token", "set", "TINYCMDR_TEST_KEY"], stdin="bad\x16value\n")
+            check("token set refuses a value with control characters", rc == 1
+                  and "control characters" in err, (rc, err[:160]))
+            check("...and writes nothing", "bad" not in (workdir / ".env").read_text(encoding="utf-8"))
+            rc, out, err = call(fb, ["token", "set", "TINYCMDR_TEST_KEY"], stdin="\ufeffbom-prefixed-1234\n")
+            check("a UTF-8 BOM (what a PowerShell pipe adds) is stripped, and said so",
+                  rc == 0 and "BOM" in out
+                  and "TINYCMDR_TEST_KEY=bom-prefixed-1234" in (workdir / ".env").read_text(encoding="utf-8"),
+                  (rc, out[:160]))
+            rc, out, err = call(fb, ["token", "set", "TINYCMDR_MM_TOKEN"], stdin="short\n")
+            check("a Mattermost token of the wrong shape is refused, with the shape named",
+                  rc == 1 and "26 letters/digits" in err, (rc, err[:200]))
+            # the provider is ASKED, and its answer is the operator's, at the prompt
+            _probe_before = fb._token_probe
+            try:
+                fb._token_probe = lambda n, v: (True, "accepted as @the-bot")
+                rc, out, err = call(fb, ["token", "set", "TINYCMDR_MM_TOKEN"], stdin="a" * 26 + "\n")
+                check("a good token is probed and reported accepted",
+                      rc == 0 and "accepted as @the-bot" in out, (rc, out[:200]))
+                fb._token_probe = lambda n, v: (False, "HTTP 400 Bad Request at https://chat/api/v4/users/me")
+                rc, out, err = call(fb, ["token", "set", "TINYCMDR_MM_TOKEN"], stdin="b" * 26 + "\n")
+                check("a token the provider REFUSES is reported at the prompt, rc 1",
+                      rc == 1 and "REFUSED" in err and "HTTP 400" in err, (rc, err[:200]))
+                fb._token_probe = lambda n, v: (None, "could not reach https://chat: timed out")
+                rc, out, err = call(fb, ["token", "set", "TINYCMDR_MM_TOKEN"], stdin="c" * 26 + "\n")
+                check("an unreachable provider says so instead of claiming success",
+                      rc == 0 and "unchecked" in out and "timed out" in out, (rc, out[:200]))
+            finally:
+                fb._token_probe = _probe_before
             # a second set replaces rather than appends
             call(fb, ["token", "set", "TINYCMDR_TEST_KEY"], stdin="second-value-9876\n")
             env_text = (workdir / ".env").read_text(encoding="utf-8")

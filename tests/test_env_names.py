@@ -42,8 +42,9 @@ def env_map_names():
 
 
 def written_names():
-    """Every name the app writes into .env through _env_set()."""
-    return set(re.findall(r'_env_set\("([A-Z0-9_]+)"', SRC))
+    """Every name the app writes into .env: _env_set(), and _env_set_safe() which reports a
+    value it must refuse instead of raising at the operator's prompt."""
+    return set(re.findall(r'_env_set(?:_safe)?\("([A-Z0-9_]+)"', SRC))
 
 
 def main():

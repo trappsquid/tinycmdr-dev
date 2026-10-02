@@ -35,6 +35,7 @@ import os
 import platform
 import queue
 import re
+import unicodedata
 import signal
 import socket
 import subprocess
@@ -130,6 +131,27 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[logging.handlers.QueueHandler(_log_queue)],
 )
+
+
+class _NoBlankRecords(logging.Filter):
+    """A library logging an empty message gets its name attached instead of nothing.
+
+    mattermostautodriver calls `log.error(message)` with the API's `message` field, which
+    is EMPTY for a refused token: the operator's log got bare `ERROR ` lines beside the
+    400 - the only trail a bad token ever left ([redacted], 2026-10-02)."""
+
+    def filter(self, record):
+        try:
+            if not record.getMessage().strip():
+                record.msg = "(%s logged an empty message)" % record.name
+                record.args = ()
+        except Exception:                                     # noqa: BLE001
+            pass
+        return True
+
+
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(_NoBlankRecords())
 log = logging.getLogger("tinycmdr")
 
 
@@ -19183,6 +19205,42 @@ def _lane_fails_snapshot():
         return json.loads(json.dumps(LANE_FAILS))
 
 
+LANE_PERMANENT_BACKOFF = 600      # a credential the service REFUSED is not an outage
+
+
+def _lane_reason(exc):
+    """A reason worth reading, even when the exception carries none.
+
+    mattermostautodriver raises `InvalidOrMissingParameters(message)` where `message` is the
+    API's empty `message` field for a bad token: str(exc) is "", so the lane recorded "no
+    detail", `doctor` printed that, and the log line was blank. Measured on [redacted],
+    2026-10-02, after 723 failed starts with no visible cause.
+    """
+    text = str(exc).strip()
+    name = type(exc).__name__
+    if not text:
+        text = repr(exc).strip() or name
+        if text in (name + "()", name + "('',)", name + '("",)'):
+            text = name           # "InvalidOrMissingParameters()" reads worse than the name
+    if name not in text:
+        text = "%s: %s" % (name, text)
+    return text[:400]
+
+
+# The failures a HUMAN has to fix. Everything else is retried on the growing backoff.
+# The bare status is matched on a word boundary because that is how the refusal arrives from
+# the libraries ("401 Invalid or expired session"); our own probe says "HTTP 400 ... at <url>".
+_LANE_PERMANENT_RE = re.compile(
+    r"(\b40[13]\b|\b400\b|InvalidOrMissingParameters|NoAccessTokenProvided|"
+    r"NotEnoughPermissions|the token was refused|"
+    r"no Mattermost token|no Telegram token)", re.I)
+
+
+def _lane_error_permanent(exc):
+    """True when no amount of waiting will start this lane: the service answered and said no."""
+    return bool(_LANE_PERMANENT_RE.search(_lane_reason(exc)))
+
+
 def lane_down(lane, error):
     """Record a lane failing. Returns (count, was_same_error, first_seen) so the caller can
     decide what to SAY: the full story once per state, and nothing while the same error
@@ -19268,36 +19326,55 @@ def lane_with_retry(start, lane, report, sleep=None, now=None):
         try:
             start()
         except Exception as e:                                # noqa: BLE001 - retried
-            failures, delay = lane_backoff_after(failures, now() - t0)
-            count, same, first = lane_down(lane, str(e))
-            report(e, count, same, first, delay)
+            permanent = _lane_error_permanent(e)
+            if permanent:
+                # It will not fix itself, and 5, 10, 20, 60 seconds of retrying said
+                # nothing: the operator's log had 723 failed starts and one blank ERROR
+                # line each ([redacted], 2026-10-02). Say it once, then park on a long
+                # interval - which also keeps the OTHER lane (a daemon thread here) alive.
+                failures, delay = failures + 1, LANE_PERMANENT_BACKOFF
+            else:
+                failures, delay = lane_backoff_after(failures, now() - t0)
+            count, same, first = lane_down(lane, _lane_reason(e))
+            report(e, count, same, first, delay, permanent)
             sleep(delay)
             continue
         return
 
 
-def _lane_report_mattermost(e, count, same, first, delay):
+def _lane_report_mattermost(e, count, same, first, delay, permanent=False):
     """One line per STATE, not one per attempt: a repeat of the SAME error is not news (the
     incident wrote 419 KB saying so), and the count and the reason are in LANE_STATE_FILE
     where `tinycmdr health` reads them."""
     if same and count > 1:
         return
+    if permanent:
+        log.critical("Mattermost REFUSED this bot's credentials: %s. Waiting will not fix "
+                     "it — the lane is parked and retried every %ds. Replace the token: "
+                     "`tinycmdr token set TINYCMDR_MM_TOKEN`, then `tinycmdr restart` "
+                     "(and check mattermost.url in config.json).", _lane_reason(e), delay)
+        return
     log.critical("Mattermost connection failed: %s — this bot cannot hear anybody. Check "
                  "mattermost.url/port in config.json, and the bot token in %s as "
                  "TINYCMDR_MM_TOKEN (System Console -> Integrations -> Bot Accounts). "
                  "Retrying in %ds; `tinycmdr health` reports this with exit code 1, and "
-                 "the full state is in %s.", e, ENV_FILE.name, delay, LANE_STATE_FILE)
+                 "the full state is in %s.", _lane_reason(e), ENV_FILE.name, delay,
+                 LANE_STATE_FILE)
 
 
-def _lane_report_telegram(e, count, same, first, delay):
+def _lane_report_telegram(e, count, same, first, delay, permanent=False):
     """The Telegram twin: what reaches here is the network. A token the API REFUSED is a
     permanent failure and exits 2 from the lane itself, before this."""
     if same and count > 1:
         return
+    if permanent:
+        log.critical("Telegram REFUSED this bot's token: %s. Replace it: `tinycmdr token "
+                     "set TINYCMDR_TG_TOKEN`, then `tinycmdr restart`.", _lane_reason(e))
+        return
     log.critical("Telegram lane is down: %s — this bot cannot hear anybody. Check this "
                  "host's network and TINYCMDR_TG_TOKEN in %s; retrying in %ds. `tinycmdr "
                  "health` reports this with exit code 1, and the full state is in %s.",
-                 e, ENV_FILE.name, delay, LANE_STATE_FILE)
+                 _lane_reason(e), ENV_FILE.name, delay, LANE_STATE_FILE)
 
 
 def _lane_token(lane):
@@ -19388,6 +19465,15 @@ def run_bot():
     url = mm["url"]
     if "://" not in url:
         url = f"{mm.get('scheme', 'https')}://{url}"
+    # Ask the server before the driver does. The driver reports a refused token with an
+    # EMPTY message (see _mm_probe), so the lane used to fail with no reason at all; this
+    # makes the failure say "HTTP 400 ... /api/v4/users/me", which _lane_error_permanent
+    # parks instead of retrying for ever.
+    _ok_mm, _why_mm = _mm_probe(_mm_base_url(mm), mm["token"])
+    if _ok_mm is False:
+        raise RuntimeError("Mattermost refused this bot's token: %s - replace it with "
+                           "`tinycmdr token set TINYCMDR_MM_TOKEN`, then restart"
+                           % _why_mm)
     bot = Bot(
         settings=Settings(
             MATTERMOST_URL=url,          # 2.2.x: scheme folded into the URL
@@ -20986,8 +21072,8 @@ def run_setup(rest=None):
     llm["base_url"], llm["model"] = target["url"], target["model"]
     if target["key"]:
         if target["key"] != cur_key:
-            _env_set("TINYCMDR_LLM_API_KEY", target["key"])
-            print(dim("   API key saved to .env as TINYCMDR_LLM_API_KEY"))
+            if _env_set_safe("TINYCMDR_LLM_API_KEY", target["key"]):
+                print(dim("   API key saved to .env as TINYCMDR_LLM_API_KEY"))
         # The running process must see it NOW, not after a restart: model_catalog and every
         # later probe read _primary_api_key(), which prefers config.json and falls back to
         # this variable. (The wizard used to save the key and then drop it from the live
@@ -21028,8 +21114,8 @@ def run_setup(rest=None):
             mm["url"] = mm_url
         mm_token = input("   Mattermost bot token (leave empty to keep current): ").strip()
         if mm_token:
-            _env_set("TINYCMDR_MM_TOKEN", mm_token)
-            print(dim("   Mattermost token saved to .env"))
+            if _env_set_safe("TINYCMDR_MM_TOKEN", mm_token):
+                print(dim("   Mattermost token saved to .env"))
         cur_users = ",".join(mm.get("allowed_users") or [])
         mm_users = input("   Allowed User ID(s) (comma-separated) [%s]: " % cur_users).strip()
         if mm_users:
@@ -21042,8 +21128,8 @@ def run_setup(rest=None):
     if want_tg in ("y", "yes"):
         tg_token = input("   Telegram bot token (leave empty to keep current): ").strip()
         if tg_token:
-            _env_set("TINYCMDR_TG_TOKEN", tg_token)
-            print(dim("   Telegram token saved to .env"))
+            if _env_set_safe("TINYCMDR_TG_TOKEN", tg_token):
+                print(dim("   Telegram token saved to .env"))
         tg_users = input("   Allowed numeric User ID(s) (comma-separated) [%s]: " % cur_tg_users).strip()
         if tg_users:
             try:
@@ -23816,10 +23902,10 @@ def _verb_model_endpoint(args):
     if rc:
         return rc
     if typed_key:
-        _env_set("TINYCMDR_LLM_API_KEY", key)
-        os.environ["TINYCMDR_LLM_API_KEY"] = key
-        CONFIG["llm"]["api_key"] = key
-        print("key saved to %s as TINYCMDR_LLM_API_KEY" % ENV_FILE.name)
+        if _env_set_safe("TINYCMDR_LLM_API_KEY", key):
+            os.environ["TINYCMDR_LLM_API_KEY"] = key
+            CONFIG["llm"]["api_key"] = key
+            print("key saved to %s as TINYCMDR_LLM_API_KEY" % ENV_FILE.name)
     if not ids:
         print("choose one with: tinycmdr model use <name>")
         return 0
@@ -23899,11 +23985,12 @@ def _verb_model_add_interactive(opts):
                       "   TINYCMDR_LLM_API_KEY with `tinycmdr token set TINYCMDR_LLM_API_KEY`."
                       % (url, ENV_FILE.name)))
         llm["base_url"], llm["model"] = url, want
-        if key:
-            _env_set("TINYCMDR_LLM_API_KEY", key)
+        _key_saved = bool(key) and _env_set_safe("TINYCMDR_LLM_API_KEY", key)
+        if _key_saved:
             os.environ["TINYCMDR_LLM_API_KEY"] = key
         line = "primary: %s -> %s%s" % (url, want,
-                                        " (key in .env as TINYCMDR_LLM_API_KEY)" if key else "")
+                                        " (key in .env as TINYCMDR_LLM_API_KEY)"
+                                        if _key_saved else "")
     else:
         for fb in fbs:
             if (isinstance(fb, dict)
@@ -23923,8 +24010,8 @@ def _verb_model_add_interactive(opts):
         if key:
             key_env = _next_endpoint_env(fbs)
             entry["api_key_env"] = key_env
-            _env_set(key_env, key)
-            os.environ[key_env] = key
+            if _env_set_safe(key_env, key):
+                os.environ[key_env] = key
         fbs.append(entry)
         line = "fallback: %s -> %s%s%s" % (
             url, want, " (alias %s)" % alias if alias else "",
@@ -24427,8 +24514,53 @@ def _verb_restart():
     return 0 if running else 1
 
 
+_SECRET_SHAPES = {
+    # name -> (regex, what it must look like). A Mattermost bot token is 26 lowercase
+    # alphanumerics; a Telegram bot token is "<digits>:<35 chars>". Both are fixed by the
+    # services, and a value that misses the shape can NEVER authenticate - which is the
+    # whole point of checking here rather than after 723 failed lane starts.
+    "TINYCMDR_MM_TOKEN": (re.compile(r"^[A-Za-z0-9]{26}$"),
+                          "26 letters/digits, from System Console -> Integrations -> "
+                          "Bot Accounts"),
+    "TINYCMDR_TG_TOKEN": (re.compile(r"^\d{5,12}:[A-Za-z0-9_-]{30,}$"),
+                          "<digits>:<35 characters>, from @BotFather"),
+}
+
+
+def secret_check(name, value):
+    """The value to write, or ValueError saying why it cannot be a working secret.
+
+    Measured on [redacted], 2026-10-02: a mattermost token of ONE 0x16 byte sat in .env and
+    `tinycmdr token` called it "set (.env)" while the lane failed 723 times - nothing had
+    looked at the value. The BOM case is not hypothetical either: PowerShell 5.1 prepends
+    a UTF-8 BOM to anything piped into a native command, so `"$tok" | tinycmdr token set
+    ...` writes seven bytes nobody can see (reproduced while writing this).
+    """
+    text = str(value or "")
+    note = ""
+    if text.startswith("\ufeff"):
+        text = text[1:]
+        note = ("removed a leading UTF-8 BOM (PowerShell 5.1 adds one when it pipes a "
+                "value into a command)")
+    bad = sorted({ch for ch in text if ch in "\r\n\t" or unicodedata.category(ch)[0] == "C"})
+    if bad:
+        raise ValueError("the value holds control characters (%s) - paste the token at "
+                         "the prompt, do not pipe it through a shell"
+                         % " ".join("U+%04X" % ord(c) for c in bad))
+    if not text.strip():
+        raise ValueError("the value is empty")
+    if text != text.strip():
+        raise ValueError("the value has leading or trailing whitespace")
+    shape = _SECRET_SHAPES.get(name)
+    if shape and not shape[0].match(text):
+        raise ValueError("a %s does not look like one: %d character(s), expected %s"
+                         % (name, len(text), shape[1]))
+    return text, note
+
+
 def _env_set(name, value):
     """Write NAME=value into .env atomically, mode 600, keeping every other line."""
+    value, _note = secret_check(name, value)
     lines = []
     if ENV_FILE.exists():
         lines = ENV_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -24446,6 +24578,75 @@ def _env_set(name, value):
         os.chmod(ENV_FILE, 0o600)
     except OSError:
         pass
+
+
+def _mm_base_url(mm):
+    """The Mattermost server as ONE url (the driver is given url and port separately)."""
+    url = str((mm or {}).get("url") or "").strip()
+    if url and "://" not in url:
+        url = "%s://%s" % ((mm or {}).get("scheme", "https"), url)
+    url = url.rstrip("/")
+    port = (mm or {}).get("port") or (443 if url.startswith("https") else 80)
+    if url and not re.search(r":\d+$", url) and str(port) not in ("443", "80"):
+        url = "%s:%s" % (url, port)
+    return url
+
+
+def _mm_probe(url, token, timeout=15):
+    """(ok, detail) for a Mattermost bot token against its server.
+
+    The driver this lane runs on answers a refused token with an EMPTY message
+    (mattermostautodriver/client.py does `log.error(message)` on the API's `message` field,
+    which is empty for a bad token) - so the lane's own failure carried no reason, `doctor`
+    said "no detail", and the log got a blank ERROR line per retry. One GET /users/me names
+    the status, the URL and the bot, and is the same call the lane needs to make anyway.
+    """
+    url = str(url or "").strip()
+    if not url:
+        return None, "no mattermost.url in config.json"
+    if "://" not in url:
+        url = "https://" + url
+    url = url.rstrip("/")
+    try:
+        r = requests.get(url + "/api/v4/users/me",
+                         headers={"Authorization": "Bearer " + str(token)},
+                         timeout=timeout)
+    except Exception as e:                                    # noqa: BLE001 - reported
+        return None, "could not reach %s: %s" % (url, e)
+    if r.status_code == 200:
+        try:
+            who = r.json().get("username") or r.json().get("id") or "?"
+        except Exception:                                     # noqa: BLE001
+            who = "?"
+        return True, "accepted as @%s" % who
+    return False, "HTTP %d %s at %s/api/v4/users/me" % (
+        r.status_code, (r.reason or "").strip(), url)
+
+
+def _token_probe(name, value):
+    """(ok|None, detail) for a secret we can ask the service about, else (None, "")."""
+    if name == "TINYCMDR_MM_TOKEN":
+        return _mm_probe((CONFIG.get("mattermost") or {}).get("url"), value)
+    if name == "TINYCMDR_TG_TOKEN":
+        try:
+            r = requests.get("https://api.telegram.org/bot%s/getMe" % value, timeout=15)
+            body = r.json()
+        except Exception as e:                                # noqa: BLE001 - reported
+            return None, "could not reach api.telegram.org: %s" % e
+        if body.get("ok"):
+            return True, "accepted as @%s" % (body.get("result") or {}).get("username")
+        return False, "refused: %s" % (body.get("description") or "the API said no")
+    return None, ""
+
+
+def _env_set_safe(name, value):
+    """_env_set, but a refused value is REPORTED instead of raising at a prompt."""
+    try:
+        _env_set(name, value)
+        return True
+    except ValueError as problem:
+        print("   not saved: %s" % problem, file=sys.stderr)
+        return False
 
 
 def _verb_token(rest):
@@ -24468,15 +24669,31 @@ def _verb_token(rest):
         except Exception as e:
             print("could not read the value: %s" % e, file=sys.stderr)
             return 1
-        if not value:
-            print("nothing written: the value was empty", file=sys.stderr)
-            return 1
         try:
-            _env_set(name, value)
+            clean, note = secret_check(name, value)
+        except ValueError as problem:
+            print("nothing written: %s" % problem, file=sys.stderr)
+            return 1
+        if note:
+            print("note: %s" % note)
+        try:
+            _env_set(name, clean)
         except Exception as e:
             print("could not write %s: %s" % (ENV_FILE, e), file=sys.stderr)
             return 1
         print("%s written to %s (mode 600 where the OS honours it)" % (name, ENV_FILE))
+        # Ask the provider NOW. A token that the service refuses is a fact the operator can
+        # have at the prompt, instead of a lane that fails every 20s behind them.
+        good, detail = _token_probe(name, clean)
+        if good is True:
+            print("checked   : the provider %s — the lane works once it restarts." % detail)
+        elif good is False:
+            print("REFUSED   : %s" % detail, file=sys.stderr)
+            print("the value is in .env, but that token does not authenticate: get a fresh "
+                  "one and run this again.", file=sys.stderr)
+            return 1
+        elif detail:
+            print("unchecked : %s" % detail)
         if _verb_running() is True:
             print("the running bot read .env at start: `tinycmdr restart` to pick it up.")
         return 0
@@ -24951,7 +25168,21 @@ def main():
                 args=(run_telegram, "telegram", _lane_report_telegram),
                 daemon=True, name="telegram-lane")
             _tg_thread.start()
-            lane_with_retry(run_bot, "mattermost", _lane_report_mattermost)
+            try:
+                lane_with_retry(run_bot, "mattermost", _lane_report_mattermost)
+            except SystemExit as exc:
+                # A lane that cannot start must not take the other one with it. Telegram
+                # rides a DAEMON thread here, so returning from main() kills it - the shape
+                # where a missing Mattermost token silences a working Telegram lane. While
+                # the other lane is alive, keep serving it; if it is gone too, exit as
+                # before and let the supervisor restart the pair.
+                if not _tg_thread.is_alive():
+                    raise
+                log.critical("Mattermost lane stopped (exit %s) - Telegram keeps serving; "
+                             "fix Mattermost, then `tinycmdr restart`.",
+                             getattr(exc, "code", "?"))
+                while _tg_thread.is_alive():
+                    time.sleep(1)
 
 
 if __name__ == "__main__":

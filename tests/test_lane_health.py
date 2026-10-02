@@ -240,9 +240,9 @@ T._lane_state_write()
 _seen = []
 
 
-def _reporter(e, count, same, first, delay):
+def _reporter(e, count, same, first, delay, permanent=False):
     _seen.append((count, same, delay))
-    T._lane_report_mattermost(e, count, same, first, delay)
+    T._lane_report_mattermost(e, count, same, first, delay, permanent)
 
 
 with _capturing() as _log:
@@ -270,9 +270,9 @@ T._LANE_FAILS_LOADED = False
 _seen2 = []
 
 
-def _reporter2(e, count, same, first, delay):
+def _reporter2(e, count, same, first, delay, permanent=False):
     _seen2.append((count, same, delay))
-    T._lane_report_mattermost(e, count, same, first, delay)
+    T._lane_report_mattermost(e, count, same, first, delay, permanent)
 
 
 _errs2 = ["connection refused", "connection refused", "401 Invalid or expired session"]
@@ -283,8 +283,10 @@ with _capturing() as _log2:
         reporter=_reporter2)
 check("a CHANGED error is logged again (1 + 1), and recovery once",
       len(_lines(_log2)) == 3, _lines(_log2))
-check("...while the backoff keeps growing across it (5, 10, 20)",
-      _slept2 == [5, 10, 20], _slept2)
+check("...and a REFUSED credential parks on the 10-minute retry, not the growing curve",
+      _slept2 == [5, 10, 600], _slept2)
+check("...and the line says what to type to fix it",
+      any("token set TINYCMDR_MM_TOKEN" in l for l in _lines(_log2)), _lines(_log2))
 check("...and the retry count starts over for the NEW error, as lane_down counts them",
       [(c, s) for c, s, _d in _seen2] == [(1, False), (2, True), (1, False)], _seen2)
 
@@ -414,3 +416,40 @@ if FAILS:
     print("%d check(s) failed: %s" % (len(FAILS), ", ".join(FAILS)))
     sys.exit(1)
 print("lanes, recovery, drift: what the surfaces say is what is true")
+
+# ---- a lane failure must carry a REASON ([redacted], 2026-10-02) -----------------------
+# mattermostautodriver raises InvalidOrMissingParameters(message) where the message is the
+# API's empty field: str(exc) was "", the lane stored "no detail", `doctor` printed "no
+# detail", and the log got a blank ERROR line per retry - 723 failed starts with no cause
+# visible to the operator.
+class _Empty(Exception):
+    def __str__(self):
+        return ""
+
+
+_bare = T._lane_reason(_Empty())
+check("a lane error with an EMPTY message still yields a reason (the class name)",
+      _bare.strip() == "_Empty", _bare)
+check("...and a normal one keeps its text", "no route to host" in T._lane_reason(RuntimeError("no route to host")))
+check("a refused credential is classified PERMANENT",
+      T._lane_error_permanent(RuntimeError("HTTP 400 Bad Request at https://x/api/v4/users/me")) is True)
+check("...and a network failure is not", T._lane_error_permanent(RuntimeError("no route to host")) is False)
+
+_blank = io.StringIO()
+_h = logging.StreamHandler(_blank)
+_h.addFilter(T._NoBlankRecords())
+_lg = logging.getLogger("mattermostautodriver.client")
+_lg.addHandler(_h)
+try:
+    _lg.error("")
+finally:
+    _lg.removeHandler(_h)
+check("a library logging an empty message is attributed, not left blank",
+      "logged an empty message" in _blank.getvalue()
+      and "mattermostautodriver" in _blank.getvalue(), _blank.getvalue()[:120])
+
+# the lane and the credential probe agree about the server's URL
+check("the Mattermost url is built once, with a non-default port",
+      T._mm_base_url({"url": "chat.x.com", "port": 8065}) == "https://chat.x.com:8065"
+      and T._mm_base_url({"url": "https://chat.x.com", "port": 443}) == "https://chat.x.com",
+      (T._mm_base_url({"url": "chat.x.com", "port": 8065}),))

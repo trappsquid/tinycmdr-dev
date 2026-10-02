@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **A chat token that cannot work is refused where it is typed, and a refused one is
+  diagnosed wherever it shows up.** `tinycmdr token set` wrote ANY value: a Mattermost
+  token of one 0x16 byte sat in a live `.env` while `tinycmdr token` called it
+  "set (.env)", and the lane failed 723 times. It now refuses control characters, an empty
+  value and stray whitespace, checks the shape per key (a Mattermost bot token is 26
+  letters/digits; a Telegram one is `<digits>:<35 chars>`), strips — and names — a leading
+  UTF-8 BOM (PowerShell 5.1 prepends one to anything piped into a command: reproduced while
+  writing this), and then ASKS THE PROVIDER (`GET /api/v4/users/me`, Telegram `getMe`),
+  printing "checked: accepted as @the-bot" or "REFUSED: HTTP 400 …" at the prompt. The
+  wizard and the model-add paths share the same gate.
+- **A lane failure now carries a reason.** mattermostautodriver raises
+  `InvalidOrMissingParameters(message)` where `message` is the API's empty field, so a
+  refused token reached the lane as an empty string: `doctor` said "mattermost lane is DOWN
+  (723 failed start(s)): no detail" and the log got a blank `ERROR ` line per retry.
+  `_lane_reason()` falls back to the exception's class (and a logging filter attributes an
+  empty library message), so the state file, `doctor` and `health` all name the cause; the
+  Mattermost lane also probes `/users/me` before the driver starts, so its failure reads
+  "HTTP 400 Bad Request at …/api/v4/users/me".
+- **A refused credential is parked, not hammered.** HTTP 400/401/403 (and the driver's own
+  InvalidOrMissingParameters / NoAccessTokenProvided / NotEnoughPermissions) is a human's
+  job, not an outage: the lane logs ONE critical line naming the fix (`tinycmdr token set
+  TINYCMDR_MM_TOKEN`, then `tinycmdr restart`) and retries every 10 minutes instead of
+  climbing the 5/10/20/60 backoff for ever.
+- **A fatal lane no longer takes the other lane with it.** With both doors configured,
+  Telegram rides a DAEMON thread, so a `sys.exit(2)` from the Mattermost lane (a missing
+  token) killed the process and the working Telegram lane with it; the pair now keeps
+  serving the lane that is up.
+
 Added
 - **Confirmations can be answered once, for the session, or for ever.** The confirm gate
   asked yes/no for every matching command, so a long run was an interrogation. It now
