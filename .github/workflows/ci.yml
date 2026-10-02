@@ -102,3 +102,75 @@ jobs:
           --select tests/test_checkin.py
           --select tests/test_endpoint_gate.py
           --select tests/test_installer_windows.py
+
+  # The one loop no suite closes: build the package, install FROM the artifact it produces,
+  # and run it. tests/test_installer_*.py install from a tree the suite assembles itself, so
+  # until this job the zip and tarball every other host downloads were never executed - the
+  # "installs and runs" claim had no exit code behind it. maintenance/smoke-install.sh builds
+  # the public package, unpacks it, installs headless, then maintenance/smoke-install.py
+  # drives doctor, health and a --once turn against a model endpoint.
+  #
+  # The endpoint is a hermetic stub by default, so this grades the artifact on a clean runner
+  # with no model. Set the repository secret TINYCMDR_SMOKE_BASE_URL (and variable
+  # TINYCMDR_SMOKE_MODEL) to run the same turn against a real endpoint instead - the value is
+  # never written into this file, because a LAN address in a tracked file is exactly what
+  # maintenance/leak-gate.py refuses. A LAN endpoint is only reachable from a runner on that
+  # network; on GitHub-hosted runners leave the secret unset and the stub runs.
+  install:
+    name: install from the built package / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    env:
+      TINYCMDR_SMOKE_BASE_URL: ${{ secrets.TINYCMDR_SMOKE_BASE_URL }}
+      TINYCMDR_SMOKE_MODEL: ${{ vars.TINYCMDR_SMOKE_MODEL }}
+      TINYCMDR_BUILD_PYTHON: python3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # build-package.py's payload-floor probe imports the app, which needs requests;
+      # without it the build still succeeds but prints "PROBE FAILED" instead of the
+      # floor it is there to measure.
+      - run: python -m pip install requests
+      - name: build, install from the artifact, smoke it
+        run: bash maintenance/smoke-install.sh
+
+  # Windows has no bash door, so the same three steps are spelled out here. install-tinycmdr.ps1
+  # gets -SkipTask (files only, no scheduled task) and -NoPath, the analogues of the macos
+  # --no-launchd --no-path, and then the install is handed to the same cross-platform smoke.
+  install-windows:
+    name: install from the built package / windows
+    runs-on: windows-latest
+    env:
+      TINYCMDR_SMOKE_BASE_URL: ${{ secrets.TINYCMDR_SMOKE_BASE_URL }}
+      TINYCMDR_SMOKE_MODEL: ${{ vars.TINYCMDR_SMOKE_MODEL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install requests
+      - name: build the public package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\rules" | Out-Null
+          Copy-Item maintenance\private_rules.example.py "$env:RUNNER_TEMP\rules\private_rules.py"
+          $env:PYTHONPATH = "$env:RUNNER_TEMP\rules"
+          python maintenance\build-package.py --public
+      - name: unpack and install from the archive
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist\tinycmdr-*-win.zip | Sort-Object LastWriteTime | Select-Object -Last 1
+          Expand-Archive -Path $zip.FullName -DestinationPath "$env:RUNNER_TEMP\pkg" -Force
+          $pkg = Get-ChildItem "$env:RUNNER_TEMP\pkg" -Directory | Select-Object -First 1
+          & "$($pkg.FullName)\install\install-tinycmdr.ps1" -NonInteractive -SkipTask -NoPath -NoPause `
+              -InstallDir "$env:RUNNER_TEMP\inst" -Python (Get-Command python).Source
+      - name: smoke the install
+        shell: pwsh
+        run: |
+          python maintenance\smoke-install.py --install-dir "$env:RUNNER_TEMP\inst" `
+              --python "$env:RUNNER_TEMP\inst\venv\Scripts\python.exe"

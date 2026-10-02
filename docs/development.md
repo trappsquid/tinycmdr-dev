@@ -19,6 +19,7 @@ answer to "what is this box".
 | Is the tree I am looking at **released**? | `where.py`'s ORIGIN block: how far HEAD is past the newest tag | `python3 maintenance/where.py` |
 | What shipped, and what is still open? | `STATUS.json`, anchored to commits/tags/files | `python3 tests/test_status.py` |
 | Does the code pass? | the suites | `venv/bin/python tests/run_all.py` |
+| Does the published package install and run? | the install jobs: build, install from the archive, `doctor`/`health`/`--once` | `bash maintenance/smoke-install.sh` |
 | Is the published prose stale? | the measured blocks regenerated from the tree | `python3 maintenance/measured-block.py` |
 | Would this push leak something private? | `maintenance/leak-gate.py` over the tree, the commits a push would add, or every reachable blob | `python3 maintenance/leak-gate.py --history` |
 | What is the long-form history? | `CHANGELOG.md`, one section per release | - |
@@ -70,6 +71,13 @@ git commit && git push -u origin <topic>  # 5. push; CI grades macOS + Linux (Wi
 - **The gate** is `tests/run_all.py` and nothing else. A suite that cannot run exits `77` and
   counts as **red** - a machine that graded nothing cannot report success. `--select 'tests/test_*x*'`
   narrows a run while you work on one suite.
+- **The artifact is graded too.** `bash maintenance/smoke-install.sh` builds the public
+  package, installs from the archive it produces (not the working tree) and runs
+  `doctor`/`health`/`--once` against it; CI runs the same on macOS, Linux and Windows
+  (the `install` and `install-windows` jobs). Every other installer check installs from a
+  tree its own suite assembles, so this is the only one that touches what other hosts
+  actually download. It uses a stub model by default; point `TINYCMDR_SMOKE_BASE_URL` at a
+  real endpoint to drive the same turn against a model.
 - **The pre-push hook** is not tracked by git; install it once per clone:
   ```bash
   printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/maintenance/pre-push.sh"\n' \
