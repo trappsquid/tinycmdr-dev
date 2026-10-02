@@ -19,17 +19,12 @@ Removed
   unaffected.
 
 Fixed
-- **A short model list is now explainable, and an id the endpoint hides is reachable.** The
-  picker was never capped - it offers exactly what `GET <base_url>/models` returns for the link
-  and key this install holds (plus anything configured). Two things made that hard to see, both
-  fixed: the plain `tinycmdr model` list now prints what each endpoint actually advertised and
-  flags any configured model NO endpoint advertises (the usual reason a list looks wrong), and
-  the catalog reads `name`/`model` keys as well as `id`, so a gateway that omits `id` no longer
-  loses its models silently. Providers exist that accept model ids their `/models` does not list
-  (Hermes shows several from a curated catalogue, e.g. `deepseek-v4-flash-vision-exp` while
-  `api.deepseek.com/models` returns two), so `model use <id>`, `model add --force --model <id>`
-  and a new "type a model id the endpoint does not list" picker row accept an unadvertised id -
-  with a warning, since the provider is the authority on what it accepts.
+- **A short model list is now explainable.** The picker was never capped - it offers exactly
+  what `GET <base_url>/models` returns for the link and key this install holds. The plain
+  `tinycmdr model` list now prints what each endpoint actually advertised and flags any
+  configured model NO endpoint advertises (the usual reason a list looks wrong), and the
+  catalog reads `name`/`model` keys as well as `id`, so a gateway that omits `id` no longer
+  loses its models silently.
 - **Pointing tinycmdr at a cloud model is one conversation again, and the key never lands in
   `config.json`.** Every model-adding door - the three installers, `tinycmdr setup`, and
   `tinycmdr model add` with no URL - now asks the same things in the same order: is the endpoint

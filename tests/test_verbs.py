@@ -291,9 +291,8 @@ def main():
         check("model lists what this install can route to", rc == 0 and "main" in out
               and "sends as tower-27b" in out, out[:300])
         rc, out, err = call(fb, ["model", "use", "nope"])
-        check("model use writes an id no endpoint lists, and says so",
-              rc == 0 and "no endpoint advertises" in err, (rc, err[:200]))
-        check("...and names what IS advertised", "main" in err and "tower" in err, err[:200])
+        check("model use refuses a name that is not routable", rc == 2, rc)
+        check("...and says what is", "main" in err and "tower" in err, err[:200])
         rc, out, err = call(fb, ["model", "use", "tower"])
         check("model use writes the default", rc == 0, (rc, err[:200]))
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))

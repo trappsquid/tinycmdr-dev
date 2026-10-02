@@ -20719,14 +20719,10 @@ def _choose_one_model(url, ids, default=""):
     if default not in ids:
         default = ids[0]
     if pick_terminal_ready():
-        rows = [(i, "advertised by %s" % url, i == default) for i in ids]
-        rows.insert(0, (MODEL_PICK_CUSTOM, "an id the endpoint does not list", False))
-        state = ModelPick(rows, current=default, title="Which model? (%d advertised)" % len(ids),
+        state = ModelPick([(i, "advertised by %s" % url, i == default) for i in ids],
+                          current=default, title="Which model? (%d advertised)" % len(ids),
                           scope="ENTER sets the model - ESC keeps %s" % default)
         picked = run_model_pick(state)
-        if picked == MODEL_PICK_CUSTOM:
-            ans = input("   Model id (exactly as the provider expects): ").strip()
-            return ans or default
         if not picked:
             print(dim("   kept %s" % default))
         return picked or default
@@ -20963,9 +20959,6 @@ MODEL_PICK_VIEW = 12      # rows on screen at once; the list scrolls under the c
 # the same ↑↓/filter/ENTER machinery as everything else.
 MODEL_PICK_ADD = "\u2795 add or change the endpoint\u2026"
 
-# A provider can accept ids its /models does not list (Hermes shows them from a curated
-# catalogue). The picker must let the reader type one, or those models are unreachable.
-MODEL_PICK_CUSTOM = "\u270e type a model id the endpoint does not list\u2026"
 
 
 def model_pick_rows(entries, current):
@@ -22968,8 +22961,7 @@ MODEL_ADD_HELP = """tinycmdr model add [<url>] [--model NAME] [--alias A] [--key
 
   With a <url> it takes the endpoint from the command line and checks the model id
   against what the endpoint advertises (one /v1/models GET, metadata only). --force
-  writes it when the endpoint is not reachable yet - and also accepts a model id the
-  endpoint does not list, for a provider that serves ids its /models hides.
+  writes it when the endpoint is not reachable yet.
 
   A cloud endpoint added here goes into llm.fallbacks and its key into .env under a
   generated TINYCMDR_ENDPOINT<n>_API_KEY the entry points at with api_key_env; a
@@ -23855,13 +23847,9 @@ def _verb_model_add(opts, positional):
         print("note: %s did not answer - writing it unverified" % url)
     else:
         if want and want.lower() not in [x.lower() for x in ids]:
-            if not opts.get("force"):
-                print("%s advertises %s - not %r. Pass --force to write it anyway: a "
-                      "provider can accept ids its /models does not list."
-                      % (url, ", ".join(ids[:12]) or "nothing", want), file=sys.stderr)
-                return 2
-            print("note: %s does not advertise %r - writing it anyway (--force)"
-                  % (url, want))
+            print("%s advertises %s - not %r"
+                  % (url, ", ".join(ids[:12]) or "nothing", want), file=sys.stderr)
+            return 2
         if not want:
             if len(ids) == 1:
                 want = ids[0]
@@ -24001,17 +23989,14 @@ def _verb_model(rest):
                       if str(e.get("name")).lower() == want.lower()
                       or str(e.get("send_as", "")).lower() == want.lower()), None)
         if match is None:
-            # A provider can accept an id its /models never lists (Hermes shows several
-            # from a curated catalogue). Refusing outright made those models unreachable;
-            # say so and write it - the provider is the authority on what it accepts.
-            print("note: no endpoint advertises %r - writing it anyway. Advertised here: %s"
-                  % (want, ", ".join(names) or "(none)"), file=sys.stderr)
-        target = str(match.get("name")) if match else want
-        prev, err = set_global_model(target)
+            print("no model named %r here. This install can route to: %s"
+                  % (want, ", ".join(names)), file=sys.stderr)
+            return 2
+        prev, err = set_global_model(str(match.get("name")))
         if err:
             print("could not write config.json: %s" % err, file=sys.stderr)
             return 1
-        print("default model: %s -> %s" % (prev, target))
+        print("default model: %s -> %s" % (prev, match.get("name")))
         if _verb_running() is True:
             print("a running bot reads config.json at start: use /model in chat, "
                   "or run `tinycmdr restart`.")
@@ -24042,21 +24027,12 @@ def _verb_model(rest):
         rows = model_pick_rows(entries, current)
         rows.insert(0, (MODEL_PICK_ADD,
                         "local or cloud, the key, then the models it serves", False))
-        rows.insert(1, (MODEL_PICK_CUSTOM,
-                        "an id the endpoint does not list", False))
         state = ModelPick(rows, current=current,
                           title="Select model (%d available)" % len(entries),
                           scope="ENTER sets the default in config.json - ESC leaves it alone")
         picked = run_model_pick(state)
         if picked == MODEL_PICK_ADD:
             return _model_setup_wizard()
-        if picked == MODEL_PICK_CUSTOM:
-            name = input("  Model id (exactly as the provider expects): ").strip()
-            if name:
-                print()
-                return _switch_global_model(name)
-            print("cancelled - nothing changed")
-            return 0
         if picked:
             print()
             return _switch_global_model(picked)
