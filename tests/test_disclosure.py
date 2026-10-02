@@ -252,7 +252,7 @@ def main():
             fb.cli_banner()
             fb._cli_command("/status")
         banner = buf.getvalue()
-        check(sum(1 for l in banner.splitlines() if l.startswith(("\u2502", "|"))) <= 5,
+        check(sum(1 for l in banner.splitlines() if l.startswith(("\u2503", "\u2502", "|"))) <= 5,
               "the banner fits in four rows of content")
         lines = [l for l in banner.splitlines() if "prompt overhead" in l]
         check(bool(lines), "the status output carries the overhead line the banner folded")

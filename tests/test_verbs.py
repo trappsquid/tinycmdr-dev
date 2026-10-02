@@ -609,6 +609,15 @@ def main():
               rc == 0 and written["llm"].get("allow_cloud_fallback") is False, (rc, err[:160]))
         rc, out, err = call(fb, ["model", "failover", "maybe"])
         check("a bad value is refused", rc == 2, (rc, err[:120]))
+        # ---- approvals: the confirm-gate allowlist has a verb ----------------
+        rc, out, err = call(fb, ["approvals"])
+        check("approvals reports the gate allowlist", rc == 0 and "allowlist" in out, out[:160])
+        fb.confirm_allow("always")
+        rc, out, err = call(fb, ["approvals"])
+        check("...and shows a permanent approval", "for ever : yes" in out, out[:240])
+        rc, out, err = call(fb, ["approvals", "clear"])
+        check("approvals clear resets it",
+              rc == 0 and fb.confirm_preapproved("x")[0] is False, (rc, err[:120]))
 
         rc, out, err = call(fb, ["model", "remove", "cloud"])
         check("model remove drops the entry it names", rc == 0 and "removed" in out,

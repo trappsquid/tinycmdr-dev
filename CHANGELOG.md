@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **Confirmations can be answered once, for the session, or for ever.** The confirm gate
+  asked yes/no for every matching command, so a long run was an interrogation. It now
+  offers "yes, all commands this session" (this process, this conversation) and "yes,
+  always (never ask again)", which is written to `confirm-allow.json` (per-host state)
+  and survives a restart. `tinycmdr model failover`'s sibling for the gate: `tinycmdr
+  approvals` reports the state, `tinycmdr approvals clear` wipes it.
+
+Fixed
+- **A 1M-context cloud model is no longer sized as ~8000.** `_detect_window` read vLLM's
+  `max_model_len`, llama.cpp's `meta.n_ctx`/`/props`, Ollama's `/api/ps` and SGLang's
+  `/get_server_info`, but not the OpenAI-style `context_window` that a hosted provider
+  puts ON the model entry (DeepSeek answers `context_window: 1048576`,
+  `max_output_tokens: 393216`). The harness then assumed ~8000, clipped replies at 2048
+  and reported a wrong window in the app. It reads `context_window`/`context_length`
+  now, and when the configured id is not advertised (an alias, or a provider that hides
+  ids) it uses the window only if EVERY advertised model reports the same one.
+- **The CLI's boxed dividers are heavy.** The `--app`/inline cards and banner now use
+  rich's HEAVY box (┏━┓┃┗┛), and the plain-text boxes the verbs print and the rule above
+  an answer use the matching heavy glyphs. The ASCII fallback is unchanged.
+
 ## [1.0.45] - 2026-10-02
 Added
 - **Cloud failover has a door.** `llm.allow_cloud_fallback` shipped `false` with no way to

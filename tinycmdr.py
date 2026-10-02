@@ -2272,7 +2272,10 @@ def _detect_window(base_url, headers, timeout=10):
     llama.cpp carries n_ctx under meta on /v1/models; any llama.cpp build answers
     /props at the server root; Ollama answers /api/ps with the context_length it is
     actually serving; and SGLang answers /get_server_info with the model's own
-    context_length. Read-only metadata, never a model call, so it is safe to ask a box
+    context_length. A hosted OpenAI-compatible provider commonly puts the window ON
+    the model entry instead (DeepSeek: context_window 1048576, max_output_tokens
+    393216) - read too, or a 1M model was sized as an 8k one and every long answer
+    was clipped. Read-only metadata, never a model call, so it is safe to ask a box
     that is busy serving somebody else.
     """
     base = str(base_url or "").rstrip("/")
@@ -2288,10 +2291,35 @@ def _detect_window(base_url, headers, timeout=10):
             log.debug("window detect: %d model(s) advertised on %s, none is %r - asking the "
                       "endpoint's own root instead", len(models), base,
                       CONFIG["llm"]["model"])
+            # The configured id is not advertised (an alias, or a provider that hides
+            # ids). When EVERY advertised model reports the SAME window, that window is
+            # a fact about this endpoint, not a guess about which model answers -
+            # DeepSeek lists context_window 1048576 on both of its models. One
+            # dissenting entry, or none carrying a window, stays unknown.
+            _wins = set()
+            for m in (models if isinstance(models, list) else []):
+                if not isinstance(m, dict):
+                    continue
+                w = (m.get("context_window") or m.get("context_length")
+                     or m.get("max_context_length"))
+                try:
+                    wi = int(w) if w else 0
+                except (TypeError, ValueError):
+                    wi = 0
+                if wi:
+                    _wins.add(wi)
+            if len(_wins) == 1:
+                detected = _wins.pop()
         else:
             detected = entry.get("max_model_len")               # vLLM
             if not detected:
                 detected = (entry.get("meta") or {}).get("n_ctx")   # llama.cpp
+            if not detected:
+                # OpenAI-compatible listings carry the window per model
+                # (context_window / max_output_tokens). Without this a 1M model was
+                # sized as ~8000 and long answers were clipped (reported 2026-10-01).
+                detected = (entry.get("context_window") or entry.get("context_length")
+                            or entry.get("max_context_length"))
     except Exception as e:
         log.debug("window detect: /models on %s did not answer: %s", base, e)
     if not detected:
@@ -6213,6 +6241,70 @@ def steering_gap_note():
     if not _ENDPOINT_GAP.get("note") or age > _ENDPOINT_GAP_FRESH:
         return ""
     return "%s (%.0f min ago)" % (_ENDPOINT_GAP["note"], age / 60)
+
+
+# ---------------------------------------------------------------- approvals
+# The operator's answers to the confirm gate, beyond one command: "all of them for
+# this session", or "always, and stop asking" (persisted, so it survives a restart).
+# The per-command question is still the default; these are the ways OUT of being asked.
+CONFIRM_ALLOW_FILE = BASE_DIR / "confirm-allow.json"
+_CONFIRM_SESSION_ALLOW = set()
+
+
+def _confirm_allow_read():
+    try:
+        d = json.loads(CONFIRM_ALLOW_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def confirm_preapproved(session_key, subject=""):
+    """(True, reason) when the operator already approved this command, else (False, "")."""
+    if session_key and session_key in _CONFIRM_SESSION_ALLOW:
+        return True, "approved for this session"
+    d = _confirm_allow_read()
+    if d.get("all"):
+        return True, "approved permanently"
+    if subject and str(subject) in [str(s) for s in (d.get("subjects") or [])]:
+        return True, "approved permanently (this command)"
+    return False, ""
+
+
+def confirm_allow_state():
+    d = _confirm_allow_read()
+    return {"all": bool(d.get("all")),
+            "subjects": [str(s) for s in (d.get("subjects") or [])],
+            "sessions": sorted(_CONFIRM_SESSION_ALLOW)}
+
+
+def confirm_allow(action, session_key=None, subject=""):
+    """Grant or clear an approval. action: 'session' | 'always' | 'this' | 'clear'.
+
+    'always' is the permanent, never-ask-again answer: it is written to
+    confirm-allow.json (per-host state, gitignored) so it survives a restart.
+    'session' lives in this process only, keyed by the conversation. 'clear' wipes
+    both the file and every session of this process."""
+    if action == "clear":
+        _CONFIRM_SESSION_ALLOW.clear()
+        atomic_write_text(CONFIRM_ALLOW_FILE,
+                          json.dumps({"all": False, "subjects": []}, indent=2))
+        return confirm_allow_state()
+    if action == "session":
+        if session_key:
+            _CONFIRM_SESSION_ALLOW.add(session_key)
+        return confirm_allow_state()
+    d = _confirm_allow_read()
+    if action == "always":
+        d["all"] = True
+    elif action == "this" and subject:
+        subs = [str(s) for s in (d.get("subjects") or [])]
+        if str(subject) not in subs:
+            subs.append(str(subject))
+        d["subjects"] = subs[-200:]
+    d.setdefault("subjects", [])
+    atomic_write_text(CONFIRM_ALLOW_FILE, json.dumps(d, indent=2))
+    return confirm_allow_state()
 
 
 def endpoint_gate(subject, why, confirm_cb):
@@ -15640,11 +15732,21 @@ class RunReporter:
         The shell tool treats "no confirm_cb" as no consent and returns DECLINED,
         so a lane that cannot ask cannot run that command at all - which is how a
         lane without an ask door went quiet on work the chat lane would have run.
+
+        Three ways to say yes: this once, all of them for this SESSION, or always (a
+        permanent allowlist, so the operator is never asked again). The last two are
+        what stop a long run being an interrogation.
         """
+        ok_pre, why = confirm_preapproved(self.session_key, command)
+        if ok_pre:
+            self._draw("system", f"✅ {why} - running")
+            return True
         answer = self.ask(
             "⚠️ This command matches a confirm-pattern. Allow it?\n"
             f"```\n{str(command)[:800]}\n```",
-            ["yes", "no"], wait, "this conversation")
+            ["yes", "no", "yes, all commands this session",
+             "yes, always (never ask again)"],
+            wait, "this conversation")
         if answer is None:
             if not self.dest.has_human:
                 # nobody can be asked in this lane: the configured default decides
@@ -15658,12 +15760,25 @@ class RunReporter:
         # The operator's first word decides, in every lane: a button that says
         # "yes, run it" and a terminal that says "go" both mean yes, and one
         # parser means one place to change what yes is.
-        first = re.sub(r"[^a-z0-9]", "", str(answer).strip().lower().split()[0]) \
-            if str(answer).strip() else ""
+        low = str(answer).strip().lower()
+        first = re.sub(r"[^a-z0-9]", "", low.split()[0]) if low else ""
         ok = first in ("y", "yes", "yeah", "ok", "okay", "approve", "approved",
                        "run", "go", "confirm", "confirmed", "1", "true")
-        self._draw("system", "✅ confirmed, running" if ok
-                   else "🚫 not confirmed - that command was skipped")
+        if ok:
+            # The wider scopes are recognised from the whole answer, not the first
+            # word ("yes, always" and "yes" must not be the same decision).
+            if "session" in low:
+                confirm_allow("session", session_key=self.session_key)
+                self._draw("system", "✅ confirmed for this session — not asking again "
+                                     "(`tinycmdr approvals clear` to undo)")
+            elif "always" in low or "never" in low or "permanent" in low or "forever" in low:
+                confirm_allow("always")
+                self._draw("system", "✅ confirmed permanently — not asking again "
+                                     "(`tinycmdr approvals clear` to undo)")
+            else:
+                self._draw("system", "✅ confirmed, running")
+        else:
+            self._draw("system", "🚫 not confirmed - that command was skipped")
         return ok
 
     def finish(self, ok=True):
@@ -16088,7 +16203,10 @@ class TuiScreen:
         self.width = width or self._width()
         self.tier = tier or tui_colour_tier()
         self.palette = TUI_PALETTE[self.tier]
-        self.box = _box.ASCII if tui_ascii_only() else _box.ROUNDED
+        # HEAVY, not ROUNDED: the cards and the banner are the frame a reader
+        # scans for, and the heavy box-drawing set reads as a drawn border rather
+        # than hairlines on a busy terminal (operator, 2026-10-02).
+        self.box = _box.ASCII if tui_ascii_only() else _box.HEAVY
         self.ellipsis = "..." if tui_ascii_only() else "\u2026"
         self.shown = []               # every renderable, in order, for the record
         self.status = ""
@@ -20379,7 +20497,7 @@ def answer_block(text):
     text = str(text)
     if not text.strip():
         return text
-    rule = "-" * 62 if tui_ascii_only() else "\u2500" * 62
+    rule = "-" * 62 if tui_ascii_only() else "\u2501" * 62   # heavy, matching the boxes
     return "\n" + _paint("  " + rule, "2") + "\n" + bold(text)
 
 
@@ -20666,11 +20784,11 @@ def _cli_render_box(title, lines, width=74):
         tl = tr = bl = br = sep = "+"
         hz, vt = "-", "|"
     else:
-        tl, tr, bl, br = "\u250c", "\u2510", "\u2514", "\u2518"
-        hz, vt, sep = "\u2500", "\u2502", "\u251c"
+        tl, tr, bl, br = "\u250f", "\u2513", "\u2517", "\u251b"   # heavy
+        hz, vt, sep = "\u2501", "\u2503", "\u2523"
     top = tl + hz + " %s " % title + hz * max(0, width - len(title) - 5) + tr
     bottom = bl + hz * (width - 2) + br
-    rule = sep + hz * (width - 2) + tr if tui_ascii_only() else sep + hz * (width - 2) + "\u2524"
+    rule = sep + hz * (width - 2) + tr if tui_ascii_only() else sep + hz * (width - 2) + "\u252b"
     body = []
     for line in lines:
         if line == "---":
@@ -22430,7 +22548,8 @@ def user_is_allowed(sender, user_id):
 #     on one token came from.
 
 VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc",
-         "restart", "update", "clean", "token", "version", "run", "help", "failures")
+         "restart", "update", "clean", "token", "version", "run", "help", "failures",
+         "approvals")
 
 # Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
 # (Windows installs by default, and a fleet Windows box had no git at all on 2026-09-24).
@@ -22702,6 +22821,8 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   health             one line + exit code: up, lane, model (no network, for scripts)
   failures           the known-failure library: which entries have EVER fired on this
                      box, and which failures keep arriving with no entry (-c, --json)
+  approvals [clear]  what the confirm gate has been told to stop asking about
+                     (the session and permanent answers); `clear` asks again
   version            the version alone
   proc               the processes running from THIS folder
   update             pull the published build (git; adopts the checkout on a fresh install)
@@ -24419,6 +24540,25 @@ def verb_from_chat(argv_line):
     return "```\n%s\n```\n(exit %s)" % (out, code)
 
 
+def _verb_approvals(rest):
+    """`approvals [clear]`: what the confirm gate has been told to stop asking about.
+
+    The operator's "all commands this session" and "always (never ask again)" answers
+    live here, so the state they set is visible and reversible without editing a file."""
+    if rest and rest[0] in ("clear", "reset", "off"):
+        confirm_allow("clear")
+        print("cleared: the confirm gate asks again for every command.")
+        return 0
+    st = confirm_allow_state()
+    print("confirm gate allowlist: %s" % CONFIRM_ALLOW_FILE)
+    print("  every command, for ever : %s" % ("yes" if st["all"] else "no"))
+    print("  this session            : %s" % (", ".join(st["sessions"]) or "none"))
+    if st["subjects"]:
+        print("  single commands         : %d" % len(st["subjects"]))
+    print("  clear with: tinycmdr approvals clear")
+    return 0
+
+
 def _verb_failures(rest):
     """What this box has already failed at, and what the library knows about it.
 
@@ -24492,6 +24632,8 @@ def run_verb(argv):
         return _verb_health()
     if verb == "failures":
         return _verb_failures(rest)
+    if verb == "approvals":
+        return _verb_approvals(rest)
     if verb == "version":
         return _verb_version()
     if verb == "proc":

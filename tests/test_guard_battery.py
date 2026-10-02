@@ -412,6 +412,51 @@ def test_doctor_reports_the_short_guard_list_and_exits_nonzero():
         shutil.rmtree(d, ignore_errors=True)
 
 
+class _ApprovalDest:
+    """A destination that answers the confirm question with a fixed text."""
+
+    has_human = True
+
+    def __init__(self, answer):
+        self.answer = answer
+        self.lines = []
+        self.options = None
+
+    def line(self, kind, text, src="main"):
+        self.lines.append(text)
+        return ("fake", len(self.lines))
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+        self.options = options
+        return self.answer
+
+
+def test_confirm_approval_scopes():
+    """The ways OUT of being asked: all for this session, or always (persisted)."""
+    fb.confirm_allow("clear")
+    d1 = _ApprovalDest("yes, all commands this session")
+    r1 = fb.RunReporter(d1, "approve-s1")
+    check("'yes, all commands this session' approves it", r1.confirm("rm -rf /tmp/x") is True)
+    check("a confirm question offers the session and always scopes",
+          bool(d1.options) and any("session" in o for o in d1.options)
+          and any("always" in o for o in d1.options), d1.options)
+    check("...and the session is preapproved from then on",
+          fb.confirm_preapproved("approve-s1")[0] is True)
+    check("...but another session is not", fb.confirm_preapproved("approve-s2")[0] is False)
+    d2 = _ApprovalDest("yes, always (never ask again)")
+    fb.RunReporter(d2, "approve-s2").confirm("rm -rf /tmp/y")
+    check("'yes, always' persists to the allowlist file",
+          json.loads((STAGE / "confirm-allow.json").read_text(encoding="utf-8")).get("all") is True)
+    check("...and every session is preapproved after it",
+          fb.confirm_preapproved("anything")[0] is True)
+    fb.confirm_allow("clear")
+    check("`confirm_allow clear` wipes the file and the sessions",
+          fb.confirm_preapproved("approve-s1")[0] is False
+          and fb.confirm_preapproved("anything")[0] is False)
+    check("a plain 'no' still declines",
+          fb.RunReporter(_ApprovalDest("no"), "approve-s3").confirm("rm -rf /tmp/z") is False)
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

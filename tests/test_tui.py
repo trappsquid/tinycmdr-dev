@@ -476,7 +476,7 @@ _t5._plain_fallback = True
 _t5.card("final", "| Slot | Size |\n|---|---|\n| DIMM 1 | 8 GB |\n| DIMM 2 | 8 GB |\n\n"
                   "After the table.\n")
 _plain5 = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in _t5.out.getvalue().splitlines()]
-_rows5 = [l[1:-1] for l in _plain5 if l.startswith("\u2502")]
+_rows5 = [l[1:-1] for l in _plain5 if l.startswith(("\u2503", "\u2502"))]
 check("the answer card carries no blank band around a table (T-05)",
       _rows5 and not any(not r.strip() for r in _rows5), _rows5)
 check("...and a table at the end of an answer adds no trailing row",
@@ -700,7 +700,7 @@ if HAVE_APP:
             fb.socket.socket = _real_socket
 
         _lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in app_screen.lines(79)]
-        _answer_cards = [i for i, l in enumerate(_lines) if "─ answer ─" in l]
+        _answer_cards = [i for i, l in enumerate(_lines) if "━ answer ━" in l]
         check("--app: the run draws exactly one answer card",
               len(_answer_cards) == 1, _lines)
         check("--app: the answer card replaces the draft, it does not stack on it",

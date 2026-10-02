@@ -127,6 +127,24 @@ def main():
           window(Fake({"/v1/models": VLLM_MODELS})) == 32768)
     check("llama.cpp's meta.n_ctx on /v1/models is the window",
           window(Fake({"/v1/models": LLAMA_MODELS})) == 131072)
+    # A hosted provider puts the window ON the model entry (DeepSeek:
+    # context_window 1048576 / max_output_tokens 393216).
+    OPENAI_WINDOW = {"object": "list", "data": [
+        {"id": "main", "context_window": 1048576, "max_output_tokens": 393216}]}
+    check("an OpenAI-style context_window on the model entry is the window",
+          window(Fake({"/v1/models": OPENAI_WINDOW})) == 1048576)
+    HIDDEN = {"object": "list", "data": [
+        {"id": "deepseek-flash", "context_window": 1048576},
+        {"id": "deepseek-v4-pro", "context_window": 1048576}]}
+    _keep_model = fb.CONFIG["llm"]["model"]
+    fb.CONFIG["llm"]["model"] = "deepseek-v4-flash"      # not advertised
+    check("an unadvertised configured id still gets the window when every entry agrees",
+          window(Fake({"/v1/models": HIDDEN})) == 1048576)
+    DISAGREE = {"object": "list", "data": [
+        {"id": "a", "context_window": 8192}, {"id": "b", "context_window": 131072}]}
+    check("...but entries that disagree stay unknown (no guess)",
+          window(Fake({"/v1/models": DISAGREE})) == 0)
+    fb.CONFIG["llm"]["model"] = _keep_model
     check("llama.cpp on /props is the fallback when /v1/models says nothing",
           window(Fake({"/v1/models": FOREIGN_LIST, "/props": LLAMA_PROPS})) == 65536)
     check("Ollama's /api/ps context_length is the window",
