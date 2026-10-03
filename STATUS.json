@@ -1030,6 +1030,28 @@
       },
       "detail": "The designer's render of the badge (24x9 characters, each a 2x4 dot cell, 48x36 effective) sits one blank row under KEYS in the --app left rail. The art is data - assets/tui-rail-badge.json, cells plus hex colours - never ANSI: an escape byte inside a prompt_toolkit span renders as literal '[38;2;...' text. Truecolor and 256-colour terminals get the per-cell colours, a 16-colour terminal gets the dots in one accent, an ASCII-only terminal gets no art, and a pruned install shows none. maintenance/make-brand-art.py re-derives an equivalent from the badge master with the stdlib alone (no PIL/numpy in this runtime); the shipped cells are the designer's own, whose LANCZOS keeps lower detail a box filter drops (19 lit dots in the last row against 3).",
       "gate": "tests/test_tui.py (artifact loads; rides the rail under KEYS; spans, never ANSI; within 26 columns; no braille on an ASCII-only terminal; accepted dot counts)"
+    },
+    {
+      "id": "rail-context-window-math",
+      "title": "the rail's CONTEXT gauge divided by the messages budget, not the window",
+      "state": "shipped",
+      "anchor": {
+        "commit": "cafadfd",
+        "expect": "tagged"
+      },
+      "detail": "On a 1M model the --app rail read 'used / 1028.0K' - the messages budget (window minus static prompt minus reply reserve) - while the model's window is 1048.6K, so the gauge could never reach 100% however full the window got. The rail divides by the window now and counts the static prompt in what is occupied, which is what the next request carries; the messages budget stays in `status` and the startup banner, where it is labelled 'usable per turn'. Operator report, 2026-10-03.",
+      "gate": "tests/test_tui.py (the gauge's window arithmetic with a static prompt; the old ratio checks still pass through the helper's default)"
+    },
+    {
+      "id": "rail-art-not-cut-off",
+      "title": "the rail art was rendered from a crop that cut the emblem's bottom",
+      "state": "shipped",
+      "anchor": {
+        "commit": "cafadfd",
+        "expect": "tagged"
+      },
+      "detail": "The art's crop was (225, 80, 900, 850) while the badge master's content box at max(rgb)>=45 is x 58..912, y 5..939: the emblem's lower ~90px were discarded and the operator saw the helmet 'cut off too early'. Re-rendered from the master with the designer's framing extended to y=940, and the art block is captioned `tinycmdr` underneath. maintenance/make-brand-art.py now states the measured box and refuses to overwrite the shipped designer render without --force.",
+      "gate": "tests/test_tui.py (the caption row; the accepted dot counts of the re-rendered art; the artifact loads and stays within the rail)"
     }
   ]
 }
