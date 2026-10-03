@@ -2933,8 +2933,14 @@ def _spill_index_save():
     """
     try:
         rows = [e for e in _SPILLS if (BASE_DIR / str(e.get("path") or "")).exists()]
+        path = _spill_index_path()
+        if not rows and not path.exists():
+            # Nothing to persist and nothing to erase: do not mkdir spill/ or drop an
+            # empty file into a tree that never spilled (run_all's G2 check caught the
+            # mkdir from an idle session reset).
+            return
         _spill_dir()
-        _spill_index_path().write_text(
+        path.write_text(
             "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in rows),
             encoding="utf-8")
     except Exception as e:                  # noqa: BLE001 - an index is never worth a run
