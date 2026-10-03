@@ -942,6 +942,83 @@
       },
       "detail": "update never overwrites host-owned files by design, so a pre-1.0.54 tools/process.py survived a 1.0.54 update and the features that call into it (auto-background, cross-restart exit codes) degraded with no note anywhere: a 75s command blocked the whole turn. dropin_gaps() now logs once and doctor prints `drop-ins: tools/process.py is an older copy (...)` with the remedy (refresh from the release, or delete to inherit the packaged seed). Verified on the box: refreshing the file made a 75s command background at 60.1s (`started b8`).",
       "gate": "tests/test_harness_extras.py"
+    },
+    {
+      "id": "parked-question-one-run-ttl",
+      "title": "a question a stopped run left unanswered nagged every later run",
+      "state": "shipped",
+      "anchor": {
+        "commit": "d28cddf",
+        "expect": "tagged"
+      },
+      "detail": "The sidecar that carries the question was re-surfaced on every run until the operator answered or stopped it; measured 2026-10-03, five consecutive runs on a fleet box restated the same assumption and paid the tokens each time. Reading it now consumes it (the NEXT run is the one that gets told, which was the original intent), and one older than agent.ask_question_ttl_hours (default 24; 0 disables) is dropped rather than surfaced. The example config documents the key.",
+      "gate": "tests/test_ask_user.py (rides the trailing block; handed to exactly one run; a stale question is dropped)"
+    },
+    {
+      "id": "restart-waits-for-the-lock",
+      "title": "`restart` reported a healthy handover as a failure",
+      "state": "shipped",
+      "anchor": {
+        "commit": "d28cddf",
+        "expect": "tagged"
+      },
+      "detail": "The helper returns as soon as it has launched the replacement, and the replacement takes the lock ~60s later on the Windows task lane (measured twice on a fleet box, 2026-10-03); the verb looked once and printed 'nothing holds the lock yet - check logs' at ~5s, which reads as a failed restart, and `status` in between said 'not running'. It now looks until the outcome is known, bounded at 90s, and says 'back up after Ns'.",
+      "gate": "tests/test_verbs.py (the wait; the host's own helper is still the only restart path)"
+    },
+    {
+      "id": "update-no-bak-piles",
+      "title": "every `update` left a stamped copy of every file it replaced",
+      "state": "shipped",
+      "anchor": {
+        "commit": "35b5699",
+        "expect": "tagged"
+      },
+      "detail": "A `.bak-update-<stamp>` per file per update is how an install grows by gigabytes: one fleet box carried three tinycmdr.py copies from three updates in a single day (3.6 MB) and only `clean` ever removed them. Both update paths replace in place now; the release you came from stays downloadable. The bounded soul.md persona copies (3, one per distinct persona) and the single write_file/edit_file undo copy - the verify pre-image - stay.",
+      "gate": "tests/test_verbs.py (nothing is copied aside; the undo copy and persona bounded set survive)"
+    },
+    {
+      "id": "shell-timeout-in-autobg-window",
+      "title": "the shell timeout was ignored for commands shorter than the auto-background window",
+      "state": "shipped",
+      "anchor": {
+        "commit": "35b5699",
+        "expect": "tagged"
+      },
+      "detail": "`timeout=5` on a 45-second command returned `exit_code=0` after the full 45s: the auto-background wait ran on its own clock (agent.auto_background_seconds) and never read the timeout the model asked for (measured on a fleet box, 2026-10-03). The requested timeout is passed into that wait and kills the tree; the blocking path's `TIMEOUT after Ns` answer comes back with partial output. Field-verified: the same call returned TIMEOUT after 5s.",
+      "gate": "tests/test_harness_extras.py (a timeout shorter than the window still kills)"
+    },
+    {
+      "id": "scheduler-adopts-jobs-json",
+      "title": "a scheduled job added or removed from a --once/CLI run never took effect",
+      "state": "shipped",
+      "anchor": {
+        "commit": "35b5699",
+        "expect": "tagged"
+      },
+      "detail": "The scheduler loads jobs.json once at process start and the bot is the only process that fires jobs, so a job added from another lane said 'next run HH:MM' and never ran (field: no fire, no log line, no output file), and a removal made there was fired anyway and written back by the bot's next save. The scheduler re-reads the file when its mtime changes, in the firing loop and before every schedule action; the overdue-skip makes a mid-session adopt safe. The list line also elides instead of cutting a task mid-word. Field-verified both ways: add -> the bot fired it; remove -> no fire, no resurrection.",
+      "gate": "tests/test_stall.py (an externally written jobs.json is adopted; a removal takes effect; a long task is elided)"
+    },
+    {
+      "id": "update-names-the-naming-rule",
+      "title": "`update <file>` answered 'is that a build?' about a valid build under a different name",
+      "state": "shipped",
+      "anchor": {
+        "commit": "e535b6b",
+        "expect": "tagged"
+      },
+      "detail": "A file passed directly to `update` must be named tinycmdr.py; the message never said so (it cost a deploy cycle on 2026-10-03). The refusal names the rule and the file; the folder/zip path keeps 'is that a build?'.",
+      "gate": "tests/test_verbs.py (a differently-named file that IS a good build, and one that is not)"
+    },
+    {
+      "id": "branding-assets",
+      "title": "the brand assets live in the repository and on its surfaces",
+      "state": "shipped",
+      "anchor": {
+        "commit": "2f232ee",
+        "expect": "tagged"
+      },
+      "detail": "Three 1024x1024 masters (badge, chibi, helm) under assets/branding/; the README opens with the chibi (190px) - also the image a link preview falls back to - the what-it-actually-is doc carries the helm, and assets/social-preview.png is the 1280x640 badge letterboxed with its own corner colour for the Social preview setting (GitHub exposes no API for that one; it is a two-click upload). The package ships the two derived sizes so an unzipped README renders as authored.",
+      "gate": "maintenance/build-package.py SHIP + the release asset check"
     }
   ]
 }
