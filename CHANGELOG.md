@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.49] - 2026-10-03
+
+Changed
+- **`update` now installs the RELEASE the installer installs: one artifact, verified, never
+  `main`.** It was `git pull` of the development repository, so a user could receive
+  unreleased commits, accumulated the project's own kit, and needed git installed - and the
+  two delivery channels had already drifted, because the Unix installer checked its download
+  and the Windows one did not. `tinycmdr update` now downloads the package for this host from
+  the newest release, checks it against `SHA256SUMS` (a mismatch refuses and unpacks nothing,
+  the contract install.sh has had since 2026-09-29), writes it over the install with a
+  `.bak-update-<stamp>` beside every changed file, never overwrites an edited `soul.md`, and
+  drops the project's own kit by name. Host state - config.json, .env, sessions, notes,
+  skills, tools - is not in the package, so it cannot be touched. `update --full` keeps the
+  kit; `update <file|zip|folder>` is unchanged. Grade in `tests/test_verbs.py`; verified end
+  to end against a locally served package on a real 1.0.47 install (apply, prune, host files
+  kept, edited persona kept) and against a tampered download (refused).
+- **The Windows one-line installer verifies its download.** `install.sh` checked SHA256SUMS
+  from 2026-09-29; `install.ps1` checked nothing, so Windows installs were the unverified
+  half. It now fetches SHA256SUMS, matches the asset's own line, and refuses on a mismatch -
+  verified on the fleet Windows box against the published files: the good download matches,
+  one tampered byte is refused.
+
 ## [1.0.48] - 2026-10-03
 
 Fixed

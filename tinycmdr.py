@@ -993,7 +993,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.48"
+VERSION = "1.0.49"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -11660,14 +11660,13 @@ _SOUL_BACKUPS_KEEP = 3
 
 
 def preserve_edited_soul(stamp):
-    """Copy an EDITED soul.md aside, before an update pulls over it.
+    """Copy an EDITED soul.md aside, before an update writes over the install.
 
-    soul.md is the one tracked file an operator is invited to edit (docs/development.md
-    calls it "the seed the agent's workspace starts from"), which means a persona lives as
-    an uncommitted modification to a tracked file. `update` in a checkout is a git pull, so
-    an upstream change to soul.md makes the fast-forward REFUSE - the update stops until the
-    operator deals with it - and anything that discards local changes (`git reset --hard`,
-    `git checkout -- .`) takes the persona with nothing to restore it from. A backup beside
+    soul.md is the one shipped file an operator is invited to edit (docs/development.md
+    calls it "the seed the agent's workspace starts from"). `update` never overwrites an
+    edited one - `_apply_package` compares it to the shipped seed and leaves it - so this
+    copy is belt-and-braces rather than the thing that saves it; it also names the moment
+    the persona changed, which is what an operator asking "was that mine?" needs. A backup beside
     itself is the same answer `update` already gives tinycmdr.py.
 
     BOUNDED, because this runs on `update`, which is routine and usually finds nothing to
@@ -22832,50 +22831,6 @@ VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc
          "restart", "update", "clean", "token", "version", "run", "help", "failures",
          "approvals")
 
-# Where `update` pulls from, and where git hides on the hosts that do not put it on PATH
-# (Windows installs by default, and a fleet Windows box had no git at all on 2026-09-24).
-DEFAULT_UPDATE_REPO = "https://github.com/trappsquid/tinycmdr.git"
-_GIT_CANDIDATES = ("git", "/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git",
-                   "C:\\Program Files\\Git\\cmd\\git.exe", "C:\\PortableGit\\cmd\\git.exe")
-
-
-def _git_exe():
-    """The git binary on this host, or "" - PATH first, then the places Windows puts it."""
-    import shutil as _shutil
-    for cand in _GIT_CANDIDATES:
-        if cand == "git":
-            hit = _shutil.which(cand)
-            if hit:
-                return hit
-        elif Path(cand).exists():
-            return cand
-    return ""
-
-
-def _run_git(git, args, timeout=120):
-    """run_capture for git, with a missing or unrunnable binary answered like a failure.
-
-    The suite caught this: `update` on a host whose git candidate was stale raised
-    FileNotFoundError straight out of the verb, so a chat command would have posted nothing
-    at all. A verb reports; it does not traceback.
-    """
-    try:
-        return run_capture([git] + list(args), timeout)
-    except OSError as e:
-        # run_capture's shape is (rc, out, err, elapsed): the callers unpack four.
-        return 1, "", "cannot run %s: %s" % (git, e), 0.0
-
-
-def _build_hash():
-    """First 16 hex of this install's tinycmdr.py - the only thing that tells two builds
-    apart while VERSION matches (fleet-version-report uses the same idea)."""
-    import hashlib
-    try:
-        return hashlib.sha256((BASE_DIR / "tinycmdr.py").read_bytes()).hexdigest()[:16]
-    except OSError:
-        return "unreadable"
-
-
 def ensure_launcher_executable():
     """Give the folder's launcher its execute bit back after a pull or an adoption.
 
@@ -23037,48 +22992,6 @@ def _verb_running():
     except Exception:                                            # noqa: BLE001
         return None
 
-def update_adopt_git(git, repo, keep_dev=False):
-    """Make this install a git checkout, then check out the published branch.
-
-    A fresh install is a folder of files, not a clone, so `tinycmdr update` had nothing to
-    pull: five of the six fleet hosts were in exactly that state on 2026-09-24, and `update`
-    answered with a usage line. The metadata comes from a --no-checkout clone; the checkout
-    writes TRACKED source only, because every per-host file (config.json, notes.md,
-    atlas.md, sessions/, logs/, spill/, tools/* except the starters, .env, *.bak) is ignored by
-    the repo's .gitignore and is left exactly as it was.
-    """
-    import shutil as _shutil
-    import tempfile
-    tmp = Path(tempfile.mkdtemp(prefix="tinycmdr-adopt-"))
-    try:
-        rc, out, err, _ = _run_git(git, ["clone", "--no-checkout", repo,
-                                         str(tmp / "repo")], 300)
-        if rc != 0:
-            print("git clone failed: %s" % ((err or out).strip()[:400]), file=sys.stderr)
-            return 1
-        target = BASE_DIR / ".git"
-        if target.exists():
-            _shutil.rmtree(target, ignore_errors=True)
-        _shutil.move(str(tmp / "repo" / ".git"), str(target))
-    finally:
-        _shutil.rmtree(tmp, ignore_errors=True)
-    before = _build_hash()
-    for args in (["fetch", "--prune", "origin"],
-                 ["checkout", "-f", "-B", "main", "origin/main"]):
-        rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR)] + args, 300)
-        if rc != 0:
-            print("git %s failed: %s" % (args[0], (err or out).strip()[:400]), file=sys.stderr)
-            return 1
-    _run_git(git, ["-C", str(BASE_DIR), "branch", "--set-upstream-to=origin/main", "main"], 60)
-    ensure_launcher_executable()
-    _narrow = _narrow_to_shipped(git, keep_dev)
-    if _narrow:
-        print(_narrow)
-    print("adopted %s: this install is a checkout of main now (tinycmdr.py %s -> %s, "
-          "VERSION %s)" % (repo, before, _build_hash(), _disk_version()))
-    print("Restart tinycmdr to run it: `tinycmdr restart`")
-    return 0
-
 VERB_HELP = """tinycmdr <verb> — management, never a model call
 
   (nothing)          a session in this folder: what the `tinycmdr` shim does when you
@@ -23109,7 +23022,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      (the session and permanent answers); `clear` asks again
   version            the version alone
   proc               the processes running from THIS folder
-  update             pull the published build (git; adopts the checkout on a fresh install)
+  update [--full]    fetch the published build (verified download; nothing to do with git)
   update <src>       put a newer build in place (file, zip or folder) with a backup
   clean [--yes]      list the junk in this folder; --yes removes it (state is kept)
   logs [n]           the last n lines of tinycmdr.log (default 40)
@@ -23731,34 +23644,32 @@ def _verb_config(rest):
     return 0
 
 
-# ---- what a PACKAGE ships, expressed as EXCLUSIONS ------------------------------------
-# build-package.py's SHIP is the allowlist for the DOWNLOAD. `tinycmdr update` used to git
-# pull the whole repo, so a user's install accumulated the project's own kit - the test
-# suites, the CI workflow, the docs, the changelog, the maintainer scripts - none of which
-# the harness needs to run a single task (measured 2026-10-03: 18 files, ~600 lines of
-# tests/CI/docs on the operator's own Mac after one update).
-#
-# Exclusions, never an allowlist: a path this list forgets STAYS on the machine (harmless,
-# and a new shipped file needs no change here), while an allowlist that forgot one would
-# DELETE something the harness needs. Untracked per-host files (config.json, .env,
-# sessions/, notes, per-host tools/) are never touched - sparse-checkout only speaks about
-# tracked paths.
+# ---- one artifact: update consumes the RELEASE the installer does ----------------------
+# `update` used to be `git pull` of the development repository, which meant a user could
+# receive unreleased commits, accumulated the project's own kit (test suites, CI workflow,
+# docs, changelog, ledger, maintainer scripts), and depended on git being installed. Two
+# delivery channels - releases for installs, git for updates - then drifted apart: the
+# Unix installer verified its download and the Windows one did not, and "shipping a
+# behaviour" quietly meant "a commit landed". It now downloads the SAME verified package
+# the one-line installer downloads, checks it against SHA256SUMS, applies it and prunes
+# the kit. It never reads main.
+DEFAULT_UPDATE_URL = "https://github.com/trappsquid/tinycmdr/releases/latest/download"
+
+# What a package does NOT carry, and therefore what an updated install drops. Still an
+# exclusion list, for the same reason as before: a path this forgets stays (harmless),
+# while an allowlist that forgot one would DELETE something the harness needs.
 _DEV_ONLY_PATHS = ("/tests/", "/.github/", "/docs/", "/STATUS.json", "/CHANGELOG.md")
-# maintenance/ ships only its restart helpers (SHIP lists exactly these); the rest of the
-# folder is maintainer kit - the release cutter, the leak gate, the package builder.
-_DEV_MAINTENANCE_KEEP = ("restart-tinycmdr.sh", "restart-tinycmdr.ps1",
-                         "restart-tinycmdr-macos.sh", "restart-tinycmdr-manager.ps1")
-_NARROW_NOTE = ("  narrowed this install to what a package ships: dropped the project's own "
-                "kit (tests/, .github/, docs/, changelog, maintainer scripts). `tinycmdr "
-                "update --full` keeps the whole repo instead.")
-
-
-def _sparse_patterns():
-    """`git sparse-checkout` patterns: the whole tree, minus the project's own kit."""
-    pats = ["/*"] + ["!%s" % p for p in _DEV_ONLY_PATHS]
-    pats.append("!/maintenance/")
-    pats += ["/maintenance/%s" % n for n in _DEV_MAINTENANCE_KEEP]
-    return pats
+# maintenance/ ships only its restart helpers; these names are the maintainer kit. Deleted
+# BY NAME and never by "anything not shipped" - that folder also holds a host's own files
+# (private_rules.py, where-roles.json) which must never be touched.
+_DEV_MAINTENANCE_DROP = ("atlas-merge.py", "build-package.py", "check-package-modes.py",
+                         "check-readme-assets.py", "check-tree-clean.py", "leak-gate.py",
+                         "ledger-tag.py", "measure-prompt.py", "measured-block.py",
+                         "pre-push.sh", "private_rules.example.py", "release.sh",
+                         "smoke-install.py", "smoke-install.sh", "where.py")
+_NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, changelog, "
+                "maintainer scripts): a package does not carry them. `tinycmdr update "
+                "--full` keeps everything instead.")
 
 
 def _disk_version():
@@ -23811,96 +23722,272 @@ def _declared_dev_tree():
     return False
 
 
-def _narrow_to_shipped(git, keep_dev=False):
-    """Drop the project's own kit from this tree, keeping what a package ships.
+def _prune_dev_kit(keep_dev=False):
+    """Delete the project's own kit from this install, and say what went.
 
-    Returns a one-line report, or "" when there was nothing to do. Never prunes a tree the
+    Returns a one-line report, or "" when nothing was removed. Never prunes a tree the
     box's own declaration (maintenance/where-roles.json, the file where.py reads) makes the
     DEVELOPMENT tree: deleting the tests out from under the person editing them is not an
-    update, it is sabotage.
+    update, it is sabotage. Deletes BY NAME - never "anything the package lacks" - because
+    those folders also hold a host's own files (private_rules.py, where-roles.json,
+    sessions/, notes) that must survive an update.
     """
+    import shutil
     if keep_dev or os.environ.get("TINYCMDR_UPDATE_KEEP_DEV"):
         return ""
     if _declared_dev_tree():
         return ("  (this tree is declared the DEVELOPMENT tree in maintenance/where-roles.json, "
                 "so nothing was pruned - pass --full to say so deliberately)")
-    if not any((BASE_DIR / d).exists() for d in ("tests", ".github", "docs")):
-        return ""                                       # already narrow
-    rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "sparse-checkout", "init",
-                                     "--no-cone"], 60)
-    if rc == 0:
-        rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "sparse-checkout",
-                                         "set"] + _sparse_patterns(), 120)
-    if rc != 0:
-        return ("  (could not narrow this tree - it keeps the whole repo: %s)"
-                % ((err or out).strip()[:160]))
-    return _NARROW_NOTE
+    gone = []
+    for rel in _DEV_ONLY_PATHS:
+        p = BASE_DIR / rel.strip("/")
+        if p.is_dir():
+            shutil.rmtree(p, ignore_errors=True)
+            gone.append(rel.strip("/") + "/")
+        elif p.is_file():
+            try:
+                p.unlink()
+                gone.append(rel.strip("/"))
+            except OSError:
+                pass
+    md = BASE_DIR / "maintenance"
+    if md.is_dir():
+        for name in _DEV_MAINTENANCE_DROP:
+            f = md / name
+            if f.is_file():
+                try:
+                    f.unlink()
+                    gone.append("maintenance/" + name)
+                except OSError:
+                    pass
+    if not gone:
+        return ""
+    return _NARROW_NOTE + " (" + ", ".join(gone[:6]) + ("..." if len(gone) > 6 else "") + ")"
+
+
+# ---- the release artifact, fetched and checked the way the installer checks it ---------
+def _update_base():
+    return str(CONFIG["agent"].get("update_url")
+               or os.environ.get("TINYCMDR_UPDATE_URL")
+               or DEFAULT_UPDATE_URL).rstrip("/")
+
+
+def _update_asset():
+    if IS_WINDOWS:
+        return "tinycmdr-win.zip"
+    if sys.platform == "darwin":
+        return "tinycmdr-macos.zip"
+    return "tinycmdr-linux.tar.gz"
+
+
+def _download(url, dest):
+    """(ok, why). requests when it is there, urllib otherwise - both already present."""
+    try:
+        import requests
+        with requests.get(url, timeout=60, stream=True) as r:
+            if r.status_code != 200:
+                return False, "HTTP %d" % r.status_code
+            with open(dest, "wb") as fh:
+                for chunk in r.iter_content(65536):
+                    fh.write(chunk)
+        return True, ""
+    except Exception:                                    # noqa: BLE001 - urllib is the retry
+        try:
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=60) as resp, open(dest, "wb") as fh:
+                shutil.copyfileobj(resp, fh)
+            return True, ""
+        except Exception as e2:                          # noqa: BLE001
+            return False, "%s: %s" % (type(e2).__name__, e2)
+
+
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(1 << 20), b""):
+            h.update(block)
+    return h.hexdigest()
+
+
+def _verify_asset(asset_path, sums_path, asset_name):
+    """(ok, why): the ONE file this run fetched, against its own SHA256SUMS line.
+
+    The same contract install.sh uses. A mismatch means a corrupted or truncated transfer
+    and nothing is unpacked. Releases are unsigned, so this checks the bytes arrived whole -
+    it does not prove who made them.
+    """
+    try:
+        lines = Path(sums_path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as e:
+        return False, "could not read SHA256SUMS: %s" % e
+    want = ""
+    for ln in lines:
+        parts = ln.split()
+        if len(parts) >= 2 and parts[-1].lstrip("*") == asset_name:
+            want = parts[0].strip().lower()
+            break
+    if not want:
+        return False, "SHA256SUMS does not cover %s - the release is broken" % asset_name
+    got = _sha256(asset_path)
+    if got != want:
+        return False, ("the download does not match SHA256SUMS (got %s..., expected %s...) - "
+                       "a corrupted or truncated transfer; nothing was unpacked"
+                       % (got[:12], want[:12]))
+    return True, ""
+
+
+def _extract_release(archive, dest):
+    """Unpack an archive into `dest`; return the folder holding tinycmdr.py, or None."""
+    import tarfile
+    import zipfile
+    dest.mkdir(parents=True, exist_ok=True)
+    if str(archive).lower().endswith(".zip"):
+        with zipfile.ZipFile(archive) as z:
+            z.extractall(dest)
+    else:
+        with tarfile.open(archive) as t:
+            try:
+                t.extractall(dest, filter="data")        # 3.12+: refuse odd members
+            except TypeError:                            # older pythons have no filter
+                t.extractall(dest)
+    for cand in sorted(dest.rglob("tinycmdr.py")):
+        return cand.parent
+    return None
+
+
+def _apply_package(root, stamp):
+    """Write the package's files over this install. Returns (written, skipped).
+
+    Backs up every file it changes and never overwrites an operator's edited soul.md. Host
+    state (config.json, .env, sessions/, notes, tools/, skills/) is simply not in the
+    package, so it cannot be touched by construction.
+    """
+    import shutil
+    written, skipped = [], []
+    for src in sorted(root.rglob("*")):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(root)
+        if rel.parts and rel.parts[0] in ("dist", ".git"):
+            continue
+        dest = BASE_DIR / rel
+        try:
+            new = src.read_bytes()
+        except OSError:
+            continue
+        if rel.as_posix() == "soul.md" and dest.exists():
+            try:
+                if dest.read_text(encoding="utf-8").strip() != DEFAULT_SOUL.strip():
+                    skipped.append(rel.as_posix())      # an edited persona is not ours to take
+                    continue
+            except OSError:
+                skipped.append(rel.as_posix())
+                continue
+        old = dest.read_bytes() if dest.exists() else None
+        if old == new:
+            continue
+        if old is not None:
+            try:
+                shutil.copy2(dest, str(dest) + ".bak-update-" + stamp)
+            except OSError:
+                pass
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write_bytes(dest, new)
+        written.append(rel.as_posix())
+    return written, skipped
 
 
 def _verb_update(rest):
-    """`update <file.py|zip|folder>` — put a newer build in place, with a backup.
+    """`update [--full]` or `update <file.py|zip|folder>` — put a newer build in place.
 
-    The pushed-by-hand dance, in one command: take the source, check it really is a build
-    (a VERSION line, and `--version` runs), back the current files up beside themselves,
-    write the new bytes, and say what changed. It never restarts anything: the operator
-    decides when a running bot is replaced.
+    With no argument it downloads the RELEASE package for this host, checks it against the
+    release's SHA256SUMS, applies it and drops the project's own kit. It never reads main
+    and never needs git: the artifact is the same one the one-line installer installs, so
+    "a behaviour was shipped" and "a user receives it" are the same act, and a user can
+    never receive unreleased code.
 
-    `--full` keeps the whole repository. Without it a pull narrows the tree to what a
-    PACKAGE ships (see _narrow_to_shipped): the harness needs none of the project's own kit,
-    and it used to be delivered to every user's machine by a plain git pull."""
+    With a path, the pushed-by-hand dance: check the source really is a build (a VERSION
+    line, and `--version` runs), back the current files up beside themselves, write the new
+    bytes, and say what changed.
+
+    `--full` keeps the project's own kit (tests/, docs/, the maintainer scripts) on this
+    host instead of pruning it. Nothing here ever restarts anything: the operator decides
+    when a running bot is replaced."""
     import shutil
     import tempfile
     import zipfile
     keep_dev = "--full" in rest
     rest = [a for a in rest if a != "--full"]
     if not rest:
-        repo = str(CONFIG["agent"].get("update_repo") or DEFAULT_UPDATE_REPO)
-        git = _git_exe()
-        if not git:
-            print("no git binary on this host and this install is not a checkout, so there is "
-                  "nothing to pull from. Install git, or hand `update` a build: "
-                  "`update <tinycmdr.py|package.zip|folder>`.", file=sys.stderr)
-            return 2
-        if not (BASE_DIR / ".git").exists():
-            print("this install is not a git checkout - adopting %s" % repo)
-            return update_adopt_git(git, repo, keep_dev)
-        print("Running in git repository at %s" % BASE_DIR)
-        print("Checking for updates via git...")
-
-        def head_of():
-            """(short HEAD, tinycmdr.py hash): either moving is a real update - a docs-only
-            commit moves HEAD and must not read as 'already up to date'."""
-            return ((_run_git(git, ["-C", str(BASE_DIR), "rev-parse", "--short", "HEAD"],
-                              30)[1] or "").strip() or "?",
-                    _build_hash())
-
-        head_before, file_before = head_of()
-        _stamp = time.strftime("%Y%m%d-%H%M%S")
-        _kept = preserve_edited_soul(_stamp)
-        if _kept:
-            print("your persona is a local edit to a tracked file, so a pull can refuse it"
-                  " - copied to %s first" % Path(_kept).name)
-        rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "pull", "--ff-only"], 120)
-        if rc != 0:
-            print("git pull failed: %s" % ((err or out).strip()[:600]), file=sys.stderr)
-            return 1
-        ensure_launcher_executable()
-        print(out.strip())
-        _narrow = _narrow_to_shipped(git, keep_dev)
-        if _narrow:
-            print(_narrow)
-        head_after, file_after = head_of()
-        if (head_before, file_before) != (head_after, file_after):
-            print("HEAD %s -> %s, tinycmdr.py %s -> %s (VERSION %s)"
-                  % (head_before, head_after, file_before, file_after, _disk_version()))
+        asset = _update_asset()
+        base = _update_base()
+        print("updating from %s/%s" % (base, asset))
+        work = Path(tempfile.mkdtemp(prefix="tinycmdr-update-"))
+        try:
+            archive = work / asset
+            ok, why = _download(base + "/" + asset, archive)
+            if not ok:
+                print("could not download %s: %s" % (asset, why), file=sys.stderr)
+                return 1
+            sums = work / "SHA256SUMS"
+            ok_sum, why_sum = _download(base + "/SHA256SUMS", sums)
+            if not ok_sum:
+                if os.environ.get("TINYCMDR_NO_SUMS") == "1":
+                    print("    (SHA256SUMS could not be fetched (%s) and TINYCMDR_NO_SUMS=1 "
+                          "says carry on - this download is UNCHECKED)" % why_sum)
+                else:
+                    print("could not fetch SHA256SUMS (%s), so this download cannot be "
+                          "checked. Re-run it, or set TINYCMDR_NO_SUMS=1 to skip the check "
+                          "deliberately." % why_sum, file=sys.stderr)
+                    return 1
+            else:
+                ok, why = _verify_asset(archive, sums, asset)
+                if not ok:
+                    print(why, file=sys.stderr)
+                    return 1
+                print("    the download matches SHA256SUMS. Releases are unsigned, so this "
+                      "catches a corrupted or truncated transfer, not a replaced release.")
+            root = _extract_release(archive, work / "pkg")
+            if root is None:
+                print("the archive did not contain a tinycmdr-* folder", file=sys.stderr)
+                return 1
+            new_app = root / "tinycmdr.py"
+            text = new_app.read_text(encoding="utf-8", errors="replace")
+            m = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.M)
+            if not m:
+                print("%s has no VERSION line - refusing to install it" % new_app,
+                      file=sys.stderr)
+                return 1
+            new_version = m.group(1)
+            this_version = _disk_version()
+            if new_version == this_version:
+                print("already up to date: VERSION %s" % this_version)
+                note = _prune_dev_kit(keep_dev)
+                if note:
+                    print(note)
+                return 0
+            stamp = time.strftime("%Y%m%d-%H%M%S")
+            _kept = preserve_edited_soul(stamp)
+            if _kept:
+                print("your persona is an edit to a shipped file - copied to %s first"
+                      % Path(_kept).name)
+            written, skipped = _apply_package(root, stamp)
+            ensure_launcher_executable()
+            if skipped:
+                print("    left your own %s alone" % ", ".join(skipped[:3]))
+            print("wrote %d file(s)%s"
+                  % (len(written),
+                     (": " + ", ".join(written[:5]) + ("..." if len(written) > 5 else ""))
+                     if written else ""))
+            note = _prune_dev_kit(keep_dev)
+            if note:
+                print(note)
+            print("VERSION %s -> %s" % (this_version, new_version))
             print("Restart tinycmdr to run new build: `tinycmdr restart`")
-        else:
-            dirty = bool((_run_git(git, ["-C", str(BASE_DIR), "status", "--porcelain",
-                                         "--", "tinycmdr.py"], 30)[1] or "").strip())
-            print("Already up to date: HEAD %s, tinycmdr.py %s (VERSION %s)%s"
-                  % (head_after, file_after, _disk_version(),
-                     " - with local uncommitted edits (a dev tree)" if dirty else ""))
-        return 0
+            return 0
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
     src = Path(rest[0]).expanduser()
     if not src.exists():
         print("no such file or folder: %s" % src, file=sys.stderr)

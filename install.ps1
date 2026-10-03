@@ -31,6 +31,25 @@ try {
     try { Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip -UseBasicParsing }
     catch { Die "could not download $base/$asset - $($_.Exception.Message)" }
 
+    Say 'verifying the download'
+    # The same contract install.sh has used since 2026-09-29: the ONE file this run fetched,
+    # against its line in SHA256SUMS. This door had no check at all while the Unix one did -
+    # the pipe-to-bash path was the one that got hardened, and Windows installs were the
+    # unverified half (measured 2026-10-03). Releases are unsigned, so this catches a
+    # corrupted or truncated transfer, not a release that was replaced.
+    $sums = Join-Path $tmp 'SHA256SUMS'
+    try { Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing }
+    catch { Die "could not fetch $base/SHA256SUMS, so this download cannot be checked. Re-run it, or download the zip by hand from the release page." }
+    $want = Get-Content -LiteralPath $sums |
+        Where-Object { $_ -match ('(\*)?' + [regex]::Escape($asset) + '\s*$') } |
+        ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1
+    if (-not $want) { Die "SHA256SUMS does not cover $asset - the release is broken, and nothing was unpacked" }
+    $got = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLower()
+    if ($got -ne $want.ToLower()) {
+        Die 'the download does not match SHA256SUMS - a corrupted or truncated transfer. Nothing was unpacked.' }
+    Write-Host '    the download matches SHA256SUMS. Releases are unsigned, so this catches a'
+    Write-Host '    corrupted or truncated transfer, not a release that was replaced.'
+
     Say 'expanding'
     Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
     $src = Get-ChildItem -LiteralPath $tmp -Directory |

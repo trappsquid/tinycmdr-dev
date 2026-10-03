@@ -117,21 +117,45 @@ def main():
                 check("the fix-up is a no-op where the execute bit does not exist",
                       launcher.read_text(encoding="utf-8").startswith("#!"))
 
-        # ---- update narrows to what a package ships (and this list DELETES) ----------
+        # ---- update prunes the project's kit (and this list DELETES) ------------------
         # `update` used to git-pull the whole repo, so user machines accumulated the test
-        # suites, the CI workflow, the docs and the maintainer kit. The narrowing is written
-        # as EXCLUSIONS so a forgotten path is kept - which means an exclusion that caught
-        # something the harness needs would break every updated install. Grade the list.
-        _pats = fb._sparse_patterns()
-        _excl = [p for p in _pats if p.startswith("!")]
-        check("update narrowing drops the project's own kit",
-              "!/tests/" in _excl and "!/.github/" in _excl and "!/docs/" in _excl, str(_excl))
-        check("...and never a directory the package ships",
-              not any(e.rstrip("/") in ("!/install", "!/tools", "!/skills", "!/tinycmdr.py")
-                      for e in _excl), str(_excl))
-        check("...while re-including the shipped restart helpers",
-              "/maintenance/restart-tinycmdr.sh" in _pats
-              and "/maintenance/restart-tinycmdr.ps1" in _pats, str(_pats))
+        # suites, the CI workflow, the docs and the maintainer kit. It now deletes those BY
+        # NAME. Grade the two ways that can go wrong: the kit must go, and a host's own
+        # files sitting in the same folders (private_rules.py, where-roles.json) must not.
+        # Run in a temp tree so the suite's own install is never touched.
+        _saved_base = fb.BASE_DIR
+        _ptmp = Path(tempfile.mkdtemp(prefix="fbtest-prune-"))
+        try:
+            fb.BASE_DIR = _ptmp
+            for rel in ("tests", "docs", ".github"):
+                (_ptmp / rel).mkdir(parents=True)
+                (_ptmp / rel / "x.txt").write_text("x", encoding="utf-8")
+            (_ptmp / "CHANGELOG.md").write_text("x", encoding="utf-8")
+            (_ptmp / "maintenance").mkdir()
+            for _name in ("release.sh", "where.py", "leak-gate.py",
+                          "private_rules.py"):
+                (_ptmp / "maintenance" / _name).write_text("x", encoding="utf-8")
+            (_ptmp / "maintenance" / "where-roles.json").write_text(
+                '[{"role":"live","path":"/a"},{"role":"dev","path":"/b"}]', encoding="utf-8")
+            _note = fb._prune_dev_kit()
+            check("pruning removes the project's kit (dirs, files, maintainer scripts)",
+                  not (_ptmp / "tests").exists() and not (_ptmp / "docs").exists()
+                  and not (_ptmp / ".github").exists()
+                  and not (_ptmp / "CHANGELOG.md").exists()
+                  and not (_ptmp / "maintenance" / "release.sh").exists()
+                  and not (_ptmp / "maintenance" / "where.py").exists(), _note)
+            check("...and never a host's own file in the same folder",
+                  (_ptmp / "maintenance" / "private_rules.py").exists()
+                  and (_ptmp / "maintenance" / "where-roles.json").exists(), _note)
+            (_ptmp / "tests").mkdir()
+            (_ptmp / "maintenance" / "where-roles.json").write_text(
+                '[{"role":"dev","path":"%s"}]' % _ptmp, encoding="utf-8")
+            _note2 = fb._prune_dev_kit()
+            check("a tree the box declares as its DEV tree is never pruned",
+                  (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note2, _note2)
+        finally:
+            fb.BASE_DIR = _saved_base
+            shutil.rmtree(_ptmp, ignore_errors=True)
 
         # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,
@@ -991,17 +1015,24 @@ def main():
     check("an unknown verb names the chat set", "unknown verb" in text and "update" in text, text)
     check("no arguments is the help", "tinycmdr <verb>" in fb.verb_from_chat(""), "none")
 
-    # ---- update: no git, no checkout -------------------------------------------
-    saved_git_exe = fb._git_exe
-    fb._git_exe = lambda: ""
-    rc, out, err = call(fb, ["update"])
-    check("update with no git and no checkout says so and exits 2",
-          rc == 2 and "no git binary" in err, (rc, err[:160]))
-    fb._git_exe = lambda: "git-not-here"
-    rc, out, err = call(fb, ["update"])
-    check("update without .git adopts the git path instead of printing usage",
-          "adopting" in out, (rc, out[:160]))
-    fb._git_exe = saved_git_exe
+    # ---- update: the release artifact, never git --------------------------------
+    # `update` was `git pull`; it now fetches the same verified package the one-line
+    # installer does. Pointed at a dead host it must fail cleanly, and it must never go
+    # looking for git at all.
+    _saved_url = os.environ.get("TINYCMDR_UPDATE_URL")
+    os.environ["TINYCMDR_UPDATE_URL"] = "http://127.0.0.1:1/releases"
+    try:
+        rc, out, err = call(fb, ["update"])
+        check("update against an unreachable release host fails cleanly",
+              rc == 1 and "could not download" in err and "Traceback" not in err,
+              (rc, (err or out)[:200]))
+        check("...and never mentions git", "git" not in (out + err).lower(),
+              (out + err)[:160])
+    finally:
+        if _saved_url is None:
+            os.environ.pop("TINYCMDR_UPDATE_URL", None)
+        else:
+            os.environ["TINYCMDR_UPDATE_URL"] = _saved_url
 
     # H1: the word after the program name is a VERB, never a reason to start the bot.
     # `tinycmdr taks` used to fall through to run_bot and bring up the agent,

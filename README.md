@@ -153,7 +153,7 @@ and in chat:
 | `model use <name>` · `model add [<url>]` · `model remove <x>` | switch; add an endpoint (no URL: it asks local/cloud, the key and the link, proves the key with a bearer `GET /models`, then offers the models to choose from); or drop one |
 | `model endpoint [<url>]` | read the endpoint or fix it - a `401` asks for the key (saved to `.env`), a typo is refused unless it answers (`--force` writes an unverified one) |
 | `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
-| `update` | pull the published build (`update <file\|zip\|folder>` puts one in place by hand) |
+| `update` | fetch the published build (`update <file\|zip\|folder>` puts one in place by hand) |
 | `clean` · `token` · `config get\|set <dotted.key>` | junk in this folder, where secrets live, edit config.json |
 | `restart` | restart through this host's own door (launchd, systemd, Task Scheduler) |
 | `/stop` in the CLI or chat | cancel the run that is going, now |
@@ -179,7 +179,7 @@ Both stay flat as the folder grows: 5.9 characters of tool index per tool at 80 
 ## Update it
 
 ```bash
-tinycmdr update      # pull the published build
+tinycmdr update      # fetch the published build (verified against SHA256SUMS)
 tinycmdr restart     # start running it
 ```
 

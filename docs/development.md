@@ -114,14 +114,15 @@ from a clone, and should not "restore" them:
 notes - a leak there is a leak onto every host. `soul.md` is the exception on that list: it is
 tracked, because it is the seed the agent's workspace starts from.
 
-That seed is also the one tracked file an operator is expected to EDIT, so a persona is an
-uncommitted modification and has to be treated as one: `tinycmdr update` copies an edited
-`soul.md` aside (`soul.md.bak-update-<stamp>`) before its `git pull`, `tinycmdr doctor` says
-whether the file is edited or still the shipped seed, and a pull that would overwrite it refuses
-instead of merging. Editing it is safe on a normal install (no checkout, nothing pulls over it);
-on a checkout, remember that anything discarding local changes - `git reset --hard`,
-`git checkout -- .` - takes the persona with it. The shipped default also lives in the build as
-`DEFAULT_SOUL`, so a host with no `soul.md` at all still runs a real persona.
+That seed is also the one shipped file an operator is expected to EDIT, so a persona is an
+edit to a shipped file and is treated as one: `tinycmdr update` copies it aside
+(`soul.md.bak-update-<stamp>`) and then **never overwrites it** - `_apply_package` compares it
+with the shipped seed and leaves anything else exactly as it is. `tinycmdr doctor` says whether
+the file is edited or still the shipped seed. Editing it is always safe: `update` installs a
+release package, so nothing merges over it. Anything that discards local changes outside
+tinycmdr - `git reset --hard`, `git checkout -- .` in a tree that happens to be a checkout -
+still takes the persona with it, which is why the copy exists. The shipped default also lives in
+the build as `DEFAULT_SOUL`, so a host with no `soul.md` at all still runs a real persona.
 
 ## 5. Secrets and privilege
 
