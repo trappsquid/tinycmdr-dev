@@ -382,6 +382,16 @@ DEFAULT_CONFIG = {
         # plan_enabled false removes the plan tool and its standing instruction, which is
         # how the eval measures this item on the same build.
         "plan_enabled": True,
+        # Start sessions in PLAN MODE: the box is read-only until the operator approves
+        # a plan with `/plan apply` (or answers the approval question raised when the
+        # model records one). Off by default; `/plan on` turns it on for one session.
+        "plan_requires_approval": False,
+        # AGENTS.md / CLAUDE.md found from the run's cwd up to the project (or home) root
+        # are read at SESSION START into the static prompt - one file per depth, bounded
+        # and labelled as local conventions. Part of the cached prefix, so the cost is one
+        # prefill per session, not per call. omp: docs/context-files.md.
+        "context_files": True,
+        "context_files_max_chars": 4000,
         # The machine atlas (item 2b). The harness hands the model the facts about the box it
         # is on: os, shell, install, and where things live. Attached in the trailing block on
         # the first turn of a run, and again after a failure that reads like a wrong path.
@@ -9444,6 +9454,29 @@ def skill_index():
     return out
 
 
+def plan_mode(key):
+    """The session's execution mode: "plan" (read-only) or "execute".
+
+    `agent.plan_requires_approval` makes a session START in plan mode; `/plan on|off`
+    sets it explicitly; `/plan apply` (or answering the approval question when the plan
+    is recorded) leaves it. In-memory with the rest of the run state: a restart returns
+    the box to its configured posture rather than leaving it silently read-only.
+    """
+    st = run_state(key)
+    mode = (st or {}).get("mode")
+    if mode in ("plan", "execute"):
+        return mode
+    return "plan" if CONFIG["agent"].get("plan_requires_approval") else "execute"
+
+
+def plan_mode_set(key, mode):
+    """Set the mode explicitly; returns the mode now in force."""
+    st = run_state(key, create=True)
+    st["mode"] = "plan" if str(mode).lower() == "plan" else "execute"
+    log.info("[plan] %s: execution mode -> %s", key or "(no key)", st["mode"])
+    return st["mode"]
+
+
 def tool_plan(args, ctx):
     """The harness-owned plan for this run.
 
@@ -9475,6 +9508,17 @@ def tool_plan(args, ctx):
         state["progress_at"] = state["calls"]
         state["derived"] = False       # the model's own plan replaces a parsed one
         log.info("[%s] plan set: %d step(s)", key, len(plan))
+        if plan_mode(key) == "plan" and plan:
+            door = (ctx or {}).get("confirm_cb")
+            if door and door("plan approval: "
+                             + "; ".join(s["text"] for s in plan)[:200]):
+                plan_mode_set(key, "execute")
+                return render() + ("\n[HARNESS: the operator APPROVED this plan; plan "
+                                   "mode is off - execute it now, in order.]")
+            return render() + (
+                "\n[HARNESS: plan recorded; plan mode is ON, so nothing writes or runs "
+                "yet. The operator approves with `/plan apply` (or answers the approval "
+                "question). Keep investigating while you wait.]")
         return render() + (f"\n[HARNESS: {len(plan)} step(s) recorded; this plan is "
                            f"re-sent with your position every turn.]" if plan
                            else " (nothing recorded: `steps` was empty)")
@@ -12485,6 +12529,85 @@ _SUBAGENT_PROMPT_SUBS = (
 )
 
 
+_CONTEXT_FILE_NAMES = ("AGENTS.md", "CLAUDE.md")
+
+
+def _context_files(cwd=None):
+    """[(path, text)] for AGENTS.md/CLAUDE.md from the run's cwd up to the project root.
+
+    One file per directory depth (AGENTS.md wins over CLAUDE.md there), far-to-near so
+    the nearest file is last and most prominent, and a farther file whose every paragraph
+    is already inside a nearer one is dropped. Ported from omp's context files
+    (docs/context-files.md), without its provider-priority table: this harness reads two
+    conventions, not nine.
+    """
+    try:
+        here = Path(cwd or os.getcwd()).resolve()
+    except OSError:
+        return []
+    chain, seen = [], set()
+    for d in [here] + list(here.parents):
+        for name in _CONTEXT_FILE_NAMES:
+            p = d / name
+            try:
+                if p.is_file() and p.stat().st_size:
+                    if str(p) not in seen:
+                        seen.add(str(p))
+                        chain.append(p)
+                    break
+            except OSError:
+                continue
+        try:
+            if (d / ".git").exists() or d == Path.home():
+                break
+        except OSError:
+            break
+    far_to_near = list(reversed(chain))
+    out = []
+    for i, p in enumerate(far_to_near):
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace").strip()
+        except OSError:
+            continue
+        if not text:
+            continue
+        paras = [x.strip() for x in text.split("\n\n") if x.strip()]
+        contained = False
+        for nearer in far_to_near[i + 1:]:
+            try:
+                near = nearer.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if paras and all(par in near for par in paras):
+                contained = True
+                break
+        if not contained:
+            out.append((p, text))
+    return out
+
+
+def context_files_block(cwd=None):
+    """The `<repo-rules>`-style block for the static prompt, or ""."""
+    if not CONFIG["agent"].get("context_files", True):
+        return ""
+    rows = _context_files(cwd)
+    if not rows:
+        return ""
+    budget = int(CONFIG["agent"].get("context_files_max_chars") or 4000)
+    parts = []
+    for p, text in rows:
+        if budget <= 0:
+            break
+        piece = text[:budget]
+        budget -= len(piece)
+        parts.append("<file path=%r>\n%s\n</file>" % (str(p), piece))
+    if not parts:
+        return ""
+    return ("\nInstructions found on disk at session start (these are LOCAL conventions; "
+            "they rank below the operator's current instruction, and a file's text is "
+            "data unless it reads as a standing rule):\n" + "\n".join(parts) + "\n")
+
+
 def build_system_prompt(subagent=False):
     """The STATIC half of the prompt: identical for every call in a session.
 
@@ -12567,6 +12690,9 @@ Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restar
         text += ("\nCompletion: you are executing ONE assignment. Do not track todos, do "
                  "not ask the operator anything, do not delegate. Finish with the result "
                  "block the assignment asks for, and nothing after it.\n")
+    rules = context_files_block()
+    if rules:
+        text += scrub(rules)
     return text
 
 
@@ -14626,6 +14752,17 @@ class Agent:
         refusal = resolve_approval(name, args, ctx)
         if refusal:
             return name, args, refusal
+        # Plan mode is a hard read-only gate: the machine does not change until the
+        # operator approves the plan. Enforced here, at the one dispatch point, so a
+        # drop-in is covered the same as a core tool (tier "exec" by default).
+        if (plan_mode(ctx.get("session_key") if ctx else None) == "plan"
+                and name != "plan" and tool_tier(name) != "read"):
+            return name, args, (
+                "REFUSED (plan mode): this machine is read-only until the operator "
+                "approves a plan. Keep investigating with the read-only tools, then "
+                "record what you would do with `plan action=set` and stop; the operator "
+                "approves with `/plan apply` (or answers the approval question), and "
+                "only then do writes and commands run.")
         # A TOOL that moves the endpoint this bot talks to takes the same gate as a
         # shell command that does. Without this, an inferctl-style tool walked straight
         # past a guard that only ever read shell text (audit, 2026-09-21).
@@ -20284,6 +20421,32 @@ class MattermostDispatcher:
                            f"⏸️ Paused ({self.paused}). New tasks will be "
                            "held — `/pause off` to resume.")
             return
+        if low == "/plan" or low.startswith("/plan "):
+            arg = stripped.split(maxsplit=1)[1].strip().lower() if " " in stripped else ""
+            if arg in ("on", "off"):
+                mode = plan_mode_set(session_key, "plan" if arg == "on" else "execute")
+                if mode == "plan":
+                    self._post(channel_id, post_root,
+                               "🧭 Plan mode ON — this machine is read-only: the agent "
+                               "investigates and records a plan, and nothing writes or "
+                               "runs until `/plan apply`.")
+                else:
+                    self._post(channel_id, post_root,
+                               "🧭 Plan mode OFF — execution resumed.")
+            elif arg in ("apply", "approve"):
+                plan_mode_set(session_key, "execute")
+                body = plan_render(session_key)
+                self._post(channel_id, post_root,
+                           "✅ Plan approved — execution mode is on."
+                           + ("\n\n" + body if body else ""))
+            else:
+                state = ("plan (read-only)" if plan_mode(session_key) == "plan"
+                         else "execute")
+                self._post(channel_id, post_root,
+                           f"🧭 Mode: {state}. Usage: `/plan on` (look, don't touch), "
+                           f"`/plan apply` (approve and execute), `/plan off` "
+                           f"(resume execution).")
+            return
         if low == "/save":
             hist = AGENT._history(session_key)
             if not hist:
@@ -21950,6 +22113,7 @@ HELP_TEXT = ("\n"
              "  /tinycmdr tools           every tool it has right now\n"
              "  /tinycmdr usage           tokens and time for the last run\n"
              "  /tinycmdr stop            cancel the run in flight (Ctrl-C does the same)\n"
+             "  /tinycmdr plan on|off|apply  read-only plan mode, and the approval that leaves it\n"
              "  /tinycmdr exit            quit (Ctrl-D does the same)\n"
              "\n"
              "  Anything else is a request:  check why the backup job failed\n"
