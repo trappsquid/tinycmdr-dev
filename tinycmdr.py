@@ -12516,27 +12516,90 @@ def _tool_pairing_problems(messages):
         role = m.get("role")
         if role == "tool":
             tid = m.get("tool_call_id") or ""
-            if tid in pending:
-                pending.pop(tid)
+            if pending.get(tid):
+                pending[tid] -= 1
+                if not pending[tid]:
+                    pending.pop(tid)
             else:
                 problems.append(f"msg {idx}: tool result for an id nobody "
                                 f"called ({tid!r})")
             continue
         if pending:
             problems.append(f"msg {idx}: {role} message arrived with "
-                            f"{len(pending)} unanswered tool_call_id(s) "
+                            f"{sum(pending.values())} unanswered tool_call_id(s) "
                             f"{sorted(pending)}")
             pending = {}
         if role == "assistant" and m.get("tool_calls"):
+            seen_here = set()
             for tc in m["tool_calls"]:
                 tid = tc.get("id") or ""
                 if not tid:
                     problems.append(f"msg {idx}: tool_calls entry with no id")
-                pending[tid] = True
+                    continue
+                if tid in seen_here:
+                    problems.append(f"msg {idx}: duplicate tool_call_id {tid!r} "
+                                    f"inside one assistant message")
+                seen_here.add(tid)
+                pending[tid] = pending.get(tid, 0) + 1
     if pending:
-        problems.append(f"end: {len(pending)} tool_call_id(s) never answered "
+        problems.append(f"end: {sum(pending.values())} tool_call_id(s) never answered "
                         f"{sorted(pending)}")
     return problems
+
+
+def _uniquify_tool_call_ids(messages):
+    """Give every tool_call its own id; return the input untouched when it already has.
+
+    A local server (or a proxy) that re-emits a call id collapses two calls onto one
+    entry in every pairing structure here, so the payload ships two tool_calls with one
+    id and one result. llama.cpp ignores it; a strict endpoint answers 400, which is one
+    failover away by design. Ported from omp's deduplicateToolCallIds
+    (packages/ai/src/providers/transform-messages.ts:131-235).
+
+    Rewrites COPIES, never the caller's dicts. The k-th tool result carrying a repeated
+    id belongs to the k-th call that had it (the first keeps the original), because
+    positional order is the only ordering a malformed payload offers.
+    """
+    counts, rewrites = {}, {}
+    out = []
+    for m in messages:
+        tcs = m.get("tool_calls") if m.get("role") == "assistant" else None
+        if tcs:
+            new_calls = None
+            for k, tc in enumerate(tcs):
+                tid = tc.get("id") or ""
+                if not tid:
+                    continue
+                seen = counts.get(tid, 0)
+                counts[tid] = seen + 1
+                if seen:
+                    suffix = "_dup%d" % seen
+                    new_id = (tid[:40 - len(suffix)] if len(tid) + len(suffix) > 40
+                              else tid) + suffix
+                    if new_calls is None:
+                        new_calls = list(tcs)
+                        m = dict(m)
+                        m["tool_calls"] = new_calls
+                    dup = dict(new_calls[k])
+                    dup["id"] = new_id
+                    new_calls[k] = dup
+                    rewrites.setdefault(tid, []).append(new_id)
+        out.append(m)
+    if not rewrites:
+        return messages
+    result_seen, fixed = {}, []
+    for m in out:
+        tid = m.get("tool_call_id") if m.get("role") == "tool" else ""
+        if tid in rewrites:
+            idx = result_seen.get(tid, 0)
+            result_seen[tid] = idx + 1
+            if idx:                       # the first result keeps the original id
+                m = dict(m)
+                m["tool_call_id"] = rewrites[tid][idx - 1]
+        fixed.append(m)
+    log.warning("tool call ids repaired: %d repeated id(s) split",
+                sum(len(v) for v in rewrites.values()))
+    return fixed
 
 
 def _repair_tool_pairing(messages):
@@ -12552,6 +12615,7 @@ def _repair_tool_pairing(messages):
     if not any(m.get("role") == "assistant" and m.get("tool_calls")
                for m in messages):
         return messages
+    messages = _uniquify_tool_call_ids(messages)
     out = []
     i = 0
     while i < len(messages):
