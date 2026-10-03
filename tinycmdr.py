@@ -254,6 +254,12 @@ DEFAULT_CONFIG = {
                                      # llama.cpp endpoint.
         "no_think": False,   # True for qwen3-style thinking models that
                              # answer empty (sends enable_thinking: false)
+        # Replay assistant `reasoning_content` on history turns TO LOCAL endpoints (a
+        # template rebuilds the <think> block from it, keeping the replayed prefix
+        # byte-aligned for the KV cache); a remote endpoint gets no such field. The cap
+        # bounds what a long think block re-buys each turn.
+        "replay_reasoning": True,
+        "replay_reasoning_max_chars": 4000,
         "fallbacks": [],   # [{"base_url": ..., "model": ..., "api_key": ...,
                            #   "alias": ..., "api_key_env": ...}]
         "allow_cloud_fallback": False,  # True = a local failure may silently
@@ -1894,6 +1900,30 @@ def _think_fence_open(lead):
         if opener.startswith(low.lower()):
             return None, "hold"
     return None, ""
+
+
+def _replay_reasoning_ok(url=None):
+    """Whether assistant turns may carry `reasoning_content` back to the endpoint.
+
+    A local llama.cpp/vLLM chat template rebuilds the `<think>` block from it, which is
+    what keeps the replayed prefix byte-aligned turn to turn - without it the template
+    renders a different token sequence for that turn and the prefix KV-cache diverges
+    from that point, on every turn, for exactly the models that emit the most tokens.
+    A strict remote provider may reject an unknown message field, so replay is
+    local-only by default. omp does the same (docs/provider-compat-reference.md:68-69).
+    """
+    if not CONFIG["llm"].get("replay_reasoning", True):
+        return False
+    return _is_local_url(url or CONFIG["llm"].get("base_url", ""))
+
+
+def _reasoning_for_replay(msg):
+    """The capped reasoning text to replay for one assistant turn, or ""."""
+    rc = msg.get("reasoning_content") if isinstance(msg, dict) else None
+    if not isinstance(rc, str) or not rc:
+        return ""
+    cap = int(CONFIG["llm"].get("replay_reasoning_max_chars") or 4000)
+    return rc[:max(0, cap)]
 
 
 def _delta_tool_calls(d):
@@ -14685,6 +14715,17 @@ class Agent:
                                     f"run; nothing was changed. Retry, or check "
                                     f"the endpoint.")
                         return f"⚠️ LLM call failed: {e}"
+                    # Reasoning replay follows the endpoint: a local template needs it to
+                    # rebuild the <think> block (prefix-cache alignment); a strict remote
+                    # provider may reject the message-level field, so it is dropped there.
+                    if _replay_reasoning_ok():
+                        _rr = _reasoning_for_replay(reply)
+                        if _rr:
+                            reply["reasoning_content"] = _rr
+                        else:
+                            reply.pop("reasoning_content", None)
+                    else:
+                        reply.pop("reasoning_content", None)
                     messages.append(reply)
                     tool_calls = reply.get("tool_calls") or []
                     if not tool_calls:
@@ -15079,6 +15120,13 @@ class Agent:
                     turn = {"role": "assistant",
                             "content": (reply.get("content") or "").strip(),
                             "tool_calls": tool_calls}
+                    # The plain-append above already capped/kept or dropped the field
+                    # according to the endpoint; carry the same decision onto the turn
+                    # that replaces it (a reasoning model's tool call is the turn whose
+                    # prefix matters most).
+                    _rr = _reasoning_for_replay(reply)
+                    if _rr:
+                        turn["reasoning_content"] = _rr
                     if messages and messages[-1] is reply:
                         messages[-1] = turn
                     else:
