@@ -3,8 +3,7 @@
 "The FULL text is on disk - nothing was dropped" was process-scoped: the index lived in
 memory only (a restart orphaned every pointer), the filename carried a timestamp (the same
 output spilled twice wrote two files), and the write had no ceiling (a multi-GB log was
-faithfully written byte for byte). omp's artifact store is content-addressed and capped
-(docs/blob-artifact-architecture.md), which is the half worth taking.
+faithfully written byte for byte). Content addressing plus a byte cap close both.
 
     python tests/test_spill_durability.py
 """

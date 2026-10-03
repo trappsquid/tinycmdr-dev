@@ -3,9 +3,8 @@
 The process table said "finished (code not captured)" for any job that outlived the
 process that started it, had no readiness condition (start-and-poll was the only way to
 know a service was up), could not answer a prompt (stdin was DEVNULL), and a job that
-ended was only discoverable by asking. Each piece here is ported from omp's bash job
-runtime (docs/bash-tool-runtime.md, async/job-manager.ts) without its broker: the wrapper
-and the spool are plain files under logs/.
+ended was only discoverable by asking. No broker: the wrapper and the spool are plain
+files under logs/.
 
     python tests/test_job_control.py
 """

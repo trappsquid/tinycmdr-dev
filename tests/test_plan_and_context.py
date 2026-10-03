@@ -1,14 +1,13 @@
 """Plan mode is a hard read-only gate; AGENTS.md travels with the checkout.
 
-Plan mode is enforced in code, not prose (omp: tools/plan-mode-guard.ts): every
+Plan mode is enforced in code, not prose: every
 write/exec tool refuses at the dispatch point until the operator approves a plan, and a
 drop-in is covered because unknown tools are tier exec. `/plan apply` (or answering the
 approval question) is the approval.
 
 Context files: AGENTS.md/CLAUDE.md from the run's cwd up to the project root are read at
 session start into the cached static prefix - one per depth, nearest most prominent, a
-farther file contained in a nearer one dropped, the block bounded (omp:
-docs/context-files.md).
+farther file contained in a nearer one dropped, the block bounded.
 
     python tests/test_plan_and_context.py
 """

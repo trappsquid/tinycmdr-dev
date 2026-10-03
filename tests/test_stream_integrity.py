@@ -1,19 +1,17 @@
 """A clean close is not a completion, and a no-op edit is not an edit.
 
-Two silent-wrong-answer shapes ported from omp (2026-10-03):
+Two silent-wrong-answer shapes:
 
   * a stream that ends with content but NEITHER a `finish_reason` NOR `[DONE]` is a
     truncation (a server killed mid-answer), and it used to be returned as the model's
-    final word - finish_reason '' meant the length/window checks never saw it either
-    (omp: packages/ai/src/providers/openai-completions.ts:1686-1702);
+    final word - finish_reason '' meant the length/window checks never saw it either;
   * an edit whose new_string reproduces the bytes already on disk wrote the file back
     and returned OK over an empty diff, teaching a weak model to re-anchor and re-send
-    variants of the same payload (omp: crates/pi-edit/src/modes/hashline/patcher.rs:53-77,
-    NOOP_HARD_LIMIT=3 in crates/pi-edit/src/store.rs:21).
+    variants of the same payload (escalating on the third identical one).
 
 It also pins the reasoning-aliases + leading think-fence rules: a server with no
 reasoning parser leaks `<think>...</think>` into `content`, and `reasoning`/
-`reasoning_text` fields used to be dropped (omp: openai-completions.ts:1402-1412).
+`reasoning_text` fields used to be dropped.
 
     python tests/test_stream_integrity.py
 """

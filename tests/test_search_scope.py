@@ -1,7 +1,7 @@
 """A directory search answers a bounded, reproducible PAGE about all the files asked.
 
-Ported from omp's search pipeline (docs/natives-text-search-pipeline.md:91-117): the walk
-is path-ordered so the same query returns the same page on every host (a capped result is
+The walk is path-ordered so the same query returns the same page on every host (a
+capped result is
 reproducible and has a stable next slice), a per-file cap keeps one hot log from eating the
 whole max_results budget before the other files are reached, and both a capped file and a
 cap-terminated walk SAY SO - a silent skip reads as an exhaustive answer.

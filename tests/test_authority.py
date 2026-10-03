@@ -1,10 +1,9 @@
 """Per-tool authority: a deny by name, a prompt by name, and a fail-closed tier.
 
 The regex tiers read TEXT; they cannot deny a tool by name, cannot gate a drop-in whose
-arguments match no pattern, and cannot express "ask before anything that executes". omp's
-approval model is the reference (docs/approval-mode.md, tools/approval.ts): a tier per
-tool, a mode that acts as a ceiling, a policy map that overrides the mode, and "unknown =
-exec" so a new tool cannot be born auto-approved. The historical behaviour is the default
+arguments match no pattern, and cannot express "ask before anything that executes".
+The model: a tier per tool, a mode that acts as a ceiling, a policy map that overrides
+the mode, and "unknown = exec" so a new tool cannot be born auto-approved. The historical behaviour is the default
 (`auto`): the regex tiers are unchanged and nothing new prompts.
 
     python tests/test_authority.py

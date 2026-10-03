@@ -1,8 +1,8 @@
 """The elision marker carries run STATE, and the overflow path keeps a copy.
 
-A list of dropped calls cannot say what the run has read and changed; omp renders exactly
-that as a `<files>` block with (Read)/(Write)/(RW) markers
-(docs/compaction.md "File-operation context in summaries"). Measured here 2026-09-29: a
+A list of dropped calls cannot say what the run has read and changed; the marker now
+carries that state as a compact, deduped ledger with R/W/RW markers. Measured here
+2026-09-29: a
 run compacted mid-rewrite and the next calls re-derived the task from session files.
 
 And `_force_shrink` - the path that drops the MOST context - was the one path that never

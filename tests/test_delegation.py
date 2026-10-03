@@ -4,9 +4,8 @@ A child inherited the FULL main prompt - the Mattermost framing, "narrate as you
 ask_user, and an instruction to delegate that its own depth check refuses - and had no
 wall-clock of its own (one hung child held a thread for the parent's whole 75 minutes). A
 batch had no way to share one Goal/Contract block, so N children each restated the same
-interfaces. Ported from omp's task tool (prompts/tools/task.md, task/executor.ts): context
-is shared, each task is self-contained, the child's prompt is purpose-built, and a settled
-child always returns the same typed shape plus what it cost.
+interfaces: context is shared, each task is self-contained, the child's prompt is
+purpose-built, and a settled child always returns the same typed shape plus what it cost.
 
     python tests/test_delegation.py
 """

@@ -2,9 +2,8 @@
 
 Local llama.cpp/vLLM boxes answer 503 while a model loads or is swapped; demoting that to
 the next endpoint silently changes the model the conversation runs on, and back-to-back
-hops maximize the chance of re-tripping the same 503. Ported from omp
-(docs/non-compaction-retry-policy.md:55-140, packages/ai/src/error/retryable.ts:20-58):
-capped exponential backoff + jitter, same model, same key, bounded, and never on 4xx.
+hops maximize the chance of re-tripping the same 503. Capped exponential backoff +
+jitter, same model, same key, bounded, and never on 4xx.
 
     python tests/test_transient_retry.py
 """

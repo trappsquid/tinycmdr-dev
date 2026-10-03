@@ -4,7 +4,7 @@ A llama.cpp/vLLM chat template rebuilds its <think> block from `reasoning_conten
 the replayed turn has no trace of it, the template renders a different token sequence for
 that turn and the prefix KV-cache diverges from there - on every turn, for exactly the
 models that emit the most tokens. A strict remote provider may reject the message-level
-field, so replay is local-only. omp: docs/provider-compat-reference.md:68-69.
+field, so replay is local-only.
 
     python tests/test_reasoning_replay.py
 """

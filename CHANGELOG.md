@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.54] - 2026-10-03
+
 Added
 - **Plan mode, context files, per-tool authority, job control, and a delegation
-  contract** - ported from oh-my-pi after a comparative review. `agent.plan_requires_approval`
+  contract** - from a hardening pass over the harness. `agent.plan_requires_approval`
   starts a session read-only (`/plan on|off|apply` is the door), `AGENTS.md`/`CLAUDE.md` are
   read into the cached prefix at session start, `agent.tool_policy` denies or prompts a tool
   by name and `agent.approval_mode` is a ceiling (`auto` default = no new prompts), background

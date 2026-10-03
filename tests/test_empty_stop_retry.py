@@ -1,9 +1,9 @@
 """A clean `stop` with no content is a no-op, not an answer: re-send, don't re-turn.
 
 The agent-level empty-answer path costs a whole extra turn - a nudge message plus a full
-prompt re-read on a prefill-bound local box. omp retries this at the provider layer
-(packages/ai/src/utils/empty-completion-retry.ts:21-22,91-170): finish_reason `stop`, no
-visible content, <= 1 output token, one bounded re-send of the IDENTICAL payload.
+prompt re-read on a prefill-bound local box. The provider layer re-sends it instead:
+finish_reason `stop`, no visible content, <= 1 output token, one bounded re-send of the
+IDENTICAL payload.
 
     python tests/test_empty_stop_retry.py
 """

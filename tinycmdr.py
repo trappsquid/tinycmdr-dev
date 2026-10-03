@@ -226,8 +226,7 @@ DEFAULT_CONFIG = {
         "retry_after_max": 60,  # honour a 429 Retry-After header, capped at N secs
         # 408/5xx/transport failures retry the SAME endpoint with capped exponential
         # backoff + jitter before any failover: a local box answers 503 while a model
-        # loads, and demoting that to another model is a silent model switch. Ported
-        # from omp (docs/non-compaction-retry-policy.md:55-140).
+        # loads, and demoting that to another model is a silent model switch.
         "same_endpoint_retries": 3,
         "retry_base_ms": 500,
         "retry_max_ms": 8000,
@@ -332,7 +331,7 @@ DEFAULT_CONFIG = {
         "digest_lines": 40,         # lines a digest may keep
         # search_files: matches shown per file before the file is named in a "capped"
         # note. Without it one hot log can eat the whole max_results budget before the
-        # other files are reached (ported from omp's search pipeline).
+        # other files are reached.
         "search_max_per_file": 5,
         # Superseded-read pruning: a newer read of the same file blanks the older copies
         # to a notice, so a read->edit->read loop stops paying for every version until
@@ -389,7 +388,7 @@ DEFAULT_CONFIG = {
         # AGENTS.md / CLAUDE.md found from the run's cwd up to the project (or home) root
         # are read at SESSION START into the static prompt - one file per depth, bounded
         # and labelled as local conventions. Part of the cached prefix, so the cost is one
-        # prefill per session, not per call. omp: docs/context-files.md.
+        # prefill per session, not per call.
         "context_files": True,
         "context_files_max_chars": 4000,
         # Bodies of skills whose frontmatter says `always: true` ride the trailing block
@@ -643,7 +642,7 @@ DEFAULT_CONFIG = {
         # confirm-pattern command is declined, never assumed yes. "allow" is the other
         # value and is a deliberate choice, not a default (audit, 2026-09-22).
         "confirm_without_door": "decline",
-        # Per-tool authority (ported from omp docs/approval-mode.md). approval_mode is a
+        # Per-tool authority. approval_mode is a
         # CEILING on top of the regex tiers: "auto" (default) adds no prompts, "write"
         # asks before exec-tier tools, "ask" before write and exec; tool_policy denies or
         # prompts individual tools by name whatever the mode. A tool not in _TOOL_TIERS
@@ -1067,7 +1066,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.53"
+VERSION = "1.0.54"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -1756,8 +1755,8 @@ def _retry_after_secs(exc, cap):
     return max(0.0, min(secs, float(cap or 0)))
 
 
-# Transport-level failures worth the SAME endpoint again, ported from omp
-# (packages/ai/src/error/retryable.ts:20-58): a local llama.cpp/vLLM box refuses or resets
+# Transport-level failures worth the SAME endpoint again: a local llama.cpp/vLLM
+# box refuses or resets
 # while a model is loading, and demoting that to the next endpoint silently changes the
 # model the conversation runs on - the exact failure the 429 comment below describes.
 _TRANSIENT_TRANSPORT_RX = re.compile(
@@ -1767,7 +1766,7 @@ _TRANSIENT_TRANSPORT_RX = re.compile(
 
 
 def _retry_backoff_ms(attempt, base_ms, max_ms, jitter_pct):
-    """Capped exponential backoff with jitter (75-100% of nominal, omp's formula)."""
+    """Capped exponential backoff with jitter (75-100% of the nominal delay)."""
     nominal = min(base_ms * (2 ** (attempt - 1)), max_ms)
     return nominal * (1.0 - random.random() * max(0.0, jitter_pct) / 100.0)
 
@@ -1898,8 +1897,7 @@ def _delta_text(value):
 # Reasoning arrives under three field names in the wild and, from a server with no
 # reasoning parser, as a leading `<think>...</think>` fence inside `content`. Both
 # shapes used to reach the operator as answer text and pollute replayed history; the
-# alias list and the leading-fence rule are ported from omp's completions parser
-# (packages/ai/src/providers/openai-completions.ts:1402-1412).
+# alias list and the leading-fence rule cover both.
 _REASONING_FIELDS = ("reasoning_content", "reasoning_text", "reasoning")
 _THINK_OPENERS = (("<think", "</think>"), ("<thinking", "</thinking>"))
 
@@ -1948,7 +1946,7 @@ def _replay_reasoning_ok(url=None):
     renders a different token sequence for that turn and the prefix KV-cache diverges
     from that point, on every turn, for exactly the models that emit the most tokens.
     A strict remote provider may reject an unknown message field, so replay is
-    local-only by default. omp does the same (docs/provider-compat-reference.md:68-69).
+    local-only by default.
     """
     if not CONFIG["llm"].get("replay_reasoning", True):
         return False
@@ -2108,7 +2106,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     terminal = False
     # `[DONE]` and `finish_reason` are two different terminal markers, and a stream that
     # ends with NEITHER has been truncated (a server killed mid-answer), not answered.
-    # Ported from omp (packages/ai/src/providers/openai-completions.ts:1686-1702).
+    # A clean close is not a completion.
     saw_done = False
     suse, timings = {}, {}
     stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
@@ -2424,7 +2422,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         # some content and then simply stop (llama.cpp OOM-killed mid-answer, a proxy
         # dropping the connection, a container restart): `done["err"]` is None and
         # deltas > 0, so every check above passed and a truncated prefix was returned
-        # as the model's final word. omp treats exactly this as an incomplete stream;
+        # as the model's final word. This is an incomplete stream;
         # the caller retries the same endpoint without streaming.
         _close()
         raise StreamFailed(
@@ -3311,9 +3309,8 @@ def _executes_text(text):
 
 
 # Per-tool authority. Each core tool's capability tier; anything not listed - a drop-in,
-# a create_tool product - is "exec" on purpose (fail closed). Ported from omp's approval
-# model (docs/approval-mode.md, packages/coding-agent/src/tools/approval.ts:97-215):
-# the policy map cannot be bypassed by a tool's own declaration because there is none,
+# a create_tool product - is "exec" on purpose (fail closed). The policy map cannot be
+# bypassed by a tool's own declaration because there is none,
 # and `approval_mode` is a ceiling that can only be stricter than the default.
 _TOOL_TIERS = {
     "read_file": "read", "search_files": "read", "list_tools": "read",
@@ -4697,8 +4694,7 @@ def _verify_region_note(path, pre_image, why):
 
     The verdict "python syntax error at line 412" asks the model to repair blind: on a
     600-line file that is a re-read plus a fresh edit, and the pre-edit bytes are already
-    on disk in the .bak. Capped at 150 lines, the same ceiling omp uses for its repair
-    region (packages/coding-agent/src/edit/auto-repair.ts:137-171).
+    on disk in the .bak, capped at 150 lines so the note stays bounded.
     """
     m = re.search(r"line (\d+)", str(why) or "")
     if not m:
@@ -6206,8 +6202,7 @@ def _shell_autobg(command, ctx, threshold):
     Fast commands keep their blocking result AND leave nothing behind: the command is
     spawned detached, and only one that actually outlives the window is adopted into the
     `process` table (so a box that never runs anything long never grows a job row). The
-    guards already ran in tool_shell. Ported from omp's auto-backgrounding
-    (docs/bash-tool-runtime.md, async/auto-background.ts).
+    guards already ran in tool_shell.
     """
     proc = REGISTRY.get("process")
     if not proc:
@@ -6538,9 +6533,8 @@ def _edit_find_fuzzy(lines, old_lines):
 
 
 # Byte-identical applies, per (session, path): the payload hash and how many times in a
-# row it produced no change. A successful mutation clears the entry. Ported from omp's
-# hashline patcher (crates/pi-edit/src/modes/hashline/patcher.rs:53-77, NOOP_HARD_LIMIT=3
-# in crates/pi-edit/src/store.rs:21): an edit that parses and applies but writes the
+# row it produced no change. A successful mutation clears the entry. An edit that
+# parses and applies but writes the
 # file's own bytes back is the most common silent failure for a weak model, and a green
 # OK over an empty diff sends it re-reading and re-anchoring variants of the same
 # payload. The loop guard cannot see it: every retry has different arguments.
@@ -7630,9 +7624,8 @@ def tool_edit_file(args, ctx):
     _v = verify_note(path)
     if "verify FAILED" in _v:
         # Localize the breakage: the region around the reported line, plus the SAME
-        # region from the pre-image (the .bak already holds it). omp isolates culprit
-        # hunks (packages/coding-agent/src/edit/auto-repair.ts:76-171); the portable half
-        # is showing the model what it just broke instead of sending it back to re-read.
+        # region from the pre-image (the .bak already holds it): showing the model what
+        # it just broke instead of sending it back to re-read.
         _v += _verify_region_note(path, raw_bytes, _v)
     return (f"OK: replaced {count if replace_all else 1} occurrence(s) in {path} "
             f"[strategy: {strategy}] (backup: {backup.name})\n--- diff ---\n{diff}"
@@ -7656,8 +7649,8 @@ def tool_search_files(args, ctx):
             * when `content` IS given, `pattern` keeps its scoping job: only files matching it
               are grepped (schema-honest shape unchanged).
 
-    Scoping rules ported from omp's search pipeline (docs/natives-text-search-pipeline.md):
-    the walk is path-ordered so the same search returns the same page on every host, a
+    Scoping rules: the walk is path-ordered so the same search returns the same page on
+    every host, a
     per-file cap keeps one hot log from eating the whole budget, and both a capped file and
     a cap-terminated walk SAY SO instead of reading as an exhaustive answer.
     """
@@ -7910,8 +7903,7 @@ def _merge_conflict_span(lines, first_line=1):
     """(start, end) of the first WELL-FORMED conflict block in `lines`, or None.
 
     Strict on purpose: column-0 markers, an exact `=======` separator, a closing
-    `>>>>>>>`, optional `|||||||` base, and only fully closed blocks. Ported from omp's
-    conflict detector (packages/coding-agent/src/tools/conflict-detect.ts:40-100): an
+    `>>>>>>>`, optional `|||||||` base, and only fully closed blocks: an
     unresolved conflict that reads as ordinary text is how a model ends up editing or
     executing around the markers.
     """
@@ -9553,8 +9545,8 @@ def tool_delegate_task(args, ctx):
     """Spawn a sub-agent with a fresh context to work a subtask (or a batch of them).
 
     A batch shares ONE `context` block (Goal + Contract: interfaces, paths owned) while
-    each task is self-contained (Target, Change, Acceptance) - the shape omp's task tool
-    teaches its model (prompts/tools/task.md), which stops N children from each needing
+    each task is self-contained (Target, Change, Acceptance) - a shape that stops N
+    children from each needing
     the same interfaces restated.
     """
     if ctx.get("depth", 0) >= 1:
@@ -9631,7 +9623,7 @@ def skill_index():
 
     Frontmatter may also carry `globs:` (when the runbook applies), `always: true`
     (its body is injected into the trailing block) and `hide: true` (readable by name,
-    absent from the prompt index). omp: docs/skills.md.
+    absent from the prompt index).
     """
     out = []
     if not SKILLS_DIR.is_dir():
@@ -12770,9 +12762,8 @@ def _context_files(cwd=None):
 
     One file per directory depth (AGENTS.md wins over CLAUDE.md there), far-to-near so
     the nearest file is last and most prominent, and a farther file whose every paragraph
-    is already inside a nearer one is dropped. Ported from omp's context files
-    (docs/context-files.md), without its provider-priority table: this harness reads two
-    conventions, not nine.
+    is already inside a nearer one is dropped. This harness reads two conventions,
+    not nine.
     """
     try:
         here = Path(cwd or os.getcwd()).resolve()
@@ -13192,7 +13183,7 @@ def _log_turn_facts(session_key, step, calls_in_run, prompt_tok, peak_prompt,
 # A tool call written as TEXT: a fenced json/python block, `<tool_call>`, the
 # Hermes/default_api shape, or a `print(default_api...)` transcription. These reach the
 # harness as prose with zero structured calls, and the generic promise nudge does not name
-# the mistake. omp ships a dedicated reminder (malformed-function-call-retry.md).
+# the mistake, so the retry names it.
 _TEXT_CALL_RX = re.compile(
     r"(?i)(`{3,}\s*(?:json|python|tool_code)|<tool_call>|</?tool_code>|"
     r"default_api\s*[:(.\[]|call:\s*default_api)")
@@ -13210,8 +13201,8 @@ ELISION_MARKERS = (MARK_COMPACT, MARK_SHRINK)
 ELISION_NOTES_MAX = 10        # one line per dropped call, oldest dropped first
 ELISION_NOTES_CHARS = 1200    # bounded: this rides every LATER request
 
-# Superseded-read pruning (ported from omp, packages/agent/src/compaction/pruning.ts):
-# a read->edit->read loop keeps every version of a file in the conversation until the
+# Superseded-read pruning: a read->edit->read loop keeps every version of a file in
+# the conversation until the
 # whole thing is compacted. The older copy is blanked in place - the newest read of that
 # path survives, and the notice says what happened so the model can re-ask.
 SUPERSEDED_NOTICE = "[Superseded by a newer read of this file]"
@@ -13232,9 +13223,8 @@ def _read_supersede_key(path):
 # What the model has actually SEEN of a file: a content hash and the line count it was
 # shown, per session. Measured failure class: a failed edit is told to re-read whether
 # the anchor was mistyped OR the file moved under the model (its own earlier edit, a
-# shell command, log rotation) - two different situations with the same message. omp
-# records a snapshot tag on every read/grep and rejects a stale one with the drift named
-# (crates/pi-edit/src/store.rs:88-118, modes/hashline/mismatch.rs:88-123).
+# shell command, log rotation) - two different situations with the same message. A
+# read records a snapshot tag, and a stale one reports the drift by name.
 _READ_RECEIPTS = {}          # session -> {realpath: (hash10, lines)}
 
 
@@ -13271,8 +13261,8 @@ def _receipt_note(path, text, ctx):
 
 # What this run has read and changed, per session. The elision marker carries the ledger
 # (cumulative, deduped by path, capped), because a list of dropped CALLS cannot express
-# run state: omp renders the same idea as a <files> block with (Read)/(Write)/(RW) markers
-# (docs/compaction.md "File-operation context in summaries"). Measured here 2026-09-29: a
+# run state: a compact ledger of what was read and changed, with R/W/RW markers.
+# Measured here 2026-09-29: a
 # run compacted mid-rewrite and the next calls re-derived the task from session files.
 _TOUCHED = {}                     # session key -> {realpath: "R"|"W"|"RW"}
 _TOUCHED_LOCK = threading.Lock()
@@ -13574,8 +13564,7 @@ def _uniquify_tool_call_ids(messages):
     A local server (or a proxy) that re-emits a call id collapses two calls onto one
     entry in every pairing structure here, so the payload ships two tool_calls with one
     id and one result. llama.cpp ignores it; a strict endpoint answers 400, which is one
-    failover away by design. Ported from omp's deduplicateToolCallIds
-    (packages/ai/src/providers/transform-messages.ts:131-235).
+    failover away by design.
 
     Rewrites COPIES, never the caller's dicts. The k-th tool result carrying a repeated
     id belongs to the k-th call that had it (the first keeps the original), because
@@ -13785,8 +13774,7 @@ class Agent:
     def fork(self, session_key, new_key=None):
         """Copy this conversation (with its sidecars) to a new session key.
 
-        Try a different approach without losing the original: omp's /fork
-        (docs/session-operations-export-share-fork-resume.md). Returns the new key, or
+        Try a different approach without losing the original. Returns the new key, or
         "" when there is nothing to copy.
         """
         src = self._session_path(session_key)
@@ -14297,7 +14285,7 @@ class Agent:
         until the whole thing is compacted (tinycmdr measured 46% of reads of its own
         source as re-acquisitions). The newest read of a path survives; the older ones
         become SUPERSEDED_NOTICE, and the notice tells the model what happened so it can
-        re-ask. The GATE is the point (omp pruning.ts:264-420): blanking a result inside
+        re-ask. The GATE is the point: blanking a result inside
         a warm prompt-cache prefix forces the provider to re-write the suffix, so a
         candidate is blanked now only when everything after it costs at most
         prune_suffix_tokens, or after the session idled past the cache's lifetime.
@@ -14791,8 +14779,7 @@ class Agent:
                         # changes the model the conversation runs on (or dies), and
                         # back-to-back endpoint hops maximize the chance of re-tripping
                         # the same 503. Same endpoint, capped exponential backoff with
-                        # jitter, honouring provider timing when it is longer. Ported
-                        # from omp (docs/non-compaction-retry-policy.md:55-140).
+                        # jitter, honouring provider timing when it is longer.
                         transient_left -= 1
                         attempt = int(CONFIG["llm"].get("same_endpoint_retries", 3)) - transient_left
                         delay = max(
@@ -14979,8 +14966,7 @@ class Agent:
                     # an answer. Re-send the IDENTICAL payload once on the same endpoint:
                     # the agent-level empty-answer path costs a whole extra turn (a
                     # nudge message plus a full prompt re-read on a prefill-bound local
-                    # box) for a failure that usually clears on a re-send. omp:
-                    # packages/ai/src/utils/empty-completion-retry.ts:21-22,91-170.
+                    # box) for a failure that usually clears on a re-send.
                     _u = data.get("usage") or {}
                     _got = int(_u.get("completion_tokens") or 0)
                     if not _u or _got <= 1:

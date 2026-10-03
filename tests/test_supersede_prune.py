@@ -1,8 +1,7 @@
 """A re-read supersedes the older copy - but only when the prefix cache can take it.
 
-Ported from omp's compaction pruning (packages/agent/src/compaction/pruning.ts:1-263,
-264-420,498-515): a read->edit->read loop keeps every version of a file in context until
-the whole conversation is compacted, and tinycmdr measured 46% of reads of its own source
+A read->edit->read loop keeps every version of a file in context until the whole
+conversation is compacted, and tinycmdr measured 46% of reads of its own source
 as re-acquisitions. Blanking an older result mutates the prompt PREFIX, which forces the
 provider to re-write everything after it - so the pass is gated: now only when the suffix
 is small, otherwise at the idle flush when the cache is cold.

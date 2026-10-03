@@ -728,9 +728,9 @@
       "title": "a clean stream close and a byte-identical edit are no longer silent successes",
       "state": "shipped",
       "anchor": {
-        "commit": "d935482"
+        "commit": "cfe0594"
       },
-      "detail": "Ported from omp v18.5.1 (2026-10-03): _stream_chat accepted a stream that ended with content but neither a finish_reason nor [DONE] (a server killed mid-answer returned a truncated prefix as the model's final word, invisible to the length/window checks); tool_edit_file wrote the file's own bytes back and returned OK over an empty diff (refused now, escalated on the 3rd identical payload, cleared by any real mutation); reasoning under `reasoning`/`reasoning_text` was dropped and a leaked leading <think> fence counted as the answer (aliases fold; a leading fence splits to reasoning across deltas, llm.think_fence=false disables).",
+      "detail": "_stream_chat accepted a stream that ended with content but neither a finish_reason nor [DONE] (a server killed mid-answer returned a truncated prefix as the model's final word, invisible to the length/window checks); tool_edit_file wrote the file's own bytes back and returned OK over an empty diff (refused now, escalated on the 3rd identical payload, cleared by any real mutation); reasoning under `reasoning`/`reasoning_text` was dropped and a leaked leading <think> fence counted as the answer (aliases fold; a leading fence splits to reasoning across deltas, llm.think_fence=false disables).",
       "gate": "tests/test_stream_integrity.py (20 checks)"
     },
     {
@@ -738,9 +738,9 @@
       "title": "search_files returns a bounded, reproducible page and says what it skipped",
       "state": "shipped",
       "anchor": {
-        "commit": "8669fa1"
+        "commit": "a1b1f29"
       },
-      "detail": "Path-ordered walk, a per-file cap (agent.search_max_per_file, default 5, overridable per call), and notes naming a capped file and a cap-terminated walk. Ported from omp's search pipeline (docs/natives-text-search-pipeline.md:91-117).",
+      "detail": "Path-ordered walk, a per-file cap (agent.search_max_per_file, default 5, overridable per call), and notes naming a capped file and a cap-terminated walk.md:91-117).",
       "gate": "tests/test_search_scope.py (8 checks)"
     },
     {
@@ -748,9 +748,9 @@
       "title": "duplicate tool_call_ids are split before a strict endpoint can 400 on them",
       "state": "shipped",
       "anchor": {
-        "commit": "08815c9"
+        "commit": "6b035ca"
       },
-      "detail": "A local server or proxy that re-emits a call id collapsed two calls onto one id in every pairing structure; the payload shipped two tool_calls with one id and one result. Copied-in id lists are rewritten (the k-th result keeps its call's id in order) and the pairing report names duplicates. omp: transform-messages.ts:131-235.",
+      "detail": "A local server or proxy that re-emits a call id collapsed two calls onto one id in every pairing structure; the payload shipped two tool_calls with one id and one result. Copied-in id lists are rewritten (the k-th result keeps its call's id in order) and the pairing report names duplicates.ts:131-235.",
       "gate": "tests/test_payload_ids.py (7 checks)"
     },
     {
@@ -758,9 +758,9 @@
       "title": "an empty stop completion is re-sent once instead of costing a nudge turn",
       "state": "shipped",
       "anchor": {
-        "commit": "04be0d0"
+        "commit": "7e9bf83"
       },
-      "detail": "A clean `stop` with no content, no tool call and <= 1 completion token now re-sends the identical payload on the same endpoint before the agent-level empty-answer path spends a whole nudge turn (a full prompt re-read on a prefill-bound local box). omp: empty-completion-retry.ts:21-22,91-170.",
+      "detail": "A clean `stop` with no content, no tool call and <= 1 completion token now re-sends the identical payload on the same endpoint before the agent-level empty-answer path spends a whole nudge turn (a full prompt re-read on a prefill-bound local box).ts:21-22,91-170.",
       "gate": "tests/test_empty_stop_retry.py (5 checks)"
     },
     {
@@ -768,9 +768,9 @@
       "title": "a re-read blanks the older copy when the prompt cache can take it",
       "state": "shipped",
       "anchor": {
-        "commit": "23b230d"
+        "commit": "bde1b5f"
       },
-      "detail": "A read->edit->read loop kept every version of a file until the whole conversation compacted (46% of reads of its own source were re-acquisitions, measured here). The older copy becomes [Superseded by a newer read of this file] when a newer full read of the same path exists - and only when the messages after it cost <= agent.prune_suffix_tokens, or after the session idled past the cache lifetime. The three drop loops also keep a running total instead of re-serializing the conversation per pass (O(N^2)); _drop_oldest_block returns the net tokens removed. omp: packages/agent/src/compaction/pruning.ts.",
+      "detail": "A read->edit->read loop kept every version of a file until the whole conversation compacted (46% of reads of its own source were re-acquisitions, measured here). The older copy becomes [Superseded by a newer read of this file] when a newer full read of the same path exists - and only when the messages after it cost <= agent.prune_suffix_tokens, or after the session idled past the cache lifetime. The three drop loops also keep a running total instead of re-serializing the conversation per pass (O(N^2)); _drop_oldest_block returns the net tokens removed.ts.",
       "gate": "tests/test_supersede_prune.py (10 checks)"
     },
     {
@@ -778,9 +778,9 @@
       "title": "the elision marker carries the file ledger and names the transcript",
       "state": "shipped",
       "anchor": {
-        "commit": "3911f65"
+        "commit": "69a5c31"
       },
-      "detail": "After compaction the marker now carries a cumulative, deduped, capped ledger of what the run read and changed ('dir/ a.py (RW)'), rebuilt from live state so compacting twice does not stack two copies, plus the path of the pre-compaction transcript when one exists. _force_shrink - the path that drops the most context - now writes the transcript before evicting. omp renders the same state as its <files> block (docs/compaction.md).",
+      "detail": "After compaction the marker now carries a cumulative, deduped, capped ledger of what the run read and changed ('dir/ a.py (RW)'), rebuilt from live state so compacting twice does not stack two copies, plus the path of the pre-compaction transcript when one exists. _force_shrink - the path that drops the most context - now writes the transcript before evicting.md).",
       "gate": "tests/test_compaction_continuity.py (10 checks)"
     },
     {
@@ -788,9 +788,9 @@
       "title": "the spill index survives a restart, dedupes content and respects a byte cap",
       "state": "shipped",
       "anchor": {
-        "commit": "0e07853"
+        "commit": "8b55628"
       },
-      "detail": "Files are content-addressed (sha1 of the text), so the same output spills once; the index is persisted to spill/index.jsonl and rewritten when /new drops a session's rows; agent.spill_max_bytes (8 MiB) keeps head+tail with an explicit omitted-bytes marker. omp: docs/blob-artifact-architecture.md.",
+      "detail": "Files are content-addressed (sha1 of the text), so the same output spills once; the index is persisted to spill/index.jsonl and rewritten when /new drops a session's rows; agent.spill_max_bytes (8 MiB) keeps head+tail with an explicit omitted-bytes marker.md.",
       "gate": "tests/test_spill_durability.py (13 checks)"
     },
     {
@@ -798,7 +798,7 @@
       "title": "a revealed tool schema expires when the tool is not used",
       "state": "shipped",
       "anchor": {
-        "commit": "16cbc1d"
+        "commit": "1bf342d"
       },
       "detail": "Reveal-on-demand was monotonic per session; agent.reveal_ttl_secs (default 1800, 0 = old behaviour) expires a schema after that long without a call. Names stay listed and a by-name call re-reveals - only the schema rent stops.",
       "gate": "tests/test_reveal_decay.py (8 checks)"
@@ -808,9 +808,9 @@
       "title": "408/5xx/transport failures retry the same endpoint before any failover",
       "state": "shipped",
       "anchor": {
-        "commit": "57cf10b"
+        "commit": "e0c3bf4"
       },
-      "detail": "agent.same_endpoint_retries (3), retry_base_ms/retry_max_ms/retry_jitter_pct, honoring a longer Retry-After/X-RateLimit-Reset hint, in abortable 0.25s slices. 4xx stays terminal, context overflow still goes to compaction, 0 restores immediate failover. omp: docs/non-compaction-retry-policy.md:55-140.",
+      "detail": "agent.same_endpoint_retries (3), retry_base_ms/retry_max_ms/retry_jitter_pct, honoring a longer Retry-After/X-RateLimit-Reset hint, in abortable 0.25s slices. 4xx stays terminal, context overflow still goes to compaction, 0 restores immediate failover.md:55-140.",
       "gate": "tests/test_transient_retry.py (10 checks); the envelope/llama-extension failover tests pin the chain with retries off"
     },
     {
@@ -818,9 +818,9 @@
       "title": "reasoning_content is replayed to local endpoints so the prefix cache holds",
       "state": "shipped",
       "anchor": {
-        "commit": "d41c08e"
+        "commit": "b0b30e5"
       },
-      "detail": "A llama.cpp/vLLM template rebuilds its <think> block from reasoning_content; a replayed turn without it renders a different token sequence and the prefix KV-cache diverges from there. Assistant turns carry it to LOCAL endpoints, capped by agent.replay_reasoning_max_chars (4000), never to a remote one; llm.replay_reasoning=false disables. omp: docs/provider-compat-reference.md:68-69.",
+      "detail": "A llama.cpp/vLLM template rebuilds its <think> block from reasoning_content; a replayed turn without it renders a different token sequence and the prefix KV-cache diverges from there. Assistant turns carry it to LOCAL endpoints, capped by agent.replay_reasoning_max_chars (4000), never to a remote one; llm.replay_reasoning=false disables.md:68-69.",
       "gate": "tests/test_reasoning_replay.py (8 checks)"
     },
     {
@@ -828,9 +828,9 @@
       "title": "per-tool tiers, a policy map and an allow tier under the confirm gate",
       "state": "shipped",
       "anchor": {
-        "commit": "7e6c81b"
+        "commit": "8ce4e81"
       },
-      "detail": "Every core tool has a tier (read/write/exec), anything unlisted - any drop-in - is exec so a stricter mode fails closed, agent.tool_policy denies or prompts individual tools by name whatever the mode, and agent.approval_mode is a ceiling ('auto' default = no new prompts; 'write' gates exec; 'ask' gates write+exec). The confirm tier gains allow_patterns/allow_content_patterns, checked before it; blocked_patterns still wins. omp: docs/approval-mode.md.",
+      "detail": "Every core tool has a tier (read/write/exec), anything unlisted - any drop-in - is exec so a stricter mode fails closed, agent.tool_policy denies or prompts individual tools by name whatever the mode, and agent.approval_mode is a ceiling ('auto' default = no new prompts; 'write' gates exec; 'ask' gates write+exec). The confirm tier gains allow_patterns/allow_content_patterns, checked before it; blocked_patterns still wins.md.",
       "gate": "tests/test_authority.py (20 checks)"
     },
     {
@@ -838,9 +838,9 @@
       "title": "delegate_task gains a shared context, a child prompt, a budget and a cost line",
       "state": "shipped",
       "anchor": {
-        "commit": "2be0ee0"
+        "commit": "599792e"
       },
-      "detail": "build_system_prompt(subagent=True) keeps the tool/verification/no-fabrication rules and drops operator framing, narration, ask_user, scheduling/delegation and the skill/custom-tool blocks (with an explicit completion rule); delegate_task accepts `context` (shared Goal + Contract) and `tasks` (parallel, sized to the endpoint's slots, ordered results); the child gets agent.subagent_timeout_seconds (900) and a crash returns the same typed envelope; its usage rides back as a cost line. omp: prompts/tools/task.md, subagent-system-prompt.md.",
+      "detail": "build_system_prompt(subagent=True) keeps the tool/verification/no-fabrication rules and drops operator framing, narration, ask_user, scheduling/delegation and the skill/custom-tool blocks (with an explicit completion rule); delegate_task accepts `context` (shared Goal + Contract) and `tasks` (parallel, sized to the endpoint's slots, ordered results); the child gets agent.subagent_timeout_seconds (900) and a crash returns the same typed envelope; its usage rides back as a cost line.md, subagent-system-prompt.md.",
       "gate": "tests/test_delegation.py (21 checks)"
     },
     {
@@ -848,9 +848,9 @@
       "title": "background jobs carry a real exit code, readiness, stdin, and tell the run when done",
       "state": "shipped",
       "anchor": {
-        "commit": "3f2de3d"
+        "commit": "97c5fd8"
       },
-      "detail": "A wrapper writes __EXIT__<rc> into the job log (status/list report the real code after a restart); start accepts wait_for {log, port, timeout}; send answers a prompt through a spool; agent.auto_background_seconds (60) hands a slow shell command to the table with an in-memory probe so a fast one leaves no row or file, and wait:true opts out; a settled job is announced once in the trailing block. omp: docs/bash-tool-runtime.md.",
+      "detail": "A wrapper writes __EXIT__<rc> into the job log (status/list report the real code after a restart); start accepts wait_for {log, port, timeout}; send answers a prompt through a spool; agent.auto_background_seconds (60) hands a slow shell command to the table with an in-memory probe so a fast one leaves no row or file, and wait:true opts out; a settled job is announced once in the trailing block.md.",
       "gate": "tests/test_job_control.py (17 checks)"
     },
     {
@@ -858,9 +858,9 @@
       "title": "plan mode is a hard read-only gate; AGENTS.md rides the cached prefix",
       "state": "shipped",
       "anchor": {
-        "commit": "7eca61b"
+        "commit": "11fd4c9"
       },
-      "detail": "plan_mode is enforced at the dispatch point (drop-ins included): write/exec tools refuse while it is on, reads and the plan tool stay open, agent.plan_requires_approval starts sessions read-only, /plan on|off|apply is the operator's door, and recording a plan asks the in-band door when one exists. AGENTS.md/CLAUDE.md are discovered from the run's cwd up to the project root at session start - one per depth (AGENTS.md wins), far-to-near, containment-dropped, bounded by agent.context_files_max_chars, labelled as local conventions below the operator's instruction. omp: tools/plan-mode-guard.ts, docs/context-files.md.",
+      "detail": "plan_mode is enforced at the dispatch point (drop-ins included): write/exec tools refuse while it is on, reads and the plan tool stay open, agent.plan_requires_approval starts sessions read-only, /plan on|off|apply is the operator's door, and recording a plan asks the in-band door when one exists. AGENTS.md/CLAUDE.md are discovered from the run's cwd up to the project root at session start - one per depth (AGENTS.md wins), far-to-near, containment-dropped, bounded by agent.context_files_max_chars, labelled as local conventions below the operator's instruction.ts, docs/context-files.md.",
       "gate": "tests/test_plan_and_context.py (18 checks)"
     },
     {
@@ -868,9 +868,9 @@
       "title": "text tool calls, conflicts, note policy, receipts, verify regions, skills, fork",
       "state": "shipped",
       "anchor": {
-        "commit": "63603c8"
+        "commit": "5a6aa7a"
       },
-      "detail": "A tool call written as text gets a one-shot retry naming the mistake and the prompt defines NEVER/MUST/[HARNESS]; an unresolved merge conflict is named on read; field notes gain repeat: once|gap:N and doctor ranks unmatched signatures with a draft matcher; remember passes the scrubber; shown-hints persist per session; read receipts let a failed edit say the file changed since it was read; a verify failure shows the region plus the pre-image from the .bak; skills parse globs/always/hide (triggers in the index, always bodies in the trailing block, hidden readable but not indexed); /fork copies a conversation and the picker marks unfinished ones. omp: conflict-detect.ts, auto-repair.ts, docs/skills.md, session ops.",
+      "detail": "A tool call written as text gets a one-shot retry naming the mistake and the prompt defines NEVER/MUST/[HARNESS]; an unresolved merge conflict is named on read; field notes gain repeat: once|gap:N and doctor ranks unmatched signatures with a draft matcher; remember passes the scrubber; shown-hints persist per session; read receipts let a failed edit say the file changed since it was read; a verify failure shows the region plus the pre-image from the .bak; skills parse globs/always/hide (triggers in the index, always bodies in the trailing block, hidden readable but not indexed); /fork copies a conversation and the picker marks unfinished ones.ts, auto-repair.ts, docs/skills.md, session ops.",
       "gate": "tests/test_harness_extras.py (28 checks)"
     }
   ]

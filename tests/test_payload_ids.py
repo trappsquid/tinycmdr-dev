@@ -3,8 +3,7 @@
 A local server (or a proxy) that re-emits a call id used to collapse two calls onto one
 id in every pairing structure here, so the payload shipped two tool_calls with one id and
 one result. llama.cpp ignores it; a strict endpoint answers 400 - one failover away by
-design. omp repairs the same class with deduplicateToolCallIds
-(packages/ai/src/providers/transform-messages.ts:131-235).
+design; ids are split in order and the results re-pointed.
 
     python tests/test_payload_ids.py
 """
