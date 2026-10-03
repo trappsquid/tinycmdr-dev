@@ -133,6 +133,32 @@ def main():
               "/maintenance/restart-tinycmdr.sh" in _pats
               and "/maintenance/restart-tinycmdr.ps1" in _pats, str(_pats))
 
+        # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
+        # directions: a two-tree box declares dev elsewhere and its live tree is prunable,
+        # while a "same_as live" (or unreadable) declaration must hold it off - the
+        # operator's own box sat in the one-tree shape and could never be cleaned.
+        _wr = Path(fb.BASE_DIR) / "maintenance" / "where-roles.json"
+        _wr.parent.mkdir(parents=True, exist_ok=True)
+        _saved = _wr.read_text(encoding="utf-8") if _wr.exists() else None
+        try:
+            _wr.write_text('[{"role":"live","path":"~/tinycmdr"},'
+                           '{"role":"dev","path":"/somewhere/else"}]', encoding="utf-8")
+            check("a dev tree declared elsewhere does not protect THIS tree",
+                  fb._declared_dev_tree() is False)
+            _wr.write_text('[{"role":"dev","same_as":"live"}]', encoding="utf-8")
+            check("...but 'dev: same_as live' does", fb._declared_dev_tree() is True)
+            _wr.write_text('[{"role":"dev","path":"%s"}]' % fb.BASE_DIR, encoding="utf-8")
+            check("...and an explicit dev path pointing here does",
+                  fb._declared_dev_tree() is True)
+            _wr.write_text("{ not json", encoding="utf-8")
+            check("an unreadable declaration is treated as dev (never prune on doubt)",
+                  fb._declared_dev_tree() is True)
+        finally:
+            if _saved is None:
+                _wr.unlink(missing_ok=True)
+            else:
+                _wr.write_text(_saved, encoding="utf-8")
+
         # ---- status: an endpoint that says nothing, then one that answers ----
         saved_detect = fb._detect_window
 

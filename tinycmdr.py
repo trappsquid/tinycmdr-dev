@@ -993,7 +993,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.47"
+VERSION = "1.0.48"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -23777,19 +23777,53 @@ def _disk_version():
     return m.group(1) if m else VERSION
 
 
+def _declared_dev_tree():
+    """True when this box's where-roles.json makes THIS folder the development tree.
+
+    The existence of a declaration file is not the question: a two-tree box has one in the
+    LIVE tree too, and that tree is exactly the one that wants pruning (measured
+    2026-10-03 - the operator's own ~/tinycmdr is the install, and the file there declared
+    "one tree" so nothing ever got cleaned). The question is whether a `dev` role points at
+    this folder, or a bare `dev` entry (no path, or a `same_as` alias) describes the tree it
+    sits in. Fail SAFE: an unreadable or odd declaration counts as dev, because pruning a
+    real dev tree deletes the tests out from under whoever edits them.
+    """
+    f = BASE_DIR / "maintenance" / "where-roles.json"
+    if not f.exists():
+        return False
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:                                    # noqa: BLE001
+        return True
+    if not isinstance(data, list):
+        return True
+    for ent in data:
+        if not isinstance(ent, dict) or str(ent.get("role") or "").lower() != "dev":
+            continue
+        target = str(ent.get("path") or ent.get("dir") or "").strip()
+        if not target:
+            return True                                  # a bare dev entry: this tree
+        try:
+            if Path(target).expanduser().resolve() == BASE_DIR.resolve():
+                return True
+        except OSError:
+            return True
+    return False
+
+
 def _narrow_to_shipped(git, keep_dev=False):
     """Drop the project's own kit from this tree, keeping what a package ships.
 
-    Returns a one-line report, or "" when there was nothing to do. Never prunes a tree that
-    declares itself a DEVELOPMENT box (maintenance/where-roles.json is the per-host
-    declaration where.py reads): deleting the tests out from under the person editing them
-    is not an update, it is sabotage.
+    Returns a one-line report, or "" when there was nothing to do. Never prunes a tree the
+    box's own declaration (maintenance/where-roles.json, the file where.py reads) makes the
+    DEVELOPMENT tree: deleting the tests out from under the person editing them is not an
+    update, it is sabotage.
     """
     if keep_dev or os.environ.get("TINYCMDR_UPDATE_KEEP_DEV"):
         return ""
-    if (BASE_DIR / "maintenance" / "where-roles.json").exists():
-        return ("  (a dev tree: maintenance/where-roles.json is present, so nothing was "
-                "pruned - pass --full to say so deliberately)")
+    if _declared_dev_tree():
+        return ("  (this tree is declared the DEVELOPMENT tree in maintenance/where-roles.json, "
+                "so nothing was pruned - pass --full to say so deliberately)")
     if not any((BASE_DIR / d).exists() for d in ("tests", ".github", "docs")):
         return ""                                       # already narrow
     rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "sparse-checkout", "init",

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.48] - 2026-10-03
+
+Fixed
+- **`update` honours a two-tree box's declaration, so the LIVE tree can be cleaned.** The
+  narrowing shipped in 1.0.47 skipped whenever a `maintenance/where-roles.json` existed at
+  all - but a two-tree box has one in the live tree too, and that is exactly the tree that
+  wants the kit gone. It now READS the declaration: a `dev` role pointing at another folder,
+  or no declaration at all, lets the pull prune; `dev: same_as live`, a bare `dev` entry, an
+  explicit dev path aimed at this folder, or an unreadable file all hold it off. Doubt
+  resolves to "keep", because pruning a real dev tree deletes the tests out from under
+  whoever is editing them. Found on the operator's own box, whose declaration said "one tree"
+  and therefore blocked the very cleanup it had just asked for. `tests/test_verbs.py` grades
+  all four declarations, and the box's own `where-roles.json` was corrected to name its live
+  and dev trees honestly (host file, gitignored).
+
 ## [1.0.47] - 2026-10-03
 
 Changed
