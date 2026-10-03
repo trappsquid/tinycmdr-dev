@@ -1019,6 +1019,17 @@
       },
       "detail": "Three 1024x1024 masters (badge, chibi, helm) under assets/branding/; the README opens with the chibi (190px) - also the image a link preview falls back to - the what-it-actually-is doc carries the helm, and assets/social-preview.png is the 1280x640 badge letterboxed with its own corner colour for the Social preview setting (GitHub exposes no API for that one; it is a two-click upload). The package ships the two derived sizes so an unzipped README renders as authored.",
       "gate": "maintenance/build-package.py SHIP + the release asset check"
+    },
+    {
+      "id": "app-rail-brand-art",
+      "title": "the --app rail carries the brand as braille cells",
+      "state": "shipped",
+      "anchor": {
+        "commit": "51864e9",
+        "expect": "tagged"
+      },
+      "detail": "The designer's render of the badge (24x9 characters, each a 2x4 dot cell, 48x36 effective) sits one blank row under KEYS in the --app left rail. The art is data - assets/tui-rail-badge.json, cells plus hex colours - never ANSI: an escape byte inside a prompt_toolkit span renders as literal '[38;2;...' text. Truecolor and 256-colour terminals get the per-cell colours, a 16-colour terminal gets the dots in one accent, an ASCII-only terminal gets no art, and a pruned install shows none. maintenance/make-brand-art.py re-derives an equivalent from the badge master with the stdlib alone (no PIL/numpy in this runtime); the shipped cells are the designer's own, whose LANCZOS keeps lower detail a box filter drops (19 lit dots in the last row against 3).",
+      "gate": "tests/test_tui.py (artifact loads; rides the rail under KEYS; spans, never ANSI; within 26 columns; no braille on an ASCII-only terminal; accepted dot counts)"
     }
   ]
 }
