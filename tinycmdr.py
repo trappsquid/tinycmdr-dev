@@ -13459,6 +13459,7 @@ class Agent:
             escalated = False
             waited_after_429 = False
             dropped_optional = False
+            empty_retried = False
             # The field carrying the output cap: `max_tokens` unless a provider's 400
             # names it, in which case the same value goes out as its replacement.
             cap_field = "max_tokens"
@@ -13745,6 +13746,26 @@ class Agent:
                         escalated = True
                         if usage is not None:
                             usage["escalated"] = True
+                        continue
+                if (not empty_retried and finish == "stop"
+                        and not (msg.get("content") or "").strip()
+                        and not msg.get("tool_calls")):
+                    # A clean `stop` carrying no content is a provider-layer no-op, not
+                    # an answer. Re-send the IDENTICAL payload once on the same endpoint:
+                    # the agent-level empty-answer path costs a whole extra turn (a
+                    # nudge message plus a full prompt re-read on a prefill-bound local
+                    # box) for a failure that usually clears on a re-send. omp:
+                    # packages/ai/src/utils/empty-completion-retry.ts:21-22,91-170.
+                    _u = data.get("usage") or {}
+                    _got = int(_u.get("completion_tokens") or 0)
+                    if not _u or _got <= 1:
+                        empty_retried = True
+                        _record_attempt(usage, url, "retry",
+                                        "empty stop completion (%d token(s))" % _got,
+                                        secs)
+                        log.warning("LLM %s returned an empty stop completion (%d "
+                                    "completion token(s)) - re-sending the same request "
+                                    "once", url, _got)
                         continue
                 return msg
         if fatal_notes:
