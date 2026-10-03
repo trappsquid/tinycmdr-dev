@@ -1791,6 +1791,51 @@ def _delta_text(value):
     return ""
 
 
+# Reasoning arrives under three field names in the wild and, from a server with no
+# reasoning parser, as a leading `<think>...</think>` fence inside `content`. Both
+# shapes used to reach the operator as answer text and pollute replayed history; the
+# alias list and the leading-fence rule are ported from omp's completions parser
+# (packages/ai/src/providers/openai-completions.ts:1402-1412).
+_REASONING_FIELDS = ("reasoning_content", "reasoning_text", "reasoning")
+_THINK_OPENERS = (("<think", "</think>"), ("<thinking", "</thinking>"))
+
+
+def _delta_reasoning(d):
+    """The reasoning text in one delta, under any alias a server actually sends.
+
+    FIRST non-empty wins, never a sum: providers send two aliases carrying the same
+    text, and adding them would double-count the thinking in usage and the stats.
+    """
+    for field in _REASONING_FIELDS:
+        text = _delta_text(d.get(field))
+        if text:
+            return text
+    return ""
+
+
+def _think_fence_open(lead):
+    """(closer, rest) for a leading thinking-fence opener in `lead`.
+
+    Returns (None, "hold") while `lead` could still BECOME an opener (`<thi` split
+    across two deltas), (None, "") when it cannot - so a delta stream that merely
+    starts with `<` is never held for ever.
+    """
+    low = lead.lstrip()
+    if not low:
+        return None, ""
+    for opener, closer in _THINK_OPENERS:
+        if low.lower().startswith(opener):
+            gt = low.find(">")
+            if gt == -1:
+                return None, "hold"
+            if low[:gt].split()[0].lower() != opener:
+                continue                     # <thinkingx> is not a thinking tag
+            return closer, low[gt + 1:]
+        if opener.startswith(low.lower()):
+            return None, "hold"
+    return None, ""
+
+
 def _delta_tool_calls(d):
     """The tool-call fragments in one delta, in any shape a server actually sends.
 
@@ -1825,6 +1870,14 @@ def _normalize_assistant_message(msg):
         msg["content"] = _delta_text(msg.get("content"))
     if msg.get("reasoning_content") and not isinstance(msg["reasoning_content"], str):
         msg["reasoning_content"] = _delta_text(msg.get("reasoning_content"))
+    if not msg.get("reasoning_content"):
+        # Alternative field names, folded to the one the rest of the harness reads
+        # (usage, the heartbeat, history replay). First non-empty wins.
+        for _field in _REASONING_FIELDS[1:]:
+            _alt = msg.get(_field)
+            if isinstance(_alt, (str, list)) and _alt:
+                msg["reasoning_content"] = _delta_text(_alt)
+                break
     calls = msg.get("tool_calls")
     if not calls:
         legacy = msg.pop("function_call", None)
@@ -1925,6 +1978,10 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     content, reasoning, finish = [], [], ""
     calls = {}
     terminal = False
+    # `[DONE]` and `finish_reason` are two different terminal markers, and a stream that
+    # ends with NEITHER has been truncated (a server killed mid-answer), not answered.
+    # Ported from omp (packages/ai/src/providers/openai-completions.ts:1686-1702).
+    saw_done = False
     suse, timings = {}, {}
     stats = {"deltas": 0, "chars": 0, "reasoning_chars": 0, "ttft": None,
              "tps": 0.0, "server_tps": 0.0, "reasoning_text": "",
@@ -1937,6 +1994,65 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
              # The other liveness channel a llama.cpp server sends unprompted: the bare
              # `:` SSE comment. Counted so the log can say a silent stream was alive.
              "pings": 0}
+    # ---- leading think-fence state: a server with no reasoning parser leaks its whole
+    # think block into `content`, and it must not be shown or replayed as the answer.
+    # Only a LEADING fence is split; a `<think>` inside an answer is prose the model wrote.
+    fence_closer = None
+    fence_lead = ""
+    fence_tail = ""
+    answer_started = False
+    fence_on = bool(CONFIG["llm"].get("think_fence", True))
+
+    def _route_content(delta):
+        """Append one content delta to the channel it belongs to; (chars, rchars)."""
+        nonlocal fence_closer, fence_lead, fence_tail, answer_started
+        chars = rchars = 0
+        text = delta
+        while text:
+            if fence_closer:
+                fence_tail += text
+                text = ""
+                idx = fence_tail.lower().find(fence_closer)
+                if idx >= 0:
+                    if idx:
+                        reasoning.append(fence_tail[:idx])
+                        rchars += idx
+                    rest = fence_tail[idx + len(fence_closer):]
+                    fence_tail = ""
+                    fence_closer = None
+                    if rest:
+                        content.append(rest)
+                        chars += len(rest)
+                        answer_started = True
+                else:
+                    # Hold a tail at least as long as the closer: it can split across
+                    # deltas (`</thi` + `nk>`), and releasing it early leaks thinking.
+                    keep = len(fence_tail) - (len(fence_closer) + 2)
+                    if keep > 0:
+                        reasoning.append(fence_tail[:keep])
+                        rchars += keep
+                        fence_tail = fence_tail[keep:]
+                continue
+            if answer_started:
+                content.append(text)
+                chars += len(text)
+                return chars, rchars
+            fence_lead += text
+            text = ""
+            closer, rest = _think_fence_open(fence_lead)
+            if closer:
+                fence_closer = closer
+                fence_lead = ""
+                text = rest
+            elif rest == "hold":
+                break
+            else:
+                content.append(fence_lead)
+                chars += len(fence_lead)
+                fence_lead = ""
+                answer_started = True
+        return chars, rchars
+
     snap_at = 0.0
     lines = queue.Queue()
     done = {"eof": False, "err": None}
@@ -2036,6 +2152,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         blob = text[5:].strip()
         if blob == "[DONE]":
             terminal = True
+            saw_done = True
             break
         try:
             chunk = json.loads(blob)
@@ -2065,16 +2182,22 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         for ch in (chunk.get("choices") or []):
             d = ch.get("delta") or {}
             text = _delta_text(d.get("content"))
-            rtext = _delta_text(d.get("reasoning_content"))
+            rtext = _delta_reasoning(d)
             fragments = _delta_tool_calls(d)
             if text or rtext or fragments:
                 stats["generating"] = True
                 if stats["ttft"] is None:
                     stats["ttft"] = time.time() - t0
+            chars_in = rchars_in = 0
             if text:
-                content.append(text)
+                if fence_on:
+                    chars_in, rchars_in = _route_content(text)
+                else:
+                    content.append(text)
+                    chars_in = len(text)
             if rtext:
                 reasoning.append(rtext)
+                rchars_in += len(rtext)
             for tc in fragments:
                 # OpenAI streams tool calls piecewise: the first fragment carries
                 # the id and the name, later ones append argument fragments. The
@@ -2133,12 +2256,12 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                 terminal = True
             stats["deltas"] += 1
             if text:
-                stats["chars"] += len(text)
-            if rtext:
+                stats["chars"] += chars_in
+            if rchars_in:
                 # Counted separately from the answer's text: a MAX-thinking box
                 # spends the first 3-13 seconds here, and with only `chars` in the
                 # heartbeat the status line read "0 chars" through all of it.
-                stats["reasoning_chars"] += len(rtext)
+                stats["reasoning_chars"] += rchars_in
             elapsed = max(0.001, time.time() - t0)
             stats["tps"] = stats["deltas"] / elapsed
             if on_delta:
@@ -2168,6 +2291,17 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
         raise StreamFailed(
             "the stream broke before it finished (%s) after %d chunk(s) - what "
             "arrived is not the model's answer" % (done["err"], stats["deltas"]))
+    if stats["deltas"] and not terminal and not saw_done:
+        # A CLEAN close is not a completion. The server may accept the request, emit
+        # some content and then simply stop (llama.cpp OOM-killed mid-answer, a proxy
+        # dropping the connection, a container restart): `done["err"]` is None and
+        # deltas > 0, so every check above passed and a truncated prefix was returned
+        # as the model's final word. omp treats exactly this as an incomplete stream;
+        # the caller retries the same endpoint without streaming.
+        _close()
+        raise StreamFailed(
+            "the stream closed after %d chunk(s) with no finish_reason and no [DONE] "
+            "- what arrived is not the model's answer" % stats["deltas"])
     if not stats["deltas"] and not content and not calls:
         # A server that ignores "stream": true answers with one plain JSON line,
         # which yields no SSE data at all. Reporting that as an empty answer would
@@ -2181,6 +2315,17 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
             timings.get("predicted_per_second") or 0.0)
     if suse.get("completion_tokens"):
         stats["completion"] = int(suse["completion_tokens"])
+    if fence_lead:
+        # Held text that never became a thinking opener is ordinary content.
+        content.append(fence_lead)
+        fence_lead = ""
+    if fence_closer:
+        # An unterminated think block: the model was cut off mid-thinking. Its text is
+        # thinking, not an answer, so it must not be presented as one.
+        if fence_tail:
+            reasoning.append(fence_tail)
+            fence_tail = ""
+        fence_closer = None
     final_text = "".join(content)
     if on_delta and stats["deltas"] and (final_text or reasoning):
         # One last callback with the complete text: the narration post must never be
@@ -5911,6 +6056,51 @@ def _edit_find_fuzzy(lines, old_lines):
     return None, "ambiguous (%d candidate regions)" % len(hits)
 
 
+# Byte-identical applies, per (session, path): the payload hash and how many times in a
+# row it produced no change. A successful mutation clears the entry. Ported from omp's
+# hashline patcher (crates/pi-edit/src/modes/hashline/patcher.rs:53-77, NOOP_HARD_LIMIT=3
+# in crates/pi-edit/src/store.rs:21): an edit that parses and applies but writes the
+# file's own bytes back is the most common silent failure for a weak model, and a green
+# OK over an empty diff sends it re-reading and re-anchoring variants of the same
+# payload. The loop guard cannot see it: every retry has different arguments.
+_EDIT_NOOPS = {}                 # (session_key, realpath) -> (payload_hash, count)
+_EDIT_NOOP_LIMIT = 3
+
+
+def _edit_noop_count(key, digest):
+    """Consecutive identical no-ops for (session, path) and this payload hash."""
+    prev, count = _EDIT_NOOPS.get(key, ("", 0))
+    count = count + 1 if prev == digest else 1
+    _EDIT_NOOPS[key] = (digest, count)
+    return count
+
+
+def _edit_noop_note(path, old, new, ctx):
+    """The refusal returned INSTEAD OF a write when new bytes == old bytes."""
+    digest = hashlib.sha256(
+        ("%s\0%s" % (old, new)).encode("utf-8", "replace")).hexdigest()[:12]
+    key = ((ctx or {}).get("session_key") or "", str(Path(path).resolve()))
+    count = _edit_noop_count(key, digest)
+    if count >= _EDIT_NOOP_LIMIT:
+        return ("STOP. Edits to %s have been a byte-identical no-op %d times in a row - "
+                "the new_string reproduces the bytes already on disk at the anchor, and "
+                "the hint did not break the cycle. Either the change is already there "
+                "(move on), or the anchor is wrong (read_file the section again, then "
+                "anchor on different lines). This exact payload will keep being rejected "
+                "until it changes." % (path, count))
+    return ("ERROR: edit applied cleanly but changed nothing in %s: new_string is "
+            "byte-identical to the file at the anchor. The thing you are looking for is "
+            "elsewhere - do NOT widen the payload or re-send it; read_file the section to "
+            "check what is actually there, or verify the file already holds the change."
+            % path)
+
+
+def _edit_noop_clear(path, ctx):
+    """A real mutation landed on `path`: the no-op streak is over."""
+    key = ((ctx or {}).get("session_key") or "", str(Path(path).resolve()))
+    _EDIT_NOOPS.pop(key, None)
+
+
 _STOP_VERBS = re.compile(
     r"\b(systemctl\s+(restart|stop|kill|start)|docker\s+(restart|stop|kill)"
     r"|pkill|killall|kill\b|taskkill|Stop-Process|Stop-Service|service\s+\S+\s+(stop|restart))\b",
@@ -6933,6 +7123,12 @@ def tool_edit_file(args, ctx):
             new_lf = (lf_text.replace(lf_old, lf_new) if replace_all
                       else lf_text.replace(lf_old, lf_new, 1))
 
+    # ---- 2b. a byte-identical apply is not a successful edit: refuse it with the
+    # distinction that matters (already on disk vs wrong anchor) instead of writing the
+    # same bytes back and reporting OK over an empty diff.
+    if new_lf == lf_text:
+        return _edit_noop_note(path, old, new, ctx)
+
     # ---- 3. write back atomically, in the file's own newline convention
     out = new_lf.replace("\n", nl) if nl != "\n" else new_lf
     backup = path.with_suffix(path.suffix + ".bak")
@@ -6944,6 +7140,7 @@ def tool_edit_file(args, ctx):
         atomic_write_text(path, out)
     except Exception as e:
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
+    _edit_noop_clear(path, ctx)
     diff = _edit_diff(lf_text, new_lf, path)
     return (f"OK: replaced {count if replace_all else 1} occurrence(s) in {path} "
             f"[strategy: {strategy}] (backup: {backup.name})\n--- diff ---\n{diff}"
@@ -7240,6 +7437,8 @@ def tool_write_file(args, ctx):
             # which reads as the model's fault, not the writer's.
             with path.open("w", encoding="utf-8", newline="") as f:
                 f.write(args["content"])
+        # A landed write ends any no-op streak on this path (the edit tool's guard).
+        _edit_noop_clear(path, ctx)
         note = verify_note(path)
         # MEASURED 2026-09-25 on the fleet's Windows box: an LF-only .ps1, .cmd and .bat all
         # RAN (including a .cmd with an if/else block and a goto/label), so the flat "it will
