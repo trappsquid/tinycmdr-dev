@@ -1096,6 +1096,61 @@
       },
       "detail": "status and the --app rail name the source - (assumed) with the remedy, (pinned) for llm.context_window, (capped) when llm.max_context_tokens is the ceiling - and the startup banner says 'window ASSUMED' when the endpoint did not report one. llm.context_window ('auto' by default) pins the window over detection, while max_context_tokens still caps the messages payload on top: two numbers with two jobs, both named. Documented in config.example.json.",
       "gate": "tests/test_endpoint_window.py (the pin and its arithmetic, the ASSUMED label with the remedy) + tests/test_tui.py (the rail's (assumed)/(pinned) suffix)"
+    },
+    {
+      "id": "theme-file-and-resolution",
+      "title": "the palette is a host-owned theme file with a resolution order",
+      "state": "shipped",
+      "anchor": {
+        "commit": "17844bf",
+        "expect": "tagged"
+      },
+      "detail": "theme.toml carries the designer's colours (background #0F1114, panel #171A1F, ivory #E9E2D6, muted #A79B88, gold #D7A94A, ember #D9782D, bronze #75654D, crimson #C43A32, error #E05245, selection #3A2524, laurel #8FAE6B) with a row per tier: truecolor hexes, the exact xterm-256 codes, the Basic-ANSI words. Resolution: --theme NAME > TINYCMDR_THEME > agent.theme in config.json > the file's default > the built-in roman-night. `update` seeds the file once (host-owned) and never overwrites it.",
+      "gate": "tests/test_tui.py (the palette resolves through the roles on every tier)"
+    },
+    {
+      "id": "semantic-roles",
+      "title": "the drawing code names semantic roles, never colours",
+      "state": "shipped",
+      "anchor": {
+        "commit": "17844bf",
+        "expect": "tagged"
+      },
+      "detail": "A call site asks for heading / value / call / result / border / error / mark_success / decorative / progress_fill ... and SEMANTIC_ROLES maps a role to a palette colour, so a retheme never touches a card. Gold carries labels and success, laurel appears only for explicit success states, crimson only on large decorative elements (the banner), and errors are the brighter red with an ERROR label; green is gone from answers.",
+      "gate": "tests/test_tui.py (cards carry the role's colour; the label/body split; the rail bar's two tones; the ASCII mark)"
+    },
+    {
+      "id": "one-sgr-conversion",
+      "title": "one SGR conversion, no raw escapes in the renderer",
+      "state": "shipped",
+      "anchor": {
+        "commit": "17844bf",
+        "expect": "tagged"
+      },
+      "detail": "sgr_for/tui_sgr turn a palette style into escape parameters: the tier decides how a colour is written (24-bit, 38;5;N, an ANSI name, or nothing) and the palette decides which. The reporter's tone table maps tones to roles instead of raw SGR numbers, and the verb helpers (green/amber/red) name roles too.",
+      "gate": "tests/test_tui.py (24-bit on truecolor, 38;5;N on 256, a name on 16, nothing on none)"
+    },
+    {
+      "id": "colour-resolution-chain",
+      "title": "colour resolves through a documented chain",
+      "state": "shipped",
+      "anchor": {
+        "commit": "17844bf",
+        "expect": "tagged"
+      },
+      "detail": "--color always|never|auto > TINYCMDR_COLOR (which also still forces a tier) > NO_COLOR > auto-detection: COLORTERM=truecolor -> 24-bit, TERM=*256color* -> xterm-256, otherwise 16; NO_COLOR -> monochrome. Windows enables VT processing and the UTF-8 console code page at startup, with the mode flags named instead of the bare 7.",
+      "gate": "tests/test_tui.py (the tier detection table) + the smoke run of tui_sgr per tier"
+    },
+    {
+      "id": "unicode-policy-and-ascii-mark",
+      "title": "a terminal that cannot draw Braille gets the ASCII mark",
+      "state": "shipped",
+      "anchor": {
+        "commit": "17844bf",
+        "expect": "tagged"
+      },
+      "detail": "agent.unicode (auto|always|never) decides; auto keeps the environment test (TERM=dumb, a Windows console without VT). When Braille cannot render, the rail shows the designer's gold `>_` and the wordmark instead of boxes - and the same policy decides the box-drawing set for the whole screen.",
+      "gate": "tests/test_tui.py (the Braille policy and the ASCII fallback are pinned separately)"
     }
   ]
 }
