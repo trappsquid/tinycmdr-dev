@@ -126,6 +126,8 @@
     "digest_enabled": true,
     "digest_min_chars": 1200,
     "digest_lines": 40,
+    "_comment_search_scope": "search_files shows at most this many matches per file before naming the file in a capped-note (the walk is path-ordered and a capped walk says the rest was not searched). Without it one hot log can eat the whole max_results budget before the other files are reached.",
+    "search_max_per_file": 5,
     "field_notes_enabled": true,
     "field_notes_file": "field-notes.md",
     "field_notes_max": 2,

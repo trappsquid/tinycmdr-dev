@@ -311,6 +311,10 @@ DEFAULT_CONFIG = {
         "digest_enabled": True,
         "digest_min_chars": 1200,   # below this, leave output alone
         "digest_lines": 40,         # lines a digest may keep
+        # search_files: matches shown per file before the file is named in a "capped"
+        # note. Without it one hot log can eat the whole max_results budget before the
+        # other files are reached (ported from omp's search pipeline).
+        "search_max_per_file": 5,
         # Field notes: a failed call whose signature is already understood gets the
         # known cause appended, from field-notes.md. Zero prompt cost (the file is
         # not injected anywhere), and bounded at field_notes_max per result.
@@ -7161,8 +7165,13 @@ def tool_search_files(args, ctx):
       * `path` may be a FILE: its own lines are grepped, with line numbers.
       * `pattern` is tried against line CONTENT as well as against file NAMES (the content
         pass is skipped when it will not compile, so a name glob like "*.md" stays a glob).
-      * when `content` IS given, `pattern` keeps its scoping job: only files matching it
-        are grepped (schema-honest shape unchanged).
+            * when `content` IS given, `pattern` keeps its scoping job: only files matching it
+              are grepped (schema-honest shape unchanged).
+
+    Scoping rules ported from omp's search pipeline (docs/natives-text-search-pipeline.md):
+    the walk is path-ordered so the same search returns the same page on every host, a
+    per-file cap keeps one hot log from eating the whole budget, and both a capped file and
+    a cap-terminated walk SAY SO instead of reading as an exhaustive answer.
     """
     import fnmatch
     root = Path(_win_long_path(Path(args.get("path") or ".").expanduser()))
@@ -7170,6 +7179,8 @@ def tool_search_files(args, ctx):
         return f"ERROR: {root} does not exist"
     pat = args.get("pattern") or "*"
     max_results = int(args.get("max_results") or 50)
+    per_file_cap = max(1, int(args.get("max_count_per_file")
+                              or CONFIG["agent"].get("search_max_per_file", 5)))
     asked_content = args.get("content")
     grepper = asked_content or pat
     try:
@@ -7192,11 +7203,14 @@ def tool_search_files(args, ctx):
                     break
         return "\n".join(hits) if hits else "No matches."
     hits, content_hits, skipped_big = [], [], []
+    capped_files, cap_reached = [], False
     try:
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in
-                           (".git", "node_modules", "__pycache__", ".venv")]
-            for fn in filenames:
+            # Deterministic order: the same search must return the same page on every
+            # host and run, so a capped result is reproducible and has a stable next slice.
+            dirnames[:] = sorted(d for d in dirnames if d not in
+                                 (".git", "node_modules", "__pycache__", ".venv"))
+            for fn in sorted(filenames):
                 full = Path(dirpath) / fn
                 globbed = fnmatch.fnmatch(fn, pat)
                 # `content` given => `pattern` SCOPES the grep (the schema-honest shape),
@@ -7209,24 +7223,35 @@ def tool_search_files(args, ctx):
                         if full.stat().st_size > 2_000_000:
                             skipped_big.append(str(full))
                             continue
+                        file_hits = 0
                         for i, line in enumerate(
                                 full.read_text(encoding="utf-8",
                                                errors="replace").splitlines(), 1):
                             if content_re.search(line):
                                 content_hits.append(
                                     f"{full}:{i}: {line.strip()[:160]}")
+                                file_hits += 1
+                                # One hot file (a log matching 4,000 lines) must not eat
+                                # the whole budget before other files are reached. The
+                                # file is named in the note, so the follow-up is obvious.
+                                if file_hits >= per_file_cap:
+                                    capped_files.append(str(full))
+                                    break
                                 # Report EVERY match up to the cap, not one per file: a
                                 # directory grep that silently returned only the first
                                 # hit was a confident wrong answer (measured 2026-10-02:
                                 # a search for a pattern a file held four times returned
                                 # one line, and no note said the rest were dropped).
                                 if (len(hits) + len(content_hits)) >= max_results:
+                                    cap_reached = True
                                     break
                     except OSError:
                         continue
                 if len(hits) + len(content_hits) >= max_results:
+                    cap_reached = True
                     break
             if len(hits) + len(content_hits) >= max_results:
+                cap_reached = True
                 break
     except OSError as e:
         return f"ERROR searching: {e}"
@@ -7241,6 +7266,16 @@ def tool_search_files(args, ctx):
         note = ("\n[HARNESS: %d file(s) over 2 MB were NOT searched for content (%s%s) - "
                 "name one directly to grep it.]"
                 % (len(skipped_big), _shown, ", ..." if len(skipped_big) > 3 else ""))
+    if capped_files:
+        _shown = ", ".join(Path(p).name for p in capped_files[:3])
+        note += ("\n[HARNESS: %d file(s) hit the per-file cap of %d match(es) (%s%s) - "
+                 "raise max_count_per_file or name one directly for the rest.]"
+                 % (len(capped_files), per_file_cap, _shown,
+                    ", ..." if len(capped_files) > 3 else ""))
+    if cap_reached:
+        note += ("\n[HARNESS: stopped at the max_results cap of %d; later matches under "
+                 "%s were NOT searched - narrow the pattern or raise max_results.]"
+                 % (max_results, root))
     if not results:
         return "No matches." + note
     return "\n".join(results[:max_results]) + note
@@ -9847,7 +9882,9 @@ CORE_TOOLS = {
             {"path": {"type": "string", "description": "Directory to search (default: bot dir)"},
              "pattern": {"type": "string", "description": "Filename glob, e.g. '*.log'"},
              "content": {"type": "string", "description": "Regex to match inside files"},
-             "max_results": {"type": "integer"}},
+             "max_results": {"type": "integer"},
+             "max_count_per_file": {"type": "integer",
+                                    "description": "Matches shown per file (default 5)"}},
             []),
     },
     "read_file": {
