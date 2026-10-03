@@ -304,6 +304,10 @@ DEFAULT_CONFIG = {
         # spill_keep rotates the folder; a failed write falls back to truncation.
         "spill_output": True,
         "spill_keep": 50,
+        # Hard ceiling on what ONE spill writes to disk. Over it the file keeps head and
+        # tail with an explicit omitted-bytes marker; the pointer says so. A runaway
+        # command (a multi-GB log) used to be written in full, byte for byte.
+        "spill_max_bytes": 8388608,
         # Tool-result digestion: a known command shape is rendered down to its
         # signal before the model reads it. The cap above only cuts a 30-line error
         # out of 6k chars of routine output; this finds the line that mattered and
@@ -2831,11 +2835,66 @@ def _spill_rows(session=None):
     no row at all: the prompt tells the model to read it.
     """
     with _SPILLS_LOCK:
+        _spill_load()
         alive = [e for e in _SPILLS
                  if (BASE_DIR / str(e.get("path") or "")).exists()]
         if len(alive) != len(_SPILLS):
             _SPILLS[:] = alive
+            _spill_index_save()
         return [e for e in alive if session is None or e.get("session") == session]
+
+
+def _spill_index_path():
+    # Deliberately NOT _spill_dir(): a READ must not create the folder. The gate counts
+    # repo-tree writes, and a prompt build that merely looked for an index used to mkdir
+    # spill/ in whatever tree the module lives in (caught by run_all's G2 check).
+    return BASE_DIR / "spill" / "index.jsonl"
+
+
+def _spill_index_save():
+    """Persist the in-memory rows (at most `_SPILLS_MAX`) so a restart keeps the promise.
+
+    The index used to be process memory only: "the FULL text is on disk - nothing was
+    dropped" stopped being true the moment the bot restarted, and the model was left
+    reading a relative path whose row no longer existed. Called with the lock HELD.
+    """
+    try:
+        rows = [e for e in _SPILLS if (BASE_DIR / str(e.get("path") or "")).exists()]
+        _spill_dir()
+        _spill_index_path().write_text(
+            "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in rows),
+            encoding="utf-8")
+    except Exception as e:                  # noqa: BLE001 - an index is never worth a run
+        log.debug("spill index save: %s", e)
+
+
+def _spill_load():
+    """Load the persisted rows once per process. Called with the lock HELD."""
+    global _SPILLS_LOADED
+    if _SPILLS_LOADED:
+        return
+    _SPILLS_LOADED = True
+    try:
+        path = _spill_index_path()
+        if not path.exists():
+            return
+        rows = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(e, dict) and e.get("path"):
+                rows.append(e)
+        for e in rows[-_SPILLS_MAX:]:
+            if (BASE_DIR / str(e["path"])).exists():
+                _SPILLS.append(e)
+                _SPILL_SEQ["n"] = max(_SPILL_SEQ["n"], int(e.get("id") or 0))
+    except Exception as e:                  # noqa: BLE001 - ditto
+        log.debug("spill index load: %s", e)
 
 def _spill_rotate(keep):
     """Trim spill/ down to `keep` files that NO LIVE INDEX ROW points at.
@@ -2876,6 +2935,7 @@ _SPILLS = []
 _SPILLS_LOCK = threading.Lock()
 _SPILLS_MAX = 12
 _SPILL_SEQ = {"n": 0}
+_SPILLS_LOADED = False
 
 
 
@@ -2894,12 +2954,25 @@ def _spill_record(name, rel, text, session=None):
         first = next((ln.strip() for ln in str(text).splitlines()
                       if ln.strip()), "")
         with _SPILLS_LOCK:
-            _SPILL_SEQ["n"] += 1
-            _SPILLS.append({"id": _SPILL_SEQ["n"], "tool": str(name)[:24],
-                            "path": rel, "first": first[:110],
-                            "chars": len(str(text)), "at": int(time.time()),
-                            "session": session or ""})
-            del _SPILLS[:-_SPILLS_MAX]
+            _spill_load()
+            # The same output spilling twice (a retried command) must not grow two files
+            # or two index lines: the file is content-addressed, so the second write is
+            # skipped in cap_output, and this row just refreshes in place.
+            existing = next((e for e in reversed(_SPILLS)
+                             if e.get("path") == rel and e.get("session") == (session or "")),
+                            None)
+            if existing is not None:
+                existing.update({"at": int(time.time()), "chars": len(str(text)),
+                                 "first": first[:110]})
+            else:
+                _SPILL_SEQ["n"] += 1
+                row = {"id": _SPILL_SEQ["n"], "tool": str(name)[:24],
+                       "path": rel, "first": first[:110],
+                       "chars": len(str(text)), "at": int(time.time()),
+                       "session": session or ""}
+                _SPILLS.append(row)
+                del _SPILLS[:-_SPILLS_MAX]
+            _spill_index_save()
     except Exception as e:
         log.debug("spill index: %s", e)
 
@@ -2995,11 +3068,28 @@ def cap_output(name, text, label="output", limit=None, session=None):
         return text
     if not CONFIG["agent"].get("spill_output", True):
         return truncate_middle(text, cap, label)
+    capped_note = ""
     try:
-        digest = hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:8]
-        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", str(name))[:24] or "output"
-        path = _spill_dir() / f"{time.strftime('%Y%m%d-%H%M%S')}-{safe}-{digest}.txt"
-        atomic_write_text(path, text)
+        raw = text.encode("utf-8", "replace")
+        digest = hashlib.sha1(raw).hexdigest()[:16]
+        blob = text
+        max_bytes = int(CONFIG["agent"].get("spill_max_bytes") or 8 * 1024 * 1024)
+        if len(raw) > max_bytes:
+            # A runaway command must not fill the disk. What is kept says what was
+            # dropped: head + tail, the same honesty rule as every other cap here.
+            head_b = tail_b = int(max_bytes * 0.4)
+            head = raw[:head_b].decode("utf-8", "ignore")
+            tail = raw[-tail_b:].decode("utf-8", "ignore")
+            omitted = len(raw) - len(head.encode("utf-8")) - len(tail.encode("utf-8"))
+            blob = ("%s\n... [spill file capped at %d bytes; %d bytes omitted] ...\n%s"
+                    % (head, max_bytes, omitted, tail))
+            capped_note = ("\n     (The spill file itself is capped at %d bytes: %d bytes "
+                           "of the middle were omitted from it too.)" % (max_bytes, omitted))
+        # Content-addressed: the same output spilling twice is ONE file, and a retry-heavy
+        # ops box stops growing a duplicate per retry.
+        path = _spill_dir() / f"{digest}.txt"
+        if not path.exists() or path.stat().st_size != len(blob.encode("utf-8")):
+            atomic_write_text(path, blob)
         _spill_rotate(int(CONFIG["agent"].get("spill_keep") or 50))
     except Exception as e:
         log.warning("spill write failed (%s) - falling back to truncation", e)
@@ -3014,7 +3104,7 @@ def cap_output(name, text, label="output", limit=None, session=None):
               f"text was written to {rel}. Nothing was dropped: read it with "
               f"`read_file {{\"path\": \"{rel}\", \"offset\": N, \"limit\": M}}`, or search it "
               f"with `search_files {{\"pattern\": \"...\", \"path\": \"{rel}\"}}`. Do NOT "
-              f"re-run the command to see the middle.] ...\n"
+              f"re-run the command to see the middle.] ...{capped_note}\n"
             + _spill_signal(text, head, len(text) - tail, max(200, cap // 4))
             + text[-tail:])
 
@@ -15466,6 +15556,9 @@ class Agent:
         # a fresh order becomes a continuation of the old one.
         with _SPILLS_LOCK:
             _SPILLS[:] = [e for e in _SPILLS if e.get("session") != (session_key or "")]
+            # Persist the removal too: otherwise the pointers /new just dropped come back
+            # on the next restart, which is the same bug one process later.
+            _spill_index_save()
         try:
             self._session_path(session_key).unlink(missing_ok=True)
         except Exception:

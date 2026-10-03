@@ -282,6 +282,7 @@
     "auto_continue_max": 2,
     "spill_output": true,
     "spill_keep": 50,
+    "spill_max_bytes": 8388608,
     "deliver_after_announcements": 3,
     "session_transcript": true,
     "fetch_max_chars": 12000
