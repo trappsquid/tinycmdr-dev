@@ -1,5 +1,7 @@
 <div align="center">
 
+  <img src="assets/tinycmdr-chibi.png" alt="tinycmdr" width="190">
+
   # tinycmdr
 
   ### An autonomous ops agent for self-hosted models

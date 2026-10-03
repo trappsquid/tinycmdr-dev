@@ -1,7 +1,9 @@
 # tinycmdr: what it actually is
 
+<img src="../assets/tinycmdr-helm.png" alt="" width="96">
+
 <!-- measured:header:start -->
-Working definition of v1.0.55, the tree this document ships with. Every number in
+Working definition of v1.0.56, the tree this document ships with. Every number in
 section 1 and section 3.2 is rendered from the code by
 `maintenance/measured-block.py` - `tests/test_measured_doc.py` fails when the
 committed numbers disagree with the tree, so they cannot rot. Section 6 is a
@@ -34,7 +36,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       17 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               81 suites / 26,541 lines / 3,062 checks that need no model, plus a graded
+tests               81 suites / 26,545 lines / 3,062 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 5 blocks: llm 25, telegram 2, mattermost 6, search 3, agent 104

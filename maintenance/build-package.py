@@ -141,6 +141,13 @@ SHIP = [
     "tools/process.py",
     "tools/toolsmith.py",
     "tools/README.md",
+    # The brand, at the two sizes a reader meets: the chibi heads the README and is the
+    # image a link preview falls back to, the helm marks the "what it actually is" doc.
+    # The masters stay in the repository as source; the 1280x640 social preview is a
+    # GitHub setting, not a product surface. Shipped so the README in an unzipped release
+    # renders the way its author meant it to.
+    "assets/tinycmdr-chibi.png",
+    "assets/tinycmdr-helm.png",
 ]
 
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere

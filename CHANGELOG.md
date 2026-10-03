@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.56] - 2026-10-03
+
+Added
+- **Branding**: the README opens with the tinycmdr chibi (also the image a link
+  preview falls back to until a Social preview is set), `docs/tinycmdr-what-it-is.md`
+  carries the helm, and `assets/` holds the three masters plus a 1280x640
+  `social-preview.png`. The package ships the two derived sizes so a reader who
+  unzips a release sees the README as its author meant it.
+
 Fixed
 - **A question a stopped run left unanswered nagged every later run.** The sidecar that
   carries it was re-surfaced on every run until the operator answered or stopped it —
