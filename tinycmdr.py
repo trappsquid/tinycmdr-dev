@@ -315,6 +315,15 @@ DEFAULT_CONFIG = {
         # note. Without it one hot log can eat the whole max_results budget before the
         # other files are reached (ported from omp's search pipeline).
         "search_max_per_file": 5,
+        # Superseded-read pruning: a newer read of the same file blanks the older copies
+        # to a notice, so a read->edit->read loop stops paying for every version until
+        # the whole conversation is compacted. The suffix gate is the point: blanking a
+        # result inside a warm prompt-cache prefix forces a re-write, so a candidate is
+        # blanked now only when everything after it is under prune_suffix_tokens, or
+        # after the session idled past prune_idle_secs.
+        "prune_superseded": True,
+        "prune_suffix_tokens": 8000,
+        "prune_idle_secs": 1800,
         # Field notes: a failed call whose signature is already understood gets the
         # known cause appended, from field-notes.md. Zero prompt cost (the file is
         # not injected anywhere), and bounded at field_notes_max per result.
@@ -12300,6 +12309,24 @@ ELISION_MARKERS = (MARK_COMPACT, MARK_SHRINK)
 ELISION_NOTES_MAX = 10        # one line per dropped call, oldest dropped first
 ELISION_NOTES_CHARS = 1200    # bounded: this rides every LATER request
 
+# Superseded-read pruning (ported from omp, packages/agent/src/compaction/pruning.ts):
+# a read->edit->read loop keeps every version of a file in the conversation until the
+# whole thing is compacted. The older copy is blanked in place - the newest read of that
+# path survives, and the notice says what happened so the model can re-ask.
+SUPERSEDED_NOTICE = "[Superseded by a newer read of this file]"
+PRUNE_MIN_TOKENS = 50         # blanking costs ~8 tokens; below this it grows the context
+
+
+def _read_supersede_key(path):
+    """The identity two reads of 'the same file' share, across spellings."""
+    text = str(path or "").strip()
+    if not text or text.startswith(("spill#", "transcript#", "http://", "https://")):
+        return ""
+    try:
+        return os.path.normcase(os.path.realpath(os.path.expanduser(text)))
+    except OSError:
+        return os.path.normcase(text)
+
 
 def _short_args(raw, limit=60):
     """A one-line hint of what a tool call was doing: the command, path, query or task.
@@ -13140,7 +13167,10 @@ class Agent:
     def _drop_oldest_block(self, messages, marker):
         """Delete the oldest whole exchange, leaving `marker` (plus what it covered) behind.
 
-        Returns False when there is no whole exchange left to drop. The marker
+        Returns None when there is no whole exchange left to drop; otherwise the NET
+        tokens the cut removed (what was deleted minus the elision note's growth), so a
+        caller can keep a running total instead of re-serializing the conversation after
+        every pass. The marker
         is REUSED, never re-inserted on every pass: the previous version cut at
         `messages[1:first_user_message]`, so once the marker sat at index 1 the
         next cut landed on the marker itself — delete it, re-insert it, repeat,
@@ -13154,23 +13184,24 @@ class Agent:
         re-inserted, so the progress guarantee above is unchanged.
         """
         if len(messages) < 4:
-            return False
+            return None
         start = 1
         if (messages[1].get("role") == "user"
                 and str(messages[1].get("content") or "").startswith(ELISION_MARKERS)):
             start = 2                  # keep the marker already in place
         if start >= len(messages):
-            return False
+            return None
         if messages[start].get("role") != "user":
             start = next((i for i in range(start, len(messages))
                           if messages[i].get("role") == "user"), None)
             if start is None:
-                return False
+                return None
         cut = next((i for i in range(start + 1, len(messages))
                     if messages[i].get("role") == "user"), None)
         if cut is None:
-            return False               # only the newest exchange is left
+            return None               # only the newest exchange is left
         dropped = messages[start:cut]
+        dropped_tokens = sum(est_tokens(json.dumps(m)) for m in dropped)
         prev = str(messages[1].get("content") or "") if start != 1 else ""
         del messages[start:cut]
         note = self._elision_note(marker, dropped, prev)
@@ -13178,7 +13209,10 @@ class Agent:
             messages.insert(1, {"role": "user", "content": note})
         else:
             messages[1]["content"] = note
-        return True
+        # The NET cost, not just what was deleted: the elision note re-inserted above
+        # rides every later request, and the callers keep a running total to avoid
+        # re-serializing the whole conversation on every pass (that was O(N^2)).
+        return dropped_tokens - (est_tokens(note) - est_tokens(prev))
 
     def _save_transcript(self, key, messages, reason):
         """Keep what compaction is about to destroy.
@@ -13210,6 +13244,93 @@ class Agent:
         except Exception as e:
             log.warning("transcript not written: %s", e)
 
+    def _supersede_prune(self, messages, key=None):
+        """Blank tool results a later result superseded; return tokens reclaimed.
+
+        A read -> edit -> read loop keeps every version of a file in the conversation
+        until the whole thing is compacted (tinycmdr measured 46% of reads of its own
+        source as re-acquisitions). The newest read of a path survives; the older ones
+        become SUPERSEDED_NOTICE, and the notice tells the model what happened so it can
+        re-ask. The GATE is the point (omp pruning.ts:264-420): blanking a result inside
+        a warm prompt-cache prefix forces the provider to re-write the suffix, so a
+        candidate is blanked now only when everything after it costs at most
+        prune_suffix_tokens, or after the session idled past the cache's lifetime.
+        """
+        if not CONFIG["agent"].get("prune_superseded", True):
+            return 0
+        if len(messages) < 8:
+            return 0
+        calls = {}
+        for m in messages:
+            if m.get("role") != "assistant":
+                continue
+            for tc in (m.get("tool_calls") or []):
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if not isinstance(fn, dict):
+                    continue
+                try:
+                    args = json.loads(fn.get("arguments") or "{}")
+                except (TypeError, ValueError):
+                    args = {}
+                calls[tc.get("id") or ""] = (str(fn.get("name") or ""),
+                                             args if isinstance(args, dict) else {})
+        reads = []
+        for i, m in enumerate(messages):
+            if m.get("role") != "tool":
+                continue
+            name, args = calls.get(m.get("tool_call_id") or "", ("", {}))
+            if name != "read_file":
+                continue
+            k = _read_supersede_key(args.get("path"))
+            if not k:
+                continue
+            reads.append((i, k, (args.get("offset"), args.get("limit"),
+                                 args.get("tail"))))
+        if not reads:
+            return 0
+        newest = {}
+        for i, k, form in reads:
+            newest[k] = (i, form)            # in order: the last read wins
+        limit = int(CONFIG["agent"].get("prune_suffix_tokens", 8000))
+        idle_secs = float(CONFIG["agent"].get("prune_idle_secs", 1800))
+        idle = False
+        if key:
+            try:
+                idle = ((time.time() - self._session_path(key).stat().st_mtime)
+                        >= idle_secs)
+            except OSError:
+                idle = False
+        suffix = [0] * (len(messages) + 1)
+        for i in range(len(messages) - 1, -1, -1):
+            add = 0 if (i == 0 and messages[0].get("role") == "system") \
+                else est_tokens(json.dumps(messages[i]))
+            suffix[i] = suffix[i + 1] + add
+        saved = pruned = 0
+        for i, k, form in reads:
+            if i <= 0 or i >= len(messages) - 4:
+                continue
+            new_i, new_form = newest[k]
+            if i == new_i:
+                continue
+            if new_form != (None, None, None) and new_form != form:
+                continue                     # a partial read supersedes only its own form
+            m = messages[i]
+            old = str(m.get("content") or "")
+            if not old or old.startswith(SUPERSEDED_NOTICE) or old.startswith("ERROR"):
+                continue
+            if not (idle or suffix[i + 1] <= limit):
+                continue
+            before, after = est_tokens(old), est_tokens(SUPERSEDED_NOTICE)
+            if before - after < PRUNE_MIN_TOKENS:
+                continue
+            messages[i] = {**m, "content": SUPERSEDED_NOTICE}
+            saved += before - after
+            pruned += 1
+        if pruned:
+            log.info("[%s] superseded-read prune: %d result(s) blanked, ~%d tokens "
+                     "reclaimed", key, pruned, saved)
+        return saved
+
     def _compact(self, messages, key=None):
         """Shrink context when over budget. Never touches messages[0] (system)
         or the newest exchange; never leaves orphan tool messages.
@@ -13227,6 +13348,10 @@ class Agent:
         # budget would push the request past the window.
         budget = (self._context_budget(key) - est_tokens(volatile_context())
                   - pending_image_tokens(key))
+        # 0) incremental reclamation first: blanking a superseded read does not cut the
+        # front of history, so on the small-suffix path it is cache-safe and buys turns
+        # before the deep cut (which resets the prefix) is needed at all.
+        self._supersede_prune(messages, key)
         if self._conversation_token_est(messages) <= budget:
             return messages
         # Before anything is shrunk or dropped: the full text goes to the transcript.
@@ -13245,9 +13370,12 @@ class Agent:
         # again and re-prefills the whole conversation (the cost this whole
         # design exists to avoid). `_drop_oldest_block` refuses once only
         # the newest exchange is left.
-        while self._conversation_token_est(messages) > low:
-            if not self._drop_oldest_block(messages, MARK_COMPACT):
+        total = self._conversation_token_est(messages)
+        while total > low:
+            removed = self._drop_oldest_block(messages, MARK_COMPACT)
+            if removed is None:
                 break
+            total -= removed
         return messages
 
     def _force_shrink(self, messages, key=None, endpoint=None):
@@ -13263,9 +13391,12 @@ class Agent:
         clip any remaining tool output. Never leaves an orphan tool message: the
         cut always lands on a user-message boundary."""
         target = max(2000, int(self._context_budget(key, endpoint) * 0.5))
-        while len(messages) > 4 and self._conversation_token_est(messages) > target:
-            if not self._drop_oldest_block(messages, MARK_SHRINK):
+        total = self._conversation_token_est(messages)
+        while len(messages) > 4 and total > target:
+            removed = self._drop_oldest_block(messages, MARK_SHRINK)
+            if removed is None:
                 break
+            total -= removed
         for m in messages[1:-2]:
             if m.get("role") == "tool" and len(m.get("content") or "") > 300:
                 m["content"] = m["content"][:150] + " ...[trimmed to fit]"
@@ -13292,9 +13423,12 @@ class Agent:
         # Cut a COPY: the run loop's history keeps its blocks, only this request shrinks.
         messages = list(messages)
         low = max(2000, int(budget * 0.6))
-        while self._conversation_token_est(messages) > low:
-            if not self._drop_oldest_block(messages, MARK_SHRINK):
+        total = self._conversation_token_est(messages)
+        while total > low:
+            removed = self._drop_oldest_block(messages, MARK_SHRINK)
+            if removed is None:
                 break
+            total -= removed
         for m in messages[1:-6]:
             if m.get("role") == "tool" and len(m.get("content") or "") > 500:
                 m["content"] = m["content"][:200] + " ...[trimmed]"
