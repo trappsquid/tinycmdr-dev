@@ -555,6 +555,13 @@ DEFAULT_CONFIG = {
         # Hard wall-clock cap per sub-agent, independent of the parent's own runway: one
         # hung child used to hold a thread for the parent's whole max_minutes (75).
         "subagent_timeout_seconds": 900,
+        # A shell command still running after this many seconds is handed to the process
+        # table (guards included) instead of holding the turn; the settled-jobs block
+        # announces its exit. 0 = always block (the old behaviour).
+        "auto_background_seconds": 60,
+        # A settled job is announced once and only if it ended within this window, so a
+        # restart does not replay an old table.
+        "jobs_push_window_minutes": 240,
         "show_usage": True,       # token/time footer on the Done status line
         "vision": False,          # set True only if your model accepts images
         "confirm_patterns": [
@@ -6060,6 +6067,71 @@ def _unwrap_redundant_powershell(command):
     return inner
 
 
+def _shell_autobg(command, ctx, threshold):
+    """Background this shell command if it outlives `threshold` seconds; else None.
+
+    Fast commands keep their blocking result AND leave nothing behind: the command is
+    spawned detached, and only one that actually outlives the window is adopted into the
+    `process` table (so a box that never runs anything long never grows a job row). The
+    guards already ran in tool_shell. Ported from omp's auto-backgrounding
+    (docs/bash-tool-runtime.md, async/auto-background.ts).
+    """
+    proc = REGISTRY.get("process")
+    if not proc:
+        return None
+    mod = getattr(proc["fn"], "__globals__", {})
+    spawn, promote = mod.get("spawn_probe"), mod.get("promote_probe")
+    discard, nxt = mod.get("discard_probe"), mod.get("next_jid")
+    if not all((spawn, promote, discard, nxt)):
+        return None
+    make_argv = (ctx or {}).get("shell_argv")
+    argv = make_argv(command) if make_argv else command
+    shell = make_argv is None
+    try:
+        child, state = spawn(argv, shell)
+    except OSError as e:
+        log.debug("auto-background spawn failed (%s); blocking instead", e)
+        return None
+    deadline = time.time() + float(threshold)
+    while time.time() < deadline:
+        stop = (ctx or {}).get("cancel_event")
+        if stop is not None and stop.is_set():
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=20)
+                else:
+                    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+            except (OSError, subprocess.SubprocessError):
+                child.kill()
+            discard(state)
+            return ("STOPPED by the operator (`/tinycmdr stop`): this command and "
+                    "everything it started were killed. Do not retry it.")
+        if child.poll() is not None:
+            state["done"].wait(timeout=1.0)   # the reader saw EOF; buffer is complete
+            with state["lock"]:
+                body = bytes(state["buf"]).decode("utf-8", "replace")
+            discard(state)
+            body = re.sub(r"\n?__EXIT__-?\d+\s*$", "", body).strip()
+            # Same shape as the blocking path, so nothing downstream can tell.
+            body = digest_output("shell", {"command": command}, body)
+            body = cap_output("shell", body, "command output",
+                              session=(ctx or {}).get("session_key"))
+            return ("exit_code=%s\n%s\n[HARNESS: this command finished inside the %ds "
+                    "auto-background window, so the turn kept its result.]"
+                    % (child.returncode, body or "(no output)", int(threshold)))
+        time.sleep(0.25)
+    jid = nxt()
+    log_path, _spool = promote(jid, child, state, command)
+    return ("started %s (pid %s)\nlog: %s\n[HARNESS: this command ran longer than "
+            "agent.auto_background_seconds=%ds, so it was handed to the background "
+            "table instead of holding this turn. Keep working; the harness will tell "
+            "you when it finishes, or poll it with process {\"action\": \"status\", "
+            "\"id\": \"%s\"} and {\"action\": \"output\", \"id\": \"%s\"}.]"
+            % (jid, child.pid, log_path, int(threshold), jid, jid))
+
+
 def tool_shell(args, ctx):
     """Run a shell command. bash on Linux/macOS, PowerShell on Windows."""
     command = args["command"]
@@ -6107,6 +6179,13 @@ def tool_shell(args, ctx):
     blocked = is_blocked(command)
     if blocked:
         return _blocked_answer(blocked)
+    _ab = int(CONFIG["agent"].get("auto_background_seconds") or 0)
+    if _ab and not args.get("wait"):
+        # Past the window, the blocking result would hold the turn hostage; the process
+        # table takes over and the settled-jobs block closes the loop.
+        ab = _shell_autobg(command, ctx, _ab)
+        if ab:
+            return ab
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
     if IS_WINDOWS:
         # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the
@@ -10174,6 +10253,11 @@ CORE_TOOLS = {
             {"command": {"type": "string", "description": "The command to run"},
              "timeout": {"type": "integer",
                          "description": "Seconds before kill (config default)"},
+             "wait": {"type": "boolean",
+                      "description": "Block for the whole run even past "
+                                     "agent.auto_background_seconds (a slow command "
+                                     "is otherwise handed to the process table and "
+                                     "you are told when it finishes)"},
              "raw": {"type": "boolean",
                      "description": "Return the output undigested"}},
             ["command"]),
@@ -12135,6 +12219,55 @@ def mint_offer_line(session_key):
             % (ent.get("sample") or "the same commands", int(ent["count"])))
 
 
+_JOBS_PUSHED = set()       # "jid:rc" announced this process
+_PROC_JOBS_FILE = BASE_DIR / "logs" / "process-jobs.json"
+
+
+def settled_jobs_block(window_minutes=None, cap=6):
+    """Background jobs that ENDED and have not been announced yet - one line each.
+
+    A job started through the `process` tool used to be discoverable only by asking:
+    a run that started a build and kept working never learned it finished, and after a
+    restart the table sat in logs/ unread. This rides the TRAILING block (volatile by
+    design), so it cannot disturb the cached prefix, and a job is announced once. Jobs
+    older than the window are not re-announced after a restart.
+    """
+    try:
+        jobs = json.loads(_PROC_JOBS_FILE.read_text(encoding="utf-8",
+                                                    errors="replace"))
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(jobs, dict):
+        return ""
+    window = float(window_minutes
+                   or CONFIG["agent"].get("jobs_push_window_minutes", 240))
+    now = time.time()
+    fresh = []
+    for jid, job in sorted(jobs.items()):
+        if not isinstance(job, dict) or job.get("rc") is None:
+            continue
+        key = "%s:%s" % (jid, job.get("rc"))
+        if key in _JOBS_PUSHED:
+            continue
+        when = 0.0
+        try:
+            if job.get("ended"):
+                when = time.mktime(time.strptime(job["ended"], "%Y-%m-%d %H:%M:%S"))
+        except (ValueError, TypeError):
+            when = 0.0
+        if when and (now - when) > window * 60:
+            continue
+        _JOBS_PUSHED.add(key)
+        fresh.append("- %s finished, exit %s - `%s` (log: %s; read it with "
+                     "process {\"action\": \"output\", \"id\": \"%s\"})"
+                     % (jid, job.get("rc"), str(job.get("command"))[:70],
+                        job.get("log") or "?", jid))
+    if not fresh:
+        return ""
+    return ("[HARNESS: background job(s) finished since you last looked - do NOT start "
+            "them again; fetch their output:]\n" + "\n".join(fresh[-cap:]))
+
+
 def volatile_context(state_marker=True, session_key=None, atlas=False, shell=False,
                      prior_unfinished=""):
     """Notes — everything in the prompt that changes mid-run.
@@ -12204,6 +12337,9 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     spill = spill_index_block(session_key)
     if spill:
         parts.append(spill)
+    _jobs = settled_jobs_block()
+    if _jobs:
+        parts.append(_jobs)
     # ONE line, only when the previous run of THIS conversation did not finish. Four
     # measured runs answered a stale thread instead of the operator's new order, and in
     # every one the previous exchange was left unfinished (promise, loop-guard stop,
