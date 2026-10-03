@@ -25926,7 +25926,14 @@ def _verb_update(rest):
             return None
         new_app = find("tinycmdr.py")
         if new_app is None:
-            print("no tinycmdr.py in %s — is that a build?" % src, file=sys.stderr)
+            if named is not None:
+                # The rule, said out loud. Measured 2026-10-03: `update C:\...\tinycmdr-cand.py`
+                # answered "is that a build?" about a perfectly good build, and cost a deploy
+                # cycle working out that the NAME was the problem.
+                print("the candidate must be named tinycmdr.py (this one is %s) - rename it, "
+                      "or point `update` at its folder or a zip" % named.name, file=sys.stderr)
+            else:
+                print("no tinycmdr.py in %s — is that a build?" % src, file=sys.stderr)
             return 1
         text = new_app.read_text(encoding="utf-8", errors="replace")
         m = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.M)

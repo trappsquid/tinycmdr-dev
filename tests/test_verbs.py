@@ -842,8 +842,17 @@ def main():
         bad = workdir / "bad.py"
         bad.write_text("print('not a build')\n", encoding="utf-8")
         rc, out, err = call(fb, ["update", str(bad)])
-        check("update refuses a file that is not a build",
-              rc == 1 and "is that a build" in err, (rc, err[:160]))
+        check("update refuses a file that is not named tinycmdr.py, and says the rule",
+              rc == 1 and "must be named tinycmdr.py" in err and "bad.py" in err,
+              (rc, err[:200]))
+        wrongly = workdir / "cand2" / "tinycmdr-cand.py"
+        wrongly.parent.mkdir()
+        wrongly.write_text((workdir / "tinycmdr.py").read_text(encoding="utf-8"),
+                           encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(wrongly)])
+        check("...even when the bytes ARE a good build",
+              rc == 1 and "must be named tinycmdr.py" in err and "tinycmdr-cand.py" in err,
+              (rc, err[:200]))
         fake = workdir / "fakebuild" / "tinycmdr.py"
         fake.parent.mkdir()
         fake.write_text("print('hello')\n", encoding="utf-8")
