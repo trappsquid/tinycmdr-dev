@@ -993,7 +993,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.49"
+VERSION = "1.0.50"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -23671,6 +23671,28 @@ _NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, chang
                 "maintainer scripts): a package does not carry them. `tinycmdr update "
                 "--full` keeps everything instead.")
 
+# Paths the HOST owns: a package may SEED them, but an update must never write over an
+# existing one. 1.0.49 protected only soul.md, so a host's edited tools/patch.py,
+# tools/process.py, toolsmith.py, tools/README.md or skills/README.md was silently
+# replaced (with a .bak beside it, but replaced) - and tools/ is exactly where the agent
+# is told to write its own tools. Mirrors the per-host table in docs/development.md §4.
+_HOST_OWNED_EXACT = frozenset((
+    ".env", "config.json", "soul.md", "notes.md", "field-notes.md", "atlas.md",
+    "experiments.jsonl", "web-sessions.json", "state.json", "jobs.json", "tasks.json",
+    "tasks.journal.jsonl", "tasks.md", "confirm-allow.json", "notes-authored.json",
+    "tools-provenance.json", "tinycmdr.log", "tinycmdr.lock",
+))
+_HOST_OWNED_PREFIXES = ("tools/", "skills/", "sessions/", "logs/", "spill/", "venv/",
+                        "dist/", "maintenance/private_rules.py",
+                        "maintenance/where-roles.json")
+
+
+def _host_owned(rel):
+    """True when a package file's destination belongs to the host, not to the package."""
+    r = rel.as_posix()
+    return r in _HOST_OWNED_EXACT or any(r == p or r.startswith(p)
+                                         for p in _HOST_OWNED_PREFIXES)
+
 
 def _disk_version():
     """VERSION as the file on disk NOW says it.
@@ -23876,14 +23898,12 @@ def _apply_package(root, stamp):
             new = src.read_bytes()
         except OSError:
             continue
-        if rel.as_posix() == "soul.md" and dest.exists():
-            try:
-                if dest.read_text(encoding="utf-8").strip() != DEFAULT_SOUL.strip():
-                    skipped.append(rel.as_posix())      # an edited persona is not ours to take
-                    continue
-            except OSError:
-                skipped.append(rel.as_posix())
-                continue
+        # A host-owned path is only ever SEEDED: an existing one is the operator's (or the
+        # agent's own tool) and is left exactly as it is. This is the whole per-host set,
+        # not just soul.md.
+        if _host_owned(rel) and dest.exists():
+            skipped.append(rel.as_posix())
+            continue
         old = dest.read_bytes() if dest.exists() else None
         if old == new:
             continue

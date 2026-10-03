@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.50] - 2026-10-03
+
+Fixed
+- **`update` no longer overwrites a host's own files.** 1.0.49 protected exactly one path -
+  `soul.md` - and wrote every other file the package carries over the install, so an edited
+  `tools/patch.py`, `tools/process.py`, `tools/toolsmith.py`, `tools/README.md` or
+  `skills/README.md` was silently replaced (a `.bak-update-<stamp>` sat beside it, but it was
+  replaced). `tools/` is precisely where the agent is told to write its own tools, so that was
+  the wrong default. An update now only SEEDS a host-owned path: if it already exists it is
+  left exactly as it is, whatever it holds, and the result names what it left alone. The
+  protected set is the per-host table in docs/development.md §4 - `tools/`, `skills/`,
+  `soul.md`, `config.json`, `.env`, `notes.md`, `field-notes.md`, `atlas.md`, `sessions/`,
+  `logs/`, `spill/`, the ledger files, `maintenance/private_rules.py` and
+  `maintenance/where-roles.json`. Graded in `tests/test_verbs.py`; verified end to end against
+  the published release from an install whose `tools/patch.py`, `skills/README.md` and
+  `soul.md` had all been edited - the app moved 1.0.48 -> 1.0.49 and every one of them stayed.
+
 ## [1.0.49] - 2026-10-03
 
 Changed

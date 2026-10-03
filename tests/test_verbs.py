@@ -157,6 +157,46 @@ def main():
             fb.BASE_DIR = _saved_base
             shutil.rmtree(_ptmp, ignore_errors=True)
 
+        # _apply_package() writes the package over the install. It must SEED a host-owned
+        # path and never overwrite one: 1.0.49 protected only soul.md, so an edited
+        # tools/patch.py or skills/README.md - tools/ being exactly where the agent is told
+        # to write its own tools - was silently replaced (measured 2026-10-03).
+        _ab = fb.BASE_DIR
+        _atmp = Path(tempfile.mkdtemp(prefix="fbtest-apply-"))
+        _pkg = Path(tempfile.mkdtemp(prefix="fbtest-pkg-"))
+        try:
+            fb.BASE_DIR = _atmp
+            for d, f, text in (("tools", "patch.py", "MINE"),
+                               ("skills", "README.md", "MINE")):
+                (_atmp / d).mkdir(); (_atmp / d / f).write_text(text, encoding="utf-8")
+                (_pkg / d).mkdir(); (_pkg / d / f).write_text("SHIPPED", encoding="utf-8")
+            (_atmp / "soul.md").write_text("my persona", encoding="utf-8")
+            (_pkg / "soul.md").write_text("seed persona", encoding="utf-8")
+            (_atmp / "tinycmdr.py").write_text("old", encoding="utf-8")
+            (_pkg / "tinycmdr.py").write_text("new", encoding="utf-8")
+            (_pkg / "install").mkdir()
+            (_pkg / "install" / "x.sh").write_text("new", encoding="utf-8")
+            _wrote, _skipped = fb._apply_package(_pkg, "TESTSTAMP")
+            check("apply writes what the package owns",
+                  (_atmp / "tinycmdr.py").read_text(encoding="utf-8") == "new"
+                  and (_atmp / "install" / "x.sh").exists()
+                  and "tinycmdr.py" in _wrote, str(_wrote))
+            check("...and never overwrites a host-owned file (tools/, skills/, soul.md)",
+                  (_atmp / "tools" / "patch.py").read_text(encoding="utf-8") == "MINE"
+                  and (_atmp / "skills" / "README.md").read_text(encoding="utf-8") == "MINE"
+                  and (_atmp / "soul.md").read_text(encoding="utf-8") == "my persona",
+                  str(_skipped))
+            (_pkg / "skills" / "RULES.md").write_text("seed", encoding="utf-8")
+            fb._apply_package(_pkg, "TESTSTAMP")
+            check("...while a MISSING host-owned file IS seeded",
+                  (_atmp / "skills" / "RULES.md").read_text(encoding="utf-8") == "seed")
+            check("...and every file it changed was backed up",
+                  bool(list(_atmp.glob("*.bak-update-TESTSTAMP"))), "no backup")
+        finally:
+            fb.BASE_DIR = _ab
+            shutil.rmtree(_atmp, ignore_errors=True)
+            shutil.rmtree(_pkg, ignore_errors=True)
+
         # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,
         # while a "same_as live" (or unreadable) declaration must hold it off - the
