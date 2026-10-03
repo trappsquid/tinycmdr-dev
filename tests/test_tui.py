@@ -327,22 +327,35 @@ _app = fb.AppScreen(colour=True, tier="truecolor")
 _title = "".join(part for _, part in _app._frame_title().__pt_formatted_text__())
 
 
-def _rail_for(used, budget):
+def _rail_for(used, budget, window=None, static=0):
     _saved_stats, _saved_budget = fb.AGENT.stats, fb.AGENT._context_budget
+    _saved_env = fb.AGENT.cached_envelope
     try:
         fb.AGENT.stats = lambda key: {"exchanges": 2 if used else 0, "est_tokens": used}
         fb.AGENT._context_budget = lambda: budget
+        # The CONTEXT block divides by the WINDOW, not the messages budget (operator
+        # report, 2026-10-03); default keeps the old calls meaning what they did.
+        fb.AGENT.cached_envelope = lambda: {"window": window or budget, "static": static}
         return "".join(part for _, part in
                        fb.AppScreen(colour=True, tier="truecolor")
                        ._sidebar_text().__pt_formatted_text__())
     finally:
         fb.AGENT.stats = _saved_stats
         fb.AGENT._context_budget = _saved_budget
+        fb.AGENT.cached_envelope = _saved_env
 
 
 _rail = _rail_for(4096, 8192)
 _bar = next((l.strip() for l in _rail.splitlines() if "\u2588" in l or "\u2591" in l), "")
 _bar_w = max(6, _app.RAIL_WIDTH - 8)
+_rail_window = _rail_for(4096, 8192, window=16384, static=4096)
+check("--app's context gauge divides by the model's WINDOW, not the messages budget",
+      "8.2K / 16.4K" in _rail_window and "50%" in _rail_window, _rail_window[:200])
+_rail_braille = [i for i, l in enumerate(_rail.splitlines())
+                 if any(0x2800 <= ord(c) <= 0x28FF for c in l)]
+check("--app captions the rail art with the product name",
+      _rail_braille and "tinycmdr" in _rail.splitlines()[max(_rail_braille) + 1],
+      _rail.splitlines()[max(_rail_braille):max(_rail_braille) + 2])
 check("--app draws a window title with the session in it",
       "tinycmdr" in _title and "cli" in _title, _title)
 check("--app draws a rail with a live context gauge",
@@ -462,7 +475,7 @@ check("...and every cell is a hex colour plus a braille glyph",
       [cell for row in _art_cells for cell in row if cell][:3])
 check("...with the accepted dot counts (the designer's render)",
       [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c)
-       for row in _art_cells] == [55, 109, 104, 93, 102, 92, 89, 73, 19],
+       for row in _art_cells] == [74, 117, 90, 98, 99, 69, 52, 7, 19],
       [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c) for row in _art_cells])
 
 # P-03: the done line and the rail read ONE counter (the run accumulator).

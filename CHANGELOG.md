@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.58] - 2026-10-03
+
+Fixed
+- **The `--app` rail's CONTEXT gauge divided by the messages budget, not the model's
+  window.** A 1M model (1048.6K window) read `used / 1028.0K`, because the budget is
+  `window - static - reply` - so a full window could never read 100% (operator
+  report). The gauge now divides by the window and counts the static prompt in what
+  is occupied, which is what the next request actually carries; the messages budget
+  stays where it belongs, in `status` and the banner.
+- **The rail's brand art was cut off at the bottom.** The crop it was rendered from
+  stopped at y=850 while the badge's content reaches y=939 (measured at
+  `max(rgb)>=45`), so the emblem's lower ~90px were discarded. Re-rendered from the
+  master with the designer's framing extended to the content box, and the art block
+  is captioned `tinycmdr` underneath. `maintenance/make-brand-art.py` refuses to
+  overwrite the shipped designer render without `--force`.
+
 ## [1.0.57] - 2026-10-03
 
 Added

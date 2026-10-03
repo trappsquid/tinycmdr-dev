@@ -1066,7 +1066,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.57"
+VERSION = "1.0.58"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -19363,9 +19363,16 @@ class AppScreen(TuiScreen):
 
         try:
             s = AGENT.stats(_cli_key())
-            budget = AGENT._context_budget()
+            env = AGENT.cached_envelope() or AGENT._envelope(_cli_key())
             used = s["est_tokens"]
-            pct = min(100, 100 * used // max(1, budget))
+            # The WINDOW, not the messages budget. "CONTEXT" reads as "how full is the
+            # model's window", and the budget (window - static - reply) understated it:
+            # a 1M model drew "used / 1028.0K" against a 1048.6K window, so a full window
+            # could never reach 100% (operator report, 2026-10-03). Occupancy is what the
+            # next request carries: the static prompt plus the conversation.
+            window = int(env.get("window") or 0) or AGENT._context_budget()
+            occupied = min(window, used + int(env.get("static") or 0))
+            pct = min(100, 100 * occupied // max(1, window))
             bar_w = max(6, self.RAIL_WIDTH - 8)
             filled = int(bar_w * pct / 100)
             bar = "\u2588" * filled + "\u2591" * (bar_w - filled)
@@ -19374,7 +19381,7 @@ class AppScreen(TuiScreen):
             value("%d exchange(s)" % s["exchanges"])
             title()
             title("CONTEXT")
-            value("%s / %s" % (fmt_tokens(used), fmt_tokens(budget)))
+            value("%s / %s" % (fmt_tokens(occupied), fmt_tokens(window)))
             value("%s %d%%" % (bar, pct))
             u = AGENT.last_usage.get(_cli_key()) or {}
             title()
@@ -19447,6 +19454,14 @@ class AppScreen(TuiScreen):
                               "".join(cell[1] if cell else " " for cell in row)))
             spans.append(("class:app.rail.value", "\n"))
             rows.append(spans)
+        # The name under the mark: the art is a logo, and an unlabelled glyph panel in a
+        # rail reads as a stray block (operator, 2026-10-03: "we also have room to write
+        # tiny cmdr underneath").
+        _cap = "tinycmdr"
+        _pad = max(0, (len(cells[0]) - len(_cap)) // 2)
+        rows.append([("class:app.rail.value", " " + " " * _pad),
+                     ("class:app.rail.title", _cap),
+                     ("class:app.rail.value", "\n")])
         return rows
 
     def _status_text(self):

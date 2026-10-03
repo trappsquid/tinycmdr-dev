@@ -25,7 +25,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "assets" / "branding" / "tinycmdr-badge-master.png"
 ART = ROOT / "assets" / "tui-rail-badge.json"
-CROP = (225, 80, 900, 850)          # left, upper, right, lower - the designer's box
+# left, upper, right, lower: the designer's framing with the bottom EXTENDED. Their
+# original box stopped at y=850 while the badge's content reaches y=939, so the emblem's
+# bottom was cut off in the rail (operator report, 2026-10-03). Measured content box at
+# max(rgb)>=45: x 58..912, y 5..939 - the sides and top of their framing are kept, because
+# a box on the whole content box includes the plate's glow and shrinks the emblem.
+CROP = (225, 80, 900, 940)
 COLS, ROWS = 24, 9                  # the app rail's budget (RAIL_WIDTH is 26)
 
 
@@ -185,7 +190,10 @@ def artifact():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--write", action="store_true", help="rewrite the artifact")
+    ap.add_argument("--write", action="store_true",
+                    help="rewrite the artifact (refused while one ships: needs --force)")
+    ap.add_argument("--force", action="store_true",
+                    help="really replace the shipped artifact with this fallback render")
     ap.add_argument("--ansi", action="store_true", help="print the colour version")
     ap.add_argument("--master", help="another master under assets/branding/ (or a path)")
     ap.add_argument("--crop", help="left,upper,right,lower (default: the badge's)")
@@ -211,6 +219,13 @@ def main():
         dots = [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c) for row in art["cells"]]
         print("dots per row: %s" % dots, file=sys.stderr)
     if a.write:
+        if ART.exists() and not a.force:
+            # The shipped artifact is the designer's render: LANCZOS keeps faint lower-edge
+            # detail this box filter drops. Overwriting it must be deliberate.
+            print("refusing to overwrite %s (the designer's render) - pass --force to "
+                  "replace it with this dependency-free fallback" % ART.relative_to(ROOT),
+                  file=sys.stderr)
+            return 1
         ART.write_text(json.dumps(art, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
         print("wrote %s" % ART.relative_to(ROOT))
     if not a.write and not a.ansi:
