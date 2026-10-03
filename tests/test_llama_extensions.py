@@ -521,6 +521,83 @@ def main():
     check("the non-llama.cpp fallback was NOT",
           len(seen) > 1 and "return_progress" not in seen[1][1], seen[1:2])
 
+    # ---- reasoning effort: three wire shapes (omp's catalog is the evidence) ---------
+    # Auto sends nothing; an OpenAI-compatible endpoint takes reasoning_effort; /responses
+    # takes reasoning.effort; an Anthropic-style endpoint takes a thinking BUDGET, with a
+    # per-level table, a per-level override and a per-level wire remap.
+    _saved_r = {k: fb.CONFIG["llm"].get(k) for k in
+                ("reasoning", "reasoning_mode", "reasoning_wire", "thinking_budgets")}
+    try:
+        fb.CONFIG["llm"]["reasoning"] = "auto"
+        fb.CONFIG["llm"]["reasoning_mode"] = "auto"
+        fb.CONFIG["llm"]["reasoning_wire"] = {}
+        fb.CONFIG["llm"]["thinking_budgets"] = {}
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "main")
+        check("reasoning: auto sends no field at all", _p == {}, _p)
+        fb.CONFIG["llm"]["reasoning"] = "high"
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "main")
+        check("an OpenAI-compatible endpoint gets reasoning_effort",
+              _p == {"reasoning_effort": "high"}, _p)
+        _p = {}
+        fb.apply_reasoning(_p, "https://api.openai.com/v1/responses", "main")
+        check("a /responses endpoint gets reasoning.effort",
+              _p == {"reasoning": {"effort": "high"}}, _p)
+        _p = {}
+        fb.apply_reasoning(_p, "https://api.anthropic.com/v1", "main")
+        check("an Anthropic-style endpoint gets a thinking budget",
+              _p == {"thinking": {"type": "enabled", "budget_tokens": 10000}}, _p)
+        fb.CONFIG["llm"]["reasoning"] = "max"
+        _p = {}
+        fb.apply_reasoning(_p, "https://api.anthropic.com/v1", "main")
+        check("...and the budget follows the level",
+              _p.get("thinking", {}).get("budget_tokens") == 64000, _p)
+        fb.CONFIG["llm"]["thinking_budgets"] = {"max": 1234}
+        _p = {}
+        fb.apply_reasoning(_p, "https://api.anthropic.com/v1", "main")
+        check("...and a per-level override wins over the table",
+              _p.get("thinking", {}).get("budget_tokens") == 1234, _p)
+        fb.CONFIG["llm"]["thinking_budgets"] = {}
+        fb.CONFIG["llm"]["reasoning_wire"] = {"max": "xhigh"}
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "main")
+        check("a provider's own spelling is honoured (omp's reasoningEffortMap)",
+              _p == {"reasoning_effort": "xhigh"}, _p)
+        fb.CONFIG["llm"]["reasoning"] = "off"
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "main")
+        check("off sends nothing to an effort endpoint", _p == {}, _p)
+        _p = {}
+        fb.apply_reasoning(_p, "https://api.anthropic.com/v1", "main")
+        check("...and disables thinking where that shape supports it",
+              _p == {"thinking": {"type": "disabled"}}, _p)
+        fb.CONFIG["llm"]["reasoning"] = "junk"
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "main")
+        check("a level nobody knows sends nothing", _p == {}, _p)
+        fb.CONFIG["llm"]["reasoning"] = "auto"
+        fb.AGENT.reasoning_overrides = {"reasoning-sess": "low"}
+        check("a /reasoning session override wins over the config",
+              fb.reasoning_level("reasoning-sess") == "low",
+              fb.reasoning_level("reasoning-sess"))
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "reasoning-sess")
+        check("...and shapes that conversation's payload",
+              _p == {"reasoning_effort": "low"}, _p)
+        fb.CONFIG["llm"]["reasoning_mode"] = "budget"
+        _p = {}
+        fb.apply_reasoning(_p, "http://127.0.0.1:8081/v1", "reasoning-sess")
+        check("llm.reasoning_mode forces a shape regardless of the URL",
+              _p == {"thinking": {"type": "enabled", "budget_tokens": 1000}}, _p)
+    finally:
+        fb.AGENT.reasoning_overrides = {}
+        for k, v in _saved_r.items():
+            if v is None:
+                fb.CONFIG["llm"].pop(k, None)
+            else:
+                fb.CONFIG["llm"][k] = v
+
     print()
     if FAILURES:
         print("%d FAILED: %s" % (len(FAILURES), ", ".join(FAILURES)))

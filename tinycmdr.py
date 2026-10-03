@@ -199,6 +199,12 @@ DEFAULT_CONFIG = {
         # and the served window wins, and the log names both when they disagree. An endpoint
         # that reports no window leaves "auto" at a conservative 8000, which the log says.
         "max_context_tokens": "auto",
+        # Reasoning effort: auto sends nothing, or minimal/low/medium/high/xhigh/max (see
+        # apply_reasoning for the three wire shapes) | off to disable where supported.
+        "reasoning": "auto",
+        "reasoning_mode": "auto",     # auto | effort | responses | budget
+        "reasoning_wire": {},         # per-level remap for a provider's own spelling
+        "thinking_budgets": {},       # per-level budget override for the budget shape
         # What the model's WINDOW is, when a local server will not say (see
         # _context_window_override). A number pins it; "auto" asks the endpoint.
         "context_window": "auto",
@@ -1076,7 +1082,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.60"
+VERSION = "1.0.61"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -13786,6 +13792,75 @@ def dump_payload(payload, label="chat", note=""):
         log.warning("payload dump failed (%s): %r", d, exc)
 
 
+# Reasoning effort, as the APIs expose it. The levels are omp's catalog's (minimal, low,
+# medium, high, xhigh, max) and so is the shape of the problem: an OpenAI-compatible
+# /chat/completions takes `reasoning_effort`, the /responses API takes
+# `reasoning: {effort}`, and an Anthropic-style endpoint takes a token BUDGET through
+# `thinking: {type: enabled, budget_tokens}` - with per-model overrides for both. `auto`
+# sends nothing at all, which is the only honest default: a server that was never asked
+# for a level keeps whatever its own default is.
+REASONING_LEVELS = ("minimal", "low", "medium", "high", "xhigh", "max")
+# Budgets for the endpoints that take a number: omp's defaults where it has them
+# (minimal/low 1000, medium 4000, high 10000), extended on the same curve.
+REASONING_BUDGETS = {"minimal": 1000, "low": 1000, "medium": 4000,
+                     "high": 10000, "xhigh": 32000, "max": 64000}
+REASONING_OFF = ("off", "none", "disabled", "disable", "false", "no")
+
+
+def reasoning_level(model=None):
+    """The level in force: a per-model override, else llm.reasoning, else auto."""
+    over = getattr(AGENT, "reasoning_overrides", None) or {}
+    if model and str(model) in over:
+        return str(over[str(model)]).strip().lower()
+    return str(CONFIG["llm"].get("reasoning") or "auto").strip().lower()
+
+
+def apply_reasoning(payload, url=None, model=None):
+    """Put the requested reasoning level on the wire in THIS endpoint's shape.
+
+    One place, three shapes (omp's catalog is the evidence, 2026-10-03): `effort` for an
+    OpenAI-compatible endpoint, `responses` for /responses, `budget` for an
+    Anthropic-style one. `llm.reasoning_mode` forces a shape (`auto` decides from the
+    URL); `llm.reasoning_wire` remaps a level for a provider that spells them differently
+    (omp's reasoningEffortMap). An unknown level is named in the log and otherwise
+    ignored - guessing a level for a model is worse than sending none.
+    """
+    level = reasoning_level(model)
+    mode = str(CONFIG["llm"].get("reasoning_mode") or "auto").strip().lower()
+    if mode not in ("effort", "responses", "budget"):
+        if "/responses" in str(url or ""):
+            mode = "responses"
+        elif "anthropic" in str(url or "").lower():
+            mode = "budget"
+        else:
+            mode = "effort"
+    if level in ("", "auto"):
+        return
+    if level in REASONING_OFF:
+        if mode == "budget":
+            payload["thinking"] = {"type": "disabled"}
+        return
+    if level not in REASONING_LEVELS:
+        log.warning("llm.reasoning is %r, not one of %s (or auto/off) - sending nothing",
+                    level, "/".join(REASONING_LEVELS))
+        return
+    wire_map = CONFIG["llm"].get("reasoning_wire") or {}
+    wire = str(wire_map.get(level) or level) if isinstance(wire_map, dict) else level
+    if mode == "responses":
+        payload["reasoning"] = {"effort": wire}
+    elif mode == "budget":
+        budgets = CONFIG["llm"].get("thinking_budgets") or {}
+        try:
+            budget = int((budgets.get(level) if isinstance(budgets, dict) else None)
+                         or REASONING_BUDGETS.get(level) or 0)
+        except (TypeError, ValueError):
+            budget = 0
+        if budget > 0:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    else:
+        payload["reasoning_effort"] = wire
+
+
 def apply_sampling(payload):
     """Strip sampling parameters from a request; never add any.
 
@@ -14037,6 +14112,9 @@ class Agent:
         # a restart doesn't silently drop every conversation back to the
         # config default
         self.model_overrides = dict(_state().get("model_overrides") or {})
+        # session_key -> reasoning level (via /reasoning), persisted the same way: a
+        # restart must not silently drop a conversation back to `auto`.
+        self.reasoning_overrides = dict(_state().get("reasoning_overrides") or {})
         self.last_usage = {}         # session_key -> token/time stats of last run
         self.live_usage = {}         # session_key -> stats of the run IN PROGRESS
         self.llm_url = CONFIG["llm"]["base_url"].rstrip("/") + "/chat/completions"
@@ -14888,6 +14966,7 @@ class Agent:
                 "messages": messages,
             }
             apply_sampling(payload)
+            apply_reasoning(payload, url, ep_model)
             if use_tools:
                 # Disclosure decides what is SENT, not what exists: the registry still
                 # holds every tool, so a call for a hidden one is executed and revealed.
@@ -17055,16 +17134,25 @@ def _save_overrides(replace=False):
     mine = {k: v for k, v in AGENT.model_overrides.items()
             if not k.startswith(derived)}
     touched = set(getattr(AGENT.model_overrides, "touched", None) or ())
+    mine_r = {k: v for k, v in (getattr(AGENT, "reasoning_overrides", None) or {}).items()
+              if not k.startswith(derived)}
+    touched_r = set(getattr(getattr(AGENT, "reasoning_overrides", None), "touched", ()) or ())
 
     def merge(st):
         if replace:
             st["model_overrides"] = {}
+            st["reasoning_overrides"] = {}
             return
         disk = {k: v for k, v in (st.get("model_overrides") or {}).items()
                 if not k.startswith(derived)}
         merged = {k: v for k, v in disk.items() if k not in touched}
         merged.update(mine)          # this process's own keys win
         st["model_overrides"] = merged
+        disk_r = {k: v for k, v in (st.get("reasoning_overrides") or {}).items()
+                  if not k.startswith(derived)}
+        merged_r = {k: v for k, v in disk_r.items() if k not in touched_r}
+        merged_r.update(mine_r)
+        st["reasoning_overrides"] = merged_r
 
     try:
         _state(merge)
@@ -19827,6 +19915,9 @@ class AppScreen(TuiScreen):
             title()
             title("MODEL")
             value(CONFIG["llm"]["model"])
+            _level = reasoning_level(_cli_key())
+            if _level not in ("", "auto"):
+                value("reasoning: %s" % _level)
             title()
             title("KEYS")
             value("\u2191\u2193 PgUp/PgDn  scroll")
@@ -21478,6 +21569,51 @@ class MattermostDispatcher:
                 self._post(channel_id, post_root,
                            f"⏸️ Paused ({self.paused}). New tasks will be "
                            "held — `/pause off` to resume.")
+            return
+        if low == "/reasoning" or low.startswith("/reasoning "):
+            arg = stripped.split(maxsplit=1)[1].strip().lower() if " " in stripped else ""
+            over = AGENT.reasoning_overrides
+            cur = over.get(session_key) or CONFIG["llm"].get("reasoning") or "auto"
+            if arg in ("", "?", "status"):
+                self._post(channel_id, post_root,
+                           "\U0001f9e0 Reasoning effort: **%s** (this conversation; "
+                           "config default %s).\nUsage: `/reasoning <auto|off|%s>` - "
+                           "`auto` sends no reasoning field at all, `off` disables it "
+                           "where the endpoint supports that."
+                           % (cur, CONFIG["llm"].get("reasoning") or "auto",
+                              "|".join(REASONING_LEVELS)))
+            elif arg == "auto":
+                over.pop(session_key, None)
+                try:
+                    over.touched.add(session_key)
+                except Exception:
+                    pass
+                _save_overrides()
+                self._post(channel_id, post_root,
+                           "\U0001f9e0 Reasoning effort back to auto (no field sent).")
+            elif arg in REASONING_LEVELS or arg == "off":
+                over[session_key] = arg
+                try:
+                    over.touched.add(session_key)
+                except Exception:
+                    pass
+                _save_overrides()
+                wire = {"effort": "reasoning_effort",
+                        "responses": "reasoning.effort",
+                        "budget": "thinking.budget_tokens"}[
+                            str(CONFIG["llm"].get("reasoning_mode") or "auto")
+                            if str(CONFIG["llm"].get("reasoning_mode") or "auto")
+                            in ("effort", "responses", "budget")
+                            else ("responses" if "/responses" in str(self.llm_url or "")
+                                  else "budget" if "anthropic" in str(self.llm_url or "").lower()
+                                  else "effort")]
+                self._post(channel_id, post_root,
+                           "\U0001f9e0 Reasoning effort for this conversation: **%s** "
+                           "(sent as `%s`)." % (arg, wire))
+            else:
+                self._post(channel_id, post_root,
+                           "\U0001f9e0 Unknown level %r - use auto, off, or one of: %s."
+                           % (arg, ", ".join(REASONING_LEVELS)))
             return
         if low == "/plan" or low.startswith("/plan "):
             arg = stripped.split(maxsplit=1)[1].strip().lower() if " " in stripped else ""
@@ -25314,7 +25450,7 @@ def user_is_allowed(sender, user_id):
 #     re-implementing the kill/launch dance, because that dance is where two bots
 #     on one token came from.
 
-VERBS = ("status", "doctor", "health", "model", "config", "setup", "logs", "proc",
+VERBS = ("status", "doctor", "health", "model", "reasoning", "config", "setup", "logs", "proc",
          "restart", "update", "clean", "token", "version", "run", "help", "failures",
          "approvals")
 
@@ -26042,6 +26178,35 @@ def _verb_proc():
     if len(rows) > 12:
         print("  ... %d more" % (len(rows) - 12))
     return 0
+
+
+def _verb_reasoning(rest):
+    """`reasoning [auto|off|minimal|low|medium|high|xhigh|max]` - what the box asks for.
+
+    The operator's door to llm.reasoning. With no argument it prints the level in force and
+    the shape the endpoint will receive it in (apply_reasoning decides that from the URL or
+    llm.reasoning_mode); with one it writes config.json through the same path `config set`
+    uses, so the read-back and the file format are the ones already graded.
+    """
+    want = (rest[0].strip().lower() if rest else "")
+    if not want:
+        level = str(CONFIG["llm"].get("reasoning") or "auto")
+        mode = str(CONFIG["llm"].get("reasoning_mode") or "auto").lower()
+        if mode not in ("effort", "responses", "budget"):
+            url = str(CONFIG["llm"].get("base_url") or "").lower()
+            mode = ("responses" if "/responses" in url
+                    else "budget" if "anthropic" in url else "effort")
+        wire = {"effort": "reasoning_effort", "responses": "reasoning.effort",
+                "budget": "thinking.budget_tokens"}[mode]
+        print("reasoning: %s (sent as `%s`)%s"
+              % (level, wire, "" if level != "auto" else " - no field is sent at all"))
+        print("levels: auto, off, %s" % ", ".join(REASONING_LEVELS))
+        return 0
+    if want not in REASONING_LEVELS + ("auto", "off"):
+        print("unknown level %r - use auto, off, or one of: %s"
+              % (want, ", ".join(REASONING_LEVELS)), file=sys.stderr)
+        return 2
+    return _verb_config(["set", "llm.reasoning", want])
 
 
 def _verb_config(rest):
@@ -27825,6 +27990,8 @@ def run_verb(argv):
         return _verb_clean(rest)
     if verb == "model":
         return _verb_model(rest)
+    if verb == "reasoning":
+        return _verb_reasoning(rest)
     if verb == "logs":
         return _verb_logs(rest)
     if verb == "restart":

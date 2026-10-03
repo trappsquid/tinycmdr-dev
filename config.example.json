@@ -105,7 +105,12 @@
         "tool_output_max_chars": 8000,
         "fetch_max_chars": 8000
       }
-    }
+    },
+    "_comment_reasoning": "reasoning: auto sends no reasoning field at all, which is the honest default - a server keeps its own. A level (minimal, low, medium, high, xhigh, max) asks for it in whatever shape the endpoint takes: reasoning_effort for an OpenAI-compatible /chat/completions, reasoning.effort for /responses, thinking.budget_tokens for an Anthropic-style endpoint (see llm.reasoning_mode to force a shape, llm.reasoning_wire to remap a level's spelling, llm.thinking_budgets to override the token table).",
+    "reasoning": "auto",
+    "reasoning_mode": "auto",
+    "reasoning_wire": {},
+    "thinking_budgets": {}
   },
   "telegram": {
     "_comment": "The third door: a Telegram DM. OFF unless you set TINYCMDR_TG_TOKEN in .env - the token is ENV-ONLY, so one pasted at 'token' below is ignored (and logged as ignored), because .env is the one place the agent cannot read into a prompt. allowed_users takes NUMERIC Telegram ids (message @userinfobot for yours) and is deny-by-default: an empty list starts the process, refuses, and says the id is missing. Mattermost WINS when both doors have a token, so this lane never starts on a Mattermost bot - run `python tinycmdr.py --telegram` for a Telegram-only process. DM only: a group message is refused. It shares the same sessions, notes, tasks and skills as every other door.",

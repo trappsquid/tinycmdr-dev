@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.61] - 2026-10-03
+
+Added
+- **Reasoning effort, in the shape each endpoint understands.** Levels: `auto` (the
+  default - no field is sent at all), `off`, and `minimal`/`low`/`medium`/`high`/`xhigh`/
+  `max`. The wire shape follows the endpoint (the field names and the level set come from
+  omp's own catalog, read out of its binary): an OpenAI-compatible `/chat/completions`
+  gets `reasoning_effort`; a `/responses` endpoint gets `reasoning: {effort}`; an
+  Anthropic-style one gets `thinking: {type: enabled, budget_tokens}` with a per-level
+  table (minimal/low 1000, medium 4000, high 10000, xhigh 32000, max 64000).
+  `llm.reasoning_mode` forces a shape, `llm.reasoning_wire` remaps a level's spelling for
+  a provider that names them differently, `llm.thinking_budgets` overrides the token
+  table per level, and an unknown level sends nothing and says so in the log.
+  Choose it with `tinycmdr reasoning <level>` (writes config.json with the usual read-back)
+  or `/reasoning <level>` in a chat lane (that conversation only, persisted like
+  `/model`); the `--app` rail shows the level under MODEL when it is not `auto`.
+  Verified against a live llama.cpp box: a request carrying `reasoning_effort: high` came
+  back with a `reasoning_content` block, so the server honours the field.
+
 ## [1.0.60] - 2026-10-03
 
 Added
