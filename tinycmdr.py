@@ -12328,6 +12328,59 @@ def _read_supersede_key(path):
         return os.path.normcase(text)
 
 
+# What this run has read and changed, per session. The elision marker carries the ledger
+# (cumulative, deduped by path, capped), because a list of dropped CALLS cannot express
+# run state: omp renders the same idea as a <files> block with (Read)/(Write)/(RW) markers
+# (docs/compaction.md "File-operation context in summaries"). Measured here 2026-09-29: a
+# run compacted mid-rewrite and the next calls re-derived the task from session files.
+_TOUCHED = {}                     # session key -> {realpath: "R"|"W"|"RW"}
+_TOUCHED_LOCK = threading.Lock()
+_TOUCHED_MAX = 20
+_READ_TOOLS = ("read_file", "search_files", "skill", "list_tools", "find_tools")
+_WRITE_TOOLS = ("write_file", "edit_file", "create_tool")
+
+
+def _touch_files(key, name, args):
+    """Record one successful call against the run's file ledger. Never raises."""
+    if not key or not isinstance(args, dict):
+        return
+    path = args.get("path") or args.get("file")
+    if not path:
+        return
+    if name in _READ_TOOLS:
+        kind = "R"
+    elif name in _WRITE_TOOLS:
+        kind = "W"
+    else:
+        return
+    k = _read_supersede_key(path) or str(path)
+    with _TOUCHED_LOCK:
+        book = _TOUCHED.setdefault(key, {})
+        prev = book.get(k, "")
+        book[k] = "RW" if prev and prev != kind else kind
+        while len(book) > _TOUCHED_MAX:
+            book.pop(next(iter(book)))
+
+
+def _files_ledger(key, cap=_TOUCHED_MAX):
+    """The ledger as ~20 lines: 'dir/ name (R), name (W)', sorted by path."""
+    book = _TOUCHED.get(key)
+    if not book:
+        return ""
+    rows = sorted(book.items())[:cap]
+    groups = []
+    for path, mark in rows:
+        parent, name = os.path.dirname(path), os.path.basename(path)
+        if groups and groups[-1][0] == parent:
+            groups[-1][1].append("%s (%s)" % (name, mark))
+        else:
+            groups.append((parent, ["%s (%s)" % (name, mark)]))
+    out = ["%s/ %s" % (parent, ", ".join(names)) for parent, names in groups]
+    if len(book) > len(rows):
+        out.append("... +%d more file(s)" % (len(book) - len(rows)))
+    return "\n".join(out)
+
+
 def _short_args(raw, limit=60):
     """A one-line hint of what a tool call was doing: the command, path, query or task.
 
@@ -13121,7 +13174,7 @@ class Agent:
         """
         return int(self._envelope(session_key, endpoint)["budget"])
 
-    def _elision_note(self, base, dropped, prev=""):
+    def _elision_note(self, base, dropped, prev="", key=None):
         """`base`, plus a bounded one-line note per call the cut just removed.
 
         A bare marker told the model that something had vanished, not what - so a live run
@@ -13137,6 +13190,10 @@ class Agent:
         keep = ""
         if str(prev).startswith(base):
             keep = str(prev)[len(base):].strip("\n")
+            # The ledger is rebuilt from live state, never carried as text: carrying it
+            # would stack one copy per compaction.
+            if "[files touched this run]" in keep:
+                keep = keep.split("[files touched this run]")[0].rstrip()
         lines = []
         for m in dropped:
             if not isinstance(m, dict):
@@ -13156,15 +13213,33 @@ class Agent:
                 # a state/elision block is not something to summarise
                 if txt and not txt.startswith("["):
                     lines.append("- operator: %s" % txt)
-        if not lines and not keep:
+        ledger = _files_ledger(key) if key else ""
+        transcript = ""
+        if key:
+            try:
+                tp = SESSIONS_DIR / (re.sub(r"[^A-Za-z0-9_.-]", "_", str(key))
+                                     + ".transcript.jsonl")
+                if tp.exists():
+                    transcript = ("[harness: the dropped messages were written to %s "
+                                  "before they were removed - read_file or search_files "
+                                  "that file instead of re-deriving work that is already "
+                                  "done.]" % tp)
+            except Exception:              # noqa: BLE001 - a note is never worth a run
+                transcript = ""
+        if not lines and not keep and not ledger and not transcript:
             return base
         merged = [ln for ln in keep.splitlines() if ln.strip()] + lines
+        if ledger:
+            merged.append("[files touched this run]\n" + ledger)
+        if transcript:
+            merged.append(transcript)
         note = "\n".join(merged[-ELISION_NOTES_MAX:])
         if len(note) > ELISION_NOTES_CHARS:
+            # Keep the TAIL: the freshest call lines and the ledger/transcript live there.
             note = note[-ELISION_NOTES_CHARS:]
         return base + "\n" + note
 
-    def _drop_oldest_block(self, messages, marker):
+    def _drop_oldest_block(self, messages, marker, key=None):
         """Delete the oldest whole exchange, leaving `marker` (plus what it covered) behind.
 
         Returns None when there is no whole exchange left to drop; otherwise the NET
@@ -13204,7 +13279,7 @@ class Agent:
         dropped_tokens = sum(est_tokens(json.dumps(m)) for m in dropped)
         prev = str(messages[1].get("content") or "") if start != 1 else ""
         del messages[start:cut]
-        note = self._elision_note(marker, dropped, prev)
+        note = self._elision_note(marker, dropped, prev, key)
         if start == 1:
             messages.insert(1, {"role": "user", "content": note})
         else:
@@ -13372,7 +13447,7 @@ class Agent:
         # the newest exchange is left.
         total = self._conversation_token_est(messages)
         while total > low:
-            removed = self._drop_oldest_block(messages, MARK_COMPACT)
+            removed = self._drop_oldest_block(messages, MARK_COMPACT, key)
             if removed is None:
                 break
             total -= removed
@@ -13391,9 +13466,12 @@ class Agent:
         clip any remaining tool output. Never leaves an orphan tool message: the
         cut always lands on a user-message boundary."""
         target = max(2000, int(self._context_budget(key, endpoint) * 0.5))
+        # The overflow path drops the most context of all, and it used to be the one path
+        # that kept no copy: what it evicted was gone for good.
+        self._save_transcript(key, messages, "force_shrink")
         total = self._conversation_token_est(messages)
         while len(messages) > 4 and total > target:
-            removed = self._drop_oldest_block(messages, MARK_SHRINK)
+            removed = self._drop_oldest_block(messages, MARK_SHRINK, key)
             if removed is None:
                 break
             total -= removed
@@ -13425,7 +13503,7 @@ class Agent:
         low = max(2000, int(budget * 0.6))
         total = self._conversation_token_est(messages)
         while total > low:
-            removed = self._drop_oldest_block(messages, MARK_SHRINK)
+            removed = self._drop_oldest_block(messages, MARK_SHRINK, key)
             if removed is None:
                 break
             total -= removed
@@ -14098,6 +14176,8 @@ class Agent:
         # AFTER the record: a hint guides THIS turn, it is not a fact about the box,
         # and the stored result is what a later run may carry forward.
         out += result_hint(name, args, out, (ctx or {}).get("session_key"))
+        if not failed_output(out):
+            _touch_files(ctx.get("session_key") if ctx else None, name, args)
         return name, args, out
 
     def run(self, session_key, user_text, rich_content=None, progress_cb=None,
