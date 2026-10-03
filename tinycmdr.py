@@ -138,7 +138,7 @@ class _NoBlankRecords(logging.Filter):
 
     mattermostautodriver calls `log.error(message)` with the API's `message` field, which
     is EMPTY for a refused token: the operator's log got bare `ERROR ` lines beside the
-    400 - the only trail a bad token ever left ([redacted], 2026-10-02)."""
+    400 - the only trail a bad token ever left (the fleet Windows box, 2026-10-02)."""
 
     def filter(self, record):
         try:
@@ -4365,7 +4365,7 @@ def _kill_tree(proc):
 _MAX_CAPTURE_BYTES = 8 * 1024 * 1024
 
 
-def _read_capped(path, limit=None, from_end=False):
+def _read_capped(path, limit=None, from_end=False, strict=False):
     """Read at most `limit` bytes of a captured stream or file, plus a note when cut.
 
     Unbounded read_text() here broke run_capture's own promise that a command cannot
@@ -4388,7 +4388,16 @@ def _read_capped(path, limit=None, from_end=False):
                 fh.seek(size - limit)
             blob = fh.read(limit)
     except OSError:
-        return "", False
+        # The contract is a 3-tuple. Returning a 2-tuple here crashed every UNREADABLE
+        # read with a Python unpack error instead of naming the cause: a Windows drive
+        # against a file held open with a deny-all share mode got
+        # "ERROR reading <path>: not enough values to unpack (expected 3, got 2)"
+        # (report H-1, 2026-10-02). `strict` re-raises so read_file can say what really
+        # happened ("being used by another process", "permission denied"); run_capture
+        # keeps the quiet empty result for its own temp capture files.
+        if strict:
+            raise
+        return "", False, ""
     truncated = size > len(blob)
     text = blob.decode("utf-8", errors="replace")
     note = ""
@@ -4620,6 +4629,33 @@ def _launch_warning(command, cap_mb=None):
             f"joins my cgroup — capped at {cap / 1024:.0f} GiB — and a model load there "
             f"kills me, not just the server. Start it in its own unit instead: "
             f"`sudo systemd-run --unit=<name> --collect <cmd>`.]")
+
+
+_START_PROCESS_RX = re.compile(r"(?i)\bstart-process\b")
+_WAITS_ON_CHILD_RX = re.compile(r"(?i)(^|\s)-wait\b|\|\s*(wait|receive)\b")
+
+
+def _start_process_warning(command):
+    """A child started with Start-Process outlives the harness unless something waits.
+
+    Measured on the fleet's Windows box, 2026-10-02 (report H-10): `Start-Process cmd -ArgumentList ...`
+    then killing the cmd left the grandchild python.exe alive with a dead parent; the
+    `process` tool's own kill DOES take the tree, and shell's timeout kills the tree too -
+    so the leak belongs to the ad-hoc door, and the fix is to name the managed one.
+    Windows only, and only when nothing in the command waits on the child.
+    """
+    if not IS_WINDOWS or not command:
+        return ""
+    text = str(command)
+    if not _START_PROCESS_RX.search(text) or _WAITS_ON_CHILD_RX.search(text):
+        return ""
+    return ("\n[HARNESS: `Start-Process` without `-Wait` leaves that child running after "
+            "this call returns - and after the harness stops; killing the parent does not "
+            "kill it (measured on this box). Use the `process` tool "
+            "(start/status/output/kill), whose kill takes the whole tree, or add `-Wait` "
+            "when you mean to block on it.]")
+
+
 def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     """Run argv, capture output, and never block past the timeout.
     stdin_text (when given) arrives on the child's stdin from a TEMP FILE, not
@@ -5661,6 +5697,15 @@ def tool_shell(args, ctx):
     if blocked:
         return _blocked_answer(blocked)
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
+    if IS_WINDOWS:
+        # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the
+        # report's box) while _read_capped decodes UTF-8, so `echo ✓ 日本語` came back as
+        # `?? ???` (report H-6, reproduced on the fleet's Windows box, 2026-10-02). The lever is the
+        # CONSOLE's output encoding - a `chcp 65001` in the child, which the report tried,
+        # does not change what .NET writes to a redirected stream. This is the shell half of
+        # H-6; execute_code gets UTF-8 from its own `-X utf8` launch.
+        shell_cmd = ("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; "
+                     "$OutputEncoding = [Console]::OutputEncoding; " + shell_cmd)
     if IS_WINDOWS and CONFIG["agent"].get("shell_strict_mode"):
         # Opt-in (agent.shell_strict_mode): makes a property that does not exist an error
         # instead of a silent $null. Measured before it was offered, not after.
@@ -5701,6 +5746,7 @@ def tool_shell(args, ctx):
                     f"would freeze this channel). Partial output:\n{out}")
         return (f"exit_code={rc}\n{out}"
                 + _launch_warning(args.get("command"))
+                + _start_process_warning(args.get("command"))
                 + route_hint(args.get("command"), ctx))
     except OperatorStop:
         return ("STOPPED by the operator (`/tinycmdr stop`): this command and everything it started "
@@ -5779,8 +5825,12 @@ def tool_execute_code(args, ctx):
         return _blocked_answer(blocked)
     try:
         scan_t0 = time.time()
+        # `-X utf8`: a redirected child on Windows defaults to the locale code page
+        # (cp1252), so `print("✓")` raised UnicodeEncodeError and aborted a batch half-way
+        # - the model got a partial run and no summary (report H-6/H-9, 2026-10-02). UTF-8
+        # mode makes the child's stdout match what _read_capped decodes.
         rc, stdout, stderr, timeout_hit = run_capture(
-            [sys.executable, "-c", code], timeout,
+            [sys.executable, "-X", "utf8", "-c", code], timeout,
             cancel=(ctx or {}).get("cancel_event"))
         if code_risk:
             charge_scan(ctx, time.time() - scan_t0)
@@ -5799,9 +5849,17 @@ def tool_execute_code(args, ctx):
                     f"started were killed (a survivor holding the output pipe "
                     f"would freeze this channel). Partial output:\n{out}")
         hint = ""
-        if rc != 0 and "NameError:" in out:
-            hint = ("\n[HINT: execute_code runs each snippet in an isolated Python process "
-                    "— include all required imports (e.g. `import os, subprocess`) in your code]")
+        if rc not in (0, None):
+            # report H-9: the drive's own batch died half-way (the encoding crash) and the
+            # model could not tell what had already run. A non-zero exit says the code
+            # STOPPED, not that nothing happened - name the partial effects so the next
+            # call re-reads what it touched instead of trusting a clean-slate assumption.
+            hint += ("\n[HARNESS: execute_code exited %d. Whatever the code did BEFORE it "
+                     "failed has already happened - re-read the files or state it touched "
+                     "rather than assuming nothing changed.]" % rc)
+        if "NameError:" in out:
+            hint += ("\n[HINT: execute_code runs each snippet in an isolated Python process "
+                     "— include all required imports (e.g. `import os, subprocess`) in your code]")
         return f"exit_code={rc}\n{out}{hint}"
     except OperatorStop:
         return ("STOPPED by the operator (`/tinycmdr stop`): this code and everything it started "
@@ -6742,6 +6800,56 @@ def _surface_write_gate(path, subject, ctx):
                          (ctx or {}).get("confirm_cb"))
 
 
+def _win_long_path(path):
+    """A Windows ABSOLUTE path past MAX_PATH, in the ``\\\\?\\`` form the Win32 API needs.
+
+    Measured on the fleet's Windows box, 2026-10-02 (report H-2): creating a 339-character path throws
+    FileNotFoundError [WinError 206] with LongPathsEnabled=0, while the same path with the
+    extended prefix works - and Python's Path handles that form (exists / name / child /
+    write all verified on the box). So the fix is one conversion at the door, not a second
+    path type.
+
+    Windows-absolute paths only - a drive root (``C:\\...``) or a UNC share
+    (``\\\\server\\share``). A RELATIVE path is resolved by the OS against the process's own
+    directory and this cannot know its final length, so it is left alone, exactly as
+    before. The 248 threshold is the stricter of the two MAX_PATH limits (248 for a
+    directory, 260 for a file). Nothing changes below it, off Windows, or on a path that is
+    already extended. Deliberately free of os.path: the transform is deterministic on any
+    host, so `tests/test_read_window.py` can grade it without a Windows box.
+    """
+    p = str(path)
+    if not IS_WINDOWS or p.startswith("\\\\?\\"):
+        return p
+    drive = len(p) >= 2 and p[0].isalpha() and p[1] == ":"
+    if not (drive or p.startswith("\\\\")):
+        return p
+    if len(p) < 248:
+        return p
+    q = p.replace("/", "\\")
+    if q.startswith("\\\\"):                             # \\server\share -> \\?\UNC\server\share
+        return "\\\\?\\UNC\\" + q[2:]
+    return "\\\\?\\" + q
+
+
+_WIN_RESERVED_NAMES = frozenset(
+    ["CON", "PRN", "AUX", "NUL"]
+    + ["COM%d" % i for i in range(1, 10)]
+    + ["LPT%d" % i for i in range(1, 10)])
+
+
+def _win_reserved_name(name):
+    """The Windows device name a file's stem collides with (CON, NUL, COM1, LPT1), or "".
+
+    Report H-7, measured on the fleet's Windows box, 2026-10-02: CON.txt, NUL.txt, AUX.txt, COM1.txt and
+    LPT1.txt were all created and listed as ordinary files - but Windows resolves those
+    stems CASE-INSENSITIVELY and with ANY extension for some APIs, so a file one tool
+    creates can be read as the device by the next. A warning, never a refusal: the file is
+    real and the operator may mean it.
+    """
+    stem = str(name).split(".")[0].upper()
+    return stem if stem in _WIN_RESERVED_NAMES else ""
+
+
 @serialized_by_path
 def tool_edit_file(args, ctx):
     """Surgical string replacement in a file (Hermes patch equivalent).
@@ -6751,7 +6859,7 @@ def tool_edit_file(args, ctx):
     convention is preserved, the write is atomic, and the result carries a diff so a wrong
     edit is visible at the moment it happens.
     """
-    path = Path(args["path"]).expanduser()
+    path = Path(_win_long_path(Path(args["path"]).expanduser()))
     if not path.exists():
         return f"ERROR: {path} does not exist"
     refusal = confirm_gate(args.get("new_string") or "",
@@ -6860,7 +6968,7 @@ def tool_search_files(args, ctx):
         are grepped (schema-honest shape unchanged).
     """
     import fnmatch
-    root = Path(args.get("path") or ".").expanduser()
+    root = Path(_win_long_path(Path(args.get("path") or ".").expanduser()))
     if not root.exists():
         return f"ERROR: {root} does not exist"
     pat = args.get("pattern") or "*"
@@ -6886,7 +6994,7 @@ def tool_search_files(args, ctx):
                 if len(hits) >= max_results:
                     break
         return "\n".join(hits) if hits else "No matches."
-    hits, content_hits = [], []
+    hits, content_hits, skipped_big = [], [], []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in
@@ -6902,6 +7010,7 @@ def tool_search_files(args, ctx):
                 if content_re is not None and (globbed or not asked_content):
                     try:
                         if full.stat().st_size > 2_000_000:
+                            skipped_big.append(str(full))
                             continue
                         for i, line in enumerate(
                                 full.read_text(encoding="utf-8",
@@ -6919,9 +7028,19 @@ def tool_search_files(args, ctx):
     except OSError as e:
         return f"ERROR searching: {e}"
     results = hits + content_hits
+    # A silent skip is a silent wrong answer: "find X under C:\\Logs" that omits every file
+    # over 2 MB looks exactly like a confident miss, and the same content was found
+    # instantly when the big file was named directly (report H-5, 2026-10-02). Say what was
+    # not searched, by name, on both the hit and the no-hit path.
+    note = ""
+    if skipped_big:
+        _shown = ", ".join(Path(p).name for p in skipped_big[:3])
+        note = ("\n[HARNESS: %d file(s) over 2 MB were NOT searched for content (%s%s) - "
+                "name one directly to grep it.]"
+                % (len(skipped_big), _shown, ", ..." if len(skipped_big) > 3 else ""))
     if not results:
-        return "No matches."
-    return "\n".join(results[:max_results])
+        return "No matches." + note
+    return "\n".join(results[:max_results]) + note
 
 
 # Measured 2026-09-25 driving the fleet's macOS box: a note inside a directory the operator
@@ -6973,7 +7092,7 @@ def tool_read_file(args, ctx):
             return (f"ERROR: no {want} in this process. The spill index in the prompt "
                     f"lists the ones that exist, and the files are under spill/.")
         want = resolved
-    path = Path(want).expanduser()
+    path = Path(_win_long_path(Path(want).expanduser()))
     if not path.exists():
         # The THIRD door of one miss (drive, 2026-09-23): the model looks for a core tool's
         # code on disk - `read_file tools/delegate_task.py`, then `read_file
@@ -7012,14 +7131,19 @@ def tool_read_file(args, ctx):
         # offset read the last 8 MiB and then sliced it by a line number meant for the
         # whole file - `offset=10, limit=2` of a 28.6 MiB file answered with lines
         # 432238-432239 under a header claiming 10-12 (measured 2026-09-27).
-        text, cut, cap_note = _read_capped(path, from_end=want_tail)
+        text, cut, cap_note = _read_capped(path, from_end=want_tail, strict=True)
     except Exception as e:
         return f"ERROR reading {path}: {e}"
     lines = text.splitlines()
     tail = int(args.get("tail") or 0)
     if tail:
         selected = lines[-tail:]
-        header = f"(last {len(selected)} of {len(lines)} lines)"
+        # A cut read's `len(lines)` is the window covered, NOT the file's line count.
+        # "last 3 of 653825 lines" reads as a property of the file and is exactly how the
+        # 8 MiB read cap looked like the file's length (report H-4, 2026-10-02).
+        header = (f"(last {len(selected)} of the {len(lines)} lines this read covered - "
+                  f"the file is bigger)" if cut
+                  else f"(last {len(selected)} of {len(lines)} lines)")
     else:
         offset = offset_req
         limit = int(args.get("limit") or 400)
@@ -7030,8 +7154,11 @@ def tool_read_file(args, ctx):
                     f"covered - the file is bigger than one read. The full text is at "
                     f"`{path}`: use tail=N for its end, or a narrower offset.")
         selected = lines[offset:offset + limit]
-        header = (f"(lines {offset}–{offset + len(selected)} of {len(lines)}"
-                  + (" shown, the file is bigger)" if cut else ")"))
+        # Same honesty fix as the tail header: when the read was cut, name the window it
+        # covered rather than printing a count that reads like the file's own length.
+        header = (f"(lines {offset}–{offset + len(selected)} of the {len(lines)} lines "
+                  f"this read covered - shown, the file is bigger)" if cut
+                  else f"(lines {offset}–{offset + len(selected)} of {len(lines)})")
     body = "\n".join(selected)
     # No digestion: a PATH is not a command, and matching one made the harness shrink
     # documents by their FILENAME (see _digest_subject). A big read is spilled whole instead.
@@ -7078,7 +7205,7 @@ def tools_dir_verdict(path):
 
 @serialized_by_path
 def tool_write_file(args, ctx):
-    path = Path(args["path"]).expanduser()
+    path = Path(_win_long_path(Path(args["path"]).expanduser()))
     _content = args.get("content") or ""
     refusal = confirm_gate(_content, "write_file %s" % path, ctx)
     if refusal:
@@ -7119,7 +7246,14 @@ def tool_write_file(args, ctx):
                      "fine, but can mis-parse labels or parenthesised blocks, so use CRLF "
                      "if it behaves oddly - .ps1 and .vbs run fine either way."
                      % path.suffix.lower())
+        # Windows only: CON.txt is an ordinary file everywhere else, and a warning there
+        # would be noise on every POSIX host.
+        _resv = _win_reserved_name(path.name) if IS_WINDOWS else ""
         return (f"OK: wrote {len(args['content'])} chars to {path}" + note + _gated
+                + ("" if not _resv else
+                   (f"  [HARNESS: `{path.name}` begins with the Windows device name {_resv}: "
+                    f"some Windows APIs read that as the device, not as this file. The file "
+                    f"is real - rename it if a later read misbehaves.]"))
                 + tools_dir_verdict(path))
     except Exception as e:
         return f"ERROR writing {path}: {e}"
@@ -8433,7 +8567,15 @@ def tool_schedule(args, ctx):
 
 def tool_search_sessions(args, ctx):
     """Grep past conversation sessions (persisted in ./sessions/)."""
-    query = args["query"].lower()
+    raw = str(args.get("query") or "")
+    # ALL words, not the literal phrase. `query in content` matched only an exact substring,
+    # so "scheduler fired schedule add" answered "No past session content matching" while
+    # the same session's events were found in one search_files call - the tool built for
+    # recall was worse at it than the generic search (report H-13, 2026-10-02). Words now
+    # AND across a session's own text, and the snippet points at its best-matching message.
+    words = [w for w in re.split(r"\W+", raw.lower()) if w]
+    if not words:
+        return "ERROR: search_sessions needs a query."
     hits = []
     for f in sorted(SESSIONS_DIR.glob("*.json")):
         try:
@@ -8453,6 +8595,7 @@ def tool_search_sessions(args, ctx):
             msgs = loaded
         else:
             continue
+        texts = []
         for m in msgs:
             if not isinstance(m, dict):
                 continue
@@ -8461,14 +8604,23 @@ def tool_search_sessions(args, ctx):
                 # A carry entry has no "content": its text lives in args/out.
                 c = " ".join(str(v) for v in (m.get("args"), m.get("out"),
                                               m.get("task"), m.get("note")) if v)
-            if isinstance(c, str) and query in c.lower():
-                snippet = re.sub(r"\s+", " ", c)[:200]
-                hits.append(f"[{f.stem}] {m.get('role') or m.get('tool') or 'entry'}: "
-                            f"{snippet}")
+            if isinstance(c, str) and c.strip():
+                texts.append((m, c))
+        if not texts:
+            continue
+        joined = " ".join(c.lower() for _m, c in texts)
+        if not all(w in joined for w in words):
+            continue
+        # A session matches as a whole; quote the message carrying the most query words
+        # (then the longest), so the snippet still points at one line of it.
+        m, c = max(texts, key=lambda mc: (sum(w in mc[1].lower() for w in words),
+                                          len(mc[1])))
+        snippet = re.sub(r"\s+", " ", c)[:200]
+        hits.append(f"[{f.stem}] {m.get('role') or m.get('tool') or 'entry'}: {snippet}")
         if len(hits) >= 25:
             break
     if not hits:
-        return f"No past session content matching: {query}"
+        return f"No past session content matching: {raw}"
     return "\n".join(hits[:25])
 
 
@@ -9520,7 +9672,10 @@ CORE_TOOLS = {
         "schema": _schema(
             "Attach a file from this machine to the chat the operator is reading "
             "- use it when the order is to SEND or SHOW a file rather than to "
-            "report a path. The file goes out as a real attachment in this channel.",
+            "report a path. The file goes out as a real attachment in this channel. "
+            "ONLY a lane with an attachment transport can carry it: a CLI or --once "
+            "lane cannot, and answers with an error naming the path - so do not plan a "
+            "deliverable around this tool on such a lane.",
             {"path": {"type": "string",
                       "description": "Absolute path of the file to attach"},
              "note": {"type": "string",
@@ -19213,7 +19368,7 @@ def _lane_reason(exc):
 
     mattermostautodriver raises `InvalidOrMissingParameters(message)` where `message` is the
     API's empty `message` field for a bad token: str(exc) is "", so the lane recorded "no
-    detail", `doctor` printed that, and the log line was blank. Measured on [redacted],
+    detail", `doctor` printed that, and the log line was blank. Measured on the fleet Windows box,
     2026-10-02, after 723 failed starts with no visible cause.
     """
     text = str(exc).strip()
@@ -19233,7 +19388,7 @@ def _lane_reason(exc):
 _LANE_PERMANENT_RE = re.compile(
     r"(\b40[13]\b|\b400\b|InvalidOrMissingParameters|NoAccessTokenProvided|"
     r"NotEnoughPermissions|the token was refused|"
-    r"no Mattermost token|no Telegram token)", re.I)
+    r"no Mattermost token|no Telegram token|is unusable)", re.I)
 
 
 def _lane_error_permanent(exc):
@@ -19330,7 +19485,7 @@ def lane_with_retry(start, lane, report, sleep=None, now=None):
             if permanent:
                 # It will not fix itself, and 5, 10, 20, 60 seconds of retrying said
                 # nothing: the operator's log had 723 failed starts and one blank ERROR
-                # line each ([redacted], 2026-10-02). Say it once, then park on a long
+                # line each (the fleet Windows box, 2026-10-02). Say it once, then park on a long
                 # interval - which also keeps the OTHER lane (a daemon thread here) alive.
                 failures, delay = failures + 1, LANE_PERMANENT_BACKOFF
             else:
@@ -19449,6 +19604,15 @@ def run_bot():
                      "in %s (or mattermost.token in config.json) and restart.",
                      BASE_DIR / ".env")
         sys.exit(2)
+    # A value that is ALREADY on disk and cannot work is named as such. The tower taught
+    # this one: one 0x16 byte in .env made the lane fail 723 times with a blank ERROR line
+    # and `doctor` saying "no detail", because nothing looked at the value (2026-10-02).
+    try:
+        secret_check("TINYCMDR_MM_TOKEN", mm["token"])
+    except ValueError as _problem:
+        raise RuntimeError("the Mattermost token in %s is unusable: %s - replace it with "
+                           "`tinycmdr token set TINYCMDR_MM_TOKEN`, then restart"
+                           % (ENV_FILE.name, _problem))
 
     # mmpy_bot 2.2.x only registers listeners defined as Plugin methods.
     class TinycmdrPlugin(Plugin):
@@ -20334,6 +20498,20 @@ def run_telegram():
         log.critical("no Telegram token: put TINYCMDR_TG_TOKEN=<bot token> in %s "
 
                      "(or telegram.token in config.json) and restart.", BASE_DIR / ".env")
+
+        sys.exit(2)
+
+    try:
+
+        secret_check("TINYCMDR_TG_TOKEN", token)
+
+    except ValueError as _problem:
+
+        log.critical("the Telegram token in %s is unusable: %s - replace it with "
+
+                     "`tinycmdr token set TINYCMDR_TG_TOKEN`, then restart.",
+
+                     ENV_FILE.name, _problem)
 
         sys.exit(2)
 
@@ -24530,7 +24708,7 @@ _SECRET_SHAPES = {
 def secret_check(name, value):
     """The value to write, or ValueError saying why it cannot be a working secret.
 
-    Measured on [redacted], 2026-10-02: a mattermost token of ONE 0x16 byte sat in .env and
+    Measured on the fleet Windows box, 2026-10-02: a mattermost token of ONE 0x16 byte sat in .env and
     `tinycmdr token` called it "set (.env)" while the lane failed 723 times - nothing had
     looked at the value. The BOM case is not hypothetical either: PowerShell 5.1 prepends
     a UTF-8 BOM to anything piped into a native command, so `"$tok" | tinycmdr token set

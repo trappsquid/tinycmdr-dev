@@ -158,15 +158,18 @@ def main():
           "NOT signed" in doc or "not signed" in doc)
 
     # F-21: the tool table advertised execute_code as running Python "in-process". It runs
-    # `[sys.executable, "-c", code]` under a timeout, and the subprocess is the better
-    # design - it is what makes a runaway script killable - so the doc was underselling it.
-    # Asserted in BOTH directions: the sentence cannot drift back, and the call cannot
-    # quietly become an exec without this suite saying so.
+    # `[sys.executable, "-X", "utf8", "-c", code]` under a timeout, and the subprocess is the
+    # better design - it is what makes a runaway script killable - so the doc was underselling
+    # it. Asserted in BOTH directions: the sentence cannot drift back, and the call cannot
+    # quietly become an exec without this suite saying so. Matched on the two halves, not the
+    # whole argv: a flag added between them (the "-X utf8" for report H-6, 2026-10-02) is not
+    # the call going away.
     app = (BASE / "tinycmdr.py").read_text(encoding="utf-8", errors="replace")
     check("the doc does not claim execute_code runs Python in-process",
           "run Python in-process" not in doc, "the in-process claim is back in the table")
     check("execute_code runs Python in a subprocess (what makes it killable)",
-          'sys.executable, "-c", code' in app, "the subprocess call is gone from tinycmdr.py")
+          "sys.executable," in app and '"-c", code' in app,
+          "the subprocess call is gone from tinycmdr.py")
 
     denials = ("no benchmark or eval harness", "no evaluation suite", "no eval set",
                "no evaluation harness", "no release process", "no test suite", "no ci")

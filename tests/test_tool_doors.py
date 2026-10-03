@@ -60,6 +60,38 @@ out = fb.tool_execute_code({"code": "print('ordinary work')\n"}, dict(CTX))
 check("execute_code: ordinary code still runs", "ordinary work" in out and not out.startswith("ERROR:"),
       out[:120])
 
+# H-9: a non-zero exit says the code STOPPED, not that nothing happened (report H-9,
+# 2026-10-02). The result must name the partial effect so the next call re-reads state.
+out = str(fb.tool_execute_code({"code": "x = 1\nraise SystemExit(3)\n"}, dict(CTX)))
+check("execute_code: a non-zero exit names the partial effects",
+      out.startswith("exit_code=3") and "already happened" in out, out[:220])
+out = str(fb.tool_execute_code({"code": "print('clean')\n"}, dict(CTX)))
+check("execute_code: a clean exit carries no partial-effects note",
+      "already happened" not in out, out[:160])
+
+# H-7 / H-10: the two Windows traps, graded as pure predicates (report, 2026-10-02).
+check("a reserved Windows device stem is named",
+      fb._win_reserved_name("CON.txt") == "CON" and fb._win_reserved_name("nul") == "NUL"
+      and fb._win_reserved_name("COM1.tar.gz") == "COM1"
+      and fb._win_reserved_name("lpt9.log") == "LPT9", "reserved stems")
+check("an ordinary name is not a device",
+      fb._win_reserved_name("console.txt") == "" and fb._win_reserved_name("COM10") == ""
+      and fb._win_reserved_name("notes.md") == "", "ordinary names")
+_real_win = fb.IS_WINDOWS
+try:
+    fb.IS_WINDOWS = True
+    check("Start-Process without -Wait is flagged",
+          "leaves that child running" in
+          fb._start_process_warning("Start-Process cmd -ArgumentList '/c','x'"))
+    check("...but -Wait is left alone",
+          fb._start_process_warning("Start-Process -Wait notepad") == "")
+    check("...and a command that starts nothing is not flagged",
+          fb._start_process_warning("echo hi") == "")
+finally:
+    fb.IS_WINDOWS = _real_win
+check("off Windows the Start-Process warning never fires",
+      fb._start_process_warning("Start-Process cmd -ArgumentList x") == "")
+
 # the shell door answers the same way, and so does a tools/ FILE whose stem is not the tool name
 out = fb.tool_shell({"command": "python tools/toolsmith.py action=list", "raw": True}, dict(CTX))
 check("shell: the same miss answers with the same door", "is a TOOL on this box" in out, out[:120])

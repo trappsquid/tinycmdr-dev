@@ -388,7 +388,7 @@ def test_locality_classification():
                       ("http://0.0.0.0:8080/v1", True),
                       ("http://gpu-box.local:8080/v1", True),
                       ("http://10.1.2.3:8080/v1", True),
-                      ("http://[redacted]:8080/v1", True),
+                      ("http://10.9.9.9:8080/v1", True),
                       ("http://172.16.0.4:8080/v1", True),
                       ("http://172.32.0.4:8080/v1", False),
                       ("https://api.deepseek.com/v1", False),

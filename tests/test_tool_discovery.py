@@ -498,6 +498,23 @@ check("search_files: content= with a glob keeps the glob as the scope",
 out = fb.tool_search_files({"path": str(srch / "missing.txt")}, {})
 check("search_files: a missing path still errors", out.startswith("ERROR"), out[:120])
 
+# ---- a file too big to content-scan is SKIPPED; say so, or the miss is a lie -----------
+# The directory scan skips files over 2 MB. Silently, that turned "find X under <dir>" into
+# a confident wrong answer whenever X lived in the largest file - which was found instantly
+# when the file was named directly (report H-5, 2026-10-02).
+big = srch / "huge.log"
+big.write_text("filler line\n" * 400000 + "NEEDLE-OVER-CAP\n", encoding="utf-8")
+check("the fixture is over the 2 MB content-scan cap", big.stat().st_size > 2_000_000,
+      big.stat().st_size)
+out = fb.tool_search_files({"pattern": "NEEDLE-OVER-CAP", "path": str(srch)}, {})
+check("search_files: a skipped large file is named, not silently omitted",
+      out.startswith("No matches.") and "NOT searched" in out and "huge.log" in out,
+      out[:240])
+(srch / "small-needle.txt").write_text("NEEDLE-OVER-CAP\n", encoding="utf-8")
+out = fb.tool_search_files({"pattern": "NEEDLE-OVER-CAP", "path": str(srch)}, {})
+check("search_files: a small hit is returned AND the skip is still disclosed",
+      "small-needle.txt" in out and "NOT searched" in out, out[:240])
+
 # ---- the disclosure answer cannot be misread as "nothing is hidden" -------------------
 # Measured 2026-09-25 driving the manager box (work order 5): asked which tools were NOT in its list,
 # the run called list_tools and find_tools(all=true) in ONE batch, read "N of N", and

@@ -312,7 +312,10 @@ check("a permanent config failure still EXITS (exit 2 is not retried)",
 # UNREACHABLE is retryable, a token the API REFUSED is not - it answered - and that one keeps
 # the exit 2 a human notices (which is also the installer's no-token exit).
 _tg_client_before, _config_before = T.TelegramClient, T.CONFIG
-T.CONFIG = {"telegram": {"token": "123:abc", "allowed_users": ["42"]}}
+# a SHAPE-valid dummy: a token that cannot look like one is refused before the lane
+# starts (that is graded elsewhere in this file), so the lane under test here needs
+# one that passes the shape gate and then fails at the API.
+T.CONFIG = {"telegram": {"token": "1234567890:" + "A" * 35, "allowed_users": ["42"]}}
 
 
 def _telegram_start_raises(exc):
@@ -417,7 +420,7 @@ if FAILS:
     sys.exit(1)
 print("lanes, recovery, drift: what the surfaces say is what is true")
 
-# ---- a lane failure must carry a REASON ([redacted], 2026-10-02) -----------------------
+# ---- a lane failure must carry a REASON (the fleet Windows box, 2026-10-02) -----------------------
 # mattermostautodriver raises InvalidOrMissingParameters(message) where the message is the
 # API's empty field: str(exc) was "", the lane stored "no detail", `doctor` printed "no
 # detail", and the log got a blank ERROR line per retry - 723 failed starts with no cause
@@ -453,3 +456,23 @@ check("the Mattermost url is built once, with a non-default port",
       T._mm_base_url({"url": "chat.x.com", "port": 8065}) == "https://chat.x.com:8065"
       and T._mm_base_url({"url": "https://chat.x.com", "port": 443}) == "https://chat.x.com",
       (T._mm_base_url({"url": "chat.x.com", "port": 8065}),))
+
+# ---- a token ALREADY on disk that cannot work is NAMED, not retried as an outage --------
+# The tower's own shape (2026-10-02): one 0x16 byte in .env, 723 failed starts, "no detail".
+_mm_before = T.CONFIG.get("mattermost")
+T.CONFIG["mattermost"] = {"token": "x\x16y", "url": "https://chat.example.com", "port": 443}
+try:
+    T.run_bot()
+    _said = "(no raise)"
+except RuntimeError as _e:
+    _said = str(_e)
+except SystemExit as _e:
+    _said = "SystemExit %s" % _e.code
+finally:
+    T.CONFIG["mattermost"] = _mm_before
+check("run_bot refuses a token holding a control character, and says why",
+      "unusable" in _said and "control characters" in _said, _said[:160])
+check("...naming the command that fixes it",
+      "token set TINYCMDR_MM_TOKEN" in _said, _said[:160])
+check("...and that failure is PERMANENT, not an outage to wait out",
+      T._lane_error_permanent(RuntimeError(_said)) is True, _said[:120])

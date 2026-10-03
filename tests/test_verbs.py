@@ -786,7 +786,7 @@ def main():
             rc, out, err = call(fb, ["token", "set", "TINYCMDR_EMPTY"], stdin="\n")
             check("token set refuses an empty value", rc == 1
                   and "nothing written" in err, (rc, err[:120]))
-            # a value that can never work is REFUSED before it is written ([redacted],
+            # a value that can never work is REFUSED before it is written (the fleet Windows box,
             # 2026-10-02: a token of one 0x16 byte sat in .env while `token` said "set")
             rc, out, err = call(fb, ["token", "set", "TINYCMDR_TEST_KEY"], stdin="bad\x16value\n")
             check("token set refuses a value with control characters", rc == 1

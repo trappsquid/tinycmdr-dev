@@ -76,6 +76,22 @@ def main():
         check(f"[{sk}] assistant" in out,
               "...while still reading the transcript itself")
 
+        # ---- a multi-word query matches WORDS, not the literal phrase -------------
+        # `query in content` made "scheduler fired schedule add" answer "No past session
+        # content matching" while the same events were found in one search_files call -
+        # the tool built for recall was worse at it than the generic search
+        # (report H-13, 2026-10-02).
+        (fb.SESSIONS_DIR / "mm-multi.json").write_text(json.dumps([
+            {"role": "user", "content": "why did the scheduler not fire"},
+            {"role": "assistant", "content": "the job was added without a schedule"},
+            {"role": "assistant", "content": "it fired after the restart"}]))
+        out = fb.tool_search_sessions({"query": "scheduler fired schedule add"}, {})
+        check("mm-multi" in out,
+              f"a multi-word query matches words spread across a session ({out[:90]!r})")
+        out = fb.tool_search_sessions({"query": "scheduler unrelated-absent-token"}, {})
+        check("mm-multi" not in out,
+              "...and still refuses when one word is nowhere in the session")
+
         check(json.loads((fb.SESSIONS_DIR / f"{key}.transcript.jsonl").read_text(encoding="utf-8")
                          .splitlines()[0]).get("role") == "user",
               "and the first line is the oldest message, in order")

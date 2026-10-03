@@ -7,7 +7,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **CI installs from the built artifact and runs it - the one loop no suite closed.** Every
+  installer check (`tests/test_installer_unix.py`, `test_installer_windows.py`,
+  `test_installer_parity.py`) installs from a tree the suite assembles itself with its own
+  fixtures and a fake venv, so the zip and tarball `maintenance/build-package.py` publishes -
+  what every other host downloads - were never executed. Two new jobs (`install` on
+  macOS + Linux, `install-windows`) build the public package, unpack THAT archive, install
+  it headless, and hand the install to `maintenance/smoke-install.py`, which drives
+  `config set`, `doctor`, `health` and one `--once` turn. The turn runs against a hermetic
+  stub unless the repository secret `TINYCMDR_SMOKE_BASE_URL` names a real endpoint - the
+  value is never written into `ci.yml`, because a LAN address in a tracked file is exactly
+  what `maintenance/leak-gate.py` refuses, and a LAN endpoint is only reachable from a
+  runner on that network anyway. `maintenance/smoke-install.sh` is the same command a
+  person runs. Falsifiers, measured on macOS 2026-10-02 from a clean clone: build → install
+  → green smoke in 11 s with 11 checks passing, and against a refused port both `doctor`
+  and the `--once` "infrastructure failure" card fail the run (the return code alone does
+  not - `--once` exits 0 whether or not an endpoint answered).
+
 Fixed
+- **Two Windows traps are named where they happen.** `write_file` to a name whose stem is a
+  reserved device name (`CON`, `NUL`, `AUX`, `COM1`…`LPT9`, which Windows resolves
+  case-insensitively and with ANY extension) now says so - the file is real, but a later
+  read can hit the device instead (report H-7). And a `shell` command using `Start-Process`
+  without `-Wait` now says the child outlives the harness and points at the `process` tool,
+  whose kill takes the tree (report H-10 - measured on the fleet's Windows box: killing the parent left
+  the grandchild alive). Both are warnings, not refusals, and both are Windows-only.
+  Verified on the fleet's Windows box, 2026-10-02; inert on Linux. `tests/test_tool_doors.py`.
+- **A failed `execute_code` says the partial effects already happened.** The drive's own
+  batch died half-way and the model could not tell what had run: a non-zero exit was
+  reported as `exit_code=1` with the traceback, and the summary the script never reached
+  was simply absent (report H-9, 2026-10-02). The result now carries `[HARNESS: execute_code
+  exited N. Whatever the code did BEFORE it failed has already happened - re-read the files
+  or state it touched ...]`, so the next call verifies instead of trusting a clean slate. A
+  clean exit carries no such note. `tests/test_tool_doors.py`.
+- **`send_file`'s own description now says a CLI/`--once` lane cannot carry a file.** The
+  tool already refused honestly, but a model planning a deliverable still reached for it
+  (report H-14, 2026-10-02); the schema says so up front now.
+- **A Windows path past MAX_PATH is extended automatically.** With LongPathsEnabled=0,
+  creating a 339-character path throws `FileNotFoundError [WinError 206]`, so a deep
+  `node_modules`, a backup tree or a long `AppData` chain failed with a confusing error -
+  and `read_file` on one reported the file as "does not exist" (report H-2, measured on
+  the fleet's Windows box, 2026-10-02). `_win_long_path()` now adds the `\\?\` extended prefix at the four
+  file-tool doors (`read_file`, `write_file`, `edit_file`, `search_files`) for a
+  Windows-ABSOLUTE path at or over the 248-character directory limit (and `\\?\UNC\` for a
+  share), leaving short paths, relative paths and every non-Windows host untouched.
+  Verified on the fleet's Windows box: write -> read -> edit -> search on a 343-character path all
+  succeed, and a short path still reports its plain form; `tests/test_read_window.py`
+  grades the transform off Windows.
+- **An unreadable file now names the cause instead of a Python unpack error.** `_read_capped`
+  returned a 2-tuple `("", False)` on `OSError` while every caller unpacks three, so
+  `read_file` on a file held open with a deny-all share mode answered
+  `not enough values to unpack (expected 3, got 2)` - a stack-trace fragment where a sysadmin
+  needs "being used by another process" (drive report H-1, 2026-10-02). The helper returns the
+  3-tuple it documents and takes `strict=`, which `read_file` sets so the real `OSError`
+  ("permission denied", "[WinError 32] ...") is what reaches the model. Falsifier in
+  `tests/test_read_window.py`: an unreadable file must name the cause and must not say
+  "unpack"; before the fix that same call printed the unpack error.
+- **`read_file`'s header no longer prints the covered window as the file's line count.** With
+  the 8 MiB read cap in play, `tail=3` of a huge file read `last 3 of 653825 lines` and an
+  offset read `of 653825` - counts that read as the file's length rather than the window this
+  read covered, which is how the cap looked like a property of the file (report H-4,
+  2026-10-02). A cut read now says `of the N lines this read covered - the file is bigger`;
+  an uncut read keeps its plain header. `tests/test_read_window.py`.
+- **`search_files` reports files it skipped instead of quietly omitting them.** The directory
+  content scan skips files over 2 MB; silently, that turned "find X under <dir>" into a
+  confident miss on exactly the largest files - the same content was found at once when the
+  file was named directly (report H-5, 2026-10-02). The result now carries a `[HARNESS: N
+  file(s) over 2 MB were NOT searched ...]` note naming them, on both the hit and the no-hit
+  path. `tests/test_tool_discovery.py`.
+- **`search_sessions` matches a query's words, not the literal phrase.** `query in content`
+  answered "No past session content matching" for "scheduler fired schedule add" while the
+  same session's events were found in one `search_files` call - the recall tool was worse at
+  recall than the generic search (report H-13, 2026-10-02). Words now AND across a session's
+  text and the snippet points at its best-matching message; the single-word case is
+  unchanged. `tests/test_transcript.py`.
+- **Non-ASCII output survives both `execute_code` and `shell` on Windows.** A redirected
+  child defaults to the locale code page, so `print("✓")` raised `UnicodeEncodeError` and
+  killed a batch half-way, and `echo ✓` in the shell came back as `??` (report H-6/H-9,
+  2026-10-02). `execute_code`'s child is now launched with `-X utf8`, and the Windows shell
+  command is prefixed with `[Console]::OutputEncoding = UTF-8` - the console's OUTPUT
+  encoding, because a `chcp 65001` in the child (which the report tried) does not change
+  what .NET writes to a redirected stream. Both verified on the fleet's Windows box, 2026-10-02:
+  `execute_code` returned `exec ✓ 日本語 ü` and `shell` returned `shell-✓-日-ok`; before the
+  shell fix the same call returned `shell-?-?-ok`. The macOS/Linux path is unchanged.
 - **A chat token that cannot work is refused where it is typed, and a refused one is
   diagnosed wherever it shows up.** `tinycmdr token set` wrote ANY value: a Mattermost
   token of one 0x16 byte sat in a live `.env` while `tinycmdr token` called it
@@ -17,7 +100,10 @@ Fixed
   UTF-8 BOM (PowerShell 5.1 prepends one to anything piped into a command: reproduced while
   writing this), and then ASKS THE PROVIDER (`GET /api/v4/users/me`, Telegram `getMe`),
   printing "checked: accepted as @the-bot" or "REFUSED: HTTP 400 …" at the prompt. The
-  wizard and the model-add paths share the same gate.
+  same gate runs at LANE STARTUP on the value already in `.env`, so a token that was already
+  broken is named ("the Mattermost token in .env is unusable: control characters … - replace
+  it with `tinycmdr token set TINYCMDR_MM_TOKEN`") instead of failing behind the operator.
+  The wizard and the model-add paths share the gate too.
 - **A lane failure now carries a reason.** mattermostautodriver raises
   `InvalidOrMissingParameters(message)` where `message` is the API's empty field, so a
   refused token reached the lane as an empty string: `doctor` said "mattermost lane is DOWN

@@ -277,7 +277,7 @@ def _run_once(key, text, reporter, *, cancel_event=None, **kw):
 
 _keep = (fb.CONFIG["telegram"], fb.TelegramClient, fb.TelegramPoller,
          fb.TelegramDestination, fb.RunReporter, fb.drive_run, fb.lane_up)
-fb.CONFIG["telegram"] = {"token": "1:tok", "allowed_users": ["123456789"]}
+fb.CONFIG["telegram"] = {"token": "12345:" + "A" * 35, "allowed_users": ["123456789"]}
 fb.TelegramClient = _LoopOnceClient
 fb.TelegramPoller = _RecordingPoller
 fb.TelegramDestination = _ParkedDestination
@@ -360,7 +360,7 @@ def _live_model_run(session_key, text, **kw):
 _keep2 = (fb.CONFIG["telegram"], fb.TelegramClient, fb.TelegramPoller,
           fb.TelegramDestination, fb.RunReporter, fb.AGENT.run, fb.lane_up,
           fb.TG_IDLE_SECONDS)
-fb.CONFIG["telegram"] = {"token": "1:tok", "allowed_users": ["123456789"]}
+fb.CONFIG["telegram"] = {"token": "12345:" + "A" * 35, "allowed_users": ["123456789"]}
 fb.TelegramClient = _FeedThenLeaveClient
 fb.TelegramPoller = _LivePoller
 fb.AGENT.run = _live_model_run
