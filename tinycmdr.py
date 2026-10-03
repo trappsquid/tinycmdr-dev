@@ -347,6 +347,10 @@ DEFAULT_CONFIG = {
         # visible list; tool_disclosure=false sends the whole registry again.
         "tool_disclosure": True,
         "core_tools": [],
+        # A revealed schema rides every later payload. This TTL lets one expire after
+        # that many seconds without a call; the tool's NAME stays in the shelf lines and
+        # a by-name call re-reveals it. 0 = never decay (the old behaviour).
+        "reveal_ttl_secs": 1800,
         "disclosure_max": 4,
         # The tool index in the static prompt is CATEGORIES + NAMES, capped so a 500-tool
         # box renders like a 9-tool one. Measured before this (2026-09-25,
@@ -11493,16 +11497,31 @@ def pinned_core_tools_missing():
 
 
 def reveal_tools(session_key, names):
-    """Record that this session may now see these tools. Returns the full set."""
+    """Record that this session may now see these tools; returns the known names.
+
+    Values are timestamps, not a bare set: a revealed schema rides every later payload,
+    so a long run that touches 30 tools would pay 30 schemas for ever. `agent.reveal_ttl_secs`
+    (default 1800, 0 = never decay) makes a schema expire after that much time without a
+    call; the NAME stays in the shelf/inventory lines, and calling it by name re-reveals it
+    (the call itself always executes - disclosure is about schemas, never about existence).
+    """
     with _revealed_lock:
-        seen = _revealed.setdefault(session_key or "", set())
-        seen.update(n for n in (names or []) if n)
+        seen = _revealed.setdefault(session_key or "", {})
+        now = time.time()
+        for n in (names or []):
+            if n:
+                seen[n] = now
         return sorted(seen)
 
 
 def revealed_tools(session_key):
+    ttl = float(CONFIG["agent"].get("reveal_ttl_secs") or 0)
     with _revealed_lock:
-        return set(_revealed.get(session_key or "", set()))
+        seen = dict(_revealed.get(session_key or "", {}))
+    if ttl <= 0:
+        return set(seen)
+    now = time.time()
+    return {n for n, ts in seen.items() if (now - float(ts)) <= ttl}
 
 
 def visible_tool_names(session_key=None):
