@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.52] - 2026-10-03
+
+Fixed
+- **`update` can no longer be blocked by a git checkout, or by git being absent.** 1.0.46,
+  1.0.47 and 1.0.48 updated by `git pull --ff-only`, which refused on the dirty checkout
+  their own kit-prune created - an install that hit that could not update at all, and one
+  whose git was missing could not update either. 1.0.49 moved to the verified release
+  artifact and never touches git; this pins that contract with a test that runs
+  `update <package>` against a legacy checkout with no git on `PATH` and asserts the build
+  lands, and the no-arg path now says plainly when it sees a `.git` that the state of the
+  tree cannot block it. Graded in `tests/test_verbs.py`.
+
 ## [1.0.51] - 2026-10-03
 
 Fixed
