@@ -1066,7 +1066,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.56"
+VERSION = "1.0.57"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -18074,6 +18074,34 @@ TUI_PALETTE = {
 TUI_COLOR_SYSTEM = {"truecolor": "truecolor", "256": "256", "16": "standard",
                     "none": None}
 
+_RAIL_ART_CACHE = {}
+
+
+def rail_art_cells(path=None):
+    """The rail's brand art: rows of [hex, braille-glyph] cells, or [] when absent.
+
+    DATA, never ANSI. The rail is drawn as prompt_toolkit spans, and an ESC byte inside a
+    span renders as literal "[38;2;..." text - the failure this file names twice. The
+    artifact is derived from assets/branding/tinycmdr-badge-master.png by
+    maintenance/make-brand-art.py (recipe in the file), so it is re-derivable and
+    reviewable rather than a blob of escapes. Absent is ordinary: a bare checkout, an
+    install whose assets were pruned, or a terminal that cannot show braille.
+    """
+    p = Path(path) if path else (BASE_DIR / "assets" / "tui-rail-badge.json")
+    key = str(p)
+    if key in _RAIL_ART_CACHE:
+        return _RAIL_ART_CACHE[key]
+    cells = []
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+        rows = d.get("cells") or []
+        if int(d.get("cols") or 0) > 0 and int(d.get("rows") or 0) > 0 and len(rows) == int(d["rows"]):
+            cells = rows
+    except Exception:
+        cells = []
+    _RAIL_ART_CACHE[key] = cells
+    return cells
+
 
 def tui_colour_tier(env=None):
     """Which palette tier this terminal can express. Decided ONCE, from the
@@ -19371,9 +19399,55 @@ class AppScreen(TuiScreen):
             value("Ctrl-B  copy all")
             value("wheel needs APP_MOUSE=1")
             value("Ctrl-C stop \u00b7 Ctrl-Q quit")
+            # The brand sits one blank row under the keys, in the space the rail has left
+            # (the designer's placement: 24 cells wide against this rail's 26).
+            _art = self._rail_art()
+            if _art:
+                value("")
+                for _span_row in _art:
+                    rows.extend(_span_row)
         except Exception:
             value("(no session yet)")
         return FormattedText(rows)
+
+    def _rail_art(self):
+        """The brand art as rail rows: per-cell colour where the terminal can take it,
+        one accent where it cannot, and nothing at all where braille cannot render.
+
+        Braille is Unicode: a 16-colour terminal still draws the dots (one accent colour),
+        an ASCII-only terminal gets no art rather than a row of replacement boxes, and a
+        pruned install gets nothing because the artifact is absent.
+        """
+        if self.tier == "none" or tui_ascii_only():
+            return []
+        cells = rail_art_cells()
+        if not cells:
+            return []
+        rows = []
+        for row in cells:
+            spans = [("class:app.rail.value", " ")]
+            if self.tier in ("truecolor", "256"):
+                colour, glyphs = None, ""
+                for cell in row:
+                    if not cell:
+                        if glyphs:
+                            spans.append(("fg:%s" % colour, glyphs))
+                            glyphs = ""
+                        colour = None
+                        spans.append(("class:app.rail.value", " "))
+                        continue
+                    if cell[0] != colour and glyphs:
+                        spans.append(("fg:%s" % colour, glyphs))
+                        glyphs = ""
+                    colour, glyphs = cell[0], glyphs + cell[1]
+                if glyphs:
+                    spans.append(("fg:%s" % colour, glyphs))
+            else:
+                spans.append(("class:app.rail.art",
+                              "".join(cell[1] if cell else " " for cell in row)))
+            spans.append(("class:app.rail.value", "\n"))
+            rows.append(spans)
+        return rows
 
     def _status_text(self):
         from prompt_toolkit.formatted_text import FormattedText
@@ -19399,6 +19473,7 @@ class AppScreen(TuiScreen):
                 "app.rail": "bg:#12161c",
                 "app.rail.title": "bg:#12161c bold #5fbfbf",
                 "app.rail.value": "bg:#12161c #a8b1bd",
+                "app.rail.art": "bg:#12161c bold #5fbfbf",
                 "app.body": "bg:#0e1116",
                 "app.status": "bg:#12161c",
                 "app.status.hot": "bg:#12161c bold #5fbfbf",
@@ -19414,6 +19489,7 @@ class AppScreen(TuiScreen):
                 "app.rail": "bg:#12161c",
                 "app.rail.title": "bg:#12161c bold cyan",
                 "app.rail.value": "bg:#12161c",
+                "app.rail.art": "bg:#12161c bold cyan",
                 "app.body": "bg:#0e1116",
                 "app.status.hot": "bold cyan",
                 "app.hint": "dim",

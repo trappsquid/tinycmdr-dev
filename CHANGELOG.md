@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.57] - 2026-10-03
+
+Added
+- **The `--app` rail carries the brand.** The badge, rendered by the designer as
+  braille cells - 24x9 characters, each a 2x4 dot cell, so 48x36 effective
+  resolution - with per-cell colour, sitting one blank row under the `KEYS` block.
+  The art is data (`assets/tui-rail-badge.json`, cells + hex colours), never ANSI:
+  escape bytes inside a prompt_toolkit span render as literal `[38;2;...` text.
+  Truecolor and 256-colour terminals get the per-cell colours, a 16-colour terminal
+  gets the dots in one accent, and an ASCII-only terminal gets no art rather than a
+  row of replacement boxes. `maintenance/make-brand-art.py` re-derives an equivalent
+  from the badge master on a host with neither PIL nor numpy.
+
 ## [1.0.56] - 2026-10-03
 
 Added

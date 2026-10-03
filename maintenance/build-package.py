@@ -148,6 +148,10 @@ SHIP = [
     # renders the way its author meant it to.
     "assets/tinycmdr-chibi.png",
     "assets/tinycmdr-helm.png",
+    # The app rail's brand art: data (braille cells + colours), never ANSI. Derived from
+    # the badge master by maintenance/make-brand-art.py; the app degrades to no art when
+    # the terminal cannot show braille, so its absence is survivable but dull.
+    "assets/tui-rail-badge.json",
 ]
 
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere

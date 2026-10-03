@@ -18,6 +18,7 @@ import base64
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -420,6 +421,49 @@ check("--app's status line carries the run status only; keys live in the rail (P
 check("--app's input box is labeled 'you', not 'ask' (P-06)",
       "".join(p for _, p in _app.composer.title.__pt_formatted_text__()).strip() == "you",
       _app.composer.title)
+
+# --- the brand art in the rail ------------------------------------------------------
+# Data, derived from the badge master by maintenance/make-brand-art.py, drawn as spans:
+# raw ANSI inside a span renders as literal "[38;2;..." text (measured twice in this
+# file), so the artifact is cells + colours and the screen composes the styles.
+_art_cells = fb.rail_art_cells()
+check("the rail art artifact loads (24x9 braille cells)",
+      len(_art_cells) == 9 and len(_art_cells[0]) == 24
+      and any(cell for row in _art_cells for cell in row),
+      (len(_art_cells), [len(r) for r in _art_cells[:2]]))
+_rail_spans = fb.AppScreen(colour=True, tier="truecolor")._sidebar_text().__pt_formatted_text__()
+_rail_txt = "".join(p for _, p in _rail_spans)
+check("...and rides the rail under the keys",
+      "KEYS" in _rail_txt and any(0x2800 <= ord(c) <= 0x28FF for c in _rail_txt),
+      _rail_txt[-260:])
+check("...as spans, never as ANSI escapes",
+      "\x1b" not in _rail_txt, [p for _, p in _rail_spans if "\x1b" in p][:2])
+_art_widths = [len(p) for _, p in _rail_spans
+               if any(0x2800 <= ord(c) <= 0x28FF for c in p)]
+check("...within the rail's 26 columns", _art_widths and max(_art_widths) <= 25, _art_widths)
+_saved_ascii_only = fb.tui_ascii_only
+try:
+    fb.tui_ascii_only = lambda: True
+    check("...and an ASCII-only terminal gets no braille mush",
+          not any(0x2800 <= ord(c) <= 0x28FF
+                  for _, _p in fb.AppScreen(colour=True, tier="16")
+                  ._sidebar_text().__pt_formatted_text__() for c in _p))
+finally:
+    fb.tui_ascii_only = _saved_ascii_only
+# The artifact is the designer's render (PIL LANCZOS keeps faint pixels a box filter
+# drops), so the contract is well-formedness + the cells it was accepted with, not
+# byte-equality with maintenance/make-brand-art.py - that tool is the dependency-free
+# fallback, and its --write is what a re-derivation would ship.
+_hex6 = re.compile(r"^#[0-9a-f]{6}$")
+_lit = [sum(1 for c in row if c) for row in _art_cells]
+check("...and every cell is a hex colour plus a braille glyph",
+      all(_hex6.match(cell[0]) and 0x2800 <= ord(cell[1]) <= 0x28FF
+          for row in _art_cells for cell in row if cell),
+      [cell for row in _art_cells for cell in row if cell][:3])
+check("...with the accepted dot counts (the designer's render)",
+      [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c)
+       for row in _art_cells] == [55, 109, 104, 93, 102, 92, 89, 73, 19],
+      [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c) for row in _art_cells])
 
 # P-03: the done line and the rail read ONE counter (the run accumulator).
 _events = []
