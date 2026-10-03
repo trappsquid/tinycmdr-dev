@@ -872,6 +872,67 @@ def main():
         check("...and the install now runs the new build",
               'VERSION = "9.9.10-' in (workdir / "tinycmdr.py").read_text(encoding="utf-8"))
 
+        # ---- the primary path: bare `update`, from the release URL, no git ----------
+        # The whole stranded-install incident was bare `update` needing git. Pin the real
+        # path hermetically: serve a package and its SHA256SUMS over loopback, point update
+        # at it, and prove it lands with no git on PATH and refuses a corrupted transfer.
+        import hashlib
+        import http.server
+        import socketserver
+        import threading
+        import zipfile
+        rel = workdir / "release"
+        (rel / "pkg" / "tinycmdr-9.9.11").mkdir(parents=True)
+        (rel / "pkg" / "tinycmdr-9.9.11" / "tinycmdr.py").write_text(
+            (workdir / "tinycmdr.py").read_text(encoding="utf-8")
+            .replace('VERSION = "', 'VERSION = "9.9.11-', 1), encoding="utf-8")
+        asset = "tc-update-test.zip"
+        with zipfile.ZipFile(rel / asset, "w") as z:
+            z.write(rel / "pkg" / "tinycmdr-9.9.11" / "tinycmdr.py",
+                    "tinycmdr-9.9.11/tinycmdr.py")
+        digest = hashlib.sha256((rel / asset).read_bytes()).hexdigest()
+        (rel / "SHA256SUMS").write_text("%s  %s\n" % (digest, asset), encoding="utf-8")
+
+        class _Rel(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                f = rel / self.path.rsplit("/", 1)[-1]
+                if not f.exists():
+                    self.send_error(404)
+                    return
+                data = f.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        srv = socketserver.TCPServer(("127.0.0.1", 0), _Rel)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        fb._update_asset = lambda: asset
+        fb.CONFIG["agent"]["update_url"] = "http://127.0.0.1:%d" % srv.server_address[1]
+        _p = os.environ.get("PATH", "")
+        try:
+            os.environ["PATH"] = str(workdir)          # nothing named git on it
+            rc, out, err = call(fb, ["update"])
+        finally:
+            os.environ["PATH"] = _p
+        check("bare update lands from the release URL with no git on PATH",
+              rc == 0 and "9.9.11" in out, (rc, out[:200], err[:200]))
+        check("...and the install runs the new build",
+              'VERSION = "9.9.11-' in (workdir / "tinycmdr.py").read_text(encoding="utf-8"))
+
+        (rel / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, asset), encoding="utf-8")
+        _before = (workdir / "tinycmdr.py").read_bytes()
+        rc, out, err = call(fb, ["update"])
+        check("a download that fails SHA256SUMS is refused",
+              rc == 1 and "SHA256SUMS" in (out + err), (rc, (out + err)[:200]))
+        check("...and nothing is written over the install",
+              (workdir / "tinycmdr.py").read_bytes() == _before)
+        srv.shutdown()
+        srv.server_close()
+
         check("the new verbs are in the verb list",
               all(v in fb.VERBS for v in ("health", "config", "proc",
                                           "update", "clean", "version")), fb.VERBS)
