@@ -866,7 +866,22 @@ if ($SearchEgress -and $SearchEgress.ToLower() -notin @("true", "false")) {
 }
 if ($SearchEgress) { $SearchEgress = $SearchEgress.ToLower() }
 
-if ($Ask) {
+# A re-run over an install that is already configured walked the whole wizard again -
+# server, token, endpoint, key - which reads as "it is resetting me" when it is only
+# re-asking. Ask ONCE, with keeping as the default; "No" still reaches the full wizard, so
+# a reinstall can still change or add a lane.
+$KeepConn = $false
+if ($Ask -and (Test-Path (Join-Path $InstallDir "config.json")) -and
+        (Test-Path (Join-Path $InstallDir ".env")) -and
+        [bool](Select-String -Path (Join-Path $InstallDir ".env") `
+                             -Pattern '^TINYCMDR_(MM|TG)_TOKEN=.+' -Quiet)) {
+    Write-Host ""
+    Write-Host "  There is already a configured install in $InstallDir"
+    Write-Host "  (config.json and .env are used as they are - nothing to re-enter)"
+    $KeepConn = Ask-Yes "  Keep the existing configuration?" $true
+}
+
+if ($Ask -and -not $KeepConn) {
     Head "how you talk to it"
     Write-Host ""
     Write-Host "tinycmdr answers messages. Pick how it should get them - a chat account is what"
@@ -1111,6 +1126,20 @@ if ($MattermostToken) {
     }
 }
 
+# The Telegram token gets the same redo treatment as the Mattermost one above. It used to
+# be filled only by the prompt, and the .env writer takes it from this variable - so a
+# redo (or the keep-existing path) wrote TINYCMDR_TG_TOKEN back EMPTY and silently dropped
+# the Telegram lane.
+if (-not $TelegramToken -and (Test-Path (Join-Path $InstallDir ".env"))) {
+    foreach ($line in Get-Content (Join-Path $InstallDir ".env")) {
+        $s = $line.Trim()
+        if ($s -match '^TINYCMDR_TG_TOKEN=(.+)$' -and $matches[1].Trim()) {
+            $TelegramToken = $matches[1].Trim()
+            break
+        }
+    }
+}
+
 # -------------------------------------------------------------------- the chat lane
 # A chat account is what the background task runs. The harness also runs as a session
 # (`python tinycmdr.py --cli`) and a single task (`--once`), but with NO Mattermost and
@@ -1316,6 +1345,12 @@ if ($script:Fallbacks.Count) {
 # in config.json is ignored with a warning), so only the numeric allowlist goes in here.
 # The lane is deny-by-default: a token with no id refuses to start, which is why the
 # installer refuses to finish that way rather than leaving a bot that ignores every DM.
+# A redo keeps a working Telegram lane: the ids live in config.json, so read them back when
+# this run was not given -TelegramIds. Without this the guard below ("a token with no id")
+# refuses a perfectly configured install the moment the token is kept.
+if (-not $TelegramIds -and $TelegramToken -and $cfg.telegram -and $cfg.telegram.allowed_users) {
+    $TelegramIds = (@($cfg.telegram.allowed_users) -join ",")
+}
 $tgIds = @()
 if ($TelegramIds) {
     $tgIds = @($TelegramIds -split '[,\s]+' | Where-Object { $_ -match '^\d+$' })

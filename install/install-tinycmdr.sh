@@ -729,6 +729,18 @@ ASK_Q=1
 [ -t 0 ] || ASK_Q=0
 [ "$YES" = 1 ] && ASK_Q=0
 [ -n "${TINYCMDR_ASK:-}" ] && ASK_Q=1
+# A re-run over an install that is already configured used to walk the whole wizard again -
+# server, token, endpoint, key - which reads as "it is resetting me" when it is only
+# re-asking. Ask ONCE, with keeping as the default; a "no" still reaches every question
+# below, so a reinstall can still change or add a lane.
+if [ "$ASK_Q" = 1 ] && [ -f "$INSTALL_DIR/config.json" ] && [ -f "$INSTALL_DIR/.env" ] &&
+   grep -qE '^TINYCMDR_(MM|TG)_TOKEN=.+' "$INSTALL_DIR/.env"; then
+    say "this install is already configured"
+    info "config.json and .env in $INSTALL_DIR are used as they are - nothing to re-enter"
+    if ask_yes "Keep the existing configuration?" y; then
+        ASK_Q=0
+    fi
+fi
 if [ "$ASK_Q" = 1 ]; then
     say "a few questions"
     info "press Enter with no answer to take the value in brackets"

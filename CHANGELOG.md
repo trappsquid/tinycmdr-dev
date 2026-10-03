@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.53] - 2026-10-03
+
+Fixed
+- **A re-run over an already-configured install no longer walks the whole wizard.** The
+  installers asked for the server, bot token, model endpoint and key every time, which reads
+  as "it is resetting me" when it is only re-asking. They now detect a configured install
+  (`config.json` plus a token in `.env`), ask ONCE - "Keep the existing configuration?"
+  [yes] - and skip every question when the answer is keep. Answering no still reaches the
+  full wizard, so a reinstall can still change or add a lane. On Windows the Telegram token
+  is now carried over from `.env` like the Mattermost one (a redo used to write
+  `TINYCMDR_TG_TOKEN` back EMPTY and silently drop the lane), and the Telegram ids are read
+  back from `config.json`, so the token-without-an-id guard cannot refuse a valid kept
+  install. Graded in `tests/test_installer_windows.py` and `tests/test_installer_unix.py`.
+
 ## [1.0.52] - 2026-10-03
 
 Fixed

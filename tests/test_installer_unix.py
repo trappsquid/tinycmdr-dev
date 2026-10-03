@@ -1038,6 +1038,13 @@ def main():
         case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
+    print("\n== a re-run over a configured install keeps it, and asks once ==")
+    _sh = (BASE / "install" / "install-tinycmdr.sh").read_text(encoding="utf-8")
+    check("the question list is gated on the keep answer",
+          "Keep the existing configuration?" in _sh and "ASK_Q=0" in _sh,
+          "a configured reinstall walked the whole wizard and read as a reset")
+    check("a configured re-run is detected from config.json + a token in .env",
+          "this install is already configured" in _sh)
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed:")

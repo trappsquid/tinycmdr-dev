@@ -336,6 +336,22 @@ def main():
     check("the uninstall branch still comes before the installer preamble",
           install.index("if ($Uninstall) {") < install.index("Head \"tinycmdr installer\""))
 
+    print("\n== a re-run over a configured install keeps it, and asks once ==")
+    ps1 = source("install/install-tinycmdr.ps1")
+    check("the wizard is gated on the keep answer",
+          "Keep the existing configuration?" in ps1
+          and "if ($Ask -and -not $KeepConn) {" in ps1,
+          "a configured reinstall walked the whole wizard and read as a reset")
+    check("a configured re-run is detected from config.json + a token in .env",
+          "There is already a configured install" in ps1
+          and re.search(r"TINYCMDR_\(MM\|TG\)_TOKEN", ps1) is not None)
+    check("the Telegram token is carried over from .env on a redo",
+          re.search(r"\^TINYCMDR_TG_TOKEN=\(\.\+\)\$", ps1) is not None,
+          "it used to be written back EMPTY, silently dropping the lane")
+    check("the Telegram ids are read back from the existing config",
+          "$cfg.telegram.allowed_users" in ps1 and "-not $TelegramIds" in ps1,
+          "the token-with-no-id guard would refuse a valid kept install")
+
     print("")
     if FAILED:
         print("%d check(s) FAILED:" % len(FAILED))
