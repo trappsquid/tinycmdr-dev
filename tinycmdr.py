@@ -552,6 +552,9 @@ DEFAULT_CONFIG = {
         "subagent_model": "",   # model for delegate_task sub-agents; empty =
                                 # inherit the conversation's model (set to the
                                 # local model name to keep sub-agents off-box-cost-free)
+        # Hard wall-clock cap per sub-agent, independent of the parent's own runway: one
+        # hung child used to hold a thread for the parent's whole max_minutes (75).
+        "subagent_timeout_seconds": 900,
         "show_usage": True,       # token/time footer on the Done status line
         "vision": False,          # set True only if your model accepts images
         "confirm_patterns": [
@@ -9198,44 +9201,108 @@ def render_subagent_result(typed, why, answer, cap=2000):
     return "\n".join(lines)
 
 
-def tool_delegate_task(args, ctx):
-    """Spawn a sub-agent with a fresh context to work a subtask."""
-    if ctx.get("depth", 0) >= 1:
-        return "ERROR: sub-agents cannot spawn further sub-agents."
-    task = args["task"]
-    key = f"sub-{time.time()}"
-    # A sub-agent is a fresh session key, so without this it would silently
-    # ignore the conversation's model and fall back to the config default.
-    inherited = (CONFIG["agent"].get("subagent_model")
-                 or ctx.get("model"))
+_SUB_KEYS = itertools.count()
+
+
+def _run_delegate_one(task, context, model, timeout, ctx):
+    """One child run, always returning a parseable result. Never raises (except /stop).
+
+    The child gets the SUBAGENT prompt, a wall-clock cap of its own, its own model when
+    asked, and anything it leaves behind (typed result + cost) is returned to the parent.
+    """
+    key = "sub-%d-%d" % (int(time.time()), next(_SUB_KEYS))
+    inherited = model or CONFIG["agent"].get("subagent_model") or ctx.get("model")
     if inherited:
         AGENT.model_overrides[key] = inherited
-    # Its own source tag, so its lines read as "↳ sub:...: ..." rather than as
-    # the main run's work, and so two subtasks running at once (one batch can
-    # start four) cannot grow each other's line.
     sub_src = "sub:" + " ".join(str(task).split())[:24]
+    body = task + _SUBAGENT_RESULT_CONTRACT
+    if context:
+        body = ("[shared context for every task in this batch]\n%s\n\n%s"
+                % (context, body))
+    cap = float(timeout or CONFIG["agent"].get("subagent_timeout_seconds", 900) or 0)
+    usage = None
+    answer = ""
     try:
-        # The contract rides the TASK: the operator's message and this harness's
-        # instructions are the only two things a run obeys, so a shape the sub-agent
-        # cannot see would be a third voice, and one it may not follow.
-        # /stop must reach the SUB-AGENT, not only the run that spawned it. Without this the
-        # operator's stop flagged a parent that was parked inside THIS call, waiting on the
-        # sub-agent: nothing checked the flag until every subtask had finished, and the
-        # sub-agents themselves had no flag to check, so they could not be stopped at all.
-        # Measured 2026-09-29: three /stop commands across twenty minutes changed nothing while
-        # three sub-agents kept writing files. Passing the parent's event down lets the
-        # sub-agent's own in-flight request abort, which returns this call and lets the parent
-        # see the stop on the next step - one fix for both halves of the same bug.
-        answer = AGENT.run(key, task + _SUBAGENT_RESULT_CONTRACT,
+        answer = AGENT.run(key, body,
                            depth=ctx.get("depth", 0) + 1,
                            source=sub_src,
                            cancel_event=ctx.get("cancel_event"),
+                           system_prompt=build_system_prompt(subagent=True),
+                           max_seconds=(cap or None),
                            **_relay_callbacks(ctx, sub_src))
+    except Exception as e:                  # noqa: BLE001 - a crash is a typed failure
+        log.warning("sub-agent %s raised %s: %s", sub_src, type(e).__name__, e)
+        answer = "The sub-agent failed: %s: %s" % (type(e).__name__, e)
     finally:
         AGENT.model_overrides.pop(key, None)
+        usage = AGENT.last_usage.pop(key, None)
         AGENT.reset(key)  # sub-agent context is throwaway
     typed, why = parse_subagent_result(answer)
-    return render_subagent_result(typed, why, answer)
+    out = render_subagent_result(typed, why, answer)
+    if usage:
+        # A 4-way delegation is the expensive case by construction; the parent (and the
+        # operator reading the footer) should see what it actually spent.
+        out += "\n[HARNESS: sub-agent cost - %s]" % fmt_usage(usage)
+    return out
+
+
+def _run_delegate_batch(items, context, ctx):
+    """Run a slice batch in parallel, sized to the endpoint's own slots, ordered out."""
+    clean = []
+    for i, item in enumerate(items):
+        if isinstance(item, str):
+            item = {"task": item}
+        if not isinstance(item, dict) or not str(item.get("task") or "").strip():
+            return ("ERROR: tasks[%d] has no `task` text. Each entry needs a "
+                    "self-contained instruction (and may carry name / model / "
+                    "timeout_seconds)." % i)
+        clean.append(item)
+    slots = endpoint_slots(AGENT.llm_url) or 1
+    workers = max(1, min(len(clean), BATCH_MAX_WORKERS, slots))
+    log.info("delegating %d task(s) with %d worker(s) (endpoint slots: %s)",
+             len(clean), workers, slots)
+    results = [None] * len(clean)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futs = {pool.submit(_run_delegate_one, str(it.get("task")), context,
+                            it.get("model"), it.get("timeout_seconds"), ctx): i
+                for i, it in enumerate(clean)}
+        for fut in as_completed(futs):
+            i = futs[fut]
+            try:
+                results[i] = fut.result()
+            except OperatorStop:
+                results[i] = "STOPPED by the operator: this sub-agent was aborted."
+            except Exception as e:          # noqa: BLE001 - one child must not sink the batch
+                results[i] = ("ERROR: sub-agent %d crashed: %s: %s"
+                              % (i + 1, type(e).__name__, e))
+    rendered = []
+    for i, (it, res) in enumerate(zip(clean, results)):
+        label = str(it.get("name") or "").strip() or ("task %d" % (i + 1))
+        rendered.append("--- sub-agent %d/%d (%s) ---\n%s"
+                        % (i + 1, len(clean), label, res))
+    return "\n\n".join(rendered)
+
+
+def tool_delegate_task(args, ctx):
+    """Spawn a sub-agent with a fresh context to work a subtask (or a batch of them).
+
+    A batch shares ONE `context` block (Goal + Contract: interfaces, paths owned) while
+    each task is self-contained (Target, Change, Acceptance) - the shape omp's task tool
+    teaches its model (prompts/tools/task.md), which stops N children from each needing
+    the same interfaces restated.
+    """
+    if ctx.get("depth", 0) >= 1:
+        return "ERROR: sub-agents cannot spawn further sub-agents."
+    context = str(args.get("context") or "").strip()
+    items = args.get("tasks")
+    if isinstance(items, list) and items:
+        return _run_delegate_batch(items, context, ctx)
+    task = str(args.get("task") or "").strip()
+    if not task:
+        return ("ERROR: give `task` (one self-contained instruction) or `tasks` "
+                "(a batch sharing the top-level `context`).")
+    return _run_delegate_one(task, context, args.get("model"),
+                             args.get("timeout_seconds"), ctx)
 
 
 # --------------------------------------------------------------------------
@@ -10302,11 +10369,28 @@ CORE_TOOLS = {
             "followups - so asking it to check a piece of work gets a verdict with "
             "its evidence, not a paragraph. Use it for parallel investigation, to "
             "keep noisy log-digging out of your own context, or to have work checked "
-            "by an agent that did not write it. Sub-agents cannot spawn further "
-            "sub-agents.",
+            "by an agent that did not write it. One `task` for a single job, or "
+            "`tasks` for a batch that shares the top-level `context` (Goal + Contract: "
+            "interfaces, files owned). Sub-agents cannot spawn further sub-agents.",
             {"task": {"type": "string",
-                      "description": "Complete, self-contained instruction"}},
-            ["task"]),
+                      "description": "One complete, self-contained instruction: "
+                                     "Target (files, non-goals), Change (steps), "
+                                     "Acceptance (observable result)"},
+             "context": {"type": "string",
+                         "description": "Shared by every entry in `tasks`: the Goal and "
+                                        "the Contract (interfaces, paths one owner "
+                                        "edits). Never restated per task"},
+             "tasks": {"type": "array",
+                       "description": "Batch of {task, name?, model?, "
+                                      "timeout_seconds?} entries, run in parallel",
+                       "items": {"type": "object"}},
+             "model": {"type": "string",
+                       "description": "Model for this child (or per entry in `tasks`); "
+                                      "defaults to the conversation's"},
+             "timeout_seconds": {"type": "integer",
+                                 "description": "Wall-clock cap for this child "
+                                                "(default agent.subagent_timeout_seconds)"}},
+            []),
     },
     "remember": {
         "fn": tool_remember,
@@ -12239,13 +12323,45 @@ def soul_text():
     return _SOUL
 
 
-def build_system_prompt():
+_SUBAGENT_PROMPT_SUBS = (
+    ("The operator messages you via Mattermost; you do the work and report back.",
+     "You are a SUB-AGENT: the main agent handed you ONE assignment and waits for its "
+     "result. There is no operator in this conversation and nothing here is posted to "
+     "any chat; the main agent will report."),
+    ("- Narrate as you go: the operator watches the chat. Before each batch of tool calls, write ONE short plain-text line saying what you are about to check or do (\"Checking what holds the file lock:\"). Under 15 words, no headers, no preamble; it posts the moment you emit it, then the tools run.",
+     "- No narration and no progress updates: nobody is watching. Work, then report "
+     "ONCE through the result block the assignment asks for."),
+    ("use `ask_user` and wait",
+     "do NOT use ask_user (a sub-agent has no operator): state the decision and the "
+     "options you weighed in your result block"),
+    ("High-stakes checks go to delegate_task so the work is not grading itself.",
+     "A sub-agent cannot delegate: report exactly what you verified and what you did not."),
+    ("- You are autonomous, but not omniscient: when a decision is genuinely the operator's (an irreversible change, two paths their preference settles, a target or credential you cannot choose between), use `ask_user` and wait. Everything else: pick the most reasonable option, state the assumption in one line, and proceed. Never `ask_user` for permission for the job you were given, or for anything a tool can tell you. If it is off or nobody is reachable, the result says so: use your judgment, state the assumption, carry on.",
+     "- You are autonomous: pick the most reasonable option, state the assumption in one "
+     "line, and proceed. A decision that is genuinely the operator's is not yours to make "
+     "silently either - put it in `blockers` with the options you weighed."),
+    ("- Anything recurring (\"check X every morning\") becomes a schedule job: it runs autonomously and reports back to the channel. Use search_sessions to recall how past issues were solved, delegate_task to farm out self-contained subtasks in parallel.",
+     "- You cannot schedule jobs or delegate: finish the assignment in this run with the "
+     "tools you have."),
+    ("- Answer the message you were actually given: never reply that it is \"noise\", \"nothing actionable\" or a \"truncated paste\" — the operator knows what they sent, and that reads as a broken bot. If it is genuinely ambiguous, quote it back and say what you tried; if you ran tools, the answer must contain what they returned (names, values, pass/fail), not your own status.",
+     "- Answer the assignment you were actually given; if you ran tools, the result must "
+     "contain what they returned (names, values, pass/fail), not your own status."),
+)
+
+
+def build_system_prompt(subagent=False):
     """The STATIC half of the prompt: identical for every call in a session.
 
     Anything that can change between two calls (notes) lives in
     volatile_context() instead — see the note there on why that matters for
     prefix caching. The one thing here that can still move is the custom-tool
     summary, and only when `create_tool` adds a tool mid-run.
+
+    `subagent=True` is the same contract minus the two things a child cannot do
+    (talk to the operator, narrate to a chat) and minus the two blocks that cost
+    prompt for capabilities it should not exercise (the skill index and the custom-tool
+    shelf). Its tools, its verification rules and its no-fabrication rules stay: those
+    are the parts a delegated result depends on.
     """
     cfg = CONFIG
     shell_name = "PowerShell" if IS_WINDOWS else "bash"
@@ -12266,8 +12382,8 @@ def build_system_prompt():
     custom_block = ("\nMore tools on this box, by category (every name is callable as it "
                     "stands; find_tools {\"category\": \"<cat>\"} returns the "
                     "category's descriptions and arguments):\n"
-                    + custom + "\n") if custom else ""
-    skills = skill_index()
+                    + custom + "\n") if (custom and not subagent) else ""
+    skills = [] if subagent else skill_index()
     skills_block = ("\nProse skills installed (runbooks of local procedures "
                     "and hard-won warnings — read the relevant one with the "
                     "`skill` tool BEFORE working in its domain; a skill is a "
@@ -12275,7 +12391,7 @@ def build_system_prompt():
                     "tools only, never skill names):\n"
                     + "\n".join(f"- {s['name']}: {s['desc']}" for s in skills)
                     + "\n") if skills else ""
-    return scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. {soul_text()} The operator messages you via Mattermost; you do the work and report back.
+    text = scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. {'' if subagent else soul_text() + ' '}The operator messages you via Mattermost; you do the work and report back.
 
 How you work:
 - Investigate first: check status, logs, and configs before concluding. Then act. Then verify the fix actually worked.
@@ -12309,6 +12425,13 @@ How you work:
 Machine: {facts}
 Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restarts)
 {custom_block}{skills_block}""")
+    if subagent:
+        for _old, _new in _SUBAGENT_PROMPT_SUBS:
+            text = text.replace(_old, _new)
+        text += ("\nCompletion: you are executing ONE assignment. Do not track todos, do "
+                 "not ask the operator anything, do not delegate. Finish with the result "
+                 "block the assignment asks for, and nothing after it.\n")
+    return text
 
 
 
@@ -14498,7 +14621,8 @@ class Agent:
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
             reasoning_cb=None,
-            ask_door=None, source="main", send_file_cb=None):
+            ask_door=None, source="main", send_file_cb=None,
+            system_prompt=None, max_seconds=None):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
         replaces user_text for this turn only (history stores text only).
@@ -14554,7 +14678,8 @@ class Agent:
             # it had done and not the order it had been doing it for. One short write per run,
             # and a restart can no longer erase what was asked.
             self._save(session_key)
-            messages = [{"role": "system", "content": build_system_prompt()}]
+            messages = [{"role": "system",
+                         "content": system_prompt or build_system_prompt()}]
             # Carried tool results ride between the system prompt and the
             # conversation: byte-identical for every call of this run, so only the
             # new tail is prefilled, and the model starts from what the session
@@ -14645,7 +14770,8 @@ class Agent:
 
             max_turns = CONFIG["llm"]["max_turns"]
             max_steps = CONFIG["agent"].get("max_steps", 40)
-            max_seconds = CONFIG["agent"].get("max_minutes", 10) * 60
+            max_seconds = float(max_seconds
+                                or (CONFIG["agent"].get("max_minutes", 10) * 60))
             model = (self.model_overrides.get(session_key)
                      or CONFIG["llm"]["model"])
             ctx["model"] = model   # derived sessions inherit this (sub-agents)
@@ -16296,6 +16422,7 @@ def _relay_callbacks(ctx, src):
 
     return {"say_cb": bind(rep.get("say")),
             "progress_cb": bind(rep.get("progress")),
+            "progress_done_cb": bind(rep.get("tool_done")),
             "interim_cb": bind(rep.get("note")),
             "narration_cb": bind(rep.get("narration")),
             "narration_drop_cb": bind(rep.get("drop"))}

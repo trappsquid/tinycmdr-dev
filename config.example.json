@@ -278,6 +278,7 @@
     "_comment_extras": "vision: only set true if the endpoint actually accepts images. subagent_model pins delegate_task sub-agents somewhere specific (empty = inherit the conversation's model). show_usage puts the token/time footer on the Done line. debug_dump_dir writes every request body to that directory when troubleshooting a model that answers nonsense (empty = off). announce_restart controls the 'back up' post after /restart.",
     "vision": false,
     "subagent_model": "",
+    "subagent_timeout_seconds": 900,
     "show_usage": true,
     "debug_dump_dir": "",
     "announce_restart": true,
