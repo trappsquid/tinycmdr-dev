@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **`shell`'s `timeout` was ignored for any command shorter than the auto-background
+  window** (60s by default): `timeout=5` on a 45-second command returned `exit_code=0`
+  after the full 45 seconds, because the auto-background wait ran on its own clock and
+  never consulted the requested timeout. Past the timeout the command and its tree are
+  killed now and the blocking path's `TIMEOUT after Ns` answer comes back instead.
+  Found by driving a Windows host.
+- **A scheduled job added from a `--once`/CLI run never fired.** The scheduler reads
+  `jobs.json` once at process start and the bot is the only process that fires jobs, so
+  a job added from another lane said "next run 09:51" and never ran (field: no log line,
+  no output file after the due minute); a job removed from such a lane was fired anyway
+  and written back into the file by the bot's next save. The scheduler re-reads the file
+  when its mtime changes — in the firing loop and before every `schedule` action.
+
+Changed
+- **`update` no longer copies every file it replaces.** Each update left a
+  `<name>.bak-update-<stamp>` beside every file it wrote — one host carried three
+  `tinycmdr.py` copies from three updates in a single day (3.6 MB), and nothing but
+  `clean` ever removed them. The replaced bytes are simply gone now; the release you came
+  from stays downloadable, and `clean` still sweeps the piles older installs carry. The
+  bounded `soul.md.bak-update-*` sets stay (three at most, one per distinct persona), and
+  `write_file`/`edit_file` still leave their single undo copy, which the verify region
+  note reads as the pre-image.
+
 ## [1.0.55] - 2026-10-03
 
 Fixed

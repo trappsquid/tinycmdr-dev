@@ -176,7 +176,7 @@ def main():
             (_pkg / "tinycmdr.py").write_text("new", encoding="utf-8")
             (_pkg / "install").mkdir()
             (_pkg / "install" / "x.sh").write_text("new", encoding="utf-8")
-            _wrote, _skipped = fb._apply_package(_pkg, "TESTSTAMP")
+            _wrote, _skipped = fb._apply_package(_pkg)
             check("apply writes what the package owns",
                   (_atmp / "tinycmdr.py").read_text(encoding="utf-8") == "new"
                   and (_atmp / "install" / "x.sh").exists()
@@ -187,11 +187,12 @@ def main():
                   and (_atmp / "soul.md").read_text(encoding="utf-8") == "my persona",
                   str(_skipped))
             (_pkg / "skills" / "RULES.md").write_text("seed", encoding="utf-8")
-            fb._apply_package(_pkg, "TESTSTAMP")
+            fb._apply_package(_pkg)
             check("...while a MISSING host-owned file IS seeded",
                   (_atmp / "skills" / "RULES.md").read_text(encoding="utf-8") == "seed")
-            check("...and every file it changed was backed up",
-                  bool(list(_atmp.glob("*.bak-update-TESTSTAMP"))), "no backup")
+            check("...and nothing is copied aside (no .bak-update pile)",
+                  not list(_atmp.glob("*.bak*")),
+                  [p.name for p in _atmp.rglob("*") if p.is_file()])
         finally:
             fb.BASE_DIR = _ab
             shutil.rmtree(_atmp, ignore_errors=True)
@@ -832,8 +833,8 @@ def main():
         rc, out, err = call(fb, ["update", str(cand)])
         check("update takes a candidate build and prints both versions",
               rc == 0 and "9.9.9" in out, (rc, out[:200], err[:200]))
-        check("...leaving a .bak-update beside the file it replaced",
-              any(p.name.startswith("tinycmdr.py.bak-update") for p in workdir.iterdir()),
+        check("...and no .bak copy is left beside it",
+              not any(p.name.startswith("tinycmdr.py.bak-update") for p in workdir.iterdir()),
               [p.name for p in workdir.iterdir()])
         rc, out, err = call(fb, ["update", str(cand)])
         check("updating with the same bytes is a no-op",

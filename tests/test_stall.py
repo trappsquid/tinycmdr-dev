@@ -783,6 +783,43 @@ def test_cron_times_stay_on_the_wall_clock():
           time.strftime("%a %H:%M", lt))
 
 
+def test_a_jobs_file_written_by_another_process_is_adopted():
+    """A `schedule add` from a --once run wrote jobs.json and reported a next run - and the
+    bot (the only process that fires jobs) never read the file again, so the job never ran;
+    a job removed from such a run was fired anyway and resurrected in the file by the next
+    save. Measured on a fleet box, 2026-10-03: job added 09:50, due 09:51, no fire, no log
+    line, no output file."""
+    work = Path(tempfile.mkdtemp(prefix="fbtest-sched-"))
+    s = None
+    try:
+        jf = work / "jobs.json"
+        jf.write_text("{}", encoding="utf-8")
+        s = fb.Scheduler(jf)
+        check("a fresh scheduler starts with the file's jobs", s.jobs == {}, s.jobs)
+        jf.write_text(json.dumps({"nightly": {"cron": "0 3 * * *", "task": "x",
+                                              "next": time.time() + 3600}}),
+                      encoding="utf-8")
+        os.utime(jf, (time.time() + 2, time.time() + 2))
+        check("a job added by another process is adopted",
+              s._reload_if_changed() and "nightly" in s.jobs, s.jobs)
+        check("...and the same file is not re-read twice", s._reload_if_changed() is False)
+        check("...and the tool sees it too",
+              "nightly" in s.tool_action({"action": "list"}, {}),
+              s.tool_action({"action": "list"}, {}))
+        s.jobs["long"] = {"cron": "0 3 * * *", "task": "x" * 200, "next": time.time() + 60}
+        _line = s.tool_action({"action": "list"}, {})
+        check("...and a long task text is elided with an ellipsis, not cut mid-word",
+              "..." in _line and _line.count("x") <= 80, _line)
+        jf.write_text("{}", encoding="utf-8")
+        os.utime(jf, (time.time() + 4, time.time() + 4))
+        check("...and a removal made elsewhere takes effect",
+              s._reload_if_changed() and s.jobs == {}, s.jobs)
+    finally:
+        if s is not None:
+            s._stop.set()
+        shutil.rmtree(work, ignore_errors=True)
+
+
 def _scripted_run(scripted):
     """Run AGENT with a stubbed model; every file write goes to tmp/."""
     fb.NOTES_FILE = TMP / "notes.md"

@@ -6260,13 +6260,20 @@ def _unwrap_redundant_powershell(command):
 _AUTOBG_GAP_WARNED = False
 
 
-def _shell_autobg(command, ctx, threshold):
+def _shell_autobg(command, ctx, threshold, limit=None):
     """Background this shell command if it outlives `threshold` seconds; else None.
 
     Fast commands keep their blocking result AND leave nothing behind: the command is
     spawned detached, and only one that actually outlives the window is adopted into the
     `process` table (so a box that never runs anything long never grows a job row). The
     guards already ran in tool_shell.
+
+    `limit` is the timeout the model asked for, and when it is shorter than the window it
+    wins: this wait used to be the only clock in play, so `timeout=5` on a 45-second
+    command came back `exit_code=0` after 45s - the parameter was silently ignored for
+    every command shorter than agent.auto_background_seconds (measured on a fleet box,
+    2026-10-03). Past `limit` the command and its tree are killed and the blocking path's
+    TIMEOUT answer is returned instead.
     """
     proc = REGISTRY.get("process")
     if not proc:
@@ -6291,6 +6298,7 @@ def _shell_autobg(command, ctx, threshold):
         log.debug("auto-background spawn failed (%s); blocking instead", e)
         return None
     deadline = time.time() + float(threshold)
+    kill_at = (time.time() + float(limit)) if limit else None
     while time.time() < deadline:
         stop = (ctx or {}).get("cancel_event")
         if stop is not None and stop.is_set():
@@ -6322,6 +6330,27 @@ def _shell_autobg(command, ctx, threshold):
                     % (child.returncode, body or "(no output)",
                        _launch_warning(command), _start_process_warning(command),
                        route_hint(command, ctx)))
+        if kill_at is not None and time.time() >= kill_at:
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)],
+                                   stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=20)
+                else:
+                    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
+            except (OSError, subprocess.SubprocessError):
+                child.kill()
+            state["done"].wait(timeout=2.0)
+            with state["lock"]:
+                body = bytes(state["buf"]).decode("utf-8", "replace")
+            discard(state)
+            body = re.sub(r"\n?__EXIT__-?\d+\s*$", "", body).strip()
+            body = digest_output("shell", {"command": command}, body)
+            body = body + verify_shell_writes(command)
+            body = cap_output("shell", body, "command output",
+                              session=(ctx or {}).get("session_key"))
+            return ("TIMEOUT after %ds — the command and everything it started were "
+                    "killed. Partial output:\n%s" % (int(limit), body or "(no output)"))
         time.sleep(0.25)
     jid = nxt()
     log_path, _spool = promote(jid, child, state, command)
@@ -6384,7 +6413,7 @@ def tool_shell(args, ctx):
     if _ab and not args.get("wait"):
         # Past the window, the blocking result would hold the turn hostage; the process
         # table takes over and the settled-jobs block closes the loop.
-        ab = _shell_autobg(command, ctx, _ab)
+        ab = _shell_autobg(command, ctx, _ab, timeout)
         if ab:
             return ab
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
@@ -9998,6 +10027,7 @@ class Scheduler:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _load(self):
+        self._mtime = self._disk_mtime()
         if self.jobs_file.exists():
             try:
                 self.jobs = json.loads(self.jobs_file.read_text(encoding="utf-8"))
@@ -10028,6 +10058,28 @@ class Scheduler:
     def _save(self):
         atomic_write_text(self.jobs_file, json.dumps(self.jobs, indent=2))
 
+    def _disk_mtime(self):
+        try:
+            return self.jobs_file.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _reload_if_changed(self):
+        """Adopt a jobs.json another process wrote. Returns True when it did.
+
+        The bot is the only process that FIRES jobs, and it held its start-up copy for
+        ever: a job added from a `--once` run said "next run 09:51" and never ran (no log
+        line, no fire), and a job removed there was fired anyway and resurrected in the
+        file by the next save - measured on a fleet box, 2026-10-03. mtime is enough: one
+        operator, one file. The overdue-skip in _load() is what makes a mid-session adopt
+        safe, the same way it is for a restart.
+        """
+        mt = self._disk_mtime()
+        if mt is None or mt == self._mtime:
+            return False
+        self._load()
+        return True
+
     @staticmethod
     def _next_run(cron_expr, base=None):
         # croniter must be seeded with a NAIVE LOCAL datetime: given a plain
@@ -10043,12 +10095,15 @@ class Scheduler:
             return "ERROR: croniter is not installed (pip install croniter)."
         action = args["action"]
         with self.lock:
+            self._reload_if_changed()
             if action == "list":
                 if not self.jobs:
                     return "No scheduled jobs."
                 lines = []
                 for name, j in sorted(self.jobs.items()):
-                    lines.append(f"- {name}: '{j['cron']}' — {j['task'][:80]}"
+                    task = j["task"]
+                    shown = task if len(task) <= 80 else task[:77] + "..."
+                    lines.append(f"- {name}: '{j['cron']}' — {shown}"
                                  f" (next: {time.strftime('%Y-%m-%d %H:%M', time.localtime(j['next']))})")
                 return "\n".join(lines)
             if action == "add":
@@ -10077,6 +10132,7 @@ class Scheduler:
             now = time.time()
             due = []
             with self.lock:
+                self._reload_if_changed()
                 for name, job in self.jobs.items():
                     if job.get("next", float("inf")) <= now:
                         due.append((name, dict(job)))
@@ -24826,7 +24882,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   version            the version alone
   proc               the processes running from THIS folder
   update [--full]    fetch the published build (verified download; nothing to do with git)
-  update <src>       put a newer build in place (file, zip or folder) with a backup
+  update <src>       put a newer build in place (file, zip or folder); no .bak copy
   clean [--yes]      list the junk in this folder; --yes removes it (state is kept)
   logs [n]           the last n lines of tinycmdr.log (default 40)
   restart            restart through this host's own door (task, systemd, launchd)
@@ -25703,14 +25759,15 @@ def _extract_release(archive, dest):
     return None
 
 
-def _apply_package(root, stamp):
+def _apply_package(root):
     """Write the package's files over this install. Returns (written, skipped).
 
-    Backs up every file it changes and never overwrites an operator's edited soul.md. Host
-    state (config.json, .env, sessions/, notes, tools/, skills/) is simply not in the
-    package, so it cannot be touched by construction.
+    Never overwrites an operator's edited soul.md (see preserve_edited_soul) and never
+    copies a replaced file aside: a stamped .bak per file per update is how an install
+    grows by gigabytes for no reason, and the release it came from stays downloadable.
+    Host state (config.json, .env, sessions/, notes, tools/, skills/) is simply not in
+    the package, so it cannot be touched by construction.
     """
-    import shutil
     written, skipped = [], []
     for src in sorted(root.rglob("*")):
         if not src.is_file():
@@ -25732,11 +25789,6 @@ def _apply_package(root, stamp):
         old = dest.read_bytes() if dest.exists() else None
         if old == new:
             continue
-        if old is not None:
-            try:
-                shutil.copy2(dest, str(dest) + ".bak-update-" + stamp)
-            except OSError:
-                pass
         dest.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_bytes(dest, new)
         written.append(rel.as_posix())
@@ -25825,7 +25877,7 @@ def _verb_update(rest):
             if _kept:
                 print("your persona is an edit to a shipped file - copied to %s first"
                       % Path(_kept).name)
-            written, skipped = _apply_package(root, stamp)
+            written, skipped = _apply_package(root)
             ensure_launcher_executable()
             if skipped:
                 print("    left your own %s alone" % ", ".join(skipped[:3]))
@@ -25890,7 +25942,6 @@ def _verb_update(rest):
             return 1
         print("candidate: %s (VERSION %s, runs ok)" % (new_app, new_version))
         print("this one : %s (VERSION %s)" % (CONFIG_PATH.parent, VERSION))
-        stamp = time.strftime("%Y%m%d-%H%M%S")
         changed = []
         for name in ("tinycmdr.py",):
             candidate = find(name)
@@ -25901,8 +25952,6 @@ def _verb_update(rest):
             new = candidate.read_bytes()
             if old == new:
                 continue
-            if old:
-                shutil.copy2(target, str(target) + ".bak-update-" + stamp)
             # The live build is replaced through the atomic writer for the same reason
             # a state file is: a torn write here bricks the install. The candidate was
             # already read and run as text, so decoding it is safe (audit §D8).
@@ -25913,7 +25962,7 @@ def _verb_update(rest):
             return 0
         for c in changed:
             print("  updated %s" % c)
-        print("backups: *.bak-update-%s beside them" % stamp)
+        print("no copy of the old build was kept: `update` the release you came from to roll back")
         if _verb_running() is True:
             print("a running bot still runs the OLD bytes: `tinycmdr restart` to switch.")
         return 0
@@ -25932,8 +25981,9 @@ CLEAN_KEEP = ("sessions", "skills", "tools", "uploads", "spill", "logs", "venv",
 def _verb_clean(rest):
     """`clean [--yes]` — say what is junk in this folder, then remove it on request.
 
-    An install folder is runtime, not an archive: the backups and staging copies pile up
-    (a push leaves a .bak per file), and `tests/`, `docs/`, `snapshots/` and `inbox/` are
+    An install folder is runtime, not an archive: backed-up copies and staging files pile up
+    (an install updated for a year carries a stamped copy of every build it ever ran, and
+    pushes leave .bak files behind), and `tests/`, `docs/`, `snapshots/` and `inbox/` are
     build-time things a reader's folder does not need. DRY RUN unless --yes: this deletes
     files, and a wrong glob here is somebody's session history."""
     apply = "--yes" in rest or "--force" in rest
