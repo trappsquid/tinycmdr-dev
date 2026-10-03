@@ -18,6 +18,7 @@ It runs against a fake dispatcher exactly like tests/test_stall.py: no network, 
 and no durable state is touched.
 """
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -324,12 +325,24 @@ def test_an_unanswered_question_stops_the_run():
               any("No answer" in t for _, t in d.posted), [t for _, t in d.posted][-2:])
         # The stop costs CONTEXT, and that is what the next run paid for on the live box
         # (2026-09-29): it spent its first calls re-deriving the task out of its own session
-        # files. The question is kept durably and surfaced in the block the next run reads.
-        check("the unanswered question is KEPT for the next run",
-              "Which of the two?" in fb.open_question("sess-t"),
+        # files. The question is kept durably and surfaced in the block the next run reads -
+        # ONCE. Measured 2026-10-03: a reminder that repeats made five consecutive runs
+        # restate the same assumption and pay the tokens each time.
+        _shown = fb.volatile_context(session_key="sess-t")
+        check("the unanswered question rides the trailing block, so the task is not re-derived",
+              "Which of the two?" in _shown, _shown[-200:])
+        check("...and it is handed to exactly ONE run (reading consumes it)",
+              fb.open_question("sess-t") == ""
+              and not fb._question_path("sess-t").exists(),
               fb.open_question("sess-t")[:140])
-        check("  and it rides the trailing block, so the task is not re-derived",
-              "Which of the two?" in fb.volatile_context(session_key="sess-t"))
+        # A question nobody came back to is stale, not eternal: past the TTL it is dropped
+        # rather than surfaced, because by then the work has moved on.
+        _qp = fb._question_path("sess-t")
+        fb._ensure_sessions_dir()
+        _qp.write_text(json.dumps({"question": "still relevant?", "at": time.time() - 25 * 3600}),
+                       encoding="utf-8")
+        check("a stale question is dropped, not surfaced",
+              fb.open_question("sess-t") == "" and not _qp.exists(), fb.open_question("sess-t")[:140])
         # the old shape stays available per box, deliberately, and only by config
         fb.CONFIG["agent"]["ask_timeout_continues"] = True
         out = fb.tool_ask_user({"question": "Which of the two?", "options": ["a", "b"]},

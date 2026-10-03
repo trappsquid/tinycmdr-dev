@@ -1085,6 +1085,24 @@ def main():
                   helper)
             check("...and says the instance is back", rc == 0 and "back up" in out,
                   (rc, out[:120], err[:160]))
+            # The helper returns BEFORE the replacement is up (~60s handover on the Windows
+            # task lane, measured twice 2026-10-03). Reporting that in-flight state as
+            # "nothing holds the lock yet" reads as a failed restart, so the verb waits for
+            # the outcome. Poll 0 keeps the suite fast; the stub flips True on the 3rd look.
+            _saved_poll = fb._RESTART_LOCK_POLL
+            _looks = {"n": 0}
+
+            def _later():
+                _looks["n"] += 1
+                return _looks["n"] >= 3
+
+            fb._RESTART_LOCK_POLL = 0
+            fb._verb_running = _later
+            rc, out, err = call(fb, ["restart"])
+            check("restart waits for the replacement to take the lock (not a snapshot)",
+                  rc == 0 and "back up" in out and _looks["n"] >= 3, (rc, out[:120], _looks))
+            fb._RESTART_LOCK_POLL = _saved_poll
+            fb._verb_running = lambda: True
             # Elevation is a PER-HOST rule, so assert this host's rule: Windows wants an
             # elevated shell for the task lane, Windows/Linux need root, and macOS needs
             # neither (launchd owns the process - exiting is the restart). The old check

@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 Fixed
+- **A question a stopped run left unanswered nagged every later run.** The sidecar that
+  carries it was re-surfaced on every run until the operator answered or stopped it —
+  five consecutive runs on one box restated the same assumption and paid the tokens each
+  time. It is now handed to exactly the next run (reading consumes it) and dropped once
+  it is older than `agent.ask_question_ttl_hours` (default 24; `0` disables the expiry),
+  so a stale question cannot outlive the work it came from.
 - **`shell`'s `timeout` was ignored for any command shorter than the auto-background
   window** (60s by default): `timeout=5` on a 45-second command returned `exit_code=0`
   after the full 45 seconds, because the auto-background wait ran on its own clock and

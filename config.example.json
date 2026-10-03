@@ -67,7 +67,7 @@
     "stream": true,
     "stream_idle_seconds": 120,
     "_stream": "Model calls use SSE when true: the first token is visible while it generates, a cancel closes the socket (a local llama.cpp stops generating), and a wedged stream ends on stream_idle_seconds. false = one blocking POST per call, which is what every version before 1.9.28 did.",
-    "_llama_extensions": "true (default) asks a llama.cpp endpoint for its OWN stream extensions: return_progress (a prompt_progress event at ~0.1s and then once per prompt batch, rendered as \"reading prompt · N%\" - a long prompt is otherwise minutes of silence) and, when sse_ping_interval is set, the keep-alive SSE comment. Gated on that endpoint's own /props reply confirming a llama.cpp build, and only ever asked of an on-LAN endpoint: a cloud provider rejects an unknown request field with a 400 and no other local server promises to ignore one. false = never send them. Neither field changes the model's answer.",
+    "_llama_extensions": "true (default) asks a llama.cpp endpoint for its OWN stream extensions: return_progress (a prompt_progress event at ~0.1s and then once per prompt batch, rendered as \"reading prompt \u00b7 N%\" - a long prompt is otherwise minutes of silence) and, when sse_ping_interval is set, the keep-alive SSE comment. Gated on that endpoint's own /props reply confirming a llama.cpp build, and only ever asked of an on-LAN endpoint: a cloud provider rejects an unknown request field with a 400 and no other local server promises to ignore one. false = never send them. Neither field changes the model's answer.",
     "llama_extensions": true,
     "sse_ping_interval": 0,
     "_sse_ping_interval": "0 = the server's own default (30s on llama.cpp), N = a ping every N seconds, -1 = no pings. Only ever sent to a confirmed llama.cpp endpoint.",
@@ -80,13 +80,29 @@
     },
     "_window_profiles": "Caps for a WINDOW BAND, keyed by the window the endpoint actually serves. `profiles` above follows the model's NAME, which cannot help the common self-hosted case: the same box restarted with a different quantisation or slot count, or a model whose name says nothing about its window. The SMALLEST band at least as large as the served window wins (a box serving 12288 takes the 16384 entry). Only keys the harness already reads are accepted, and a band's values are undone when a later band takes over, so only the last band applied is in force. The three below are the documented starting point for a small self-hosted model - delete them to get the window-scaled defaults, which already shrink every character cap to window/8. The character caps are ceilings: on an 8k window they clamp at 1024, which is the point. A band CAPS the character budgets only - it never widens the window, so it cannot fix a cloud endpoint the harness is running on its assumed 8000 (which lands in the 16384 band and gets small-model caps). Only llm.max_context_tokens sets the window; put the provider's documented number there.",
     "window_profiles": {
-      "8192": {"tool_carry": false, "history_exchanges": 4, "digest_lines": 12,
-               "notes_max_chars": 1500, "atlas_max_chars": 1200,
-               "tool_output_max_chars": 2000, "fetch_max_chars": 2000},
-      "16384": {"history_exchanges": 8, "digest_lines": 24, "notes_max_chars": 3000,
-                "tool_output_max_chars": 4000, "fetch_max_chars": 4000},
-      "32768": {"history_exchanges": 12, "digest_lines": 40, "notes_max_chars": 6000,
-                "tool_output_max_chars": 8000, "fetch_max_chars": 8000}
+      "8192": {
+        "tool_carry": false,
+        "history_exchanges": 4,
+        "digest_lines": 12,
+        "notes_max_chars": 1500,
+        "atlas_max_chars": 1200,
+        "tool_output_max_chars": 2000,
+        "fetch_max_chars": 2000
+      },
+      "16384": {
+        "history_exchanges": 8,
+        "digest_lines": 24,
+        "notes_max_chars": 3000,
+        "tool_output_max_chars": 4000,
+        "fetch_max_chars": 4000
+      },
+      "32768": {
+        "history_exchanges": 12,
+        "digest_lines": 40,
+        "notes_max_chars": 6000,
+        "tool_output_max_chars": 8000,
+        "fetch_max_chars": 8000
+      }
     }
   },
   "telegram": {
@@ -108,8 +124,18 @@
   "search": {
     "_comment": "Web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network. `allow_cloud_egress` is ON by default - a box with providers configured wants to search, and a silent refusal reads as a broken tool; set it false to REFUSE every off-LAN provider, which also refuses fetch_url for a URL off this network. A searxng provider never needs the flag. The installers ask (--search-egress), setup asks, and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
     "providers": [
-      {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search", "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"},
-      {"kind": "tavily", "url": "https://api.tavily.com/search", "api_key_env": "TAVILY_API_KEY", "label": "tavily"}
+      {
+        "kind": "anysearch",
+        "url": "https://api.anysearch.com/v1/search",
+        "api_key_env": "ANYSEARCH_API_KEY",
+        "label": "anysearch"
+      },
+      {
+        "kind": "tavily",
+        "url": "https://api.tavily.com/search",
+        "api_key_env": "TAVILY_API_KEY",
+        "label": "tavily"
+      }
     ],
     "allow_cloud_egress": true,
     "max_results": 5
@@ -294,7 +320,7 @@
     "checkin_stream_notes": true,
     "checkin_stream_seconds": 2.0,
     "color_coded": true,
-    "_stream_notes": "When true, the model’s own narration is streamed into ONE message that grows while it writes, so the plan is readable (and stoppable or steerable) before the tools run. False restores posting it once, after the call returns.",
+    "_stream_notes": "When true, the model\u2019s own narration is streamed into ONE message that grows while it writes, so the plan is readable (and stoppable or steerable) before the tools run. False restores posting it once, after the call returns.",
     "_comment_mint": "The model sees one run at a time, so it cannot know that the same by-hand procedure has now run four times this week. The harness keeps that census (logs/procedure-census.json) and, at mint_hint_after separate runs of one command shape, rides a single line on the tool result naming the mint call. After a run that drove mint_offer_steps or more hand calls (shell/execute_code/process), minted nothing, and repeated a shape seen in another run, the harness asks YOU instead - one line, at most once per procedure per week. Both are result-text/notice behaviour: no prompt bytes.",
     "mint_hint": true,
     "mint_hint_after": 2,
@@ -309,6 +335,8 @@
     "spill_max_bytes": 8388608,
     "deliver_after_announcements": 3,
     "session_transcript": true,
-    "fetch_max_chars": 12000
+    "fetch_max_chars": 12000,
+    "_comment_ask_question_ttl": "A question a run left unanswered is remembered for the NEXT run and handed to it once; after this many hours it is dropped instead (0 disables the expiry). 24 covers an overnight gap without nagging a box for days.",
+    "ask_question_ttl_hours": 24
   }
 }

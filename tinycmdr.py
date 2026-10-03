@@ -10579,6 +10579,9 @@ def set_open_question(session_key, question, options=None):
     in run_state on purpose: run_state dies with the process, the session file keeps only the
     trimmed conversation (measured: one message), and a restart between the two runs is
     ordinary.
+
+    The lifecycle is bounded: `open_question()` hands it to exactly one run, and a question
+    older than `agent.ask_question_ttl_hours` is dropped rather than surfaced.
     """
     try:
         _ensure_sessions_dir()
@@ -10599,14 +10602,35 @@ def clear_open_question(session_key):
 
 
 def open_question(session_key):
-    """The question an earlier run left unanswered, as a line for the trailing block, or ""."""
+    """The question an earlier run left unanswered, as a line for the trailing block, or "".
+
+    Handed to exactly ONE run: reading it consumes it, because a reminder that repeats in
+    every later run is noise - measured 2026-10-03 on a fleet box, where five consecutive
+    runs restated the same assumption and paid the tokens each time. The operator already
+    saw the question when it was asked; the run that follows the stop is the one that needs
+    the context. A question older than `agent.ask_question_ttl_hours` (default 24) is stale
+    and dropped outright: past that the work has moved on, and re-asking it blind is worse
+    than letting it go.
+    """
+    path = _question_path(session_key)
     try:
-        d = json.loads(_question_path(session_key).read_text(encoding="utf-8"))
+        d = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return ""
     q = str((d or {}).get("question") or "").strip()
     if not q:
         return ""
+    ttl = float(CONFIG["agent"].get("ask_question_ttl_hours") or 24)
+    if ttl > 0:
+        age_h = (time.time() - float((d or {}).get("at") or 0)) / 3600.0
+        if age_h > ttl:
+            log.info("dropping a question parked %.1fh ago (ask_question_ttl_hours=%g): %s",
+                     age_h, ttl, q[:80])
+            clear_open_question(session_key)
+            return ""
+    # Consumed: this run is the one that gets told. Deleting here, not after the run, keeps
+    # the state machine single-step - there is no run-end hook that could forget to.
+    clear_open_question(session_key)
     opts = [str(o) for o in (d.get("options") or []) if str(o).strip()]
     line = ('[HARNESS: a question from an earlier run is still unanswered: "%s"' % q)
     if opts:
@@ -26754,6 +26778,14 @@ def _scheduled_task_owned():
         return False
 
 
+# The helper returns as soon as it has SPARKED the replacement, and the replacement only
+# takes the lock once it is up - ~60s later on the Windows task lane (measured twice,
+# 2026-10-03, on a fleet box). One look right here turned that in-flight handover into
+# "nothing holds the lock yet - check logs", which reads as a failed restart.
+_RESTART_LOCK_POLL = 2.0   # seconds between looks while the handover is in flight
+_RESTART_LOCK_WAIT = 90.0  # long enough for the measured handover, short enough to be an answer
+
+
 def _verb_restart():
     """Restart through this host's own door, by calling the SHIPPED helper.
 
@@ -26799,12 +26831,25 @@ def _verb_restart():
         print("restart helper exited %s%s" % (rc, (": " + (err or "").strip()[-300:])
                                               if err else ""), file=sys.stderr)
         return 1
+    # Look until the outcome is known, bounded: the lock appears when the replacement is
+    # actually up, and the helper's own success says only that it was launched.
+    _t0 = time.time()
     running = _verb_running()
-    print("restart: %s" % {True: "back up (the lock is held again)",
-                           False: "the helper ran, but nothing holds the lock yet — "
-                                  "check `tinycmdr logs 20`",
-                           None: "helper ran; instance state unknown"}[running])
-    return 0 if running else 1
+    while running is not True and time.time() - _t0 < _RESTART_LOCK_WAIT:
+        time.sleep(_RESTART_LOCK_POLL)
+        running = _verb_running()
+    _waited = int(time.time() - _t0)
+    if running is True:
+        print("restart: back up%s (the lock is held again)"
+              % (" after %ds" % _waited if _waited >= 2 else ""))
+        return 0
+    if running is False:
+        print("restart: the helper ran, but nothing holds the lock %ds later — "
+              "check `tinycmdr logs 20`" % _waited, file=sys.stderr)
+        return 1
+    print("restart: helper ran; instance state unknown (the lock could not be read)",
+          file=sys.stderr)
+    return 1
 
 
 _SECRET_SHAPES = {
