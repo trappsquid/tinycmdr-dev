@@ -621,7 +621,7 @@
         "commit": "4daa918",
         "expect": "tagged"
       },
-      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '↑↓ PgUp/PgDn scroll' while ↑ and ↓ were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: ↑/↓ move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
+      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '\u2191\u2193 PgUp/PgDn scroll' while \u2191 and \u2193 were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: \u2191/\u2193 move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
       "gate": "done - merged to main; the README documents the keys; release.sh states the tagged claim on this anchor when the next tag exists"
     },
     {
@@ -893,7 +893,8 @@
       "title": "an edit to a CRLF file was told 'this file changed since you read it'",
       "state": "shipped",
       "anchor": {
-        "commit": "7f8fc87"
+        "commit": "7f8fc87",
+        "expect": "tagged"
       },
       "detail": "The read side recorded the raw bytes and the edit side compared its LF-normalized copy, so the receipt never matched on a CRLF file; the post-edit receipt also stored the new_string FRAGMENT instead of the resulting file. Both sides now hash an LF canonical view and count lines from it, and the post-edit receipt stores new_lf. Found by the box's own agent while it was being driven, 2026-10-03.",
       "gate": "tests/test_harness_extras.py (CRLF edit carries no note; an externally changed CRLF file does, with true counts)"
@@ -903,7 +904,8 @@
       "title": "a piped --once run parked a question for the full 120s and then stopped",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9"
+        "commit": "28ceff9",
+        "expect": "tagged"
       },
       "detail": "The CLI mounted its console ask door even when stdin was a pipe (cron, `ssh host --once`), so ask_user published the question, waited 120s and ended the run - contradicting the documented rule that a lane without a door refuses. The caller now declares whether a human is reachable: run_cli passes has_human=sys.stdin.isatty() and mounts no door when it is false, and a human-less destination takes the doorless confirm path. Observed live twice on a Windows fleet box (173s and 141s runs, both stopped).",
       "gate": "tests/test_harness_extras.py; tests/test_cli_prompt.py still pins the console door with a fake human"
@@ -913,7 +915,8 @@
       "title": "doctor's unmatched-failure draft said `match: everything`",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9"
+        "commit": "28ceff9",
+        "expect": "tagged"
       },
       "detail": "The draft picked the longest word of a signature; on a real box that was 'everything' from a timeout signature - a matcher that would fire everywhere. Drafts now skip a stopword list and pick the longest distinctive token ('timeout').",
       "gate": "tests/test_harness_extras.py (draft never picks a stopword; falls back to a distinctive word)"
@@ -923,7 +926,8 @@
       "title": "a read miss that shares a tool name hid the file that exists",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9"
+        "commit": "28ceff9",
+        "expect": "tagged"
       },
       "detail": "`read_file .../notes` answered with the tool lecture ('notes is a TOOL') while notes.md sat beside it, and the model was sent elsewhere (operator report). The sibling file is named first (`Did you mean .../notes.md?`); the tool note stays second; a plain miss still reads `does not exist.`",
       "gate": "tests/test_harness_extras.py"
@@ -933,7 +937,8 @@
       "title": "an older host-owned tools/process.py silently disabled auto-background",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9"
+        "commit": "28ceff9",
+        "expect": "tagged"
       },
       "detail": "update never overwrites host-owned files by design, so a pre-1.0.54 tools/process.py survived a 1.0.54 update and the features that call into it (auto-background, cross-restart exit codes) degraded with no note anywhere: a 75s command blocked the whole turn. dropin_gaps() now logs once and doctor prints `drop-ins: tools/process.py is an older copy (...)` with the remedy (refresh from the release, or delete to inherit the packaged seed). Verified on the box: refreshing the file made a 75s command background at 60.1s (`started b8`).",
       "gate": "tests/test_harness_extras.py"
