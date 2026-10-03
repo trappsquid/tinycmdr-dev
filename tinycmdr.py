@@ -620,6 +620,17 @@ DEFAULT_CONFIG = {
         # confirm-pattern command is declined, never assumed yes. "allow" is the other
         # value and is a deliberate choice, not a default (audit, 2026-09-22).
         "confirm_without_door": "decline",
+        # Per-tool authority (ported from omp docs/approval-mode.md). approval_mode is a
+        # CEILING on top of the regex tiers: "auto" (default) adds no prompts, "write"
+        # asks before exec-tier tools, "ask" before write and exec; tool_policy denies or
+        # prompts individual tools by name whatever the mode. A tool not in _TOOL_TIERS
+        # (any drop-in) is tier "exec", so a stricter mode fails closed. allow_patterns /
+        # allow_content_patterns are the confirm tier's escape hatch: one known-safe
+        # command or file shape can be whitelisted instead of {"all": true}.
+        "approval_mode": "auto",
+        "tool_policy": {},
+        "allow_patterns": [],
+        "allow_content_patterns": [],
         # The endpoint gate covers TOOLS, not just shell (audit, 2026-09-21): an
         # inferctl/llamasrv verb moves the box this bot talks to, and a TOOL CALL never
         # passes through the shell guard - two of them moved :8081 while the guard only
@@ -695,6 +706,10 @@ SHIPPED_GUARD_LISTS = {
     "confirm_patterns": tuple(DEFAULT_CONFIG["agent"]["confirm_patterns"]),
     "confirm_content_patterns": tuple(
         DEFAULT_CONFIG["agent"]["confirm_content_patterns"]),
+    # Empty on purpose (nothing is silently allowed), but registered so `<list>_extra`
+    # folds into them like every other tier and drift never reports on an empty base.
+    "allow_patterns": (),
+    "allow_content_patterns": (),
 }
 
 
@@ -3272,6 +3287,63 @@ def _executes_text(text):
     return any(rx.search(text) for rx in _EXECUTORS)
 
 
+# Per-tool authority. Each core tool's capability tier; anything not listed - a drop-in,
+# a create_tool product - is "exec" on purpose (fail closed). Ported from omp's approval
+# model (docs/approval-mode.md, packages/coding-agent/src/tools/approval.ts:97-215):
+# the policy map cannot be bypassed by a tool's own declaration because there is none,
+# and `approval_mode` is a ceiling that can only be stricter than the default.
+_TOOL_TIERS = {
+    "read_file": "read", "search_files": "read", "list_tools": "read",
+    "find_tools": "read", "skill": "read", "search_sessions": "read",
+    "ask_user": "read", "plan": "read",
+    "write_file": "write", "edit_file": "write", "create_tool": "write",
+    "notes": "write", "remember": "write", "experiment": "write",
+    "send_file": "write",
+    "shell": "exec", "execute_code": "exec", "schedule": "exec",
+    "delegate_task": "exec",
+}
+# "auto" adds no prompt on top of the regex tiers (the historical behaviour); "write"
+# gates exec; "ask" gates write+exec. "yolo" is accepted as an alias of auto.
+_APPROVAL_TIER_SETS = {"auto": ("read", "write", "exec"),
+                       "write": ("read", "write"),
+                       "ask": ("read",)}
+TIER_RANK = {"read": 0, "write": 1, "exec": 2}
+
+
+def tool_tier(name):
+    """The capability tier of a tool; UNKNOWN tools are `exec` (fail closed)."""
+    return _TOOL_TIERS.get(str(name or ""), "exec")
+
+
+def resolve_approval(name, args, ctx):
+    """The per-tool authority decision, before any handler runs. None = proceed.
+
+    Order: policy deny -> policy prompt -> tier vs mode. The existing regex tiers
+    (blocked/confirm) stay the ARGS-level gate and are checked by the tools themselves;
+    this adds what they cannot express: deny-by-name, a per-tool prompt, and a
+    fail-closed tier for drop-in tools that no content pattern happens to match.
+    """
+    policy = str(((CONFIG["agent"].get("tool_policy") or {}).get(str(name)))
+                 or "").strip().lower()
+    if policy == "deny":
+        return ("REFUSED: tool %r is denied by agent.tool_policy. Do not look for a way "
+                "around it - say what you needed it for and why." % name)
+    mode = str(CONFIG["agent"].get("approval_mode") or "auto").strip().lower()
+    if mode == "yolo":
+        mode = "auto"
+    if mode not in _APPROVAL_TIER_SETS:
+        log.warning("agent.approval_mode %r is not one of %s - using 'auto'",
+                    mode, "/".join(_APPROVAL_TIER_SETS))
+        mode = "auto"
+    tier = tool_tier(name)
+    if policy == "prompt" or tier not in _APPROVAL_TIER_SETS[mode]:
+        return endpoint_gate(
+            "%s %s" % (name, scrub(json.dumps(args, sort_keys=True))[:120]),
+            "agent.tool_policy/approval_mode asks before this tool (%s tier) runs" % tier,
+            (ctx or {}).get("confirm_cb"))
+    return None
+
+
 def is_blocked(command):
     # case-insensitive on purpose: PowerShell cmdlets are capitalised
     # (Remove-Item, Stop-Computer) and 'Format C:' must match too (the patterns
@@ -3299,7 +3371,16 @@ def _confirm_hit(text, kind="confirm_patterns"):
 
     `kind` is the CONTENT tier for a file's text and the COMMAND tier for a shell
     string: a bare word is a command in a shell and prose in a file (2026-09-25).
+
+    An `allow` list is checked FIRST, so an operator can whitelist one known-safe shape
+    instead of silencing the whole tier with confirm-allow's {"all": true}. deny still
+    wins: allow is only consulted here, after is_blocked refused its own match.
     """
+    allow_kind = ("allow_content_patterns" if kind == "confirm_content_patterns"
+                  else "allow_patterns")
+    for pat in _patterns(allow_kind):
+        if pat.search(text):
+            return None
     for pat in _patterns(kind):
         if pat.search(text):
             return pat.pattern
@@ -14280,6 +14361,12 @@ class Agent:
                     " different build - say so instead of hand-running its steps, and"
                     " create_tool writes a tool this box is missing.")
             return name, args, f"ERROR: unknown tool '{name}'.{hint}"
+        # Per-tool authority before anything runs: deny-by-name, a per-tool prompt, and a
+        # fail-closed tier for tools no content pattern happens to match. The regex tiers
+        # inside each tool still apply (this is a ceiling, not a replacement).
+        refusal = resolve_approval(name, args, ctx)
+        if refusal:
+            return name, args, refusal
         # A TOOL that moves the endpoint this bot talks to takes the same gate as a
         # shell command that does. Without this, an inferctl-style tool walked straight
         # past a guard that only ever read shell text (audit, 2026-09-21).
