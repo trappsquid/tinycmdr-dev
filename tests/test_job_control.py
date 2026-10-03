@@ -80,12 +80,13 @@ def main():
         check("readiness: ready" in out,
               "wait_for blocks until the log matches", out[-200:])
         jid2 = out.split()[1]
-        # 30s, not 5: the "still-running job is NOT announced" check below runs after the
-        # stdin step (~3s of work), and a 5s sleep raced it - under a loaded gate the job
-        # had already settled and the check failed on nothing but wall-clock (measured
-        # 2026-10-03, one flake in a green run of the same tree). It is killed at the end.
+        # 300s, and not a number that could elapse: the "still-running job is NOT
+        # announced" check below runs after the stdin step, and a short sleep raced it
+        # TWICE under a loaded gate (5s, then 30s) - the job settled first and the check
+        # failed on nothing but wall-clock. It is killed at the end of the test, so the
+        # long sleep costs nothing but cannot make this assertion nondeterministic.
         out = run_proc({"action": "start",
-                        "command": "%s -u -c \"import time;time.sleep(30)\"" % py,
+                        "command": "%s -u -c \"import time;time.sleep(300)\"" % py,
                         "wait_for": {"log": "never", "timeout": 1}}, ctx)
         check("NOT ready" in out and "still running" in out,
               "an unmet condition reports timedOut without killing the job", out[-200:])

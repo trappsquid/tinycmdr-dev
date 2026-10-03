@@ -388,6 +388,13 @@ DEFAULT_CONFIG = {
         # a plan with `/plan apply` (or answers the approval question raised when the
         # model records one). Off by default; `/plan on` turns it on for one session.
         "plan_requires_approval": False,
+        # The designer's suggested defaults (2026-10-03): a theme name resolved by
+        # --theme/TINYCMDR_THEME/config (see resolve_theme_name), colour and Unicode as
+        # policies ("auto" asks the environment), and animations subtle or off.
+        "theme": "roman-night",
+        "color": "auto",
+        "unicode": "auto",
+        "animations": "subtle",
         # AGENTS.md / CLAUDE.md found from the run's cwd up to the project (or home) root
         # are read at SESSION START into the static prompt - one file per depth, bounded
         # and labelled as local conventions. Part of the cached prefix, so the cost is one
@@ -1069,7 +1076,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.59"
+VERSION = "1.0.60"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -18174,26 +18181,254 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
 # cannot fork it again. Blue is gone on purpose: rich's named `blue` is ANSI 4, which
 # dark themes render blue-violet, and the answer was never the blue box's job to mark.
 TUI_PALETTE = {
-    "truecolor": {"accent": "#5fbfbf", "frame": "bright_black", "call": "cyan",
-                  "result": "#5fbf7f", "fail": "bold red", "ask": "bold magenta",
-                  "dim": "dim", "body": "default", "title": "bold #5fbfbf"},
-    # The 256 tier used rich's `color(N)` spellings, which prompt_toolkit's
-    # Style.from_dict does not accept - so `--app` could not even be CONSTRUCTED on a
-    # TERM=*256color terminal with no COLORTERM (stock Terminal.app, no COLORTERM set):
-    # ValueError "Wrong color format 'color(73)'" out of AppScreen.__init__, before a
-    # screen existed, with no inline fallback because app_wanted() is true there
-    # (measured 2026-09-30 on a pty). These are the same two colours - xterm-256 73 and
-    # 78 - written the one way both hosts read.
-    "256":       {"accent": "#5fafaf", "frame": "bright_black", "call": "cyan",
-                  "result": "#5fd787", "fail": "bold red", "ask": "bold magenta",
-                  "dim": "dim", "body": "default", "title": "bold #5fafaf"},
-    "16":        {"accent": "cyan", "frame": "bright_black", "call": "cyan",
-                  "result": "green", "fail": "bold red", "ask": "bold magenta",
-                  "dim": "dim", "body": "default", "title": "bold cyan"},
-    "none":      {"accent": "", "frame": "", "call": "", "result": "",
-                  "fail": "bold", "ask": "bold", "dim": "dim", "body": "",
-                  "title": "bold"},
+    # The theme's colour names, one row per TIER. The drawing code never reads these
+    # directly: it asks for a SEMANTIC role (see SEMANTIC_ROLES) and this table says what
+    # that role's colour is on this terminal. theme.toml (host-owned) overrides them.
+    #
+    # gold is the LABEL and SUCCESS colour (headings, results, the answer label); green is
+    # only `laurel`, for explicit success marks - never a normal answer ("move the answer
+    # away from green", designer 2026-10-03). crimson is the one large decorative accent
+    # (the banner border) and is too dark for small body text.
+    "truecolor": {"background": "#0F1114", "panel": "#171A1F", "text": "#E9E2D6",
+                  "muted": "#A79B88", "gold": "#D7A94A", "ember": "#D9782D",
+                  "bronze": "#75654D", "crimson": "#C43A32", "error": "#E05245",
+                  "selection_bg": "#3A2524", "selection_fg": "#E9E2D6",
+                  "laurel": "#8FAE6B"},
+    "256":       {"background": "#1c1c1c", "panel": "#262626", "text": "#e4e4e4",
+                  "muted": "#949494", "gold": "#d7af5f", "ember": "#d75f00",
+                  "bronze": "#87875f", "crimson": "#d75f5f", "error": "#ff5f5f",
+                  "selection_bg": "#5f0000", "selection_fg": "#e4e4e4",
+                  "laurel": "#87af5f"},
+    "16":        {"background": "black", "panel": "black", "text": "white",
+                  "muted": "dim", "gold": "bold yellow", "ember": "yellow",
+                  "bronze": "dim yellow", "crimson": "red", "error": "bold red",
+                  "selection_bg": "reverse", "selection_fg": "",
+                  "laurel": "green"},
+    "none":      {"background": "", "panel": "", "text": "", "muted": "dim",
+                  "gold": "bold", "ember": "", "bronze": "", "crimson": "",
+                  "error": "bold", "selection_bg": "reverse", "selection_fg": "",
+                  "laurel": ""},
 }
+
+# What the drawing code asks for: SEMANTIC roles. A call site says `heading` or `value`
+# and never a colour, so the palette can be rethemed without touching a card, and a theme
+# names colours in the operator's own words (designer, 2026-10-03).
+SEMANTIC_ROLES = {
+    "heading": "gold",         # SESSION / CONTEXT / MODEL, an answer's label
+    "value": "text",           # ordinary values: a session, a model, a count, a duration
+    "muted": "muted",          # secondary text, approval and running notes
+    "border": "bronze",        # card borders, sidebar borders and dividers
+    "divider": "bronze",
+    "call": "ember",           # a tool call's mark, warnings, the spinner
+    "result": "gold",          # a finished call: success reads gold
+    "label": "gold",
+    "answer": "gold",          # the answer's label (its body is `text`)
+    "body": "text",
+    "status": "muted",         # the quiet status line
+    "status_live": "ember",    # "writing...", approval prompts
+    "progress_fill": "gold",
+    "progress_rest": "bronze",
+    "mark_success": "laurel",  # an explicit success mark: laurel, never a normal answer
+    "mark_error": "error",
+    "error": "error",
+    "warning": "ember",
+    "decorative": "crimson",   # large decorative elements only (the banner border)
+    "selection": "selection_bg",
+}
+
+
+# The theme file's names, as the designer writes them, onto the roles above. One table, so
+# a theme can add a colour without the rest of this file learning a new vocabulary.
+_THEME_TIERS = {"truecolor": "truecolor", "256": "256", "ansi": "16", "16": "16"}
+
+# The Basic-ANSI column is written in words a human reads ("dark yellow", "bright white");
+# prompt_toolkit wants its own names. Unknown values pass through - it may already be one.
+_ANSI_WORDS = {
+    # The Basic-ANSI column is written in words a human reads; both renderers want names
+    # they can parse (rich has no "ansiyellow" - it raised StyleSyntaxError on a card,
+    # measured 2026-10-03), so a bright tone becomes bold and a grey becomes dim.
+    "black": "black", "red": "red", "green": "green", "yellow": "yellow",
+    "blue": "blue", "magenta": "magenta", "cyan": "cyan", "white": "white",
+    "bright black": "dim", "bright red": "bold red", "bright green": "bold green",
+    "bright yellow": "bold yellow", "bright blue": "bold blue",
+    "bright magenta": "bold magenta", "bright cyan": "bold cyan",
+    "bright white": "white",
+    "dark yellow": "dim yellow", "dark red": "dim red", "dark green": "dim green",
+}
+
+
+# ANSI SGR names and attributes, in ONE table: a role's palette value is a style string
+# ("bold #D7A94A", "dim yellow") and this is the single place that turns one into escape
+# parameters - so no raw \x1b[..m values are scattered through the renderer.
+_SGR_ATTRS = {"bold": 1, "dim": 2, "italic": 3, "underline": 4, "reverse": 7}
+_SGR_NAMES = {"black": 30, "red": 31, "green": 32, "yellow": 33, "blue": 34,
+              "magenta": 35, "cyan": 36, "white": 37}
+
+
+def nearest_xterm256(r, g, b):
+    """The xterm-256 index closest to an RGB triple (the 6x6x6 cube plus the greys)."""
+    best, bestd = 16, None
+    for i in range(16, 256):
+        if i < 232:
+            n = i - 16
+            conv = lambda v: 0 if v == 0 else 55 + 40 * v
+            cr, cg, cb = conv(n // 36), conv((n // 6) % 6), conv(n % 6)
+        else:
+            v = 8 + (i - 232) * 10
+            cr = cg = cb = v
+        d = (cr - r) ** 2 + (cg - g) ** 2 + (cb - b) ** 2
+        if bestd is None or d < bestd:
+            best, bestd = i, d
+    return best
+
+
+def sgr_for(style_value, tier=None):
+    """SGR parameters for a palette style string. "" -> "0" (reset to default).
+
+    The tier decides HOW a hex is written: a truecolor terminal gets 24-bit, a 256-colour
+    one gets the nearest cube index (38;5;N) instead of a 24-bit code it would render as
+    garbage (measured in the smoke run that prompted this), and the 16-colour tier carries
+    names, not hexes.
+    """
+    codes = []
+    for token in str(style_value or "").split():
+        if token in _SGR_ATTRS:
+            codes.append(str(_SGR_ATTRS[token]))
+        elif re.match(r"^#[0-9a-fA-F]{6}$", token):
+            r, g, b = (int(token[i:i + 2], 16) for i in (1, 3, 5))
+            if tier == "256":
+                codes.append("38;5;%d" % nearest_xterm256(r, g, b))
+            else:
+                codes.append("38;2;%d;%d;%d" % (r, g, b))
+        elif token.lower() in _SGR_NAMES:
+            codes.append(str(_SGR_NAMES[token.lower()]))
+    return ";".join(codes) or "0"
+
+
+def tui_sgr(role, tier=None):
+    """The SGR parameters for a SEMANTIC role on this terminal's tier."""
+    tier = tier or tui_colour_tier()
+    value = TUI_PALETTE.get(tier, {}).get(SEMANTIC_ROLES.get(role, role), "")
+    return sgr_for(value, tier)
+
+
+def _theme_parse(text):
+    """{section: {key: value}} from the theme file's TOML subset. Raises on a bad line.
+
+    tomllib is 3.11+ and this harness runs on 3.10, so the two shapes a theme needs -
+    `[section]` and `key = "value"`, with comments - are read here. A bad line is an
+    error the caller reports; a theme is never worth a failed start.
+    """
+    out, section = {}, ""
+    for lineno, raw in enumerate(str(text).splitlines(), 1):
+        # A comment is a # that is not inside the value's quotes - `background = "#0F1114"
+        # # main background` must keep the colour (the first cut ate it: measured in the
+        # smoke run that caught this).
+        in_q, cut = "", None
+        for i, ch in enumerate(raw):
+            if in_q:
+                if ch == in_q:
+                    in_q = ""
+            elif ch in "'\"":
+                in_q = ch
+            elif ch == "#":
+                cut = i
+                break
+        line = (raw[:cut] if cut is not None else raw).strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            out.setdefault(section, {})
+            continue
+        if "=" not in line:
+            raise ValueError("line %d: expected `key = \"value\"` or [section]" % lineno)
+        key, _, val = line.partition("=")
+        key, val = key.strip().lower(), val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+            val = val[1:-1]
+        out.setdefault(section, {})[key] = val
+    return out
+
+
+def resolve_theme_name():
+    """Which theme to use: --theme, then TINYCMDR_THEME, then config, then `roman-night`.
+
+    The designer's order (2026-10-03): a flag beats the environment, the environment beats
+    the config file, and the built-in name is the floor - so a box can be rethemed for one
+    run without editing anything, and a host that says nothing gets the brand palette.
+    """
+    argv = sys.argv[1:]
+    for i, arg in enumerate(argv):
+        if arg == "--theme" and i + 1 < len(argv):
+            return argv[i + 1].strip().lower()
+        if arg.startswith("--theme="):
+            return arg.split("=", 1)[1].strip().lower()
+    env = (os.environ.get("TINYCMDR_THEME") or "").strip().lower()
+    if env:
+        return env
+    for holder in (CONFIG, CONFIG.get("agent") or {}):
+        name = str((holder or {}).get("theme") or "").strip().lower()
+        if name:
+            return name
+    return "roman-night"
+
+
+def theme_palette(path=None, palette=None, name=None):
+    """The palette with a theme file's overrides merged in. Never raises.
+
+    Absent file, absent section, unknown colour or a malformed line: the built-in value
+    stands and the problem is named once. A theme is data an operator owns - `update`
+    seeds it and never overwrites it - so a typo must cost a colour, not the TUI.
+    """
+    base = {tier: dict(roles) for tier, roles in (palette or TUI_PALETTE).items()}
+    p = Path(path) if path else (BASE_DIR / "theme.toml")
+    try:
+        parsed = _theme_parse(p.read_text(encoding="utf-8"))
+    except OSError:
+        return base
+    except Exception as e:
+        log.warning("theme: %s - using the built-in palette" % e)
+        return base
+    # The file's own `default` is only consulted when nobody above it chose a name.
+    want = (name or (parsed.get("") or {}).get("default") or resolve_theme_name())
+    want = str(want).strip().lower()
+    themes = {k.split(".", 1)[1]: v for k, v in parsed.items()
+              if k.startswith("themes.") and "." not in k.split(".", 1)[1]}
+    tiers_of = {}
+    for k, v in parsed.items():
+        parts = k.split(".")
+        if len(parts) == 3 and parts[0] == "themes":
+            tiers_of.setdefault(parts[1], {})[parts[2]] = v
+    if want not in themes and themes:
+        log.info("theme: no theme named %r in %s - using the built-in palette", want, p.name)
+        return base
+    chosen = themes.get(want) or {}
+    for tier, roles in base.items():
+        over = dict(chosen.get(tier) or {})
+        over.update({k: v for k, v in (tiers_of.get(want, {}).get(
+            "ansi" if tier == "16" else tier) or {}).items()})
+        for name, value in over.items():
+            role = name
+            if role not in roles:
+                log.warning("theme: unknown colour %r in [%s] - ignored", name, tier)
+                continue
+            val = str(value).strip()
+            if not val:
+                continue
+            if tier in ("truecolor", "256"):
+                if not re.match(r"^#?[0-9a-fA-F]{6}$", val):
+                    log.warning("theme: %s = %r is not a hex colour - ignored", name, value)
+                    continue
+                roles[role] = "#" + val.lstrip("#")
+            else:
+                roles[role] = _ANSI_WORDS.get(val.lower(), val)
+    return base
+
+
+# The screens read this. A host theme.toml overrides the built-in table above; everything
+# downstream (cards, the rail, the banner, the picker, the art) reads roles from here.
+TUI_PALETTE = theme_palette()
 TUI_COLOR_SYSTEM = {"truecolor": "truecolor", "256": "256", "16": "standard",
                     "none": None}
 
@@ -18266,15 +18501,32 @@ TUI_GLYPHS_ASCII = {"tool": "> ", "tool_done": "+ ", "tool_fail": "x ",
                     "ask": "? ", "checkin": "* "}
 
 
-def tui_ascii_only():
-    """Box drawing and glyphs only survive a console that can encode them. cp437
-    cannot carry \u25b8 \u2714 \u2718 \u2026, so that console gets ASCII."""
-    if os.environ.get("TINYCMDR_ASCII"):
+def tui_ascii_only(env=None):
+    """True when this terminal cannot be trusted with the Unicode drawing set.
+
+    `agent.unicode` says what to do: "always" forces the Unicode set, "never" forces ASCII,
+    and "auto" (the default) keeps the environment test - TERM=dumb, a Windows console with
+    no VT, NO_COLOR's cousins in spirit. ONE place decides, so the rail, the glyphs and the
+    fallback mark cannot disagree about what this terminal can draw.
+    """
+    want = str(CONFIG["agent"].get("unicode") or "auto").strip().lower()
+    if want in ("always", "yes", "true", "1"):
+        return False
+    if want in ("never", "no", "false", "0", "ascii"):
         return True
-    try:
-        "\u25b8\u2714\u2718\u2026".encode(_CONSOLE_ENCODING or "utf-8")
-    except Exception:
+    env = os.environ if env is None else env
+    if env.get("TINYCMDR_ASCII") or env.get("TERM") == "dumb":
         return True
+    if os.name == "nt" and not env.get("WT_SESSION") and not env.get("TINYCMDR_COLOR"):
+        # A stock conhost without VT: the box-drawing set lands as boxes.
+        try:
+            import ctypes
+            mode = ctypes.c_uint32()
+            kern = ctypes.windll.kernel32
+            if kern.GetConsoleMode(kern.GetStdHandle(-11), ctypes.byref(mode)):
+                return not bool(mode.value & 0x0004)        # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        except Exception:
+            return True
     return False
 
 
@@ -18284,18 +18536,20 @@ def tui_glyphs():
 
 # kind -> (card title, palette ROLE). A None title is a plain line, not a card.
 TUI_KINDS = {
+    # kind -> (card label, SEMANTIC role). The role decides the border; a label is drawn
+    # with `heading` and a body with `text`.
     "tool":      ("call",     "call"),
     "tool_done": ("result",   "result"),
-    "tool_fail": ("failed",   "fail"),
-    "ask":       ("question", "ask"),
-    "final":     ("answer",   "frame"),
-    "error":     ("error",    "fail"),
-    "checkin":   (None,       "dim"),
+    "tool_fail": ("failed",   "error"),
+    "ask":       ("question", "label"),
+    "final":     ("answer",   "border"),
+    "error":     ("ERROR",    "error"),   # the designer's label: bright red + ERROR
+    "checkin":   (None,       "muted"),
     "note":      (None,       "body"),
-    "narration": (None,       "dim"),
-    "reply":     (None,       "dim"),   # the question this answer replies to
+    "narration": (None,       "muted"),
+    "reply":     (None,       "muted"),   # the question this answer replies to
     "say":       (None,       "body"),
-    "system":    (None,       "dim"),
+    "system":    (None,       "muted"),
 }
 TUI_STATUS_EVERY = 5.0        # seconds between the run's own lines
 
@@ -18353,32 +18607,51 @@ class TuiScreen:
         self.theme = self._markdown_theme()
 
     def style(self, role):
-        """The active tier's style for one palette role."""
-        return self.palette.get(role, "")
+        """The active tier's style for one SEMANTIC role (`heading`, `value`, `call`...).
+
+        A call site never names a colour: SEMANTIC_ROLES says which palette entry a role
+        means, and the palette (theme.toml's overrides included) says what that colour is
+        on this terminal. An unknown role passes through, so a colour name still works.
+        """
+        return self.palette.get(SEMANTIC_ROLES.get(role, role), "")
 
     def _markdown_theme(self):
         """The answer body's own theme, pinned to this palette.
 
-        rich's default Markdown theme paints h2-h4 and block quotes MAGENTA (this
-        palette's "a question to the operator"), lists and code cyan, links blue. So
-        every element an answer can contain is pinned here - headings bold, the rest
-        body or dim, links on the one accent - and the palette table stays the only
-        colour source (round-3 P-04).
+        rich paints its defaults in hues of its own (h2-h4 and block quotes magenta, links
+        blue). Every element an answer can carry is pinned here to a SEMANTIC role, so the
+        markdown follows theme.toml like everything else - and a failure colour can never
+        arrive through a heading. Values are RESOLVED styles (self.style), never role
+        names: rich parses these strings and has no vocabulary for "muted".
         """
         from rich.theme import Theme
-        accent = self.style("accent") or "dim"
+        role = self.style
         return Theme({
-            "markdown.h1": "bold", "markdown.h2": "bold", "markdown.h3": "bold",
-            "markdown.h4": "bold", "markdown.h5": "bold", "markdown.h6": "dim",
-            "markdown.h7": "dim", "markdown.hr": "dim", "markdown.block_quote": "dim",
-            "markdown.list": "default", "markdown.item": "default",
-            "markdown.item.number": "default", "markdown.item.bullet": "default",
-            "markdown.code": "dim", "markdown.code_block": "dim",
-            "markdown.link": accent, "markdown.link_url": "dim",
-            "markdown.table.border": "dim", "markdown.table.header": "bold",
+            "markdown.h1": "bold " + (role("heading") or ""),
+            "markdown.h2": "bold " + (role("heading") or ""),
+            "markdown.h3": "bold " + (role("heading") or ""),
+            "markdown.h4": "bold " + (role("heading") or ""),
+            "markdown.h5": "bold " + (role("heading") or ""),
+            "markdown.h6": role("muted") or "dim",
+            "markdown.h7": role("muted") or "dim",
+            "markdown.hr": role("muted") or "dim",
+            "markdown.block_quote": role("muted") or "dim",
+            "markdown.list": role("body") or "default",
+            "markdown.item": role("body") or "default",
+            "markdown.item.number": role("body") or "default",
+            "markdown.item.bullet": role("body") or "default",
+            "markdown.code": role("muted") or "dim",
+            "markdown.code_block": role("muted") or "dim",
+            # gold, not the decorative accent: a link is small text, and crimson is for
+            # large decorative elements only (designer, 2026-10-03).
+            "markdown.link": role("heading") or role("decorative") or "default",
+            "markdown.link_url": role("muted") or "dim",
+            "markdown.table.border": role("border") or "dim",
+            "markdown.table.header": "bold",
             "markdown.em": "italic", "markdown.strong": "bold",
             "markdown.s": "strike", "table.header": "bold", "table.cell": "default",
-            "table.footer": "bold", "table.title": "dim", "table.caption": "dim",
+            "table.footer": "bold", "table.title": role("muted") or "dim",
+            "table.caption": role("muted") or "dim",
         })
 
     @staticmethod
@@ -18444,9 +18717,9 @@ class TuiScreen:
             body.append(value + "\n", style=self.style("body") or "default")
         if hint:
             body.append(hint, style="dim")
-        head = Text(title, style=self.style("title"))
+        head = Text(title, style=self.style("heading"))
         self._draw(Panel(body, title=head, title_align="left",
-                         border_style=self.style("accent"), box=self.box,
+                         border_style=self.style("decorative"), box=self.box,
                          padding=(0, 1)))
 
     def card(self, kind, text, foot=""):
@@ -18462,12 +18735,31 @@ class TuiScreen:
             # (round-3 P-02). The live region replaces itself instead.
             return
         if title is None:
+            # A line the harness marks ITSELF: the leading glyph decides the colour, so a
+            # success reads as one (laurel) and a failure as one (the error red), without
+            # every call site remembering to say so.
+            _mark = str(text).lstrip()[:1]
+            if _mark in ("\u2705", "\u2714", "\u2713"):
+                style = self.style("mark_success") or style
+            elif _mark in ("\u26a0", "\u2716", "\u2717", "\u274c"):
+                style = self.style("mark_error") or style
             quiet = "dim" if kind in ("checkin", "system", "narration") else style
             label = (self.ellipsis + "  ") if kind == "narration" else ""
             self._draw(Text("  " + label + text, style=quiet or "default"), raw=text, kind=kind)
             self._last_was_panel = False
             return
-        if title == "answer":
+        if title == "call":
+            # `shell(...)`: the tool's name is the ember mark, the command itself is ivory
+            # (designer's mapping). One split, here, so every call card reads the same -
+            # and the body falls THROUGH to the shared rhythm below, so a call card stacks
+            # with its result and registers as a copyable item like every other card.
+            from rich.text import Text as _Text
+            body = _Text()
+            _head, _sep, _rest = str(text).partition("(")
+            body.append(_head, style=self.style("call") or "default")
+            if _sep:
+                body.append("(" + _rest, style=self.style("body") or "default")
+        elif title == "answer":
             # No leading/trailing blank band and no run of empty lines inside: the
             # markdown's own spacing plus the panel padding was reading as dead
             # space (brief T-05).
@@ -18493,7 +18785,7 @@ class TuiScreen:
         if title == "answer":
             # the title carries the one accent; the frame stays quiet so the words
             # are the brightest thing on the screen (the brief's §1 and §2)
-            self._panel(title, self.style("title"), style, body, foot, raw=str(text), kind=kind)
+            self._panel(title, self.style("heading"), style, body, foot, raw=str(text), kind=kind)
         else:
             self._panel(title, ("bold " + style).strip(), style, body, foot, raw=str(text), kind=kind)
 
@@ -18664,9 +18956,11 @@ class CliDestination(Destination):
     # `final` is the run's DONE line, not the answer: it reads as `system`, dim -
     # the green it used to be is the palette's result colour and belongs to a tool
     # that finished, not to a status line (brief §5).
-    TONES = {"note": "2", "narration": "2;37", "say": "37", "tool": "36",
-             "tool_done": "32", "tool_fail": "1;31", "checkin": "2",
-             "ask": "1;35", "system": "2", "error": "1;31", "final": "2"}
+    # tone -> SEMANTIC role. The palette decides the colour (theme.toml decides the
+    # palette); this table is the only thing a lane has to know about a tone.
+    TONES = {"note": "muted", "narration": "muted", "say": "value", "tool": "call",
+             "tool_done": "result", "tool_fail": "error", "checkin": "muted",
+             "ask": "label", "system": "muted", "error": "error", "final": "body"}
     # The same glyphs every lane draws (▸ a call, ✔ its result, ✘ a failure): one
     # vocabulary across the lanes, and in a terminal - where colour can be piped
     # away - the glyph is what still says which line is which. A code page that
@@ -18752,8 +19046,11 @@ class CliDestination(Destination):
             % len(self._bare(text).strip()), self.TONES["narration"]))
         self._open = True
 
-    def _paint(self, text, code):
-        return f"\033[{code}m{text}\033[0m" if self.colour else text
+    def _paint(self, text, role):
+        """Paint one line for a SEMANTIC role. The escapes come from tui_sgr - the one
+        conversion - and a role the palette does not know paints nothing."""
+        code = tui_sgr(role)
+        return f"\033[{code}m{text}\033[0m" if self.colour and code != "0" else text
 
     def _write(self, text):
         # A screen owns the cursor: a plain print() here fights prompt_toolkit for the
@@ -19509,7 +19806,12 @@ class AppScreen(TuiScreen):
                                  {"assumed": " (assumed)",
                                   "config": " (capped)",
                                   "config-window": " (pinned)"}.get(_src, "")))
-            value("%s %d%%" % (bar, pct))
+            # Two tones on purpose (designer: fill gold, remainder dark bronze), so the bar
+            # is drawn as spans instead of through value()'s single style.
+            rows.append(("class:app.rail.value", " "))
+            rows.append(("class:app.rail.fill", bar[:filled]))
+            rows.append(("class:app.rail.rest", bar[filled:]))
+            rows.append(("class:app.rail.value", " %d%%\n" % pct))
             u = AGENT.last_usage.get(_cli_key()) or {}
             title()
             title("LAST RUN")
@@ -19544,6 +19846,26 @@ class AppScreen(TuiScreen):
             value("(no session yet)")
         return FormattedText(rows)
 
+    # The four inks the brand art may use: crimson, bronze, ember, gold - the designer's
+    # rule ("rail art: crimson, gold, bronze, and ember"). The source art's own cells are
+    # warm but arbitrary, so each is snapped to the nearest brand ink by RGB distance.
+    _BRAND_INKS = (("crimson", "#C43A32"), ("bronze", "#75654D"),
+                   ("ember", "#D9782D"), ("gold", "#D7A94A"))
+
+    def _brand_ink(self, hexs):
+        """The palette's hex for the brand ink nearest a source cell colour."""
+        try:
+            r, g, b = (int(str(hexs).lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+        except Exception:
+            return self.style("heading") or ""
+        best, bestd = None, None
+        for role, brand in self._BRAND_INKS:
+            br, bg_, bb = (int(brand.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+            d = (r - br) ** 2 + (g - bg_) ** 2 + (b - bb) ** 2
+            if bestd is None or d < bestd:
+                best, bestd = role, d
+        return self.palette.get(best) or (self.style("heading") or "")
+
     def _rail_art(self):
         """The brand art as rail rows: per-cell colour where the terminal can take it,
         one accent where it cannot, and nothing at all where braille cannot render.
@@ -19552,17 +19874,25 @@ class AppScreen(TuiScreen):
         an ASCII-only terminal gets no art rather than a row of replacement boxes, and a
         pruned install gets nothing because the artifact is absent.
         """
-        if self.tier == "none" or tui_ascii_only():
+        if self.tier == "none":
             return []
         cells = rail_art_cells()
-        if not cells:
-            return []
+        if tui_ascii_only() or not cells:
+            # Braille is Unicode: a terminal that cannot draw it gets the ASCII mark
+            # instead of boxes (designer: fall back to a simple gold `>_`). The wordmark
+            # underneath is the caption, which every tier already gets.
+            return [[("class:app.rail.art", "  >_"),
+                     ("class:app.rail.value", "\n")],
+                    [("class:app.rail.value", "  "),
+                     ("class:app.rail.title", "tinycmdr"),
+                     ("class:app.rail.value", "\n")]]
         rows = []
         for row in cells:
             spans = [("class:app.rail.value", " ")]
             if self.tier in ("truecolor", "256"):
                 colour, glyphs = None, ""
                 for cell in row:
+                    cell = (self._brand_ink(cell[0]), cell[1]) if cell else cell
                     if not cell:
                         if glyphs:
                             spans.append(("fg:%s" % colour, glyphs))
@@ -19601,43 +19931,50 @@ class AppScreen(TuiScreen):
         return FormattedText([("class:app.hint", "  " + (self.status or "ready"))])
 
     def _app_style(self):
-        """The app's own surface colours. One table, tier-aware: a 16-colour terminal
-        keeps the layering with reverse video instead of losing the rails.
-
-        model_pick_styles() joins it here and in the shell host, so the picker reads the
-        same in both doors - one table, two hosts.
+        """The app's own surface colours, resolved through the SEMANTIC roles (so a retheme
+        touches theme.toml, never this table). A 16-colour terminal has no #171A1F, so a
+        surface it cannot paint keeps reverse video - the layering survives without depth.
         """
+        pal, role = self.palette, self.style
+        bg, panel = pal.get("background") or "", pal.get("panel") or ""
+        def surf(style_string):
+            return (("bg:%s" % panel) + (" " + style_string if style_string else "")).strip()
         if self.tier in ("truecolor", "256"):
             return {
-                "app.frame": "bg:#0b0e13",
-                "frame.border": "#2f3946 bg:#0b0e13",
-                "frame.label": "bg:#0b0e13",
-                "app.rail": "bg:#12161c",
-                "app.rail.title": "bg:#12161c bold #5fbfbf",
-                "app.rail.value": "bg:#12161c #a8b1bd",
-                "app.rail.art": "bg:#12161c bold #5fbfbf",
-                "app.body": "bg:#0e1116",
-                "app.status": "bg:#12161c",
-                "app.status.hot": "bg:#12161c bold #5fbfbf",
-                "app.hint": "bg:#12161c #6b7480",
-                "app.composer": "bg:#12161c",
-                "line": "#232a34 bg:#0b0e13",
-                "textarea": "#e6e6e6 bg:#12161c",
-                "prompt": "bold #5fbfbf bg:#12161c",
-                **model_pick_styles(self.palette),
+                "app.frame": "bg:%s" % bg,
+                "frame.border": "%s bg:%s" % (role("border") or "default", bg),
+                "frame.label": "bg:%s" % bg,
+                "app.rail": "bg:%s" % panel,
+                "app.rail.title": surf("bold " + (role("heading") or "")),
+                "app.rail.value": surf(role("value") or ""),
+                "app.rail.art": surf("bold " + (role("heading") or "")),
+                "app.rail.fill": surf(role("progress_fill") or ""),
+                "app.rail.rest": surf("dim " + (role("progress_rest") or "")),
+                "app.body": "bg:%s" % bg,
+                "app.status": surf(role("status") or ""),
+                "app.status.hot": surf("bold " + (role("status_live") or "")),
+                "app.hint": surf(role("muted") or ""),
+                "app.composer": "bg:%s" % panel,
+                "line": "%s bg:%s" % (role("divider") or "default", bg),
+                "textarea": "%s bg:%s" % (role("value") or "default", panel),
+                "prompt": surf("bold " + (role("heading") or "")),
+                **model_pick_styles(pal),
             }
         if self.tier == "16":
             return {
-                "app.rail": "bg:#12161c",
-                "app.rail.title": "bg:#12161c bold cyan",
-                "app.rail.value": "bg:#12161c",
-                "app.rail.art": "bg:#12161c bold cyan",
-                "app.body": "bg:#0e1116",
-                "app.status.hot": "bold cyan",
-                "app.hint": "dim",
+                "app.rail": "bg:black",
+                "app.rail.title": "bg:black bold yellow",
+                "app.rail.value": "bg:black white",
+                "app.rail.art": "bg:black bold yellow",
+                "app.rail.fill": "bg:black bold yellow",
+                "app.rail.rest": "bg:black dim yellow",
+                "app.body": "bg:black",
+                "app.status": "bg:black dim",
+                "app.status.hot": "bg:black bold yellow",
+                "app.hint": "bg:black dim yellow",
                 "textarea": "",
-                "prompt": "bold cyan",
-                **model_pick_styles(self.palette),
+                "prompt": "bold yellow",
+                **model_pick_styles(pal),
             }
         return {}
 
@@ -22766,10 +23103,21 @@ _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
 
 
 def _console_utf8():
-    """Windows consoles are not UTF-8 by default, and the banner is."""
+    """Windows consoles are not UTF-8 by default, and the banner is.
+
+    Python's streams are reconfigured AND the console's own output code page is lifted to
+    65001, so a child (`chcp`-inheriting PowerShell, a tool writing bytes) lands in the same
+    encoding the harness reads.
+    """
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
         except Exception:
             pass
 
@@ -22779,19 +23127,24 @@ def _ansi_enable():
         try:
             import ctypes
             kern = ctypes.windll.kernel32
-            kern.SetConsoleMode(kern.GetStdHandle(-11), 7)
+            # 0x0004 ENABLE_VIRTUAL_TERMINAL_PROCESSING, 0x0002 ENABLE_WRAP_AT_EOL_OUTPUT,
+            # 0x0001 ENABLE_PROCESSED_OUTPUT - the same set colorama's
+            # just_fix_windows_console() sets, without the dependency.
+            kern.SetConsoleMode(kern.GetStdHandle(-11), 0x0001 | 0x0002 | 0x0004)
         except Exception:
             return False
     return bool(getattr(sys.stdout, "isatty", lambda: False)())
 
 
-def _paint(text, code):
-    return "\033[%sm%s\033[0m" % (code, text) if _CLI["colour"] else text
+def _paint(text, role):
+    """Paint a verb's line for a SEMANTIC role (see tui_sgr - the one conversion)."""
+    code = tui_sgr(role)
+    return "\033[%sm%s\033[0m" % (code, text) if _CLI["colour"] and code != "0" else text
 
 
 def green(text):
-    """The agent talking (narration, answers, confirmations)."""
-    return _paint(text, "32")
+    """The agent talking (narration, answers, confirmations): success reads `mark_success`."""
+    return _paint(text, "mark_success")
 
 
 def amber(text):
@@ -22800,8 +23153,8 @@ def amber(text):
 
 
 def red(text):
-    """A failure, and only a failure."""
-    return _paint(text, "31")
+    """A failure, and only a failure: the palette's `error`."""
+    return _paint(text, "error")
 
 
 def dim(text):
@@ -23486,14 +23839,15 @@ def model_pick_rows(entries, current):
 
 
 def model_pick_styles(palette):
-    """The picker's style classes, from the ONE palette table both hosts already use."""
+    """The picker's style classes, from the same palette the cards read."""
     return {
-        "pick.title": palette.get("title", ""),
-        "pick.hint": palette.get("dim", ""),
-        "pick.row": palette.get("body", ""),
-        "pick.sel": (palette["accent"] + " reverse") if palette.get("accent") else "reverse",
-        "pick.cur": palette.get("result", ""),
-        "pick.filter": palette.get("accent", ""),
+        "pick.title": palette.get("gold", ""),
+        "pick.hint": palette.get("muted", ""),
+        "pick.row": palette.get("text", ""),
+        "pick.sel": (("bg:%s %s" % (palette["selection_bg"], palette.get("selection_fg") or ""))
+                     if palette.get("selection_bg") else "reverse"),
+        "pick.cur": palette.get("gold", ""),
+        "pick.filter": palette.get("ember", ""),
     }
 
 
@@ -24334,11 +24688,38 @@ def _cli_startup(app_mode, once=False):
     print(dim(capability_line("cli")))
 
 
+def _resolve_colour():
+    """Always, never or auto - from `--color`, then TINYCMDR_COLOR, then NO_COLOR, then the
+    `color_coded` switch and a tty check (the designer's resolution order, 2026-10-03).
+
+    TINYCMDR_COLOR carries two jobs: `always`/`never`/`auto` say whether to paint at all,
+    and a tier name (`truecolor`, `256`, `16`, `none`) still forces which palette tier to
+    use - the tests and screenshots depend on that, and `never` outranks it.
+    """
+    def flag():
+        argv = sys.argv[1:]
+        for i, arg in enumerate(argv):
+            if arg == "--color" and i + 1 < len(argv):
+                return argv[i + 1].strip().lower()
+            if arg.startswith("--color="):
+                return arg.split("=", 1)[1].strip().lower()
+        return ""
+    want = flag() or (os.environ.get("TINYCMDR_COLOR") or "").strip().lower()
+    if want == "always":
+        return True
+    if want == "never":
+        return False
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    if not bool(CONFIG["agent"].get("color_coded", True)):
+        return False
+    return bool(_ansi_enable())
+
+
 def run_cli(once=None, app=False):
     global CONFIG
     _console_utf8()
-    _CLI["colour"] = bool(CONFIG["agent"].get("color_coded", True)) and os.environ.get("NO_COLOR") is None
-    _CLI["colour"] = _CLI["colour"] and _ansi_enable()
+    _CLI["colour"] = _resolve_colour()
     # `--app` takes the terminal over: it draws its own banner in its own pane, so
     # dispatch before anything prints. A terminal that cannot host it falls back to
     # the inline cards with one dim note, never an error (drawn below, in order).
@@ -25805,6 +26186,9 @@ _NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, chang
 # replaced (with a .bak beside it, but replaced) - and tools/ is exactly where the agent
 # is told to write its own tools. Mirrors the per-host table in docs/development.md §4.
 _HOST_OWNED_EXACT = frozenset((
+    # The operator's theme: seeded from the shipped default, then theirs to edit - an
+    # update must never take a palette away (the designer's table ships as its default).
+    "theme.toml",
     ".env", "config.json", "soul.md", "notes.md", "field-notes.md", "atlas.md",
     "experiments.jsonl", "web-sessions.json", "state.json", "jobs.json", "tasks.json",
     "tasks.journal.jsonl", "tasks.md", "confirm-allow.json", "notes-authored.json",

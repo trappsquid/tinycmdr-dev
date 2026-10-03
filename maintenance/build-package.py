@@ -152,6 +152,9 @@ SHIP = [
     # the badge master by maintenance/make-brand-art.py; the app degrades to no art when
     # the terminal cannot show braille, so its absence is survivable but dull.
     "assets/tui-rail-badge.json",
+    # The theme: the designer's palette as a host-owned file (an update seeds it once and
+    # never overwrites it), so a host can retheme without patching the build.
+    "theme.toml",
 ]
 
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere

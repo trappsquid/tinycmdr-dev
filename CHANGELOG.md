@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.60] - 2026-10-03
+
+Added
+- **The Roman-commander theme, as a host-owned file (`theme.toml`).** The designer's
+  palette - background `#0F1114`, panel `#171A1F`, text `#E9E2D6` (ivory), muted
+  `#A79B88`, gold `#D7A94A`, ember `#D9782D`, bronze `#75654D`, crimson `#C43A32`, error
+  `#E05245`, selection `#3A2524`, laurel `#8FAE6B` - with a row per tier (truecolor
+  hexes, the exact xterm codes, the Basic-ANSI words). Resolution order:
+  `--theme NAME` > `TINYCMDR_THEME` > `agent.theme` in config.json > the file's `default`
+  > the built-in `roman-night`. `update` seeds the file once and never overwrites it.
+- **Semantic roles in the drawing code.** A call site asks for `heading`, `value`,
+  `call`, `result`, `border`, `error`, `mark_success`, `decorative`, ... and one table
+  (`SEMANTIC_ROLES`) says which palette colour that is, so a retheme never touches a
+  card. Green is gone from answers: gold carries labels and success, laurel appears only
+  for explicit success states, crimson only on large decorative elements (the banner),
+  and errors are the brighter red with an `ERROR` label.
+- **One SGR conversion** (`sgr_for` / `tui_sgr`): no raw `\x1b[..m` values are scattered
+  through the renderer. The tier decides how a colour is written - 24-bit, `38;5;N`, an
+  ANSI name, or nothing - and the palette decides which.
+- **Colour resolution**: `--color always|never|auto` > `TINYCMDR_COLOR` > `NO_COLOR` >
+  auto-detection (`COLORTERM=truecolor` -> 24-bit, `TERM=*256color*` -> xterm-256,
+  otherwise 16; `NO_COLOR` -> monochrome). Windows enables VT processing and the UTF-8
+  console code page at startup, with the mode flags named rather than the bare `7`.
+- **`agent.unicode` (`auto|always|never`)**: a terminal that cannot draw Braille or the
+  box set gets the gold `>_` mark and the wordmark instead of boxes.
+
+Changed
+- The `--app` rail: the badge art is drawn in the brand inks only (crimson, gold, bronze,
+  ember), the progress bar is two-tone (fill gold, remainder dark bronze), headings gold,
+  values ivory, borders bronze, and a live status ember.
+- Call cards draw the tool's name in ember and its arguments in ivory.
+
 ## [1.0.59] - 2026-10-03
 
 Fixed

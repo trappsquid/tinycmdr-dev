@@ -1,0 +1,45 @@
+# tinycmdr theme - roman-night (the designer's palette, 2026-10-03)
+#
+# This file is HOST-OWNED: `update` seeds it once and never overwrites it, so a theme is
+# yours to edit and an upgrade cannot take it away. Delete it to fall back to the built-in
+# default, which is this same table.
+#
+# `default` names the theme to use; a file may carry several.
+default = "roman-night"
+
+[themes.roman-night]
+background   = "#0F1114"   # main background
+panel        = "#171A1F"   # sidebar / composer background
+text         = "#E9E2D6"   # ordinary values: ivory
+muted        = "#A79B88"   # secondary text, quiet chrome
+gold         = "#D7A94A"   # headings, status, answer labels, success marks
+ember        = "#D9782D"   # tool calls, warnings, spinner, live status
+bronze       = "#75654D"   # borders, dividers, progress remainder
+crimson      = "#C43A32"   # brand shapes and large decorative accents only
+error        = "#E05245"   # errors and stopped states (brighter than crimson)
+selection_bg = "#3A2524"   # selected / highlighted row
+laurel       = "#8FAE6B"   # success states only - never a normal answer
+
+[themes.roman-night.256]
+background   = "#1c1c1c"   # 234
+panel        = "#262626"   # 235
+text         = "#e4e4e4"   # 254
+muted        = "#949494"   # 246
+gold         = "#d7af5f"   # 179
+ember        = "#d75f00"   # 166
+bronze       = "#87875f"   # 101
+crimson      = "#d75f5f"   # 167
+error        = "#ff5f5f"   # 203
+selection_bg = "#5f0000"   # 52
+
+[themes.roman-night.ansi]
+background   = "black"
+panel        = "black"
+text         = "bright white"
+muted        = "bright black"
+gold         = "yellow"
+ember        = "yellow"
+bronze       = "dark yellow"
+crimson      = "red"
+error        = "bright red"
+selection_bg = "red"

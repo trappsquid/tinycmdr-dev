@@ -32,6 +32,11 @@ fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_tui_under_test"] = fb
 spec.loader.exec_module(fb)
 
+# The DRAWING POLICY is pinned here, the way colour and TERM are pinned below: this shell
+# is often TERM=dumb (where the ASCII set is the CORRECT output), but these checks grade
+# the Unicode set and the brand art. The ASCII policy gets its own check further down.
+fb.CONFIG["agent"]["unicode"] = "always"
+
 PASSES = []
 FAILS = []
 
@@ -91,13 +96,13 @@ check("a result carries the palette's result colour", str(p.title).strip() == "r
 screen.card("tool_fail", "shell docker ps · [exit 1]")
 p = screen.shown[-1]
 check("a failure carries the failure style", str(p.title).strip() == "failed"
-      and p.border_style == screen.style("fail"), str(p.title))
+      and p.border_style == screen.style("error"), str(p.title))
 screen.card("final", "\n\n# Heading\n\n- a\n- b\n\n")
 p = screen.shown[-1]
 check("the answer is titled on the quiet frame", str(p.title).strip() == "answer"
-      and p.border_style == screen.style("frame"), str(p.title))
+      and p.border_style == screen.style("border"), str(p.title))
 check("...and its title is the one accent",
-      screen.style("title") in str(p.title.style), str(p.title.style))
+      screen.style("heading") in str(p.title.style), str(p.title.style))
 check("...and it is rendered as markdown, not raw text",
       type(p.renderable).__name__ == "_TightMarkdown")
 check("...through the tight renderer that strips rich's table band",
@@ -127,12 +132,16 @@ for tier in ("truecolor", "256", "16", "none"):
     tiers[tier] = fb.TuiScreen(out=io.StringIO(), width=90, tier=tier)
     tiers[tier]._plain_fallback = True      # a StringIO is not a tty: ask for the bytes
     tiers[tier].card("final", "# a\n\n| x | y |\n|---|---|\n| 1 | 2 |\n")
-check("a truecolor console gets 24-bit SGR for the accent",
-      "38;2;95;191;191" in tiers["truecolor"].out.getvalue(),
-      repr(tiers["truecolor"].out.getvalue()[:120]))
-check("a 256-colour console gets the 256 form of it",
-      "38;5;73" in tiers["256"].out.getvalue(),
-      repr(tiers["256"].out.getvalue()[:120]))
+# The answer card's BORDER is bronze and its title gold: crimson is the designer's one
+# large decorative accent (the banner), never a card border (2026-10-03).
+check("a truecolor console gets 24-bit SGR for a card border (bronze) and title (gold)",
+      "38;2;117;101;77" in tiers["truecolor"].out.getvalue()
+      and "38;2;215;169;74" in tiers["truecolor"].out.getvalue(),
+      repr(tiers["truecolor"].out.getvalue()[:200]))
+check("a 256-colour console gets the 256 form of the same roles",
+      "38;5;101" in tiers["256"].out.getvalue()
+      and "38;5;179" in tiers["256"].out.getvalue(),
+      repr(tiers["256"].out.getvalue()[:200]))
 check("a 16-colour console gets a named colour instead of hex",
       "38;2;" not in tiers["16"].out.getvalue()
       and "38;5;" not in tiers["16"].out.getvalue(),
@@ -352,11 +361,19 @@ _bar_w = max(6, _app.RAIL_WIDTH - 8)
 _rail_window = _rail_for(4096, 8192, window=16384, static=4096)
 check("--app's context gauge divides by the model's WINDOW, not the messages budget",
       "8.2K / 16.4K" in _rail_window and "50%" in _rail_window, _rail_window[:200])
-_rail_braille = [i for i, l in enumerate(_rail.splitlines())
-                 if any(0x2800 <= ord(c) <= 0x28FF for c in l)]
+_saved_pol = fb.CONFIG["agent"].get("unicode")
+try:
+    fb.CONFIG["agent"]["unicode"] = "always"     # this shell's TERM is often `dumb`
+    _rail_caption = _rail_for(4096, 8192)
+finally:
+    fb.CONFIG["agent"]["unicode"] = _saved_pol
+_rail_lines = _rail_caption.splitlines()
+_rail_braille = [i for i, ln in enumerate(_rail_lines)
+                 if any(0x2800 <= ord(c) <= 0x28FF for c in ln)]
 check("--app captions the rail art with the product name",
-      _rail_braille and "tinycmdr" in _rail.splitlines()[max(_rail_braille) + 1],
-      _rail.splitlines()[max(_rail_braille):max(_rail_braille) + 2])
+      bool(_rail_braille) and "tinycmdr" in _rail_lines[max(_rail_braille) + 1],
+      _rail_lines[max(_rail_braille):max(_rail_braille) + 2] if _rail_braille
+      else _rail_lines[-3:])
 check("--app names an assumed or pinned window in the rail",
       "(assumed)" in _rail_for(4096, 8192, window=16384, source="assumed")
       and "(pinned)" in _rail_for(4096, 8192, window=16384, source="config-window")
@@ -445,40 +462,54 @@ check("--app's input box is labeled 'you', not 'ask' (P-06)",
 # Data, derived from the badge master by maintenance/make-brand-art.py, drawn as spans:
 # raw ANSI inside a span renders as literal "[38;2;..." text (measured twice in this
 # file), so the artifact is cells + colours and the screen composes the styles.
-_art_cells = fb.rail_art_cells()
-check("the rail art artifact loads (24x9 braille cells)",
-      len(_art_cells) == 9 and len(_art_cells[0]) == 24
-      and any(cell for row in _art_cells for cell in row),
-      (len(_art_cells), [len(r) for r in _art_cells[:2]]))
-_rail_spans = fb.AppScreen(colour=True, tier="truecolor")._sidebar_text().__pt_formatted_text__()
-_rail_txt = "".join(p for _, p in _rail_spans)
-check("...and rides the rail under the keys",
-      "KEYS" in _rail_txt and any(0x2800 <= ord(c) <= 0x28FF for c in _rail_txt),
-      _rail_txt[-260:])
-check("...as spans, never as ANSI escapes",
-      "\x1b" not in _rail_txt, [p for _, p in _rail_spans if "\x1b" in p][:2])
-_art_widths = [len(p) for _, p in _rail_spans
-               if any(0x2800 <= ord(c) <= 0x28FF for c in p)]
-check("...within the rail's 26 columns", _art_widths and max(_art_widths) <= 25, _art_widths)
-_saved_ascii_only = fb.tui_ascii_only
+#
+# The POLICY decides, not the ambient terminal: this shell's TERM is often `dumb`, where
+# the ASCII mark is the correct output - so the Unicode checks force the policy and the
+# fallback gets a check of its own.
+_saved_unicode = fb.CONFIG["agent"].get("unicode")
 try:
-    fb.tui_ascii_only = lambda: True
-    check("...and an ASCII-only terminal gets no braille mush",
-          not any(0x2800 <= ord(c) <= 0x28FF
-                  for _, _p in fb.AppScreen(colour=True, tier="16")
-                  ._sidebar_text().__pt_formatted_text__() for c in _p))
+    fb.CONFIG["agent"]["unicode"] = "always"
+    _art_cells = fb.rail_art_cells()
+    check("the rail art artifact loads (24x9 braille cells)",
+          len(_art_cells) == 9 and len(_art_cells[0]) == 24
+          and any(cell for row in _art_cells for cell in row),
+          (len(_art_cells), [len(r) for r in _art_cells[:2]]))
+    _rail_spans = fb.AppScreen(colour=True, tier="truecolor")\
+        ._sidebar_text().__pt_formatted_text__()
+    _rail_txt = "".join(p for _, p in _rail_spans)
+    check("...and rides the rail under the keys",
+          "KEYS" in _rail_txt and any(0x2800 <= ord(c) <= 0x28FF for c in _rail_txt),
+          _rail_txt[-260:])
+    check("...as spans, never as ANSI escapes",
+          "\x1b" not in _rail_txt, [p for _, p in _rail_spans if "\x1b" in p][:2])
+    _art_widths = [len(p) for _, p in _rail_spans
+                   if any(0x2800 <= ord(c) <= 0x28FF for c in p)]
+    check("...within the rail's 26 columns", _art_widths and max(_art_widths) <= 25,
+          _art_widths)
+    _hex6 = re.compile(r"^#[0-9a-f]{6}$")
+    check("...and every cell is a hex colour plus a braille glyph",
+          all(_hex6.match(cell[0]) and 0x2800 <= ord(cell[1]) <= 0x28FF
+              for row in _art_cells for cell in row if cell),
+          [cell for row in _art_cells for cell in row if cell][:3])
+    check("...with the accepted dot counts (the designer's render)",
+          [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c)
+           for row in _art_cells] == [74, 117, 90, 98, 99, 69, 52, 7, 19],
+          [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c)
+           for row in _art_cells])
 finally:
-    fb.tui_ascii_only = _saved_ascii_only
-# The artifact is the designer's render (PIL LANCZOS keeps faint pixels a box filter
-# drops), so the contract is well-formedness + the cells it was accepted with, not
-# byte-equality with maintenance/make-brand-art.py - that tool is the dependency-free
-# fallback, and its --write is what a re-derivation would ship.
-_hex6 = re.compile(r"^#[0-9a-f]{6}$")
-_lit = [sum(1 for c in row if c) for row in _art_cells]
-check("...and every cell is a hex colour plus a braille glyph",
-      all(_hex6.match(cell[0]) and 0x2800 <= ord(cell[1]) <= 0x28FF
-          for row in _art_cells for cell in row if cell),
-      [cell for row in _art_cells for cell in row if cell][:3])
+    fb.CONFIG["agent"]["unicode"] = _saved_unicode
+
+try:
+    fb.CONFIG["agent"]["unicode"] = "never"
+    _ascii_art = fb.AppScreen(colour=True, tier="truecolor")._rail_art()
+finally:
+    fb.CONFIG["agent"]["unicode"] = _saved_unicode
+_ascii_txt = "".join(t for row in _ascii_art for _, t in row)
+check("a terminal that cannot draw Braille gets the ASCII mark and the wordmark",
+      ">_" in _ascii_txt and "tinycmdr" in _ascii_txt
+      and not any(0x2800 <= ord(c) <= 0x28FF for c in _ascii_txt),
+      _ascii_txt)
+fb.CONFIG["agent"]["unicode"] = _saved_unicode
 check("...with the accepted dot counts (the designer's render)",
       [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c)
        for row in _art_cells] == [74, 117, 90, 98, 99, 69, 52, 7, 19],

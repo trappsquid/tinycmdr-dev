@@ -339,6 +339,10 @@
     "session_transcript": true,
     "fetch_max_chars": 12000,
     "_comment_ask_question_ttl": "A question a run left unanswered is remembered for the NEXT run and handed to it once; after this many hours it is dropped instead (0 disables the expiry). 24 covers an overnight gap without nagging a box for days.",
-    "ask_question_ttl_hours": 24
+    "ask_question_ttl_hours": 24,
+    "theme": "roman-night",
+    "color": "auto",
+    "unicode": "auto",
+    "animations": "subtle"
   }
 }
