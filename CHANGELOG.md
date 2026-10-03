@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.55] - 2026-10-03
+
 Fixed
 - **An edit to a CRLF file was told "this file changed since you read it".** The read
   receipt hashed the raw bytes and the edit compared its LF-normalized copy, so the two
