@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.59] - 2026-10-03
+
+Fixed
+- **A re-read whose earlier result had been elided was refused, and the loop guard then
+  stopped the run.** The duplicate refusal exists because "nothing has changed since" -
+  but when compaction has dropped the result from the payload, the model asking again is
+  asking for something it can no longer see. Measured 2026-10-03 while driving a fleet
+  box: the model re-read a spilled payload by id (`read_file spill#3`) whose result the
+  elision had dropped, was refused with 4000 chars of it, asked once more, and the run
+  ended on `loop guard: read_file came back after being refused - forcing the final
+  report` - "it is stopping and detecting a loop almost every turn". The elision now
+  records which calls lost their results, and the next repeat of one of them is SERVED
+  (one elision buys one re-run).
+- **A refused repeat of a read-only tool no longer forces the final report.** Repeating
+  `read_file` / `search_files` / `search_sessions` / `list_tools` / `atlas` cannot damage
+  anything, and the model may legitimately need it again; the refusal and its nudge stay,
+  the stop does not. Repeats of calls that ACT still end the run: that is the shape the
+  guard exists for.
+- **A failed context probe was cached as a window.** `_endpoint_window` keeps each
+  endpoint's answer for five minutes; a probe that came back EMPTY (a busy llama.cpp
+  box timing out one GET) was cached as "0 tokens" for the whole TTL, and every call
+  in that window then took the assumed branch: `budget 8000 + static + reply` - a
+  14,205-token "window" with static 4157, 17,680 with static 7632 - against a server
+  serving 131,072. The assumed figure moved with the prompt, so it read as
+  unexplainable. An empty answer now expires in 20s (`WINDOW_MISS_TTL`) and is
+  re-asked, and a route that RAISED (a blip) is retried once before giving up.
+- **A guess no longer looks like a server fact.** `tinycmdr status` and the `--app`
+  rail name the source: `(assumed)` with the remedy, `(pinned)` for
+  `llm.context_window`, `(capped)` when `llm.max_context_tokens` is the ceiling, and
+  the startup banner says `window ASSUMED` when the endpoint did not report one.
+  `envelope_line()` carries the same note, so `status` and `health` agree.
+
+Added
+- **`llm.context_window`**: what the model's window IS, when a server will not say -
+  `"auto"` asks the endpoint (default), a number pins it, and a pin wins over
+  detection while `llm.max_context_tokens` still caps the messages payload on top.
+  Two numbers with two jobs, both named.
+
 ## [1.0.58] - 2026-10-03
 
 Fixed

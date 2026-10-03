@@ -199,6 +199,9 @@ DEFAULT_CONFIG = {
         # and the served window wins, and the log names both when they disagree. An endpoint
         # that reports no window leaves "auto" at a conservative 8000, which the log says.
         "max_context_tokens": "auto",
+        # What the model's WINDOW is, when a local server will not say (see
+        # _context_window_override). A number pins it; "auto" asks the endpoint.
+        "context_window": "auto",
         # Cap on generated tokens per LLM call. Llama.cpp-class servers default
         # to max_tokens/n_predict = -1 (unlimited), so on a slow local model one
         # call can generate for many minutes and blow the run's time budget.
@@ -1066,7 +1069,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.58"
+VERSION = "1.0.59"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -1483,6 +1486,32 @@ _ENVELOPE_ASSUMED_WINDOW = 16384  # endpoint silent and nothing configured to sa
 _STATIC_CACHE = {}                # session_key -> (at, frozenset(names), tokens)
 
 
+def _context_window_override():
+    """llm.context_window as an int WINDOW, or None for "ask the endpoint".
+
+    The ceiling (`llm.max_context_tokens`) caps the messages payload; this says what the
+    model's window IS. Two different numbers with two different jobs, and the operator can
+    pin this one when a local server will not say - the case that produced "the window is
+    14k" from a busy probe (2026-10-03). "auto"/blank/0/junk mean None, and junk is named
+    in the log rather than reaching int().
+    """
+    val = CONFIG["llm"].get("context_window")
+    if isinstance(val, str) and val.strip().lower() == "auto":
+        return None
+    if isinstance(val, bool) or (val not in (None, "", 0)
+                                 and not isinstance(val, (int, float))):
+        log.warning("llm.context_window is %r, which is neither a number nor \"auto\" - "
+                    "asking the endpoint instead", val)
+        return None
+    if val in (None, "", 0):
+        return None
+    try:
+        num = int(val)
+    except (TypeError, ValueError):
+        return None
+    return num if num > 0 else None
+
+
 def _context_ceiling():
     """llm.max_context_tokens as an int ceiling, or None for "believe the endpoint".
 
@@ -1538,9 +1567,20 @@ def envelope_line(env, raw=False):
     """
     fmt = (lambda n: str(int(n))) if raw else fmt_tokens
     rem = max(0, int(env.get("budget") or 0) - est_tokens(volatile_context()))
-    return ("window %s · static %s · reply %s · budget %s · remaining %s"
+    line = ("window %s · static %s · reply %s · budget %s · remaining %s"
             % (fmt(env.get("window")), fmt(env.get("static")),
                fmt(env.get("reply")), fmt(env.get("budget")), fmt(rem)))
+    # Where the window came from, when it was not the endpoint: a guess and a pinned
+    # number must not read like a server fact (an assumed window moves with the static
+    # prompt, so two readings can disagree and neither is "the model's window").
+    _src = env.get("source")
+    if _src == "assumed":
+        line += " · window ASSUMED (the endpoint did not report one; set llm.context_window)"
+    elif _src == "config-window":
+        line += " · pinned by llm.context_window"
+    elif _src == "config":
+        line += " · budget capped by llm.max_context_tokens"
+    return line
 
 
 # The most a single tool result may carry on a box with room to spare. window // 8 does the
@@ -1690,6 +1730,12 @@ def apply_window_profile(window):
 # made "only a bot restart fixes it" true one level down, so the same TTL pattern
 # server_defaults() uses applies here (audit, 2026-09-22).
 WINDOW_TTL = 300.0
+# A probe that came back EMPTY is not an answer: caching "0 tokens" for the full TTL
+# is how a local box read as a 14,205-token window (8000 assumed messages + 4157 static
+# + 2048 reply) for five minutes after one busy-server timeout - the assumed figure even
+# moved with the prompt, so it looked unexplainable (operator, 2026-10-03). A miss is
+# retried this soon, so a blip self-heals on the next call instead of at the next TTL.
+WINDOW_MISS_TTL = 20.0
 
 # How many times a run may re-ask after the model returned NO answer at all (empty
 # content, no tool call). Deliberately separate from agent.auto_continue_max: a
@@ -2576,6 +2622,7 @@ def _detect_window(base_url, headers, timeout=10):
         return 0
     root = _endpoint_root(base)
     detected = None
+    _blip = [False]
     try:
         models = (requests.get(base + "/models", headers=headers,
                                timeout=timeout).json().get("data") or [])
@@ -2614,6 +2661,7 @@ def _detect_window(base_url, headers, timeout=10):
                 detected = (entry.get("context_window") or entry.get("context_length")
                             or entry.get("max_context_length"))
     except Exception as e:
+        _blip[0] = True
         log.debug("window detect: /models on %s did not answer: %s", base, e)
     if not detected:
         try:
@@ -2622,6 +2670,7 @@ def _detect_window(base_url, headers, timeout=10):
             detected = ((props.get("default_generation_settings") or {})
                         .get("n_ctx") or props.get("n_ctx"))
         except Exception as e:
+            _blip[0] = True
             log.debug("window detect: /props on %s did not answer: %s", base, e)
     if not detected:
         # Ollama. Its OpenAI-compatible /v1 answers /models like everything else, but
@@ -2645,6 +2694,7 @@ def _detect_window(base_url, headers, timeout=10):
                     detected = entry["context_length"]
                     break
         except Exception as e:
+            _blip[0] = True
             log.debug("window detect: /api/ps on %s did not answer: %s", base, e)
     if not detected:
         # SGLang answers /get_server_info at its root - the third fingerprint, beside
@@ -2661,7 +2711,25 @@ def _detect_window(base_url, headers, timeout=10):
             if isinstance(info, dict):
                 detected = info.get("context_length") or info.get("max_req_input_len")
         except Exception as e:
+            _blip[0] = True
             log.debug("window detect: /get_server_info on %s did not answer: %s", base, e)
+    if not detected and _blip[0]:
+        # At least one route ERRORED rather than answering - a busy or freshly-started server
+        # is the ordinary cause, and the ordinary fix is to ask once more in a moment. A
+        # server that ANSWERED and simply does not report a window is not retried: that is an
+        # answer, and the operator's configured ceiling is the honest one to fall back on.
+        time.sleep(1.5)
+        try:
+            models = (requests.get(base + "/models", headers=headers,
+                                   timeout=timeout).json().get("data") or [])
+            entry = _pick_model(models, CONFIG["llm"]["model"])
+            if entry is not None:
+                detected = (entry.get("max_model_len")
+                            or (entry.get("meta") or {}).get("n_ctx")
+                            or (entry.get("context_window") or entry.get("context_length")
+                                or entry.get("max_context_length")))
+        except Exception as e:
+            log.debug("window detect: retry on %s did not answer either: %s", base, e)
     try:
         return int(detected) if detected else 0
     except (TypeError, ValueError):
@@ -3046,6 +3114,46 @@ def _spill_dir():
 # line per spill (id, tool, path, first line, when, size), oldest whole entries drop
 # off the end - their files stay in spill/, only the line goes - and one call reads a
 # spill back by id. Bounded on both axes because this rides in every prompt.
+# Calls whose RESULT was elided from the payload by compaction, keyed by session. A
+# duplicate refusal exists because "nothing has changed since", but when the earlier result
+# is no longer in the payload that premise is FALSE: the model asking again is asking for
+# something it can no longer see. Measured on a fleet box, 2026-10-03: the model re-read a
+# spilled payload by id (`read_file spill#3`) whose result the elision had dropped, got
+# refused with 4000 chars of it, asked again, and the loop guard force-stopped the run -
+# "detecting a loop almost every turn". A call in this set is SERVED, and the entry is
+# consumed: one elision buys one re-run.
+_ELIDED_CALLS = {}
+_ELIDED_CALLS_MAX = 240
+
+# Repeat calls that only READ. A refused repeat of one of these cannot damage anything and
+# the model may legitimately need it again (an elided result, a file it changed its mind
+# about), so a re-issue never forces the final report - the refusal and the nudge stay.
+_IDEMPOTENT_TOOLS = frozenset(("read_file", "search_files", "search_sessions",
+                               "list_tools", "atlas"))
+
+
+def _elided_note(session, sig):
+    """True once: was this call's result dropped from the payload? Consumes the entry."""
+    with _SPILLS_LOCK:
+        keys = _ELIDED_CALLS.get(session or "")
+        if not keys or sig not in keys:
+            return False
+        keys.discard(sig)
+        return True
+
+
+def _remember_elided(session, sig):
+    """Record one call whose result the elision just dropped. Bounded, never raises."""
+    try:
+        with _SPILLS_LOCK:
+            keys = _ELIDED_CALLS.setdefault(session or "", set())
+            keys.add(sig)
+            while len(keys) > _ELIDED_CALLS_MAX:
+                keys.pop()
+    except Exception:
+        pass
+
+
 _SPILLS = []
 _SPILLS_LOCK = threading.Lock()
 _SPILLS_MAX = 12
@@ -14167,9 +14275,12 @@ class Agent:
             self._window_cache = cache
         root = _endpoint_root(url or CONFIG["llm"]["base_url"])
         hit = cache.get(root)
-        if hit is not None and now - hit[0] <= WINDOW_TTL:
-            self._window_at = hit[0]
-            return hit[1]
+        if hit is not None:
+            # An empty answer expires fast: it means "ask again", not "no window".
+            _ttl = WINDOW_TTL if hit[1] else WINDOW_MISS_TTL
+            if now - hit[0] <= _ttl:
+                self._window_at = hit[0]
+                return hit[1]
         value = _detect_window(url or CONFIG["llm"]["base_url"], self.headers)
         cache[root] = (now, value)
         self._window_at = now
@@ -14206,13 +14317,16 @@ class Agent:
                 and now - cached.get("at", 0.0) <= WINDOW_TTL):
             return cached
         static = static_prompt_tokens(session_key)
-        detected = int(self._endpoint_window(base) or 0)
+        pinned = _context_window_override()
+        if pinned:
+            log.info("context: llm.context_window pins the window to %d", pinned)
+        detected = pinned or int(self._endpoint_window(base) or 0)
         cfg_max = int(CONFIG["llm"].get("max_tokens") or 0)
         explicit = _context_ceiling()
         refused = warned = False
         refusal = ""
         if detected:
-            window, source = detected, "server"
+            window, source = detected, ("config-window" if pinned else "server")
             reply = min(cfg_max or window // 4, max(1, window // 4))
             budget = max(ENVELOPE_MIN_BUDGET, window - static - reply)
             if explicit and explicit < budget:
@@ -14411,6 +14525,14 @@ class Agent:
             return None               # only the newest exchange is left
         dropped = messages[start:cut]
         dropped_tokens = sum(est_tokens(json.dumps(m)) for m in dropped)
+        # Remember WHICH calls lost their results: a later repeat of one of them is not the
+        # "nothing has changed" case the refusal is for (see _elided_note).
+        for _m in dropped:
+            for _tc in ((_m.get("tool_calls") or []) if isinstance(_m, dict) else []):
+                _fn = (_tc.get("function") or {})
+                if _fn.get("name"):
+                    _remember_elided(key, _call_sig(_fn.get("name"),
+                                                    _fn.get("arguments") or ""))
         prev = str(messages[1].get("content") or "") if start != 1 else ""
         del messages[start:cut]
         note = self._elision_note(marker, dropped, prev, key)
@@ -16215,9 +16337,10 @@ class Agent:
                             # formatting and this lookup read that as a different call. The
                             # canonical signature helper exists for exactly this; both sides read
                             # it now.
+                            _sig = _call_sig(name, raw_args)
                             with dedupe_lock:
-                                prior = executed.get(_call_sig(name, raw_args))
-                            if prior and prior[0] >= dedupe_after:
+                                prior = executed.get(_sig)
+                            if prior and prior[0] >= dedupe_after and not _elided_note(session_key, _sig):
                                 try:
                                     parsed = json.loads(raw_args or "{}")
                                 except Exception:
@@ -16328,7 +16451,7 @@ class Agent:
                             # has rather than burning the rest of the ladder.
                             _refusals = refused_seen.get(key, 0) + 1
                             refused_seen[key] = _refusals
-                            if _refusals >= 2 and not spun:
+                            if _refusals >= 2 and not spun and name not in _IDEMPOTENT_TOOLS:
                                 spun = (f"`{name}` re-issued after its identical call was "
                                         f"already refused")
                                 spun_tool = name
@@ -19381,7 +19504,11 @@ class AppScreen(TuiScreen):
             value("%d exchange(s)" % s["exchanges"])
             title()
             title("CONTEXT")
-            value("%s / %s" % (fmt_tokens(occupied), fmt_tokens(window)))
+            _src = env.get("source")
+            value("%s / %s%s" % (fmt_tokens(occupied), fmt_tokens(window),
+                                 {"assumed": " (assumed)",
+                                  "config": " (capped)",
+                                  "config-window": " (pinned)"}.get(_src, "")))
             value("%s %d%%" % (bar, pct))
             u = AGENT.last_usage.get(_cli_key()) or {}
             title()
@@ -22777,6 +22904,11 @@ def cli_banner():
     model = "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])
     context = ("~%s usable per turn \u00b7 prompt %s"
                % (fmt_tokens(f["env"]["budget"]), f["prompt"]))
+    if f["env"].get("source") == "assumed":
+        # The number below it is a guess with a moving denominator (8000 + static + reply);
+        # saying so is the difference between a wrong window and an honest unknown.
+        context += (" \u00b7 window ASSUMED - the endpoint did not report one; set "
+                    "llm.context_window")
     if screen is not None:
         # Three content rows, not seven: the envelope and the prompt arithmetic
         # live in /status now (brief T-04). The frame carries the one accent.

@@ -327,7 +327,7 @@ _app = fb.AppScreen(colour=True, tier="truecolor")
 _title = "".join(part for _, part in _app._frame_title().__pt_formatted_text__())
 
 
-def _rail_for(used, budget, window=None, static=0):
+def _rail_for(used, budget, window=None, static=0, source=""):
     _saved_stats, _saved_budget = fb.AGENT.stats, fb.AGENT._context_budget
     _saved_env = fb.AGENT.cached_envelope
     try:
@@ -335,7 +335,8 @@ def _rail_for(used, budget, window=None, static=0):
         fb.AGENT._context_budget = lambda: budget
         # The CONTEXT block divides by the WINDOW, not the messages budget (operator
         # report, 2026-10-03); default keeps the old calls meaning what they did.
-        fb.AGENT.cached_envelope = lambda: {"window": window or budget, "static": static}
+        fb.AGENT.cached_envelope = lambda: {"window": window or budget, "static": static,
+                                            "source": source}
         return "".join(part for _, part in
                        fb.AppScreen(colour=True, tier="truecolor")
                        ._sidebar_text().__pt_formatted_text__())
@@ -356,6 +357,11 @@ _rail_braille = [i for i, l in enumerate(_rail.splitlines())
 check("--app captions the rail art with the product name",
       _rail_braille and "tinycmdr" in _rail.splitlines()[max(_rail_braille) + 1],
       _rail.splitlines()[max(_rail_braille):max(_rail_braille) + 2])
+check("--app names an assumed or pinned window in the rail",
+      "(assumed)" in _rail_for(4096, 8192, window=16384, source="assumed")
+      and "(pinned)" in _rail_for(4096, 8192, window=16384, source="config-window")
+      and "(assumed)" not in _rail_for(4096, 8192, window=16384, source="server"),
+      _rail_for(4096, 8192, window=16384, source="assumed")[:200])
 check("--app draws a window title with the session in it",
       "tinycmdr" in _title and "cli" in _title, _title)
 check("--app draws a rail with a live context gauge",

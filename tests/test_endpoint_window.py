@@ -122,6 +122,93 @@ def window(fake, base="http://127.0.0.1:1/v1"):
 def main():
     want = fb.CONFIG["llm"].get("model") or "main"
 
+    # ----------------------------------------- an empty answer is not a window (v1.0.59)
+    # Measured 2026-10-03 on a fleet box: one probe of a busy llama.cpp server timed out,
+    # and the harness cached "0" as if it were a window for the whole WINDOW_TTL (5 min).
+    # Every call in that window took the assumed branch - budget 8000 + static 4157 + reply
+    # 2048 = a 14,205-token "window" that MOVED with the static prompt - while the server
+    # serves 131,072. An empty answer now expires in WINDOW_MISS_TTL and is re-asked.
+    real_detect_miss = fb._detect_window
+    real_cache = getattr(fb.AGENT, "_window_cache", None)
+    try:
+        _base = "http://127.0.0.1:8081/v1"
+        _root = fb._endpoint_root(_base)
+        fb.AGENT._window_cache = {}
+        _asked = []
+        fb._detect_window = lambda url, headers=None: (_asked.append(url) or 0)
+        check("a probe that came back empty is reported as 0",
+              fb.AGENT._endpoint_window(_base) == 0, _asked)
+        fb._detect_window = lambda url, headers=None: (_asked.append(url) or 131072)
+        check("...and it is not trusted for the full TTL (still inside the miss TTL)",
+              fb.AGENT._endpoint_window(_base) == 0 and len(_asked) == 1, _asked)
+        _at, _val = fb.AGENT._window_cache[_root]
+        fb.AGENT._window_cache[_root] = (_at - fb.WINDOW_MISS_TTL - 1, _val)
+        check("...and after WINDOW_MISS_TTL the server's real answer is adopted",
+              fb.AGENT._endpoint_window(_base) == 131072 and len(_asked) == 2, _asked)
+        check("...whereas a REAL answer is kept for the long TTL",
+              fb.AGENT._endpoint_window(_base) == 131072 and len(_asked) == 2, _asked)
+    finally:
+        fb._detect_window = real_detect_miss
+        fb.AGENT._window_cache = real_cache if real_cache is not None else {}
+
+    # ------------------------------------------------------ one retry when a route BLIPS
+    # A route that raises is a busy or freshly-started server; asking once more in a moment
+    # turns a blip into the right window instead of the assumed one. A server that ANSWERS
+    # without a window is not retried - that is an answer, not a blip.
+    class _Flaky:
+        def __init__(self):
+            self.models_calls = 0
+            self.real = _rq
+
+        def get(self, url, **kw):
+            if url.endswith("/v1/models"):
+                self.models_calls += 1
+                if self.models_calls == 1:
+                    raise _rq.ConnectionError("server busy")
+                return types.SimpleNamespace(json=lambda: LLAMA_MODELS)
+            raise _rq.ConnectionError("down")
+
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+
+    _flaky = _Flaky()
+    check("a blip on every route is retried once, and the retry's answer is used",
+          window(_flaky) == 131072 and _flaky.models_calls == 2, _flaky.models_calls)
+
+    # ------------------------------------------------- llm.context_window pins the window
+    _saved_cw = fb.CONFIG["llm"].get("context_window")
+    _saved_ceiling = fb.CONFIG["llm"].get("max_context_tokens")
+    try:
+        # The fixture sets max_context_tokens=110000: the ceiling would cap the budget and
+        # mask the pin's own arithmetic, so clear it for this pair of checks.
+        fb.CONFIG["llm"]["max_context_tokens"] = "auto"
+        fb._detect_window = lambda url, headers=None: 131072
+        fb.CONFIG["llm"]["context_window"] = 262144
+        fb.AGENT._window_cache, fb.AGENT._envelope_cache = {}, None
+        _env = fb.AGENT._envelope("pin-sess")
+        check("llm.context_window pins the window over the endpoint's answer",
+              _env["window"] == 262144 and _env["source"] == "config-window", _env)
+        check("...and the arithmetic follows the pin",
+              _env["budget"] == max(fb.ENVELOPE_MIN_BUDGET,
+                                    _env["window"] - _env["static"] - _env["reply"]), _env)
+        check("...and status names it, so a pin cannot read like a server fact",
+              "pinned by llm.context_window" in fb.envelope_line(_env),
+              fb.envelope_line(_env))
+        fb.CONFIG["llm"]["context_window"] = "auto"
+        fb._detect_window = lambda url, headers=None: 0
+        fb.AGENT._window_cache, fb.AGENT._envelope_cache = {}, None
+        _env2 = fb.AGENT._envelope("assume-sess")
+        check("an endpoint that will not say is labelled ASSUMED, with the remedy",
+              _env2["source"] == "assumed" and "ASSUMED" in fb.envelope_line(_env2)
+              and "llm.context_window" in fb.envelope_line(_env2), fb.envelope_line(_env2))
+        check("...and the assumed branch keeps its conservative 8000-token budget",
+              _env2["budget"] == 8000, _env2)
+    finally:
+        fb.CONFIG["llm"]["context_window"] = _saved_cw
+        fb.CONFIG["llm"]["max_context_tokens"] = _saved_ceiling
+        fb._detect_window = real_detect_miss       # the stub must not leak into the routes
+        fb.AGENT._window_cache, fb.AGENT._envelope_cache = {}, None
+
     # ------------------------------------------------------------- the three routes
     check("vLLM's max_model_len is the window",
           window(Fake({"/v1/models": VLLM_MODELS})) == 32768)

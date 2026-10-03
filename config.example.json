@@ -35,6 +35,8 @@
     "model": "my-model-name",
     "max_turns": 100,
     "_comment_context": "max_context_tokens is a CEILING on the messages payload, not a promise: the harness asks the endpoint what it serves per request (a llama.cpp box answers /v1/models or /props), keeps room for the reply and the tool schemas, and uses the tighter of the two. \"auto\" (or 0, or blank) means believe the endpoint, and is what ships - a number written for one box becomes the wrong number the moment that box is restarted with a different slot count, and the run then dies mid-think with no answer. If your endpoint reports nothing about its window (most hosted APIs), auto falls back to a conservative 8000 and the log says so: put the number your provider documents here instead.",
+    "_comment_context_window": "context_window says what the model's window IS: 'auto' (or 0/blank) asks the endpoint - llama.cpp answers /v1/models or /props, vLLM max_model_len, Ollama /api/ps, SGLang /get_server_info - and a NUMBER pins it when a local server will not answer. A busy llama.cpp box can time out one probe; the harness retries a miss in 20s instead of caching the empty answer for the full five-minute TTL. A pinned window wins over detection, and max_context_tokens still caps the messages payload on top of it.",
+    "context_window": "auto",
     "max_context_tokens": "auto",
     "max_tokens": 16384,
     "final_max_tokens": 8192,

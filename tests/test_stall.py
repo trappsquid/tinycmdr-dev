@@ -1079,6 +1079,69 @@ def test_a_refusal_that_comes_back_ends_the_run():
           "counter holds two ticks" in out, out[:220])
 
 
+def test_a_re_read_after_elision_is_served_not_refused():
+    """The elision is what makes a repeat legitimate: the model asking again is asking for
+    something it can no longer SEE.
+
+    Measured 2026-10-03 on a fleet box: the model re-read a spilled payload by id
+    (`read_file spill#3`) whose result compaction had dropped, got refused with 4000 chars
+    of it, asked once more, and the loop guard force-stopped the run - "loop detected
+    almost every turn". A dropped call is remembered, and its next repeat is served (the
+    entry is consumed: one elision buys one re-run).
+    """
+    sig = fb._call_sig("read_file", json.dumps({"path": "spill#3"}))
+    fb._remember_elided("elide-sess", sig)
+    check("an elided call is remembered", fb._elided_note("elide-sess", sig) is True)
+    check("...and only once - the next repeat is a normal duplicate again",
+          fb._elided_note("elide-sess", sig) is False)
+    check("...and another session is not affected",
+          fb._elided_note("other-sess", sig) is False)
+    # The wiring, not just the helper: a dropped exchange records the calls it carried.
+    msgs = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "first order"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "function": {"name": "read_file",
+                                     "arguments": json.dumps({"path": "spill#3"})}}]},
+        {"role": "tool", "tool_call_id": "1", "content": "the dropped result"},
+        {"role": "user", "content": "second order"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    fb.AGENT._drop_oldest_block(msgs, fb.ELISION_MARKERS[0], "wire-sess")
+    check("...and _drop_oldest_block records what it dropped",
+          fb._elided_note("wire-sess", sig) is True, msgs[:3])
+    check("idempotent tools are the ones exempt from the spin stop",
+          {"read_file", "search_files", "search_sessions", "list_tools"}
+          <= set(fb._IDEMPOTENT_TOOLS), sorted(fb._IDEMPOTENT_TOOLS))
+
+
+def test_a_refused_read_only_repeat_does_not_end_the_run():
+    """A refused repeat of a READ cannot damage anything, and the model may legitimately
+    need it again. The refusal and the nudge stay; the forced final report does not - that
+    is reserved for repeats of things that ACT (measured 2026-10-03: runs stopped "almost
+    every turn" because a re-issued read was treated as a spin).
+    """
+    target = TMP / "read_once.txt"
+    target.write_text("the one fact\n", encoding="utf-8")
+    call = {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "1", "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": str(target)})}}]}
+    fb.CONFIG["agent"]["loop_dedupe_after"] = 2
+    fb.CONFIG["agent"]["loop_stop_repeats"] = 6
+    fb.CONFIG["agent"]["max_steps"] = 100
+    fb.CONFIG["agent"]["max_minutes"] = 30
+    scripted = ([copy.deepcopy(call) for _ in range(4)]
+                + [{"role": "assistant", "content": "Report: the file says one fact."}])
+    out, calls, payloads = _scripted_run(scripted)
+    check("a re-issued read does not force-stop the run",
+          "Stopped a loop" not in out, out[:200])
+    check("...the model gets its report in, on its own call", calls >= 4, calls)
+    transcript = json.dumps(payloads[-1] if payloads else [])
+    check("...and the refusal text still told it the result was already in hand",
+          "NOT RE-EXECUTED" in transcript or "already ran" in transcript, transcript[:200])
+
+
 def test_duplicate_refusal_can_be_switched_off():
     fb.CONFIG["agent"]["loop_dedupe_after"] = 0
     counter = TMP / "dedupe_off.txt"
