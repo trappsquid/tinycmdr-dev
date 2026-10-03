@@ -47,6 +47,20 @@ def main():
               or "NEVER = do not" in fb.build_system_prompt(),
               "the prompt defines its own vocabulary")
 
+        # ---------------------------------------------------------- read miss with a sibling
+        # Operator report (2026-10-03): `read_file .../notes` got the tool lecture while
+        # `notes.md` sat next to it — the model wanted the FILE and was sent elsewhere.
+        sib = workdir / "notes.md"
+        sib.write_text("durable fact\n", encoding="utf-8")
+        miss = fb.tool_read_file({"path": str(workdir / "notes")}, dict(ctx))
+        check(miss.startswith("ERROR: no file") and str(sib) in miss,
+              "a missing file names the sibling that exists", miss[:220])
+        check("ALSO a TOOL" in miss,
+              "...and still says the name is a tool", miss[:220])
+        plain = fb.tool_read_file({"path": str(workdir / "absent_xyz")}, dict(ctx))
+        check(plain == "ERROR: %s does not exist." % (workdir / "absent_xyz"),
+              "a plain miss stays plain", plain[:140])
+
         # ---------------------------------------------------------- merge conflicts
         conflict = ["a", "<<<<<<< HEAD", "ours", "=======", "theirs",
                     ">>>>>>> branch", "b"]
@@ -95,6 +109,58 @@ def main():
               "unmatched signatures are ranked for the operator", cands)
         check("draft ->" in cands[0], "with a matcher draft", cands)
 
+        # A stopword is not a matcher: a fleet box's doctor printed `match: everything`
+        # for a timeout signature, 2026-10-03.
+        stats(unmatched={"timeout after 5s - the command and everything it started "
+                         "were killed": {"fails": 3, "sample": "TIMEOUT after 5s"}})
+        cands = fb.field_note_candidates()
+        check("match: everything" not in cands[0],
+              "the draft never picks a stopword", cands)
+        check("match: timeout" in cands[0],
+              "...and falls back to a distinctive word", cands)
+
+        # ---- a CLI run with nobody who can type (piped stdin) declares no human
+        # A Windows fleet box, 2026-10-03: a `--once` run driven over ssh with the script piped in
+        # mounted the console door anyway, so ask_user parked the full 120s and then
+        # stopped the run. The caller now says whether a human is reachable.
+        class _TTY:
+            def __init__(self, tty):
+                self._tty = tty
+
+            def isatty(self):
+                return self._tty
+
+        dst_none = fb.CliDestination(colour=False, out=_TTY(False), has_human=False)
+        check(dst_none.has_human is False,
+              "has_human=False survives construction", dst_none.has_human)
+        check(fb.RunReporter(dst_none, "k").ask("q") is None,
+              "confirm/ask on it takes the doorless path, not a stdin wait")
+        dst_yes = fb.CliDestination(colour=False, out=_TTY(False))
+        check(dst_yes.has_human is True,
+              "the default keeps a fake console human (tests and interactive lanes)")
+        check(fb._cli_new_reporter(has_human=False).dest.has_human is False,
+              "the --once caller can declare it", None)
+
+        # ---- an older host-owned drop-in must be REPORTED, not silently absorbed
+        # A Windows fleet box, 2026-10-03: tree 1.0.54, tools/process.py pre-1.0.54 → a 75s command
+        # blocked the turn and nothing anywhere said auto-background was off.
+        fb._DROPIN_GAPS.update({"checked": False, "gaps": []})
+        fb._AUTOBG_GAP_WARNED = False
+        _real_proc = fb.REGISTRY.custom.get("process")
+        fb.REGISTRY.custom["process"] = {"fn": (lambda a, c: ""), "schema": {}}
+        try:
+            gaps = fb.dropin_gaps()
+            check(any(g[0] == "process" and "spawn_probe" in g[1] for g in gaps),
+                  "an older process drop-in is reported, not ignored", gaps)
+            check(fb._shell_autobg("echo hi", {}, 60) is None,
+                  "auto-background degrades cleanly on an old drop-in", None)
+        finally:
+            if _real_proc is None:
+                fb.REGISTRY.custom.pop("process", None)
+            else:
+                fb.REGISTRY.custom["process"] = _real_proc
+            fb._DROPIN_GAPS.update({"checked": False, "gaps": []})
+
         # ---------------------------------------------------------- memory scrubbing
         fb._SECRETS.add("hunter2secret")
         try:
@@ -129,7 +195,7 @@ def main():
               "an edit against a moved file says so", out[:220])
 
         # ---- CRLF files: a correct edit must NOT be told the file changed
-        # Found on [redacted], 2026-10-03, by the box's own agent: the read side recorded
+        # Found on a Windows fleet box, 2026-10-03, by the box's own agent: the read side recorded
         # the raw CRLF bytes and the edit side compared its LF-normalized copy, so every
         # correct edit to a CRLF file carried "changed since your last read (was 3 lines,
         # now 3)". Both sides now hash the same LF view and count lines the same way.

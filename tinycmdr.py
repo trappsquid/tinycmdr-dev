@@ -3330,6 +3330,43 @@ _APPROVAL_TIER_SETS = {"auto": ("read", "write", "exec"),
 TIER_RANK = {"read": 0, "write": 1, "exec": 2}
 
 
+_DROPPABLE_API = {"process": ("spawn_probe", "promote_probe", "discard_probe",
+                              "next_jid")}
+_DROPIN_GAPS = {"checked": False, "gaps": []}
+
+
+def dropin_gaps():
+    """Drop-ins this harness CALLS INTO whose installed copy lacks the API.
+
+    tools/ is host-owned and an update never overwrites it (`_apply_package` skips it by
+    design), so a host that ever had an older tools/process.py keeps it for ever while
+    tinycmdr.py moves on - and the features that call into it (auto-background, real exit
+    codes across restarts) degrade SILENTLY. Found on a Windows fleet box, 2026-10-03: the tree was
+    1.0.54, tools/process.py was the pre-1.0.54 copy, and a 75-second command blocked the
+    whole turn with no note anywhere. Returns [(name, missing_api_names)].
+    """
+    if _DROPIN_GAPS["checked"]:
+        return _DROPIN_GAPS["gaps"]
+    gaps = []
+    for name, api in _DROPPABLE_API.items():
+        tool = REGISTRY.get(name)
+        if not tool:
+            continue
+        glb = getattr(tool.get("fn"), "__globals__", {}) or {}
+        missing = [fn for fn in api if fn not in glb]
+        if missing:
+            gaps.append((name, missing))
+    _DROPIN_GAPS["checked"] = True
+    _DROPIN_GAPS["gaps"] = gaps
+    if gaps:
+        for name, missing in gaps:
+            log.warning("tools/%s.py on this host is an older copy (no %s): the features "
+                        "that call into it are off until it is refreshed from the release "
+                        "or deleted (the packaged seed is then used)", name,
+                        ", ".join(missing))
+    return gaps
+
+
 def tool_tier(name):
     """The capability tier of a tool; UNKNOWN tools are `exec` (fail closed)."""
     return _TOOL_TIERS.get(str(name or ""), "exec")
@@ -3765,11 +3802,35 @@ def field_note_candidates(limit=10):
     rows.sort(reverse=True)
     out = []
     for fails, sig, sample in rows[:max(1, int(limit))]:
-        token = max((t for t in re.findall(r"[A-Za-z_]{4,}", sig)), key=len, default="")
-        draft = ("   draft -> `match: %s` + `note: <what this failure means>`" % token
-                 if token else "")
+        draft = _draft_match(sig)
         out.append("- %dx %s :: %s%s" % (fails, sig[:100], sample, draft))
     return out
+
+
+# Words a matcher must not be built from: they appear in so many failures that a note
+# keyed on one would fire everywhere (or read as nonsense). "everything" was the first
+# draft a fleet box's doctor printed for a timeout signature, 2026-10-03.
+_DRAFT_STOPWORDS = {
+    "everything", "something", "started", "command", "output", "error", "errors",
+    "failed", "failure", "cannot", "could", "does", "exist", "exists", "the", "this",
+    "that", "with", "from", "have", "been", "were", "was", "for", "and", "not",
+    "file", "path", "line", "returned", "unexpected", "invalid", "killed", "after",
+}
+
+
+def _draft_match(sig):
+    """A conservative draft matcher for one unmatched signature, or "".
+
+    The longest distinctive word, not the longest word: a draft is a STARTING POINT for
+    the operator, and `match: everything` (the first version's output on a real box) is
+    worse than no draft at all.
+    """
+    words = [w for w in re.findall(r"[A-Za-z_][A-Za-z0-9_.-]*", str(sig))
+             if len(w) >= 4 and w.lower() not in _DRAFT_STOPWORDS]
+    if not words:
+        return ""
+    token = max(words, key=len)
+    return ("   draft -> `match: %s` + `note: <what this failure means>`" % token)
 
 
 def _failure_signature(text):
@@ -6196,6 +6257,9 @@ def _unwrap_redundant_powershell(command):
     return inner
 
 
+_AUTOBG_GAP_WARNED = False
+
+
 def _shell_autobg(command, ctx, threshold):
     """Background this shell command if it outlives `threshold` seconds; else None.
 
@@ -6211,6 +6275,12 @@ def _shell_autobg(command, ctx, threshold):
     spawn, promote = mod.get("spawn_probe"), mod.get("promote_probe")
     discard, nxt = mod.get("discard_probe"), mod.get("next_jid")
     if not all((spawn, promote, discard, nxt)):
+        global _AUTOBG_GAP_WARNED
+        if not _AUTOBG_GAP_WARNED:
+            _AUTOBG_GAP_WARNED = True
+            log.info("auto-background is off on this host: tools/process.py is an older "
+                     "copy (no spawn_probe) - refresh it from the release, or delete it "
+                     "to inherit the packaged seed")
         return None
     make_argv = (ctx or {}).get("shell_argv")
     argv = make_argv(command) if make_argv else command
@@ -7818,14 +7888,27 @@ def tool_read_file(args, ctx):
         # tools/create_tool.py`, both 56-char misses - because for the tools that ARE files
         # this is how you learn their shape. The core tools live in this file, so answer
         # with the door and the arguments instead of a bare "does not exist".
+        #
+        # But a model asking for a FILE can share a tool's name: `/Users/.../notes` is the
+        # memory file `notes.md` one keystroke short, and answering with the tool lecture
+        # alone sent it looking elsewhere (operator report of exactly that read call). The
+        # sibling is named first; the tool note stays because the name really is a tool.
         stem = path.name[:-3] if path.name.lower().endswith(".py") else path.name
+        sibs = []
+        try:
+            sibs = sorted(p.name for p in path.parent.iterdir()
+                          if p.is_file() and p.name.startswith(path.name + "."))
+        except OSError:
+            sibs = []
+        hint = (" Did you mean "
+                + ", ".join(str(path.with_name(s)) for s in sibs[:3]) + "?") if sibs else ""
         if _registered_tool(stem):
             shape = _tool_args_shape(stem)
-            return (f"ERROR: no file {path} - `{stem}` is a TOOL on this box, not a script: "
-                    f"call it by name and the harness runs it"
-                    + (f". Its arguments: {shape}" if shape else "")
-                    + ". (Tools that ARE files live in ./tools/; list_tools names them.)")
-        return f"ERROR: {path} does not exist"
+            return (f"ERROR: no file {path}.{hint} (`{stem}` is ALSO a TOOL on this box - "
+                    f"if you meant the tool, call it by name and the harness runs it"
+                    + (f"; its arguments: {shape}" if shape else "")
+                    + ". Tools that ARE files live in ./tools/.)")
+        return f"ERROR: {path} does not exist.{hint}"
     if path.is_dir():
         try:
             entries = sorted(p.name + ("/" if p.is_dir() else "")
@@ -13234,7 +13317,7 @@ def _receipt_text(text):
     The read side records what came off disk (CRLF on a Windows file) and the edit side
     compares its LF-normalized working copy, so the hashes never matched on any file
     with CRLF endings and a correct edit was told "this file changed since you read it
-    (was 3 lines, now 3)". Found on [redacted], 2026-10-03, by the box's own agent while
+    (was 3 lines, now 3)". Found on a Windows fleet box, 2026-10-03, by the box's own agent while
     it was being driven.
     """
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -18367,10 +18450,16 @@ class CliDestination(Destination):
         text = re.sub(r"`([^`]+)`", r"\1", str(text))
         return re.sub(r"^\s*[\U0001F527\U0001F4AC]\s*", "", text)
 
-    def __init__(self, colour=True, out=None, on_drop=None, screen=None):
+    def __init__(self, colour=True, out=None, on_drop=None, screen=None,
+                 has_human=True):
         self.colour = bool(colour)
         self.screen = screen      # a TuiScreen, or None for plain painted lines
         self.out = out or sys.stdout
+        # `has_human` is the CALLER's knowledge, not a guess from isatty() here: a
+        # `--once` run with a piped stdin has nobody who can type an answer, and the
+        # caller knows that. The default keeps the interactive lanes and every test
+        # that mounts a fake console human exactly as they were.
+        self.has_human = bool(has_human)
         self._row = None         # ask_user's row while a question is open here
         self.on_drop = on_drop   # told what the streamed draft said, when it goes
         self._refs = {}          # ref -> the text already printed for it
@@ -24026,8 +24115,17 @@ def run_cli(once=None, app=False):
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce (found after the fleet push).
     if once:
-        reporter = _cli_new_reporter()
-        answer = drive_run(_cli_key(), once, reporter, ask_door=reporter.dest)
+        try:
+            _tty = bool(sys.stdin.isatty())
+        except Exception:                                        # noqa: BLE001
+            _tty = False
+        reporter = _cli_new_reporter(has_human=_tty)
+        # A piped stdin has nobody who can type an answer: mounting the console door
+        # parked a question the full 120s wait and then stopped the run (a Windows fleet box,
+        # 2026-10-03, driven over ssh with the script piped in). No door = ask_user
+        # refuses at once and states the assumption, per the documented rule.
+        answer = drive_run(_cli_key(), once, reporter,
+                           ask_door=(reporter.dest if _tty else None))
         screen = tui_screen()
         if screen is not None:
             # The same answer card the interactive lane draws. `--once` used to print
@@ -24073,7 +24171,7 @@ def _draw_answer(screen, question, answer):
     screen.answer_card(_reply_ref(question, screen.ellipsis), answer)
 
 
-def _cli_new_reporter():
+def _cli_new_reporter(has_human=True):
     """One per run: the check-in cadence and the done line are per run.
 
     Its destination is also the run's ask door, so a question reaches the terminal
@@ -24081,10 +24179,15 @@ def _cli_new_reporter():
     second implementation here that read stdin directly and was never called
     (`confirm_cb` is `reporter.confirm`, which goes through dest.ask) - one door,
     one reader.
+
+    `has_human=False` (a `--once` run with a piped stdin: cron, `ssh host --once`)
+    means nobody can type an answer, so the caller mounts no ask door and a
+    confirm-pattern command takes the doorless default instead of waiting on a
+    stdin that is a script.
     """
     return RunReporter(
         CliDestination(colour=bool(_CLI["colour"]), out=sys.stdout,
-                       screen=tui_screen(),
+                       screen=tui_screen(), has_human=has_human,
                        on_drop=lambda t: _CLI.__setitem__("streamed_answer", t)),
         _cli_key())
 
@@ -24850,6 +24953,18 @@ def _verb_doctor():
         problems.append(guard_drift_note(drift))
     else:
         print("  guards    : shipped lists intact (v%d)" % GUARD_LIST_VERSION)
+
+    _gaps = dropin_gaps()
+    if _gaps:
+        print("  drop-ins  : %s"
+              % "; ".join("tools/%s.py is an older copy (missing %s)"
+                          % (n, ", ".join(m)) for n, m in _gaps))
+        notes.append("a host-owned drop-in is older than this build, so the features that "
+                     "call into it are OFF (auto-background and cross-restart exit codes "
+                     "need the shipped tools/process.py); refresh it from the release or "
+                     "delete it to inherit the packaged seed")
+    else:
+        print("  drop-ins  : ok")
 
     _cands = field_note_candidates(limit=3)
     if _cands:
