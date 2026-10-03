@@ -484,6 +484,13 @@ check("search_files: a FILE path with a regex pattern greps it",
 out = fb.tool_search_files({"pattern": "blocked_patterns", "path": str(srch)}, {})
 check("search_files: a DIRECTORY with a regex pattern greps its files",
       "one.py:2:" in out, out[:200])
+# Every match is reported, not one per file: the directory pass used to `break` after the
+# first hit, so a file holding a pattern four times answered with one line and no note
+# (found 2026-10-02 - a silent wrong answer, the failure this tool exists to avoid).
+(srch / "many.py").write_text("hit one\nnope\nhit two\nhit three\n", encoding="utf-8")
+out = fb.tool_search_files({"pattern": "hit ", "path": str(srch)}, {})
+check("search_files: every match in a file is reported, not just the first",
+      "many.py:1:" in out and "many.py:3:" in out and "many.py:4:" in out, out[:300])
 out = fb.tool_search_files({"pattern": "*.py", "path": str(srch)}, {})
 check("search_files: a name glob still lists names",
       "two.py" in out and ":2:" not in out, out[:200])

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **`search_files` answered with at most one match per file.** The directory pass broke out
+  of a file after its first content hit, so a search for a pattern a file held four times
+  returned one line and said nothing about the rest - a confident wrong answer from the tool
+  the prompt teaches for grep (found by an audit of the live macOS install, 2026-10-02, and
+  reproduced here). Every match now reports, up to `max_results`. Graded in
+  `tests/test_tool_discovery.py`.
+- **The run-state runway promised tool-call budget the turn cap could cut off.** With
+  `llm.max_turns=100` beside `agent.max_steps=250`, a run making one call per turn was forced
+  to report at 100 calls while the line it was shown said "about 150 left before the harness
+  forces your report". The line now names both caps and says plainly that whichever is
+  reached first ends the run. Graded in `tests/test_plan.py`.
+
 ## [1.0.50] - 2026-10-03
 
 Fixed

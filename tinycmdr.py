@@ -7018,7 +7018,13 @@ def tool_search_files(args, ctx):
                             if content_re.search(line):
                                 content_hits.append(
                                     f"{full}:{i}: {line.strip()[:160]}")
-                                break
+                                # Report EVERY match up to the cap, not one per file: a
+                                # directory grep that silently returned only the first
+                                # hit was a confident wrong answer (measured 2026-10-02:
+                                # a search for a pattern a file held four times returned
+                                # one line, and no note said the rest were dropped).
+                                if (len(hits) + len(content_hits)) >= max_results:
+                                    break
                     except OSError:
                         continue
                 if len(hits) + len(content_hits) >= max_results:
@@ -10490,11 +10496,20 @@ def run_block(key):
         return ""
     bits = []
     max_steps = int(CONFIG["agent"].get("max_steps") or 40)
+    max_turns = int(CONFIG["llm"].get("max_turns") or 0)
     if st.get("calls"):
         pct = int(100 * st["calls"] / max(1, max_steps))
-        left = max(max_steps - st["calls"], 0)
-        bits.append(f"Run so far: {st['calls']} of {max_steps} tool calls used "
-                    f"({pct}%), about {left} left before the harness forces your report.")
+        # Name BOTH caps, and do not promise the whole step budget: the loop stops at
+        # max_turns as well as max_steps, so with one call per turn the turn cap can bind
+        # with two thirds of the advertised tool-call budget still "left" (found
+        # 2026-10-02: llm.max_turns=100 next to agent.max_steps=250, and the run-state line
+        # reported only the 250).
+        line = (f"Run so far: {st['calls']} of {max_steps} tool calls used ({pct}%)")
+        if max_turns:
+            line += (f", turn {int(st.get('turn') or 0)} of {max_turns}")
+        line += (" - the harness forces your report at whichever cap is reached first, so "
+                 "land the job inside both.")
+        bits.append(line)
     if st["plan"]:
         bits.append(plan_render(key))
         if st.get("derived") and not any(s["status"] != "open" for s in st["plan"]):
@@ -13860,6 +13875,9 @@ class Agent:
 
             try:
                 for turn in range(max_turns):
+                    # The loop variable is reused later in this body for the assistant
+                    # message dict, so keep the 1-based turn NUMBER under its own name.
+                    _turn_no = turn + 1
                     if cancel_event and cancel_event.is_set():
                         status = "cancelled"
                         hist.append({"role": "assistant",
@@ -14675,6 +14693,12 @@ class Agent:
                     _st = run_state(session_key)
                     if _st is not None:
                         _st["calls"] = steps + len(tool_calls)
+                        # Turns as well as calls: the loop stops at max_turns AND at
+                        # max_steps, and with one call per turn the turn cap binds long
+                        # before the step cap. The runway line has to name both or it
+                        # promises room the run does not have (found 2026-10-02: the
+                        # advertisement said "250 tool calls" while llm.max_turns=100).
+                        _st["turn"] = _turn_no
                         _drift = int(CONFIG["agent"].get("plan_drift_after") or 8)
                         if (_st["plan"]
                                 and _st["calls"] - _st["progress_at"] >= _drift):
