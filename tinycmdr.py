@@ -23966,6 +23966,14 @@ def _verb_update(rest):
     if not rest:
         asset = _update_asset()
         base = _update_base()
+        # No git, ever, and no assumption about the tree. Installers from 1.0.46-1.0.48
+        # used `git pull --ff-only`, which refused on the dirty checkout their own kit
+        # prune created - a dead end users could not get out of. Say plainly that this
+        # path does not care, so a stranded install knows it is not the blocker.
+        if (BASE_DIR / ".git").exists():
+            print("note: this install is a git checkout; update no longer uses git - it "
+                  "installs the verified release over whatever state the tree is in, so a "
+                  "dirty, pruned or gitless checkout cannot block it.")
         print("updating from %s/%s" % (base, asset))
         work = Path(tempfile.mkdtemp(prefix="tinycmdr-update-"))
         try:

@@ -849,6 +849,29 @@ def main():
         rc, out, err = call(fb, ["update", str(fake)])
         check("...and a tinycmdr.py with no VERSION line",
               rc == 1 and "VERSION" in err, (rc, err[:160]))
+
+        # ---- the rescue must not need git, or a clean tree ---------------------
+        # The stranded installs are the ones 1.0.46-1.0.48 left behind: a git checkout
+        # their own kit-prune made dirty, or no git at all. `update <package>` is the one
+        # path they have, so pin that it lands with git absent and the tree looking like a
+        # broken checkout.
+        (workdir / ".git").mkdir(exist_ok=True)
+        (workdir / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        pkg = workdir / "pkg" / "tinycmdr.py"
+        pkg.parent.mkdir()
+        pkg.write_text((workdir / "tinycmdr.py").read_text(encoding="utf-8")
+                       .replace('VERSION = "', 'VERSION = "9.9.10-', 1), encoding="utf-8")
+        _path = os.environ.get("PATH", "")
+        os.environ["PATH"] = str(workdir)      # nothing named git anywhere on it
+        try:
+            rc, out, err = call(fb, ["update", str(pkg)])
+        finally:
+            os.environ["PATH"] = _path
+        check("update lands on a legacy git checkout with no git on PATH",
+              rc == 0 and "9.9.10" in out, (rc, out[:200], err[:200]))
+        check("...and the install now runs the new build",
+              'VERSION = "9.9.10-' in (workdir / "tinycmdr.py").read_text(encoding="utf-8"))
+
         check("the new verbs are in the verb list",
               all(v in fb.VERBS for v in ("health", "config", "proc",
                                           "update", "clean", "version")), fb.VERBS)
