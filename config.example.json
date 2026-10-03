@@ -44,7 +44,15 @@
     "request_timeout": 1200,
     "request_grace": 30,
     "retry_after_max": 60,
+    "_comment_same_endpoint_retry": "408/5xx and transport failures (refused/reset connections, socket timeouts) retry the SAME endpoint with capped exponential backoff plus jitter before any endpoint failover, because a local box answers 503 while it loads a model and demoting that to another model silently changes what the conversation runs on. Backoff is min(retry_base_ms x 2^(n-1), retry_max_ms) x (75-100%); a provider Retry-After/X-RateLimit-Reset hint that is longer wins. 0 disables the same-endpoint retry and restores immediate failover.",
+    "same_endpoint_retries": 3,
+    "retry_base_ms": 500,
+    "retry_max_ms": 8000,
+    "retry_jitter_pct": 25,
     "no_think": false,
+    "_comment_replay_reasoning": "Assistant reasoning_content is replayed on history turns to LOCAL endpoints: a llama.cpp/vLLM chat template rebuilds the <think> block from it, which keeps the replayed prefix byte-aligned turn to turn (a diverging prefix throws away the KV-cache hit from that point, on every turn, for the models that emit the most tokens). A remote endpoint never receives the field. replay_reasoning_max_chars bounds what a long think block re-buys each turn.",
+    "replay_reasoning": true,
+    "replay_reasoning_max_chars": 4000,
     "fallbacks": [
       {
         "_comment": "Optional. Tried in order when the primary fails. alias is what /model <alias> switches to. Prefer api_key_env over api_key so the secret stays in .env.",

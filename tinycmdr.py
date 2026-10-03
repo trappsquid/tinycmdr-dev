@@ -34,6 +34,7 @@ import logging
 import os
 import platform
 import queue
+import random
 import re
 import unicodedata
 import signal
@@ -223,6 +224,14 @@ DEFAULT_CONFIG = {
         # abandoned and the next endpoint gets a turn.
         "request_grace": 30,
         "retry_after_max": 60,  # honour a 429 Retry-After header, capped at N secs
+        # 408/5xx/transport failures retry the SAME endpoint with capped exponential
+        # backoff + jitter before any failover: a local box answers 503 while a model
+        # loads, and demoting that to another model is a silent model switch. Ported
+        # from omp (docs/non-compaction-retry-policy.md:55-140).
+        "same_endpoint_retries": 3,
+        "retry_base_ms": 500,
+        "retry_max_ms": 8000,
+        "retry_jitter_pct": 25,
         "stream": True,      # SSE transport for model calls: the first token is
                              # visible while it generates, a cancel really closes
                              # the socket (so a local box stops generating), and a
@@ -1701,6 +1710,36 @@ def _retry_after_secs(exc, cap):
         except Exception:
             secs = 0.0   # HTTP-date form — treat as "no hint"
     return max(0.0, min(secs, float(cap or 0)))
+
+
+# Transport-level failures worth the SAME endpoint again, ported from omp
+# (packages/ai/src/error/retryable.ts:20-58): a local llama.cpp/vLLM box refuses or resets
+# while a model is loading, and demoting that to the next endpoint silently changes the
+# model the conversation runs on - the exact failure the 429 comment below describes.
+_TRANSIENT_TRANSPORT_RX = re.compile(
+    r"(?i)(connection refused|connection reset|reset by peer|socket hang up|"
+    r"remote end closed|remotedisconnected|connectionerror|chunkedencodingerror|"
+    r"timed out|timeout|broken pipe|temporarily unavailable|upstream connect)")
+
+
+def _retry_backoff_ms(attempt, base_ms, max_ms, jitter_pct):
+    """Capped exponential backoff with jitter (75-100% of nominal, omp's formula)."""
+    nominal = min(base_ms * (2 ** (attempt - 1)), max_ms)
+    return nominal * (1.0 - random.random() * max(0.0, jitter_pct) / 100.0)
+
+
+def _sleep_unless_stopped(seconds, cancel_event, what, started):
+    """Sleep in 0.25s slices so /stop lands in a fraction of a second, not at the end."""
+    deadline = time.time() + max(0.0, seconds)
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            raise OperatorStop(
+                "stopped by the operator while waiting out %s after %ds"
+                % (what, int(time.time() - started)))
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.25, remaining))
 
 
 class StreamFailed(InfraError):
@@ -13781,6 +13820,7 @@ class Agent:
             waited_after_429 = False
             dropped_optional = False
             empty_retried = False
+            transient_left = int(CONFIG["llm"].get("same_endpoint_retries", 3))
             # The field carrying the output cap: `max_tokens` unless a provider's 400
             # names it, in which case the same value goes out as its replacement.
             cap_field = "max_tokens"
@@ -13918,16 +13958,36 @@ class Agent:
                             # of after the whole Retry-After (which is a config cap of
                             # 60s): a 429 wait is the one place the call still slept in
                             # one un-interruptible block. Mirrors _post_watchdog.
-                            deadline = time.time() + wait
-                            while True:
-                                if cancel_event is not None and cancel_event.is_set():
-                                    raise OperatorStop(
-                                        f"stopped by the operator while waiting out a "
-                                        f"429 on {url} after {int(time.time() - t0)}s")
-                                remaining = deadline - time.time()
-                                if remaining <= 0:
-                                    break
-                                time.sleep(min(0.25, remaining))
+                            _sleep_unless_stopped(wait, cancel_event,
+                                                  f"a 429 on {url}", t0)
+                        continue
+                    if (status == 408 or status >= 500) and transient_left > 0:
+                        # A transient server state, NOT a broken endpoint. Local boxes
+                        # return 503 while a model loads or is swapped and 500 on
+                        # transient grammar/parse failures; demoting here silently
+                        # changes the model the conversation runs on (or dies), and
+                        # back-to-back endpoint hops maximize the chance of re-tripping
+                        # the same 503. Same endpoint, capped exponential backoff with
+                        # jitter, honouring provider timing when it is longer. Ported
+                        # from omp (docs/non-compaction-retry-policy.md:55-140).
+                        transient_left -= 1
+                        attempt = int(CONFIG["llm"].get("same_endpoint_retries", 3)) - transient_left
+                        delay = max(
+                            _retry_backoff_ms(
+                                attempt,
+                                float(CONFIG["llm"].get("retry_base_ms", 500)),
+                                float(CONFIG["llm"].get("retry_max_ms", 8000)),
+                                float(CONFIG["llm"].get("retry_jitter_pct", 25))) / 1000.0,
+                            _retry_after_secs(e, CONFIG["llm"].get("retry_after_max", 60)))
+                        _record_attempt(usage, url, "retry",
+                                        f"{status} transient: {body}", secs)
+                        log.warning("LLM %s answered %s (transient); waiting %.1fs then "
+                                    "retrying the same endpoint (%d retry/retries left)",
+                                    url, status, delay, transient_left)
+                        last_err = e
+                        if delay:
+                            _sleep_unless_stopped(delay, cancel_event,
+                                                  f"a %s on %s" % (status, url), t0)
                         continue
                     if (status in (400, 413, 422)
                             and _CONTEXT_OVERFLOW_RE.search(body)):
@@ -13957,6 +14017,27 @@ class Agent:
                     break
                 except Exception as e:
                     secs = time.time() - t0
+                    if (transient_left > 0 and not isinstance(e, InfraError)
+                            and _TRANSIENT_TRANSPORT_RX.search(str(e))):
+                        # Same reasoning as the 408/5xx branch above, for failures that
+                        # never produced a status: refused/reset connections and socket
+                        # timeouts are what a local box emits while it is loading a model.
+                        transient_left -= 1
+                        attempt = int(CONFIG["llm"].get("same_endpoint_retries", 3)) - transient_left
+                        delay = _retry_backoff_ms(
+                            attempt,
+                            float(CONFIG["llm"].get("retry_base_ms", 500)),
+                            float(CONFIG["llm"].get("retry_max_ms", 8000)),
+                            float(CONFIG["llm"].get("retry_jitter_pct", 25))) / 1000.0
+                        _record_attempt(usage, url, "retry", str(e), secs)
+                        log.warning("LLM %s failed transiently (%s); waiting %.1fs then "
+                                    "retrying the same endpoint (%d retry/retries left)",
+                                    url, e, delay, transient_left)
+                        last_err = e
+                        if delay:
+                            _sleep_unless_stopped(delay, cancel_event,
+                                                  "a transport failure on %s" % url, t0)
+                        continue
                     _record_attempt(
                         usage, url,
                         "abandoned" if isinstance(e, InfraError) else "error",

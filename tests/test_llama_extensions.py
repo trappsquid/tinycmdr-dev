@@ -483,6 +483,11 @@ def main():
                        allow_cloud_fallback=True,
                        fallbacks=[{"base_url": "http://10.0.0.9:9000/v1",
                                    "model": "fb", "api_key": "none"}])
+    # same-endpoint retries off: this grades the per-ENDPOINT extension gate, so the
+    # fallback must be the second request this call makes (tests/test_transient_retry.py
+    # pins the retry policy).
+    _saved_retries = fb.CONFIG["llm"].get("same_endpoint_retries")
+    fb.CONFIG["llm"]["same_endpoint_retries"] = 0
     fb.AGENT._window_cache = 32768
     fb.AGENT._window_at = 0.0
     fb.AGENT._envelope_cache = None
@@ -506,6 +511,10 @@ def main():
         fb._post_watchdog = real
         fb.requests = _rq
         restore()
+        if _saved_retries is None:
+            fb.CONFIG["llm"].pop("same_endpoint_retries", None)
+        else:
+            fb.CONFIG["llm"]["same_endpoint_retries"] = _saved_retries
     check("both endpoints were tried", len(seen) >= 2, seen)
     check("the llama.cpp primary was ASKED for prompt progress",
           seen and seen[0][1].get("return_progress") is True, seen[:1])

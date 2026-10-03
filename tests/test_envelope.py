@@ -80,6 +80,11 @@ def capture_request(fb, session_key="envtest"):
     """
     import requests
     seen = []
+    # These measure payload SHAPE and the failover CHAIN, not the retry policy: with
+    # same-endpoint retries on (the default), a 500 would be re-sent before failover.
+    # The retry policy has its own suite (tests/test_transient_retry.py).
+    _saved_retries = fb.CONFIG["llm"].get("same_endpoint_retries")
+    fb.CONFIG["llm"]["same_endpoint_retries"] = 0
 
     def fake_post(url, headers, payload, timeout, grace, cancel_event=None,
                   stream=False):
@@ -96,6 +101,10 @@ def capture_request(fb, session_key="envtest"):
         sent = str(e)
     finally:
         fb._post_watchdog = real
+        if _saved_retries is None:
+            fb.CONFIG["llm"].pop("same_endpoint_retries", None)
+        else:
+            fb.CONFIG["llm"]["same_endpoint_retries"] = _saved_retries
     return seen, sent
 
 
@@ -109,6 +118,9 @@ def capture_chain(fb, messages, session_key="envtest"):
     """
     import requests
     seen = []
+    # Chain shape, not retry policy (see capture_request).
+    _saved_retries = fb.CONFIG["llm"].get("same_endpoint_retries")
+    fb.CONFIG["llm"]["same_endpoint_retries"] = 0
 
     def fake_post(url, headers, payload, timeout, grace, cancel_event=None,
                   stream=False):
@@ -123,6 +135,10 @@ def capture_chain(fb, messages, session_key="envtest"):
         pass
     finally:
         fb._post_watchdog = real
+        if _saved_retries is None:
+            fb.CONFIG["llm"].pop("same_endpoint_retries", None)
+        else:
+            fb.CONFIG["llm"]["same_endpoint_retries"] = _saved_retries
     return seen
 
 
