@@ -7619,7 +7619,7 @@ def tool_edit_file(args, ctx):
     except Exception as e:
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
     _edit_noop_clear(path, ctx)
-    _receipt_record(path, lf_new, ctx)
+    _receipt_record(path, new_lf, ctx)
     diff = _edit_diff(lf_text, new_lf, path)
     _v = verify_note(path)
     if "verify FAILED" in _v:
@@ -13228,15 +13228,27 @@ def _read_supersede_key(path):
 _READ_RECEIPTS = {}          # session -> {realpath: (hash10, lines)}
 
 
+def _receipt_text(text):
+    """The canonical view BOTH sides of a receipt use: LF newlines.
+
+    The read side records what came off disk (CRLF on a Windows file) and the edit side
+    compares its LF-normalized working copy, so the hashes never matched on any file
+    with CRLF endings and a correct edit was told "this file changed since you read it
+    (was 3 lines, now 3)". Found on [redacted], 2026-10-03, by the box's own agent while
+    it was being driven.
+    """
+    return str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def _receipt_record(path, text, ctx):
     key = (ctx or {}).get("session_key")
     rp = _read_supersede_key(path)
     if not key or not rp:
         return
-    body = str(text or "")
+    body = _receipt_text(text)
     h = hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:10]
     with _TOUCHED_LOCK:
-        _READ_RECEIPTS.setdefault(key, {})[rp] = (h, body.count("\n") + 1)
+        _READ_RECEIPTS.setdefault(key, {})[rp] = (h, len(body.splitlines()))
 
 
 def _receipt_note(path, text, ctx):
@@ -13250,13 +13262,13 @@ def _receipt_note(path, text, ctx):
     if not rec:
         return ""
     old_hash, old_lines = rec
-    body = str(text or "")
+    body = _receipt_text(text)
     if old_hash == hashlib.sha256(body.encode("utf-8", "replace")).hexdigest()[:10]:
         return ""
     return ("\n[HARNESS: %s changed since your last read of it in this session (was %d "
             "lines, now %d) - the anchor may be from a stale view. read_file the section "
             "again before re-sending.]" % (Path(str(path)).name, old_lines,
-                                           body.count("\n") + 1))
+                                           len(body.splitlines())))
 
 
 # What this run has read and changed, per session. The elision marker carries the ledger

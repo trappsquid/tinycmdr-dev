@@ -128,6 +128,25 @@ def main():
         check("changed since your last read" in out,
               "an edit against a moved file says so", out[:220])
 
+        # ---- CRLF files: a correct edit must NOT be told the file changed
+        # Found on [redacted], 2026-10-03, by the box's own agent: the read side recorded
+        # the raw CRLF bytes and the edit side compared its LF-normalized copy, so every
+        # correct edit to a CRLF file carried "changed since your last read (was 3 lines,
+        # now 3)". Both sides now hash the same LF view and count lines the same way.
+        crlf = workdir / "crlf.txt"
+        crlf.write_bytes(b"alpha\nbeta\r\n")
+        fb.tool_read_file({"path": str(crlf)}, dict(ctx))
+        out = fb.tool_edit_file({"path": str(crlf), "old_string": "alpha",
+                                 "new_string": "ALPHA"}, dict(ctx))
+        check("changed since your last read" not in out,
+              "a correct edit to a CRLF file carries no stale-view note", out[-200:])
+        crlf.write_bytes(b"alpha\nbeta\ngamma\r\n")
+        out = fb.tool_edit_file({"path": str(crlf), "old_string": "nope",
+                                 "new_string": "x"}, dict(ctx))
+        check("changed since your last read" in out and "was 2 lines, now 3" in out,
+              "...and an externally changed CRLF file does, with true line counts",
+              out[-240:])
+
         # ---------------------------------------------------------- verify region
         pyfile = workdir / "broken.py"
         pyfile.write_text("def f():\n    return 1\n", encoding="utf-8")
