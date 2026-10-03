@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.47] - 2026-10-03
+
+Changed
+- **`tinycmdr update` no longer copies the project's own kit onto user machines.** The verb
+  git-pulled the whole repository, so every updated install accumulated the test suites, the
+  CI workflow, the docs, the changelog, the ledger and the maintainer scripts - ~600 lines
+  the harness needs to run nothing (an update on the operator's own Mac landed 18 files, 7 of
+  them test suites). A pull now narrows the tree to what a PACKAGE ships, written as
+  EXCLUSIONS rather than an allowlist so a path this list forgets stays (harmless) instead of
+  an allowlist forgetting one and DELETING something the harness needs. Untracked per-host
+  files (config.json, .env, sessions/, notes, a host's own tools/) are untouched - the tool
+  speaks only about tracked paths - a tree that declares itself development
+  (maintenance/where-roles.json, the file where.py reads) is never pruned, and `update --full`
+  keeps the whole repository deliberately. Verified on throwaway clones: after a pull the
+  tests/.github/docs/changelog/ledger/maintainer scripts are gone, `install/`, `tools/` and
+  the restart helpers are intact, untracked files survive, and `tinycmdr --version` runs.
+- **The update summary reports the version it just pulled.** It printed the RUNNING process's
+  VERSION, so updating to 1.0.46 announced "(VERSION 1.0.45)" - confusing enough that it was
+  reported as a bug. It now reads the version from the file on disk.
+
 ## [1.0.46] - 2026-10-03
 
 Added

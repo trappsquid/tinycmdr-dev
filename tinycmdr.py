@@ -993,7 +993,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.46"
+VERSION = "1.0.47"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -23037,7 +23037,7 @@ def _verb_running():
     except Exception:                                            # noqa: BLE001
         return None
 
-def update_adopt_git(git, repo):
+def update_adopt_git(git, repo, keep_dev=False):
     """Make this install a git checkout, then check out the published branch.
 
     A fresh install is a folder of files, not a clone, so `tinycmdr update` had nothing to
@@ -23071,8 +23071,11 @@ def update_adopt_git(git, repo):
             return 1
     _run_git(git, ["-C", str(BASE_DIR), "branch", "--set-upstream-to=origin/main", "main"], 60)
     ensure_launcher_executable()
-    print("adopted %s: this install is a checkout of main now (tinycmdr.py %s -> %s)"
-          % (repo, before, _build_hash()))
+    _narrow = _narrow_to_shipped(git, keep_dev)
+    if _narrow:
+        print(_narrow)
+    print("adopted %s: this install is a checkout of main now (tinycmdr.py %s -> %s, "
+          "VERSION %s)" % (repo, before, _build_hash(), _disk_version()))
     print("Restart tinycmdr to run it: `tinycmdr restart`")
     return 0
 
@@ -23728,16 +23731,94 @@ def _verb_config(rest):
     return 0
 
 
+# ---- what a PACKAGE ships, expressed as EXCLUSIONS ------------------------------------
+# build-package.py's SHIP is the allowlist for the DOWNLOAD. `tinycmdr update` used to git
+# pull the whole repo, so a user's install accumulated the project's own kit - the test
+# suites, the CI workflow, the docs, the changelog, the maintainer scripts - none of which
+# the harness needs to run a single task (measured 2026-10-03: 18 files, ~600 lines of
+# tests/CI/docs on the operator's own Mac after one update).
+#
+# Exclusions, never an allowlist: a path this list forgets STAYS on the machine (harmless,
+# and a new shipped file needs no change here), while an allowlist that forgot one would
+# DELETE something the harness needs. Untracked per-host files (config.json, .env,
+# sessions/, notes, per-host tools/) are never touched - sparse-checkout only speaks about
+# tracked paths.
+_DEV_ONLY_PATHS = ("/tests/", "/.github/", "/docs/", "/STATUS.json", "/CHANGELOG.md")
+# maintenance/ ships only its restart helpers (SHIP lists exactly these); the rest of the
+# folder is maintainer kit - the release cutter, the leak gate, the package builder.
+_DEV_MAINTENANCE_KEEP = ("restart-tinycmdr.sh", "restart-tinycmdr.ps1",
+                         "restart-tinycmdr-macos.sh", "restart-tinycmdr-manager.ps1")
+_NARROW_NOTE = ("  narrowed this install to what a package ships: dropped the project's own "
+                "kit (tests/, .github/, docs/, changelog, maintainer scripts). `tinycmdr "
+                "update --full` keeps the whole repo instead.")
+
+
+def _sparse_patterns():
+    """`git sparse-checkout` patterns: the whole tree, minus the project's own kit."""
+    pats = ["/*"] + ["!%s" % p for p in _DEV_ONLY_PATHS]
+    pats.append("!/maintenance/")
+    pats += ["/maintenance/%s" % n for n in _DEV_MAINTENANCE_KEEP]
+    return pats
+
+
+def _disk_version():
+    """VERSION as the file on disk NOW says it.
+
+    The running process's VERSION was read at startup, so the OLD build printed its own
+    number in the update summary - the operator saw "VERSION 1.0.45" immediately after
+    pulling 1.0.46 (measured 2026-10-03). Report what the tree holds, not what this
+    process remembers.
+    """
+    try:
+        text = (BASE_DIR / "tinycmdr.py").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return VERSION
+    m = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.M)
+    return m.group(1) if m else VERSION
+
+
+def _narrow_to_shipped(git, keep_dev=False):
+    """Drop the project's own kit from this tree, keeping what a package ships.
+
+    Returns a one-line report, or "" when there was nothing to do. Never prunes a tree that
+    declares itself a DEVELOPMENT box (maintenance/where-roles.json is the per-host
+    declaration where.py reads): deleting the tests out from under the person editing them
+    is not an update, it is sabotage.
+    """
+    if keep_dev or os.environ.get("TINYCMDR_UPDATE_KEEP_DEV"):
+        return ""
+    if (BASE_DIR / "maintenance" / "where-roles.json").exists():
+        return ("  (a dev tree: maintenance/where-roles.json is present, so nothing was "
+                "pruned - pass --full to say so deliberately)")
+    if not any((BASE_DIR / d).exists() for d in ("tests", ".github", "docs")):
+        return ""                                       # already narrow
+    rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "sparse-checkout", "init",
+                                     "--no-cone"], 60)
+    if rc == 0:
+        rc, out, err, _ = _run_git(git, ["-C", str(BASE_DIR), "sparse-checkout",
+                                         "set"] + _sparse_patterns(), 120)
+    if rc != 0:
+        return ("  (could not narrow this tree - it keeps the whole repo: %s)"
+                % ((err or out).strip()[:160]))
+    return _NARROW_NOTE
+
+
 def _verb_update(rest):
     """`update <file.py|zip|folder>` — put a newer build in place, with a backup.
 
     The pushed-by-hand dance, in one command: take the source, check it really is a build
     (a VERSION line, and `--version` runs), back the current files up beside themselves,
     write the new bytes, and say what changed. It never restarts anything: the operator
-    decides when a running bot is replaced."""
+    decides when a running bot is replaced.
+
+    `--full` keeps the whole repository. Without it a pull narrows the tree to what a
+    PACKAGE ships (see _narrow_to_shipped): the harness needs none of the project's own kit,
+    and it used to be delivered to every user's machine by a plain git pull."""
     import shutil
     import tempfile
     import zipfile
+    keep_dev = "--full" in rest
+    rest = [a for a in rest if a != "--full"]
     if not rest:
         repo = str(CONFIG["agent"].get("update_repo") or DEFAULT_UPDATE_REPO)
         git = _git_exe()
@@ -23748,7 +23829,7 @@ def _verb_update(rest):
             return 2
         if not (BASE_DIR / ".git").exists():
             print("this install is not a git checkout - adopting %s" % repo)
-            return update_adopt_git(git, repo)
+            return update_adopt_git(git, repo, keep_dev)
         print("Running in git repository at %s" % BASE_DIR)
         print("Checking for updates via git...")
 
@@ -23771,16 +23852,19 @@ def _verb_update(rest):
             return 1
         ensure_launcher_executable()
         print(out.strip())
+        _narrow = _narrow_to_shipped(git, keep_dev)
+        if _narrow:
+            print(_narrow)
         head_after, file_after = head_of()
         if (head_before, file_before) != (head_after, file_after):
             print("HEAD %s -> %s, tinycmdr.py %s -> %s (VERSION %s)"
-                  % (head_before, head_after, file_before, file_after, VERSION))
+                  % (head_before, head_after, file_before, file_after, _disk_version()))
             print("Restart tinycmdr to run new build: `tinycmdr restart`")
         else:
             dirty = bool((_run_git(git, ["-C", str(BASE_DIR), "status", "--porcelain",
                                          "--", "tinycmdr.py"], 30)[1] or "").strip())
             print("Already up to date: HEAD %s, tinycmdr.py %s (VERSION %s)%s"
-                  % (head_after, file_after, VERSION,
+                  % (head_after, file_after, _disk_version(),
                      " - with local uncommitted edits (a dev tree)" if dirty else ""))
         return 0
     src = Path(rest[0]).expanduser()

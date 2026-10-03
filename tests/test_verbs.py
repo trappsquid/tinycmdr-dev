@@ -117,6 +117,22 @@ def main():
                 check("the fix-up is a no-op where the execute bit does not exist",
                       launcher.read_text(encoding="utf-8").startswith("#!"))
 
+        # ---- update narrows to what a package ships (and this list DELETES) ----------
+        # `update` used to git-pull the whole repo, so user machines accumulated the test
+        # suites, the CI workflow, the docs and the maintainer kit. The narrowing is written
+        # as EXCLUSIONS so a forgotten path is kept - which means an exclusion that caught
+        # something the harness needs would break every updated install. Grade the list.
+        _pats = fb._sparse_patterns()
+        _excl = [p for p in _pats if p.startswith("!")]
+        check("update narrowing drops the project's own kit",
+              "!/tests/" in _excl and "!/.github/" in _excl and "!/docs/" in _excl, str(_excl))
+        check("...and never a directory the package ships",
+              not any(e.rstrip("/") in ("!/install", "!/tools", "!/skills", "!/tinycmdr.py")
+                      for e in _excl), str(_excl))
+        check("...while re-including the shipped restart helpers",
+              "/maintenance/restart-tinycmdr.sh" in _pats
+              and "/maintenance/restart-tinycmdr.ps1" in _pats, str(_pats))
+
         # ---- status: an endpoint that says nothing, then one that answers ----
         saved_detect = fb._detect_window
 
