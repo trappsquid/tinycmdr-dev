@@ -91,6 +91,41 @@ if command -v cygpath >/dev/null 2>&1; then
     NOTES="$(cygpath -m "$NOTES" 2>/dev/null || printf '%s' "$NOTES")"
 fi
 git push origin main
+
+# ---- the gate must be GREEN on this exact commit before it becomes a release ----------
+# Doctrine (docs/development.md §7): a release flows from green CI, and a published number
+# is never rebuilt. This script used to push and tag in one breath, so a commit whose gate
+# had not finished - or had failed - could still be published, and once published the
+# assets stay published. Push first, WAIT for the gate run on this sha, then tag.
+# Override deliberately with TINYCMDR_SKIP_CI_GATE=1 and say why in the notes.
+if [ "${TINYCMDR_SKIP_CI_GATE:-0}" = "1" ]; then
+    echo "*** TINYCMDR_SKIP_CI_GATE=1: tagging $(git rev-parse --short HEAD) WITHOUT a green gate" >&2
+else
+    SHA="$(git rev-parse HEAD)"
+    say "the gate must be green on $SHA before the tag exists"
+    tries="${TINYCMDR_CI_WAIT_TRIES:-90}"      # 90 x 20s = 30 minutes
+    while :; do
+        rows="$(gh run list --commit "$SHA" --workflow gate --limit 10 \
+                    --json status,conclusion \
+                    --jq '.[] | "\(.status) \(.conclusion // "-")"' 2>/dev/null || true)"
+        if printf '%s\n' "$rows" | grep -qE '^completed (failure|cancelled|timed_out|startup_failure|action_required)'; then
+            echo "*** the gate FAILED on $SHA - refusing to tag it. Fix and cut again:" >&2
+            printf '%s\n' "$rows" >&2
+            exit 1
+        fi
+        if printf '%s\n' "$rows" | grep -q '^completed success'; then
+            echo "gate: green on $SHA"
+            break
+        fi
+        tries=$((tries - 1))
+        if [ "$tries" -le 0 ]; then
+            echo "*** no green gate run for $SHA after the wait - refusing to tag an ungraded commit." >&2
+            exit 1
+        fi
+        sleep 20
+    done
+fi
+
 gh release create "$TAG" \
     "dist/tinycmdr-$VER-win.zip" \
     "dist/tinycmdr-$VER-linux.tar.gz" \
