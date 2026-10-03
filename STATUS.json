@@ -1052,6 +1052,50 @@
       },
       "detail": "The art's crop was (225, 80, 900, 850) while the badge master's content box at max(rgb)>=45 is x 58..912, y 5..939: the emblem's lower ~90px were discarded and the operator saw the helmet 'cut off too early'. Re-rendered from the master with the designer's framing extended to y=940, and the art block is captioned `tinycmdr` underneath. maintenance/make-brand-art.py now states the measured box and refuses to overwrite the shipped designer render without --force.",
       "gate": "tests/test_tui.py (the caption row; the accepted dot counts of the re-rendered art; the artifact loads and stays within the rail)"
+    },
+    {
+      "id": "re-read-after-elision-served",
+      "title": "a re-read whose result was elided was refused, then the run was stopped as a loop",
+      "state": "shipped",
+      "anchor": {
+        "commit": "8818e28",
+        "expect": "tagged"
+      },
+      "detail": "The spill index advertises payload ids (spill#N); compaction drops an older result from the payload; the model re-reads the id because it can no longer see the content; the duplicate refusal answered 'NOT RE-EXECUTED ... nothing has changed since' - a false premise when the result is gone - and the loop guard then read the re-issue as a spin and forced the final report, 'detecting a loop almost every turn' while driving a fleet box (2026-10-03). _drop_oldest_block now records which calls lost their results, keyed by session, and a repeat of one of them is SERVED (one elision buys one re-run).",
+      "gate": "tests/test_stall.py (the elision memory and its wiring through _drop_oldest_block)"
+    },
+    {
+      "id": "idempotent-repeats-never-stop",
+      "title": "a refused read-only repeat no longer forces the final report",
+      "state": "shipped",
+      "anchor": {
+        "commit": "8818e28",
+        "expect": "tagged"
+      },
+      "detail": "Repeating read_file / search_files / search_sessions / list_tools / atlas cannot damage anything and the model may legitimately need it again; the refusal and its nudge stay, the forced stop does not. Repeats of calls that ACT still end the run - that is the shape the guard exists for.",
+      "gate": "tests/test_stall.py (a re-issued read does not stop the run; a re-issued shell still does)"
+    },
+    {
+      "id": "window-probe-miss-not-cached",
+      "title": "a failed context probe was cached as a window",
+      "state": "shipped",
+      "anchor": {
+        "commit": "8818e28",
+        "expect": "tagged"
+      },
+      "detail": "Each endpoint's answer is kept for WINDOW_TTL (300s); a probe that came back EMPTY (a busy llama.cpp box timing out one GET) was cached as 0 for the whole TTL, so every call in that window took the assumed branch - budget 8000 + static + reply = 14,205 tokens with a 4157-token prompt, 17,680 with a 7632-token one - against a server serving 131,072. That guess MOVED with the prompt, which is why it read as unexplainable. An empty answer now expires in WINDOW_MISS_TTL (20s) and is re-asked; a route that RAISED is retried once inside the probe.",
+      "gate": "tests/test_endpoint_window.py (the miss TTL, the blip retry, the pin)"
+    },
+    {
+      "id": "window-source-named",
+      "title": "a guessed or pinned window no longer reads like a server fact",
+      "state": "shipped",
+      "anchor": {
+        "commit": "8818e28",
+        "expect": "tagged"
+      },
+      "detail": "status and the --app rail name the source - (assumed) with the remedy, (pinned) for llm.context_window, (capped) when llm.max_context_tokens is the ceiling - and the startup banner says 'window ASSUMED' when the endpoint did not report one. llm.context_window ('auto' by default) pins the window over detection, while max_context_tokens still caps the messages payload on top: two numbers with two jobs, both named. Documented in config.example.json.",
+      "gate": "tests/test_endpoint_window.py (the pin and its arithmetic, the ASSUMED label with the remedy) + tests/test_tui.py (the rail's (assumed)/(pinned) suffix)"
     }
   ]
 }
