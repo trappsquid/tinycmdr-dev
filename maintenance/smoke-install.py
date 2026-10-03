@@ -106,8 +106,13 @@ def start_stub(model):
 
 
 def run(python, install_dir, args, timeout=180):
+    # encoding/errors, never plain text=True: the app reconfigures its stdout to UTF-8, and
+    # a bare text=True decodes with the LOCALE codec (cp1252 on Windows), so a byte like
+    # 0x81 raised UnicodeDecodeError inside subprocess.run and the smoke died on a decoding
+    # fault instead of grading the install (measured by the Windows CI job, 2026-10-03).
     return subprocess.run([python, str(Path(install_dir) / "tinycmdr.py"), *args],
-                          cwd=install_dir, text=True, capture_output=True, timeout=timeout)
+                          cwd=install_dir, capture_output=True, timeout=timeout,
+                          encoding="utf-8", errors="replace")
 
 
 def set_config(python, install_dir, key, value):
@@ -164,29 +169,34 @@ def main():
                            ("llm.stream", "false")):
             got = set_config(python, install_dir, key, value)
             failures += not check("config set %s %s" % (key, value), got.returncode == 0,
-                                  got.stdout + got.stderr)
+                                  (got.stdout or "") + (got.stderr or ""))
 
-        # 3. doctor: the install is coherent AND the endpoint answers.
+        # 3. doctor: the INSTALL is coherent and the endpoint answers. Deliberately NOT
+        # "no problems found": these installs are CLI-only, and doctor names the missing
+        # chat token as a problem under the Windows installer's placeholder config. What
+        # this smoke is for is the install and the model link.
         got = run(python, install_dir, ["doctor"])
-        out = got.stdout + got.stderr
-        failures += not check("doctor: no problems found", got.returncode == 0,
-                              out)
+        out = (got.stdout or "") + (got.stderr or "")
         failures += not check("doctor: the endpoint was reached (not NO ANSWER)",
                               "NO ANSWER" not in out, out)
+        failures += not check("doctor: the install folder is writable",
+                              "folder    : writable" in out, out)
+        failures += not check("doctor: the HTTP layer is present",
+                              "dep requests: ok" in out, out)
 
         # 4. health: the one line a supervisor reads, naming this build.
         got = run(python, install_dir, ["health"])
-        out = got.stdout + got.stderr
+        out = (got.stdout or "") + (got.stderr or "")
         failures += not check("health: prints the version/lane/model/endpoint line",
-                              bool(STEP.search(got.stdout)) and "model " + args.model in got.stdout
-                              and base_url in got.stdout, out)
+                              bool(STEP.search(got.stdout or "")) and "model " + args.model in (got.stdout or "")
+                              and base_url in (got.stdout or ""), out)
         failures += not check("health: reports no DOWN lane",
                               " is DOWN" not in out, out)
 
         # 5. --once: one whole turn, through the installed tree and the endpoint.
         got = run(python, install_dir, ["--once", "reply with the single word: " + STUB_REPLY],
                   timeout=300)
-        out = got.stdout + got.stderr
+        out = (got.stdout or "") + (got.stderr or "")
         # A turn with no endpoint exits 0 and prints an honest "infrastructure failure"
         # card (measured 2026-10-02 against a refused port), so the return code alone
         # grades nothing here - the card must be absent.
@@ -198,7 +208,7 @@ def main():
             failures += not check("--once reached the endpoint",
                                   len(_StubHandler.calls) >= 1, out)
             failures += not check("--once printed the model's reply",
-                                  STUB_REPLY in got.stdout, out)
+                                  STUB_REPLY in (got.stdout or ""), out)
     finally:
         if server is not None:
             server.shutdown()
