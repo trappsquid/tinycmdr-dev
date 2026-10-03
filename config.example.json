@@ -174,6 +174,7 @@
     "_comment_context_files": "AGENTS.md / CLAUDE.md found from the run's cwd up to the project (or home) root are read at session start into the static prompt: one file per directory depth (AGENTS.md wins over CLAUDE.md there), far-to-near so the nearest file is most prominent, a farther file whose paragraphs are all inside a nearer one dropped, and the block bounded by context_files_max_chars. It rides the cached prefix, so the cost is one prefill per session. These are local conventions and rank below the operator's current instruction; set context_files false to disable.",
     "context_files": true,
     "context_files_max_chars": 4000,
+    "skills_always_max_chars": 3000,
     "_comment_notes": "Durable memory. Every 'remember' lands in notes.md, the newest of which rides in the trailing state block, never the system prompt - the system prompt has to stay byte-stable for the endpoint's prefix cache; older entries age into notes-archive.md. notes_max_note_chars caps a single entry at write time, because one huge note poisons every later call in the session.",
     "notes_max_chars": 8000,
     "notes_max_note_chars": 1200,

@@ -392,6 +392,9 @@ DEFAULT_CONFIG = {
         # prefill per session, not per call. omp: docs/context-files.md.
         "context_files": True,
         "context_files_max_chars": 4000,
+        # Bodies of skills whose frontmatter says `always: true` ride the trailing block
+        # (not the cached system prompt); bounded here.
+        "skills_always_max_chars": 3000,
         # The machine atlas (item 2b). The harness hands the model the facts about the box it
         # is on: os, shell, install, and where things live. Attached in the trailing block on
         # the first turn of a run, and again after a failure that reads like a wrong path.

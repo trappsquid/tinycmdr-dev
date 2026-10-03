@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **Plan mode, context files, per-tool authority, job control, and a delegation
+  contract** - ported from oh-my-pi after a comparative review. `agent.plan_requires_approval`
+  starts a session read-only (`/plan on|off|apply` is the door), `AGENTS.md`/`CLAUDE.md` are
+  read into the cached prefix at session start, `agent.tool_policy` denies or prompts a tool
+  by name and `agent.approval_mode` is a ceiling (`auto` default = no new prompts), background
+  jobs report real exit codes across restarts with `wait_for` readiness and `send` stdin, and
+  `delegate_task` takes a shared `context` plus a `tasks` batch with a per-child budget and
+  cost line. Graded in `tests/test_plan_and_context.py`, `tests/test_authority.py`,
+  `tests/test_job_control.py` and `tests/test_delegation.py`.
+
+Fixed
+- **A clean stream close was returned as the model's final word.** A server that died
+  mid-answer (or a proxy that dropped the connection) left content with no `finish_reason`
+  and no `[DONE]`, and `_stream_chat` accepted it - the truncated prefix went to the
+  operator and into history, and `finish_reason: ''` kept it invisible to the length and
+  window checks. It is now a `StreamFailed`, which the caller retries non-streaming.
+  Graded in `tests/test_stream_integrity.py`.
+- **`edit_file` could report OK over an empty diff.** A `new_string` byte-identical to the
+  file wrote the same bytes back and returned a green OK, so a weak model re-anchored and
+  re-sent variants while the loop guard saw different arguments each time. It is refused
+  now, escalates to a STOP on the third identical payload, and any real mutation clears it.
+  Graded in `tests/test_stream_integrity.py`.
+- **Reasoning leaked into the answer, and `reasoning`/`reasoning_text` were dropped.**
+  A server with no reasoning parser puts the whole `<think>` block into `content`; it now
+  routes to reasoning (leading fences only, split across deltas), the three field aliases
+  fold to `reasoning_content`, and local endpoints get it replayed on history turns so the
+  prefix KV-cache stays aligned. `llm.replay_reasoning=false` / `llm.think_fence=false`
+  disable either half. Graded in `tests/test_stream_integrity.py` and
+  `tests/test_reasoning_replay.py`.
+- **A transient 5xx demoted the conversation to another model.** Local boxes answer 503
+  while a model loads; the harness treated that like a fatal error and moved to the next
+  endpoint (or died). 408/5xx and refused/reset/timeout transport failures now retry the
+  SAME endpoint with capped exponential backoff + jitter before any failover
+  (`agent.same_endpoint_retries`, default 3; 0 restores the old behaviour).
+  Graded in `tests/test_transient_retry.py`.
+- **`search_files` returned an unordered page that one hot file could eat.**
+  The walk is path-ordered, a per-file cap (`agent.search_max_per_file`, default 5) keeps
+  one log from consuming the whole budget, and both a capped file and a cap-terminated
+  walk say so. Graded in `tests/test_search_scope.py`.
+- **The spill index did not survive a restart, and spills were unbounded on disk.** The
+  same output now spills to ONE content-addressed file, the index persists beside the
+  files (and `/new`'s removal persists too), and `agent.spill_max_bytes` (8 MiB) caps what
+  a runaway command writes, saying what it dropped. Graded in `tests/test_spill_durability.py`.
+- **Duplicate `tool_call_id`s could 400 a strict endpoint.** A local server or proxy that
+  re-emits an id collapsed two calls onto one id in every pairing structure; ids are split
+  in order (results re-pointed) and the pairing report names duplicates. Graded in
+  `tests/test_payload_ids.py`.
+- **An empty `stop` completion cost a whole nudge turn.** It is re-sent once, unchanged, on
+  the same endpoint; a turn that spent tokens is not re-asked. Graded in
+  `tests/test_empty_stop_retry.py`.
+- **A read->edit->read loop kept every version of a file.** An older read superseded by a
+  newer full read of the same path is blanked to a notice, gated on the prompt cache
+  (`agent.prune_suffix_tokens`, `agent.prune_idle_secs`); the compaction drop loops no
+  longer re-serialize the whole conversation per pass. Graded in `tests/test_supersede_prune.py`.
+- **The elision marker said something vanished without saying what.** It now carries a
+  cumulative file ledger (R/W/RW) and names the pre-compaction transcript, and
+  `_force_shrink` writes that transcript before evicting. Graded in
+  `tests/test_compaction_continuity.py`.
+- **A revealed tool schema rode every later payload for the session's life.**
+  `agent.reveal_ttl_secs` (default 1800) expires it after that long without a call; the name
+  stays listed and a call re-reveals. Graded in `tests/test_reveal_decay.py`.
+- **`remember` was the one prompt-bound text sink that skipped the secret scrubber.** It
+  now passes `scrub()`. Field notes gained `repeat: once|gap:N`, shown hints persist per
+  session, read receipts let a failed edit say "this file changed since you read it", a
+  verify failure shows the region plus the pre-image from the `.bak`, skills parse
+  `globs:`/`always:`/`hide:`, `/fork` copies a conversation, and an unresolved merge
+  conflict is named when it is read. Graded in `tests/test_harness_extras.py`.
+
 ## [1.0.53] - 2026-10-03
 
 Fixed
