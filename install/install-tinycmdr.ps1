@@ -985,7 +985,7 @@ if ($Ask) {
     while ($true) {
         if (-not (Ask-Yes "Add another endpoint?" $false)) { break }
         $n = $script:Fallbacks.Count + 1
-        $fbKind = Ask-Choose "Endpoint #$n: local or cloud?" "1" `
+        $fbKind = Ask-Choose "Endpoint #${n}: local or cloud?" "1" `
             "local / my LAN (no key)" "cloud / hosted (needs an API key)"
         $fbKey = ""
         if ($fbKind -eq "2") { $fbKey = Ask-Text "API key for it (input hidden)" -Secret }
