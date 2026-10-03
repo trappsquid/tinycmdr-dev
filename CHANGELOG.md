@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Fixed
+- **An edit to a CRLF file was told "this file changed since you read it".** The read
+  receipt hashed the raw bytes and the edit compared its LF-normalized copy, so the two
+  never matched on any Windows file; the post-edit receipt also stored the new_string
+  fragment rather than the resulting file. One canonical view now backs both, and line
+  counts are the file's own. Found by a fleet box's own agent while it was being driven.
+- **A `--once` run with a piped stdin parked `ask_user` for the full 120s and then
+  stopped the run.** The CLI mounted its console ask door even with nobody able to type
+  (cron, `ssh host --once`); the caller now declares whether a human is reachable, so
+  such a run refuses the question immediately and states its assumption instead.
+- **`doctor`'s unmatched-failure drafts suggested `match: everything`.** Drafts now skip
+  stopwords and pick a distinctive token.
+- **A read miss that shares a tool's name no longer hides the file that exists.**
+  `read_file .../notes` now answers "Did you mean .../notes.md?" before noting that
+  `notes` is also a tool.
+- **An older host-owned `tools/process.py` silently disabled auto-background** (and
+  cross-restart exit codes) on an otherwise updated tree, because `update` never
+  overwrites host-owned files. The runtime logs it once and `doctor` prints the remedy.
+
 ## [1.0.54] - 2026-10-03
 
 Added
