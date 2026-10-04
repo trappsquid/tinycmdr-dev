@@ -66,6 +66,10 @@ say "the README's download names must exist in dist/ before anything is pushed"
 # as themselves, and each archive gets a copy under its stable name.
 cp install.sh dist/install.sh
 cp install.ps1 dist/install.ps1
+# The version-independent updater, published beside the installer: an install too old to
+# update itself (or one whose own updater is broken) is repaired with this.
+cp update.sh dist/update.sh
+cp update.ps1 dist/update.ps1
 cp "dist/tinycmdr-$VER-win.zip" dist/tinycmdr-win.zip
 cp "dist/tinycmdr-$VER-linux.tar.gz" dist/tinycmdr-linux.tar.gz
 cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
@@ -79,7 +83,7 @@ if command -v sha256sum >/dev/null 2>&1; then SUM="sha256sum"; else SUM="shasum 
 ( cd dist && rm -f SHA256SUMS && $SUM \
     "tinycmdr-$VER-win.zip" "tinycmdr-$VER-linux.tar.gz" "tinycmdr-$VER-macos.zip" \
     tinycmdr-win.zip tinycmdr-linux.tar.gz tinycmdr-macos.zip \
-    install.sh install.ps1 > SHA256SUMS )
+    install.sh install.ps1 update.sh update.ps1 > SHA256SUMS )
 cat dist/SHA256SUMS
 
 say "push main, then publish"
@@ -132,6 +136,8 @@ gh release create "$TAG" \
     "dist/tinycmdr-$VER-macos.zip" \
     "dist/install.sh" \
     "dist/install.ps1" \
+    "dist/update.sh" \
+    "dist/update.ps1" \
     --title "$TAG" --notes-file "$NOTES"
 
 say "attach the stable names the README uses (the versioned files stay)"

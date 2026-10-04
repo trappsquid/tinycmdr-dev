@@ -222,13 +222,24 @@ def test_console_lane():
     # A management verb the session cannot run gets the door that has it, not "not a
     # command": the operator asked how to update, typed /update here, and the list it named
     # has no update verb in it (2026-09-30).
-    out = io.StringIO()
-    with contextlib.redirect_stdout(out):
-        fb._cli_command("/tinycmdr update")
-    said = out.getvalue()
-    check("/update in a session names the shell, both steps, instead of dead-ending",
-          "not a command" not in said and "tinycmdr update" in said
-          and "tinycmdr restart" in said, said[:200])
+    # THE UPDATE RULE (2026-10-03): `/update` in a session RUNS the update - it does not
+    # print a hint about a shell command ("... instead of dead-ending", 2026-09-30) and it
+    # does not leave the old bytes running silently. The verb is STUBBED: this test grades
+    # the door, not the network (unstubbed it fetched the release inside the suite).
+    _saved_run_verb = fb.run_verb
+    _called = []
+    fb.run_verb = lambda argv: (_called.append(list(argv)) or 0)
+    try:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            fb._cli_command("/tinycmdr update")
+        said = out.getvalue()
+    finally:
+        fb.run_verb = _saved_run_verb
+    check("/update in a session RUNS the update verb",
+          _called and _called[0][:1] == ["update"], (_called, said[:160]))
+    check("...and says how this session gets the new bytes",
+          "relaunch" in said and "restart" in said, said[:200])
 
     out = io.StringIO()
     with contextlib.redirect_stdout(out):

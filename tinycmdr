@@ -48,6 +48,29 @@ if [ -z "$PY" ]; then
     exit 127
 fi
 
+# THE RULE: every user, on every released version, types `tinycmdr update` and it works. An
+# old install's own updater may predate the release package (1.0.46-1.0.48 shelled out to
+# `git pull`, which refused on their own dirty checkout), so when the local code cannot do
+# the job this shim fetches the published updater and lets IT do the whole thing. The
+# probe is a marker, not a version compare: what matters is whether this copy has the
+# packaged updater at all.
+if [ "${1:-}" = "update" ] && ! grep -q "def _verb_update" "$HERE/tinycmdr.py" 2>/dev/null; then
+    V="$(grep -m1 '^VERSION' "$HERE/tinycmdr.py" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/')"
+    echo "tinycmdr: this install (${V:-unknown version}) predates the packaged updater - using the published one"
+    UPD="$(mktemp)"
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "https://github.com/trappsquid/tinycmdr/releases/latest/download/update.sh" -o "$UPD" || { rm -f "$UPD"; echo "tinycmdr: could not fetch the updater" >&2; exit 1; }
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "https://github.com/trappsquid/tinycmdr/releases/latest/download/update.sh" -O "$UPD" || { rm -f "$UPD"; echo "tinycmdr: could not fetch the updater" >&2; exit 1; }
+    else
+        echo "tinycmdr: neither curl nor wget is available to update with" >&2; exit 1
+    fi
+    sh "$UPD" "$HERE"
+    RC=$?
+    rm -f "$UPD"
+    exit $RC
+fi
+
 if [ "$#" -eq 0 ]; then
     exec "$PY" "$HERE/tinycmdr.py" --app
 fi

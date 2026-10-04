@@ -27,6 +27,19 @@ if not defined PY (
     echo           [the Microsoft Store stub on PATH is not a usable interpreter.] 1>&2
     exit /b 127
 )
+REM THE RULE: every user, on every released version, types `tinycmdr update` and it works.
+REM An old install's own updater may predate the release package, so when the local code
+REM cannot do the job this shim fetches the published updater and lets IT do the whole
+REM thing (the probe is a marker in tinycmdr.py, not a version compare).
+if /i "%~1"=="update" (
+    findstr /c:"def _verb_update" "%HERE%tinycmdr.py" >nul 2>&1
+    if errorlevel 1 (
+        echo tinycmdr: this install predates the packaged updater - using the published one
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing 'https://github.com/trappsquid/tinycmdr/releases/latest/download/update.ps1' -OutFile (Join-Path $env:TEMP 'tc-update.ps1'); } catch { Write-Error 'could not fetch the updater'; exit 1 }; & (Join-Path $env:TEMP 'tc-update.ps1') -Dir '%HERE%'; exit $LASTEXITCODE"
+        exit /b %ERRORLEVEL%
+    )
+)
+
 REM No arguments means a human at a keyboard, so give them the app (inline cards
 REM on a console that cannot host it). The bot keeps
 REM starting the way it always has: the scheduled task runs tinycmdr.py itself.

@@ -155,6 +155,9 @@ SHIP = [
     # The theme: the designer's palette as a host-owned file (an update seeds it once and
     # never overwrites it), so a host can retheme without patching the build.
     "theme.toml",
+    # The default under the host-owned file above, byte-identical: `doctor` and `update`
+    # diff the two so a host that never edited its theme learns when the default moved.
+    "theme.default.toml",
 ]
 
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere

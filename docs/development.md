@@ -206,3 +206,26 @@ tool being truthful about a layout it does not recognise, not a fault. Declare y
 `maintenance/where-roles.json` (gitignored, format in §2), or point `TINYCMDR_WHERE_ROLES=<file>` at
 a declaration of your own. The roles describe a box; they are never a statement about this
 repository.
+
+## The update rule (2026-10-03)
+
+**Every user, on every released version, types `tinycmdr update` (or `/tinycmdr update` in
+chat) and it works.** That is a hard rule, not an aspiration:
+
+- the command fetches the latest **release package** and its `SHA256SUMS`, verifies the
+  download before touching the install, and applies it while leaving every host-owned path
+  alone (`config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, sessions, state,
+  jobs, tasks, logs, spill, venv, `theme.toml`);
+- it never shells out to git: a dirty, pruned or gitless checkout is not a blocker (that
+  was the 1.0.46-1.0.48 dead end);
+- an install whose own updater is missing or broken is repaired by the **published**
+  updater (`update.sh` / `update.ps1`, attached to every release): the `tinycmdr` launcher
+  probes the local code and falls back to it;
+- an update that changed the version must leave the NEW code running: chat restarts onto
+  it, and a terminal session says exactly how;
+- a host-owned file whose default moved is reported, with the remedy, by both `update` and
+  `doctor` (shipped default beside it: `theme.default.toml`).
+
+Anything that breaks this rule is a defect, not a compatibility note. Tests:
+`tests/test_verbs.py` (the verb, the published updater, the release attachments) and the
+two shims' fallback paths.

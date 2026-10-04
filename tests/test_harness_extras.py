@@ -162,6 +162,34 @@ def main():
                 fb.REGISTRY.custom["process"] = _real_proc
             fb._DROPIN_GAPS.update({"checked": False, "gaps": []})
 
+        # ---- a host-owned file whose SHIPPED DEFAULT moved must be reported
+        # update never overwrites a host-owned file by design, so a fix inside the default
+        # reaches only new installs unless the host is told. Measured 2026-10-03: the
+        # 16-colour fix lived in theme.toml, existing installs kept the old copy, and a
+        # Windows console stayed all-yellow - the drop-in gap's shape, one release later.
+        _work = Path(tempfile.mkdtemp(prefix="fbtest-hostgap-"))
+        try:
+            _saved_base = fb.BASE_DIR
+            fb.BASE_DIR = _work
+            (_work / "theme.toml").write_text("# mine\n", encoding="utf-8")
+            (_work / "theme.default.toml").write_text("# mine\n", encoding="utf-8")
+            fb._HOST_DEFAULT_GAPS.update({"checked": False, "gaps": []})
+            check("a host file identical to the shipped default is not reported",
+                  fb.host_file_gaps() == [], fb.host_file_gaps())
+            (_work / "theme.toml").write_text("# mine, edited\n", encoding="utf-8")
+            fb._HOST_DEFAULT_GAPS.update({"checked": False, "gaps": []})
+            check("...and one that differs IS reported, with its default named",
+                  fb.host_file_gaps() == [("theme.toml", "theme.default.toml")],
+                  fb.host_file_gaps())
+            (_work / "theme.toml").unlink()
+            fb._HOST_DEFAULT_GAPS.update({"checked": False, "gaps": []})
+            check("...and an absent file is not a gap", fb.host_file_gaps() == [],
+                  fb.host_file_gaps())
+        finally:
+            fb.BASE_DIR = _saved_base
+            fb._HOST_DEFAULT_GAPS.update({"checked": False, "gaps": []})
+            shutil.rmtree(_work, ignore_errors=True)
+
         # ---- a timeout shorter than the auto-background window must still kill
         # A Windows fleet box, 2026-10-03: shell timeout=5 on a 45-second command came back
         # exit_code=0 after 45s - the auto-background wait ran on its own clock (60s) and

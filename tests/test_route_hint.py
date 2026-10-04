@@ -119,6 +119,25 @@ check("and the third does not (the cap holds through the tool)",
 out3 = fb.tool_shell({"command": "echo hi"}, {"session_key": "r-shell-echo", "config": fb.CONFIG})
 check("a plain command's result carries nothing", "[HARNESS:" not in out3, out3[-120:])
 
+# ---- a computer/GUI procedure is ALREADY tool-driven: never offer to wrap it ---------
+# Operator report, 2026-10-03: a run executed a computer-use runbook "by hand" (9 calls) and
+# the harness offered "say mint it and I will turn it into a tool" - the capability was
+# already a tool, so the offer was noise.
+_st_gui = fb.run_state("mint-gui-1", create=True)
+_st_gui["calls_by"] = {"shell": 9, "computer_use": 9}
+_st_gui["skills_read"] = ["computer-use"]
+_st_gui["mint_ent"] = {"count": 2, "sample": "open the browser and click the button"}
+check("a run that used a computer/GUI tool is never offered a mint",
+      fb.mint_offer("mint-gui-1", None, source="main") == ""
+      and fb.mint_offer_line("mint-gui-1") == "",
+      (fb.mint_offer_line("mint-gui-1"),))
+_st_nogui = fb.run_state("mint-nogui-1", create=True)
+_st_nogui["calls_by"] = {"shell": 9}
+_st_nogui["skills_read"] = ["web-server"]
+_st_nogui["mint_ent"] = {"count": 2, "sample": "restart the web server and check the port"}
+check("...while a shell-driven runbook still is",
+      "mint it" in fb.mint_offer_line("mint-nogui-1"), fb.mint_offer_line("mint-nogui-1")[:120])
+
 # ---- the mint census: one line when a by-hand SHAPE has run in several runs ----------
 # Measured 2026-09-25 driving the manager box: the run does a routine by hand every time and never
 # offers to keep it, and the whole six-day log held ONE `remember` call. The model sees one

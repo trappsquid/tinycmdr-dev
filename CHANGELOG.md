@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.64] - 2026-10-03
+
+Added
+- **One update command, from any version: `/tinycmdr update` (chat) and `tinycmdr update`
+  (terminal).** This is a rule of the project now, not a compatibility note - the one thing
+  a user cannot be asked to do is work out which upgrade procedure their version needs:
+  - the command fetches the latest release package and its `SHA256SUMS`, verifies the
+    download before touching anything, and applies it while leaving every host-owned path
+    alone (`config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, sessions, state,
+    jobs, tasks, logs, spill, venv, `theme.toml`);
+  - an install whose own updater is missing or broken is repaired by the **published**
+    updater (`update.sh` / `update.ps1`, attached to every release beside `install.sh`);
+    the `tinycmdr` launcher probes the local code and falls back to it;
+  - a chat update that changed the version **restarts onto it** (an update that leaves the
+    old bytes serving the channel is the confusion this removes); a terminal session runs
+    the same verb and says to relaunch (or `tinycmdr restart` for the service);
+  - the rule and its reasoning are written down in `docs/development.md` and the README,
+    and pinned by `tests/test_verbs.py` (the published updaters, the release attachments,
+    the launcher fallbacks, the chat verb, the inline run, the restart).
+
+Fixed
+- **No mint offer for a procedure that already ran through a computer/GUI tool.** The offer
+  ("say mint it and I will turn it into a tool") fired for a computer-use runbook executed
+  by hand - but those calls were already tool calls, so wrapping the runbook changes
+  nothing. Any run whose calls include a computer/GUI tool is left alone, in both the
+  operator's offer and the report-time line to the model.
+- **A host-owned file whose shipped default moved is now reported, not silently stale.**
+  `update` never overwrites a host-owned file (`theme.toml` is the operator's, `tools/*.py`
+  are the agent's) - which is correct, and is exactly why the 16-colour fix inside
+  `theme.toml` reached only new installs while every existing one kept the all-yellow ANSI
+  column. This is the drop-in gap's shape one release later, so it gets the same treatment:
+  the release ships the default beside the host file (`theme.default.toml`), and `update`
+  prints - and `doctor` reports - `theme.toml differs from this release's
+  theme.default.toml; if you never edited it, delete it to inherit the fix (or diff the
+  two)`. Logged once, like the drop-in gap.
+
 ## [1.0.63] - 2026-10-03
 
 Fixed

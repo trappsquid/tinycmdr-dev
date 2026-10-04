@@ -1082,7 +1082,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.63"
+VERSION = "1.0.64"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -3488,6 +3488,42 @@ def dropin_gaps():
     return gaps
 
 
+# Host-owned files the package also ships a DEFAULT for, so a host can be TOLD when the
+# default under it changed: update must not overwrite them (theme.toml is the operator's,
+# tools/*.py are the agent's), and that rule is exactly how a fixed default reaches only
+# new installs. Measured 2026-10-03: the 16-colour fix shipped inside theme.toml, every
+# existing install kept its old copy, and the Windows console stayed all-yellow - the same
+# shape as the drop-in gap that blocked auto-background a release earlier.
+_HOST_DEFAULT_PAIRS = (("theme.toml", "theme.default.toml"),)
+_HOST_DEFAULT_GAPS = {"checked": False, "gaps": []}
+
+
+def host_file_gaps():
+    """[(path, default_path)] where a host-owned file differs from the shipped default.
+
+    Differs is not wrong: an operator who edited their theme SHOULD differ. The report
+    exists because a host that never touched the file cannot tell that the default moved -
+    so both `update` and `doctor` print the pair and the remedy, once.
+    """
+    if _HOST_DEFAULT_GAPS["checked"]:
+        return _HOST_DEFAULT_GAPS["gaps"]
+    gaps = []
+    for name, default in _HOST_DEFAULT_PAIRS:
+        mine, theirs = BASE_DIR / name, BASE_DIR / default
+        try:
+            if mine.exists() and theirs.exists() and mine.read_bytes() != theirs.read_bytes():
+                gaps.append((name, default))
+        except OSError:
+            continue
+    _HOST_DEFAULT_GAPS["checked"] = True
+    _HOST_DEFAULT_GAPS["gaps"] = gaps
+    for name, default in gaps:
+        log.info("%s on this host differs from the shipped default in %s: if you never "
+                 "edited it, delete %s to inherit the new default (or diff the two to see "
+                 "what changed)", name, default, name)
+    return gaps
+
+
 def tool_tier(name):
     """The capability tier of a tool; UNKNOWN tools are `exec` (fail closed)."""
     return _TOOL_TIERS.get(str(name or ""), "exec")
@@ -5713,6 +5749,13 @@ _SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docke
 # one party that knows whether the job recurs.
 
 MINT_HINT_TOOLS = ("shell", "execute_code", "process")
+# A procedure driven through a computer/GUI tool is ALREADY one tool call per step: wrapping
+# the runbook in another tool would change nothing, and offering it reads as the harness not
+# knowing its own capabilities (operator report, 2026-10-03: a computer-use runbook run
+# "by hand" produced "say mint it and I will turn it into a tool"). Any run that used a
+# tool matching this pattern is left alone.
+_GUI_TOOL_RX = re.compile(
+    r"(?i)(?:^|_)(?:computer|gui|screen|screenshot|vision|desktop|mouse|keyboard|pyautogui)(?:$|_)")
 PROC_CENSUS_FILE = BASE_DIR / "logs" / "procedure-census.json"
 _PROC_LOCK = threading.Lock()
 
@@ -6017,6 +6060,11 @@ def mint_offer(session_key, reporter, source="main"):
         except Exception:
             log.debug("mint offer failed", exc_info=True)
         return line
+    if any(_GUI_TOOL_RX.search(str(name)) for name in (by or {})):
+        # The procedure was performed THROUGH a tool that already exists (computer use,
+        # a GUI driver): there is nothing to mint, and the offer would be noise.
+        log.info("[%s] mint offer skipped: the run used a computer/GUI tool", session_key)
+        return ""
     books = [b for b in (st.get("skills_read") or []) if b]
     if books:
         # The run READ a runbook and then did its steps by hand. That is the "combine the
@@ -12745,6 +12793,10 @@ def mint_offer_line(session_key):
         return ""
     by = st.get("calls_by") or {}
     if int(by.get("create_tool") or 0) or int(by.get("toolsmith") or 0):
+        return ""
+    if any(_GUI_TOOL_RX.search(str(name)) for name in (by or {})):
+        # Same rule as the offer itself: a computer/GUI procedure is already tool-driven,
+        # so there is nothing to mint and nothing to ask the model to explain.
         return ""
     st["offer_line_shown"] = 1
     log.info("[%s] report-time mint invitation (shape seen in %d runs)",
@@ -21558,7 +21610,19 @@ class MattermostDispatcher:
         # fell through to the model as ordinary text.
         _v = low[1:].split()[0] if low.startswith("/") and len(low) > 1 else ""
         if _v in _CHAT_VERB_SET:
-            self._post(channel_id, post_root, verb_from_chat(stripped[1:]))
+            _line = stripped[1:]
+            _out = verb_from_chat(_line)
+            self._post(channel_id, post_root, _out)
+            # `/tinycmdr update` must leave the NEW code running: an update that changed
+            # the version and stopped there would be the old bytes serving the channel
+            # while the operator believes it is updated. One command, then the host door.
+            if (_line.strip().split()[:1] or [""])[0].lower() == "update" \
+                    and "VERSION " in str(_out) and "->" in str(_out) \
+                    and "already up to date" not in str(_out):
+                self._post(channel_id, post_root,
+                           "♻️ Restarting onto it now - back in a few seconds.")
+                perform_restart(channel_id, post_root, sender)
+                return
             return
         if low == "/retry":
             last = AGENT.pop_last_user(session_key)
@@ -24691,8 +24755,17 @@ def _cli_command(text):
     # both steps.
     bare = verb.lstrip("/")
     if bare == "update":
-        print(dim("  `update` runs in a shell on the host: `tinycmdr update` pulls the build, "
-                  "then `tinycmdr restart` starts running it."))
+        # The rule: `/update` works here, from any version. It runs the same verb the shell
+        # does - fetch the published release, verify it, apply it, leave host-owned files
+        # alone - and says how this session gets the new bytes (a terminal session is
+        # relaunched; the service is restarted with `tinycmdr restart`).
+        print(dim("  updating from the published release..."))
+        try:
+            run_verb(["update"])
+        except SystemExit as e:
+            return bool(e.code)
+        print(dim("  this session still runs the OLD bytes: relaunch it, or "
+                  "`tinycmdr restart` for the service"))
         return True
     if bare == "restart":
         print(dim("  `restart` runs in a shell on the host: `tinycmdr restart`"))
@@ -25896,6 +25969,17 @@ def _verb_doctor():
     else:
         print("  drop-ins  : ok")
 
+    _hfgaps = host_file_gaps()
+    if _hfgaps:
+        print("  host files: %s"
+              % "; ".join("%s differs from this release's %s" % (n, d) for n, d in _hfgaps))
+        notes.append("a host-owned file differs from the default this release ships "
+                     "(update never overwrites those on purpose): if you never edited it, "
+                     "delete it to inherit the new default, or diff the two to see what "
+                     "changed")
+    else:
+        print("  host files: ok")
+
     _cands = field_note_candidates(limit=3)
     if _cands:
         print("  fieldnotes: %d recurring failure signature(s) have no note entry; the "
@@ -26784,6 +26868,12 @@ def _verb_update(rest):
                 print("your persona is an edit to a shipped file - copied to %s first"
                       % Path(_kept).name)
             written, skipped = _apply_package(root)
+            # A host-owned file the package also ships a default for: say when the default
+            # moved, because the update deliberately did NOT overwrite it.
+            for _name, _default in host_file_gaps():
+                print("    %s is yours, so it was left alone - but this release's default "
+                      "(%s) differs. Never edited it? Delete it to inherit the fix."
+                      % (_name, _default))
             ensure_launcher_executable()
             if skipped:
                 print("    left your own %s alone" % ", ".join(skipped[:3]))

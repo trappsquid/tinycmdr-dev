@@ -1026,6 +1026,43 @@ def main():
         finally:
             os.environ.pop("TINYCMDR_MM_TOKEN", None)
 
+        # ---- the update RULE: one command, any version ---------------------------
+        # Every user, on every released version, types `tinycmdr update` (or
+        # `/tinycmdr update` in chat) and it works. These pin the machinery that makes
+        # that true: the published updater exists and is attached to releases, the
+        # launchers fall back to it, and every lane can run the verb.
+        check("the published updater exists for both platforms",
+              (BASE / "update.sh").is_file() and (BASE / "update.ps1").is_file(),
+              sorted(p.name for p in BASE.glob("update.*")))
+        _rel = (BASE / "maintenance" / "release.sh").read_text(encoding="utf-8")
+        check("...and every release attaches it",
+              "dist/update.sh" in _rel and "dist/update.ps1" in _rel
+              and "install.sh install.ps1 update.sh update.ps1 > SHA256SUMS" in _rel,
+              "release.sh")
+        _ush = (BASE / "update.sh").read_text(encoding="utf-8")
+        check("...it verifies the download before touching the install",
+              "SHA256SUMS" in _ush and "checksum mismatch" in _ush, "update.sh")
+        check("...and leaves host-owned paths alone",
+              "theme.toml" in _ush and "config.json" in _ush and "tools skills sessions" in _ush,
+              "update.sh")
+        _shim = (BASE / "tinycmdr").read_text(encoding="utf-8")
+        check("the unix launcher falls back to the published updater for old installs",
+              "def _verb_update" in _shim and "releases/latest/download/update.sh" in _shim,
+              "shim")
+        _cmd = (BASE / "tinycmdr.cmd").read_text(encoding="utf-8")
+        check("...and so does the Windows launcher",
+              "def _verb_update" in _cmd and "releases/latest/download/update.ps1" in _cmd,
+              "shim")
+        check("...and chat can run it, so `/tinycmdr update` works from a channel",
+              "update" in fb._CHAT_VERB_SET, sorted(fb._CHAT_VERB_SET))
+        _src = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
+        check("...a terminal session RUNS `/update` instead of printing a hint",
+              'run_verb(["update"])' in _src
+              and "`update` runs in a shell on the host" not in _src,
+              "the inline handler")
+        check("...and a chat update that changed the version restarts onto it",
+              '"♻️ Restarting onto it now' in _src, "the chat handler")
+
         check("restart and run are verbs too",
               "restart" in fb.VERBS and "run" in fb.VERBS)
 

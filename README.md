@@ -155,7 +155,7 @@ and in chat:
 | `model use <name>` · `model add [<url>]` · `model remove <x>` | switch; add an endpoint (no URL: it asks local/cloud, the key and the link, proves the key with a bearer `GET /models`, then offers the models to choose from); or drop one |
 | `model endpoint [<url>]` | read the endpoint or fix it - a `401` asks for the key (saved to `.env`), a typo is refused unless it answers (`--force` writes an unverified one) |
 | `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
-| `update` | fetch the published build (`update <file\|zip\|folder>` puts one in place by hand) |
+| `update` | fetch the published build - works from any version (`update <file\|zip\|folder>` puts one in place by hand) |
 | `clean` · `token` · `config get\|set <dotted.key>` | junk in this folder, where secrets live, edit config.json |
 | `restart` | restart through this host's own door (launchd, systemd, Task Scheduler) |
 | `/stop` in the CLI or chat | cancel the run that is going, now |
@@ -180,10 +180,24 @@ Both stay flat as the folder grows: 5.9 characters of tool index per tool at 80 
 
 ## Update it
 
+**One command, from any version.** Type it in chat (`/tinycmdr update`) or in a terminal
+(`tinycmdr update`); the same command fetches the latest published build, verifies it
+against `SHA256SUMS`, applies it over this install - your `config.json`, `.env`, `soul.md`,
+notes, `tools/`, `skills/` and `theme.toml` are never overwritten - and, in chat, restarts
+onto it. In a terminal session, relaunch the session (or run `tinycmdr restart` for the
+service).
+
 ```bash
 tinycmdr update      # fetch the published build (verified against SHA256SUMS)
-tinycmdr restart     # start running it
+tinycmdr restart     # start running it (chat does this for you)
 ```
+
+An install too old to update itself (its own `update` predating the release package, or
+broken) is repaired by the same command: the `tinycmdr` launcher detects that and runs the
+published updater (`update.sh` / `update.ps1`, attached to every release) instead. That is
+a rule of this project, not a compatibility note: **the update path must work from every
+released version**, because the one thing a user cannot be asked to do is work out which
+upgrade procedure their version needs.
 
 ## Remove it
 
