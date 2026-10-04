@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.67] - 2026-10-03
+
 Added
 - **The page is back, as the default door** (the lane was removed in 1.0.36). A bare
   `tinycmdr` serves it and opens a browser when the machine has one, `--no-web` runs the
