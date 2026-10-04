@@ -170,10 +170,10 @@ SHIP = [
     # fetched an asset). tests/test_webui_page.py freezes this list against every asset
     # the routes serve, so the next asset the page gains cannot ship half-wired.
     "assets/webui.css",
-    # The page's backdrop: the faint colonnade behind the transcript, drawn in the host's
-    # accent (the server substitutes {{ACCENT}}), plus the bundled OFL fonts - a local page
-    # must not need the internet for its own typography.
-    "assets/roman-colonnade.svg",
+    # The page's backdrop photo (the operator's own, 2026-10-04 - the permanent
+    # replacement for the drawn colonnade) plus the bundled OFL fonts - a local page must
+    # not need the internet for its own typography.
+    "assets/roman-temple-spring.jpg",
     "assets/fonts/cinzel-600.woff2",
     "assets/fonts/cinzel-700.woff2",
     "assets/fonts/inter.woff2",

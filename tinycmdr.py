@@ -22589,7 +22589,7 @@ WEB_PAGE = """
     </div>
   </aside>
   <main class="stage">
-    {{COLONNADE}}
+    {{BACKDROP}}
     <div class="stage-vignette"></div>
     <div class="stage-header">
       <div><small>COMMAND CHANNEL</small><strong id=title title="click to rename">No active conversation</strong></div>
@@ -23915,7 +23915,7 @@ def _web_page_html():
     return (WEB_PAGE.replace("{{VERSION}}", VERSION)
                     .replace("{{THEME_COLOR}}", _web_theme_vars()["--bg"])
                     .replace("{{EMPTY_ART}}", figure)
-                    .replace("{{COLONNADE}}", _web_colonnade_svg()))
+                    .replace("{{BACKDROP}}", _web_backdrop_html()))
 
 
 def _web_manifest():
@@ -24532,19 +24532,17 @@ def run_webui():
                     self._send("not found", 404, "text/plain")
                 else:
                     self._send(css, 200, "text/css; charset=utf-8")
-            elif self.path.startswith("/colonnade.svg"):
-                svg = _web_colonnade_svg()
-                if svg is None:
+            elif self.path.startswith("/temple.jpg"):
+                art = _web_temple_bytes()
+                if art is None:
                     self._send("not found", 404, "text/plain")
                 else:
-                    data = svg.encode()
                     self.send_response(200)
-                    self.send_header("Content-Type", "image/svg+xml")
-                    self.send_header("Content-Length", str(len(data)))
-                    # themed, so never cached: a changed theme changes these bytes
-                    self.send_header("Cache-Control", "no-store, must-revalidate")
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(art)))
+                    self.send_header("Cache-Control", "max-age=86400")
                     self.end_headers()
-                    self.wfile.write(data)
+                    self.wfile.write(art)
             elif self.path == "/" or self.path.startswith("/?"):
                 self._send(_web_page_html())
             else:
@@ -24950,21 +24948,31 @@ def _web_font_path(name):
     return path if path.exists() else None
 
 
-def _web_colonnade_svg():
-    """The faint colonnade, inline in the stage, in the host's own gold and bronze.
+def _web_temple_bytes():
+    """The stage backdrop photo: the host's own file, else None (the CSS draws nothing).
 
-    The operator's design ("modern imperial command pavilion", 2026-10-04): four arches on
-    six fluted columns, drawn at ~5.5% effective opacity behind the transcript. The two
-    colours are placeholders in the asset, so a host that rethemes gets THEIR linework.
+    Operator, 2026-10-04: `roman-temple-spring.jpg` is "the permanent background
+    replacement for the dark pillars background". Read per request, so a host that drops
+    a new photo sees it on the next reload; the bytes are static, so the route caches for
+    a day like the other art.
     """
     try:
-        svg = (BASE_DIR / "assets" / "roman-colonnade.svg").read_text(encoding="utf-8")
+        return (BASE_DIR / "assets" / "roman-temple-spring.jpg").read_bytes()
     except OSError:
+        return None
+
+
+def _web_backdrop_html():
+    """The stage's backdrop element, or "" - a host with no photo gets no backdrop.
+
+    The pavilion brief drew a faint colonnade in gold and bronze; the operator replaced it
+    the same day with the photo. The file is served at /temple.jpg and drawn by
+    .colonnade's own CSS rule (cover, bottom-anchored, dimmed and feathered into the
+    stage), so this only decides whether the element exists at all.
+    """
+    if _web_temple_bytes() is None:
         return ""
-    theme = _web_theme_vars()
-    return (svg.replace("{{GOLD}}", theme["--gold"])
-               .replace("{{BRONZE}}", theme["--bronze"])
-               .replace("{{ACCENT}}", theme["--gold"]))     # older asset revisions
+    return '<div class="colonnade" aria-hidden="true"></div>'
 
 
 def _firewall_note(port):

@@ -191,14 +191,15 @@ Traps this project has actually paid for:
 
 ## Looking at the page
 
-The web page is the operator's design (`assets/webui.css`, the colonnade SVG, the bundled
-fonts, the icons inlined into the markup). To look at the tree's own page WITHOUT touching
+The web page is the operator's design (`assets/webui.css`, the backdrop photo
+(`assets/roman-temple-spring.jpg`, the operator's own - the replacement for the drawn
+colonnade), the bundled fonts, the icons inlined into the markup). To look at the tree's own page WITHOUT touching
 the running service, serve a scratch copy - the service on 8790 belongs to the install:
 
 ```bash
 rm -rf /tmp/preview && mkdir -p /tmp/preview/tinycmdr
 cp tinycmdr.py /tmp/preview/tinycmdr/
-cp -R assets /tmp/preview/tinycmdr/            # webui.css, fonts, colonnade, the mascot
+cp -R assets /tmp/preview/tinycmdr/            # webui.css, fonts, the backdrop photo, the mascot
 cp ~/tinycmdr/theme.toml /tmp/preview/tinycmdr/ 2>/dev/null || true
 python3 - <<'EOF'
 import json, pathlib
@@ -219,9 +220,9 @@ What is served, and where it comes from:
 
 | route | source |
 | :--- | :--- |
-| `/` | `WEB_PAGE` in tinycmdr.py, with `{{VERSION}}`, `{{THEME_COLOR}}`, `{{EMPTY_ART}}` and the inline colonnade substituted |
+| `/` | `WEB_PAGE` in tinycmdr.py, with `{{VERSION}}`, `{{THEME_COLOR}}`, `{{EMPTY_ART}}` and the backdrop element substituted |
 | `/page.css` | `assets/webui.css`, with `{{THEME}}` = the host's theme roles (one theme.toml decides the terminal and the page) |
-| `/colonnade.svg` | `assets/roman-colonnade.svg`, `{{GOLD}}`/`{{BRONZE}}` substituted |
+| `/temple.jpg` | `assets/roman-temple-spring.jpg`, the stage's backdrop photo (drawn by `.colonnade`, dimmed and feathered) |
 | `/fonts/*.woff2` | the four bundled OFL faces (Cinzel 600/700, Inter variable, JetBrains Mono) |
 | `/chibi.png`, `/mark.png`, `/icon.png` | `assets/page-*.png` when the host ships them, else the built-in badge |
 
@@ -235,7 +236,7 @@ every asset the routes serve; for the eyes, point the scratch recipe above at an
 (then hard-reload: art and CSS are cached).
 
 A missing asset is a supported state, not an error: no chibi falls back to the mark, no
-colonnade draws nothing, and the page never logs a 404 for art it does not have.
+photo draws no backdrop, and the page never logs a 404 for art it does not have.
 
 ## The agent-protocol surfaces (A2UI, A2A, MCP)
 

@@ -625,9 +625,13 @@ textarea:focus-visible {
   bottom: 44px;
   left: 2vw;
   width: 104%;
-  height: min(58vh, 560px);
-  opacity: 0.78;
+  height: min(60vh, 580px);
+  opacity: 0.6;
   pointer-events: none;
+  background: url(/temple.jpg) center bottom / cover no-repeat;
+  filter: saturate(0.95) brightness(1.02);
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 30%, #000 78%, transparent);
+  mask-image: linear-gradient(180deg, transparent, #000 30%, #000 78%, transparent);
 }
 
 .stage-vignette {
@@ -635,8 +639,9 @@ textarea:focus-visible {
   inset: 0;
   pointer-events: none;
   background:
+    linear-gradient(90deg, rgba(11, 13, 16, 0.78), rgba(11, 13, 16, 0.34) 42%, transparent 68%),
     linear-gradient(180deg, rgba(11, 13, 16, 0.15), transparent 36%, rgba(11, 13, 16, 0.68)),
-    radial-gradient(circle at 50% 48%, transparent 0, rgba(11, 13, 16, 0.42) 72%);
+    radial-gradient(circle at 50% 48%, transparent 0, rgba(11, 13, 16, 0.30) 72%);
 }
 
 .stage-header {
@@ -1402,5 +1407,5 @@ letter-spacing:.34em;text-transform:uppercase;opacity:.82}
 #brandmark img{width:22px;height:22px;opacity:.95}
 #logwrap.empty #brandmark{display:none}
 .colonnade{transition:opacity .45s ease}
-body.chat .colonnade{opacity:.22}
+body.chat .colonnade{opacity:.28}
 body.chat #log .msg:not(.you),body.chat #log .file{max-width:none}

@@ -322,30 +322,31 @@ def main():
         finally:
             (STAGE / "assets" / "page-chibi.png").unlink()
 
-    # ---- the colonnade, the fonts, the command slab ---------------------------
-    # The brief: "extremely faint Roman colonnade", fonts bundled ("because this is a local
-    # application"), and a command slab that is a strong destination for the eye.
+    # ---- the backdrop photo, the fonts, the command slab ---------------------
+    # The operator's photo (2026-10-04) is the permanent replacement for the drawn
+    # colonnade; the fonts stay bundled ("because this is a local application"), and the
+    # command slab is a strong destination for the eye.
     html = req("GET", "/", limit=400000)[1].decode("utf-8", "replace")
     check('class="colonnade"' not in html,
-          "with no colonnade art nothing is drawn into the stage")
+          "with no photo the stage draws no backdrop")
     (STAGE / "assets" / "fonts").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(BASE / "assets" / "roman-colonnade.svg",
-                 STAGE / "assets" / "roman-colonnade.svg")
+    shutil.copy2(BASE / "assets" / "roman-temple-spring.jpg",
+                 STAGE / "assets" / "roman-temple-spring.jpg")
     for name in ("cinzel-600.woff2", "cinzel-700.woff2", "inter.woff2",
                  "jetbrains-mono-400.woff2"):
         shutil.copy2(BASE / "assets" / "fonts" / name, STAGE / "assets" / "fonts" / name)
     html = req("GET", "/", limit=400000)[1].decode("utf-8", "replace")
-    svg = req("GET", "/colonnade.svg")
-    check('class="colonnade"' in html and "xMidYMax slice" in html,
-          "the design's colonnade (arches on fluted columns) is drawn into the stage")
+    jpg = req("GET", "/temple.jpg", limit=1000000)
+    check('class="colonnade"' in html,
+          "the backdrop element is in the stage when the photo is there")
     check('aria-hidden="true"' in html.split('class="colonnade"')[0][-200:]
           or 'aria-hidden="true"' in html,
           "...and it is decorative, never a click target")
-    check(svg[0] == 200 and b"<svg" in svg[1], "the colonnade asset is served too", svg[0])
-    check(b"{{GOLD}}" not in svg[1] and b"{{BRONZE}}" not in svg[1],
-          "with both colour placeholders substituted (no template leaks)")
-    check(b"#d7a94a" in svg[1] or b"#D7A94A" in svg[1],
-          "and it is drawn in the theme's gold")
+    check(jpg[0] == 200 and jpg[2].get("Content-Type") == "image/jpeg"
+          and len(jpg[1]) > 100000,
+          "the photo is served at /temple.jpg, as a JPEG, whole",
+          (jpg[0], jpg[2].get("Content-Type"), len(jpg[1])))
+    check(jpg[1][:3] == b"\xff\xd8\xff", "...with the JPEG signature")
     for name in ("cinzel-700.woff2", "inter.woff2", "jetbrains-mono-400.woff2"):
         r = req("GET", "/fonts/" + name, limit=200000)
         check(r[0] == 200 and r[2].get("Content-Type") == "font/woff2",
