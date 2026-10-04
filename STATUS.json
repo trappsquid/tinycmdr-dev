@@ -1415,6 +1415,16 @@
       },
       "detail": "Operator, 2026-10-04, on a fresh install: 'the api key is asked for first instead of the endpoint link... it asked me about one thing and then later on it asked for a config entry for it when it should have asked at that time', and 'how we are requiring a web-ui token to be re-entered so often for no reason' - and later, on the live box, 'why do all my pages to tinycmdr webui say unauthorized now'. Fixed (ac2bd17): _ask_model_target asks the endpoint LINK before the key (cloud only; the 401 re-ask stays where its reason is visible) and a hosted endpoint that reports no context window is ASKED for llm.max_context_tokens at that moment (128k or a number; the 2048 reply floor is refused) instead of leaving it as homework - the link order in `setup` and `model add`, the window in `setup`. The page no longer prompts for its token when the handover cookie already authenticates: the boot probes GET /api/login (200 = cookie good, 401 = fresh browser) and asks only then; and any 401 on a GET/HEAD clears the stale token, asks once (the retry prompt names `tinycmdr web` as the way back) and retries that call, instead of stranding the page on a bare 'unauthorized' note. The page suite never saw the prompt bug because its /api/log prefix branch swallowed /api/login; the branch order is fixed and both behaviors are graded in test_webui_page/test_webui, plus test_model_setup for the model-add order.",
       "gate": "done - landed as ac2bd17 (the wizard order and the token probe) and a8e191b (the 401 recovery); tests/test_setup.py + tests/test_model_setup.py + tests/test_webui.py + tests/test_webui_page.py"
+    },
+    {
+      "id": "art-cache-and-one-status",
+      "title": "versioned art URLs, and one status chip with four real states",
+      "state": "open",
+      "anchor": {
+        "commit": "e13cee4"
+      },
+      "detail": "Operator, 2026-10-04, live page: 'new background but old chibi' and 'is the server idle and ready? ... remove pointless things or actually make them useful'. (1) Every artifact carried the right bytes - the tree, the published archive, the live install and the live service's /chibi.png all hashed to the same new 295,131-byte file - but /page.css and the HTML revalidate on an ordinary reload while the ART routes cache for a day, so an update could show a new stylesheet beside the old mascot until a hard reload. The art URLs now carry ?v=<version> (chibi/mark/icon in the page, the manifest icon, the backdrop URL in the stylesheet; the handlers match with startswith so the query is inert), so a release invalidates exactly the art it changed. (2) The app bar and the stage header each carried a status pill for the same state machine - 'idle' beside 'ready' - neither dot changed colour, and nothing reset the stage chip when a run ended. One chip now, in the stage header: ready (green) / working (gold, pulsing) / stopping (gold) / trouble (red), each with a tooltip, all writers through one setStage(); the app bar pill and its CSS are gone. Verified live in all four states. tests/test_webui.py pins the versioned URLs; tests/test_webui_page.py reports the chip and asserts a finished run leaves it ready.",
+      "gate": "done - landed as e13cee4; tests/test_webui.py + tests/test_webui_page.py"
     }
   ]
 }

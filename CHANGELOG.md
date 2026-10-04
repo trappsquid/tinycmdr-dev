@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.73] - 2026-10-04
+
+Fixed
+- **Art updates reach the page on an ordinary reload.** The art routes cache for a day
+  while the stylesheet and the HTML revalidate, so an update could show a new backdrop
+  beside the old mascot until a hard reload (operator's "new background but old chibi" -
+  every artifact carried the right bytes; the browser was serving its cached copy). The
+  art URLs now carry the app version (`?v=<version>`), so a release invalidates exactly
+  the art it changed (`tests/test_webui.py`).
+Changed
+- **One status chip, four states, real colours.** The app bar and the stage header each
+  carried a pill for the same state machine - "idle" beside "ready" - and neither dot
+  ever changed colour; the stage chip also never reset when a run ended. One chip now,
+  in the stage header: ready (green) / working (gold, pulsing) / stopping (gold) /
+  trouble (red), every writer through one `setStage(state, detail)`, every state with a
+  tooltip (`tests/test_webui_page.py`).
+
 ## [1.0.72] - 2026-10-04
 
 Fixed
