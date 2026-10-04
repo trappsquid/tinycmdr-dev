@@ -258,10 +258,12 @@ def main():
         # no real DNS, no real window probe: the wizard's cloud path calls both
         mod._is_local_url = lambda url: False
         mod._detect_window = lambda url, headers=None: 0
-        # kind (cloud), key (wrong), url, key again (right), model NUMBER, MM, TG,
-        # page x4, egress
-        answers = ["cloud", "sk-bad", "https://api.example.com/v1", "sk-good", "1",
-                   "", "", "", "", "", "", ""]
+        # kind (cloud), url, key (wrong), key again (right) - the link is asked BEFORE
+        # the key, so the key has an endpoint to belong to (operator's order report,
+        # 2026-10-04) - then model NUMBER, context window (asked here because a hosted
+        # endpoint reports none), MM, TG, page x4, egress
+        answers = ["cloud", "https://api.example.com/v1", "sk-bad", "sk-good", "1",
+                   "128k", "", "", "", "", "", "", ""]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -284,6 +286,9 @@ def main():
               "...and the key goes to .env, never config.json", env[-200:])
         check("sk-good" not in json.dumps(written) and "sk-bad" not in json.dumps(written),
               "...the key never reaches config.json", json.dumps(written.get("llm")))
+        check(written["llm"].get("max_context_tokens") == 128000,
+              "the context window is ASKED at the endpoint and written (128k -> 128000)",
+              written["llm"].get("max_context_tokens"))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

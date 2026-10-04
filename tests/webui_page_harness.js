@@ -147,6 +147,7 @@ globalThis.location = { search: scenario.query || '', hash: scenario.hash || '',
 const replaced = [];
 globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
 const authSeen = [];
+const loginCalls = [];
 const uploads = [];
 let healthFetches = 0;
 
@@ -284,6 +285,18 @@ function fetchShim(url, opts) {
   }
   if (url.indexOf('/api/tasks') === 0) { return jres({ items: [], next_id: 1 }); }
   if (url.indexOf('/api/jobs') === 0) { return jres({ jobs: [], scheduler: false }); }
+  if (url.indexOf('/api/login') === 0) {
+    loginCalls.push(((opts && opts.method) || 'GET') + ':' + ((opts && opts.headers && opts.headers['X-Tinycmdr-Token']) ? 'hdr' : 'no-hdr'));
+    // GET is the page's "does this browser already authenticate?" probe (the HttpOnly
+    // cookie is unreadable to the page, readable to the server). A browser with no
+    // token and no cookie is refused - the default, and what a fresh profile looks
+    // like; scenario.login_ok marks one whose cookie already authenticates.
+    if ((opts && opts.method) === 'GET' && !scenario.login_ok) {
+      return Promise.resolve({ ok: false, status: 401,
+                               json: () => Promise.resolve({ error: 'unauthorized' }) });
+    }
+    return jres({ ok: true });
+  }
   if (url.indexOf('/api/log') === 0) { return jres({ lines: [], path: 'tinycmdr.log' }); }
   if (url.indexOf('/api/inventory') === 0) {
     return jres({ skills: [], tools: [], spill: { files: 0, bytes: 0 } });
@@ -460,6 +473,7 @@ async function main() {
     pages,
     copied,
     prompts: promptCalls,
+    logins: loginCalls,
     promptMsg: promptMsg,
     replaced: replaced,
     auth: authSeen,

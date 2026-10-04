@@ -22704,14 +22704,25 @@ function askToken(retry){
  if(a){token=a;}
  return a;
 }
-if(!token){askToken(false);}
 if(token){localStorage.fb_token=token;}
 // Hand the token to the server ONCE (a POST with the header) and take an HttpOnly
 // cookie back: from then on the browser authenticates by cookie, so the token is in no
 // URL, no history entry, and - once the handover lands - no localStorage either (a
 // script on this page can read localStorage; it cannot read an HttpOnly cookie).
 async function login(){
- if(!token)return;
+ if(!token){
+  // Nothing readable: ask the SERVER before asking the operator. GET /api/login
+  // answers 200 when the HttpOnly cookie already authenticates (a script cannot read
+  // the cookie; the server can) and 401 only when a token is really needed. The old
+  // boot prompted on every visit regardless - that prompt, not the gate, was the
+  // operator's re-entry report (2026-10-04).
+  try{
+   const probe=await fetch('/api/login',{method:'GET'});
+   if(probe.status!==401){return;}
+  }catch(e){return;}
+  if(!askToken(false)){return;}
+  localStorage.fb_token=token;
+ }
  try{
   const r=await fetch('/api/login',{method:'POST',headers:H()});
   if(r.ok){try{localStorage.removeItem('fb_token');}catch(e){}}
@@ -28458,21 +28469,21 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
 
     THE one model-adding conversation: `setup` (the primary) and `model add` (an endpoint
     added later) both call it, so both ask the same things in the same order - local or
-    cloud, then the key and the endpoint link, then the model list the endpoint actually
-    returns. A cloud answer sends its key as a bearer on GET /models BEFORE a model is
-    chosen, so a wrong key is named here (HTTP 401) instead of surfacing as a failed first
-    message; a local answer sends none.
+    cloud, then the endpoint link, then the key that link needs (cloud only), then the
+    model list the endpoint actually returns. A cloud answer sends the key as a bearer on
+    GET /models before a model is chosen, so a wrong key is named here (HTTP 401) instead
+    of surfacing as a failed first message; a local answer sends none.
 
     Returns {"url", "model", "key"} (key "" for local), or None when there is no endpoint
     to write.
     """
     default_url = str(default_url or MODEL_ENDPOINT_DEFAULT).strip().rstrip("/")
     kind = _ask_endpoint_kind(default_url)
+    # The LINK comes before the key: the link says which key belongs to it, and asking
+    # for a key before the endpoint it is for reads as a question out of order
+    # (operator's report, 2026-10-04). Asked once, after the first URL is accepted; a
+    # 401 re-asks it below, where the reason is visible.
     key = ""
-    if kind == "cloud":
-        if default_key:
-            print(dim("   a key is already set for this endpoint (Enter keeps it)"))
-        key = input("   API key (leave empty if it needs none): ").strip() or default_key
     url, ids, url_tries = "", None, 0
     while True:
         label = ("Endpoint (e.g. https://api.provider.com/v1)" if kind == "cloud"
@@ -28484,6 +28495,10 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
             if not ans:
                 return None
             continue
+        if kind == "cloud" and not key:
+            if default_key:
+                print(dim("   a key is already set for this endpoint (Enter keeps it)"))
+            key = input("   API key (leave empty if it needs none): ").strip() or default_key
         # The key changed on a 401 without the URL changing: re-probe the same link
         # rather than making the reader re-type it. Bounded - three refusals means the
         # provider is not going to take it, and the rest of the wizard has work to do.
@@ -28580,10 +28595,27 @@ def run_setup(rest=None):
     # that fixes it belongs (F-19). The probe is read-only, the same one the envelope runs;
     # an on-LAN box is skipped - its lever is its own context slot, not a config key.
     if not _is_local_url(llm["base_url"]) and not _detect_window(llm["base_url"], None):
-        print(dim("   Note: no context window was reported, so the harness will assume an"))
-        print(dim("   8000-token conversation budget and clip replies at 2048. Set"))
-        print(dim("   llm.max_context_tokens in config.json to the window your provider"))
-        print(dim("   documents (hosted models are usually 32k-128k+)."))
+        # The window is ASKED here, at the moment the endpoint is being named, rather
+        # than left as a note and homework: the operator is already configuring this
+        # endpoint ("it should have asked at that time" - operator's order report,
+        # 2026-10-04). Only a hosted endpoint gets asked - an on-LAN box has its own
+        # context slot, and the probe reads no window from /v1/models.
+        cur_win = int(llm.get("max_context_tokens") or 8000)
+        print(dim("   The endpoint reported no context window; the harness assumes %d and"
+                  % cur_win))
+        print(dim("   clips replies at 2048. Hosted models usually document 32k-128k+."))
+        ans_win = input("   Context window in tokens [%s]: " % cur_win).strip()
+        if ans_win:
+            try:
+                win = int(ans_win.replace(",", "").lower().replace("k", "000").strip())
+            except ValueError:
+                print(red("   '%s' is not a number; keeping %d" % (ans_win, cur_win)))
+            else:
+                if win >= 2048:
+                    llm["max_context_tokens"] = win
+                else:
+                    print(red("   %d is below the 2048 reply floor; keeping %d"
+                              % (win, cur_win)))
     # A cloud fallback is only reached automatically when the operator says so, and
     # the flag shipped with no door (config.json only). Ask, but only when such an
     # endpoint is actually configured - an install with no off-LAN endpoint has

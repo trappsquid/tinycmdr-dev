@@ -188,6 +188,24 @@ def main():
     check(not res.get("token"),
           f"the handed-over token is dropped from localStorage ({res.get('token')!r})")
 
+    # -- 1b. the token prompt: a good cookie is not a reason to ask ------------
+    # The page cannot read the HttpOnly cookie, so it probes GET /api/login first: 200
+    # means the cookie authenticates and no prompt appears; 401 means a fresh browser
+    # that must be asked. The old boot prompted on every visit regardless - the
+    # operator's re-entry report (2026-10-04).
+    sc = {"runs": [[["final", "hi"]]],
+          "steps": [{"kind": "message", "text": "hello", "polls": 6}],
+          "no_token": True, "login_ok": True}
+    res = run_page(sc, script)
+    check(res["prompts"] == 0,
+          f"a browser whose cookie already authenticates is not asked for the token "
+          f"({res['prompts']} prompt(s))")
+    sc.pop("login_ok")
+    res = run_page(sc, script)
+    check(res["prompts"] == 1 and res.get("token") is None,
+          f"and a browser the server refuses IS asked, and the handover drops it again "
+          f"({res['prompts']} prompt(s), token {res.get('token')!r})")
+
     # -- 2. a line that grows in place must reach its final text --------------
     full = "The sky is blue because of Rayleigh scattering."
     sc = {

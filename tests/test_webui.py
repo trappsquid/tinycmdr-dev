@@ -393,6 +393,10 @@ def main():
           "a wrong cookie: 401")
     check(req("POST", "/api/login", {"X-Tinycmdr-Token": "wrong"})[0] == 401,
           "and the handover refuses a wrong token")
+    check(req("GET", "/api/login")[0] == 401,
+          "GET /api/login is the page's probe: no token, no cookie -> 401")
+    check(req("GET", "/api/login", TOK)[0] == 200,
+          "...and a browser that has one gets 200, so nothing is prompted for")
     check(req("POST", "/api/run", body=b'{"message":"hi"}')[0] == 401,
           "a POST without a token: 401 (it never reaches the agent)")
 
