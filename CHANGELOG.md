@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.75] - 2026-10-04
+
+Fixed
+- **An endpoint that reports no context window gets its DOCUMENTED one.** A hosted API
+  that answers nothing used to run at a conservative assumed 8000 tokens with replies
+  clipped to 2048, so a 1M-token provider needed a hand-written
+  `llm.max_context_tokens` (operator's DeepSeek report, 2026-10-04: "you must write
+  1000000 explicitly"). `llm.window_presets` (host-substring -> tokens) is consulted
+  first, then a small built-in table of the providers' documented windows (OpenAI 128k,
+  Anthropic 200k, DeepSeek 128k - the providers' own docs); the resolution is pinned ->
+  server -> preset -> explicit ceiling -> assumed 8000; the source is named in the log
+  and in the health line ("window from api.deepseek.com (documented; ...)"), and
+  `llm.max_context_tokens` still caps whatever a preset says. Matched by HOST only -
+  F-19's rule against guessing from a model name stays. With a window, the reply cap
+  follows it instead of the assumed branch's hard 2048. (`tests/test_endpoint_window.py`.)
+  In the same pass the ledger's `caps-from-window` wish was found to be already solved -
+  `mem_limit_chars`' `window // 8` tightening plus its one-shot ceiling (df4282c), and
+  `llm.window_profiles` with the example's three small-model bands - and was closed
+  rather than re-implemented.
+
 ## [1.0.74] - 2026-10-04
 
 Fixed

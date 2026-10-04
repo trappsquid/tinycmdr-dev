@@ -384,12 +384,12 @@
     {
       "id": "caps-from-window",
       "title": "output caps come from a model-name match, not the detected window",
-      "state": "wish",
+      "state": "closed",
       "anchor": {
-        "file": "tinycmdr.py"
+        "commit": "df4282c"
       },
-      "detail": "The per-model profile keys caps off a substring of the model name while the window-detection routes already know the real window. A new or unnamed model - the common case for someone swapping quantisations - gets the desktop defaults.",
-      "gate": "caps derived from the detected window, plus a few named small-context profiles in config.example.json"
+      "detail": "Closed 2026-10-04: this was already solved in two layers, and the wish's text described a gap that no longer exists. mem_limit_chars() (audit D5, and its one-shot ceiling in df4282c) makes every character cap the tighter of the configured value and window // 8, and lets a ONE-SHOT result cap rise with a big window while the every-turn blocks never inflate - both halves pinned in tests/test_envelope.py. llm.window_profiles gives the operator window-banded overrides, and config.example.json ships the three small-model bands (8192/16384/32768) as the documented starting point. The model-name profile table is then only the FIRST claim on a cap, not the last word: the window bounds whatever it sets. No code changed to close this; the record was wrong about its own system.",
+      "gate": "closed - mem_limit_chars' window scaling + one-shot ceiling (df4282c, pinned in test_envelope.py) and llm.window_profiles with the example's three bands; nothing further is outstanding"
     },
     {
       "id": "search-egress-shipped",
@@ -621,7 +621,7 @@
         "commit": "4daa918",
         "expect": "tagged"
       },
-      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '\u2191\u2193 PgUp/PgDn scroll' while \u2191 and \u2193 were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: \u2191/\u2193 move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
+      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '↑↓ PgUp/PgDn scroll' while ↑ and ↓ were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: ↑/↓ move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
       "gate": "done - merged to main; the README documents the keys; release.sh states the tagged claim on this anchor when the next tag exists"
     },
     {
@@ -1448,6 +1448,16 @@
       },
       "detail": "Operator, 2026-10-04: 'Stop creating one off fixes everywhere instead of engineering adequately with proper checks and balances in your code.' Landed as three structural pieces: tests/test_contracts.py derives every must-agree pair from BOTH sides (page ids vs the harness DOM, placeholders vs substitutions, referenced assets vs the docs route table, .env keys installers write vs what the code reads, docs' env names vs the tree's programs, and each router chain's prefix ordering - the class that hid the login probe behind /api/log; it found real drift on its first run, including the prefix that would have swallowed /api/login in the page harness). maintenance/check-package-page.py, wired into release.sh beside the other package checks, unpacks each built archive, serves it on a scratch port and fetches the page the way a browser does (no placeholders left, every referenced asset 200, the API reporting the built version) - the artifact no gate had ever loaded. development.md 7 states the rule: a bug lands as the fix PLUS the invariant that grades its class, named with where it is checked.",
       "gate": "done - landed as ab9286e; the contracts suite and both package checks run in the gate/release path"
+    },
+    {
+      "id": "window-presets-1-0-75",
+      "title": "a hosted endpoint that reports no window gets its DOCUMENTED window (and the caps wish was already solved)",
+      "state": "open",
+      "anchor": {
+        "commit": "f037120"
+      },
+      "detail": "Operator, 2026-10-04: 'tinycmdr pointed at api.deepseek.com right now runs at 8,000 tokens, not 1M - you must write 1000000 explicitly.' Landed (f037120): llm.window_presets (host-substring -> tokens) is consulted before a small built-in table of providers' documented windows (api.openai.com 128k, api.anthropic.com 200k, api.deepseek.com 128k), matched by HOST ONLY (F-19's no-name-guessing rule kept); the envelope resolves pinned -> server -> preset -> explicit ceiling -> assumed 8000, so llm.max_context_tokens still caps a preset, the log names the source and envelope_line reads 'window from api.deepseek.com (documented; ...)'; with a window the reply cap follows it instead of the assumed branch's hard 2048. tests/test_endpoint_window.py pins all four behaviors. In the same pass the ledger's caps-from-window wish was found to be already solved (mem_limit_chars' window//8 tightening plus its one-shot ceiling, df4282c; window_profiles bands with the example's three seeds) and was closed with that record rather than re-implemented.",
+      "gate": "done - landed as f037120; tests/test_endpoint_window.py + tests/test_envelope.py (the caps half) + tests/test_config_example.py"
     }
   ]
 }
