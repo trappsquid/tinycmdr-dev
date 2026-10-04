@@ -1375,9 +1375,10 @@
     {
       "id": "fresh-installs-carry-the-page",
       "title": "every installer copied a hand list that never gained assets/ - fresh installs served the page unstyled",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "7fdb61f"
+        "commit": "7fdb61f",
+        "expect": "tagged"
       },
       "detail": "Operator, 2026-10-04, on a fresh install on a second computer: the page rendered as raw unstyled markup - the same symptom as the 1.0.68/1.0.69 packages, from a second cause. All three installers copied a HAND-WRITTEN list of names and the pavilion port's assets/webui.css was never added to any of them, so even a correct package produced an install with no stylesheet, no mascot and no colonnade; the installer suite could not see it because its own package_tree() kept a fourth list that omitted assets/ too - four mirrors of 'what ships', none tied to what the page fetches, and every check graded the source tree where the file exists. Fixed (7fdb61f): the installers copy the package minus host-owned paths (the rule update.sh already used, so no list is left to drift), maintenance/package_assets.py derives the page's asset set from the code once, tests/test_webui_page.py grades SHIP against it, tests/test_installer_unix.py grades an INSTALLED tree (staged from SHIP), and maintenance/check-package-assets.py - wired into release.sh - grades the built archives byte-for-byte. Both halves falsified: the released installer goes red naming the missing assets; a doctored archive goes red naming webui.css.",
       "gate": "done - landed as 7fdb61f; the installer suite drives real installs and asserts the derived set lands, and release.sh now refuses an archive that misses an asset or carries stale bytes"
@@ -1385,9 +1386,10 @@
     {
       "id": "page-art-batch-071",
       "title": "the hero's SPQR pill removed; the page's mascot is the operator's new chibi",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "7fdb61f"
+        "commit": "7fdb61f",
+        "expect": "tagged"
       },
       "detail": "Operator, 2026-10-04: the SPQR pill on the hero read as a clickable control and did nothing ('remove that too'), and a new chibi arrived in the web-ui design import to be used everywhere ('I want it replaced everywhere with that one tinycmdr-chibi-new.png'). The pill (HTML plus its two CSS rules) is gone (7fdb61f); the chibi master was replaced and both shipped figures re-derived with the stdlib pipeline - page-chibi.png 512x512 for the hero, tinycmdr-chibi.png 512x759 for the README (23fd603), verified live in a browser (cold load; the art is cached warm) and copied into the live install's assets/.",
       "gate": "done - landed as 23fd603 (chibi) and 7fdb61f (pill); the page suite runs the script clean and the hero was verified live"
