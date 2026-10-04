@@ -1393,6 +1393,16 @@
       },
       "detail": "Operator, 2026-10-04: the SPQR pill on the hero read as a clickable control and did nothing ('remove that too'), and a new chibi arrived in the web-ui design import to be used everywhere ('I want it replaced everywhere with that one tinycmdr-chibi-new.png'). The pill (HTML plus its two CSS rules) is gone (7fdb61f); the chibi master was replaced and both shipped figures re-derived with the stdlib pipeline - page-chibi.png 512x512 for the hero, tinycmdr-chibi.png 512x759 for the README (23fd603), verified live in a browser (cold load; the art is cached warm) and copied into the live install's assets/.",
       "gate": "done - landed as 23fd603 (chibi) and 7fdb61f (pill); the page suite runs the script clean and the hero was verified live"
+    },
+    {
+      "id": "stage-backdrop-photo",
+      "title": "the stage's backdrop is the operator's photo (roman-temple-spring.jpg)",
+      "state": "open",
+      "anchor": {
+        "commit": "f3835b5"
+      },
+      "detail": "Operator, 2026-10-04: a new photo, 'the permanent background replacement for the dark pillars background of the webUI'. The drawn colonnade (assets/roman-colonnade.svg, themed gold and bronze) is gone - SVG, route and substitution deleted; the photo is served at /temple.jpg (image/jpeg, cached a day, read per request so a host can swap it at the same path) and the backdrop element is emitted only when the file exists. The CSS was tuned by LOOKING at the rendered page: cover/bottom anchoring, a vertical feather mask, opacity .6 in the hero and .28 with a chat open, plus a left scrim in .stage-vignette so the copy stays legible over the bright marble. tests/test_webui.py pins the no-photo absence, the element's aria-hidden, and the route's bytes and JPEG signature; the asset-set derivation covers the file with no list, so the manifest, install and archive checks do too.",
+      "gate": "done - landed as f3835b5; verified live in the hero and mid-run states"
     }
   ]
 }

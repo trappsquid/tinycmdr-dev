@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.72] - 2026-10-04
+
+Changed
+- **The stage's backdrop is the operator's photo.** `assets/roman-temple-spring.jpg`
+  (the operator's own, 2048x1152) replaces the drawn colonnade everywhere it appeared:
+  the SVG asset, its `/colonnade.svg` route and the `{{GOLD}}`/`{{BRONZE}}` substitution
+  are deleted; the server emits the backdrop element only when the photo exists and
+  serves the bytes at `/temple.jpg` (JPEG, cached a day - read per request, so a host
+  can drop its own photo at that path). The CSS draws it with cover/bottom anchoring, a
+  feather mask and dimming tuned by looking at the page (.6 in the hero, .28 with a chat
+  open), and `.stage-vignette` gained a left scrim so the copy stays legible over the
+  bright photo. `tests/test_webui.py` pins: no photo -> no element; with it -> the
+  element present and `aria-hidden`, and `/temple.jpg` answering 200 with the JPEG
+  signature. The asset-set derivation carries it automatically - no list to update.
+
 ## [1.0.71] - 2026-10-04
 
 Fixed
