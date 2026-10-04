@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.71] - 2026-10-04
+
+Fixed
+- **Fresh installs carry the page's assets.** All three installers copied a
+  hand-written list of names, and the pavilion port's `assets/webui.css` - and every
+  asset added since - was never added to any of them, so a fresh install landed
+  without a stylesheet and the page rendered as raw unstyled markup: the same symptom
+  as the 1.0.68/1.0.69 packages, from a second cause (operator's fresh install on a
+  second computer, 2026-10-04). The installers copy *the package minus host-owned
+  paths* now - the rule `update.sh` already used - so there is no list left to drift;
+  `tools/` and `skills/` still seed a fresh install without overwriting the host's
+  own, and `theme.toml` stays the host's file.
+- **The hero's SPQR pill is gone** - it read as a button and did nothing (operator's
+  report).
+Changed
+- **The page's asset set is derived once and graded three times.**
+  `maintenance/package_assets.py` derives every asset the routes serve (handler
+  literals, `WEB_FONTS`, the bundled fonts, the stylesheet's `@font-face` refs);
+  `tests/test_webui_page.py` fails when the package manifest misses one,
+  `tests/test_installer_unix.py` when an installed tree does (its package stages from
+  `SHIP` now, not a list of its own), and `maintenance/check-package-assets.py` -
+  wired into `release.sh` - when a built archive misses one or carries stale bytes.
+  Falsified both ways: the released installer goes red naming the missing assets, and
+  a doctored archive goes red naming `assets/webui.css`.
+- **The page's mascot is the operator's new chibi**: the master replaced, both shipped
+  figures re-derived with the stdlib pipeline (`make-brand-art.py --page-chibi 512
+  --readme-chibi 512`).
+
 ## [1.0.70] - 2026-10-04
 
 Fixed
