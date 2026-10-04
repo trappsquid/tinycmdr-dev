@@ -1150,16 +1150,37 @@ if [ "$FORCE" = 1 ] && [ -d "$INSTALL_DIR" ]; then
     done
 fi
 mkdir -p "$INSTALL_DIR"
-# The console door goes in FLAT, never in a folder of its own:
-# every door then reads ONE config.json and ONE .env (it resolves both from the
-# folder it sits in), and the doors are mediums rather than separate installs.
-for item in tinycmdr.py tinycmdr requirements.txt README.md \
-            config.example.json .env.example field-notes.md soul.md \
-            skills tools install maintenance; do
-    if [ -e "$SRC/$item" ]; then
-        cp -a "$SRC/$item" "$INSTALL_DIR/"
-    fi
-done
+# Everything the package carries lands FLAT, minus the paths this host owns - the rule
+# update.sh applies. This used to be a hand-written list of names, and that list is a
+# THIRD mirror of "what ships": the pavilion port added assets/ to the package, the list
+# was never told, and every fresh install served /page.css as a 404 - the page rendered
+# as raw unstyled markup (operator's fresh-install report, 2026-10-04). One rule now.
+HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
+HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
+host_owned() {
+    case "$1" in
+        */*) for d in $HOST_DIRS; do case "$1" in "$d"/*) return 0 ;; esac; done; return 1 ;;
+    esac
+    for f in $HOST_TOP; do [ "$1" = "$f" ] && return 0; done
+    return 1
+}
+_fl="$(mktemp)"
+(cd "$SRC" && find . -type f -print | sed 's|^\./||') > "$_fl"
+while IFS= read -r rel; do
+    host_owned "$rel" && continue
+    mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
+    cp -p "$SRC/$rel" "$INSTALL_DIR/$rel"
+done < "$_fl"
+rm -f "$_fl"
+# The starter drop-ins seed a FRESH install and never overwrite the operator's own:
+# tools/*.py are the agent's once they exist, and skills/ is the operator's runbooks.
+mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/skills"
+if [ -d "$SRC/tools" ]; then
+    cp -Rn "$SRC/tools/." "$INSTALL_DIR/tools/" 2>/dev/null || true
+fi
+if [ -d "$SRC/skills" ]; then
+    cp -Rn "$SRC/skills/." "$INSTALL_DIR/skills/" 2>/dev/null || true
+fi
 if [ -n "$keep" ]; then
     for f in "$keep"/*; do
         # -n: a kept file must not clobber what the copy just installed -

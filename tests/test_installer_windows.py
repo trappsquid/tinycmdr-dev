@@ -373,6 +373,17 @@ def main():
             check("%s parses" % rel, r.returncode == 0,
                   (r.stdout + r.stderr).strip()[:200])
 
+    print("\n== the copy phase carries the page's assets (fresh-install regression) ==")
+    # The installer used to copy a hand-written list of names; the pavilion port added
+    # assets/ to the package and the list was never told, so every fresh install served
+    # /page.css as a 404 (operator's fresh-install report, 2026-10-04). The copy is the
+    # package-tree-minus-host-owned rule now - no list to drift.
+    check("the Windows installer copies the package tree, not a list",
+          "$hostDirs" in install
+          and "Get-ChildItem -Path $Source -Recurse -File" in install
+          and "$copy = @(" not in install,
+          "the copy phase is a hand list again")
+
     print("")
     if FAILED:
         print("%d check(s) FAILED:" % len(FAILED))

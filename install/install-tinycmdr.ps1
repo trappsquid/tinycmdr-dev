@@ -1224,21 +1224,43 @@ if ($Force) {
     Start-Sleep -Seconds 2
 }
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-$copy = @("tinycmdr.py", "tinycmdr-supervise.py", "tinycmdr.cmd", "requirements.txt", "config.example.json",
-          ".env.example", "README.md", "field-notes.md", "soul.md", "skills",
-          "tools",    # the starter drop-in tools; tools/README.md has the shapes
-          "install")  # the installer family incl. uninstall-tinycmdr.ps1
-foreach ($item in $copy) {
-    $src = Join-Path $Source $item
-    if (Test-Path $src) { Copy-Item $src -Destination $InstallDir -Recurse -Force }
+# Everything the package carries is copied, minus the paths this host owns - the rule
+# update.sh applies. This used to be a hand-written list, and that list is a THIRD mirror
+# of "what ships": the pavilion port added assets/ to the package, the list was never
+# told, and every fresh install served /page.css as a 404 - the page rendered as raw
+# unstyled markup (operator's fresh-install report, 2026-10-04). One rule now.
+$hostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
+               "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
+               "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl", "tasks.md",
+               "confirm-allow.json", "tools-provenance.json", "theme.toml",
+               "tinycmdr.log", "tinycmdr.lock")
+$hostDirs  = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
+               "dist", ".git", "tmp")
+$copied = 0
+foreach ($f in (Get-ChildItem -Path $Source -Recurse -File)) {
+    $rel = $f.FullName.Substring($Source.Length).TrimStart('\', '/')
+    $top = ($rel -split '[\\/]')[0]
+    if (($hostFiles -contains $top) -or ($hostDirs -contains $top)) { continue }
+    $dest = Join-Path $InstallDir $rel
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+    Copy-Item $f.FullName $dest -Force
+    $copied++
 }
-# the restart helper is the one maintenance script that is host-generic
-New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir "maintenance") | Out-Null
-$restart = Join-Path $Source "maintenance\restart-tinycmdr.ps1"
-if (Test-Path $restart) { Copy-Item $restart (Join-Path $InstallDir "maintenance") -Force }
+# The starter drop-ins seed a FRESH install and never overwrite the operator's own.
+foreach ($seed in @("tools", "skills")) {
+    $from = Join-Path $Source $seed
+    if (-not (Test-Path $from)) { continue }
+    $to = Join-Path $InstallDir $seed
+    New-Item -ItemType Directory -Force -Path $to | Out-Null
+    foreach ($f in (Get-ChildItem -Path $from -Recurse -File)) {
+        $d = Join-Path $to $f.FullName.Substring($from.Length).TrimStart('\', '/')
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $d) | Out-Null
+        if (-not (Test-Path $d)) { Copy-Item $f.FullName $d }
+    }
+}
 $stateDirs = @("sessions", "snapshots", "tools", "tmp")
 foreach ($d in $stateDirs) { New-Item -ItemType Directory -Force -Path (Join-Path $InstallDir $d) | Out-Null }
-Say "copied  : $(($copy | Where-Object { Test-Path (Join-Path $Source $_) }) -join ', ')"
+Say "copied  : $copied file(s) from the package (assets included)"
 
 # ------------------------------------------- 4. its own python + dependencies
 # The dependencies go into a virtual environment INSIDE the install folder rather

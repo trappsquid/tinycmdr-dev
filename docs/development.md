@@ -169,7 +169,11 @@ of it - the two most recent releases were cut exactly this way.
 5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`), `bash maintenance/pre-push.sh`, and
    `bash maintenance/release.sh <notes-file>`. The notes file becomes the release body verbatim, so
    write it fresh and factual. Afterwards, verify from outside the repo: download the published
-   `SHA256SUMS` and one archive and check the sum.
+   `SHA256SUMS` and one archive and check the sum. `release.sh` also grades the built archives
+   before publishing: `check-readme-assets.py` (every README download name) and
+   `check-package-assets.py` (**every asset the page's routes serve**, byte-identical to the tree -
+   the derivation lives once, in `maintenance/package_assets.py`, because 1.0.68-1.0.70 shipped
+   without `assets/webui.css` at all).
 
 Traps this project has actually paid for:
 
@@ -220,6 +224,15 @@ What is served, and where it comes from:
 | `/colonnade.svg` | `assets/roman-colonnade.svg`, `{{GOLD}}`/`{{BRONZE}}` substituted |
 | `/fonts/*.woff2` | the four bundled OFL faces (Cinzel 600/700, Inter variable, JetBrains Mono) |
 | `/chibi.png`, `/mark.png`, `/icon.png` | `assets/page-*.png` when the host ships them, else the built-in badge |
+
+**Look at an INSTALL, not only at the tree.** Every page defect that has reached a user so far was
+invisible from the source tree, where all the files exist: 1.0.68-1.0.70 shipped without
+`assets/webui.css` (the page rendered as raw unstyled markup), and the installers copied a hand
+list that had never gained `assets/`, so even a correct package produced a fresh install with no
+stylesheet at all - both found by looking at a real install on a second box (2026-10-04). The
+installer suite now drives a real install into a temp dir and asserts the installed tree carries
+every asset the routes serve; for the eyes, point the scratch recipe above at an INSTALLED copy
+(then hard-reload: art and CSS are cached).
 
 A missing asset is a supported state, not an error: no chibi falls back to the mark, no
 colonnade draws nothing, and the page never logs a 404 for art it does not have.

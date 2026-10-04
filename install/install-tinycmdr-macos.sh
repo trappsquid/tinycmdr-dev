@@ -1004,46 +1004,40 @@ if [ "$FORCE" = 1 ]; then
     done
 fi
 
-# Everything is installed FLAT in one folder: every door then reads ONE
-# config.json and ONE .env, so a session and the bot cannot disagree about which
-# config was last edited.
-for f in tinycmdr.py tinycmdr requirements.txt config.example.json README.md field-notes.md soul.md; do
-    if [ -f "$SRC/$f" ]; then
-        cp -f "$SRC/$f" "$INSTALL_DIR/$f"
-    elif [ -f "$INSTALL_DIR/$f" ]; then
-        info "keeping the existing $f"
-    else
-        warn "package has no $f"
-    fi
-done
-if [ -d "$SRC/skills" ]; then
-    mkdir -p "$INSTALL_DIR/skills"
-    cp -R "$SRC/skills/." "$INSTALL_DIR/skills/" 2>/dev/null || true
-    n=$(find "$INSTALL_DIR/skills" -name SKILL.md | wc -l | tr -d ' ')
-    info "skills: $n"
-fi
-# the starter drop-in tools (package bytes win; the operator's own tool
-# files in this folder are not named by the package and are left alone)
+# Everything the package carries lands FLAT in one folder, minus the paths this host
+# owns - the rule update.sh applies. This used to be a hand-written list of names, and
+# that list is a THIRD mirror of "what ships": the pavilion port added assets/ to the
+# package, the list was never told, and every fresh install served /page.css as a 404 -
+# the page rendered as raw unstyled markup (operator's fresh-install report, 2026-10-04).
+# One rule now; update.sh and this installer cannot disagree about the file set again.
+HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
+HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
+host_owned() {
+    case "$1" in
+        */*) for d in $HOST_DIRS; do case "$1" in "$d"/*) return 0 ;; esac; done; return 1 ;;
+    esac
+    for f in $HOST_TOP; do [ "$1" = "$f" ] && return 0; done
+    return 1
+}
+_fl="$(mktemp)"
+(cd "$SRC" && find . -type f -print | sed 's|^\./||') > "$_fl"
+while IFS= read -r rel; do
+    host_owned "$rel" && continue
+    mkdir -p "$INSTALL_DIR/$(dirname "$rel")"
+    cp -p "$SRC/$rel" "$INSTALL_DIR/$rel"
+done < "$_fl"
+rm -f "$_fl"
+# The starter drop-ins seed a FRESH install and never overwrite the operator's own:
+# tools/*.py are the agent's once they exist, and skills/ is the operator's runbooks.
+mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/skills"
 if [ -d "$SRC/tools" ]; then
-    mkdir -p "$INSTALL_DIR/tools"
-    cp -f "$SRC/tools/"* "$INSTALL_DIR/tools/" 2>/dev/null || true
+    cp -Rn "$SRC/tools/." "$INSTALL_DIR/tools/" 2>/dev/null || true
 fi
-# the installer family lands with the install - day-two removal must not need
-# the original package (the uninstaller is uninstall-tinycmdr-macos.sh)
-if [ -d "$SRC/install" ]; then
-    mkdir -p "$INSTALL_DIR/install"
-    cp -f "$SRC/install/"* "$INSTALL_DIR/install/" 2>/dev/null || true
-# The two double-clickable doors ride in the install dir as well, so someone who wants
-# tinycmdr GONE later is looking at a folder that shows them how, without the original
-# package (measured 2026-09-26: the install dir carried no door at all).
-cp -f "$SRC/INSTALL-MACOS.command" "$INSTALL_DIR/" 2>/dev/null || true
-cp -f "$SRC/UNINSTALL-MACOS.command" "$INSTALL_DIR/" 2>/dev/null || true
+if [ -d "$SRC/skills" ]; then
+    cp -Rn "$SRC/skills/." "$INSTALL_DIR/skills/" 2>/dev/null || true
 fi
-mkdir -p "$INSTALL_DIR/maintenance"
-for f in restart-tinycmdr-macos.sh restart-tinycmdr.sh; do
-    [ -f "$SRC/maintenance/$f" ] && cp -f "$SRC/maintenance/$f" "$INSTALL_DIR/maintenance/$f"
-done
-info "files copied"
+n=$(find "$INSTALL_DIR/skills" -name SKILL.md 2>/dev/null | wc -l | tr -d ' ')
+info "files copied (skills: $n)"
 # The launcher needs its execute bit: the shim in /usr/local/bin execs THAT file, and
 # the package carries it as 0644 (git cannot hold the bit out of a Windows checkout),
 # so the `cp -f` above lands a door that answers "Permission denied" for the user and

@@ -78,25 +78,13 @@ def page_script():
 def page_served_assets():
     """Every asset the page's routes actually serve, derived from the code.
 
-    Not a hand list: the pavilion port (1.0.68) added assets/webui.css and the
-    cinzel-600 face, the package manifest (maintenance/build-package.py SHIP) was never
-    told, and 1.0.68/1.0.69 shipped /page.css as a 404 to every install - the page
-    rendered as raw unstyled markup, found by LOOKING at a published install rather
-    than by any suite (measured 2026-10-04). This derives the served set from the code
-    and the stylesheet so the mirror cannot drift silently again.
+    The derivation lives in maintenance/package_assets.py - ONE place, because the
+    package check, this manifest check and the installer check must agree, and a second
+    copy of the derivation is the next list that drifts (see that file's docstring).
     """
-    src = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
-    assets = {f"assets/{m}" for m in re.findall(
-        r'BASE_DIR\s*/\s*"assets"\s*/\s*"([^"]+)"(?!\s*/)', src)}
-    fonts = {}
-    for node in ast.walk(ast.parse(src)):
-        if (isinstance(node, ast.Assign) and node.targets
-                and getattr(node.targets[0], "id", "") == "WEB_FONTS"):
-            fonts = ast.literal_eval(node.value)
-    css = (BASE / "assets" / "webui.css").read_text(encoding="utf-8")
-    refs = set(re.findall(r"url\(/fonts/([^)]+)\)", css))
-    assets |= {f"assets/fonts/{v}" for v in fonts.values()}
-    return assets, sorted(refs - set(fonts.values()))
+    sys.path.insert(0, str(BASE / "maintenance"))
+    from package_assets import served_assets
+    return served_assets(BASE)
 
 
 def package_manifest_check():

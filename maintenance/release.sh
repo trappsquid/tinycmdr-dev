@@ -74,6 +74,11 @@ cp "dist/tinycmdr-$VER-win.zip" dist/tinycmdr-win.zip
 cp "dist/tinycmdr-$VER-linux.tar.gz" dist/tinycmdr-linux.tar.gz
 cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
 "$PY" maintenance/check-readme-assets.py --dist dist
+# ...and the built archives carry every asset the page's routes serve, byte-identical to
+# the tree. 1.0.68-1.0.70 shipped without assets/webui.css at all (the page rendered
+# unstyled on every install); this is the artifact half of that check, derived from the
+# code - see maintenance/package_assets.py.
+"$PY" maintenance/check-package-assets.py --dist dist
 
 say "SHA256SUMS over the published files"
 # Everything a downloader can fetch, listed once, so `sha256sum -c SHA256SUMS` works in

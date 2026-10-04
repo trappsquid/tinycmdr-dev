@@ -47,6 +47,7 @@ launchd `com.tinycmdr.agent`):
 
     python tests/test_installer_unix.py
 """
+import ast
 import hashlib
 import json
 import os
@@ -60,6 +61,8 @@ import sys
 import tempfile
 
 BASE = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE / "maintenance"))
+from package_assets import served_assets  # noqa: E402
 FAILS = []
 
 
@@ -185,21 +188,51 @@ def sandbox_home_env(sb, bindir, log, user, extra=None):
 
 def package_tree(pkg):
     """A copy of the shippable files, so an install does not read the working tree twice
-    and an `install/fleet-secrets.env` can be planted without writing into the repo."""
+    and an `install/fleet-secrets.env` can be planted without writing into the repo.
+
+    The set comes from maintenance/build-package.py's SHIP - the ONE manifest - not from
+    a list written here: this file used to carry its own, and it omitted assets/ exactly
+    like the installers did, so the end-to-end installs below could not see that every
+    fresh install served the page without its stylesheet (operator's fresh-install
+    report, 2026-10-04). Derive, never re-list.
+    """
+    bp = (BASE / "maintenance" / "build-package.py").read_text(encoding="utf-8")
+    ship = []
+    for node in ast.walk(ast.parse(bp)):
+        if (isinstance(node, ast.Assign) and node.targets
+                and getattr(node.targets[0], "id", "") == "SHIP"):
+            ship = ast.literal_eval(node.value)
     pkg.mkdir(parents=True, exist_ok=True)
-    for name in ("tinycmdr.py", "config.example.json", "requirements.txt", ".env.example",
-                 # The root-level doors: install.sh is what the one-line curl command
-                 # runs, and the two .command files are what a Finder double-click runs.
-                 "install.sh", "INSTALL-MACOS.command", "UNINSTALL-MACOS.command",
-                 "tinycmdr", "launch-tinycmdr.sh"):
+    for name in ship:
+        src = BASE / name
+        if src.is_dir():
+            shutil.copytree(src, pkg / name, dirs_exist_ok=True)
+        elif src.exists():
+            (pkg / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, pkg / name)
+    # The root-level doors a Finder double-click runs, plus the one-line curl door. Not
+    # in SHIP (they are doors, not payload) - and named here on purpose.
+    for name in ("install.sh", "INSTALL-MACOS.command", "UNINSTALL-MACOS.command",
+                 "launch-tinycmdr.sh"):
         src = BASE / name
         if src.exists():
             shutil.copy2(src, pkg / name)
-    for name in ("install", "maintenance", "tools"):
-        src = BASE / name
-        if src.is_dir():
-            shutil.copytree(src, pkg / name)
     return pkg
+
+
+def check_page_assets(inst, label):
+    """Every asset the page's routes serve must LAND in an install.
+
+    1.0.68-1.0.70 copied a hand-written list that never gained assets/ when the pavilion
+    port added it, so every fresh install served /page.css as a 404 and the page rendered
+    as raw unstyled markup (operator's fresh-install report, 2026-10-04). The package
+    staged here comes from SHIP now, and the set checked comes from the code
+    (maintenance/package_assets.py) - the INSTALLED tree, what a user meets, is graded.
+    """
+    assets, _stray = served_assets(BASE)
+    for rel in sorted(assets) + ["theme.default.toml"]:
+        check("%s: the install carries %s" % (label, rel),
+              (inst / rel).exists(), "missing from %s" % inst)
 
 
 def fake_venv(inst, py):
@@ -271,6 +304,7 @@ def case_linux_user_mode(sb, pkg, bindir, user, py):
           f"mode {oct(mode_of(inst / '.env') or 0)}")
     check("D5 the install log is created 0600", mode_of(log) == 0o600,
           f"mode {oct(mode_of(log) or 0)}")
+    check_page_assets(inst, "fresh-install")
     real_group = subprocess.run(["id", "-gn"], capture_output=True, text=True).stdout.strip()
     check("D9 the pre-flight names the primary group from id -gn",
           f"service group: {real_group}" in got.stdout,
@@ -469,6 +503,7 @@ def case_macos_install(sb, pkg, bindir, user, py):
     check("D4 the day-two helper the installer prints is installed",
           (inst / "maintenance" / "restart-tinycmdr-macos.sh").exists(),
           "the install carries no maintenance/restart-tinycmdr-macos.sh")
+    check_page_assets(inst, "fresh-install")
     if os.uname().sysname == "Darwin":
         plist = sb / "home" / "Library" / "LaunchAgents" / "com.tinycmdr.insttest.plist"
         check("D2 the plist lands under the INVOKING user's home", plist.exists(),
