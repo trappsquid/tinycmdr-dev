@@ -1294,6 +1294,28 @@
       },
       "detail": "The operator's pavilion design is ported and gated (the stylesheet, the colonnade SVG, the four bundled fonts, the inlined lucide icons, the markup shell, the hero/chibi, the two banners), but the port was done by a TEXT session: it can measure an image, not look at one. The remaining work is visual - spacing, contrast, the mascot, the operator's pending chibi modification - and belongs to a session running the harness's vision model (modelRoles.vision in ~/.omp/agent/config.yml). How to look: docs/development.md, 'Looking at the page'. Closed 2026-10-04: the vision pass ran (commit 02f7708). Every surface was looked at and the defects it found are fixed - icons take the design's sizes, the banner/version class-store wipes and the missing hidden state, the shell is the viewport, the rail's list scrolls, the palette is frosted, Stop is a header pill, copy and delete affordances sit at a resting opacity - the operator's states are implemented (empty -> welcome+mascot, first line -> brand mark, active chat -> the stage, colonnade 0.22, the command box pinned), the provided chibi is the brand art everywhere, and the operator signed off by ordering the 1.0.68 cut.",
       "gate": "done - landed as 02f7708 and rides v1.0.68; maintenance/ledger-tag.py states the release claim once the tag exists"
+    },
+    {
+      "id": "memory-okf",
+      "title": "the harness's memory is an OKF bundle, and the notes.md write path is gone",
+      "state": "shipped",
+      "anchor": {
+        "commit": "a189366",
+        "expect": "untagged"
+      },
+      "detail": "Operator brief, 2026-10-04: redesign the memory system to work off Google Cloud's Open Knowledge Format. Landed: memory/ holds one markdown concept per durable fact with YAML frontmatter (type, title, description, tags; provenance via sources; trust via generated/verified and a derived tier; lifecycle via status/stale_after), plus index.md and log.md; ONE `memory` tool (add, update, deprecate, forget, read, search, list) under one lock, so the concept, the index and the log move together; volatile_context carries the capped, flagged index and never the concepts; notes.md stays on disk and in the prompt, read-only (no migration - the operator's call); the curator, the archive and the authored-hash sidecar are deleted with their five write-time config keys; attestation (type: Attested Computation) is reserved for a later phase. Rent: the schema declares six fields so the all-revealed worst case is 5,386 est against the 5,400 ratchet, while the default static state is ~4.3K est. tests/test_memory_okf.py (52 checks) pins the format contract; the authorship-guard suite retired with its subject.",
+      "gate": "done - landed as a189366 and rides v1.0.69; maintenance/ledger-tag.py states the release claim once the tag exists"
+    },
+    {
+      "id": "agent-protocols",
+      "title": "A2UI cards in the page, the A2A mesh door and the MCP client - all on the rent rule",
+      "state": "shipped",
+      "anchor": {
+        "commit": "a189366",
+        "expect": "untagged"
+      },
+      "detail": "Operator brief, 2026-10-04: implement Google's agent formats while keeping the revolving prompt budget low (~5k). Landed: (A2UI) a hidden render_ui tool emitting A2UI v1.0 createSurface envelopes against the catalog this page declares (Card/Column/Row/Text/Divider; {\"path\": ...} bindings against createSurface.dataModel), refused by name when malformed; the payload rides the transcript line and never the prompt, and a lane with no surface answers honestly; (A2A) web.a2a publishes an AgentCard at /.well-known/agent-card.json (public, no token) and answers the v1.0 JSON-RPC binding on POST /a2a with the page token as a Bearer - SendMessage runs one message through this box and returns a Task (TASK_STATE_COMPLETED, or TASK_STATE_FAILED when the endpoint never answered), GetTask/ListTasks read a bounded task ring, cancel and streaming and push answer the spec's own errors - plus a hidden a2a client tool (list/card/send) registered ONLY when agent.a2a_remotes is set; (MCP) a hidden mcp tool driving stdio servers from agent.mcp_servers: the stateless 2026-07-28 revision (version and client identity in each request's _meta, resultType tolerated either way) with a one-time initialize fallback for older servers, processes reused across calls. Verified live: our own a2a client called this box's door and read the Task back, and an A2UI card was rendered in a browser with its bindings resolved. Suites: test_a2ui (24), test_a2a (47), test_mcp (19), each ending in the on/off registration check that a box without the feature is byte-identical.",
+      "gate": "done - landed as a189366 and rides v1.0.69; maintenance/ledger-tag.py states the release claim once the tag exists"
     }
   ]
 }
