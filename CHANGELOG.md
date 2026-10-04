@@ -43,7 +43,7 @@ Added
   token it requires, so an upgrade introduces the page instead of stranding it behind a
   command the operator has to be told about.
 - **Two suites grade the page itself, not just its server.** `tests/test_webui.py`
-  (47 checks) drives the HTTP surface, the token's minting rules, uploads, downloads and
+  (49 checks) drives the HTTP surface, the token's minting rules, uploads, downloads and
   the Host/Origin gates; `tests/test_webui_page.py` (82 checks) runs the page's real
   script in Node against a DOM shim and a fake server that mirrors `WebRun`'s line
   semantics - in-place growth, uid keying, steer ordering, reload re-attachment, copy,

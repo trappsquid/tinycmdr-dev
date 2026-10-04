@@ -19,9 +19,12 @@ import importlib.util
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parent.parent / "tinycmdr.py"
@@ -39,20 +42,16 @@ def check(cond, what, extra=""):
         print(f"ok   {what}")
 
 
-def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, web=False):
+def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60):
     """Run the harness in `dirpath` and return (exit_code, stdout+stderr+log).
 
     A child that SERVES (the page holds the process open) never exits on its own, so
     the deadline is the caller's: a timeout comes back as the string "serving" with
     everything the child had printed, instead of an exception that grades the test.
-
-    `web=True` stages the page ON with port 0 (an ephemeral one). Port 8790 is the
-    product's default and a box that runs tinycmdr already holds it - a suite that
-    binds it grades which process got there first, not the rule.
+    For a serving child, prefer serve_and_probe(): text from a killed process is
+    unreliable, the page answering is not.
     """
     cfg = {"llm": LLM}
-    if web:
-        cfg["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
     if with_mm:
         cfg["mattermost"] = {"url": "chat.invalid", "scheme": "https", "port": 443,
                              "token": "", "allowed_users": ["u1"]}
@@ -95,6 +94,70 @@ def load(dirpath):
     return mod
 
 
+def free_port():
+    """A port nothing holds right now (the child binds exactly it and we poll it)."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def serve_and_probe(dirpath, port, deadline=45):
+    """Start the file with the page on `port`, wait for the PAGE to answer, kill it.
+
+    The page is the evidence, not the child's words: a process killed at a deadline has
+    unflushed prints in its pipe AND an unflushed log tail (the log rides a background
+    listener), so text greps flake by platform - measured, and the reason this helper
+    exists. Returns (served, authed, said): served is /api/health answering 200, authed
+    is a gated route answering 200 with the token the child itself minted into .env.
+    """
+    (dirpath / "config.json").write_text(json.dumps(
+        {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1", "port": port}}),
+        encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
+    env["HOME"] = str(dirpath)
+    proc = subprocess.Popen([sys.executable, str(dirpath / "tinycmdr.py")],
+                            cwd=str(dirpath), env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    served = authed = False
+    t0 = time.time()
+    while time.time() - t0 < deadline and proc.poll() is None:
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % port,
+                                        timeout=1) as r:
+                if r.status == 200:
+                    served = True
+                    break
+        except Exception:                                        # noqa: BLE001
+            time.sleep(0.5)
+    tok = ""
+    envf = dirpath / ".env"
+    if envf.exists():
+        for ln in envf.read_text(encoding="utf-8").splitlines():
+            if ln.startswith("TINYCMDR_WEB_TOKEN="):
+                tok = ln.split("=", 1)[1].strip()
+    if served and tok:
+        try:
+            req = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port,
+                                         headers={"X-Tinycmdr-Token": tok})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                authed = r.status == 200
+        except Exception:                                        # noqa: BLE001
+            authed = False
+    if proc.poll() is None:
+        proc.kill()
+    try:
+        out, err = proc.communicate(timeout=10)
+    except Exception:                                            # noqa: BLE001
+        out, err = "", ""
+    said = (out or "") + (err or "")
+    logf = dirpath / "tinycmdr.log"
+    if logf.exists():
+        said += logf.read_text(encoding="utf-8", errors="replace")
+    return served, authed, said
+
+
 def main():
     work = Path(tempfile.mkdtemp(prefix="fblane-"))
     try:
@@ -108,18 +171,10 @@ def main():
         # box does not stop: it mints, serves the page and holds the process open -
         # which is what the installer's autostart agent relies on. The CLI-only end
         # state is the page OFF (next case).
-        code, said = run(work / "cli_only", timeout=30, web=True)
-        check(code == "serving",
-              f"no token, page on: the run serves instead of stopping ({code})")
-        check("minted TINYCMDR_WEB_TOKEN" in said,
-              "it mints the token the page requires", said[-400:])
-        # Assert on the LOG lines, not the prints: a killed child's stdout is still in
-        # its pipe buffer (measured: the print output differs run to run on CI, the log
-        # never does).
-        check("no chat lane configured" in said and "serving the page" in said,
-              "and says the page is the door", said[-400:])
-        check("web UI listening on http" in said,
-              "the page really started", said[-400:])
+        port = free_port()
+        served, authed, said = serve_and_probe(work / "cli_only", port)
+        check(served, "no token, page on: the page answers on the configured port")
+        check(authed, "and the token it minted gates it (a gated route: 200)")
         check("cannot start" not in said, "it is NOT a startup abort")
         _env = (work / "cli_only" / ".env").read_text(encoding="utf-8")
         check("TINYCMDR_WEB_TOKEN=" in _env, "the minted token lands in .env", _env[-120:])

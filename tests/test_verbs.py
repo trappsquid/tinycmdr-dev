@@ -14,10 +14,13 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
+import urllib.request
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
@@ -1273,28 +1276,39 @@ def main():
         _cfg["mattermost"]["url"] = ""
         _cfg["mattermost"]["token"] = ""
         _cfg["mattermost"]["allowed_users"] = []
-        # port 0: an ephemeral one, so this grades "it serves", not "8790 was free" -
-        # the product's default port belongs to whatever tinycmdr the box really runs.
-        _cfg["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
+        # A port we choose and POLL: the child's stdout/log tail is unreliable once it is
+        # killed at a deadline (unflushed pipe buffer, log rides a listener thread), so
+        # the evidence is the page answering - not text.
+        _s = socket.socket()
+        _s.bind(("127.0.0.1", 0))
+        _port = _s.getsockname()[1]
+        _s.close()
+        _cfg["web"] = {"enabled": True, "host": "127.0.0.1", "port": _port}
         (stage / "config.json").write_text(json.dumps(_cfg), encoding="utf-8")
+        _proc = subprocess.Popen([sys.executable, str(stage / "tinycmdr.py"), "--web"],
+                                 cwd=str(stage), stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 env=dict(os.environ, TINYCMDR_PLAIN="1"))
+        _served = False
+        _t0 = time.time()
+        while time.time() - _t0 < 45 and _proc.poll() is None:
+            try:
+                with urllib.request.urlopen("http://127.0.0.1:%d/api/health" % _port,
+                                            timeout=1) as _r:
+                    if _r.status == 200:
+                        _served = True
+                        break
+            except Exception:                                    # noqa: BLE001
+                time.sleep(0.5)
+        _alive = _proc.poll() is None
+        if _alive:
+            _proc.kill()
         try:
-            fl = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "--web"],
-                                cwd=str(stage), capture_output=True, text=True, timeout=45,
-                                stdin=subprocess.DEVNULL,
-                                env=dict(os.environ, TINYCMDR_PLAIN="1"))
-            fcode, fblob = fl.returncode, fl.stdout + fl.stderr
-        except subprocess.TimeoutExpired as e:
-            fcode = "serving"
-            # TimeoutExpired carries BYTES on some platforms even with text=True;
-            # normalize each part rather than concatenating blindly.
-            fblob = "".join(
-                c if isinstance(c, str) else (c or b"").decode("utf-8", "replace")
-                for c in (e.stdout, e.stderr) if c is not None)
-        # Log lines, not the child's prints: a child killed at the deadline still has
-        # unflushed stdout in its pipe (measured on CI), while every log line was written.
+            _out, _err = _proc.communicate(timeout=10)
+        except Exception:                                        # noqa: BLE001
+            _out, _err = "", ""
         check("H1: `--web` serves the page and holds it open",
-              fcode == "serving" and "web UI listening on http" in fblob
-              and "serving the page" in fblob, (fcode, fblob[-240:]))
+              _served and _alive, (_served, _alive, (_out or "")[-160:]))
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

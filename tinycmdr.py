@@ -22557,12 +22557,15 @@ def _web_hosts_resolve():
         _WEB_HOSTS_CACHE.update(extra)
 
 
-def _web_hosts_settled(timeout=5.0):
+def _web_hosts_settled(timeout=3.0):
     """Wait for the resolver, ONCE, for a Host the fast set does not know.
 
     A LAN visitor's first request can arrive before the background resolve has
     finished; refusing it would be a wrong answer, not a safe one. Waiting here costs
-    nothing on the common path (loopback is in the fast set, so this is never called).
+    nothing on the common path (loopback is in the fast set, so this is never called),
+    and it is capped short: an unknown Host - a hostile one, or a scanner - must not tie
+    a handler thread for long (measured: a 5s cap made a foreign-Host check on a slow
+    resolver take exactly that long).
     """
     if _WEB_HOSTS_WARM is not None:
         _WEB_HOSTS_WARM.join(timeout)

@@ -201,7 +201,10 @@ def main():
           "a POST without a token: 401 (it never reaches the agent)")
 
     # ---- Host and Origin ----------------------------------------------------
-    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    # timeout well above the settle cap: an unknown Host waits for the background
+    # resolver once (up to 3s) before being refused, and a 5s client deadline sat right
+    # on that boundary - measured: this check timed the suite out on a macOS runner.
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=30)
     conn.putrequest("GET", "/api/tasks", skip_host=True)
     conn.putheader("Host", "evil.example")
     conn.endheaders()

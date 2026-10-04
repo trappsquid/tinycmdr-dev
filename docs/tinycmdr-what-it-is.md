@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                31,363 lines / 1.45 MB in ONE file, no package, no framework
+code                31,366 lines / 1.45 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -36,7 +36,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               84 suites / 28,253 lines / 3,303 checks that need no model, plus a graded
+tests               84 suites / 28,325 lines / 3,301 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 3, search 3, agent 108
@@ -418,7 +418,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 31,363-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 31,366-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -461,7 +461,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               31,363 lines, one file, no dependency tree to audit
+readability               31,366 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
