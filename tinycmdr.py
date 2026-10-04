@@ -583,6 +583,14 @@ DEFAULT_CONFIG = {
         "remember_nudge": True,     # one line when a lookup answers a durable-fact question
         "auto_continue": True,
         "auto_continue_max": 2,
+        # No-progress nudges: a reply that ends the turn with an intention instead of a
+        # tool call (or with no tool call at all) is asked to act again - up to this many
+        # times per run. This budget used to be a hard ONE, and the operator hit exactly
+        # that on the live box: "the harness keeps allowing the model to stop and it doesnt
+        # seem like it is nudging it to continue. It has stopped 2x this run now"
+        # (2026-10-04). 0 keeps the old ask-once behaviour; the delivery still annotates a
+        # run that will not act ("stopped short") rather than asking forever.
+        "nudge_retries": 3,
         # Delivery guard: how many times a run may announce the work as complete while still
         # queueing tool calls before the harness demands the report (and, two announcements
         # later, forces it). Measured 2026-09-18 on the Windows test box: five announcements in 25 minutes
@@ -10371,30 +10379,29 @@ def tool_schedule(args, ctx):
     return SCHEDULER.tool_action(args, ctx)
 
 
-def tool_search_sessions(args, ctx):
-    """Grep past conversation sessions (persisted in ./sessions/)."""
-    raw = str(args.get("query") or "")
-    # ALL words, not the literal phrase. `query in content` matched only an exact substring,
-    # so "scheduler fired schedule add" answered "No past session content matching" while
-    # the same session's events were found in one search_files call - the tool built for
-    # recall was worse at it than the generic search (report H-13, 2026-10-02). Words now
-    # AND across a session's own text, and the snippet points at its best-matching message.
-    words = [w for w in re.split(r"\W+", raw.lower()) if w]
+def session_search_hits(query, limit=25):
+    """[(key, role, snippet, rank)] for transcripts matching ALL query words.
+
+    The core `search_sessions` runs on, factored out so the PAGE's own search reads the
+    same corpus with the same rules - the operator asked to search INSIDE conversations,
+    not just across session titles (2026-10-04). Words AND across a session's text, the
+    snippet comes from its best-matching message (most query words, then longest), and
+    both file shapes in sessions/ are tolerated: the transcript (*.json, a list of
+    message dicts) and the carry sidecar (*.carry.json, a dict whose lists hold
+    args/out entries).
+    """
+    words = [w for w in re.split(r"\W+", str(query or "").lower()) if w]
     if not words:
-        return "ERROR: search_sessions needs a query."
+        return []
     hits = []
     for f in sorted(SESSIONS_DIR.glob("*.json")):
         try:
             loaded = json.loads(f.read_text(encoding="utf-8"))
         except Exception:
             continue
-        # TWO shapes live in this folder: the transcript (*.json -> a list of message
-        # dicts) and the carry sidecar (*.carry.json -> {run, entries, ...}). Iterating a
-        # dict yields its string keys, so the old unguarded m.get("content") raised
-        # 'str' object has no attribute 'get' on the first sidecar in sorted() order and
-        # killed the WHOLE search before it read one message - the tool could not recall
-        # the session it was running in (measured 2026-09-20 on a fleet box: the search died
-        # on its own .carry.json while the research it was asked for sat in the transcript).
+        # (the two-shapes comment lives with the tool that first hit this: iterating a
+        # sidecar dict yields its string keys, and m.get("content") then raised and
+        # killed the whole search before it read one message)
         if isinstance(loaded, dict):
             msgs = [v for val in loaded.values() if isinstance(val, list) for v in val]
         elif isinstance(loaded, list):
@@ -10407,7 +10414,6 @@ def tool_search_sessions(args, ctx):
                 continue
             c = m.get("content")
             if c is None:
-                # A carry entry has no "content": its text lives in args/out.
                 c = " ".join(str(v) for v in (m.get("args"), m.get("out"),
                                               m.get("task"), m.get("note")) if v)
             if isinstance(c, str) and c.strip():
@@ -10417,17 +10423,28 @@ def tool_search_sessions(args, ctx):
         joined = " ".join(c.lower() for _m, c in texts)
         if not all(w in joined for w in words):
             continue
-        # A session matches as a whole; quote the message carrying the most query words
-        # (then the longest), so the snippet still points at one line of it.
         m, c = max(texts, key=lambda mc: (sum(w in mc[1].lower() for w in words),
                                           len(mc[1])))
-        snippet = re.sub(r"\s+", " ", c)[:200]
-        hits.append(f"[{f.stem}] {m.get('role') or m.get('tool') or 'entry'}: {snippet}")
-        if len(hits) >= 25:
+        hits.append((f.stem, m.get("role") or m.get("tool") or "entry",
+                     re.sub(r"\s+", " ", c)[:200],
+                     sum(w in c.lower() for w in words)))
+        if len(hits) >= limit:
             break
+    return hits
+
+
+def tool_search_sessions(args, ctx):
+    """Grep past conversation sessions (persisted in ./sessions/)."""
+    raw = str(args.get("query") or "")
+    # ALL words, not the literal phrase. `query in content` matched only an exact substring,
+    # so "scheduler fired schedule add" answered "No past session content matching" while
+    # the same session's events were found in one search_files call - the tool built for
+    # recall was worse at it than the generic search (report H-13, 2026-10-02).
+    hits = session_search_hits(raw, 25)
     if not hits:
         return f"No past session content matching: {raw}"
-    return "\n".join(hits[:25])
+    return "\n".join("[%s] %s: %s" % (key, role, snippet)
+                      for key, role, snippet, _rank in hits)
 
 
 # A sub-agent's answer used to come back as raw prose, so the parent had to re-read a
@@ -16769,11 +16786,12 @@ class Agent:
             # MODEL failed to answer is not a run that used its budget, so this has
             # its own small bound instead of spending a continuation segment.
             _no_answer = 0
-            # Promise retries for this run: a reply that announces the work and stops
-            # with no tool call at all. Bounded to one, for the same reason the
-            # no-answer retry is bounded - a model that will not act is reported, not
-            # asked forever.
-            _no_call_nudge = False
+            # Promise/no-call retries for this run: a reply that announces the work and
+            # stops with no tool call at all. Bounded by agent.nudge_retries (default 3) -
+            # a model that will not act is eventually reported, not asked forever, but one
+            # ask was too few to keep a weak model moving (operator's report, 2026-10-04).
+            _no_call_used = 0
+            _nudge_cap = max(0, int(CONFIG["agent"].get("nudge_retries", 3) or 0))
             _seg_raw = CONFIG["agent"].get("auto_continue_max")
             # 0 must mean 0 here, so no `or` default: an `or` turned an explicit
             # "no continuation" setting back into 2 (caught by a suite).
@@ -16819,7 +16837,7 @@ class Agent:
             refused_seen = {}   # (tool, args) signature -> times a refusal came back
             _last_narr = ""     # the previous turn's narration, for the restate guard
             _prompt_seen = 0    # usage["prompt"] as of the last logged turn
-            _promise_asked = False   # the after-work promise nag, once per run
+            _promise_used = 0        # the after-work promise nag, per-run budget
             _restated = 0       # how many turns in a row restated the same status
             _restate_note = None   # the nudge that goes in with the next tool results
             _restate_nudge = int(CONFIG["agent"].get("restate_nudge_after", 3) or 0)
@@ -17064,14 +17082,14 @@ class Agent:
                         _textcall = (not _promised and not _fragmented and not _claimed
                                      and calls == 0
                                      and bool(_TEXT_CALL_RX.search(_promise)))
-                        if (not _no_call_nudge and calls == 0 and not spun
+                        if (_no_call_used < _nudge_cap and calls == 0 and not spun
                                 and len(_promise) <= (_INTENT_MAX_CHARS if _promised
                                                       else _RESULT_CLAIM_MAX_CHARS)
                                 and not _promise.endswith("?")
                                 and (_promised or _fragmented or _claimed or _textcall)
                                 and steps < max_steps
                                 and (now_mono() - t0) < max_seconds):
-                            _no_call_nudge = True
+                            _no_call_used += 1
                             # Drop the promise turn: a transcript whose last word is
                             # "let me start" invites the same words again (the same
                             # reason the empty-answer retry drops its turn).
@@ -17097,16 +17115,17 @@ class Agent:
                                 "call NOW and report only what it actually returns. If "
                                 "those values did not come from this run, say so in one "
                                 "line instead.")})
+                            _asked = "(%d/%d)" % (_no_call_used, _nudge_cap)
                             _note = ("the model wrote a tool call as text - asking it "
-                                     "once to use the interface"
+                                     "to use the interface " + _asked
                                      if _textcall else
                                      "the model described the work as under way with "
-                                     "no tool call - asking it to act once"
+                                     "no tool call - asking it to act " + _asked
                                      if _fragmented else
                                      "the model promised the work with no tool call - "
-                                     "asking it to act once" if _promised else
+                                     "asking it to act " + _asked if _promised else
                                      "the model reported results with no tool call - "
-                                     "asking it to check once")
+                                     "asking it to check " + _asked)
                             log.warning("[%s] %s", session_key, _note)
                             if say_cb:
                                 try:
@@ -17125,12 +17144,13 @@ class Agent:
                         # next message is "wait why didnt you download anything". One more
                         # ask, once per run; if it stops again the delivery says so (see
                         # _annotate_promise).
-                        if (_promised and not _promise_asked and calls > 0 and not spun
+                        if (_promised and _promise_used < _nudge_cap and calls > 0
+                                and not spun
                                 and len(_promise) <= _INTENT_MAX_CHARS
                                 and not _promise.endswith("?")
                                 and steps < max_steps
                                 and (now_mono() - t0) < max_seconds):
-                            _promise_asked = True
+                            _promise_used += 1
                             if messages and messages[-1] is reply:
                                 messages.pop()
                             messages.append({"role": "user", "content": (
@@ -17142,7 +17162,8 @@ class Agent:
                                 f"genuinely finished, write the final report with what "
                                 f"you have and say plainly what is left undone.")})
                             _note = ("the model ended the turn on a promise after "
-                                     f"{calls} tool call(s) - asking it to act once")
+                                     f"{calls} tool call(s) - asking it to act "
+                                     f"({_promise_used}/{_nudge_cap})")
                             log.warning("[%s] %s", session_key, _note)
                             if say_cb:
                                 try:
@@ -17264,9 +17285,10 @@ class Agent:
                         # Asked to act once already and still ending on an intention: say
                         # so. A run that COMPLIED after the ask (wrote its report with what
                         # it had) is delivered exactly as written.
-                        if ((_promise_asked and _promised)
-                                or (calls == 0 and (_no_call_nudge
-                                                    or _promise_asked))):
+                        if ((_promise_used >= _nudge_cap and _promised)
+                                or (calls == 0 and _nudge_cap
+                                    and (_no_call_used >= _nudge_cap
+                                         or _promise_used >= _nudge_cap))):
                             answer = _annotate_promise(answer, calls)
                         answer = _annotate_evidence(answer, muts, calls)
                         if _dropped_answers:
@@ -22577,6 +22599,7 @@ WEB_PAGE = """
     <div class="sidebar-section sidebar-actions">
       <button id=newchat class="new-campaign"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" /> <path d="M12 8v6" /> <path d="M9 11h6" /> </svg> New campaign</button>
       <label class="archive-search"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /> </svg><input id=filter placeholder="Search the archive" autocomplete=off></label>
+      <div id=hits class="hit-list" hidden></div>
     </div>
     <div class="sidebar-section">
       <div class="section-heading"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="20" height="5" x="2" y="3" rx="1" /> <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /> <path d="M10 12h4" /> </svg> Legion archive</div>
@@ -22677,6 +22700,7 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       emptyLast=document.getElementById('emptylast'),
       railEl=document.getElementById('rail'),
       sessEl=document.getElementById('sessions'),titleEl=document.getElementById('title'),
+      hitsEl=document.getElementById('hits'),
       modelEl=document.getElementById('model'),meterFill=document.getElementById('meterfill'),
       drawerEl=document.getElementById('drawer'),panelEl=document.getElementById('panel'),
       palEl=document.getElementById('pal'),hostEl=document.getElementById('host'),
@@ -22852,6 +22876,93 @@ function a2uiRender(payload){
  card.appendChild(a2uiNode(byId['root'],byId,s.dataModel||{}));
  return card;
 }
+// A model writes markdown, and Mattermost renders it - the page used to print it raw:
+// "tried to use a markdown table but in the webui it looks all stupid" (operator,
+// 2026-10-04). Small renderer, no library: inline bold/italic/code/links, fenced code,
+// bullet and numbered lists, and pipe tables (only when the |---| separator row is
+// there, GitHub's own rule for calling something a table). Everything becomes DOM
+// nodes - never innerHTML, and an array rather than a DocumentFragment (the test
+// harness fabricates elements, not fragments) - so nothing a model writes can inject
+// markup, and the page suite can grade what was drawn.
+function mdInline(text, into){
+ const walk=/(!\\[[^\\]\\n]*\\]\\((?:https?:\\/\\/|\\/)[^)\\s]+\\)|\\*\\*[^*]+\\*\\*|`[^`]+`|\\*[^*\\n]+\\*|_[^_\\n]+_|\\[[^\\]\\n]+\\]\\((?:https?:\\/\\/|\\/)[^)\\s]+\\)|https?:\\/\\/[^\\s<>()]+)/g;
+ let m,last=0;
+ while((m=walk.exec(text))){
+  if(m.index>last)into.appendChild(document.createTextNode(text.slice(last,m.index)));
+  const t=m[0];
+  if(t.slice(0,2)==='**'){const e=document.createElement('strong');e.textContent=t.slice(2,-2);into.appendChild(e);}
+  else if(t[0]==='`'){const e=document.createElement('code');e.textContent=t.slice(1,-1);into.appendChild(e);}
+  else if(t[0]==='['||t.slice(0,2)==='!['){
+   const q=/!?\\[([^\\]]*)\\]\\(([^)]+)\\)/.exec(t);
+   const a=document.createElement('a');a.textContent=q[1]||q[2];a.href=q[2];
+   a.target='_blank';a.rel='noopener noreferrer';into.appendChild(a);
+  }
+  else if(t.slice(0,4)==='http'){
+   // A bare URL is a link too (a model pastes one and it was dead text).
+   let u=t;while(/[.,;:!?]$/.test(u)){u=u.slice(0,-1);}
+   const a=document.createElement('a');a.textContent=u;a.href=u;
+   a.target='_blank';a.rel='noopener noreferrer';into.appendChild(a);
+   if(u!==t)into.appendChild(document.createTextNode(t.slice(u.length)));
+  }
+  else{const e=document.createElement('em');e.textContent=t.slice(1,-1);into.appendChild(e);}
+  last=m.index+t.length;
+ }
+ if(last<text.length)into.appendChild(document.createTextNode(text.slice(last)));
+}
+function mdCells(line){
+ return line.trim().replace(/^\\|/,'').replace(/\\|$/,'').split('|').map(function(c){return c.trim();});
+}
+function mdIsTable(lines,i){
+ if(i+1>=lines.length)return false;
+ if(!/^\\s*\\|/.test(lines[i])||!/^\\s*\\|/.test(lines[i+1]))return false;
+ return /^\\s*\\|?[\\s:|-]*-[\\s:|-]*\\|?\\s*$/.test(lines[i+1]);
+}
+function mdRender(text){
+ const out=[];
+ const lines=String(text).split('\\n');
+ let i=0;
+ while(i<lines.length){
+  const line=lines[i];
+  if(/^```/.test(line.trim())){
+   const body=[];i++;
+   while(i<lines.length&&!/^```/.test(lines[i].trim())){body.push(lines[i]);i++;}
+   i++;
+   const pre=document.createElement('pre');const code=document.createElement('code');
+   code.textContent=body.join('\\n');pre.appendChild(code);out.push(pre);continue;
+  }
+  if(mdIsTable(lines,i)){
+   const table=document.createElement('table');table.className='mdtable';
+   const head=document.createElement('thead');const hr=document.createElement('tr');
+   mdCells(lines[i]).forEach(function(c){const th=document.createElement('th');mdInline(c,th);hr.appendChild(th);});
+   head.appendChild(hr);table.appendChild(head);
+   const body=document.createElement('tbody');i+=2;
+   while(i<lines.length&&/^\\s*\\|/.test(lines[i])){
+    const tr=document.createElement('tr');
+    mdCells(lines[i]).forEach(function(c){const td=document.createElement('td');mdInline(c,td);tr.appendChild(td);});
+    body.appendChild(tr);i++;
+   }
+   table.appendChild(body);out.push(table);continue;
+  }
+  const bullet=/^\\s*[-*]\\s+/.test(line),numbered=/^\\s*\\d+[.)]\\s+/.test(line);
+  if(bullet||numbered){
+   const list=document.createElement(bullet?'ul':'ol');
+   while(i<lines.length&&((bullet&&/^\\s*[-*]\\s+/.test(lines[i]))||(numbered&&/^\\s*\\d+[.)]\\s+/.test(lines[i])))){
+    const li=document.createElement('li');
+    mdInline(lines[i].replace(/^\\s*(?:[-*]|\\d+[.)])\\s+/,''),li);list.appendChild(li);i++;
+   }
+   out.push(list);continue;
+  }
+  const buf=[];
+  while(i<lines.length&&lines[i].trim()!==''&&!/^\\s*\\|/.test(lines[i])
+        &&!/^```/.test(lines[i].trim())&&!/^\\s*[-*]\\s+/.test(lines[i])
+        &&!/^\\s*\\d+[.)]\\s+/.test(lines[i])){buf.push(lines[i]);i++;}
+  if(!buf.length){i++;continue;}
+  const para=document.createElement('div');para.className='p';
+  mdInline(buf.join('\\n'),para);out.push(para);
+ }
+ return out;
+}
+const MD_KINDS={say:1,final:1,you:1};
 function paint(node,l){
  const cls='msg '+l.kind;
  if(node.className!==cls)node.className=cls;
@@ -22873,7 +22984,14 @@ function paint(node,l){
   node.appendChild(document.createTextNode('📎 '));
   node.appendChild(a);
  }else{
-  node.appendChild(document.createTextNode(l.text));
+  // Model and operator text renders as markdown when it looks like markdown; plain
+  // prose keeps the old, cheaper text-node path.
+  const raw=String(l.text);
+  if(MD_KINDS[l.kind]&&/[*_`\\[]|^\\s*[|>#-]|^\\s*\\d+[.)]\\s/m.test(raw)){
+   for(const el of mdRender(raw))node.appendChild(el);
+  }else{
+   node.appendChild(document.createTextNode(l.text));
+  }
  }
  if(COPYABLE[l.kind]){node.classList.add('copyable');attachCopy(node);}
 }
@@ -23402,7 +23520,16 @@ inp.addEventListener('paste',function(e){
  if(files.length){e.preventDefault();uploadFiles(files);}
 });
 titleEl.onclick=renameSession;
-menuBtn.onclick=function(){railEl.classList.toggle('hide');};
+// One writer for the rail's visibility. Hiding the rail used to just set .hide on it,
+// which left the workspace's 292px track reserved and pushed the STAGE into the
+// sidebar's column - a broken layout from one click (operator, 2026-10-04). The body
+// class re-tracks the grid, and the button says what it does (aria-expanded).
+function toggleRail(){
+ const hidden=document.body.classList.toggle('rail-hidden');
+ menuBtn.setAttribute('aria-expanded',hidden?'false':'true');
+}
+menuBtn.setAttribute('aria-expanded','true');
+menuBtn.onclick=toggleRail;
 toolsBtn.onclick=function(){if(panelWhich&&drawerEl.classList.contains('show')){
   drawerEl.classList.remove('show');panelWhich=null;}else showPanel('tasks');};
 closePanelBtn.onclick=function(){drawerEl.classList.remove('show');panelWhich=null;};
@@ -23430,7 +23557,7 @@ inp.addEventListener('keydown',function(e){
 });
 document.addEventListener('keydown',function(e){      // ctrl/cmd+K: the conversation rail
  if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K'))
-  {e.preventDefault();railEl.classList.toggle('hide');}
+  {e.preventDefault();toggleRail();}
 });
 log.addEventListener('click',function(e){             // tap the answer to copy it
  const n=e.target;
@@ -23445,12 +23572,44 @@ async function attach(){
   if(j.run_id&&j.run_id!==runId){runId=j.run_id;fails=0;busy(true);poll(++gen);}
  }catch(e){}
 }
+let searchTimer=null;
 filterEl.oninput=function(){
  const q=filterEl.value.trim().toLowerCase();
  for(const row of sessEl.children){
   row.style.display=(!q||String(row.textContent).toLowerCase().indexOf(q)>=0)?'':'none';
  }
+ // INSIDE conversations too, not only the titles above (operator, 2026-10-04: "support
+ // for searching within conversations, not just the parent session"): debounced, since
+ // every keystroke would otherwise scan the transcripts.
+ if(searchTimer)clearTimeout(searchTimer);
+ searchTimer=setTimeout(runSearch,250);
 };
+async function runSearch(){
+ const q=filterEl.value.trim();
+ hitsEl.textContent='';
+ if(q.length<2){hitsEl.hidden=true;return;}
+ let j=null;
+ try{
+  const r=await fetch('/api/search?q='+encodeURIComponent(q),{headers:H()});
+  if(!r.ok){hitsEl.hidden=true;return;}
+  j=await r.json();
+ }catch(e){hitsEl.hidden=true;return;}
+ const ms=(j&&j.matches)||[];
+ if(!ms.length){hitsEl.hidden=true;return;}
+ const head=document.createElement('div');head.className='hit-head';
+ head.textContent=ms.length+(ms.length===1?' match inside conversations'
+                                          :' matches inside conversations');
+ hitsEl.appendChild(head);
+ for(const m of ms){
+  const b=document.createElement('button');b.type='button';b.className='hit';
+  const ti=document.createElement('strong');ti.textContent=m.title||m.key;b.appendChild(ti);
+  const sn=document.createElement('small');
+  sn.textContent=(m.role?m.role+': ':'')+(m.snippet||'');b.appendChild(sn);
+  b.onclick=function(){openSession(m.key);};
+  hitsEl.appendChild(b);
+ }
+ hitsEl.hidden=false;
+}
 emptyNew.onclick=function(){newConversation();};
 // Resume the newest conversation that HAS exchanges - the same call a rail row makes.
 // The old handler here un-hid the rail, which on a desktop is already visible, so the
@@ -24455,6 +24614,29 @@ def run_webui():
                 except ValueError:
                     rev = 0
                 self._json(run.view(since, rev))
+            elif self.path.startswith("/api/search"):
+                # The page's SEARCH: inside conversations, not just their titles
+                # (operator, 2026-10-04). Same corpus and rules as the model's
+                # search_sessions tool (session_search_hits), with the rail's own titles
+                # attached so a result reads like a conversation. Two characters is the
+                # floor: a 1-char query matches everything and costs a full scan.
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                _q = self._query().get("q") or ""
+                q = (_q[0] if isinstance(_q, list) else _q) or ""
+                if len(str(q).strip()) < 2:
+                    self._json({"query": q, "matches": []})
+                    return
+                titles = {s.get("key"): (s.get("title") or "")
+                          for s in web_sessions(_web_client(self.headers), True)}
+                self._json({"query": q, "matches": [
+                    {"key": key, "role": role,
+                     # a snippet is a QUOTE, but emphasis markers read as noise in a
+                     # narrow rail; the model's tool output keeps them
+                     "snippet": re.sub(r"\*\*|`", "", snippet),
+                     "title": titles.get(key) or key}
+                    for key, role, snippet, _rank in session_search_hits(q, 20)]})
             elif self.path.startswith("/api/sessions"):
                 # The rail: what conversations this browser has, newest first.
                 # ?all=1 is the token holder's view of every conversation on this
@@ -24513,6 +24695,16 @@ def run_webui():
                     self._json({"error": "unauthorized"}, 401)
                     return
                 self._json(web_jobs_view())
+            elif self.path.startswith("/api/login"):
+                # The page's probe (GET): 200 when this browser already authenticates
+                # (the HttpOnly cookie the handover set), 401 when it must be asked.
+                # POST does the handover itself, in the POST chain - and this branch
+                # must sit ABOVE /api/log, whose prefix would otherwise swallow
+                # /api/login (tests/test_contracts.py grades the whole ordering class).
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json({"ok": True})
             elif self.path.startswith("/api/log"):
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
@@ -27028,10 +27220,56 @@ def tg_escape(text):
 
 
 def tg_html(text):
+    """Escaped text, with the markdown a model writes rendered in Telegram's HTML.
 
-    """Escaped text, with `backticks` rendered as the code they always meant."""
+    Backticks were the only thing this converted, so bold showed its asterisks, links
+    were dead text and a table arrived as pipes - while Mattermost rendered the same
+    answer (operator's report, 2026-10-04). Telegram's HTML subset has no table element,
+    so a pipe table is wrapped in <pre>: columns keep their alignment and nothing is
+    dropped. Code spans are protected FIRST so the emphasis rules cannot reach inside
+    them, and the text is escaped before any tag is added.
 
-    return re.sub(r"`([^`]+)`", r"<code>\1</code>", tg_escape(text))
+    Tags emitted: <b> <i> <code> <pre> <a> - nothing else, and no attribute is taken
+    from the model's text except the sanitized href.
+    """
+    text = tg_escape(str(text))
+    code = []
+
+    def _keep(m):
+        code.append(m.group(1))
+        return "\x00%d\x00" % (len(code) - 1)
+
+    text = re.sub(r"`([^`]+)`", _keep, text)
+    text = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"(?<![*\w])\*([^*\n]+)\*(?![*\w])", r"<i>\1</i>", text)
+    text = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(r"(?<![\"'=])(https?://[^\s<>\")]+)",
+                  lambda m: '<a href="%s">%s</a>' % (m.group(1), m.group(1)), text)
+    lines, out, i = text.split("\n"), [], 0
+    while i < len(lines):
+        if lines[i].lstrip().startswith("```"):          # fenced block -> <pre>
+            i += 1
+            body = []
+            while i < len(lines) and not lines[i].lstrip().startswith("```"):
+                body.append(lines[i])
+                i += 1
+            i += 1
+            out.append("<pre>%s</pre>" % "\n".join(body))
+            continue
+        if (i + 1 < len(lines) and lines[i].strip().startswith("|")
+                and re.match(r"^[\s:|-]*-[\s:|-]*$", lines[i + 1].strip())):
+            body = [lines[i], lines[i + 1]]                # header + separator, kept
+            i += 2
+            while i < len(lines) and lines[i].strip().startswith("|"):
+                body.append(lines[i])
+                i += 1
+            out.append("<pre>%s</pre>" % "\n".join(body))
+            continue
+        out.append(lines[i])
+        i += 1
+    text = "\n".join(out)
+    return re.sub(r"\x00(\d+)\x00",
+                  lambda m: "<code>%s</code>" % code[int(m.group(1))], text)
 
 
 

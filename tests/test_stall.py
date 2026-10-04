@@ -3006,6 +3006,10 @@ def test_a_bare_action_phrase_never_ends_a_run_as_an_answer():
                     {"role": "assistant", "content": "It is not there any more."}]
         fb.CONFIG["agent"]["max_steps"] = 10
         fb.CONFIG["agent"]["max_minutes"] = 5
+        # This test pins the DELIVERY once the nudge budget is spent: with the budget at
+        # one, the fragment is asked once and the second stop is annotated. The default
+        # budget (three) has its own test below.
+        fb.CONFIG["agent"]["nudge_retries"] = 1
         out, calls, payloads = _scripted_run(scripted)
     finally:
         done()
@@ -3013,6 +3017,30 @@ def test_a_bare_action_phrase_never_ends_a_run_as_an_answer():
           any("described the work as under way with no tool call" in m for m in cap), cap[-4:])
     check("the run took the nudge's turn rather than ending", calls == 2, calls)
     check("and the delivery says the work has not run", "stopped short" in (out or ""), out)
+
+
+def test_the_nudge_budget_is_spent_before_the_run_gives_up():
+    """Operator, 2026-10-04, live box: "the harness keeps allowing the model to stop and
+    it doesnt seem like it is nudging it to continue. It has stopped 2x this run now."
+    The no-progress ask used to be a hard ONE per run; with nudge_retries it is spent
+    before the delivery annotates the run, and every ask is logged with its counter.
+    """
+    cap, done = _capture_turns()
+    try:
+        scripted = [{"role": "assistant", "content": "Let me check the config file."},
+                    {"role": "assistant", "content": "Let me look at the service unit."},
+                    {"role": "assistant", "content": "Let me read the logs."},
+                    {"role": "assistant", "content": "Done: nothing to change."}]
+        fb.CONFIG["agent"]["max_steps"] = 20
+        fb.CONFIG["agent"]["max_minutes"] = 5
+        fb.CONFIG["agent"]["nudge_retries"] = 2
+        out, calls, payloads = _scripted_run(scripted)
+    finally:
+        done()
+    asked = [m for m in cap if "promised the work with no tool call" in m]
+    check("the second promise gets a second ask, not a silent stop",
+          any("(2/2)" in m for m in asked), asked)
+    check("and the run really took the extra turns", calls >= 3, calls)
 
 
 def test_every_model_turn_is_logged_with_its_facts():

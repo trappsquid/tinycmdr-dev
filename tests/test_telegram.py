@@ -71,6 +71,21 @@ check("escaping is the three characters HTML needs",
       fb.tg_escape("a <b> & c") == "a &lt;b&gt; &amp; c")
 check("backticks become the code they always meant",
       fb.tg_html("run `ls -la` now") == "run <code>ls -la</code> now")
+check("bold and italic become Telegram's own tags",
+      fb.tg_html("**bold** and *it*") == "<b>bold</b> and <i>it</i>")
+check("a markdown link becomes an anchor",
+      fb.tg_html("[docs](https://example.com/x)")
+      == '<a href="https://example.com/x">docs</a>')
+check("a bare URL becomes a link",
+      fb.tg_html("see https://example.com/x now")
+      == 'see <a href="https://example.com/x">https://example.com/x</a> now')
+_tbl = fb.tg_html("| a | b |\n| --- | --- |\n| 1 | 2 |")
+check("a pipe table rides in <pre> (Telegram's HTML has no table element)",
+      _tbl.startswith("<pre>") and _tbl.endswith("</pre>") and "| 1 | 2 |" in _tbl, _tbl)
+check("code spans are protected from the emphasis rules",
+      "<b>" not in fb.tg_html("`**not bold**`"))
+check("the escaping still comes first (no tag injection)",
+      fb.tg_html("<script>alert(1)</script>").startswith("&lt;script&gt;"))
 check("a bold tag in the model's own text cannot inject",
       fb.tg_escape("<b>bold</b>") == "&lt;b&gt;bold&lt;/b&gt;")
 

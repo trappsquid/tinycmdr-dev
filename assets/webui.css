@@ -271,6 +271,19 @@ textarea:focus-visible {
   color: var(--error);
 }
 
+/* the in-conversation search: results the rail's box finds INSIDE transcripts, above
+   the archive list (title filtering still happens on the rows themselves) */
+.hit-list{display:flex;flex-direction:column;gap:5px;margin:10px 0 2px}
+.hit-head{color:var(--dim);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;
+font-family:'JetBrains Mono',ui-monospace,monospace;padding:0 2px}
+.hit{display:flex;flex-direction:column;gap:3px;text-align:left;cursor:pointer;
+border:1px solid var(--line-soft);border-radius:.5rem;background:rgba(255,255,255,.02);
+color:var(--fg);padding:.45rem .55rem;font:inherit}
+.hit:hover{border-color:color-mix(in srgb, var(--gold) 45%, var(--line-soft))}
+.hit strong{font-size:.8rem;color:var(--gold);font-weight:600}
+.hit small{color:var(--dim);font-size:.72rem;line-height:1.35;display:-webkit-box;
+-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+
 .connection-banner {
   display: grid;
   min-height: 52px;
@@ -1198,6 +1211,18 @@ scroll-behavior:smooth}
 .run{display:contents}
 .msg{max-width:860px;padding:.6rem .85rem;border-radius:.7rem;white-space:pre-wrap;
 word-break:break-word;font-size:.95rem;line-height:1.6}
+/* the markdown a model writes: tables scroll instead of clipping, cells wrap, links
+   take the theme's gold (the renderer builds nodes; see mdRender in the page script) */
+.msg .p{display:block}
+.msg table.mdtable{border-collapse:collapse;margin:.35rem 0;display:block;
+max-width:100%;overflow-x:auto}
+.msg table.mdtable th,.msg table.mdtable td{border:1px solid var(--line-soft);
+padding:.2rem .55rem;text-align:left;white-space:normal}
+.msg table.mdtable th{color:var(--gold)}
+.msg pre{margin:.35rem 0;padding:.5rem .7rem;overflow-x:auto;
+background:rgba(255,255,255,.03);border:1px solid var(--line-soft);border-radius:.5rem}
+.msg ul,.msg ol{margin:.3rem 0 .3rem 1.2rem}
+.msg a{color:var(--gold)}
 .msg.copyable{position:relative;padding-right:58px}
 .copyb{position:absolute;top:4px;right:6px;font:inherit;font-size:11px;line-height:1;padding:3px 7px;
 border:1px solid var(--line);border-radius:6px;background:var(--panel-strong);color:var(--muted);
@@ -1322,7 +1347,10 @@ box-shadow:0 10px 30px var(--shadow);z-index:9}
 #meter{flex:0 0 auto;height:3px;background:color-mix(in srgb, var(--bronze) 16%, var(--panel-solid))}
 #meterfill{height:100%;width:0;background:linear-gradient(90deg,var(--gold),var(--gold-bright));
 transition:width .3s}
-#rail.hide{display:none}
+/* the rail's visibility is a BODY class, so the workspace can re-track its grid: with
+   the item gone the stage would otherwise land in the sidebar's 292px column */
+body.rail-hidden #rail{display:none}
+body.rail-hidden .workspace{grid-template-columns:minmax(0, 1fr)}
 [hidden]{display:none !important}
 .busy-status{color:var(--ember)}
 

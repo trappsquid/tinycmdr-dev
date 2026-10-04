@@ -119,8 +119,17 @@ def run_page(scenario, script):
 
 
 def drawn(res):
-    """Every node on the page, in document order, as (class, text)."""
-    return [(r["cls"].split()[-1], r["text"]) for r in res["rendered"]]
+    """Every node on the page, in document order, as (kind, text).
+
+    The kind is the node's own token among the classes - not the LAST one: a copyable
+    answer is `msg final copyable`, and taking the last token read it as `copyable`
+    (found 2026-10-04 when the shim's className stopped lying about classList).
+    """
+    out = []
+    for r in res["rendered"]:
+        toks = [c for c in r["cls"].split() if c not in ("msg", "copyable")]
+        out.append((toks[-1] if toks else "", r["text"]))
+    return out
 
 
 def where(res, needle, cls=None):
@@ -221,6 +230,45 @@ def main():
     res = run_page(sc, script)
     check(res["prompts"] == 1 and not res["errors"],
           f"a refused GET prompts once and is retried ({res['prompts']} prompt(s))")
+
+    # -- 1d. a model's markdown renders (Mattermost always did; the page printed it
+    # raw - "tried to use a markdown table but in the webui it looks all stupid") -----
+    sc = {"runs": [[["say", "| item | count |\n| --- | --- |\n| **bolt** | 12 |"],
+                    ["final", "Done.\n\n- first\n- second\n\n`code` and "
+                              "https://example.com/x"]]],
+          "steps": [{"kind": "message", "text": "a table please", "polls": 10}]}
+    res = run_page(sc, script)
+    txt = " ".join(t for _c, t in drawn(res))
+    check("bolt" in txt and "12" in txt,
+          f"a markdown table's cells render ({txt[-80:]!r})")
+    check("| ---" not in txt and "**" not in txt,
+          "and no markdown punctuation reaches the page as literal text")
+    check("first" in txt and "second" in txt and "example.com" in txt,
+          "lists and bare URLs render too")
+
+    # -- 1e. the rail toggle re-tracks the layout (the click used to strand the stage
+    # in the sidebar's 292px column) --------------------------------------------
+    sc = {"runs": [], "steps": [{"kind": "click", "id": "menu", "polls": 2}]}
+    res = run_page(sc, script)
+    check("rail-hidden" in res.get("bodyCls", ""),
+          f"clicking the menu hides the rail via the body class ({res.get('bodyCls')!r})")
+    sc = {"runs": [], "steps": [{"kind": "click", "id": "menu", "polls": 2},
+                               {"kind": "click", "id": "menu", "polls": 2}]}
+    res = run_page(sc, script)
+    check("rail-hidden" not in res.get("bodyCls", ""),
+          "and clicking it again brings the rail back")
+
+    # -- 1f. search INSIDE conversations (the rail's box only filtered titles) ----------
+    sc = {"runs": [], "search_hits": [
+              {"key": "web-x", "title": "token rotation", "role": "assistant",
+               "snippet": "run tinycmdr token set TINYCMDR_WEB_TOKEN"}],
+          "steps": [{"kind": "input", "id": "filter", "text": "rotate token",
+                     "polls": 4}]}
+    res = run_page(sc, script)
+    check(res.get("hitsShown") and "token rotation" in res.get("hits", ""),
+          f"the rail's search shows matches found inside conversations "
+          f"({(res.get('hits') or '')[:60]!r})")
+    check("TINYCMDR_WEB_TOKEN" in res.get("hits", ""), "with the matching snippet")
 
     # -- 2. a line that grows in place must reach its final text --------------
     full = "The sky is blue because of Rayleigh scattering."
@@ -389,9 +437,9 @@ def main():
     }
     res = run_page(sc, script)
     check(not res["errors"], f"the copy path runs clean ({res['errors'][:1]})")
-    fin = [r for r in res["rendered"] if r["cls"].endswith("final")]
-    tool = [r for r in res["rendered"] if r["cls"].endswith("tool_done")]
-    think = [r for r in res["rendered"] if r["cls"].endswith("thinking")]
+    fin = [r for r in res["rendered"] if "final" in r["cls"].split()]
+    tool = [r for r in res["rendered"] if "tool_done" in r["cls"].split()]
+    think = [r for r in res["rendered"] if "thinking" in r["cls"].split()]
     check(fin and fin[0]["hasCopy"], "the answer box carries a copy button")
     check(tool and tool[0]["hasCopy"], "a command-output box carries one too")
     check(think and not think[0]["hasCopy"],
@@ -612,7 +660,7 @@ def main():
     }
     res = run_page(sc, script)
     check(not res["errors"], f"the file-line page runs clean ({res['errors'][:1]})")
-    fin = [r for r in res["rendered"] if r["cls"].endswith("file")]
+    fin = [r for r in res["rendered"] if "file" in r["cls"].split()]
     check(bool(fin), f"an offered file draws its own line ({res['rendered']})")
     check(fin and "report final.txt" in fin[0]["text"] and "\U0001F4CE" in fin[0]["text"],
           f"the line names the file ({fin[:1]})")

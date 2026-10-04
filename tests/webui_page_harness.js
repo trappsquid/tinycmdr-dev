@@ -40,7 +40,7 @@ class El {
     this.children = [];
     this.parent = null;
     this._text = '';
-    this.className = '';
+    this._cls = new Set();
     this.style = {};
     this.dataset = {};
     this.scrollTop = 0;
@@ -49,15 +49,19 @@ class El {
     this.value = '';
     this.placeholder = '';
     this.listeners = {};
-    this._cls = new Set();
     const self = this;
     this.classList = {
       add(c) { self._cls.add(c); },
       remove(c) { self._cls.delete(c); },
       contains(c) { return self._cls.has(c); },
-      toggle(c, on) { if (on) { self._cls.add(c); } else { self._cls.delete(c); } },
+      // the real toggle FLIPS when `on` is absent; this used to always delete,
+      // so a plain classList.toggle('x') never added anything (found 2026-10-04)
+      toggle(c, on) { const want = (on === undefined) ? !self._cls.has(c) : !!on;
+        if (want) { self._cls.add(c); } else { self._cls.delete(c); } },
     };
   }
+  get className() { return [...this._cls].join(' '); }
+  set className(v) { this._cls = new Set(String(v).split(/\s+/).filter(Boolean)); }
   appendChild(n) { this.children.push(n); n.parent = this; return n; }
   insertBefore(n, ref) {
     const at = ref ? this.children.indexOf(ref) : -1;
@@ -87,7 +91,7 @@ class El {
 
 // every id the page looks up at load; a missing one makes getElementById return
 // null and the page dies on the next property write
-const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
+const IDS = ['log', 'in', 'send', 'stop', 'ver',
              'note', 'notetext', 'noteact',
              // the rail, the meter and the panel drawer: a missing id makes
              // getElementById null and the page dies on its first write
@@ -102,11 +106,12 @@ const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
              // and the empty state with its two actions
              'lanedetail', 'laneretry', 'lanemore',
              'configwarn', 'configtext', 'configdismiss',
-             'empty', 'emptymark', 'emptynew', 'emptylast', 'medallionimg',
+             'empty', 'emptymark',  // freshDom writes its src from the markup
+             'emptynew', 'emptylast',
              'stage-status', 'stage-state',
              // the pavilion shell: the rail's filter, the host card, the hero's stats and
              // the stage header's state
-             'filter', 'hostver', 'stage-state', 'logwrap',
+             'filter', 'hits', 'hostver', 'stage-state', 'logwrap',
              'stat-session', 'stat-context', 'stat-model'];
 const byId = {};
 function freshDom() {
@@ -251,6 +256,10 @@ function fetchShim(url, opts) {
   if (url.indexOf('/api/health') === 0) {
     healthFetches++;
     return jres(scenario.health || { ok: true, version: 'harness' });
+  }
+  if (url.indexOf('/api/search') === 0) {
+    // the operator's search INSIDE conversations: the scenario carries the hits
+    return jres({ query: (url.split('q=')[1] || ''), matches: scenario.search_hits || [] });
   }
   if (url.indexOf('/api/sessions') === 0) {
     // scenario.auth_401_once: the FIRST list call is refused, which is the stale
@@ -442,6 +451,15 @@ async function main() {
       const fn = page()[step.fn];
       if (typeof fn === 'function') { await fn.apply(null, step.args || []); }
       for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
+    } else if (step.kind === 'input') {
+      // type into a field and fire its handler (the rail's search box)
+      const el = byId[step.id];
+      if (!el) { errors.push('input step: no element #' + step.id); }
+      else {
+        el.value = step.text;
+        if (typeof el.oninput === 'function') { await el.oninput({}); }
+        for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
+      }
     } else if (step.kind === 'click') {
       // click an element by id: either wiring works (`onclick=`, or addEventListener)
       const el = byId[step.id];
@@ -482,6 +500,9 @@ async function main() {
     pages,
     copied,
     prompts: promptCalls,
+    bodyCls: (globalThis.document.body || {}).className || '',
+    hits: (byId.hits || {}).textContent || '',
+    hitsShown: !(byId.hits || {}).hidden,
     stage: (byId['stage-state'] || {}).textContent || null,
     stageS: (byId['stage-status'] || {dataset:{}}).dataset.s,
     logins: loginCalls,

@@ -400,10 +400,31 @@ def main():
           "and the handover refuses a wrong token")
     check(req("GET", "/api/login")[0] == 401,
           "GET /api/login is the page's probe: no token, no cookie -> 401")
-    check(req("GET", "/api/login", TOK)[0] == 200,
-          "...and a browser that has one gets 200, so nothing is prompted for")
+    _probe = req("GET", "/api/login", TOK)
+    check(_probe[0] == 200 and json.loads(_probe[1]).get("ok") is True,
+          "...and a browser that has one gets the probe's ok payload - NOT the log tail "
+          "(/api/login must sit above /api/log)",
+          "%s %r" % (_probe[0], _probe[1][:80]))
     check(req("POST", "/api/run", body=b'{"message":"hi"}')[0] == 401,
           "a POST without a token: 401 (it never reaches the agent)")
+
+    # ---- search INSIDE conversations (operator, 2026-10-04) --------------------
+    _sess = STAGE / "sessions"
+    _sess.mkdir(parents=True, exist_ok=True)
+    (_sess / "web-searchable.json").write_text(json.dumps([
+        {"role": "user", "content": "how do I rotate the page token"},
+        {"role": "assistant",
+         "content": "run tinycmdr token set TINYCMDR_WEB_TOKEN"}]), encoding="utf-8")
+    _r = req("GET", "/api/search?q=rotate%20token", TOK)
+    _j = json.loads(_r[1]) if _r[0] == 200 else {}
+    check(_r[0] == 200 and any("rotate" in (m.get("snippet") or "").lower()
+                              for m in (_j.get("matches") or [])),
+          "search inside conversations finds message text, not just titles",
+          (_r[0], (_r[1] or b"")[:120]))
+    check(req("GET", "/api/search?q=rotate")[0] == 401,
+          "and the search sits behind the token like everything else")
+    check(json.loads(req("GET", "/api/search?q=x", TOK)[1]).get("matches") == [],
+          "a one-character query scans nothing")
 
     # ---- Host and Origin ----------------------------------------------------
     # timeout well above the settle cap: an unknown Host waits for the background
