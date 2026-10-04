@@ -84,7 +84,7 @@ def main():
     # executes and re-reveals; ttl=0 -> the old never-decay behaviour. The clock is aged
     # directly, so the checks are deterministic.
     bkey = "decay-use"
-    tool = "notes"                    # hidden by default and safe to run with no args
+    tool = "list_tools"               # hidden by default and safe to run with no args
     fb.CONFIG["agent"]["reveal_ttl_secs"] = 1800
     fb.reveal_tools(bkey, [tool])
     fb._revealed[bkey][tool] = time.time() - 1700            # a reveal 1700s old

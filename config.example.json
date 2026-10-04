@@ -77,7 +77,7 @@
       "example-cloud-model": {
         "tool_output_max_chars": 40000,
         "fetch_max_chars": 60000,
-        "notes_max_note_chars": 4000
+        "memory_concept_max_chars": 8000
       }
     },
     "_window_profiles": "Caps for a WINDOW BAND, keyed by the window the endpoint actually serves. `profiles` above follows the model's NAME, which cannot help the common self-hosted case: the same box restarted with a different quantisation or slot count, or a model whose name says nothing about its window. The SMALLEST band at least as large as the served window wins (a box serving 12288 takes the 16384 entry). Only keys the harness already reads are accepted, and a band's values are undone when a later band takes over, so only the last band applied is in force. The three below are the documented starting point for a small self-hosted model - delete them to get the window-scaled defaults, which already shrink every character cap to window/8. The character caps are ceilings: on an 8k window they clamp at 1024, which is the point. A band CAPS the character budgets only - it never widens the window, so it cannot fix a cloud endpoint the harness is running on its assumed 8000 (which lands in the 16384 band and gets small-model caps). Only llm.max_context_tokens sets the window; put the provider's documented number there.",
@@ -129,10 +129,11 @@
     "ssl_verify": true
   },
   "web": {
-    "_comment": "The page: the default door. ON by default - a bare `tinycmdr` serves it and opens a browser when the machine has one. The token is MANDATORY and lives in .env as TINYCMDR_WEB_TOKEN (the installer mints one, and so does the first start of a host that has none; `tinycmdr token set TINYCMDR_WEB_TOKEN` with an empty value mints a fresh one and prints the link). No token = no server, never an open port. host 127.0.0.1 keeps it on this machine; a headless box reached from the LAN sets host to 0.0.0.0 (the installer and `tinycmdr setup` ask), where the token travels in cleartext - use it on a network you trust. 8790 is the published default (8787 belongs to RStudio Server).",
+    "_comment": "The page: the default door. ON by default - a bare `tinycmdr` serves it and opens a browser when the machine has one. The token is MANDATORY and lives in .env as TINYCMDR_WEB_TOKEN (the installer mints one, and so does the first start of a host that has none; `tinycmdr token set TINYCMDR_WEB_TOKEN` with an empty value mints a fresh one and prints the link). No token = no server, never an open port. host 127.0.0.1 keeps it on this machine; a headless box reached from the LAN sets host to 0.0.0.0 (the installer and `tinycmdr setup` ask), where the token travels in cleartext - use it on a network you trust. 8790 is the published default (8787 belongs to RStudio Server). a2a true adds the A2A v1.0 endpoint (/a2a plus a public agent card at /.well-known/agent-card.json; the page token as a Bearer) - off by default.",
     "enabled": true,
     "host": "127.0.0.1",
-    "port": 8790
+    "port": 8790,
+    "a2a": false
   },
   "search": {
     "_comment": "Web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network. `allow_cloud_egress` is ON by default - a box with providers configured wants to search, and a silent refusal reads as a broken tool; set it false to REFUSE every off-LAN provider, which also refuses fetch_url for a URL off this network. A searxng provider never needs the flag. The installers ask (--search-egress), setup asks, and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
@@ -214,13 +215,19 @@
     "context_files": true,
     "context_files_max_chars": 4000,
     "skills_always_max_chars": 3000,
-    "_comment_notes": "Durable memory. Every 'remember' lands in notes.md, the newest of which rides in the trailing state block, never the system prompt - the system prompt has to stay byte-stable for the endpoint's prefix cache; older entries age into notes-archive.md. notes_max_note_chars caps a single entry at write time, because one huge note poisons every later call in the session.",
+    "_comment_memory": "Durable memory is an OKF bundle under memory/: one markdown concept per fact with YAML frontmatter - type (required), title, description, tags, then provenance (sources), trust (generated/verified), lifecycle (status/stale_after). index.md rides in the trailing state block, never the system prompt: the system prompt has to stay byte-stable for the endpoint's prefix cache. memory_concept_max_chars caps one concept at write time (refused, never truncated), memory_index_max_chars bounds what the prompt carries, memory_max_concepts bounds the bundle. notes.md is legacy - still read into the prompt, no longer written by a tool.",
     "notes_max_chars": 8000,
-    "notes_max_note_chars": 1200,
-    "notes_supersede_share": 0.85,
-    "notes_supersede_min_words": 5,
-    "notes_keep_entries": 60,
-    "notes_archive_days": 45,
+    "memory_index_max_chars": 3000,
+    "memory_concept_max_chars": 6000,
+    "memory_max_concepts": 400,
+    "_comment_a2ui": "render_ui draws A2UI v1.0 cards in the web page (createSurface envelopes against this build's catalog: Card, Column, Row, Text, Divider; data bindings resolve against createSurface.dataModel). ui_payload_max_chars bounds one card; the payload rides the transcript line and never the prompt, and a lane with no surface answers honestly instead of pretending.",
+    "ui_payload_max_chars": 4096,
+    "_comment_a2a": "Two halves, both off by default. Server: web.a2a true publishes an AgentCard at /.well-known/agent-card.json and answers A2A v1.0 JSON-RPC on POST /a2a (the page token as a Bearer; SendMessage runs one message and returns a Task). Client: a2a_remotes is a map of name -> {url, token_env}; the hidden `a2a` tool exists only when this map is non-empty, so a box with no peers pays no prompt bytes. a2a_timeout bounds one remote call.",
+    "a2a_remotes": {},
+    "a2a_timeout": 120,
+    "_comment_mcp": "MCP stdio servers, off until configured: mcp_servers is a map of name -> {command, args, env?}. The hidden `mcp` tool lets the model list a server's tools and call one; with an empty map no mcp tool exists at all. The client speaks the stateless 2026-07-28 revision (version and client identity in each request's _meta) and falls back once to the older initialize handshake when a server refuses it. mcp_timeout bounds one request.",
+    "mcp_servers": {},
+    "mcp_timeout": 60,
     "_comment_progress": "Progress must arrive as NEW messages: an edited status line notifies nobody, which is how a real 32-minute run looked like total silence. checkin_minutes and checkin_steps are the two independent cadences (either one posts), 0 turns one off.",
     "progress_updates": true,
     "checkin_minutes": 5,

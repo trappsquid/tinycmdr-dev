@@ -1277,6 +1277,28 @@ background:var(--panel-strong);color:var(--muted);cursor:pointer;opacity:.32;tra
 .campaign-item .dot.work{background:var(--gold);animation:pulse 1.4s infinite}
 .campaign-item .dot.quiet{background:color-mix(in srgb, var(--dim) 45%, var(--panel))}
 @keyframes pulse{50%{opacity:.35}}
+/* A2UI cards: the agent draws on the page (render_ui). Declarative payloads only, from
+   this page's own catalog - nothing here executes, and the card wears the pavilion's
+   glass and bronze so a drawn surface reads as part of the transcript. */
+.msg.ui{padding:0;background:transparent;border:0;max-width:none}
+.ui-card{border:1px solid var(--line);border-radius:.5rem;
+background:color-mix(in srgb,var(--panel-solid) 82%,transparent);padding:.7rem .9rem;
+display:flex;flex-direction:column;gap:.45rem;box-shadow:0 .6rem 1.4rem var(--shadow)}
+.ui-card .ui-card{border-color:var(--line-soft);
+background:color-mix(in srgb,var(--bronze) 8%,transparent);box-shadow:none}
+.ui-column{display:flex;flex-direction:column;gap:.45rem}
+.ui-row{display:flex;flex-direction:row;gap:.7rem;flex-wrap:wrap;align-items:baseline}
+.ui-divider{height:1px;background:var(--line-soft)}
+.ui-textwrap{min-width:0}
+.ui-text{color:var(--ivory);font-size:.92rem;line-height:1.5;word-break:break-word}
+.ui-text.ui-title{font-family:Cinzel,Georgia,serif;color:var(--gold);font-size:1.04rem;
+letter-spacing:.02em}
+.ui-text.ui-subtitle{color:var(--gold-bright);font-size:.94rem;font-weight:650}
+.ui-text.ui-caption{color:var(--muted-2);font-size:.76rem;
+font-family:'JetBrains Mono',ui-monospace,monospace}
+.ui-text.ui-mono{font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.8rem;
+color:var(--ivory);white-space:pre-wrap}
+
 /* the drawer (tasks/jobs/log/inventory) rides the same glass */
 #drawer{position:absolute;top:0;right:0;bottom:0;width:370px;max-width:92vw;
 background:var(--panel-strong);border-left:1px solid var(--line);display:none;

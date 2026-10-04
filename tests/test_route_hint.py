@@ -179,7 +179,7 @@ check("an order asking WHERE a fact lives is spotted as a lookup",
 fb.run_state("nudge-1", create=True)["order_is_lookup"] = 1
 _nudge = fb.remember_nudge("read_file", {"path": "config.json"}, {"session_key": "nudge-1"})
 check("the result that answered the lookup carries one memory nudge",
-      "DURABLE" in _nudge and "remember" in _nudge, _nudge[:200])
+      "DURABLE" in _nudge and "memory" in _nudge, _nudge[:200])
 check("...and not a second time in the run",
       fb.remember_nudge("read_file", {}, {"session_key": "nudge-1"}) == "")
 _st6 = fb.run_state("nudge-2", create=True)

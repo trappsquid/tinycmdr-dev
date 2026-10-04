@@ -67,12 +67,9 @@ def reset_config():
 def redirect_files():
     reset_config()
     fb.NOTES_FILE = TMP / "notes.md"
-    fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")
-    if fb.NOTES_ARCHIVE_FILE.exists():
-        fb.NOTES_ARCHIVE_FILE.unlink()
 
 
 class FakeDispatcher:

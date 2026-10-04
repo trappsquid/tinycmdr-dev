@@ -104,7 +104,7 @@ from a clone, and should not "restore" them:
 | :--- | :--- | :--- |
 | `.env`, `config.json` | tokens, endpoint, this box's identity | `.env.example`, `config.example.json` |
 | `sessions/`, `logs/`, `spill/`, `tinycmdr.log`, `state.json`, `jobs.json`, `tinycmdr.lock` | conversation and runtime state | - |
-| `notes.md`, `field-notes.md`, `atlas.md`, `experiments.jsonl`, `web-sessions.json` | this box's working memory | created on the host (`tests/fixture-field-notes.md` is what the digest suite stages) |
+| `memory/`, `notes.md`, `field-notes.md`, `atlas.md`, `experiments.jsonl`, `web-sessions.json` | this box's working memory (`memory/` is the OKF bundle; `notes.md` is the legacy file it reads and no longer writes) | created on the host (`tests/fixture-field-notes.md` is what the digest suite stages) |
 | `tools/`, `skills/` | drop-in tools and prose skills built on this host | `tools/` starter files, `skills/README.md` |
 | `maintenance/private_rules.py` | this fleet's leak patterns | `private_rules.example.py` |
 | `maintenance/where-roles.json` | this box's tree declaration | `ROLES` in `maintenance/where.py` |
@@ -223,6 +223,34 @@ What is served, and where it comes from:
 
 A missing asset is a supported state, not an error: no chibi falls back to the mark, no
 colonnade draws nothing, and the page never logs a 404 for art it does not have.
+
+## The agent-protocol surfaces (A2UI, A2A, MCP)
+
+Three protocol surfaces, all built to a rent rule: **a feature that is off
+registers nothing**, so a box that never sets it has a byte-identical payload.
+
+**A2UI** — the page is a surface the agent can draw on. The hidden `render_ui` tool
+emits a standard A2UI v1.0 `createSurface` envelope against the catalog the page
+declares (`Card`, `Column`, `Row`, `Text`, `Divider`; `{"path": ...}` bindings resolve
+against `createSurface.dataModel`); `a2ui_validate()` refuses anything else by name.
+The payload rides the transcript line (`WebRun.add(kind, text, **extra)` -> the page's
+`a2uiRender`) and NEVER the prompt: the model sees the one-line summary. A lane with no
+surface answers honestly. Tests: `tests/test_a2a.py` covers the door, `tests/test_a2ui.py`
+the envelope and caps, and the page suite's shim the renderer.
+
+**A2A** — the mesh door, off by default (`web.a2a`):
+- `GET /.well-known/agent-card.json` is public metadata (no token) once enabled;
+- `POST /a2a` speaks the v1.0 JSON-RPC binding with the page token as a `Bearer`
+  (`_auth_ok` accepts it): `SendMessage` runs one message through this box and returns a
+  `Task` (`TASK_STATE_COMPLETED`, or `TASK_STATE_FAILED` when the endpoint never
+  answered), `GetTask`/`ListTasks` read the in-memory task ring (`A2A_MAX_TASKS`), and
+  `CancelTask`/streaming/push answer the spec's own errors (-32002/-32004).
+- The client is a hidden `a2a` tool (list/card/send) that is registered **only** when
+  `agent.a2a_remotes` is non-empty - the A/A check lives in `tests/test_a2a.py`.
+
+Verify by hand: set `web.a2a` true, restart, then
+`curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with
+`-H 'Authorization: Bearer <TINYCMDR_WEB_TOKEN>'`.
 
 ## 8. Starting from nothing
 

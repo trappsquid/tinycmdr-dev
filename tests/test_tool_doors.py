@@ -133,7 +133,7 @@ finally:
 key = "doors-order-reveal"
 hidden_before = fb.hidden_tools(key)
 target = None
-for cand in ("create_tool", "notes", "experiment", "delegate_task"):
+for cand in ("create_tool", "experiment", "delegate_task"):
     if cand in hidden_before:
         target = cand
         break
@@ -314,7 +314,7 @@ for label, cmd, want in (
         ("an echo naming a hidden core tool", 'echo "now I will use search_files"', "search_files"),
         ("a plain echo", 'echo "hello there"', ""),
         ("a real command naming a path", "ls -la /tmp/send_file.txt", ""),
-        ("prose that happens to contain a tool word", 'echo "the notes file is ready"', "notes"),
+        ("prose that happens to contain a tool word", 'echo "the memory file is ready"', "memory"),
         ("printf with a tool word", 'printf "%s" shell', "shell"),
         ("a command whose JOB is the name, not narration", "list_tools", ""),
 ):
@@ -334,15 +334,15 @@ check("...once per session",
       fb.result_hint("shell", {"command": 'echo "calling send_file now"'}, out, _hint_sess) == "",
       "the second call answered")
 
-out = fb.tool_shell({"command": 'echo "the notes file is ready"'}, dict(CTX))
+out = fb.tool_shell({"command": 'echo "the memory file is ready"'}, dict(CTX))
 check("prose containing a tool word still just prints",
-      "the notes file is ready" in out and "is a TOOL on this box" not in out, out[:160])
+      "the memory file is ready" in out and "is a TOOL on this box" not in out, out[:160])
 check("...and the note still rides it once: the matcher cannot tell prose from narration, "
       "so the price of catching the narration case is one line per session",
-      "is not a call" in fb.result_hint("shell", {"command": 'echo "the notes file is ready"'},
+      "is not a call" in fb.result_hint("shell", {"command": 'echo "the memory file is ready"'},
                                         out, "-prose"), "no hint")
 check("...and it is one line, not one per call",
-      fb.result_hint("shell", {"command": 'echo "the notes file is ready"'}, out, "-prose") == "",
+      fb.result_hint("shell", {"command": 'echo "the memory file is ready"'}, out, "-prose") == "",
       "the second call answered")
 
 out = fb.tool_shell({"command": "list_tools"}, dict(CTX))

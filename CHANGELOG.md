@@ -5,7 +5,76 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.69] - 2026-10-04
+
+Changed
+- **Memory is an Open Knowledge Format bundle now.** Operator brief, 2026-10-04:
+  redesign the harness's memory to work off Google Cloud's OKF. `memory/` holds one
+  markdown concept per durable fact with YAML frontmatter, carrying the v0.2 families for
+  a corpus agents write - provenance (`sources`), trust (`generated`/`verified`, from
+  which a tier is derived), lifecycle (`status`/`stale_after`) - plus `index.md` (the
+  only part the prompt carries, capped and flagged) and `log.md` (newest-first history).
+  The `remember`/`notes` pair is ONE tool now: add, update, deprecate, forget, read,
+  search, list. A body over the cap is refused rather than truncated, the bundle refuses
+  new concepts past its cap, and every mutation takes one lock so the concept, the index
+  and the log move together. `notes.md` is left in place and still rides the prompt, but
+  nothing writes it; no migration was performed (operator's call). Attestation
+  (`type: Attested Computation`) is reserved for a later phase. Rent was the constraint:
+  the schema was cut to six declared fields so the all-revealed worst case lands at 5,386
+  est tokens, inside the 5,400 ratchet, while the default static state is ~4.3K.
+
+Added
+- **MCP: the harness can use the tool ecosystem.** Operator brief, 2026-10-04. A
+  per-host `agent.mcp_servers` map names stdio servers (`{"name": {"command": ...,
+  "args": [...], "env": {...}}}`) and the hidden `mcp` tool lists a server's tools or
+  calls one. The client speaks the current stateless revision (2026-07-28: version and
+  client identity in every request's `_meta`, `resultType` tolerated either way) and
+  falls back ONCE to the older `initialize` handshake when a server refuses it; servers
+  are kept alive between calls and exit on stdin EOF. With an empty map no `mcp` tool
+  is registered at all, so a box with no servers is byte-identical to a build that
+  never had it. `tests/test_mcp.py` (19 checks) drives three real stub processes - a
+  stateless one, a legacy one and a silent one - through discovery, calls, the
+  fallback, process reuse and every honest error (unknown server/tool, no answer, dead
+  server, unstartable command).
+- **A2A: this box can be one node of an agent mesh.** Operator brief, 2026-10-04. With
+  `web.a2a` true the page server publishes a standard AgentCard at
+  `/.well-known/agent-card.json` (skills = this box's runbooks) and answers the A2A v1.0
+  JSON-RPC binding on `POST /a2a` with the page token as a `Bearer`: `SendMessage` runs
+  one message through the harness and returns a `Task` - `TASK_STATE_COMPLETED`, or
+  `TASK_STATE_FAILED` when the endpoint never answered, which is the same verdict the
+  done line goes red on - `GetTask`/`ListTasks` read a bounded in-memory task ring, and
+  `CancelTask`, streaming and push answer the spec's own errors (-32002/-32004/-32009)
+  because this build runs each message to completion. The client half is a hidden `a2a`
+  tool (list/card/send, bearer from a `token_env`) that is registered ONLY when
+  `agent.a2a_remotes` is set - a box with no peers is byte-identical to a build that
+  never had it. Pinned by `tests/test_a2a.py` (47 checks: the card, the lifecycle, the
+  error map, a live stub peer, and the on/off registration), and exercised live: our own
+  client tool called this box's door and read the Task back.
+- **The page is an agent surface: `render_ui` draws A2UI v1.0 cards in the transcript.**
+  Operator brief, 2026-10-04, on the harness's rent terms ("around 5k or less"): the tool
+  emits a standard `createSurface` envelope against a catalog this renderer DECLARES
+  (Card, Column, Row, Text, Divider; `{"path": ...}` bindings resolve against
+  `createSurface.dataModel`), a stdlib validator refuses anything else by name, and the
+  page draws it in the pavilion's idiom. The payload rides the transcript line - the
+  model sees only the one-line summary, never the JSON - and a lane with no surface
+  answers honestly instead of pretending a card appeared. Rent: `render_ui` is hidden
+  like every non-core tool, so its NAME on the hidden-inventory line is the only
+  static-prompt byte it adds, and its schema (under the 1,200-char per-tool cap) rides
+  only once a run calls it. `tests/test_a2ui.py` pins the envelope, the catalog, the caps
+  and the door's honesty.
+- `memory_index_max_chars` (3000), `memory_concept_max_chars` (6000) and
+  `memory_max_concepts` (400) in `DEFAULT_CONFIG` and `config.example.json`, and
+  `docs/memory.md` - the profile of OKF this build implements, with its rent budget.
+- `tests/test_memory_okf.py`: the format contract (round-trip with unknown keys, quoting,
+  conformance, trust tiers, staleness, add/update/deprecate/forget, index, log, and
+  tolerance of foreign or frontmatter-less files in the bundle).
+
+Removed
+- The notes.md write path - the curator, the archive, the authored-hash sidecar - and its
+  five write-time config keys (`notes_max_note_chars`, `notes_supersede_share`,
+  `notes_supersede_min_words`, `notes_keep_entries`, `notes_archive_days`). The file
+  itself stays on disk and in the prompt. `tests/test_notes_guard.py` retired with its
+  subject; the format contract is `tests/test_memory_okf.py`.
 
 ## [1.0.68] - 2026-10-04
 

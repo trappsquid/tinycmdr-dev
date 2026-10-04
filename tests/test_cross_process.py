@@ -55,6 +55,7 @@ def reset_state():
         p = STAGE / name
         if p.exists():
             p.unlink()
+    shutil.rmtree(STAGE / "memory", ignore_errors=True)
 
 
 def load():
@@ -66,9 +67,9 @@ def load():
     return fb
 
 
-# One worker. `hold` widens the window between the notes READ and the write it answers
-# with, which is the interleaving that loses an update - and inside the fix it is eaten
-# by the note lock, so the answer is the same.
+# One worker. `hold` widens the window INSIDE the memory write (concept + index under one
+# lock), which is the interleaving that would lose an index entry - and inside the fix it
+# is eaten by the memory lock, so the answer is the same.
 WORKER_NOTE = r'''
 import importlib.util, sys, time
 from pathlib import Path
@@ -77,13 +78,14 @@ spec = importlib.util.spec_from_file_location("mp_worker", stage / "tinycmdr.py"
 fb = importlib.util.module_from_spec(spec)
 sys.modules["mp_worker"] = fb
 spec.loader.exec_module(fb)
-real = fb._parse_notes
-def slow(raw):
-    doc = real(raw)
+real = fb.memory_index_render
+def slow(*a, **k):
+    out = real(*a, **k)
     time.sleep(hold)
-    return doc
-fb._parse_notes = slow
-print(fb.tool_remember({"note": "worker-" + tag}, {}))
+    return out
+fb.memory_index_render = slow
+print(fb.tool_memory({"action": "add", "title": "worker-" + tag,
+                      "body": "worker-" + tag}, {}))
 '''
 
 # A lane that sets ONE conversation's model choice and saves it, optionally waiting for
@@ -118,7 +120,8 @@ def spawn(code, args, timeout=180):
 
 
 def test_three_processes_writing_one_memory():
-    """audit D2: the measured shape - three memory writes, one notes.md, lost updates."""
+    """audit D2's shape on the memory bundle: three lanes add at once, each asleep inside
+    the write window, and neither a concept nor the shared index loses an entry."""
     reset_state()
     hold = 0.4
     procs = [subprocess.Popen(
@@ -130,10 +133,14 @@ def test_three_processes_writing_one_memory():
         outs.append((p.returncode, out.strip(), err.strip()))
     check(all(rc == 0 for rc, _o, _e in outs), "all three lanes exited 0", outs)
     check(sum(1 for _rc, o, _e in outs if o.startswith("OK:")) == 3,
-          "and all three answered OK (that was true before the fix too)", outs)
-    text = (STAGE / "notes.md").read_text(encoding="utf-8")
-    check(all(("worker-%d" % i) in text for i in range(3)),
-          "all three writes are IN notes.md", text)
+          "and all three answered OK", outs)
+    concepts = sorted(p.stem for p in (STAGE / "memory").glob("*.md")
+                      if p.stem not in ("index", "log"))
+    check(concepts == ["worker-0", "worker-1", "worker-2"],
+          "all three concepts are on disk", concepts)
+    index = (STAGE / "memory" / "index.md").read_text(encoding="utf-8")
+    check(all(("worker-%d" % i) in index for i in range(3)),
+          "and the shared index lists all three", index)
 
 
 # A lane that bumps one counter in state.json with a deliberate pause between the read

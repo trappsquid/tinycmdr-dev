@@ -136,12 +136,12 @@ def main():
         fb.AGENT._envelope_cache = {"window": 8192}
         check(fb.mem_limit_num("digest_lines", 40, 400, 8) == 20,
               "digest_lines scales with the window (8192 // 400 = 20)")
-        check(fb.mem_limit_chars("notes_max_note_chars", 1200) == 1024,
-              "the per-note cap scales with the window (8192 // 8 = 1024)")
+        check(fb.mem_limit_chars("memory_concept_max_chars", 1200) == 1024,
+              "the per-concept cap scales with the window (8192 // 8 = 1024)")
         fb.AGENT._envelope_cache = {"window": 0}
         check(fb.mem_limit_num("digest_lines", 40, 400, 8) == 40
-              and fb.mem_limit_chars("notes_max_note_chars", 1200) == 1200,
-              "an undetected window leaves the configured values alone")
+              and fb.mem_limit_chars("memory_concept_max_chars", 1200) == 6000,
+              "an undetected window leaves the configured value alone (6000)")
 
         # ---- 2. the landing skeleton, and the clamp on that final call --------
         fb.AGENT._envelope_cache = None

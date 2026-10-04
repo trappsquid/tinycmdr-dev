@@ -200,8 +200,8 @@ def render(name, f):
             "                    run_all.py is the gate)\n"
             "config              config.json, %d blocks: %s\n"
             "                    (all of section 3 is configurable)\n"
-            "state on disk       sessions/*.json (per channel), notes.md, jobs.json (cron),\n"
-            "                    uploads/, logs"
+            "state on disk       sessions/*.json (per channel), memory/ (OKF knowledge),\n"
+            "                    notes.md (legacy, still read), jobs.json (cron), uploads/, logs"
             % (f"{f['lines']:,}", f["mb"],
                len(req), ", ".join(req), len(op), len(f["deps"]),
                f["core"], f["always_on"], f["shipped_tools"],
@@ -217,7 +217,7 @@ def render(name, f):
             "tool_output_max_chars %-5s what a tool may hand back into context\n"
             "max_context_tokens          context budget, with `context` reporting the fill\n"
             "history_exchanges           session depth kept in the prompt\n"
-            "notes_max_chars / per-note / keep / archive_days   memory caps and rotation"
+            "memory caps: index / per-concept / max_concepts (OKF); notes_max_chars legacy"
             % (a["max_steps"], a["max_minutes"], a["shell_timeout"],
                a["tool_output_max_chars"]))
     if name == "readability":

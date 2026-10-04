@@ -166,11 +166,11 @@ def main():
         # ---- calling a hidden tool works, and sticks ------------------------
         ctx = {"session_key": "s6"}
         name, args, out = fb.Agent._exec_tool(
-            fb.AGENT, {"function": {"name": "notes", "arguments": {}}}, ctx)
+            fb.AGENT, {"function": {"name": "list_tools", "arguments": {}}}, ctx)
         check(not out.startswith("ERROR"), f"a hidden tool still runs ({out[:60]!r})")
         check("was not in your tool list" in out,
               "the result says the tool was revealed")
-        check("notes" in names(fb.select_tool_schemas("s6")),
+        check("list_tools" in names(fb.select_tool_schemas("s6")),
               "and it is in the payload from then on")
 
         # a near-miss name now suggests the real one

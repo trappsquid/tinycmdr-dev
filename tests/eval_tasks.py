@@ -287,10 +287,10 @@ TASKS = [
     {
         "id": "T09_code_grounding", "category": "grounding", "difficulty": "medium",
         "prompt": ("In this install, what are the default values of the agent config "
-                   "keys notes_max_chars and notes_keep_entries? Answer with the two "
-                   "numbers."),
+                   "keys memory_index_max_chars and memory_concept_max_chars? Answer "
+                   "with the two numbers."),
         "setup": {},
-        "check": {"answer_contains": ["8000", "60"]},
+        "check": {"answer_contains": ["3000", "6000"]},
     },
     {
         "id": "T10_unknown_tool", "category": "hallucination", "difficulty": "medium",

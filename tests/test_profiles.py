@@ -55,13 +55,13 @@ def main():
 
     # 2. a matching profile wins, and only the keys it names move
     fb = load("deepseek-v4-flash", {"deepseek": {"tool_output_max_chars": 40000,
-                                                 "notes_max_note_chars": 4000}})
+                                                 "memory_concept_max_chars": 8000}})
     check(fb.PROFILE and fb.PROFILE["profile"] == "deepseek",
           "the first profile key found in the model name wins")
     check(fb.CONFIG["agent"]["tool_output_max_chars"] == 40000,
           "its tool-output cap applies")
-    check(fb.CONFIG["agent"]["notes_max_note_chars"] == 4000,
-          "its note cap applies")
+    check(fb.CONFIG["agent"]["memory_concept_max_chars"] == 8000,
+          "its memory-concept cap applies")
     check(fb.CONFIG["agent"].get("fetch_max_chars") == 12000,
           "keys the profile does not name keep the value already in config")
     check(fb.CONFIG["agent"].get("active_profile") == "deepseek",

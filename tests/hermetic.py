@@ -28,10 +28,11 @@ TESTS = REPO / "tests"
 # own tinycmdr.py inherits BASE_DIR = the checkout, so its notes, its sessions and its
 # state land in the tree unless the suite moves them first (BUGREPORT T3).
 REPO_DATA_FILES = (
-    "NOTES_FILE", "NOTES_ARCHIVE_FILE",
+    "NOTES_FILE",
     "EXPERIMENTS_FILE", "SESSIONS_DIR", "UPLOADS_DIR", "JOBS_FILE", "GLOBAL_STATE_FILE",
-    "NOTES_AUTHORED_FILE", "PROC_CENSUS_FILE", "CONFIRM_ALLOW_FILE",
+    "PROC_CENSUS_FILE", "CONFIRM_ALLOW_FILE",
     "LANE_STATE_FILE",           # logs/state.json: what the lane surfaces read
+    "MEMORY_DIR", "MEMORY_INDEX", "MEMORY_LOG",   # the OKF memory bundle
 )
 
 _staged = []

@@ -823,12 +823,9 @@ def test_a_jobs_file_written_by_another_process_is_adopted():
 def _scripted_run(scripted):
     """Run AGENT with a stubbed model; every file write goes to tmp/."""
     fb.NOTES_FILE = TMP / "notes.md"
-    fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")
-    if fb.NOTES_ARCHIVE_FILE.exists():
-        fb.NOTES_ARCHIVE_FILE.unlink()
     fb.AGENT.histories.clear()
     fb.AGENT.model_overrides.clear()
     saved_chat = fb.AGENT._chat
@@ -2027,7 +2024,6 @@ def test_stall_thresholds_are_configurable_and_sane():
 def _redirect_state():
     """Every file write from a test goes to tmp/, never beside the package."""
     fb.NOTES_FILE = TMP / "notes.md"
-    fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")

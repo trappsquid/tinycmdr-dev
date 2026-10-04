@@ -59,7 +59,6 @@ def check(name, cond, detail=""):
 
 def redirect_files():
     fb.NOTES_FILE = TMP / "notes.md"
-    fb.NOTES_ARCHIVE_FILE = TMP / "notes-archive.md"
     fb.SESSIONS_DIR = TMP / "sessions"
     fb.SESSIONS_DIR.mkdir(exist_ok=True)
     fb.NOTES_FILE.write_text("", encoding="utf-8")

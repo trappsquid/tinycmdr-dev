@@ -3,7 +3,7 @@
 <img src="../assets/tinycmdr-helm.png" alt="" width="96">
 
 <!-- measured:header:start -->
-Working definition of v1.0.68, the tree this document ships with. Every number in
+Working definition of v1.0.69, the tree this document ships with. Every number in
 section 1 and section 3.2 is rendered from the code by
 `maintenance/measured-block.py` - `tests/test_measured_doc.py` fails when the
 committed numbers disagree with the tree, so they cannot rot. Section 6 is a
@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                32,215 lines / 1.50 MB in ONE file, no package, no framework
+code                33,090 lines / 1.54 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -36,13 +36,13 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               85 suites / 28,876 lines / 3,391 checks that need no model, plus a graded
+tests               88 suites / 29,429 lines / 3,473 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 3, search 3, agent 108
+config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 4, search 3, agent 111
                     (all of section 3 is configurable)
-state on disk       sessions/*.json (per channel), notes.md, jobs.json (cron),
-                    uploads/, logs
+state on disk       sessions/*.json (per channel), memory/ (OKF knowledge),
+                    notes.md (legacy, still read), jobs.json (cron), uploads/, logs
 ```
 <!-- measured:surface:end -->
 
@@ -60,8 +60,11 @@ web_search      configured provider chain (anysearch, tavily, searxng), off-LAN 
 create_tool     the agent writes a new tool; hot-loaded, live on the next call
 list_tools      list what exists, core and custom
 schedule        cron entries (croniter) for recurring jobs
-notes           long-term memory file, append with budgets and archiving
-remember        shorter-form memory write
+memory          durable knowledge as an OKF bundle (memory/*.md): add, update,
+                deprecate, forget, read, search, list; the index rides every prompt
+render_ui       draw an A2UI v1.0 card in the web page (this build's own catalog)
+a2a             call another A2A agent (list/card/send); exists only when configured
+mcp             list, inspect or call a configured MCP stdio server; same rule
 search_sessions past conversations, across channels
 delegate_task   sub-agent with a fresh context for one subtask
 skill           list, read, or search the prose runbooks
@@ -129,7 +132,7 @@ shell_timeout 300             per command
 tool_output_max_chars 10000 what a tool may hand back into context
 max_context_tokens          context budget, with `context` reporting the fill
 history_exchanges           session depth kept in the prompt
-notes_max_chars / per-note / keep / archive_days   memory caps and rotation
+memory caps: index / per-concept / max_concepts (OKF); notes_max_chars legacy
 ```
 <!-- measured:budgets:end -->
 
@@ -168,8 +171,10 @@ stop                idempotent; reads on the listener thread even while a wedged
 
 ```
 sessions/          one JSON per channel; a conversation is a channel, so no bleed between them
-notes.md           append-only dated memory, read back into the prompt under a character budget,
-                   with rotation and an archive for what ages out
+memory/            OKF knowledge bundle, one markdown concept per durable fact; index.md rides
+                   in the prompt, a concept is read on demand (provenance, trust, lifecycle)
+notes.md           legacy memory from before the bundle: still read into the prompt, no longer
+                   written by a tool
 search_sessions    recall across channels, no embeddings, no vector store
 compact/compress   in-run context compression, keeping the recent tail
 delegate_task      sub-agent with a throwaway context (one level only, refuses to nest), inherits
@@ -375,9 +380,9 @@ runtime              Python, one file, 3 dependencies    Node.js, plugin archite
 channels             Mattermost (self-hosted)            Discord, WhatsApp, Slack, iMessage,
                                                          Teams, Signal, Matrix, Telegram, Zalo,
                                                          WebChat
-identity and memory  notes.md plus per-host skills read   AGENTS.md/SOUL.md/MEMORY.md injected into
-                     on demand (about 40 tokens per       every session
-                     skill in the prompt index)
+identity and memory  memory/ (OKF) plus per-host skills   AGENTS.md/SOUL.md/MEMORY.md injected into
+                     read on demand (about 40 tokens      every session
+                     per skill in the prompt index)
 always-on behaviour  check-ins every 5 minutes during a   heartbeats every 30 minutes, cron jobs,
                      run, cron entries for scheduled      wakeups
                      jobs
@@ -418,7 +423,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 32,215-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 33,090-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -433,7 +438,7 @@ guardrails                    budgets, loop guard,        security analyzer,    
                               stall watchdog,             action confirmation    hooks, sandbox        apply, git commits
                               check-ins, confirm gate
 sessions/memory               per-channel JSON,           conversation store,    session files,         chat history per
-                              notes.md,                   context condenser      CLAUDE.md memory       repo
+                              memory/ (OKF),              context condenser      CLAUDE.md memory       repo
                               search, no vectors
 sub-agents                    one level, throwaway        delegation in SDK      subagents (own         no
                               context                                            context, MCP access)
@@ -461,7 +466,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               32,215 lines, one file, no dependency tree to audit
+readability               33,090 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

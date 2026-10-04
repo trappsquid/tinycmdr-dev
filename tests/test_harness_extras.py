@@ -54,10 +54,11 @@ def main():
         sib = workdir / "notes.md"
         sib.write_text("durable fact\n", encoding="utf-8")
         miss = fb.tool_read_file({"path": str(workdir / "notes")}, dict(ctx))
-        check(miss.startswith("ERROR: no file") and str(sib) in miss,
+        check(miss.startswith("ERROR:") and str(sib) in miss and "Did you mean" in miss,
               "a missing file names the sibling that exists", miss[:220])
-        check("ALSO a TOOL" in miss,
-              "...and still says the name is a tool", miss[:220])
+        check("TOOL on this box" not in miss,
+              "...and does not lecture about a tool: on this build the name is a file",
+              miss[:220])
         plain = fb.tool_read_file({"path": str(workdir / "absent_xyz")}, dict(ctx))
         check(plain == "ERROR: %s does not exist." % (workdir / "absent_xyz"),
               "a plain miss stays plain", plain[:140])
@@ -205,11 +206,13 @@ def main():
         # ---------------------------------------------------------- memory scrubbing
         fb._SECRETS.add("hunter2secret")
         try:
-            fb.tool_remember({"note": "the wifi password is hunter2secret here"},
-                             dict(ctx))
+            fb.tool_memory({"action": "add", "title": "wifi password",
+                            "body": "the wifi password is hunter2secret here"},
+                           dict(ctx))
         finally:
             fb._SECRETS.discard("hunter2secret")
-        body = fb.NOTES_FILE.read_text(encoding="utf-8") if fb.NOTES_FILE.exists() else ""
+        concept = fb.MEMORY_DIR / "wifi-password.md"
+        body = concept.read_text(encoding="utf-8") if concept.exists() else ""
         check("hunter2secret" not in body and "redacted" in body,
               "a memory write passes the secret scrubber", body[-200:])
 

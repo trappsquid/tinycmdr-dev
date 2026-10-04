@@ -84,7 +84,6 @@ SKILL_READ_MAX = 12000      # chars returned by one skill read (see tool_skill)
 JOBS_FILE = BASE_DIR / "jobs.json"
 CONFIG_PATH = BASE_DIR / "config.json"
 EXPERIMENTS_FILE = BASE_DIR / "experiments.jsonl"  # append-only experiment ledger, one JSON line per record
-NOTES_ARCHIVE_FILE = BASE_DIR / "notes-archive.md"   # notes evicted from the prompt
 
 # Console logging must never freeze the bot. On Windows, a stray click in
 # the console window enables "mark" (QuickEdit) mode and the OS blocks the
@@ -304,6 +303,11 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "host": "127.0.0.1",
         "port": 8790,
+        # The A2A door (Agent2Agent v1.0): false by default. True publishes an
+        # AgentCard at /.well-known/agent-card.json and answers JSON-RPC on POST /a2a
+        # with the page token as a Bearer. SendMessage runs one message through this
+        # box and returns a Task; streaming and push are declared unsupported.
+        "a2a": False,
     },
     "search": {
         # PROVIDERS, in order: the first that answers wins. `kind` picks the adapter,
@@ -504,18 +508,23 @@ DEFAULT_CONFIG = {
         "command_cost_guard": True,
         "scan_budget_seconds": 120,   # per RUN, shell + execute_code together
         "notes_max_chars": 8000,  # newest notes carried in the trailing state block
-        # A single remember call is capped AT WRITE TIME. A 480KB note (seen in
-        # the wild) otherwise poisons every later call in the session, because
-        # it overflows the context window on each request and no amount of
-        # prompt-side truncation helps. Long content belongs in a file.
-        "notes_max_note_chars": 1200,
-        "notes_supersede_share": 0.85,   # a new note this close to an existing one REPLACES
-                                         # it instead of piling up beside it (see tool_remember)
-        "notes_supersede_min_words": 5,  # ...only when BOTH notes carry at least this many
-                                         # distinct words: on a one-word note containment is
-                                         # always 1.00 and distinct facts would collapse
-        "notes_keep_entries": 60,   # entries kept in notes.md before ageing out
-        "notes_archive_days": 45,   # older than this -> notes-archive.md
+        "memory_index_max_chars": 3000,    # index.md carried in the same block (OKF)
+        "memory_concept_max_chars": 6000,  # per-concept body cap, refused not truncated
+        "memory_max_concepts": 400,        # past this, add refuses and names the way out
+        "ui_payload_max_chars": 4096,      # one A2UI card; the summary is what the model sees
+        # The A2A client exists ONLY when this map is non-empty: {"<name>": {"url":
+        # "http://box:8790", "token_env": "TINYCMDR_MM_TOKEN_BOX"}}. A box with no mesh
+        # members registers no a2a tool at all, so its payload is byte-identical.
+        "a2a_remotes": {},
+        "a2a_timeout": 120,                # seconds for one remote call
+        # MCP stdio servers, same rule: {"<name>": {"command": "npx", "args": [...]}}.
+        # Empty means no mcp tool is registered at all.
+        "mcp_servers": {},
+        "mcp_timeout": 60,                 # seconds for one MCP request
+        # A single memory write is capped AT WRITE TIME (memory_concept_max_chars). A 480KB
+        # body otherwise poisons every later call in the session, because it overflows the
+        # context window on each request and no prompt-side truncation helps. Long content
+        # belongs in a file.
         # A single-target delete of real content OUTSIDE scratch asks first, and the ask
         # carries the measured effect (file count, size, age). Deleting a temp path, or a path
         # that is not there, stays ordinary work. false restores the old shape per box.
@@ -1064,7 +1073,7 @@ def apply_model_profile():
         "llm": {"model": "deepseek-v4-flash",
                 "profiles": {"deepseek": {"tool_output_max_chars": 40000,
                                           "fetch_max_chars": 60000,
-                                          "notes_max_note_chars": 4000}}}
+                                          "memory_concept_max_chars": 8000}}}
 
     A profile key matches a WHOLE WORD of the model name, and the LONGEST matching key wins.
     "The first key that appears in the model name" was decided by dict order and a bare
@@ -1111,7 +1120,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.68"
+VERSION = "1.0.69"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -3467,7 +3476,7 @@ _TOOL_TIERS = {
     "find_tools": "read", "skill": "read", "search_sessions": "read",
     "ask_user": "read", "plan": "read",
     "write_file": "write", "edit_file": "write", "create_tool": "write",
-    "notes": "write", "remember": "write", "experiment": "write",
+    "memory": "write", "experiment": "write", "render_ui": "read",
     "send_file": "write",
     "shell": "exec", "execute_code": "exec", "schedule": "exec",
     "delegate_task": "exec",
@@ -4263,7 +4272,7 @@ _LAST_GOOD_CALL = {}       # tool name -> the arguments of the last call that WO
 
 # Tools whose arguments are not a shape to copy: the plan/notes mutators take
 # free text, and list/find take nothing that a replay could teach.
-_REPLAY_SKIP = ("plan", "remember", "list_tools", "find_tools")
+_REPLAY_SKIP = ("plan", "memory", "list_tools", "find_tools")
 
 
 def remember_good_call(name, args, out):
@@ -4587,7 +4596,8 @@ _ATLAS_KNOWN_FILES = (
     ("tinycmdr.py", "the agent itself"),
     ("config.json", "settings; secrets live in .env, never read those out loud"),
     ("field-notes.md", "known-failure library; a matching tool failure arrives annotated"),
-    ("notes.md", "durable memory, newest entries ride in this prompt"),
+    ("notes.md", "legacy memory, still read into this prompt"),
+    ("memory/", "OKF knowledge; the index rides in this prompt"),
     ("atlas.md", "this file"),
     ("skills/", "runbooks, read on demand with the skill tool"),
     ("tools/", "custom tools; a file dropped here is read at the next start"),
@@ -6032,9 +6042,9 @@ def remember_nudge(name, args, ctx):
     log.info("[%s] remember nudge: a lookup answered a durable-fact question", key)
     return ("\n[HARNESS: if the answer to the operator's question is a DURABLE fact about "
             "this box (a port, a path, a credential location, a quirk, a version), save it "
-            "now - remember {\"note\": \"<one line: the fact>\"} - and say in your report "
-            "what you saved. It rides in every future prompt, so the next run does not look "
-            "it up again.]")
+            "now - memory {\"action\": \"add\", \"title\": \"<short name>\", \"body\": "
+            "\"<the fact>\"} - and say in your report what you saved. The index rides in "
+            "every future prompt, so the next run does not look it up again.]")
 
 
 def mint_offer(session_key, reporter, source="main"):
@@ -6066,8 +6076,8 @@ def mint_offer(session_key, reporter, source="main"):
         # be needed again - same shape as the mint offer, and only once per session.
         st["remember_offer_done"] = 1
         line = ("💡 Nothing about this was saved to memory. If that fact is one you will "
-                "need again, say **save it** and I will keep it in notes.md - it then rides "
-                "in my prompt every run, so I stop looking it up.")
+                "need again, say **save it** and I will keep it in memory - the index "
+                "then rides in my prompt every run, so I stop looking it up.")
         try:
             if reporter is not None:
                 reporter.say(line)
@@ -6980,7 +6990,8 @@ def _endpoint_load_request(command):
 # measured (2026-09-25: a note inside a folder being cleaned ended its four steps with
 # `printf 'notes cleared by cleanup' > notes.md`, and the run did it - the bot's whole memory
 # replaced by a line from a file it had been asked to read). Reads are untouched.
-_SURFACE_FILES = ("notes.md", "atlas.md", "field-notes.md", "field-notes-hits.json")
+_SURFACE_FILES = ("notes.md", "atlas.md", "field-notes.md", "field-notes-hits.json",
+                  "memory/")
 _SURFACE_WRITE_RX = re.compile(
     r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:%s)"
     r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"
@@ -8597,438 +8608,1140 @@ def _fetch_page(url, max_chars, session=None):
 
 
 # --------------------------------------------------------------------------
-# Ledger discipline — bounded notes, durable task list
+# Memory - an Open Knowledge Format (OKF) bundle under memory/
 #
-# Both exist because an unbounded artifact entering the prompt fails silently
-# and compounds:
-#   * notes.md was append-only and truncated at prompt-assembly time by keeping
-#     the NEWEST notes_max_chars — so the oldest facts (usually the ones that
-#     took longest to learn) fell off the head with no warning, and one
-#     oversized note overflowed every later request in the session;
-#   * work state lived only in an in-memory transcript that a restart destroys,
-#     so "what is this box in the middle of?" had no answer.
-# Rules: cap at write time, evict to an archive instead of deleting, mark every
-# truncation explicitly, and keep the task list curated — a bounded, re-rendered
-# plan rather than an ever-growing log.
+# notes.md is legacy from here on: it stays on disk and still rides the prompt, but the
+# WRITE path is this bundle. Every durable fact is one OKF concept - a markdown file with
+# YAML frontmatter - carrying the fields OKF v0.2 defines for a corpus agents write:
+# provenance (`sources`), trust (`generated`/`verified`), lifecycle
+# (`status`/`stale_after`), and an `index.md` small enough for the prompt to carry.
+#
+# Conformance follows the spec's permissive line: `type` is the only required key,
+# unknown keys survive a rewrite, unknown types are not rejected, and a bare `verified`
+# mapping reads as a one-element list. The YAML subset below is exactly what the spec's
+# own examples use (scalars, inline lists and maps, block lists of maps); it is parsed
+# with the stdlib because this runtime has three dependencies and YAML is not one.
+#
+# Design decisions (operator brief, 2026-10-04): the bundle is `memory/`; the tool
+# surface is ONE tool named `memory` (the old `remember`/`notes` pair is gone); existing
+# notes.md is left untouched - no migration - and attestation (`type: Attested
+# Computation`) is reserved for a later phase, not implemented here.
 # --------------------------------------------------------------------------
 
-NOTE_LINE_RE = re.compile(r"^- \[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\] (.*)$")
-NOTE_ELIDE_RE = re.compile(r"^<!--\s*notes elided:.*?-->\s*$")
+MEMORY_DIR = BASE_DIR / "memory"
+MEMORY_INDEX = MEMORY_DIR / "index.md"
+MEMORY_LOG = MEMORY_DIR / "log.md"
+MEMORY_LOCK_FILE = MEMORY_DIR / ".lock"
+OKF_VERSION = "0.2"
+# The key order this harness writes; unknown keys keep their own order after these.
+_OKF_KEY_ORDER = ("type", "title", "description", "resource", "tags", "status",
+                  "stale_after", "generated", "verified", "sources", "usage_window",
+                  "runtime", "parameters", "computation", "executor", "attester")
+_OKF_BARE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./@+-]*$")
+_OKF_RESERVED = ("index", "log")
+_MEMORY_TYPES = ("Fact", "Host", "Runbook", "Decision")
 
 
-def _parse_notes(text):
-    """notes.md -> {"preamble": [...], "entries": [{ts, text, extra}]}.
-
-    Anything before the first dated entry is kept as preamble rather than
-    dropped: the operator is allowed to hand-write in this file, and a curator
-    that eats hand-written text is worse than no curator."""
-    doc = {"preamble": [], "entries": []}
-    cur = None
-    for line in (text or "").splitlines():
-        if NOTE_ELIDE_RE.match(line):
-            continue
-        m = NOTE_LINE_RE.match(line)
-        if m:
-            cur = {"ts": m.group(1), "text": m.group(2).rstrip(), "extra": []}
-            doc["entries"].append(cur)
-        elif cur is not None and line.strip():
-            cur["extra"].append(line.rstrip())
-        elif line.strip():
-            doc["preamble"].append(line.rstrip())
-    return doc
+def _okf_plain(v):
+    """Would this scalar survive a round-trip as an unquoted YAML scalar?"""
+    if v == "" or v != v.strip():
+        return False
+    if v.lower() in ("true", "false", "null", "~", "yes", "no", "on", "off"):
+        return False
+    if re.fullmatch(r"-?\d+(\.\d+)?", v):
+        return False
+    if v[0] in "-?:,[]{}#&*!|>'\"%@`":
+        return False
+    if ": " in v or " #" in v:
+        return False
+    return _OKF_BARE_RE.match(v) is not None
 
 
-def _render_notes(doc, elided=0):
-    # The guard marker is part of every render, so a foreign rewrite of the file cannot strip
-    # it: the next writer reads what this file is before appending to it.
-    out = [ln for ln in (doc.get("preamble") or []) if ln.strip() != NOTES_GUARD_LINE]
-    out.insert(0, NOTES_GUARD_LINE)
-    if elided:
-        noun = "entry" if elided == 1 else "entries"
-        out.append(f"<!-- notes elided: {elided} older {noun} moved to "
-                   f"{NOTES_ARCHIVE_FILE.name} -->")
-    for e in doc["entries"]:
-        out.append(f"- [{e['ts']}] {e['text']}")
-        out.extend(e["extra"])
-    return "\n".join(out) + ("\n" if out else "")
+def _okf_emit(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, list):
+        return "[" + ", ".join(_okf_emit(x) for x in v) + "]"
+    if isinstance(v, dict):
+        return "{ " + ", ".join("%s: %s" % (k, _okf_emit(x)) for k, x in v.items()) + " }"
+    s = str(v)
+    return json.dumps(s, ensure_ascii=False) if not _okf_plain(s) else s
 
 
-def _archive_notes(entries, reason):
-    """Append evicted entries to notes-archive.md. Always called BEFORE
-    notes.md is shortened, so nothing is ever lost — only demoted out of the
-    prompt."""
-    if not entries:
-        return
-    stamp = time.strftime("%Y-%m-%d %H:%M")
-    with NOTES_ARCHIVE_FILE.open("a", encoding="utf-8") as f:
-        f.write(f"\n## archived {stamp} — {reason}\n")
-        f.write(_render_notes({"preamble": [], "entries": entries}))
-
-
-NOTES_GUARD_LINE = ("<!-- bot memory: rides every prompt, keep entries short. Scripts and "
-                    "agents: log to docs/dev-log.md, not here. -->")
-NOTES_AUTHORED_FILE = BASE_DIR / "notes-authored.json"
-_NOTES_AUTHORED = {"loaded": False, "hashes": []}
-# Reentrant ON PURPOSE. `record_authored_note()` holds this and calls
-# `notes_authored()`, which takes it again on its bootstrap path: with a plain Lock that
-# is a self-deadlock on the FIRST `remember` of any process, and the tool batch that waits
-# on it then waits for ever (measured live on the Windows test box 2026-09-18 - the bot froze
-# mid-run, listener still polling, session lock held, and stayed frozen). A guard whose
-# job is protecting memory must never be able to stop the bot that writes it.
-_NOTES_AUTHORED_LOCK = threading.RLock()
-
-
-def _note_hash(entry):
-    """Identity of an entry: its normalized TEXT.
-
-    Not the timestamp and not the position - both move when the file is re-rendered, and an
-    identity that drifts would mark the bot's own memory as foreign, which is the one mistake
-    this guard must never make.
-    """
-    text = " ".join(str(entry.get("text") or "").split()).lower()
-    return hashlib.sha1(text.encode("utf-8", "replace")).hexdigest()[:16]
-
-
-def _notes_authored_save():
-    try:
-        atomic_write_text(NOTES_AUTHORED_FILE,
-                          json.dumps({"hashes": _NOTES_AUTHORED["hashes"][-400:]},
-                                     ensure_ascii=False))
-    except Exception as e:
-        log.debug("notes authorship not saved: %s", e)
-
-
-def notes_authored():
-    """Hashes of the entries THIS bot wrote, from the sidecar.
-
-    On first use the sidecar is absent, and every entry already in the file was the bot's
-    (whatever wrote it, it was the bot's memory before this guard existed). Bootstrapping from
-    the file means the guard can never retroactively evict the facts it protects.
-    """
-    if _NOTES_AUTHORED["loaded"]:
-        return _NOTES_AUTHORED["hashes"]
-    with _NOTES_AUTHORED_LOCK:
-        if _NOTES_AUTHORED["loaded"]:
-            return _NOTES_AUTHORED["hashes"]
-        try:
-            disk = json.loads(_read_text_any(NOTES_AUTHORED_FILE) or "{}")
-            _NOTES_AUTHORED["hashes"] = [h for h in (disk.get("hashes") or []) if h]
-        except Exception as e:
-            log.debug("notes authorship unreadable: %s", e)
-            _NOTES_AUTHORED["hashes"] = []
-        if not _NOTES_AUTHORED["hashes"]:
-            try:
-                for e in _parse_notes(_read_text_any(NOTES_FILE))["entries"]:
-                    _NOTES_AUTHORED["hashes"].append(_note_hash(e))
-                if _NOTES_AUTHORED["hashes"]:
-                    _notes_authored_save()
-                    log.info("notes guard: %d existing entries recorded as this bot's",
-                             len(_NOTES_AUTHORED["hashes"]))
-            except Exception as e:
-                log.debug("notes authorship bootstrap: %s", e)
-        _NOTES_AUTHORED["loaded"] = True
-    return _NOTES_AUTHORED["hashes"]
-
-
-def record_authored_note(text):
-    """Call after the harness itself appends a note, so the guard knows it is ours."""
-    try:
-        h = hashlib.sha1(" ".join(str(text).split()).lower()
-                         .encode("utf-8", "replace")).hexdigest()[:16]
-        with _NOTES_AUTHORED_LOCK:
-            notes_authored()
-            if h not in _NOTES_AUTHORED["hashes"]:
-                _NOTES_AUTHORED["hashes"].append(h)
-            _notes_authored_save()
-    except Exception as e:
-        log.debug("notes authorship record: %s", e)
-
-
-def curate_notes(reason="curator"):
-    """Keep notes.md inside its budget without silently dropping facts.
-
-    Deterministic on purpose: the agent's long-term memory is not somewhere an
-    LLM should rewrite unattended. Order: collapse exact duplicates (newest
-    kept), age out entries older than notes_archive_days, trim to
-    notes_keep_entries, then trim to notes_max_chars — oldest first, all of it
-    archived. Returns a one-line report, or "" when nothing had to change."""
-    # The WHOLE read-modify-write runs under the notes.md lock. A
-    # load-mutate-save race lost an add and a done in a 4-worker
-    # batch (2026-09-23); curate_notes was the same shape on the file the
-    # model calls `remember` into, and a concurrent append between its read
-    # and its write was erased by the rewrite.
-    with _path_lock(str(NOTES_FILE)):
-        return _curate_notes_impl(reason)
-
-
-def _curate_notes_impl(reason="curator"):
-    """curate_notes' real body; every caller runs it under the notes.md lock."""
-    if not NOTES_FILE.exists():
-        return ""
-    raw = NOTES_FILE.read_text(encoding="utf-8", errors="replace")
-    cfg = CONFIG["agent"]
-    cap = mem_limit_chars("notes_max_chars", 8000)
-    keep = int(cfg.get("notes_keep_entries") or 60)
-    days = int(cfg.get("notes_archive_days") or 45)
-    doc = _parse_notes(raw)
-    entries = doc["entries"]
-    if not entries:
-        return ""
-
-    last_of = {}
-    for i, e in enumerate(entries):
-        key = " ".join((" ".join([e["text"]] + e["extra"])).split()).lower()
-        last_of[key] = i            # chronological file: last occurrence wins
-    dupes = len(entries) - len(last_of)
-    if dupes:
-        keepers = set(last_of.values())
-        entries = [e for i, e in enumerate(entries) if i in keepers]
-
-    cutoff = time.strftime("%Y-%m-%d %H:%M",
-                           time.localtime(time.time() - days * 86400))
-    aged = [e for e in entries if e["ts"] < cutoff]
-    entries = [e for e in entries if e["ts"] >= cutoff]
-
-    # Entries this bot never wrote go FIRST, whatever their age, so a sibling agent (or any
-    # other process) appending to the bot's memory can never push the bot's own facts out.
-    authored = set(notes_authored())
-    foreign = [e for e in entries if _note_hash(e) not in authored]
-    if foreign:
-        log.warning("notes guard: %d entry/entries in %s were NOT written by this bot "
-                    "(oldest %s %r) - they are evicted first. Something other than the bot "
-                    "is appending to its memory; engineering notes belong in docs/dev-log.md.",
-                    len(foreign), NOTES_FILE.name, foreign[0].get("ts"),
-                    (foreign[0].get("text") or "")[:90])
-
-    def _evict_first(rows):
-        """Eviction order: foreign oldest-first, then the bot's own oldest-first."""
-        bad = [e for e in rows if _note_hash(e) not in authored]
-        good = [e for e in rows if _note_hash(e) in authored]
-        return bad + good
-
-    over_count = []
-    if len(entries) > keep:
-        victims = set(map(id, _evict_first(entries)[:len(entries) - keep]))
-        over_count = [e for e in entries if id(e) in victims]
-        entries = [e for e in entries if id(e) not in victims]
-
-    trimmed = []
-    while len(entries) > 1:
-        doc["entries"] = entries
-        evicted = len(aged) + len(over_count) + len(trimmed)
-        if len(_render_notes(doc, elided=evicted + 1)) <= cap:
-            break
-        victim = _evict_first(entries)[0]
-        entries = [e for e in entries if e is not victim]
-        trimmed.insert(0, victim)
-
-    evicted_entries = aged + over_count + trimmed
-    if not evicted_entries and not dupes:
-        return ""
-    if evicted_entries:
-        _archive_notes(evicted_entries, reason)
-    doc = {"preamble": doc["preamble"], "entries": entries}
-    new_text = _render_notes(doc, elided=len(evicted_entries))
-    # atomic, not open("w"): the plain write this replaces is one crash or one
-    # interleaved writer away from a spliced notes.md - the exact failure that
-    # filled a state file with a duplicated fragment (see atomic_write_text).
-    atomic_write_text(NOTES_FILE, new_text)
-    bits = []
-    if dupes:
-        bits.append(f"{dupes} duplicate(s) merged")
-    if evicted_entries:
-        bits.append(f"{len(evicted_entries)} entry/entries archived "
-                    f"({len(aged)} aged, {len(over_count)} over "
-                    f"notes_keep_entries, {len(trimmed)} over the char cap)")
-    log.info("notes curated (%s): %s; %d -> %d chars", reason,
-             ", ".join(bits), len(raw), len(new_text))
-    return (f"notes curated: {'; '.join(bits)} — notes.md is now "
-            f"{len(new_text)} chars (cap {cap}); evicted entries are readable "
-            f"in {NOTES_ARCHIVE_FILE.name}.")
-
-
-@serialized_on(NOTES_FILE)
-def tool_remember(args, ctx):
-    """Append, replace or forget ONE durable fact in notes.md, bounded at write time.
-
-    The schema has always said "replace stale facts instead of stacking contradictions",
-    and the tool could only ever APPEND (measured 2026-09-25 driving the fleet box: a run had
-    recorded a workaround as a durable fact, a harness fix made it false an hour later,
-    and there was no way to correct it - the note had to be removed by hand). Replace and
-    forget are the missing half.
-
-    The reply also says WHAT was written, WHICH entry changed and HOW FULL the memory is.
-    "OK: noted." told the operator nothing about what the bot had just decided to carry
-    into every future run, which is why a memory write looked like any other call.
-    """
-    action = str(args.get("action") or "note").strip().lower()
-    # The notes file is re-injected into every prompt, and this was the one text sink in
-    # the process that skipped the secret scrubber (match/last-fired paths are scrubbed).
-    note = scrub(" ".join(str(args.get("note") or "").split()))
-    old = " ".join(str(args.get("old") or "").split())
-    if action not in ("note", "replace", "forget"):
-        return "ERROR: action must be note, replace or forget."
-    if action in ("replace", "forget") and not old:
-        return (f"ERROR: {action} needs `old` - the words already in the entry you mean "
-                f"(matched case-insensitively against the note text).")
-    cap = mem_limit_chars("notes_max_note_chars", 1200)
-    budget = mem_limit_chars("notes_max_chars", 8000)
-    if action != "forget" and len(note) > cap * 4:
-        # NEVER truncate. A mutilated fact is worse than a missing one: the clipped
-        # text rides in every future prompt, so the model reasons from half a sentence
-        # and re-derives the rest - the redo pattern an audit of the campaign harness
-        # found on the root-cause notes (2026-09-21). Refuse, and name the way out.
-        return ("ERROR: that note is %d chars and the per-note limit is %d. Truncating "
-                "it would leave a half-true fact in every future prompt. Put the long "
-                "version in a file (notes/<topic>.md or a project doc), then remember "
-                "ONE line: the path and the conclusion." % (len(note), cap))
-    if action == "replace" and not note:
-        return ("ERROR: replace needs `note` - the corrected fact that should stand in "
-                "place of the old entry.")
-    if action != "forget" and not note:
-        return "ERROR: the note is empty."
-    raw = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
-           if NOTES_FILE.exists() else "")
-    doc = _parse_notes(raw)
-    entries = doc["entries"]
-    if action in ("replace", "forget"):
-        needle = old.lower()
-        hit = next((e for e in entries
-                    if needle in (e.get("text") or "").lower()), None)
-        if hit is None:
-            heads = "; ".join("%s %r" % (e["ts"], (e.get("text") or "")[:60])
-                              for e in entries[:5]) or "(none)"
-            return (f"ERROR: no memory entry contains {old!r}, so nothing was changed. "
-                    f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} now, "
-                    f"oldest first: {heads}"
-                    + (". The rest are in the file: notes action=view."
-                       if len(entries) > 5 else ""))
-        keep = [e for e in entries if e is not hit]
-        head = (hit.get("text") or "")[:70]
-        if action == "replace":
-            keep.append({"ts": hit["ts"], "text": note, "extra": []})
-        lines = list(doc["preamble"])
-        for e in keep:
-            lines.append("- [%s] %s" % (e["ts"], e["text"]))
-            lines.extend(e.get("extra") or [])
-        atomic_write_text(NOTES_FILE, "\n".join(lines) + "\n")
-        if action == "replace":
-            record_authored_note(note)
-        msg = (f"OK: {'replaced' if action == 'replace' else 'forgot'} the entry from "
-               f"{hit['ts']} ({head!r}).")
-    else:
-        timestamp = time.strftime("%Y-%m-%d %H:%M")
-        # A near-duplicate is the pile-up the schema warns about, and the model cannot see the
-        # file it just wrote to. Measured 2026-09-25 driving a fleet box: the same web-UI fact
-        # was saved twice in slightly different words, the reply NAMED the older entry and
-        # suggested the replace call - and the model re-issued the identical note, so the file
-        # kept both and the char budget pays for one fact twice. Above
-        # `notes_supersede_share` the harness does what the model was asked to do: the newer
-        # words win, in the older entry's slot, and the pile-up does not happen.
-        superseded = None
-        new_words = set(re.findall(r"[a-z0-9_]{3,}", note.lower()))
-        share_cap = float(CONFIG["agent"].get("notes_supersede_share") or 0.85)
-        # A containment share is DEGENERATE on a short note. "w8-fact-1: fact 1" and
-        # "w8-fact-2: fact 2" each reduce to the single word {"fact"}, so containment is
-        # 1.00 and eight distinct facts collapsed into ONE - reported by this repo's own
-        # suite against the 1.0.14 build (measured 2026-09-25: the race suite 35 passed,
-        # 1 failed, "eight parallel remembers are eight notes"). Superseding is a judgement
-        # about two notes that SAY something, so a minimum shared vocabulary is required
-        # before the share is allowed to mean anything. Erring toward APPEND is the safe
-        # direction: a duplicate costs chars, a superseded fact is gone.
-        min_words = int(CONFIG["agent"].get("notes_supersede_min_words") or 5)
-        for e in entries:
-            old_words = set(re.findall(r"[a-z0-9_]{3,}", (e.get("text") or "").lower()))
-            if not new_words or not old_words:
-                continue
-            if min(len(new_words), len(old_words)) < min_words:
-                continue
-            share = len(new_words & old_words) / float(min(len(new_words), len(old_words)))
-            if share >= share_cap:
-                superseded = (e, share)
-                break
-        if superseded:
-            e, share = superseded
-            lines = list(doc["preamble"])
-            for x in entries:
-                if x is e:
-                    lines.append("- [%s] %s" % (x["ts"], note))
-                else:
-                    lines.append("- [%s] %s" % (x["ts"], x["text"]))
-                    lines.extend(x.get("extra") or [])
-            atomic_write_text(NOTES_FILE, "\n".join(lines) + "\n")
-            record_authored_note(note)
-            msg = (f"OK: superseded the entry from {e['ts']} ({share:.0%} of the same "
-                   f"words - one fact, one entry).")
+def _okf_split(s):
+    """Top-level comma split of a flow body, quote- and brace-aware."""
+    out, depth, quote, cur = [], 0, "", ""
+    for ch in s:
+        if quote:
+            cur += ch
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+            cur += ch
+        elif ch in "[{(":
+            depth += 1
+            cur += ch
+        elif ch in "]})":
+            depth -= 1
+            cur += ch
+        elif ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
         else:
-            # A file whose last line carries no terminator would have this entry glued
-            # into it (measured 2026-09-25 on a fleet macOS box). Check the last byte
-            # and separate when it is not a newline.
-            _sep = ""
-            try:
-                if NOTES_FILE.exists() and NOTES_FILE.stat().st_size:
-                    with NOTES_FILE.open("rb") as f:
-                        f.seek(-1, os.SEEK_END)
-                        if f.read(1) not in (b"\n", b"\r"):
-                            _sep = "\n"
-            except OSError:
-                _sep = ""
-            with NOTES_FILE.open("a", encoding="utf-8") as f:
-                f.write(f"{_sep}- [{timestamp}] {note}\n")
-            record_authored_note(note)     # the guard knows this entry is the bot's own
-            msg = f"OK: noted at {timestamp}."
-    after = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
-             if NOTES_FILE.exists() else "")
-    doc2 = _parse_notes(after)
-    # A near-duplicate is the pile-up the schema warns about, and the model cannot see the
-    # file it just wrote to. Measured 2026-09-25: the same web-UI fact was saved twice within
-    # two minutes in slightly different words, and nothing said so.
-    if action == "note" and not superseded:
-        new_words = set(re.findall(r"[a-z0-9_]{3,}", note.lower()))
-        for e in doc2["entries"][:-1]:
-            old_words = set(re.findall(r"[a-z0-9_]{3,}", (e.get("text") or "").lower()))
-            if not new_words or not old_words:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def _okf_scalar(tok):
+    tok = tok.strip()
+    if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
+        return tok[1:-1]
+    if tok in ("true", "True"):
+        return True
+    if tok in ("false", "False"):
+        return False
+    if re.fullmatch(r"-?\d+", tok):
+        return int(tok)
+    return tok
+
+
+def _okf_inline_map(tok):
+    body = tok.strip()
+    if body.startswith("{") and body.endswith("}"):
+        body = body[1:-1]
+    out = {}
+    for part in _okf_split(body):
+        if ":" not in part:
+            continue
+        k, v = part.split(":", 1)
+        out[k.strip()] = _okf_value(v.strip())
+    return out
+
+
+def _okf_value(v):
+    if v.startswith("[") and v.endswith("]"):
+        return [_okf_scalar(p) for p in _okf_split(v[1:-1]) if p.strip()]
+    if v.startswith("{") and v.endswith("}"):
+        return _okf_inline_map(v)
+    return _okf_scalar(v)
+
+
+def okf_parse(text):
+    """(frontmatter dict, body) for a concept; ({}, text) when there is no block.
+
+    Permissive on purpose (spec §11): a missing or unparseable block is not an error, it
+    is a concept with no frontmatter - and `type` is the only key this code demands.
+    """
+    text = text or ""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}, text
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() == "---"), None)
+    if end is None:
+        return {}, text
+    fm, key = {}, None
+    for raw in lines[1:end]:
+        if not raw.strip() or raw.lstrip().startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        line = raw.strip()
+        if indent == 0:
+            key = None
+            if ":" not in line:
+                continue                      # not in the subset; ignored, never fatal
+            k, v = line.split(":", 1)
+            k, v = k.strip(), v.strip()
+            if v == "":
+                key = k
+                fm[k] = None
+            else:
+                fm[k] = _okf_value(v)
+        elif key is not None:
+            if line.startswith("- "):
+                item = line[2:].strip()
+                if not isinstance(fm.get(key), list):
+                    fm[key] = []
+                fm[key].append(_okf_inline_map(item) if item.startswith("{")
+                               else _okf_scalar(item))
+            elif line.startswith("{") and line.endswith("}"):
+                fm[key] = _okf_inline_map(line)
+            elif ":" in line:
+                if not isinstance(fm.get(key), dict):
+                    fm[key] = {}
+                k, v = line.split(":", 1)
+                fm[key][k.strip()] = _okf_value(v.strip())
+    return fm, "\n".join(lines[end + 1:]).lstrip("\n")
+
+
+def okf_dump(frontmatter, body=""):
+    """The canonical concept file: our key order first, unknown keys after."""
+    keys = [k for k in _OKF_KEY_ORDER if k in frontmatter]
+    keys += [k for k in frontmatter if k not in _OKF_KEY_ORDER]
+    out = ["---"]
+    for k in keys:
+        v = frontmatter[k]
+        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            out.append("%s:" % k)
+            out.extend("  - " + _okf_emit(x) for x in v)
+        else:
+            out.append("%s: %s" % (k, _okf_emit(v)))
+    out.append("---")
+    text = "\n".join(out) + "\n"
+    if body:
+        text += "\n" + body.strip("\n") + "\n"
+    return text
+
+
+def _memory_now():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _memory_actor(human=False):
+    if human:
+        return "human:operator"
+    try:
+        model = str(CONFIG["llm"].get("model") or "")
+    except Exception:
+        model = ""
+    return "tinycmdr/" + (model or VERSION)
+
+
+def _memory_slug(title):
+    s = re.sub(r"[^a-z0-9]+", "-", (title or "").strip().lower()).strip("-")
+    return (s or "concept")[:48]
+
+
+def _memory_find(cid):
+    """A concept by id (`slug`), or by a path/`slug.md` the model may have copied."""
+    stem = Path(str(cid or "").strip()).name
+    if stem.lower().endswith(".md"):
+        stem = stem[:-3]
+    for c in memory_scan():
+        if c["id"] == stem:
+            return c
+    return None
+
+
+def memory_scan():
+    """Every concept in the bundle, title-sorted: dicts with fm/body and derived flags."""
+    out = []
+    if not MEMORY_DIR.exists():
+        return out
+    for path in sorted(MEMORY_DIR.glob("*.md")):
+        if path.stem.lower() in _OKF_RESERVED:
+            continue
+        try:
+            fm, body = okf_parse(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        fm = fm or {}
+        out.append({"id": path.stem, "path": path, "fm": fm, "body": body,
+                    "title": str(fm.get("title") or path.stem),
+                    "description": str(fm.get("description") or ""),
+                    "type": str(fm.get("type") or ""),
+                    "status": str(fm.get("status") or "stable")})
+    out.sort(key=lambda c: c["title"].lower())
+    return out
+
+
+def _okf_tier(fm):
+    v = fm.get("verified")
+    if isinstance(v, dict):
+        v = [v]
+    if not isinstance(v, list) or not v:
+        return "unverified"
+    for entry in v:
+        if str((entry or {}).get("by") or "").startswith("human:"):
+            return "human-reviewed"
+    return "machine-confirmed"
+
+
+def _okf_stale(fm):
+    when = str(fm.get("stale_after") or "")
+    return bool(when) and _memory_now() >= when
+
+
+def memory_index_render(concepts=None):
+    """index.md for the bundle: progressive disclosure the prompt can afford (spec §8)."""
+    concepts = memory_scan() if concepts is None else concepts
+    sections = {}
+    for c in concepts:
+        sections.setdefault(c["type"] or "Concept", []).append(c)
+    order = [t for t in _MEMORY_TYPES if t in sections]
+    order += sorted(t for t in sections if t not in _MEMORY_TYPES)
+    lines = ["---", 'okf_version: "%s"' % OKF_VERSION, "---", "", "# Memory", ""]
+    if not concepts:
+        lines += ["_No concepts yet._", ""]
+    for t in order:
+        lines += ["# " + t, ""]
+        for c in sections[t]:
+            flags = []
+            if c["status"] == "deprecated":
+                flags.append("deprecated")
+            if _okf_stale(c["fm"]):
+                flags.append("stale")
+            tier = _okf_tier(c["fm"])
+            if tier != "unverified":
+                flags.append(tier)
+            tail = ("  (%s)" % ", ".join(flags)) if flags else ""
+            desc = (" - " + c["description"]) if c["description"] else ""
+            lines.append("* [%s](%s.md)%s%s" % (c["title"], c["id"], desc, tail))
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def memory_index_update():
+    atomic_write_text(MEMORY_INDEX, memory_index_render())
+
+
+def _memory_log_append(kind, text):
+    """Prepend an entry under today's heading - newest first, per spec §9."""
+    day = time.strftime("%Y-%m-%d")
+    entry = "* **%s**: %s" % (kind, text)
+    head = "# Memory log\n"
+    body = ""
+    if MEMORY_LOG.exists():
+        raw = MEMORY_LOG.read_text(encoding="utf-8", errors="replace")
+        body = raw[len(head):].lstrip("\n") if raw.startswith(head) else raw.strip("\n")
+    lines = body.splitlines()
+    if ("## " + day) in lines:
+        cut = lines.index("## " + day) + 1
+        lines = lines[:cut] + [entry] + lines[cut:]
+    else:
+        lines = ["## " + day, entry, ""] + lines
+    atomic_write_text(MEMORY_LOG, head + "\n" + "\n".join(lines).strip("\n") + "\n")
+
+
+def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
+                       stale_after=None, sources=None, status=None, actor=None):
+    """One new concept. Raises FileExistsError when the title already stands."""
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    title = " ".join(str(title or "").split())
+    if not title:
+        raise ValueError("a concept needs a title")
+    concepts = memory_scan()
+    if len(concepts) >= int(CONFIG["agent"].get("memory_max_concepts") or 400):
+        raise ValueError("memory/ already holds %d concepts (the cap). Update or "
+                         "deprecate old ones instead of adding more." % len(concepts))
+    slug = _memory_slug(title)
+    same = next((c for c in concepts if c["id"] == slug), None)
+    if same is not None:
+        if same["title"].strip().lower() == title.lower():
+            raise FileExistsError(slug)
+        n = 2
+        taken = {c["id"] for c in concepts}
+        while "%s-%d" % (slug, n) in taken:
+            n += 1
+        slug = "%s-%d" % (slug, n)
+    fm = {"type": str(ctype or "Fact").strip() or "Fact", "title": title}
+    if not description:
+        # The index line is what the prompt carries; a caller that gave only a body
+        # gets its first sentence (the schema asks for six fields, not a style guide).
+        first = " ".join(str(body or "").strip().split())
+        description = first[:160].rsplit(" ", 1)[0] if len(first) > 160 else first
+    if description:
+        fm["description"] = " ".join(str(description).split())
+    if tags:
+        fm["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+    if status and status != "stable":
+        fm["status"] = status
+    if stale_after:
+        fm["stale_after"] = str(stale_after)
+    fm["generated"] = {"by": actor or _memory_actor(), "at": _memory_now()}
+    if sources:
+        fm["sources"] = sources
+    path = MEMORY_DIR / (slug + ".md")
+    atomic_write_text(path, okf_dump(fm, body))
+    return {"id": slug, "path": path, "fm": fm}
+
+
+def memory_update_concept(cid, body=None, title=None, description=None, tags=None,
+                          stale_after=None, actor=None):
+    """Rewrite a concept in place; bumps generated.at. None when the id is unknown."""
+    c = _memory_find(cid)
+    if c is None:
+        return None
+    fm = dict(c["fm"])
+    if title:
+        fm["title"] = " ".join(str(title).split())
+    if description is not None:
+        fm["description"] = " ".join(str(description).split())
+    if tags is not None:
+        fm["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+    if stale_after is not None:
+        if stale_after:
+            fm["stale_after"] = str(stale_after)
+        else:
+            fm.pop("stale_after", None)
+    fm["generated"] = {"by": actor or _memory_actor(), "at": _memory_now()}
+    atomic_write_text(c["path"], okf_dump(fm, c["body"] if body is None else body))
+    return {"id": c["id"], "path": c["path"], "fm": fm}
+
+
+def memory_set_status(cid, status, reason="", actor=None):
+    c = _memory_find(cid)
+    if c is None:
+        return None
+    fm = dict(c["fm"])
+    if status == "stable":
+        fm.pop("status", None)
+    else:
+        fm["status"] = status
+    fm["generated"] = {"by": actor or _memory_actor(), "at": _memory_now()}
+    atomic_write_text(c["path"], okf_dump(fm, c["body"]))
+    _memory_log_append("Deprecation" if status == "deprecated" else "Update",
+                       "[%s](%s.md)%s" % (c["title"], c["id"],
+                                          (" - " + reason) if reason else ""))
+    return {"id": c["id"], "path": c["path"], "fm": fm}
+
+
+def memory_forget(cid):
+    """Delete the concept file. The log names it; the content is gone (true forget)."""
+    c = _memory_find(cid)
+    if c is None:
+        return None
+    try:
+        c["path"].unlink()
+    except OSError:
+        return None
+    _memory_log_append("Removal", "%s (forgotten)" % c["title"])
+    return {"id": c["id"], "title": c["title"]}
+
+
+def _memory_missing(cid):
+    concepts = memory_scan()
+    names = ", ".join(c["id"] for c in concepts[:10]) or "(none)"
+    return ("ERROR: no concept %r. %d in memory/; ids: %s%s. (memory action=list "
+            "shows the index.)" % (str(cid or ""), len(concepts), names,
+                                   ", ..." if len(concepts) > 10 else ""))
+
+
+def _memory_report(verb, made, body_len=None):
+    fm = made["fm"]
+    bits = ["%s memory/%s.md" % (verb, made["id"]),
+            "(%s, %s%s)" % (fm.get("type") or "?", _okf_tier(fm),
+                            ", stale" if _okf_stale(fm) else ""),
+            "%r" % fm.get("title")]
+    if body_len is not None:
+        bits.append("%d chars" % body_len)
+    concepts = memory_scan()
+    bits.append("memory: %d concept%s, index %d chars"
+                % (len(concepts), "" if len(concepts) == 1 else "s",
+                   len(memory_index_render(concepts))))
+    return "OK: " + " | ".join(bits)
+
+
+@serialized_on(MEMORY_LOCK_FILE)
+def tool_memory(args, ctx):
+    """One OKF bundle, one call per change: add, update, deprecate, forget, read,
+    search, list.
+
+    Every mutation rebuilds index.md and appends log.md, so the bundle stays browseable
+    by a human and by any other OKF consumer; the prompt carries index.md, never the
+    concepts. A body over the cap is REFUSED, never truncated: a half-fact would ride
+    every future prompt, which is worse than a missing one (the notes.md lesson,
+    2026-09-21).
+    """
+    action = str(args.get("action") or "list").strip().lower()
+    MEMORY_DIR.mkdir(parents=True, exist_ok=True)
+    actor = _memory_actor()
+    cap = mem_limit_chars("memory_concept_max_chars", 6000)
+    if action in ("list", "index", "view", ""):
+        concepts = memory_scan()
+        index = memory_index_render(concepts)
+        return ("%d concept%s in memory/ | index %d chars\n%s"
+                % (len(concepts), "" if len(concepts) == 1 else "s",
+                   len(index), index))
+    if action == "read":
+        c = _memory_find(args.get("id"))
+        if c is None:
+            return _memory_missing(args.get("id"))
+        text = c["path"].read_text(encoding="utf-8", errors="replace")
+        return ("memory/%s.md | %s | %s | %s\n%s"
+                % (c["id"], c["type"] or "?", _okf_tier(c["fm"]),
+                   "stale" if _okf_stale(c["fm"]) else c["status"], text))
+    if action == "search":
+        query = " ".join(str(args.get("query") or "").split()).lower()
+        if not query:
+            return "ERROR: search needs `query`."
+        hits = []
+        for c in memory_scan():
+            hay = " ".join([c["title"], c["description"], c["body"],
+                            " ".join(str(t) for t in (c["fm"].get("tags") or []))])
+            if query in hay.lower():
+                hits.append(c)
+        if not hits:
+            return ("no concept matches %r. Index (memory action=list):\n%s"
+                    % (query, memory_index_render()))
+        lines = ["%d match%s:" % (len(hits), "" if len(hits) == 1 else "es")]
+        for c in hits[:12]:
+            flags = [c["type"] or "?"]
+            if c["status"] != "stable":
+                flags.append(c["status"])
+            lines.append("- %s (%s): %s" % (c["id"], ", ".join(flags), c["title"]))
+        return "\n".join(lines)
+    if action == "add":
+        title = " ".join(scrub(str(args.get("title") or "")).split())
+        body = scrub(str(args.get("body") or "").strip())
+        if not title or not body:
+            return "ERROR: add needs `title` and `body`."
+        if len(body) > cap:
+            return ("ERROR: that body is %d chars and the per-concept limit is %d. "
+                    "Truncating would leave half a fact in memory - split it into "
+                    "concepts, or keep the long form in a file and store the path "
+                    "and the conclusion here." % (len(body), cap))
+        sources = [{"resource": str(s).strip()}
+                   for s in (args.get("sources") or []) if str(s).strip()]
+        try:
+            made = memory_new_concept(
+                title, body, ctype=args.get("type") or "Fact",
+                tags=args.get("tags"), description=args.get("description"),
+                stale_after=args.get("stale_after"), sources=sources or None,
+                actor=actor)
+        except FileExistsError as e:
+            return ("ERROR: memory already holds a concept titled %r (id %s) - update "
+                    "it instead (memory {action: \"update\", id: %s, body: \"...\"}), "
+                    "or add a differently titled one." % (title, e, e))
+        except ValueError as e:
+            return "ERROR: %s" % e
+        memory_index_update()
+        _memory_log_append("Creation", "[%s](%s.md)" % (title, made["id"]))
+        return _memory_report("wrote", made, len(body))
+    if action == "update":
+        c = _memory_find(args.get("id"))
+        if c is None:
+            return _memory_missing(args.get("id"))
+        body = args.get("body")
+        if body is not None and len(str(body)) > cap:
+            return ("ERROR: that body is %d chars and the per-concept limit is %d."
+                    % (len(str(body)), cap))
+        out = memory_update_concept(
+            c["id"], body=None if body is None else scrub(str(body)),
+            title=" ".join(scrub(str(args.get("title") or "")).split()) or None,
+            description=(" ".join(scrub(str(args.get("description") or "")).split())
+                         if args.get("description") is not None else None),
+            tags=args.get("tags"), stale_after=args.get("stale_after"), actor=actor)
+        memory_index_update()
+        _memory_log_append("Update", "[%s](%s.md)" % (out["fm"].get("title"),
+                                                      out["id"]))
+        return _memory_report("updated", out)
+    if action in ("deprecate", "forget"):
+        c = _memory_find(args.get("id"))
+        if c is None:
+            return _memory_missing(args.get("id"))
+        reason = " ".join(str(args.get("reason") or "").split())
+        tail = (" (%s)" % reason) if reason else ""
+        if action == "deprecate":
+            memory_set_status(c["id"], "deprecated", reason=reason, actor=actor)
+            memory_index_update()
+            return ("OK: %s is deprecated%s - kept in the bundle for history and "
+                    "links, flagged in the index." % (c["id"], tail))
+        memory_forget(c["id"])
+        memory_index_update()
+        return ("OK: %s is forgotten%s - the file is deleted; the log records that "
+                "it was removed, not what it held." % (c["id"], tail))
+    return ("ERROR: action must be add, update, deprecate, forget, read, search or "
+            "list.")
+
+
+# --------------------------------------------------------------------------
+# A2UI - agent-driven UI, on the harness's rent terms
+#
+# The page is a surface the agent can draw on. Rather than inventing a payload
+# vocabulary, this speaks A2UI v1.0's envelope - a single `createSurface` message with
+# its components and data model embedded, the spec's one-message instantiation - and
+# declares its OWN catalog, which the spec explicitly encourages: the agent may use
+# exactly the components this renderer has, nothing else.
+#
+# Rent: registration only. `render_ui` is hidden like every non-core tool (call it by
+# name and its schema stays for the session), its NAME is the only byte it adds to the
+# static prompt (the hidden-inventory line), and on a lane with no surface the tool
+# answers honestly instead of pretending. The payload rides the transcript line, never
+# the prompt: the model sees the one-line summary.
+# --------------------------------------------------------------------------
+
+A2UI_VERSION = "v1.0"
+A2UI_CATALOG_ID = "https://tinycmdr.local/a2ui/catalog-1.json"
+_A2UI_COMPONENTS = ("Card", "Column", "Row", "Text", "Divider")
+_A2UI_MAX_COMPONENTS = 60
+_A2UI_MAX_TEXT = 2000
+
+
+def _a2ui_text_ok(v):
+    return isinstance(v, str) or (isinstance(v, dict) and set(v) == {"path"}
+                                  and isinstance(v["path"], str)
+                                  and v["path"].startswith("/"))
+
+
+def a2ui_validate(payload):
+    """(ok, reason, summary) for a card payload. stdlib; no schema library, no fetching.
+
+    Enforces the envelope's shape and THIS catalog: unique ids, children that exist,
+    known component names, bounded sizes. Nothing here executes or resolves a path.
+    """
+    if not isinstance(payload, dict):
+        return False, "the payload must be a JSON object", ""
+    if payload.get("version") != A2UI_VERSION:
+        return False, "version must be %r" % A2UI_VERSION, ""
+    surface = payload.get("createSurface")
+    if not isinstance(surface, dict):
+        return False, "the envelope must carry createSurface", ""
+    sid = surface.get("surfaceId")
+    if not isinstance(sid, str) or not sid:
+        return False, "createSurface.surfaceId must be a non-empty string", ""
+    comps = surface.get("components")
+    if not isinstance(comps, list) or not comps:
+        return False, "createSurface.components must be a non-empty list", ""
+    if len(comps) > _A2UI_MAX_COMPONENTS:
+        return False, ("%d components is over the %d cap"
+                       % (len(comps), _A2UI_MAX_COMPONENTS)), ""
+    ids = {}
+    for c in comps:
+        if not isinstance(c, dict):
+            return False, "every component must be an object", ""
+        cid, name = c.get("id"), c.get("component")
+        if not isinstance(cid, str) or not cid:
+            return False, "every component needs a string id", ""
+        if cid in ids:
+            return False, "duplicate component id %r" % cid, ""
+        if name not in _A2UI_COMPONENTS:
+            return False, ("unknown component %r - this catalog has: %s"
+                           % (name, ", ".join(_A2UI_COMPONENTS))), ""
+        ids[cid] = name
+    if "root" not in ids:
+        return False, "one component must have id 'root' (the surface mounts it)", ""
+    for c in comps:
+        kids = c.get("children")
+        if kids is None:
+            continue
+        if not isinstance(kids, list) or not all(isinstance(k, str) for k in kids):
+            return False, "%s.children must be a list of ids" % c["id"], ""
+        if ids[c["id"]] in ("Text", "Divider"):
+            return False, "%s (%s) cannot have children" % (c["id"], ids[c["id"]]), ""
+        for k in kids:
+            if k not in ids:
+                return False, ("%s names a child %r that is not in this payload"
+                               % (c["id"], k)), ""
+    text = ""
+    for c in comps:
+        if c.get("component") != "Text":
+            continue
+        t = c.get("text")
+        if not _a2ui_text_ok(t):
+            return False, ("Text %s needs text: a string, or {\"path\": \"/...\"}"
+                           % c["id"]), ""
+        if isinstance(t, str):
+            if len(t) > _A2UI_MAX_TEXT:
+                return False, ("Text %s is over the %d-char cap"
+                               % (c["id"], _A2UI_MAX_TEXT)), ""
+            if not text:
+                text = " ".join(t.split())
+    summary = text[:120] + ("..." if len(text) > 120 else "")
+    return True, "", summary
+
+
+def tool_render_ui(args, ctx):
+    """Draw a card in the transcript, when this run's lane has a surface.
+
+    The door is the lane's (`ctx["render_ui"]`), like send_file's: the web page renders
+    it; a chat lane has no surface, and the result says so - give the operator the text
+    instead - rather than pretending a card appeared.
+    """
+    payload = args.get("payload")
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except ValueError as e:
+            return "ERROR: payload is not JSON: %s" % e
+    ok, why, summary = a2ui_validate(payload)
+    if not ok:
+        return ("ERROR: %s. One card: components %s, a 'root' id, children as id lists."
+                % (why, ", ".join(_A2UI_COMPONENTS)))
+    cap = mem_limit_chars("ui_payload_max_chars", 4096)
+    blob = json.dumps(payload, ensure_ascii=False)
+    if len(blob) > cap:
+        return ("ERROR: the payload is %d chars and the cap is %d. Send less per card "
+                "(split it), or put the long text in your answer instead."
+                % (len(blob), cap))
+    door = (ctx or {}).get("render_ui")
+    if not door:
+        return ("ERROR: this lane has no surface to draw on. Put the same content in "
+                "the answer text instead.")
+    try:
+        return str(door(payload, summary))
+    except Exception as e:                                       # noqa: BLE001
+        return "ERROR: could not render the card: %s" % e
+
+
+# --------------------------------------------------------------------------
+# A2A - the agent mesh door (Agent2Agent v1.0, JSON-RPC binding)
+#
+# Two halves, both off by default, both zero-rent when off:
+#  * the SERVER: `web.a2a` true publishes an AgentCard at /.well-known/agent-card.json
+#    and answers JSON-RPC on POST /a2a. SendMessage runs one message through this box
+#    (blocking, which is the spec's default) and returns a Task; GetTask reads the
+#    stored task back. Streaming and push are declared unsupported, which is true.
+#  * the CLIENT: a hidden `a2a` tool that exists ONLY when agent.a2a_remotes is
+#    configured, so a box with no mesh members pays no prompt bytes at all.
+# Auth is the page's own bearer token and the card says so.
+# --------------------------------------------------------------------------
+
+A2A_PROTOCOL_VERSION = "1.0"
+A2A_MAX_TASKS = 50
+_A2A_TASKS = {}
+_A2A_TASKS_ORDER = []
+_A2A_LOCK = threading.Lock()
+_A2A_RUN_HOOK = None          # tests replace the model half
+
+
+def _a2a_id(prefix):
+    return "%s-%s" % (prefix, os.urandom(6).hex())
+
+
+def a2a_base_url():
+    """Where this box answers A2A, as a client would reach it (loopback unless LAN)."""
+    host = str((CONFIG.get("web") or {}).get("host") or "127.0.0.1")
+    if host in ("0.0.0.0", "::", ""):
+        host = "127.0.0.1"
+    port = int((CONFIG.get("web") or {}).get("port") or 8790)
+    return "http://%s:%d" % (host, port)
+
+
+def a2a_card():
+    """This box's AgentCard (A2A v1.0 §4.4.1). Skills are the runbooks it holds."""
+    skills = []
+    try:
+        for s in (skill_index() or [])[:12]:
+            name = str(s.get("name") or "")
+            if not name:
                 continue
-            share = len(new_words & old_words) / float(min(len(new_words), len(old_words)))
-            if share >= 0.7:
-                msg += (f" NOTE: an entry from {e['ts']} says nearly the same thing "
-                        f"({share:.0%} of the same words) - if this supersedes it, call "
-                        f"remember {{action: \"replace\", old: \"{((e.get('text') or '')[:40])}\""
-                        f", note: \"<the one that should stand>\"}} instead of keeping both.")
-                break
-    msg += (f" Memory now holds {len(doc2['entries'])} entr"
-            f"{'y' if len(doc2['entries']) == 1 else 'ies'}, {len(after)}/{budget} chars."
-            + (" Saved: " + note[:160] if note else ""))
-    report = curate_notes("auto")         # acts only when the file is over budget
-    if report:
-        msg += " " + report
-    return msg
+            skills.append({"id": name, "name": name,
+                           "description": str(s.get("desc") or name)[:200],
+                           "tags": ["runbook"]})
+    except Exception:
+        log.debug("a2a card: skill index unavailable", exc_info=True)
+    if not skills:
+        skills = [{"id": "ops", "name": "Command this box",
+                   "description": "Run commands, inspect files and services on this "
+                                  "machine, and answer with what was measured.",
+                   "tags": ["ops"]}]
+    return {"name": "tinycmdr",
+            "description": ("A local ops agent on %s: runs shell and code on the host, "
+                            "reads files and services, keeps an OKF knowledge bundle."
+                            % socket.gethostname()),
+            "version": VERSION,
+            "supportedInterfaces": [{"url": a2a_base_url() + "/a2a",
+                                     "protocolBinding": "JSONRPC",
+                                     "protocolVersion": A2A_PROTOCOL_VERSION}],
+            "capabilities": {"streaming": False, "pushNotifications": False},
+            "defaultInputModes": ["text/plain"],
+            "defaultOutputModes": ["text/plain"],
+            "securitySchemes": {
+                "bearer": {"httpAuthSecurityScheme": {
+                    "description": "the page token (TINYCMDR_WEB_TOKEN)",
+                    "scheme": "bearer"}}},
+            "skills": skills}
 
 
-@serialized_on(NOTES_FILE)
-def tool_notes(args, ctx):
-    """Inspect or curate notes.md (the memory carried in every prompt)."""
-    action = str(args.get("action") or "view").strip().lower()
-    cap = mem_limit_chars("notes_max_chars", 8000)
-    if action in ("view", "show", ""):
-        raw = (NOTES_FILE.read_text(encoding="utf-8", errors="replace")
-               if NOTES_FILE.exists() else "")
-        doc = _parse_notes(raw)
-        arch = (NOTES_ARCHIVE_FILE.stat().st_size
-                if NOTES_ARCHIVE_FILE.exists() else 0)
-        head = (f"{len(raw)} chars, {len(doc['entries'])} entries | prompt cap "
-                f"{cap} | archive {NOTES_ARCHIVE_FILE.name} {arch} bytes")
-        return head + "\n" + (raw or "(notes.md is empty)")
-    if action == "curate":
-        return curate_notes("agent request") or \
-            "notes.md is already inside budget — nothing to curate."
-    if action == "archive":
-        if not NOTES_ARCHIVE_FILE.exists():
-            return (f"{NOTES_ARCHIVE_FILE.name} does not exist yet — nothing "
-                    "has been evicted.")
-        raw = NOTES_ARCHIVE_FILE.read_text(encoding="utf-8", errors="replace")
-        return f"{NOTES_ARCHIVE_FILE.name}: {len(raw)} chars\n" + raw[-cap:]
-    return "ERROR: action must be view, curate or archive."
+def _a2a_text_of(message):
+    """(text, error) for a client message. This agent accepts text parts only."""
+    if not isinstance(message, dict):
+        return "", {"code": -32602, "message": "Invalid params: message must be an object"}
+    parts = message.get("parts")
+    if not isinstance(parts, list) or not parts:
+        return "", {"code": -32602, "message": "Invalid params: message.parts is empty"}
+    texts = []
+    for p in parts:
+        if not isinstance(p, dict):
+            return "", {"code": -32005, "message": "ContentTypeNotSupportedError: a part "
+                                                   "must be an object"}
+        if "text" in p:
+            texts.append(str(p.get("text") or ""))
+        else:
+            return "", {"code": -32005,
+                        "message": "ContentTypeNotSupportedError: this agent accepts "
+                                   "text parts only"}
+    return "\n".join(t for t in texts if t.strip()), ""
+
+
+def a2a_run(text, context_id):
+    """Run one A2A message through the harness. (answer, failed).
+
+    The model half sits behind a hook so the routing, the task lifecycle and the
+    error mapping are gradable without an endpoint (tests/test_a2a.py).
+    """
+    if _A2A_RUN_HOOK is not None:
+        return _A2A_RUN_HOOK(text, context_id)
+    key = "a2a-" + str(context_id or _a2a_id("ctx"))
+    try:
+        reporter = RunReporter(NowhereDestination(), key)
+        answer = drive_run(key, text, reporter, source="a2a")
+        # A run whose endpoint never answered still RETURNS a composed answer; to a
+        # peer that is a failure, not a completion (AGENT.last_usage is the same
+        # verdict the reporter's done line goes red on).
+        failed = bool((AGENT.last_usage.get(key) or {}).get("infra_failed"))
+        return str(answer or ""), failed
+    except OperatorStop:
+        return "stopped by the operator", True
+    except Exception as e:                                       # noqa: BLE001
+        log.warning("a2a run failed: %s", e)
+        return "the run failed: %s" % e, True
+
+
+def _a2a_task_of(task_id, history_messages, answer, failed, context_id):
+    state = "TASK_STATE_FAILED" if failed else "TASK_STATE_COMPLETED"
+    reply = {"messageId": _a2a_id("msg"), "role": "ROLE_AGENT", "taskId": task_id,
+             "parts": [{"text": answer or "(no answer)"}]}
+    if context_id:
+        reply["contextId"] = context_id
+    task = {"id": task_id,
+            "status": {"state": state, "message": reply,
+                       "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+            "artifacts": [{"artifactId": _a2a_id("art"), "name": "answer",
+                           "parts": [{"text": answer or ""}]}],
+            "history": list(history_messages) + [reply]}
+    if context_id:
+        task["contextId"] = context_id
+    return task
+
+
+def _a2a_store(task):
+    with _A2A_LOCK:
+        if task["id"] not in _A2A_TASKS:
+            _A2A_TASKS_ORDER.append(task["id"])
+        _A2A_TASKS[task["id"]] = task
+        while len(_A2A_TASKS_ORDER) > A2A_MAX_TASKS:
+            _A2A_TASKS.pop(_A2A_TASKS_ORDER.pop(0), None)
+    return task
+
+
+def a2a_handle(method, params, version=None):
+    """(result, error) for one JSON-RPC call: no HTTP, no threads, gradable alone."""
+    if version and str(version).split(".")[0] != "1":
+        return None, {"code": -32009,
+                      "message": "VersionNotSupportedError: this agent speaks A2A 1.x"}
+    params = params if isinstance(params, dict) else {}
+    if method == "SendMessage":
+        message = params.get("message")
+        text, err = _a2a_text_of(message)
+        if err:
+            return None, err
+        if not text:
+            return None, {"code": -32602,
+                          "message": "Invalid params: the text part is empty"}
+        context_id = str(message.get("contextId") or _a2a_id("ctx"))
+        task_id = str(message.get("taskId") or _a2a_id("task"))
+        answer, failed = a2a_run(text, context_id)
+        return _a2a_store(_a2a_task_of(task_id, [message], answer, failed, context_id)), None
+    if method == "GetTask":
+        task_id = str(params.get("id") or "")
+        with _A2A_LOCK:
+            task = _A2A_TASKS.get(task_id)
+        if task is None:
+            return None, {"code": -32001,
+                          "message": "TaskNotFoundError: no task %s" % task_id}
+        return task, None
+    if method == "ListTasks":
+        size = max(1, min(100, int(params.get("pageSize") or 50)))
+        with _A2A_LOCK:
+            tasks = [_A2A_TASKS[t] for t in reversed(_A2A_TASKS_ORDER)][:size]
+            total = len(_A2A_TASKS_ORDER)
+        return {"tasks": tasks, "nextPageToken": "", "pageSize": len(tasks),
+                "totalSize": total}, None
+    if method == "CancelTask":
+        return None, {"code": -32002,
+                      "message": "TaskNotCancelableError: this agent runs each message "
+                                 "to completion, so there is nothing to cancel"}
+    return None, {"code": -32004,
+                  "message": "UnsupportedOperationError: %s is not supported by this "
+                             "agent (streaming and push are off by design)" % method}
+
+
+def a2a_rpc(payload, version=None):
+    """(status, response) for one JSON-RPC request body."""
+    rid = payload.get("id") if isinstance(payload, dict) else None
+    if not isinstance(payload, dict) or payload.get("jsonrpc") != "2.0":
+        return 400, {"jsonrpc": "2.0", "id": rid,
+                     "error": {"code": -32600, "message": "Invalid Request"}}
+    result, error = a2a_handle(payload.get("method"), payload.get("params"), version)
+    if error:
+        return 200, {"jsonrpc": "2.0", "id": rid, "error": error}
+    return 200, {"jsonrpc": "2.0", "id": rid, "result": result}
+
+
+def a2a_http(path, body, token_ok, version=None):
+    """(status, payload) for the web server: the card, or one JSON-RPC call."""
+    if path.startswith("/.well-known/agent-card.json"):
+        return 200, a2a_card()
+    if not token_ok:
+        return 401, {"error": "unauthorized"}
+    return a2a_rpc(body, version)
+
+
+def _a2a_remote(name):
+    remotes = (CONFIG.get("agent") or {}).get("a2a_remotes") or {}
+    entry = remotes.get(str(name or ""))
+    if not isinstance(entry, dict) or not str(entry.get("url") or "").strip():
+        return None, ("ERROR: no remote named %r. Configured: %s"
+                      % (name, ", ".join(sorted(remotes)) or "(none)"))
+    return str(entry["url"]).rstrip("/"), ""
+
+
+def tool_a2a(args, ctx):
+    """Call another A2A agent: list the configured remotes, fetch a card, send a message."""
+    action = str(args.get("action") or "list").strip().lower()
+    remotes = (CONFIG.get("agent") or {}).get("a2a_remotes") or {}
+    if action in ("list", ""):
+        if not remotes:
+            return "ERROR: no A2A remotes are configured (agent.a2a_remotes)."
+        return ("configured A2A remotes:\n" + "\n".join(
+            "- %s -> %s" % (n, (e or {}).get("url"))
+            for n, e in sorted(remotes.items())))
+    url, err = _a2a_remote(args.get("remote"))
+    if err:
+        return err
+    entry = remotes.get(str(args.get("remote"))) or {}
+    token = os.environ.get(str(entry.get("token_env") or ""), "") \
+        if entry.get("token_env") else ""
+    timeout = float((CONFIG.get("agent") or {}).get("a2a_timeout") or 120)
+    headers = {"Accept": "application/json"}
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    try:
+        if action == "card":
+            r = requests.get(url + "/.well-known/agent-card.json", headers=headers,
+                             timeout=min(timeout, 30))
+            if r.status_code != 200:
+                return "ERROR: %s answered %d for its card" % (url, r.status_code)
+            card = r.json()
+            skills = ", ".join(str(s.get("name") or "?")
+                               for s in (card.get("skills") or [])[:8])
+            return ("%s v%s at %s | %s | skills: %s"
+                    % (card.get("name") or "?", card.get("version") or "?", url,
+                       str(card.get("description") or "")[:160], skills or "(none)"))
+        if action == "send":
+            text = str(args.get("message") or "").strip()
+            if not text:
+                return "ERROR: send needs `message` - the words to send."
+            body = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage",
+                    "params": {"message": {"messageId": _a2a_id("msg"),
+                                           "role": "ROLE_USER",
+                                           "parts": [{"text": text}]}}}
+            r = requests.post(url + "/a2a", json=body, headers=headers,
+                              timeout=timeout)
+            if r.status_code == 401:
+                return ("ERROR: %s answered 401 - its token is the page token; point "
+                        "this remote's token_env at it." % url)
+            if r.status_code != 200:
+                return "ERROR: %s answered %d" % (url, r.status_code)
+            data = r.json()
+            if data.get("error"):
+                return ("ERROR: remote %s: %s"
+                        % (url, (data.get("error") or {}).get("message")))
+            task = data.get("result") or {}
+            parts = ((task.get("status") or {}).get("message") or {}).get("parts") or []
+            answer = "\n".join(str(p.get("text") or "") for p in parts if "text" in p)
+            return ("remote %s | task %s %s\n%s"
+                    % (args.get("remote"), task.get("id") or "?",
+                       (task.get("status") or {}).get("state") or "?",
+                       answer or "(no text answer)"))
+    except Exception as e:                                       # noqa: BLE001
+        return "ERROR: %s" % e
+    return "ERROR: action must be list, card or send."
+
+
+# --------------------------------------------------------------------------
+# MCP - the tool ecosystem's front door (Model Context Protocol, stdio)
+#
+# The harness has its own tool system; MCP matters because the ECOSYSTEM speaks it. A
+# per-host `agent.mcp_servers` map names stdio servers; the hidden `mcp` tool lists
+# their tools and calls one. No servers configured => no tool registered (the payload
+# is byte-identical), and nothing here touches the prompt.
+#
+# Protocol: the 2026-07-28 revision is stateless - every request carries its version
+# and client identity in `_meta`, and results carry `resultType`. Servers from earlier
+# revisions want an `initialize` handshake instead, so the client tries the modern
+# shape and falls back ONCE to `initialize` (2025-06-18) when a server refuses it.
+# Servers are kept alive between calls (the spec asks clients not to tie a process to
+# one task); they exit on stdin EOF when this process does.
+# --------------------------------------------------------------------------
+
+MCP_PROTOCOL_VERSION = "2026-07-28"
+MCP_LEGACY_VERSION = "2025-06-18"
+_MCP_PROCS = {}
+_MCP_LOCK = threading.Lock()
+
+
+def _mcp_meta():
+    return {"io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
+            "io.modelcontextprotocol/clientInfo": {"name": "tinycmdr",
+                                                   "version": VERSION},
+            "io.modelcontextprotocol/clientCapabilities": {}}
+
+
+def _mcp_servers():
+    return (CONFIG.get("agent") or {}).get("mcp_servers") or {}
+
+
+def _mcp_open(name):
+    """(entry, error): the live stdio server, started on first use."""
+    spec = _mcp_servers().get(str(name or ""))
+    if not isinstance(spec, dict) or not str(spec.get("command") or "").strip():
+        return None, ("ERROR: no MCP server named %r. Configured: %s"
+                      % (name, ", ".join(sorted(_mcp_servers())) or "(none)"))
+    with _MCP_LOCK:
+        ent = _MCP_PROCS.get(name)
+        if ent and ent["proc"].poll() is None:
+            return ent, ""
+        cmd = [str(spec["command"])] + [str(a) for a in (spec.get("args") or [])]
+        env = dict(os.environ)
+        env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                    env=env)
+        except Exception as e:                                   # noqa: BLE001
+            return None, "ERROR: could not start %r: %s" % (name, e)
+        q = queue.Queue()
+
+        def _pump(p=proc, q=q):
+            try:
+                for line in p.stdout:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        q.put(json.loads(line))
+                    except ValueError:
+                        q.put({"junk": line})
+            except Exception:                                    # noqa: BLE001
+                pass
+
+        threading.Thread(target=_pump, daemon=True).start()
+        ent = {"proc": proc, "q": q, "seq": 0, "modern": None, "tools": None}
+        _MCP_PROCS[name] = ent
+        return ent, ""
+
+
+def _mcp_rpc(ent, method, params, timeout, modern):
+    """(result, error) for one newline-delimited JSON-RPC round trip."""
+    proc = ent["proc"]
+    if proc.poll() is not None:
+        return None, "the server exited (code %s)" % proc.returncode
+    ent["seq"] += 1
+    rid = ent["seq"]
+    payload = {"jsonrpc": "2.0", "id": rid, "method": method}
+    params = dict(params or {})
+    if modern:
+        params["_meta"] = _mcp_meta()
+    if params:
+        payload["params"] = params
+    try:
+        proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        proc.stdin.flush()
+    except Exception as e:                                       # noqa: BLE001
+        return None, "the server's stdin is closed (%s)" % e
+    deadline = time.time() + timeout
+    while True:
+        left = deadline - time.time()
+        if left <= 0:
+            return None, "no answer within %gs" % timeout
+        try:
+            msg = ent["q"].get(timeout=left)
+        except queue.Empty:
+            continue
+        if not isinstance(msg, dict) or msg.get("id") != rid:
+            continue                      # a notification, or a stale reply
+        if msg.get("error"):
+            return None, str((msg.get("error") or {}).get("message") or "error")
+        return msg.get("result") or {}, None
+
+
+def _mcp_negotiate(ent, timeout):
+    """(ok, error): decide once whether this server speaks the stateless revision."""
+    if ent["modern"] is not None:
+        return True, ""
+    res, err = _mcp_rpc(ent, "tools/list", {}, timeout, modern=True)
+    if not err:
+        ent["modern"] = True
+        ent["tools"] = res
+        return True, ""
+    first = err
+    res, err = _mcp_rpc(ent, "initialize",
+                        {"protocolVersion": MCP_LEGACY_VERSION,
+                         "capabilities": {},
+                         "clientInfo": {"name": "tinycmdr", "version": VERSION}},
+                        timeout, modern=False)
+    if err:
+        return False, "%s; then initialize failed: %s" % (first, err)
+    try:
+        ent["proc"].stdin.write(json.dumps({"jsonrpc": "2.0",
+                                            "method": "notifications/initialized"}) + "\n")
+        ent["proc"].stdin.flush()
+    except Exception:                                            # noqa: BLE001
+        pass
+    res, err = _mcp_rpc(ent, "tools/list", {}, timeout, modern=False)
+    if err:
+        return False, "initialize worked but tools/list failed: %s" % err
+    ent["modern"] = False
+    ent["tools"] = res
+    return True, ""
+
+
+def tool_mcp(args, ctx):
+    """Talk to a configured MCP server: list, tools (discover), call (invoke one)."""
+    action = str(args.get("action") or "list").strip().lower()
+    if action in ("list", ""):
+        servers = _mcp_servers()
+        if not servers:
+            return "ERROR: no MCP servers are configured (agent.mcp_servers)."
+        return ("configured MCP servers:\n" + "\n".join(
+            "- %s -> %s %s" % (n, (c or {}).get("command"),
+                               " ".join(str(a) for a in ((c or {}).get("args") or [])))
+            for n, c in sorted(servers.items())))
+    name = str(args.get("server") or "")
+    ent, err = _mcp_open(name)
+    if err:
+        return err
+    timeout = float((CONFIG.get("agent") or {}).get("mcp_timeout") or 60)
+    ok, err = _mcp_negotiate(ent, timeout)
+    if not ok:
+        return "ERROR: %s did not answer the handshake: %s" % (name, err)
+    tools = (ent.get("tools") or {}).get("tools") or []
+    if action == "tools":
+        if not tools:
+            return "%s exposes no tools." % name
+        lines = ["%s exposes %d tool(s):" % (name, len(tools))]
+        for t in tools[:40]:
+            lines.append("- %s: %s" % (t.get("name"),
+                                       " ".join(str(t.get("description") or "").split())[:140]))
+        return "\n".join(lines)
+    if action == "call":
+        tool = str(args.get("tool") or "").strip()
+        if not tool:
+            return "ERROR: call needs `tool`."
+        known = {t.get("name") for t in tools}
+        if tools and tool not in known:
+            return ("ERROR: %s has no tool %r. Its tools: %s"
+                    % (name, tool, ", ".join(sorted(str(k) for k in known))[:300]))
+        res, err = _mcp_rpc(ent, "tools/call",
+                            {"name": tool, "arguments": args.get("arguments") or {}},
+                            timeout, modern=bool(ent["modern"]))
+        if err:
+            return "ERROR: %s/%s: %s" % (name, tool, err)
+        parts = res.get("content") or []
+        text = "\n".join(str(p.get("text") or "") for p in parts
+                         if isinstance(p, dict) and p.get("type") == "text")
+        if not text:
+            text = json.dumps(res, ensure_ascii=False)[:2000]
+        return ("%s%s/%s -> %s" % ("ERROR: " if res.get("isError") else "",
+                                   name, tool, text[:4000]))
+    return "ERROR: action must be list, tools or call."
 
 
 def _fsync_dir(d):
@@ -11090,14 +11803,31 @@ CORE_TOOLS = {
                                                 "(default agent.subagent_timeout_seconds)"}},
             []),
     },
-    "remember": {
-        "fn": tool_remember,
+    "memory": {
+        "fn": tool_memory,
         "schema": _schema(
-                                                    "Save a durable machine or fleet fact (paths, service names, quirks; "
-            "never secrets). Re-sent in every future prompt: keep it short, "
-            "replace stale facts rather than stacking contradictions.",
-            {"note": {"type": "string"}},
-            ["note"]),
+            "Durable memory (OKF bundle, memory/): add, update, deprecate, forget, "
+            "read, search, list. The index rides every prompt; never store secrets.",
+            {"action": {"type": "string"},
+             "id": {"type": "string", "description": "concept id"},
+             "title": {"type": "string", "description": "short name"},
+             "body": {"type": "string", "description": "the fact"},
+             "reason": {"type": "string", "description": "deprecate/forget: why"},
+             "query": {"type": "string", "description": "search: words"}},
+            ["action"]),
+    },
+    "render_ui": {
+        "fn": tool_render_ui,
+        "schema": _schema(
+            "Draw a card in the web transcript (A2UI v1.0 createSurface) instead of "
+            "answering in prose - for tables, shapes and dashboards the operator "
+            "should SEE. This renderer's catalog: Card, Column, Row, Text, Divider; "
+            "one component needs id 'root'; children are id lists; a Text takes "
+            "text (+ optional variant: title|subtitle|body|caption|mono) or a data "
+            "binding {\"path\": \"/x\"} against createSurface.dataModel.",
+            {"payload": {"type": "object",
+                         "description": "the createSurface envelope"}},
+            ["payload"]),
     },
     "experiment": {
         "fn": tool_experiment,
@@ -11126,18 +11856,6 @@ CORE_TOOLS = {
                                        "artifacts, body, next_trigger"}},
             ["action"]),
     },
-    "notes": {
-        "fn": tool_notes,
-        "schema": _schema(
-            "Inspect or curate notes.md, the memory re-sent in every prompt. "
-            "view shows it with its budget, curate compacts it (de-dupes, "
-            "archives the oldest to notes-archive.md), archive shows what was "
-            "evicted. Use when notes look stale or contradictory.",
-            {"action": {"type": "string",
-                        "enum": ["view", "curate", "archive"]}},
-            ["action"]),
-    },
-
     "ask_user": {
         "fn": tool_ask_user,
         "schema": _schema(
@@ -11176,6 +11894,35 @@ CORE_TOOLS = {
             ["action"]),
     },
 }
+# The A2A client exists only on a box that has remotes configured: a feature that is
+# off registers nothing at all, so the payload is byte-identical to a build that never
+# had it, and its NAME is the only static-prompt byte when it is on.
+if (CONFIG.get("agent") or {}).get("a2a_remotes"):
+    CORE_TOOLS["a2a"] = {
+        "fn": tool_a2a,
+        "schema": _schema(
+            "Call another A2A agent on this network: list the configured remotes, "
+            "fetch a remote's agent card, or send it one message and return its "
+            "answer (blocking; no streaming).",
+            {"action": {"type": "string", "enum": ["list", "card", "send"]},
+             "remote": {"type": "string", "description": "the configured remote name"},
+             "message": {"type": "string", "description": "send: the words to send"}},
+            ["action"]),
+    }
+
+if (CONFIG.get("agent") or {}).get("mcp_servers"):
+    CORE_TOOLS["mcp"] = {
+        "fn": tool_mcp,
+        "schema": _schema(
+            "Talk to a configured MCP server: list the servers, read one's tools, or "
+            "call one tool by name (stdio servers; results are text).",
+            {"action": {"type": "string", "enum": ["list", "tools", "call"]},
+             "server": {"type": "string", "description": "the configured server name"},
+             "tool": {"type": "string", "description": "call: the tool to invoke"},
+             "arguments": {"type": "object", "description": "call: its arguments"}},
+            ["action"]),
+    }
+
 CORE_TOOL_NAMES = set(CORE_TOOLS)
 
 
@@ -12012,8 +12759,8 @@ _CARRY_MAX_ENTRIES = 40
 # count and the size are both bounded, because this is paid for on every turn of every run.
 _CARRY_INDEX_LINES = 24
 _CARRY_INDEX_CHARS = 2200
-_CARRY_SKIP = {"plan", "remember", "list_tools", "find_tools",
-               "skill_list", "notes", "todo"}
+_CARRY_SKIP = {"plan", "memory", "list_tools", "find_tools",
+               "skill_list", "todo"}
 _CARRY_BANNER = (
     "[HARNESS: tool results carried over from EARLIER runs of this session - NOT from this "
     "run. They are what you already gathered here, kept because runs do not otherwise "
@@ -12244,7 +12991,7 @@ _MAP_MIN_LINES = 400       # below this the map costs more than the file is wort
 _MAP_MAX_CHARS = 2600
 _MAP_ON_READS = (2, 4)     # attach on the 2nd and 4th read of a path, then stay quiet
 _READ_SKIP_TOOLS = {"write_file", "edit_file", "verify_write", "plan",
-                    "remember", "notes", "list_tools", "find_tools"}
+                    "memory", "list_tools", "find_tools"}
 
 
 def reset_read_counts(key):
@@ -12394,7 +13141,7 @@ def annotate_repeat_read(name, args, out, ctx):
 # The five primitives are ~80% of real calls; the rest are the doors the standing
 # instructions name (runbooks, memory, research, and the discovery tool).
 _DEFAULT_CORE = ("shell", "execute_code", "read_file", "write_file", "edit_file",
-                 "skill", "remember", "web_search",
+                 "skill", "memory", "web_search",
                  "fetch_url", "find_tools", "ask_user")
 
 _revealed = {}
@@ -12981,7 +13728,7 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     Sent as a TRAILING message, never baked into the system prompt. The system
     prompt is the first thing in every payload, so a single character changing
     there invalidates the server's prefix cache for the entire conversation:
-    measured on the LAN box, one `remember` write re-prefilled from the notes
+    measured on the LAN box, one `memory` write re-prefilled from this
     block onward — 22.6 s on a 6.5k prompt, and the same edit at 120k would
     re-read ~400 s. Trailing placement keeps [system + whole history]
     byte-identical between calls, so only this block is re-read (~250 tokens,
@@ -13006,7 +13753,8 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
                 _notes_warned = True
                 log.warning("notes.md is %d chars, over its %d-char budget — the "
                             "prompt gets only the newest %d; the file is left "
-                            "as it is (curate it with the notes tool)",
+                            "as it is (notes.md is legacy and read-only; new "
+                            "facts belong in memory/)",
                             len(notes), cap, cap)
             notes = (f"<!-- only the newest {cap} chars of notes.md fit this "
                      f"prompt; the older entries are on disk but not shown "
@@ -13030,9 +13778,22 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
         if block:
             parts.append(block)
     if notes.strip():
-        parts.append("Notes from previous sessions (the oldest are evicted to "
-                     f"{NOTES_ARCHIVE_FILE.name} when the budget is hit — read "
-                     "that file if a fact you expect is missing):\n" + notes)
+        parts.append("Legacy notes.md (hand-kept before the memory bundle; no tool "
+                     "writes it any more):\n" + notes)
+    if MEMORY_INDEX.exists():
+        cap = mem_limit_chars("memory_index_max_chars", 3000)
+        index = MEMORY_INDEX.read_text(encoding="utf-8", errors="replace")
+        if len(index) > cap:
+            # A read path never rewrites the bundle (the notes.md lesson): bound what
+            # the prompt sees and say so. `memory action=list` returns the whole index.
+            index = (index[:cap] + "\n<!-- index cut at %d chars; memory "
+                     "{\"action\": \"list\"} shows all of it -->\n" % cap)
+        if index.strip():
+            parts.append("Memory: durable knowledge about this machine, one OKF "
+                         "concept per file under memory/ (markdown + YAML "
+                         "frontmatter; provenance, trust tier and staleness in the "
+                         "index). Read a concept before trusting it - flags like "
+                         "(stale), (deprecated) or (unverified) qualify it:\n" + index)
     exp_block = render_experiment_prompt()
     if exp_block:
         parts.append(exp_block)
@@ -15722,7 +16483,9 @@ class Agent:
                     out += nudge
             except Exception:
                 log.debug("remember nudge failed", exc_info=True)
-        elif name == "remember" and ctx is not None:
+        elif name == "memory" and ctx is not None \
+                and str((args or {}).get("action") or "") in ("add", "update",
+                                                              "deprecate", "forget"):
             # the run saved something: the nudge has done its job
             try:
                 run_state(ctx.get("session_key"), create=True)["remembered"] = 1
@@ -15767,7 +16530,7 @@ class Agent:
             interim_cb=None, progress_done_cb=None, steer_cb=None,
             narration_cb=None, narration_drop_cb=None, say_cb=None,
             reasoning_cb=None,
-            ask_door=None, source="main", send_file_cb=None,
+            ask_door=None, source="main", send_file_cb=None, render_ui_cb=None,
             system_prompt=None, max_seconds=None):
         """Run the agent until a final answer or max_turns. Returns the answer.
         rich_content: optional OpenAI-style content list (text + images) that
@@ -15868,6 +16631,9 @@ class Agent:
                    "ask_door": ask_door,
                    # The file door: how this run puts a file in front of the operator.
                    "send_file": send_file_cb,
+                   # The surface door: how this run draws a card (A2UI). None on a lane
+                   # with no renderer, and the tool answers honestly then.
+                   "render_ui": render_ui_cb,
                    # What this run reports THROUGH, and under which source. A tool
                    # that starts another run (delegate_task) hands these down so a
                    # subtask is visible in every lane instead of silent in all of
@@ -17437,6 +18203,16 @@ class Destination:
         return (f"NOT SENT: this lane cannot carry a file. The file is at {path} "
                 f"- tell the operator the path.")
 
+    def render_ui(self, payload, summary):
+        """Draw a card for the human this lane reaches, if it can.
+
+        A chat lane has no surface: the payload is not "sent somewhere else", it
+        simply has no renderer here - and the tool's result says so rather than
+        letting a run believe a card appeared.
+        """
+        return ("NOT RENDERED: this lane has no surface for agent UI. Give the same "
+                "content in your answer text.")
+
 
 # --- the failure verdict, shared by every tool line ---------------------------
 _FAILURE_MARKERS = ("ERROR", "BLOCKED", "DECLINED", "TIMEOUT", "STOPPED")
@@ -17563,7 +18339,7 @@ def checkin_line(session_key, steps, elapsed, name=None, args=None):
 # --- the tones, as Mattermost attachment colours ------------------------------
 # Kept here with the reporter because they are the reporting palette, not a
 # Mattermost detail: the terminal maps the same tones to ANSI.
-_MEMORY_LABELS = {"remember": "📝 memory", "notes": "📝 notes"}
+_MEMORY_LABELS = {"memory": "📝 memory"}
 
 COLOR_NARRATION = "#2ecc71"
 COLOR_TOOL = "#f1c40f"   # amber: a tool call that ran
@@ -17919,6 +18695,13 @@ class RunReporter:
             return self.dest.attach(str(path), note or "")
         except Exception as e:                                   # noqa: BLE001
             return f"ERROR: could not send {path}: {e}"
+
+    def render_ui(self, payload, summary, src=None):
+        """The A2UI door, for the tool: returns the line the model reads back."""
+        try:
+            return self.dest.render_ui(payload, summary)
+        except Exception as e:                                   # noqa: BLE001
+            return f"ERROR: could not render the card: {e}"
 
     def tool_done(self, name, args, output, elapsed, src=None):
         """The line for one finished call: the preview, the duration, the exit
@@ -18413,7 +19196,8 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                                ask_door=ask_door,
                                # handed over unwrapped: tests pin this door's identity,
                                # and every attach is preceded by a tool line that touched.
-                               send_file_cb=reporter.attach)
+                               send_file_cb=reporter.attach,
+                               render_ui_cb=getattr(reporter, "render_ui", None))
         except OperatorStop as e:
             # The lane boundary: a stop must become an ANSWER, never a dead lane. run() now
             # catches its own turn-level stop, and this catches one raised around it (a cancel
@@ -21209,16 +21993,19 @@ class WebRun:
         self.asked = None       # the ask_user row this run is parked on, if any
         self.lock = threading.Lock()
 
-    def _line(self, kind, text):
+    def _line(self, kind, text, **extra):
         # uid is the page's identity for a line: stable for the life of the run,
         # so a line that grows in place is repainted and never duplicated, and
-        # two runs can never be confused by sharing an index.
+        # two runs can never be confused by sharing an index. `extra` carries
+        # payload fields the page reads but the model never sees (a ui card).
         i = len(self.lines)
-        return {"i": i, "uid": f"{self.id}#{i}", "kind": kind, "text": text,
-                "t": round(time.time() - self.started, 1),
-                "r": self.rev}
+        out = {"i": i, "uid": f"{self.id}#{i}", "kind": kind, "text": text,
+               "t": round(time.time() - self.started, 1),
+               "r": self.rev}
+        out.update(extra)
+        return out
 
-    def add(self, kind, text):
+    def add(self, kind, text, **extra):
         with self.lock:
             self.rev += 1
             if kind == "tool":
@@ -21226,7 +22013,7 @@ class WebRun:
                 # own steps for the check-in cadence; this is the buffer's count of
                 # the lines it actually holds, and no heartbeat can inflate it.
                 self.steps += 1
-            self.lines.append(self._line(kind, text))
+            self.lines.append(self._line(kind, text, **extra))
             # A tool call ends this turn's thinking: the next fragment of model
             # text starts a NEW line instead of growing this turn's tool line.
             if kind in ("tool", "tool_done", "tool_fail"):
@@ -21456,6 +22243,18 @@ class WebDestination(Destination):
         self.run.add("file", str(p))
         return ("attached to the page: %s (%d bytes) - the operator can download it "
                 "there" % (p.name, size))
+
+    def render_ui(self, payload, summary):
+        """Draw an A2UI card in the page.
+
+        The payload rides the line (the page renders it; the model never sees it);
+        the summary is the transcript text, so a later turn - and a chat lane - still
+        know what was shown.
+        """
+        self.run.add("ui", summary or "card", ui=payload)
+        return ("rendered on the page as a card: %s - the payload is not in the "
+                "transcript text, so repeat anything load-bearing in words."
+                % (summary or "(no text)"))
 
     def ask(self, question, options=None, wait=300.0, label=None):
         """Ask the page: a question row the operator answers with /api/steer.
@@ -21889,6 +22688,43 @@ function clearLog(){
  log.textContent='';runs.clear();syncEmpty();
 }
 function lineStamp(l){return (l.kind==='final'||l.kind==='thinking')?(l.t+'s'):null;}
+// A2UI cards (render_ui): a declarative payload the agent draws with. Components come
+// from THIS page's catalog only, nothing here executes, and a payload that does not
+// resolve falls back to its summary text - a card is never a blank hole.
+const A2UI_CATALOG={Card:1,Column:1,Row:1,Text:1,Divider:1};
+function a2uiResolve(v,dm){
+ if(v&&typeof v==='object'&&typeof v.path==='string'){
+  let cur=dm;
+  for(const part of v.path.split('/')){if(!part)continue;if(cur==null)return '';cur=cur[part];}
+  return cur==null?'':String(cur);
+ }
+ return v==null?'':String(v);
+}
+function a2uiNode(c,byId,dm){
+ const name=c.component||'',el=document.createElement('div');
+ if(name==='Text'){
+  const span=document.createElement('div');
+  const variant=String(c.variant||'').toLowerCase().replace(/[^a-z]/g,'');
+  const known=['title','subtitle','body','caption','mono'];
+  span.className='ui-text'+(known.indexOf(variant)>=0?' ui-'+variant:'');
+  span.textContent=a2uiResolve(c.text,dm);
+  el.className='ui-textwrap';el.appendChild(span);return el;
+ }
+ if(name==='Divider'){el.className='ui-divider';return el;}
+ el.className='ui-'+name.toLowerCase();
+ for(const kid of (c.children||[])){const k=byId[kid];if(k)el.appendChild(a2uiNode(k,byId,dm));}
+ return el;
+}
+function a2uiRender(payload){
+ const s=(payload||{}).createSurface||{};
+ const comps=Array.isArray(s.components)?s.components:[];
+ const byId={};
+ for(const c of comps){if(c&&c.id)byId[c.id]=c;}
+ if(!byId['root'])return null;
+ const card=document.createElement('div');card.className='ui-card';
+ card.appendChild(a2uiNode(byId['root'],byId,s.dataModel||{}));
+ return card;
+}
 function paint(node,l){
  const cls='msg '+l.kind;
  if(node.className!==cls)node.className=cls;
@@ -21897,7 +22733,11 @@ function paint(node,l){
  node._copyb=null;
  if(stamp!==null){const s=document.createElement('span');s.className='stamp';
   s.textContent=stamp;node.appendChild(s);}
- if(l.kind==='file'){
+ if(l.kind==='ui'){
+  const card=a2uiRender(l.ui);
+  if(card){node.appendChild(card);}
+  else{node.appendChild(document.createTextNode(l.text||'card'));}
+ }else if(l.kind==='file'){
   // An OFFERED download: the server serves ONLY lines of this kind, by uid.
   const name=String(l.text).split('/').pop();
   const a=document.createElement('a');
@@ -23357,6 +24197,12 @@ def run_webui():
             # boot: it hands the fragment over once and forgets it.
             given = self.headers.get("X-Tinycmdr-Token") or ""
             if not given:
+                authz = self.headers.get("Authorization") or ""
+                if authz.lower().startswith("bearer "):
+                    # A2A peers authenticate the standard way (web.a2a); it is the
+                    # SAME page token, and the published card says so.
+                    given = authz[7:].strip()
+            if not given:
                 for part in (self.headers.get("Cookie") or "").split(";"):
                     name, _, value = part.strip().partition("=")
                     if name == "tinycmdr_token":
@@ -23438,6 +24284,14 @@ def run_webui():
                 return
             if self.path.startswith("/api/health"):
                 self._json(health_payload())
+            elif self.path.startswith("/.well-known/agent-card.json"):
+                # The A2A card (web.a2a): public metadata and no token - it names no
+                # secret, and a peer has to read it before it can authenticate. Every
+                # other route on this server stays token-gated, /a2a included.
+                if not (CONFIG.get("web") or {}).get("a2a"):
+                    self._json({"error": "not found"}, 404)
+                    return
+                self._json(a2a_card())
             elif self.path.startswith("/api/events"):
                 if not self._auth_ok():
                     self._drain()
@@ -23697,6 +24551,19 @@ def run_webui():
         def do_POST(self):
             if not self._origin_ok():
                 self._forbidden()
+                return
+            if self.path.startswith("/a2a"):
+                # The A2A JSON-RPC endpoint (web.a2a): SendMessage runs one message
+                # through this box and returns a Task. The card route is public; this
+                # one takes the page token as a Bearer.
+                if not (CONFIG.get("web") or {}).get("a2a"):
+                    self._drain()
+                    self._json({"error": "not found"}, 404)
+                    return
+                body = self._body() or {}
+                status, payload = a2a_http(self.path, body, self._auth_ok(),
+                                           self.headers.get("A2A-Version"))
+                self._json(payload, status)
                 return
             if self.path.startswith("/api/login"):
                 # The browser's one handover: the page reads the token from the URL
@@ -27050,8 +27917,8 @@ HELP_TEXT = ("\n"
              "  /tinycmdr setup           guided setup: endpoint, chat gateways, web search\n"
              "  /tinycmdr sessions        the conversations saved in this folder\n"
              "  /tinycmdr resume N        continue one of them in this window\n"
-             "  /tinycmdr status          version, endpoint, context use, notes, skills\n"
-             "  /tinycmdr notes           what it has written down about this machine\n"
+             "  /tinycmdr status          version, endpoint, context use, memory, skills\n"
+             "  /tinycmdr memory          the knowledge bundle it keeps about this machine\n"
              "  /tinycmdr skills          the runbooks it can load\n"
              "  /tinycmdr tools           every tool it has right now\n"
              "  /tinycmdr usage           tokens and time for the last run\n"
@@ -27394,16 +28261,16 @@ def _cli_usage_line(force=False):
                    fmt_tokens(budget), pct)))
 
 
-def _cli_notes():
-    if not NOTES_FILE.exists():
-        print(dim("  nothing written down yet"))
+def _cli_memory():
+    """The memory bundle as the operator reads it: its index and size."""
+    if not MEMORY_INDEX.exists():
+        print(dim("  memory/ is empty - nothing written down yet"))
         return
-    body = NOTES_FILE.read_text(encoding="utf-8", errors="replace").strip()
-    if not body:
-        print(dim("  nothing written down yet"))
-        return
-    print(dim("  %s (%d chars)" % (NOTES_FILE, len(body))))
-    for line in body.splitlines()[-40:]:
+    index = MEMORY_INDEX.read_text(encoding="utf-8", errors="replace").strip()
+    count = len(memory_scan())
+    print(dim("  %s (%d concept%s, index %d chars)"
+              % (MEMORY_INDEX, count, "" if count == 1 else "s", len(index))))
+    for line in index.splitlines()[-60:]:
         print("  " + line)
 
 
@@ -28351,6 +29218,9 @@ def _cli_command(text):
         notes = 0
         if NOTES_FILE.exists():
             notes = len(NOTES_FILE.read_text(encoding="utf-8", errors="replace"))
+        concepts = len(memory_scan())
+        index_chars = (len(MEMORY_INDEX.read_text(encoding="utf-8", errors="replace"))
+                       if MEMORY_INDEX.exists() else 0)
         print("  version    %s" % VERSION)
         print("  model      %s" % CONFIG["llm"]["model"])
         print("  endpoint   %s" % CONFIG["llm"]["base_url"])
@@ -28361,7 +29231,9 @@ def _cli_command(text):
                  100 * s["est_tokens"] // max(1, budget), s["exchanges"]))
         print("  last run   %s" % (fmt_usage(u) if u.get("calls") else "nothing yet"))
         print("  session    %s (%d exchange(s))" % (_cli_key(), s["exchanges"]))
-        print("  notes      %d chars in notes.md" % notes)
+        print("  notes      %d chars in notes.md (legacy)" % notes)
+        print("  memory     %d concept%s, index %d chars"
+              % (concepts, "" if concepts == 1 else "s", index_chars))
         print("  skills     %d runbooks" % len(skill_index()))
         print("  tools      %d" % len(REGISTRY.openai_schemas()))
         # The banner keeps three rows; this is where its folded arithmetic lives
@@ -28374,8 +29246,8 @@ def _cli_command(text):
         if strays:
             print("  ignored    %s (in config.json, never sent)" % ", ".join(strays))
         return True
-    if verb == "/notes":
-        _cli_notes()
+    if verb == "/memory":
+        _cli_memory()
         return True
     if verb in ("/skills", "/skill"):
         sk = skill_index()
@@ -29548,8 +30420,11 @@ def _verb_status():
     else:
         print("  log       : none yet")
     try:
+        concepts = memory_scan()
+        index_bytes = MEMORY_INDEX.stat().st_size if MEMORY_INDEX.exists() else 0
         notes = (BASE_DIR / "notes.md").stat().st_size
-        print("  memory    : notes.md %d bytes" % notes)
+        print("  memory    : %d concept%s, %d chars index; notes.md %d bytes (legacy)"
+              % (len(concepts), "" if len(concepts) == 1 else "s", index_bytes, notes))
     except OSError:
         pass
     print("  config    : %s" % (CONFIG_PATH if CONFIG_PATH.exists() else
