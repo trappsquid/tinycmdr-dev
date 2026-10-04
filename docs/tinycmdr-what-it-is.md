@@ -20,15 +20,16 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                33,094 lines / 1.54 MB in ONE file, no package, no framework
+code                33,224 lines / 1.54 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
 processes           one; no daemon, no gateway, no database
 interfaces          Mattermost bot (DMs + @mentions), Telegram DM, `--once "task"`,
-                    and `tinycmdr` itself: a full-screen app (`--app`, the
-                    default) or the same session as inline cards (`--cli`);
-                    a host with no chat token is CLI-only
+                    and `tinycmdr` itself: the PAGE (a bare invocation opens the
+                    web UI) or a terminal session (`tinycmdr cli` / `--cli`
+                    inline cards, `--app` full-screen); a host with no chat
+                    token is CLI-only
 core tools          21, of which 11 are always-on; the rest answer by name (section 2)
 custom tools        3 example tools ship in ./tools/ (native .py, register-style .py,
                     <name>.tool.json); a working box's own drop-ins load from the same
@@ -36,7 +37,7 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               88 suites / 29,429 lines / 3,473 checks that need no model, plus a graded
+tests               88 suites / 29,589 lines / 3,494 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 4, search 3, agent 111
@@ -423,7 +424,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 33,094-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 33,224-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -466,7 +467,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               33,094 lines, one file, no dependency tree to audit
+readability               33,224 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call
