@@ -91,13 +91,19 @@ def check_archive(archive):
                     "token": TOKEN}}), encoding="utf-8")
         env = dict(os.environ, TINYCMDR_NO_BROWSER="1",
                    TINYCMDR_WEB_TOKEN=TOKEN)
-        proc = subprocess.Popen(
-            [sys.executable, str(tree / "tinycmdr.py"), "--web", "--no-browser"],
-            cwd=str(tree), env=env,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        logfile = Path(tmp) / "server.log"
+        with open(logfile, "wb") as _log:
+            proc = subprocess.Popen(
+                [sys.executable, str(tree / "tinycmdr.py"), "--web", "--no-browser"],
+                cwd=str(tree), env=env, stdout=_log, stderr=subprocess.STDOUT)
         try:
-            if not wait_port(port, time.time() + 25):
-                return ["the server never answered on 127.0.0.1:%d" % port]
+            # 60s, not 25: this runs straight after the package build on a loaded machine,
+            # and a 25s first-sight deadline failed all three archives in the 1.0.74 cut
+            # while the same archives passed seconds later (2026-10-04).
+            if not wait_port(port, time.time() + 60):
+                tail = logfile.read_text(encoding="utf-8", errors="replace")[-600:]
+                return ["the server never answered on 127.0.0.1:%d - its output:\n%s"
+                        % (port, tail)]
             status, html = get("/", port)
             if status != 200:
                 problems.append("/ -> %s" % status)
