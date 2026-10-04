@@ -33,6 +33,18 @@ ROOT = Path(__file__).resolve().parent.parent
 TOKEN = "pkg-page-check-0123456789"
 
 
+def server_python():
+    """The interpreter to run the unpacked app with.
+
+    The dev venv when there is one - the app imports requests at boot, and the python
+    that runs this checker (release.sh's $PY) may be a bare interpreter without it: the
+    1.0.74 cut failed on exactly that (ModuleNotFoundError: No module named 'requests',
+    2026-10-04). An install runs from its own venv; this mirrors that.
+    """
+    venv = ROOT / "venv" / "bin" / "python"
+    return str(venv) if venv.exists() else sys.executable
+
+
 def unpack(archive, dest):
     if archive.suffix == ".zip":
         with zipfile.ZipFile(archive) as z:
@@ -94,7 +106,7 @@ def check_archive(archive):
         logfile = Path(tmp) / "server.log"
         with open(logfile, "wb") as _log:
             proc = subprocess.Popen(
-                [sys.executable, str(tree / "tinycmdr.py"), "--web", "--no-browser"],
+                [server_python(), str(tree / "tinycmdr.py"), "--web", "--no-browser"],
                 cwd=str(tree), env=env, stdout=_log, stderr=subprocess.STDOUT)
         try:
             # 60s, not 25: this runs straight after the package build on a loaded machine,
