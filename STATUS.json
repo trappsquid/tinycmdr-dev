@@ -805,7 +805,8 @@
       "title": "a revealed tool schema expires when the tool is not used",
       "state": "shipped",
       "anchor": {
-        "commit": "9232dff"
+        "commit": "9232dff",
+        "expect": "tagged"
       },
       "detail": "Reveal-on-demand was monotonic per session; agent.reveal_ttl_secs (default 1800, 0 = old behaviour) expires a schema after that long without a call. Names stay listed and a by-name call re-reveals - only the schema rent stops. Correction 2026-10-03 (9232dff): the stamp only moved on a REVEAL, so the clock expired tools that were in use (seven days: 36 expiry re-reveals, 2 mid-run, 5 with a call under 1,800s earlier); every executed non-core call now touches it, the banner states the expiry, and the event ledger records reveal/eject transitions.",
       "gate": "tests/test_reveal_decay.py (21 checks)"
