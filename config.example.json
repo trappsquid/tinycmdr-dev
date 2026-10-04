@@ -350,6 +350,8 @@
     "remember_nudge": true,
     "auto_continue": true,
     "auto_continue_max": 2,
+    "_comment_nudge_retries": "How many times a turn that ends with an intention instead of a tool call - or with no tool call at all - is asked to act again, per run. 0 = ask never, 1 = the old ask-once behaviour; the delivery says 'stopped short' when the budget is spent.",
+    "nudge_retries": 3,
     "spill_output": true,
     "spill_keep": 50,
     "spill_max_bytes": 8388608,
