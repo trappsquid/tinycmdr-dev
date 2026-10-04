@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.74] - 2026-10-04
+
+Fixed
+- **The model's markdown renders in the page and on Telegram.** The page printed raw
+  text - no markdown at all - so tables, bold, links, lists and code arrived as
+  punctuation soup (operator: "a model tried to use a markdown table but in the webui it
+  looks all stupid. And in mattermost it shows as a normal table"). It renders now, from
+  DOM nodes and never innerHTML: tables, fenced code, lists, bold/italic/inline code,
+  links, bare URLs, images as links; wide tables scroll. Telegram's converter handled
+  only backticks, so the same class hit there; `tg_html` now emits Telegram's HTML subset
+  (bold/italic/code/pre/a) with code spans protected and tables wrapped in `<pre>`
+  (Telegram's HTML has no table element). Tests: `test_webui_page.py`,
+  `test_telegram.py`.
+- **The no-progress nudge is a budget, not a single ask.** Two one-shot flags ended the
+  guard that asks a model to act again - one for a promise that ends a run which already
+  did work, one for a run with no tool call at all - so a weak model stopping twice got
+  one nudge and a "stopped short" delivery (operator: "the harness keeps allowing the
+  model to stop... It has stopped 2x this run now"). Both spend
+  `agent.nudge_retries` asks (default 3; 0 restores the old behaviour), each logged with
+  its counter; the delivery annotation stays for a run that will not act. `test_stall.py`
+  pins budget-1 and budget-2.
+- **The rail toggle re-tracks the layout** (hiding the rail left the workspace's 292px
+  track reserved and pushed the stage into the sidebar's column), and the login probe
+  has a real GET branch above `/api/log` instead of being served by the log route's
+  prefix match (`tests/test_webui.py` asserts its payload).
+Added
+- **Search inside conversations.** `/api/search?q=` reads the same corpus and rules as
+  the model's `search_sessions` tool (factored into `session_search_hits()`); the rail's
+  box debounces into it and shows matches with the conversation's title, a
+  marker-stripped snippet, and a click that opens that conversation
+  (`test_webui.py`, `test_webui_page.py`).
+- **The checks-and-balances this batch was asked for.** `tests/test_contracts.py` grades
+  every must-agree pair derived from both sides (page ids vs the test harness's DOM,
+  placeholders vs substitutions, referenced assets vs the docs' route table, `.env` keys
+  installers write vs what the code reads, and both routers' prefix ordering - the class
+  that hid the login probe behind `/api/log`). `maintenance/check-package-page.py`,
+  wired into `release.sh`, serves each BUILT archive and fetches the page the way a
+  browser does. `development.md` section 7 states the rule: a reported bug lands as the
+  fix plus the invariant that grades its class.
+
 ## [1.0.73] - 2026-10-04
 
 Fixed

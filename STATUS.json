@@ -1426,6 +1426,26 @@
       },
       "detail": "Operator, 2026-10-04, live page: 'new background but old chibi' and 'is the server idle and ready? ... remove pointless things or actually make them useful'. (1) Every artifact carried the right bytes - the tree, the published archive, the live install and the live service's /chibi.png all hashed to the same new 295,131-byte file - but /page.css and the HTML revalidate on an ordinary reload while the ART routes cache for a day, so an update could show a new stylesheet beside the old mascot until a hard reload. The art URLs now carry ?v=<version> (chibi/mark/icon in the page, the manifest icon, the backdrop URL in the stylesheet; the handlers match with startswith so the query is inert), so a release invalidates exactly the art it changed. (2) The app bar and the stage header each carried a status pill for the same state machine - 'idle' beside 'ready' - neither dot changed colour, and nothing reset the stage chip when a run ended. One chip now, in the stage header: ready (green) / working (gold, pulsing) / stopping (gold) / trouble (red), each with a tooltip, all writers through one setStage(); the app bar pill and its CSS are gone. Verified live in all four states. tests/test_webui.py pins the versioned URLs; tests/test_webui_page.py reports the chip and asserts a finished run leaves it ready.",
       "gate": "done - landed as e13cee4; tests/test_webui.py + tests/test_webui_page.py"
+    },
+    {
+      "id": "live-page-and-stall-batch-1-0-74",
+      "title": "markdown renders (page and Telegram), search inside conversations, the rail toggle, and a nudge budget instead of one ask",
+      "state": "open",
+      "anchor": {
+        "commit": "a4890b7"
+      },
+      "detail": "Operator's live-box reports, 2026-10-04, in one batch. (1) 'A model tried to use a markdown table but in the webui it looks all stupid. And in mattermost it shows as a normal table' - the page had NO markdown renderer; it renders now (DOM nodes, never innerHTML: tables, fences, lists, emphasis, links, bare URLs, images as links) and Telegram's tg_html grew the same class (it converted only backticks; now the HTML subset, code protected, tables in <pre>). (2) 'we need to allow support for searching within conversations, not just the parent session' - the rail's box filtered titles only; /api/search?q= reads the model tool's own corpus (session_search_hits()) and the matches render with title, snippet and a click that opens the conversation. (3) 'This is what happens when I click the far left menu icon ... very stupid' - hiding the rail left the grid's 292px track, pushing the stage into the sidebar column; a body class re-tracks it, one writer, aria-expanded. (4) 'the harness keeps allowing the model to stop... It has stopped 2x this run now' - both no-progress guards were one-shot booleans; they now spend agent.nudge_retries (default 3) asks, logged with counters, delivery annotation kept for the give-up. (5) the GET /api/login probe was being served by /api/log's prefix match; it has its own branch above it, payload asserted.",
+      "gate": "done - landed as a4890b7; tests/test_webui_page.py + tests/test_webui.py + tests/test_telegram.py + tests/test_stall.py"
+    },
+    {
+      "id": "checks-and-balances-1-0-74",
+      "title": "the contracts suite, the built-package page gate, and the rule for reported bugs",
+      "state": "open",
+      "anchor": {
+        "commit": "ab9286e"
+      },
+      "detail": "Operator, 2026-10-04: 'Stop creating one off fixes everywhere instead of engineering adequately with proper checks and balances in your code.' Landed as three structural pieces: tests/test_contracts.py derives every must-agree pair from BOTH sides (page ids vs the harness DOM, placeholders vs substitutions, referenced assets vs the docs route table, .env keys installers write vs what the code reads, docs' env names vs the tree's programs, and each router chain's prefix ordering - the class that hid the login probe behind /api/log; it found real drift on its first run, including the prefix that would have swallowed /api/login in the page harness). maintenance/check-package-page.py, wired into release.sh beside the other package checks, unpacks each built archive, serves it on a scratch port and fetches the page the way a browser does (no placeholders left, every referenced asset 200, the API reporting the built version) - the artifact no gate had ever loaded. development.md 7 states the rule: a bug lands as the fix PLUS the invariant that grades its class, named with where it is checked.",
+      "gate": "done - landed as ab9286e; the contracts suite and both package checks run in the gate/release path"
     }
   ]
 }
