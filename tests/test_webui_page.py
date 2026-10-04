@@ -206,6 +206,15 @@ def main():
           f"and a browser the server refuses IS asked, and the handover drops it again "
           f"({res['prompts']} prompt(s), token {res.get('token')!r})")
 
+    # -- 1c. a stale token on any GET: one prompt, one retry, the page recovers ---
+    # The bare "unauthorized" note with no way back was the operator's report
+    # (2026-10-04: "why do all my pages to tinycmdr webui say unauthorized now"). The
+    # page clears the token, asks once with the way back named, and retries the GET.
+    sc = {"runs": [], "steps": [{"kind": "polls", "n": 3}], "auth_401_once": True}
+    res = run_page(sc, script)
+    check(res["prompts"] == 1 and not res["errors"],
+          f"a refused GET prompts once and is retried ({res['prompts']} prompt(s))")
+
     # -- 2. a line that grows in place must reach its final text --------------
     full = "The sky is blue because of Rayleigh scattering."
     sc = {

@@ -147,6 +147,7 @@ globalThis.location = { search: scenario.query || '', hash: scenario.hash || '',
 const replaced = [];
 globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
 const authSeen = [];
+let authFlaked = false;
 const loginCalls = [];
 const uploads = [];
 let healthFetches = 0;
@@ -251,6 +252,13 @@ function fetchShim(url, opts) {
     return jres(scenario.health || { ok: true, version: 'harness' });
   }
   if (url.indexOf('/api/sessions') === 0) {
+    // scenario.auth_401_once: the FIRST list call is refused, which is the stale
+    // token a browser wakes up with; the page must ask once and retry the GET.
+    if (scenario.auth_401_once && !authFlaked) {
+      authFlaked = true;
+      return Promise.resolve({ ok: false, status: 401,
+                               json: () => Promise.resolve({ error: 'unauthorized' }) });
+    }
     if (opts && opts.method === 'POST') {
       if (body.op === 'new') {
         const k = 'web-new' + (++convSeq);

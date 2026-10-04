@@ -22697,7 +22697,9 @@ if(!token){token=localStorage.fb_token||'';}
 function askToken(retry){
  const msg=retry
    ? 'That token was not accepted.\\n\\nIt is the TINYCMDR_WEB_TOKEN line in .env on that '
-     +'machine (the installer prints the full path, and the link it prints contains the token).'
+     +'machine (the installer prints the full path, and the link it prints contains the token). '
+     +'On the box itself, run `tinycmdr web` and open the link it prints - it carries the '
+     +'current token.'
    : 'This page needs its access token.\\n\\nIt is the TINYCMDR_WEB_TOKEN line in .env '
      +'on that machine - or use the link the installer printed, which carries the token.';
  const a=prompt(msg+(!retry?'\\n\\nIf this install has no token, leave this empty.':''))||'';
@@ -22744,6 +22746,28 @@ function H(extra){
  if(extra)for(const k in extra)h[k]=extra[k];
  return h;
 }
+// A GET/HEAD that answers 401 is the stale-token case: clear it, ask ONCE, and retry
+// that call with the new token. It used to surface a bare "unauthorized" note with no
+// way back (operator's report, 2026-10-04: "why do all my pages to tinycmdr webui say
+// unauthorized now"). POSTs are left to their own handlers: their bodies were written
+// for the failed attempt and are not replayable from here, and send() already asks with
+// the message it can say.
+let authAsking=false;
+globalThis.fetch=(function(orig){
+ return async function(u,o){
+  const r=await orig(u,o);
+  const m=((o&&o.method)||'GET').toUpperCase();
+  if(r.status!==401||authAsking||(m!=='GET'&&m!=='HEAD')
+     ||String(u).indexOf('/api/login')===0){return r;}
+  authAsking=true;
+  try{
+   delete localStorage.fb_token;token='';
+   if(!askToken(true)){return r;}
+   localStorage.fb_token=token;
+   return orig(u,Object.assign({},o||{},{headers:H()}));
+  }finally{authAsking=false;}
+ };
+})(globalThis.fetch);
 let runId=null, gen=0, timer=null, fails=0, localSeq=0, sessionKey=null,
     sessions=[], budget=0, panelWhich=null, commands=[], palAt=-1, hist=[], histAt=-1,
     lastRail=0;

@@ -24,6 +24,12 @@ Fixed
   `GET /api/login` first - 200 means the cookie is good, 401 means a fresh browser - and
   asks only then (`tests/test_webui_page.py`, `tests/test_webui.py`). The page suite's
   `/api/log` branch had been swallowing `/api/login`, which is why it never caught this.
+- **A refused GET recovers instead of stranding the page.** Any 401 on a GET/HEAD clears
+  the stale token, asks once (the retry prompt names the way back: run `tinycmdr web` on
+  the box and open the link it prints), and retries that call. It used to leave a bare
+  `unauthorized` note with no way out - the operator's "why do all my pages say
+  unauthorized now" (2026-10-04). POSTs keep their own handlers, whose messages name the
+  failed message.
 
 Changed
 - **The stage's backdrop is the operator's photo.** `assets/roman-temple-spring.jpg`
