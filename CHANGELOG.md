@@ -5,6 +5,44 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.0.70] - 2026-10-04
+
+Fixed
+- **The page ships its stylesheet again - 1.0.68 and 1.0.69 did not.** The pavilion
+  port (1.0.68) added `assets/webui.css` and the cinzel-600 face; the package manifest
+  was never told, so `/page.css` 404'd on every install from those tags and the page
+  rendered as raw unstyled markup (operator's report, looking at an updated box:
+  "this is what we shipped worldwide to all users?"). `SHIP` carries both files now,
+  `WEB_FONTS` serves the 600 face, and `tests/test_webui_page.py` derives every asset
+  the routes serve - from the code and the stylesheet, never a hand list - and fails
+  when the manifest misses one; falsified against the released manifest, which it
+  names exactly.
+- **A bare `tinycmdr` opened the page and the app at once.** Operator's contract:
+  bare is the page (the chat lanes still start beside it), `tinycmdr cli` is the
+  console alone, and `--cli`/`--app` no longer raise the page unless `--web` says so.
+  Both shims add nothing for the bare case; `tests/test_shim.py` pins the mapping and
+  main()'s two rules.
+- **The page's "Open archives" button was a dead link.** It only un-hid an
+  already-visible rail. The hero's second action is "Resume the last campaign": the
+  newest session with exchanges, hidden when there is none; verified by clicking it
+  live (the first cut resumed by row order and opened the empty conversation New
+  Campaign had just made).
+Changed
+- **`tinycmdr setup` can set the page token.** Enter keeps the host's own or mints
+  one; a typed value goes through `_env_set_safe` (the 20+ character shape is
+  enforced and a refused value is re-asked, not swallowed) and retires a stale
+  `web.token` in config.json so nothing outranks `.env`. `--web-token <t>` does the
+  same at install, on all three installers (`tests/test_setup.py`,
+  `tests/test_installer_parity.py`).
+- **The operator-only skill switch binds the skill tool.** `hide: true` (omp's
+  `disable-model-invocation: true` accepted as-is) hides a runbook from the prompt,
+  the skill tool's list/search and the public A2A card; the OPERATOR naming it in an
+  order opens it for that session (`grant_named_skills`, cleared by `/new`).
+  `tests/test_tool_discovery.py` + `tests/test_harness_extras.py`, falsified against
+  142207e.
+
 ## [1.0.69] - 2026-10-04
 
 Changed

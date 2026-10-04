@@ -1316,6 +1316,56 @@
       },
       "detail": "Operator brief, 2026-10-04: implement Google's agent formats while keeping the revolving prompt budget low (~5k). Landed: (A2UI) a hidden render_ui tool emitting A2UI v1.0 createSurface envelopes against the catalog this page declares (Card/Column/Row/Text/Divider; {\"path\": ...} bindings against createSurface.dataModel), refused by name when malformed; the payload rides the transcript line and never the prompt, and a lane with no surface answers honestly; (A2A) web.a2a publishes an AgentCard at /.well-known/agent-card.json (public, no token) and answers the v1.0 JSON-RPC binding on POST /a2a with the page token as a Bearer - SendMessage runs one message through this box and returns a Task (TASK_STATE_COMPLETED, or TASK_STATE_FAILED when the endpoint never answered), GetTask/ListTasks read a bounded task ring, cancel and streaming and push answer the spec's own errors - plus a hidden a2a client tool (list/card/send) registered ONLY when agent.a2a_remotes is set; (MCP) a hidden mcp tool driving stdio servers from agent.mcp_servers: the stateless 2026-07-28 revision (version and client identity in each request's _meta, resultType tolerated either way) with a one-time initialize fallback for older servers, processes reused across calls. Verified live: our own a2a client called this box's door and read the Task back, and an A2UI card was rendered in a browser with its bindings resolved. Suites: test_a2ui (24), test_a2a (47), test_mcp (19), each ending in the on/off registration check that a box without the feature is byte-identical.",
       "gate": "done - landed as a189366 and rides v1.0.69; maintenance/ledger-tag.py states the release claim once the tag exists"
+    },
+    {
+      "id": "page-ships-its-stylesheet",
+      "title": "1.0.68/1.0.69 served /page.css as a 404 - every install rendered unstyled",
+      "state": "open",
+      "anchor": {
+        "commit": "2385279"
+      },
+      "detail": "Operator, 2026-10-04, looking at the updated live box: 'This is what we shipped worldwide to all users?' The pavilion port (0118cd8, 1.0.68) added assets/webui.css and assets/fonts/cinzel-600.woff2; maintenance/build-package.py's SHIP manifest was never told, and tinycmdr.py's WEB_FONTS never gained the 600 face - so every package from those tags carried neither, the page loaded its markup without a stylesheet, and /fonts/cinzel-600.woff2 404'd even from a source tree. Found by opening a published install in a browser, not by a suite: the release gate checked README download names, and the web suites run against the source tree where the file exists. Fixed (2385279): SHIP carries both, WEB_FONTS serves the 600 face, and tests/test_webui_page.py derives every asset the routes serve - from the code and the stylesheet, never a hand list - and fails when SHIP misses one; falsified against the released manifest, which it names exactly. The live box was repaired in place and the packages rebuilt.",
+      "gate": "done - landed as 2385279; the 1.0.70 archives carry both files (unzip -l / tar -tzf, plus the freeze check), and ledger-tag states the release claim once the tag exists"
+    },
+    {
+      "id": "launcher-bare-is-the-page",
+      "title": "a bare `tinycmdr` opened the page and the app at once; `tinycmdr cli` is the console now",
+      "state": "open",
+      "anchor": {
+        "commit": "2385279"
+      },
+      "detail": "Operator, 2026-10-04: 'typing tinycmdr now opens the webui and the TUI/CLI at once. I want it default to web-ui and for a user to deliberately have to type tinycmdr cli for it to open the cli only.' Two layers: both shims added --app for the bare case (2026-09-30), and main() raised the page beside every long-lived mode, so the app and the page started together. Fixed (2385279): the shims add nothing (the build's bare start is the page, with the chat lanes beside it when a box has any), `tinycmdr cli` is handled before the verb dispatch and normalised to --cli, and --cli/--app no longer raise the page unless --web is given; tests/test_shim.py pins the shim mapping and both main() rules.",
+      "gate": "done - landed as 2385279; the shims and main() are graded by tests/test_shim.py"
+    },
+    {
+      "id": "setup-token-question",
+      "title": "the wizard minted the page token but never let the operator set one",
+      "state": "open",
+      "anchor": {
+        "commit": "2385279"
+      },
+      "detail": "Operator, 2026-10-04: 'your config wizard doesn't let people set their own web-ui token there - that's worth fixing.' run_setup section 4 minted a token or kept the host's own; an operator holding a token from a password manager had to hand-edit .env afterwards. Fixed (2385279): the wizard asks (Enter keeps the host's own or mints one; a typed value goes through _env_set_safe, whose 20+ character shape is enforced and a refused value is re-asked, not swallowed), retires a stale config.json web.token so nothing silently outranks .env, and prints the link the new token makes; `--web-token <t>` does the same at install, on all three installers. tests/test_setup.py covers save/use/retire; test_installer_parity.py carries the flag row.",
+      "gate": "done - landed as 2385279; tests/test_setup.py + tests/test_installer_parity.py"
+    },
+    {
+      "id": "hero-button-resumes",
+      "title": "the page's 'Open archives' button was a dead link",
+      "state": "open",
+      "anchor": {
+        "commit": "2385279"
+      },
+      "detail": "Operator, 2026-10-04: 'the open archives button doesnt do anything at all in the webui. it is a dead link... it can be removed or renamed and a different feature added there.' Its handler only un-hid the rail - already visible on a desktop. Fixed (2385279): the hero's second action is 'Resume the last campaign' - the newest session with exchanges, the same call a rail row makes - and it hides itself when there is none. The first cut opened the empty conversation New Campaign had just made and looked as dead as the button it replaced; that was caught by clicking it live, and the fix resumes by exchanges instead of row order. Verified in a real browser: the click opens the transcript, the hero closes, the rail row goes active.",
+      "gate": "done - landed as 2385279; the page suite runs the script clean, and the click path was verified live"
+    },
+    {
+      "id": "operator-only-skills-tool-gated",
+      "title": "the skill frontmatter switch hid a runbook from the prompt but not from the skill tool",
+      "state": "open",
+      "anchor": {
+        "commit": "2385279"
+      },
+      "detail": "The omp-style switch (hide: true; disable-model-invocation: true accepted as-is) trimmed the prompt index while skill{list} still served the name and skill{read} the body. Fixed (2385279): the flag binds the tool - list/search omit, read refuses, name-miss lists do not leak, the A2A card skips - and the OPERATOR naming the runbook in an order grants it for that session (grant_named_skills; word-bounded on the frontmatter or folder name; cleared by /new); a granted read carries a HARNESS line saying why it opened. tests/test_tool_discovery.py + tests/test_harness_extras.py; falsified against 142207e (kebab unparsed, body served, names leaked).",
+      "gate": "done - landed as 2385279; tests/test_tool_discovery.py + tests/test_harness_extras.py"
     }
   ]
 }
