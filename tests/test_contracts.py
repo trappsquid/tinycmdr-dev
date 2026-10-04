@@ -1,0 +1,181 @@
+"""The must-agree contracts: each case DERIVES both sides, no hand lists.
+
+Every page defect that reached a user today (2026-10-04) was one of these agreements
+breaking silently: assets that never shipped, an id the test harness had not been told
+about, an art URL the browser cached forever, a route table describing a file that no
+longer existed, a shim branch swallowing a newer endpoint, an env var an installer wrote
+that no code read. Each case below derives side A from one source and side B from
+another, so adding something on one side without the other fails HERE - in the gate -
+instead of on a fresh install.
+
+The rule (docs/development.md 7): a reported bug lands as the fix PLUS the invariant
+that grades its class. This file is where those invariants live; when a class has a
+better home (test_webui_page's asset derivation, test_installer_unix's installed tree,
+maintenance/check-package-assets.py for archives) it lives there and is not repeated.
+
+    python tests/test_contracts.py
+"""
+import ast
+import re
+import sys
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+SRC = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
+HARNESS = (BASE / "tests" / "webui_page_harness.js").read_text(encoding="utf-8")
+CSS = (BASE / "assets" / "webui.css").read_text(encoding="utf-8")
+DEV_DOC = (BASE / "docs" / "development.md").read_text(encoding="utf-8")
+INSTALLERS = "\n".join(p.read_text(encoding="utf-8")
+                       for p in sorted((BASE / "install").glob("install-tinycmdr*")))
+
+FAILS = []
+
+
+def check(what, ok, detail=""):
+    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % detail))
+    if not ok:
+        FAILS.append(what)
+
+
+def literal(name):
+    """A module-level string literal (WEB_PAGE, WEB_THEME_CSS...) from tinycmdr.py."""
+    for node in ast.walk(ast.parse(SRC)):
+        if (isinstance(node, ast.Assign) and node.targets
+                and getattr(node.targets[0], "id", "") == name
+                and isinstance(node.value, ast.Constant)):
+            return node.value.value
+    raise SystemExit("no %s string literal in tinycmdr.py" % name)
+
+
+def fn_source(name):
+    for node in ast.walk(ast.parse(SRC)):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return ast.get_source_segment(SRC, node)
+    raise SystemExit("no %s() in tinycmdr.py" % name)
+
+
+def main():
+    page = literal("WEB_PAGE")
+
+    # ---- 1. the ids the page looks up vs the ids the test harness fabricates --------
+    # A missing id makes getElementById return null and the page dies on its next write;
+    # the harness's IDS list is the stand-in DOM. Equality both ways: a page id the
+    # harness lacks breaks the suite's realism, and a harness id the page never looks up
+    # is dead weight.
+    page_ids = set(re.findall(r"getElementById\('([a-z0-9-]+)'\)", page))
+    m = re.search(r"const IDS = \[(.*?)\];", HARNESS, re.S)
+    harness_ids = set(re.findall(r"'([a-z0-9-]+)'", m.group(1))) if m else set()
+    check("every id the page looks up exists in the test harness's DOM",
+          page_ids <= harness_ids, sorted(page_ids - harness_ids))
+    # ...and every OTHER id the harness fabricates is one its own code touches (freshDom
+    # writes emptymark's src from the markup, for instance): an id nobody uses is dead
+    # weight, and "the page looks it up" is not the only legitimate reason to have it.
+    harness_used = set(re.findall(r"byId\.([a-z0-9-]+)", HARNESS)) \
+        | set(re.findall(r"byId\['([a-z0-9-]+)'\]", HARNESS))
+    check("...and every other harness id is one the harness's own code touches",
+          harness_ids <= page_ids | harness_used, sorted(harness_ids - page_ids - harness_used))
+
+    # ---- 2. placeholders vs the substitutions that fill them -------------------------
+    # A {{TOKEN}} with no replace passes straight to the browser as literal text - the
+    # old raw-template class. The replace sets are read from the functions that serve.
+    for surface, text, fn in ((  # (name, served text, the function that serves it)
+            ("WEB_PAGE", page, "_web_page_html"),
+            ("assets/webui.css", CSS, "_web_page_css"),
+            ("the manifest", "", "_web_manifest"))):
+        body = fn_source(fn)
+        filled = set(re.findall(r'replace\("\{\{([A-Z_]+)\}\}"', body))
+        if surface == "assets/webui.css":
+            have = set(re.findall(r"\{\{([A-Z_]+)\}\}", text))
+        elif surface == "the manifest":
+            have = set(re.findall(r"\{\{([A-Z_]+)\}\}", body))
+        else:
+            have = set(re.findall(r"\{\{([A-Z_]+)\}\}", text))
+        check("%s: every placeholder has a substitution" % surface,
+              have <= filled, sorted(have - filled))
+
+    # ---- 3. every asset the page references is a row in the docs route table ---------
+    # The table said /colonnade.svg after the file was deleted; this is the class.
+    refs = set()
+    for u in re.findall(r'(?:src|href)="(/[^"?#]+)', page):
+        refs.add(u)
+    if "/chibi.png" in page or "EMPTY_ART" in page:
+        refs.add("/chibi.png")
+    for u in re.findall(r"url\((/[^)?]+)", CSS):
+        refs.add(u)
+    refs = {r for r in refs if not r.startswith("/api/")}
+    pats = []
+    for ln in DEV_DOC.splitlines():
+        if not ln.startswith("| `"):
+            continue
+        cell = ln.split("|")[1]
+        for part in cell.split(","):
+            part = part.strip().strip("`").strip()
+            if part.startswith("/"):
+                pats.append(re.compile("^" + re.escape(part).replace(r"\*", "[^`]*") + "$"))
+    missing = [r for r in sorted(refs) if not any(p.match(r) for p in pats)]
+    check("every asset the page references is a row in development.md's route table",
+          not missing, missing)
+
+    # ---- 4. the installers' env names are names the code actually reads --------------
+    # An installer writing TINYCMDR_X that no code reads is a silent no-op (or a typo'd
+    # rename half-landed). Direction: installers -> code.
+    code_env = set(re.findall(r"TINYCMDR_[A-Z0-9_]+", SRC))
+    # The docs describe the whole product, so their names must exist in SOME program in
+    # the tree (the app, the installers, the shim/updater, maintenance) - not necessarily
+    # in tinycmdr.py: TINYCMDR_SERVICE is the installers', TINYCMDR_WHERE_ROLES where.py's.
+    programs = [SRC, INSTALLERS,
+                (BASE / "update.sh").read_text(encoding="utf-8"),
+                (BASE / "tinycmdr").read_text(encoding="utf-8"),
+                (BASE / "install.sh").read_text(encoding="utf-8")]
+    programs += [q.read_text(encoding="utf-8")
+                 for q in sorted((BASE / "maintenance").glob("*.py"))]
+    docs_text = "\n".join(p.read_text(encoding="utf-8")
+                          for p in sorted((BASE / "docs").glob("*.md"))) \
+        + (BASE / "README.md").read_text(encoding="utf-8")
+    docs_env = set(re.findall(r"TINYCMDR_[A-Z0-9_]+", docs_text))
+    known = set(re.findall(r"TINYCMDR_[A-Z0-9_]+", "\n".join(programs)))
+    check("every TINYCMDR_* the docs name exists in some program in the tree",
+          docs_env <= known, sorted(docs_env - known))
+    # ...and every key an installer writes into .env is one the code reads (a written
+    # key nobody reads is a silent no-op). The Windows installer's writes are graded by
+    # tests/test_installer_windows.py; this pinches the two POSIX installers.
+    written = {"TINYCMDR_" + w
+               for w in re.findall(r"printf 'TINYCMDR_([A-Z0-9_]+)=", INSTALLERS)}
+    check("every TINYCMDR_* an installer writes into .env is one the code reads",
+          written <= code_env, sorted(written - code_env))
+
+    # ---- 5. no route prefix shadows a later route (both routers) ---------------------
+    # '/api/log' matched '/api/login' in the page harness because it was tested first -
+    # the probe read as 200 and the token prompt bug stayed invisible. In a router, an
+    # EARLIER prefix must never be a prefix of a LATER path.
+    def shadows(prefixes):
+        bad = []
+        for i, a in enumerate(prefixes):
+            for b in prefixes[i + 1:]:
+                if a != b and b.startswith(a):
+                    bad.append("%s before %s" % (a, b))
+        return bad
+
+    # Per HANDLER: do_GET and do_POST are separate dispatch chains, so a prefix only
+    # shadows another in its own chain.
+    chains, order = [], []
+    for m in re.finditer(r'def (do_[A-Z]+)\(|self\.path\.startswith\("([^"]+)"\)', SRC):
+        if m.group(1):
+            chains.append((m.group(1), []))
+        elif chains:
+            chains[-1][1].append(m.group(2))
+    bad = {"%s: %s" % (name, s) for name, pfx in chains for s in shadows(pfx)}
+    order = sorted(bad)
+    check("the server's route prefixes are ordered so none shadows a later one "
+          "(each handler chain separately)", not bad, order[:4])
+    shim_prefixes = re.findall(r"url\.indexOf\('([^']+)'\) === 0", HARNESS)
+    check("the page harness's branches are ordered so none shadows a later one",
+          not shadows(shim_prefixes), shadows(shim_prefixes)[:4])
+
+    print("\n%s" % ("all contract checks passed" if not FAILS
+                    else "FAILED: %d" % len(FAILS)))
+    return 1 if FAILS else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

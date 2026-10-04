@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                33,310 lines / 1.55 MB in ONE file, no package, no framework
+code                33,548 lines / 1.56 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -37,10 +37,10 @@ custom tools        3 example tools ship in ./tools/ (native .py, register-style
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               88 suites / 29,674 lines / 3,504 checks that need no model, plus a graded
+tests               89 suites / 29,967 lines / 3,530 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 4, search 3, agent 111
+config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 4, search 3, agent 112
                     (all of section 3 is configurable)
 state on disk       sessions/*.json (per channel), memory/ (OKF knowledge),
                     notes.md (legacy, still read), jobs.json (cron), uploads/, logs
@@ -307,7 +307,9 @@ Execution safety
   no read-only mode, no dry-run, no diff-approval step before a write lands
 
 Interop and ecosystem
-  no MCP client or server (0 references), so none of that ecosystem's tools
+  an MCP CLIENT (stdio, off until agent.mcp_servers names one; the hidden `mcp` tool
+  lists, inspects and calls) and an A2A server (card + JSON-RPC at /a2a) - but no MCP
+  SERVER: nothing here answers MCP clients yet
   no ACP/agent-protocol integration, no plugin market
   no LSP or language tooling; no repo map, no symbol index, no call-graph tooling (an Aider
   strength); search is ripgrep plus the model's own reading
@@ -393,12 +395,18 @@ reach                one bot per machine, ops on my boxes  personal assistant, a
                                                          client in front of it
 ```
 
-Two standards converged while this was being built, and tinycmdr speaks neither: MCP for tools
-(Anthropic, donated to the Linux Foundation's Agentic AI Foundation in 2026) and AGENTS.md for
-instructions (OpenAI's, same foundation), with the Agent Client Protocol letting harnesses drive each
-other. tinycmdr's extension path is a hot-loaded `.py` file and its instructions are Hermes-style
-SKILL.md folders. That is a real interop gap, and a cheap one to close if it ever matters: an MCP
-client is one file, and SKILL.md to AGENTS.md is a translation.
+Two standards converged while this was being built: MCP for tools (Anthropic, donated to the Linux
+Foundation's Agentic AI Foundation in 2026) and AGENTS.md for instructions (OpenAI's, same
+foundation), with the Agent Client Protocol letting harnesses drive each other. tinycmdr's extension
+path is a hot-loaded `.py` file and its instructions are Hermes-style SKILL.md folders.
+
+What it speaks (1.0.69 onward): the MCP **client** - stdio servers named in
+`agent.mcp_servers`, the stateless 2026-07-28 revision with a one-time `initialize` fallback,
+tool discovery and calls through the hidden `mcp` tool, and no tool registered at all when
+the map is empty - plus A2A as the door for other agents to drive this box, and A2UI cards
+in its own page. What it still does not: an MCP **server** (nothing here answers MCP
+clients), and AGENTS.md is read as a context file, not published as the instructions
+surface.
 
 Two pieces of framing from that same literature describe this build better than any feature list:
 
@@ -424,7 +432,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 33,310-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 33,548-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -467,7 +475,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               33,310 lines, one file, no dependency tree to audit
+readability               33,548 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

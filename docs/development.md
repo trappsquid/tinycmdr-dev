@@ -175,6 +175,15 @@ of it - the two most recent releases were cut exactly this way.
    the derivation lives once, in `maintenance/package_assets.py`, because 1.0.68-1.0.70 shipped
    without `assets/webui.css` at all).
 
+**The rule for a reported bug.** It lands as the fix PLUS the invariant that grades its class -
+and the invariant lives where the class lives: a must-agree pair in `tests/test_contracts.py`, an
+artifact surface in `maintenance/check-package-*.py` (both run by `release.sh`), a page behaviour in
+`tests/test_webui_page.py`. Naming the must-agree a bug violated, and where that agreement is
+checked, is part of calling it fixed. The 2026-10-04 sweep that wrote this rule found: assets that
+never shipped (three hand lists), a router prefix swallowing a newer route, a page harness that
+fabricated ids the page no longer used and missed ids it did, a doc route table naming a deleted
+file, and installers writing `.env` keys nothing read.
+
 Traps this project has actually paid for:
 
 - **Do not edit the tree while a gate run is in progress.** The runner's G2 report attributes your
@@ -224,6 +233,7 @@ What is served, and where it comes from:
 | `/page.css` | `assets/webui.css`, with `{{THEME}}` = the host's theme roles (one theme.toml decides the terminal and the page) |
 | `/temple.jpg` | `assets/roman-temple-spring.jpg`, the stage's backdrop photo (drawn by `.colonnade`, dimmed and feathered) |
 | `/fonts/*.woff2` | the four bundled OFL faces (Cinzel 600/700, Inter variable, JetBrains Mono) |
+| `/manifest.webmanifest` | built in tinycmdr.py (`_web_manifest()`), the PWA manifest (icons versioned like the art) |
 | `/chibi.png`, `/mark.png`, `/icon.png` | `assets/page-*.png` when the host ships them, else the built-in badge |
 
 **Look at an INSTALL, not only at the tree.** Every page defect that has reached a user so far was

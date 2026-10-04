@@ -79,6 +79,10 @@ cp "dist/tinycmdr-$VER-macos.zip" dist/tinycmdr-macos.zip
 # unstyled on every install); this is the artifact half of that check, derived from the
 # code - see maintenance/package_assets.py.
 "$PY" maintenance/check-package-assets.py --dist dist
+# ...and the page FROM the archive: served, fetched, every referenced asset 200, the
+# API reporting the version it was built as. Nothing before this had ever loaded the
+# page a user installs (1.0.68-1.0.70 shipped without the stylesheet).
+"$PY" maintenance/check-package-page.py --dist dist
 
 say "SHA256SUMS over the published files"
 # Everything a downloader can fetch, listed once, so `sha256sum -c SHA256SUMS` works in
