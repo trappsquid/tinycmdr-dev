@@ -1151,6 +1151,72 @@
       },
       "detail": "agent.unicode (auto|always|never) decides; auto keeps the environment test (TERM=dumb, a Windows console without VT). When Braille cannot render, the rail shows the designer's gold `>_` and the wordmark instead of boxes - and the same policy decides the box-drawing set for the whole screen.",
       "gate": "tests/test_tui.py (the Braille policy and the ASCII fallback are pinned separately)"
+    },
+    {
+      "id": "reasoning-effort",
+      "title": "reasoning effort, in the shape each endpoint takes",
+      "state": "shipped",
+      "anchor": {
+        "commit": "044b258",
+        "expect": "tagged"
+      },
+      "detail": "Levels auto (default - no field at all) / off / minimal / low / medium / high / xhigh / max, with the wire shape from omp's own catalog: reasoning_effort for an OpenAI-compatible /chat/completions, reasoning.effort for /responses, thinking.budget_tokens for an Anthropic-style endpoint (per-level table 1000/1000/4000/10000/32000/64000, overridable). llm.reasoning_mode forces a shape, llm.reasoning_wire remaps a level's spelling, llm.thinking_budgets overrides the table, an unknown level sends nothing and is named in the log. Chosen with `tinycmdr reasoning <level>` or `/reasoning <level>` per conversation, persisted like /model; the rail shows the level under MODEL. Verified live against a local llama.cpp box (reasoning_effort: high -> a reasoning_content block came back).",
+      "gate": "tests/test_llama_extensions.py (all three shapes, the table, the override, the remap, off/auto/junk, the session override, reasoning_mode)"
+    },
+    {
+      "id": "fresh-session-per-launch",
+      "title": "the console opens a fresh conversation per launch",
+      "state": "shipped",
+      "anchor": {
+        "commit": "044b258",
+        "expect": "tagged"
+      },
+      "detail": "The console lane's key was the constant `cli`, so every launch - and every --once run on a box - resumed one shared transcript: a brand-new window answered a new question about the previous run's ledger, and a test question accumulated an order count across all of them. A launch gets its own key now (cli-<stamp>-<pid>-<n>); older conversations stay on disk, `/tinycmdr sessions` lists them, `--continue` / `/tinycmdr resume N` resumes one, and `--session NAME` / TINYCMDR_SESSION names one exactly (which is how the suites pin a key).",
+      "gate": "tests/test_cli_prompt.py (fresh keys differ; --session/--session=/env; --continue resumes the newest)"
+    },
+    {
+      "id": "question-is-not-a-routine",
+      "title": "a question never enters the order census",
+      "state": "shipped",
+      "anchor": {
+        "commit": "044b258",
+        "expect": "tagged"
+      },
+      "detail": "The census spots repeated ORDERS; a test question ('what is the date today?') was counted as one, so eight runs later the harness offered to mint a tool for it and the model answered about that instead of the date - 'the harness's repetition nag'. A trailing '?' or a leading what/when/where/who/why/how/which/is/are/do/does/can/tell me/show me/list never enters the census; work still does.",
+      "gate": "tests/test_stall.py (a question is not an order; real work is)"
+    },
+    {
+      "id": "unfinished-note-only-on-continuation",
+      "title": "the unfinished-run note rides only a continuation",
+      "state": "shipped",
+      "anchor": {
+        "commit": "044b258",
+        "expect": "tagged"
+      },
+      "detail": "The note is context when the operator picks up last run's work and noise when they ask something new (measured: a brand-new question opened with 'the previous run did not finish' and the model answered about the previous run's ledger). The note asked the model to judge; the harness judges now - it rides an order matching the continuation cues (continue, resume, carry on, finish it, pick it up, the last task, ...) or a nearly-new conversation (the checkin suite's wreck case).",
+      "gate": "tests/test_checkin.py (the wreck payload still carries it) + tests/test_stall.py (a new question does not)"
+    },
+    {
+      "id": "rail-hide-for-copying",
+      "title": "Ctrl-W hides the rail so a drag-select copies cleanly",
+      "state": "shipped",
+      "anchor": {
+        "commit": "044b258",
+        "expect": "tagged"
+      },
+      "detail": "With mouse capture off, a drag is the TERMINAL's selection and cannot know where the panes are, so it spilled into the sidebar and copied its keys along with the code. Ctrl-W hides the rail (the transcript takes the width) and the status line says so; Ctrl-W brings it back. A true in-app selection mode is the deeper fix and is not in this release.",
+      "gate": "tests/test_tui.py (the rail is a conditional container; the flag defaults to on)"
+    },
+    {
+      "id": "sixteen-colour-tier-distinct",
+      "title": "the 16-colour tier read as one colour",
+      "state": "shipped",
+      "anchor": {
+        "commit": "df9ad3f",
+        "expect": "tagged"
+      },
+      "detail": "A 16-colour terminal cannot show four neighbouring warm hues, and the theme's ANSI column mapped gold, ember, bronze and the label gold all to yellow - so a Windows console drew everything yellow while a truecolor one on macOS showed the palette ('all yellow and almost no variation'). The tier now uses the closest DISTINCT members of the 16-colour set, one per role: gold bright yellow, ember red, bronze dark yellow, crimson magenta, error bright red, muted dim, text white, laurel green. The app-style table is built from the palette on every tier now, instead of a second hardcoded table - which is how the ANSI column drifted at all.",
+      "gate": "tests/test_tui.py (named colours on 16, no 24-bit or 256 SGR there) + the theme file's ansi section"
     }
   ]
 }
