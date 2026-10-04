@@ -1279,15 +1279,17 @@ def main():
         (stage / "config.json").write_text(json.dumps(_cfg), encoding="utf-8")
         try:
             fl = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "--web"],
-                                cwd=str(stage), capture_output=True, text=True, timeout=8,
+                                cwd=str(stage), capture_output=True, text=True, timeout=45,
                                 stdin=subprocess.DEVNULL,
                                 env=dict(os.environ, TINYCMDR_PLAIN="1"))
             fcode, fblob = fl.returncode, fl.stdout + fl.stderr
         except subprocess.TimeoutExpired as e:
             fcode = "serving"
-            fblob = (e.stdout or "") + (e.stderr or "")
-            if isinstance(fblob, bytes):
-                fblob = fblob.decode("utf-8", "replace")
+            # TimeoutExpired carries BYTES on some platforms even with text=True;
+            # normalize each part rather than concatenating blindly.
+            fblob = "".join(
+                c if isinstance(c, str) else (c or b"").decode("utf-8", "replace")
+                for c in (e.stdout, e.stderr) if c is not None)
         check("H1: `--web` serves the page and holds it open",
               fcode == "serving" and "tinycmdr page:" in fblob
               and "Serving the page" in fblob, (fcode, fblob[-240:]))

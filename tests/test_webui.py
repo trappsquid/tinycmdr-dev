@@ -147,7 +147,7 @@ def main():
     check(not any(token in m for m in sink.lines),
           "the token never appears in a log line", sink.lines)
 
-    def req(method, path, headers=None, body=None, timeout=5, limit=4000):
+    def req(method, path, headers=None, body=None, timeout=20, limit=4000):
         r = urllib.request.Request(base + path, method=method, data=body,
                                    headers=headers or {})
         try:
@@ -199,6 +199,42 @@ def main():
           "a cross-origin request: 403")
     code, body, _ = req("GET", "/api/tasks", {**TOK, "Origin": base})
     check(code == 200, "a same-origin request passes", code)
+
+    # ---- the resolver is NOT on the request path ----------------------------
+    # Measured on a macOS CI runner: getfqdn/gethostbyname_ex took >5s, and because the
+    # Host check ran them per request, the FIRST request to a freshly started server
+    # timed out (test_page_upgrade and this suite both died that way). The fast names
+    # (loopback, this box's hostname, web.host) answer immediately; the resolver's
+    # answers are merged in from a background thread.
+    real_socket = fb.socket
+    calls = {"n": 0}
+
+    class _SlowSock:
+        def __getattr__(self, name):
+            return getattr(real_socket, name)
+
+        def getfqdn(self, *a):
+            calls["n"] += 1
+            time.sleep(30)
+            return "slow.example"
+
+        def gethostbyname_ex(self, *a):
+            calls["n"] += 1
+            time.sleep(30)
+            return ("slow", [], ["192.0.2.7"])
+
+    fb._WEB_HOSTS_CACHE = None          # force a fresh warm under the slow resolver
+    fb._WEB_HOSTS_WARM = None
+    fb.socket = _SlowSock()
+    try:
+        t0 = time.time()
+        code, _, _ = req("GET", "/api/tasks", TOK, timeout=3)
+        dt = time.time() - t0
+        check(code == 200 and dt < 2.0,
+              f"a request never waits on the resolver ({code}, {round(dt, 2)}s)")
+        check(calls["n"] >= 1, "the resolver runs in the background", calls)
+    finally:
+        fb.socket = real_socket
 
     # ---- the body cap is checked BEFORE the read ----------------------------
     big = b"x" * (fb.WEB_BODY_MAX + 64)

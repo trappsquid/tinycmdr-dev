@@ -22490,8 +22490,10 @@ def _web_command(text, key="web"):
         return ("reply", "Unknown command — try %s help." % CMDR)
     return ("task", text)
 
-# This box's own names, computed once (getfqdn hits DNS): the Host check's allowlist.
+# This box's own names: loopback/hostname/web.host immediately, the resolver's answers
+# (getfqdn hits DNS) merged in from a background thread - never on a request's path.
 _WEB_HOSTS_CACHE = None
+_WEB_HOSTS_WARM = None
 
 
 def _web_local_hosts():
@@ -22507,22 +22509,64 @@ def _web_local_hosts():
 
     A Host that names this box is not a threat - the Origin rule below is what carries CSRF
     protection - it is the door being used the way the installer said it could be.
+
+    The RESOLVER is not on the request path any more. `getfqdn`/`gethostbyname_ex` can
+    take seconds (measured: >5s on a macOS CI runner, which made the first request to a
+    freshly started server time out), and this function is called per request. The cheap
+    names - loopback, the hostname, `web.host` when it is one - are always available; the
+    resolved set is merged in from a background thread, and `_web_hosts_settled()` waits
+    for it only when a request carries a Host that is not already known.
     """
-    global _WEB_HOSTS_CACHE
+    global _WEB_HOSTS_CACHE, _WEB_HOSTS_WARM
     if _WEB_HOSTS_CACHE is None:
         names = {"127.0.0.1", "localhost", "::1"}
         try:
-            host = socket.gethostname()
-            names.add(host.strip().lower())
-            fq = socket.getfqdn(host)
-            if fq:
-                names.add(fq.strip().lower())
-            for ip in socket.gethostbyname_ex(host)[2]:
-                names.add(str(ip).strip().lower())
+            names.add(socket.gethostname().strip().lower())
         except Exception:                                    # noqa: BLE001
             pass
         _WEB_HOSTS_CACHE = names
+    if _WEB_HOSTS_WARM is None:
+        _WEB_HOSTS_WARM = threading.Thread(target=_web_hosts_resolve, daemon=True,
+                                           name="web-hosts")
+        _WEB_HOSTS_WARM.start()
+        _WEB_HOSTS_CACHE.update(_web_hosts_configured())
     return set(_WEB_HOSTS_CACHE)
+
+
+def _web_hosts_configured():
+    """`web.host`, when it names ONE host - the name the operator bound to."""
+    configured = str((CONFIG.get("web") or {}).get("host") or "").strip().lower()
+    if configured and configured not in ("0.0.0.0", "::"):
+        return {configured.rsplit(":", 1)[0].strip("[]")}
+    return set()
+
+
+def _web_hosts_resolve():
+    """The names that need the resolver, merged into the cache when they land."""
+    extra = set()
+    try:
+        host = socket.gethostname()
+        fq = socket.getfqdn(host)
+        if fq:
+            extra.add(fq.strip().lower())
+        for ip in socket.gethostbyname_ex(host)[2]:
+            extra.add(str(ip).strip().lower())
+    except Exception:                                        # noqa: BLE001
+        pass
+    if _WEB_HOSTS_CACHE is not None:
+        _WEB_HOSTS_CACHE.update(extra)
+
+
+def _web_hosts_settled(timeout=5.0):
+    """Wait for the resolver, ONCE, for a Host the fast set does not know.
+
+    A LAN visitor's first request can arrive before the background resolve has
+    finished; refusing it would be a wrong answer, not a safe one. Waiting here costs
+    nothing on the common path (loopback is in the fast set, so this is never called).
+    """
+    if _WEB_HOSTS_WARM is not None:
+        _WEB_HOSTS_WARM.join(timeout)
+    return set(_WEB_HOSTS_CACHE or ()) | _web_hosts_configured()
 
 def health_payload():
     """What a monitor should read, answering "can it hear me?" rather than "is the HTTP
@@ -22703,6 +22747,10 @@ def run_webui():
             # This box's own names answer the question "did you address me?"; `web.host`,
             # when it names one host, is an extra name the operator chose.
             allowed = _web_local_hosts()
+            if name not in allowed:
+                # A name the fast set does not know may be the box's own LAN address,
+                # still being resolved in the background: settle it once before refusing.
+                allowed = _web_hosts_settled()
             configured = str((CONFIG.get("web") or {}).get("host") or "").strip().lower()
             if configured and configured not in ("0.0.0.0", "::"):
                 allowed.add(configured.rsplit(":", 1)[0].strip("[]"))

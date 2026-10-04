@@ -1626,8 +1626,26 @@ WantedBy=$BOOT_TARGET
 EOF
 info "wrote $UNIT"
 sctl daemon-reload 2>/dev/null || true
-sctl enable "$SERVICE_NAME" >/dev/null 2>&1 || die "systemctl enable failed"
+# A user-mode enable needs a user systemd BUS. A container, a CI runner, or an install
+# over ssh before that user has ever logged in has none - and that is not a broken unit:
+# the file is in place and enabling is one command away (the same shape macOS handles
+# with --no-launchd, and the shape this installer's own smoke install runs in).
+_HAVE_BUS=1
 if [ "$INSTALL_MODE" = user ]; then
+    if [ -z "${DBUS_SESSION_BUS_ADDRESS:-}" ] \
+       && [ ! -S "/run/user/$(id -u)/bus" ] \
+       && [ ! -S "/run/user/$(id -u)/systemd/private" ]; then
+        _HAVE_BUS=0
+    fi
+fi
+if [ "$_HAVE_BUS" = 1 ]; then
+    sctl enable "$SERVICE_NAME" >/dev/null 2>&1 || die "systemctl enable failed"
+else
+    warn "no user systemd bus here (a container, CI, or a session that has not started):"
+    warn "the unit is written but NOT enabled. In a user session, run:"
+    warn "  systemctl --user enable --now $SERVICE_NAME"
+fi
+if [ "$INSTALL_MODE" = user ] && [ "$_HAVE_BUS" = 1 ]; then
     info "enabled at login: $(sctl is-enabled "$SERVICE_NAME" 2>&1)"
     # Lingering is what turns "starts when I log in" into "starts with the machine".
     # It needs root, so a no-root install may not be allowed to set it.

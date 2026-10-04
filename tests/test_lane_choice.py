@@ -70,13 +70,19 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, web=False):
         code, said = r.returncode, r.stdout + r.stderr
     except subprocess.TimeoutExpired as e:
         code = "serving"
-        said = (e.stdout or "") + (e.stderr or "")
-        if isinstance(said, bytes):
-            said = said.decode("utf-8", "replace")
+        # stdout/stderr on a TimeoutExpired are BYTES on some platforms even with
+        # text=True (measured: ubuntu CI), and order matters: normalize each part.
+        said = _text(e.stdout) + _text(e.stderr)
     logf = dirpath / "tinycmdr.log"
     if logf.exists():
         said += logf.read_text(encoding="utf-8", errors="replace")
     return code, said
+
+
+def _text(chunk):
+    if chunk is None:
+        return ""
+    return chunk if isinstance(chunk, str) else chunk.decode("utf-8", "replace")
 
 
 def load(dirpath):
@@ -102,7 +108,7 @@ def main():
         # box does not stop: it mints, serves the page and holds the process open -
         # which is what the installer's autostart agent relies on. The CLI-only end
         # state is the page OFF (next case).
-        code, said = run(work / "cli_only", timeout=8, web=True)
+        code, said = run(work / "cli_only", timeout=30, web=True)
         check(code == "serving",
               f"no token, page on: the run serves instead of stopping ({code})")
         check("minted TINYCMDR_WEB_TOKEN" in said,
@@ -127,7 +133,10 @@ def main():
         # the log listener need not have flushed its last lines when a fast child exits -
         # which macOS won and ubuntu lost, so it graded the platform, not the rule. The run
         # here is only what stages this case's config.json; the rule is read off the module.
-        run(work / "health")
+        # `--no-web`: this run exists only to stage the case's config.json (the rule is
+        # read off the module, below). Without it the page is the door now, and the child
+        # mints a token, serves 8790 and holds the port until the deadline.
+        run(work / "health", args=("--no-web",), timeout=30)
         saved = {k: os.environ.pop(k) for k in list(os.environ) if k.startswith("TINYCMDR_")}
         try:
             m = load(work / "health")

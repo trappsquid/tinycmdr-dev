@@ -64,7 +64,7 @@ def get(url, token=None):
     if token:
         req.add_header("X-Tinycmdr-Token", token)
     try:
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=20) as r:
             return r.status
     except urllib.error.HTTPError as e:
         return e.code

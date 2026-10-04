@@ -60,6 +60,13 @@ Changed
   terminal doors, `--once` runs one task, and a chat token is optional again.
 
 Fixed
+- **The page's Host check no longer touches the resolver on the request path.** It
+  called `getfqdn`/`gethostbyname_ex` per request to build its allowlist, and on a box
+  where that takes seconds (measured: >5s on a macOS CI runner) the FIRST request to a
+  freshly started server timed out - the page looked dead for everyone while nothing was
+  wrong. Loopback, the hostname and `web.host` answer immediately; the resolved names are
+  merged in from a background thread, and a Host the fast set does not know settles it
+  once before being refused. Pinned in `tests/test_webui.py` with a resolver that sleeps.
 - **A minted page token could kill startup on an upgraded install.** `TINYCMDR_WEB_TOKEN`
   in `.env` (which is exactly what an install that upgraded into the page carries) plus a
   config.json written before the page existed (no `web` block) raised `KeyError: 'web'`
@@ -69,6 +76,12 @@ Fixed
   section it needs (a `web: false` in a hand-edited config.json is replaced rather than
   fatal), and `tests/test_page_upgrade.py` stages that tree and grades both halves -
   the pre-fix build dies with the KeyError, which is the check's own falsification.
+- **A Linux user install with no user systemd bus no longer fails.** A container, a CI
+  runner, or an install over ssh before that user has ever logged in has no
+  `systemctl --user` bus - and the page-on default now registers the unit for a chat-less
+  install, which turned that into `systemctl enable failed` and a dead install. The unit
+  is written either way and the operator is told the one command that enables it in a
+  session; a bus that IS there and still refuses stays fatal.
 
 ## [1.0.66] - 2026-10-03
 
