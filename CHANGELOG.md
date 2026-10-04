@@ -7,6 +7,93 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.68] - 2026-10-04
+
+- **Privileges are handled explicitly: the page needs no administrator, and the parts that
+  do are named with the exact command.** Loopback plus the published default port (8790,
+  above 1024) is a standard-user install on all three platforms - nothing asks for root.
+  What does need rights is now checked and said:
+  - a port **below 1024** is refused with the reason and swapped for 8790 (all three
+    installers check `id -u` / `IsInRole(Administrator)` before promising it);
+  - a **LAN bind** (`web.host 0.0.0.0`) needs no rights for the bind, but the FIREWALL
+    hole does: macOS's Application Firewall, `ufw`/`firewalld` on Linux and Windows
+    Defender each get their one exact command, with the loopback tunnel as the no-rights
+    alternative (measured on this Mac: the note names `socketfilterfw --add/--unblockapp`
+    with the interpreter's own path);
+  - the same text is printed by `tinycmdr setup` when the LAN is chosen, by `doctor`
+    whenever `web.host` is `0.0.0.0`, and by the startup announce - a host switched to the
+    LAN long after the installer asked still learns what to open;
+  - the runtime names EACCES for what it is: "ports below 1024 need root - set web.port to
+    a port above 1024 (the default is 8790), or run the service elevated", instead of
+    six retries and a vague "cannot bind".
+
+Added
+- **The page wears the host's palette and the host's icon.** It shipped with a hardcoded
+  blue-grey palette and a placeholder favicon, so an install whose terminal was themed saw
+  none of it in a browser (operator report, 2026-10-04: "no branding ... no colour theme
+  to match the roman empire styling"). The page's CSS now carries role variables - `--bg`,
+  `--panel`, `--fg`, `--dim`, `--gold`, `--ember`, `--bronze`, `--crimson`, `--error`,
+  `--laurel`, `--sel` - filled from the SAME `theme_palette()` the terminal reads, every
+  literal colour in it became a role or a `color-mix()` of one, the mobile `theme-color`
+  and the PWA manifest's background/theme colours follow that value. The art ships in the
+  forms the places need, all derived from the masters by `maintenance/make-brand-art.py`:
+  an opaque `assets/page-icon.png` for the home-screen/apple-touch icon (an OS composites
+  transparency on white or black), a transparent `assets/page-mark.png` for the tab, and
+  `assets/page-chibi.png` for the header medallion and the empty state. A host that wants
+  different art drops its own PNG at any of those paths; the built-in emblem stands in
+  when they are absent.
+- **The browser hands its token over once and stops carrying it.** The page POSTs the
+  token from the URL fragment to `/api/login` and takes an HttpOnly, `SameSite=Strict`
+  cookie back; the fragment is scrubbed as before and the `localStorage` copy is dropped
+  once that lands, so the token is in no URL, no history entry, and nothing a script on
+  the page can read. The `X-Tinycmdr-Token` header stays for every non-browser caller
+  (the probes, curl, the installer), and a wrong token or cookie is still 401.
+
+Fixed
+- **The built-in fallback favicon is the project's own badge.** It was the deleted page
+  lane's placeholder - a white monogram on a blue disc - and at favicon size that reads as
+  somebody else's logo (operator report, 2026-10-04: "what is that icon you are using that
+  says fb?"). The embedded last-resort icon is now the badge at 192px (the shipped
+  `assets/page-icon.png` remains the 512px render), so even a tree with no `assets/` shows
+  our art; `tests/test_webui.py` decodes the constant and refuses a blue one.
+- **The dead-lane banner is dismissible.** Operator, 2026-10-04: "make that a closeable
+  notification, not a permanent banner". The x hides it and remembers that exact wording
+  (`fb_lane_muted`); a different failure - another lane, another reason, a config edit -
+  speaks again, and so does the same one after a recovery. The header marker and the tab
+  title never hide: dismissed means "I have read this", not "stop telling me the bot is
+  deaf". Pinned by the page suite (dismiss, stay dismissed, re-notify on a new reason).
+- **A theme file's truecolor section never applied** - only its `.256` and `.ansi`
+  sub-tables did. The merge looked for a nested `truecolor` key that no theme file has, so
+  `[themes.NAME]` - the section holding the operator's own hexes - was read as empty and
+  every surface kept the built-in palette. Found by wiring the page to the same palette
+  and watching it not move; pinned by `tests/test_theme.py` (13 checks), which grades each
+  tier, the page's variables, a bad hex, an unknown role, and a `default` naming a section
+  that is not there.
+- **No suite opens a browser tab any more.** A staged child that serves auto-opened the
+  page on every run (measured: ~60 tabs in one day of gate runs on a Mac);
+  `TINYCMDR_NO_BROWSER=1` is the opt-out `_browser_possible()` honours, every suite that
+  starts a server sets it, and the in-process suites patch the function.
+
+Changed
+- **The page is a modern imperial command pavilion.** The operator's brief, 2026-10-04:
+  keep the efficient dark console, put Rome in the ornamentation. Basalt ground with two
+  faint radial washes; an extremely faint colonnade behind the transcript, drawn in the
+  host's own gold (`assets/roman-colonnade.svg`, the server substitutes the accent, 5.5%
+  opacity - never a scene); glass panels; bronze edges; gold linework. The header is a
+  four-rem bar with the **chibi in a round bronze medallion** (the placeholder mark it
+  replaces read like somebody else's logo), the name in Cinzel, the version in crimson
+  mono. The rail is a legion archive - "CAMPAIGNS", gold hover, this host in the footer.
+  The empty transcript is an empty STATE: the chibi, "Ave, Commander.", one line of
+  orientation, and two ways in (start a new campaign, open the archive) - gone the moment
+  there is a transcript. The composer is a command slab: bronze border, gold focus ring, a
+  gold **Dispatch** button, the attachment as a bronze seal. A conversation that will not
+  load is a card with Retry and Start-New instead of a blank pane.
+- **Two banners, not one.** A lane that cannot be heard is an ERROR with a one-line
+  meaning ("Messages can be drafted locally, but they may not be dispatched"), a Retry
+  that re-checks immediately, a Details click for the technical reason, and a dismiss; a
+  config edit that has not applied is a separate AMBER notice with its own dismiss. One
+  banner carrying both read as one alarm that was mostly noise.
+
 ## [1.0.67] - 2026-10-03
 
 Added
