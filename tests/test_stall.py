@@ -1562,13 +1562,17 @@ def test_props_parsing_matches_the_live_shape():
 
 def test_status_has_one_implementation():
     """The Mattermost handler and the web UI each had their own /status and had
-    drifted (the web one silently lacked sampling and notes). One renderer, and with
-    the web UI gone only the Mattermost caller is left."""
+    drifted (the web one silently lacked sampling and notes). One renderer, and both
+    callers - the Mattermost handler and the web lane's `/status` - must go through it:
+    a new second copy is exactly how this drifted the first time."""
     src = (SRC).read_text(encoding="utf-8", errors="replace")
     check("status: the shared renderer exists", "def status_text(" in src)
     check("status: the Mattermost handler uses it",
           "status_text(session_key, paused=self.paused)" in src,
           "mattermost not unified")
+    check("status: the web lane uses the same renderer",
+          'return ("reply", status_text(key))' in src,
+          "web /status has its own copy again")
     check("status: no second copy of the fields",
           src.count("notes.md: {notes_kb:.1f} KB") == 1,
           "duplicate renderer left behind")

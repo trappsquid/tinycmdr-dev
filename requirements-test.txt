@@ -6,9 +6,14 @@
 #     pip install -r requirements.txt -r requirements-test.txt
 #
 # requests / rich / prompt_toolkit come from requirements.txt: the suites import the
-# tree's own tinycmdr.py, so anything it imports has to be there. The only suite that
-# ever needed more of its own was the local web UI's browser suite, and that whole
-# surface is gone, so there are no extra packages to install here any more.
+# tree's own tinycmdr.py, so anything it imports has to be there. The web UI's BROWSER
+# suite (playwright + a Chromium binary) was deleted with the lane in 1.0.36 and is
+# deliberately NOT revived with it: the renderer defects it existed for are graded
+# without a browser by tests/test_webui_page.py, which runs the page's real script in
+# Node against a DOM shim - node is preinstalled on the CI runners, and the suite exits
+# 77 (red) where it is missing, so it cannot pass ungraded. If the browser suite ever
+# comes back, this file gains playwright and CI gains
+# `python -m playwright install chromium`.
 
 # No pytest. Three suite docstrings used to advertise `python -m pytest -q <file>`;
 # their check() only ever printed, so pytest collected no test and exited 0 with the

@@ -9,10 +9,11 @@ Two incidents on a live install, 2026-09-28, both invisible until someone went l
     config.json correctly and the service restarted - and nothing anywhere said that a config
     edit needs a restart to apply.
 
-The local web UI is gone, so these facts are graded where they now live: `lanes_snapshot()`,
-`tinycmdr health` (exit code and lane line), the persisted `logs/state.json`, `tinycmdr
-doctor`'s lane lines, and `config_drift()`. Hermetic: the staged copy is the module, so
-`logs/state.json` lands in the stage.
+The web UI's own surface is graded by tests/test_webui.py (`/api/health` carries the lane
+state) and by the page suite's dead-lane banner check; these facts are graded where the
+other lanes live: `lanes_snapshot()`, `tinycmdr health` (exit code and lane line), the
+persisted `logs/state.json`, `tinycmdr doctor`'s lane lines, and `config_drift()`.
+Hermetic: the staged copy is the module, so `logs/state.json` lands in the stage.
 
     python tests/test_lane_health.py
 """
