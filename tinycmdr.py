@@ -4597,7 +4597,7 @@ _ATLAS_KNOWN_FILES = (
     ("config.json", "settings; secrets live in .env, never read those out loud"),
     ("field-notes.md", "known-failure library; a matching tool failure arrives annotated"),
     ("notes.md", "legacy memory, still read into this prompt"),
-    ("memory/", "OKF knowledge; the index rides in this prompt"),
+    ("memory/", "OKF knowledge bundle; the index rides in this prompt"),
     ("atlas.md", "this file"),
     ("skills/", "runbooks, read on demand with the skill tool"),
     ("tools/", "custom tools; a file dropped here is read at the next start"),
@@ -11807,13 +11807,13 @@ CORE_TOOLS = {
         "fn": tool_memory,
         "schema": _schema(
             "Durable memory (OKF bundle, memory/): add, update, deprecate, forget, "
-            "read, search, list. The index rides every prompt; never store secrets.",
+            "read, search, list. Never store secrets.",
             {"action": {"type": "string"},
-             "id": {"type": "string", "description": "concept id"},
-             "title": {"type": "string", "description": "short name"},
-             "body": {"type": "string", "description": "the fact"},
-             "reason": {"type": "string", "description": "deprecate/forget: why"},
-             "query": {"type": "string", "description": "search: words"}},
+             "id": {"type": "string"},
+             "title": {"type": "string"},
+             "body": {"type": "string"},
+             "reason": {"type": "string"},
+             "query": {"type": "string"}},
             ["action"]),
     },
     "render_ui": {

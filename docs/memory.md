@@ -106,7 +106,7 @@ The feature was built to a budget, and the budget is pinned:
 
 - default static state (11 core tool schemas + system prompt): **~4.3K est tokens**;
 - the all-tools-revealed worst case must stay inside the ratchet in
-  `tests/test_envelope.py` (**5,400 est**; this landed at 5,383, which is why the
+  `tests/test_envelope.py` (**5,400 est**; this landed at 5,331, which is why the
   `memory` schema declares six fields rather than eleven);
 - no standing-instruction line anywhere names the format - the atlas carries two lines
   (`notes.md` legacy, `memory/`) and nothing else rides the static prompt.

@@ -20,8 +20,9 @@ Changed
   and the log move together. `notes.md` is left in place and still rides the prompt, but
   nothing writes it; no migration was performed (operator's call). Attestation
   (`type: Attested Computation`) is reserved for a later phase. Rent was the constraint:
-  the schema was cut to six declared fields so the all-revealed worst case lands at 5,386
-  est tokens, inside the 5,400 ratchet, while the default static state is ~4.3K.
+  the schema was cut to six declared fields so the all-revealed worst case lands at 5,331
+  est tokens - measured on a dev box; a CI runner's longer paths read ~17 higher, and the
+  5,400 ratchet still holds there.
 
 Added
 - **MCP: the harness can use the tool ecosystem.** Operator brief, 2026-10-04. A
