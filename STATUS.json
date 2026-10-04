@@ -1217,6 +1217,61 @@
       },
       "detail": "A 16-colour terminal cannot show four neighbouring warm hues, and the theme's ANSI column mapped gold, ember, bronze and the label gold all to yellow - so a Windows console drew everything yellow while a truecolor one on macOS showed the palette ('all yellow and almost no variation'). The tier now uses the closest DISTINCT members of the 16-colour set, one per role: gold bright yellow, ember red, bronze dark yellow, crimson magenta, error bright red, muted dim, text white, laurel green. The app-style table is built from the palette on every tier now, instead of a second hardcoded table - which is how the ANSI column drifted at all.",
       "gate": "tests/test_tui.py (named colours on 16, no 24-bit or 256 SGR there) + the theme file's ansi section"
+    },
+    {
+      "id": "update-rule-any-version",
+      "title": "one update command, from any version",
+      "state": "shipped",
+      "anchor": {
+        "commit": "6defe10",
+        "expect": "tagged"
+      },
+      "detail": "The rule (docs/development.md + README): every user, on every released version, types /tinycmdr update in chat or `tinycmdr update` in a terminal and it works. The command fetches the latest release package and SHA256SUMS, verifies the download BEFORE touching the install, applies it leaving every host-owned path alone, and never shells out to git (a dirty/pruned/gitless checkout is not a blocker). It is reachable from chat (_CHAT_VERB_SET), runs in an interactive session instead of printing a hint, and a chat update that changed the version RESTARTS onto it. tests/test_verbs.py pins the verb, the published updaters, the release attachments, the launcher fallbacks and the restart; tests/test_tinycmdr_prefix.py grades the door with the verb stubbed.",
+      "gate": "tests/test_verbs.py + tests/test_tinycmdr_prefix.py"
+    },
+    {
+      "id": "published-updater-scripts",
+      "title": "update.sh / update.ps1 ship with every release",
+      "state": "shipped",
+      "anchor": {
+        "commit": "6defe10",
+        "expect": "tagged"
+      },
+      "detail": "A version-independent updater attached beside install.sh/install.ps1 (and listed in SHA256SUMS): fetch the package for this host, verify it, extract, copy over the install while skipping the host-owned set, print the version it moved from and to. It is what repairs an install whose own updater is missing, broken or git-based. Proven end to end on a real 1.0.44 install planted on a Windows host: 27 files written, 1.0.44 -> 1.0.64, config.json / tools/mine.py / theme.toml / notes.md byte-identical.",
+      "gate": "tests/test_verbs.py (existence, release attachment, SHA verification, host-owned set) + the field run"
+    },
+    {
+      "id": "launcher-fallback-capability-probe",
+      "title": "the launcher repairs an install whose own updater predates the package path",
+      "state": "shipped",
+      "anchor": {
+        "commit": "941e9a8",
+        "expect": "tagged"
+      },
+      "detail": "The tinycmdr launchers (sh and cmd) probe the local code for the CAPABILITY (releases/latest/download), not the verb name: measured against a real 1.0.44 payload, that version HAS an `update` verb - git-pull based, which dead-ends on the dirty checkout its installer leaves - and zero occurrences of the release URL. When the probe fails, the launcher fetches and runs the published updater. Verified end to end on the box: a 1.0.44 payload with the current launcher, `tinycmdr update` -> 'this install predates the packaged updater - using the published one' -> 1.0.44 -> 1.0.65 (27 files, host-owned left alone).",
+      "gate": "tests/test_verbs.py (the capability marker in both launchers) + the field run"
+    },
+    {
+      "id": "host-file-default-gap",
+      "title": "a host-owned file whose shipped default moved is reported",
+      "state": "shipped",
+      "anchor": {
+        "commit": "6defe10",
+        "expect": "tagged"
+      },
+      "detail": "update never overwrites host-owned files by design, which is how the 16-colour fix inside theme.toml reached only new installs while existing ones kept the all-yellow ANSI column (same shape as the drop-in gap, one release later). The release now ships theme.default.toml beside theme.toml, and update prints - and doctor reports - the pair with the remedy, once per process.",
+      "gate": "tests/test_harness_extras.py (identical -> quiet, edited -> reported, absent -> not a gap) + doctor's `host files:` line"
+    },
+    {
+      "id": "no-mint-for-tooled-procedures",
+      "title": "no mint offer for a procedure that already ran through a tool",
+      "state": "shipped",
+      "anchor": {
+        "commit": "6defe10",
+        "expect": "tagged"
+      },
+      "detail": "A computer-use runbook executed by hand produced 'say mint it and I will turn it into a tool' - but those calls were already tool calls, so wrapping the runbook changes nothing (operator: 'seems very stupid'). A run whose calls include a computer/GUI-shaped tool name (computer, gui, screen, screenshot, vision, desktop, mouse, keyboard, pyautogui) gets no offer and no report-time line.",
+      "gate": "tests/test_route_hint.py (GUI-driven silent in both paths; shell-driven still offered)"
     }
   ]
 }
