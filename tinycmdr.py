@@ -25083,7 +25083,11 @@ def start_web_surface(open_browser=True):
               "web.enabled: false to stop this line, or write .env by hand.",
               file=sys.stderr)
         return None
-    port = int(web.get("port") or 8790)
+    raw_port = web.get("port")
+    # 0 is a real value here ("let the OS pick"), not a missing one: `or 8790` turned the
+    # suite's port-0 server into a probe of 8790, and on a box whose live install serves
+    # the page that read as "already serving here" (measured 2026-10-04).
+    port = int(raw_port) if raw_port is not None else 8790
     if _web_answers(port):
         # The service (or another session) already serves the page: announce it
         # instead of spending six seconds failing to bind the same port.
@@ -25095,7 +25099,7 @@ def start_web_surface(open_browser=True):
         # Say what would work: who holds the port, and that a page already answering
         # there is usable as-is (the log gets the same, but a person at the terminal
         # sees this).
-        for line in web_busy_note(web.get("host") or "127.0.0.1", web.get("port") or 8790):
+        for line in web_busy_note(web.get("host") or "127.0.0.1", port):
             print(line, file=sys.stderr)
         return None
     _announce_web(srv.server_address[1], open_browser=open_browser)
