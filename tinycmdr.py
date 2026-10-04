@@ -1639,6 +1639,10 @@ def envelope_line(env, raw=False):
         line += " · pinned by llm.context_window"
     elif _src == "config":
         line += " · budget capped by llm.max_context_tokens"
+    elif isinstance(_src, str) and (":" in _src and _src.split(":", 1)[0]
+                                    in ("preset", "window_presets")):
+        line += (" · window from %s (documented; llm.max_context_tokens caps it)"
+                 % _src.split(":", 1)[-1])
     return line
 
 
@@ -2793,6 +2797,39 @@ def _detect_window(base_url, headers, timeout=10):
         return int(detected) if detected else 0
     except (TypeError, ValueError):
         return 0
+
+
+# Documented context windows for hosts that do not report one, matched by HOST ONLY.
+# Each number is the provider's own documentation for its main models (OpenAI's
+# GPT-4o/4.1-class 128k; Anthropic's Claude 3/4-class 200k; DeepSeek's chat/reasoner
+# 128k - checked 2026-10-04). A provider whose window varies per model is deliberately
+# absent: llm.window_presets and llm.max_context_tokens are the doors there, and doctor
+# names them. Never matched by model NAME - that guess is what F-19 refused - and every
+# use is logged and named in envelope_line, so a preset never reads like a server fact.
+_CLOUD_WINDOW_PRESETS = {
+    "api.openai.com": 128000,
+    "api.anthropic.com": 200000,
+    "api.deepseek.com": 128000,
+}
+
+
+def _preset_window(base_url):
+    """(window, source) for a host whose documented window applies, or (0, "").
+
+    llm.window_presets (host-substring -> tokens) is consulted FIRST, so the operator's
+    own number always beats the built-in table. The source names which one answered.
+    """
+    host = _endpoint_root(base_url)
+    own = (CONFIG.get("llm") or {}).get("window_presets")
+    if isinstance(own, dict):
+        for key, val in own.items():
+            if (str(key).lower() in host and isinstance(val, (int, float))
+                    and not isinstance(val, bool) and val > 0):
+                return int(val), "window_presets:%s" % key
+    for key, val in _CLOUD_WINDOW_PRESETS.items():
+        if key in host:
+            return int(val), "preset:%s" % key
+    return 0, ""
 
 
 def _endpoint_root(url):
@@ -15428,12 +15465,20 @@ class Agent:
         if pinned:
             log.info("context: llm.context_window pins the window to %d", pinned)
         detected = pinned or int(self._endpoint_window(base) or 0)
+        preset_src = ""
+        if not detected:
+            detected, preset_src = _preset_window(base)
+            if detected:
+                log.info("context: %s reports no window; using the documented %s-token "
+                         "window for %s (llm.max_context_tokens still caps it)",
+                         base, detected, preset_src.split(":", 1)[-1])
         cfg_max = int(CONFIG["llm"].get("max_tokens") or 0)
         explicit = _context_ceiling()
         refused = warned = False
         refusal = ""
         if detected:
-            window, source = detected, ("config-window" if pinned else "server")
+            window, source = detected, ("config-window" if pinned
+                                        else (preset_src or "server"))
             reply = min(cfg_max or window // 4, max(1, window // 4))
             budget = max(ENVELOPE_MIN_BUDGET, window - static - reply)
             if explicit and explicit < budget:
@@ -15466,9 +15511,12 @@ class Agent:
                             reply, budget, window, static, reply, budget,
                             ENVELOPE_WARN_WINDOW, ENVELOPE_MIN_WINDOW)
             else:
-                log.info("context: server reports %s per request, static %s + reply "
+                log.info("context: %s reports %s per request, static %s + reply "
                          "%s, using messages budget %s (window=%s static=%s "
-                         "reply=%s budget=%s)", window, static, reply, budget,
+                         "reply=%s budget=%s)",
+                         ("the server" if source == "server" else
+                          "the documented window for %s" % source.split(":", 1)[-1]),
+                         window, static, reply, budget,
                          window, static, reply, budget)
         elif explicit:
             budget, source = explicit, "config"

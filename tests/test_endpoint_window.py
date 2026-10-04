@@ -209,6 +209,55 @@ def main():
         fb._detect_window = real_detect_miss       # the stub must not leak into the routes
         fb.AGENT._window_cache, fb.AGENT._envelope_cache = {}, None
 
+    # ------------------------------- a host whose window is DOCUMENTED (presets)
+    # Operator, 2026-10-04: a DeepSeek endpoint that reports nothing ran at the assumed
+    # 8000 with replies clipped to 2048 ("you must write 1000000 explicitly"). A
+    # reporting-nothing HOST now gets its documented window: the built-in table names a
+    # few providers, llm.window_presets beats it, llm.max_context_tokens still caps it,
+    # and the model NAME is never consulted (F-19's rule, kept).
+    _saved_llm = {k: fb.CONFIG["llm"].get(k) for k in
+                  ("base_url", "max_context_tokens", "window_presets")}
+    try:
+        fb.CONFIG["llm"]["max_context_tokens"] = "auto"
+        fb.CONFIG["llm"].pop("window_presets", None)
+        fb.CONFIG["llm"]["base_url"] = "https://api.deepseek.com/v1"
+        fb._detect_window = lambda url, headers=None: 0
+        fb.AGENT._window_cache, fb.AGENT._envelope_cache = {}, None
+        _penv = fb.AGENT._envelope("preset-sess")
+        check("a hosted endpoint that reports nothing gets its DOCUMENTED window",
+              _penv["window"] == 128000
+              and _penv["source"] == "preset:api.deepseek.com", _penv)
+        check("...so the reply is no longer clamped to the assumed 2048",
+              _penv["reply"] > 2048, _penv["reply"])
+        check("...and the line names the source, never the server",
+              "window from api.deepseek.com" in fb.envelope_line(_penv),
+              fb.envelope_line(_penv))
+        fb.CONFIG["llm"]["window_presets"] = {"api.deepseek.com": 1000000}
+        fb.AGENT._envelope_cache = None
+        _penv2 = fb.AGENT._envelope("preset-sess")
+        check("llm.window_presets beats the built-in table",
+              _penv2["window"] == 1000000
+              and _penv2["source"] == "window_presets:api.deepseek.com", _penv2)
+        fb.CONFIG["llm"]["base_url"] = "https://api.example.com/v1"
+        fb.AGENT._envelope_cache = None
+        _penv3 = fb.AGENT._envelope("unknown-sess")
+        check("an unknown host still assumes, and says so",
+              _penv3["source"] == "assumed" and _penv3["budget"] == 8000, _penv3)
+        fb.CONFIG["llm"]["max_context_tokens"] = 20000
+        fb.CONFIG["llm"]["base_url"] = "https://api.deepseek.com/v1"
+        fb.AGENT._envelope_cache = None
+        _penv4 = fb.AGENT._envelope("cap-sess")
+        check("...and llm.max_context_tokens still caps a preset's budget",
+              _penv4["budget"] == max(fb.ENVELOPE_MIN_BUDGET, 20000), _penv4)
+    finally:
+        for _k, _v in _saved_llm.items():
+            if _v is None:
+                fb.CONFIG["llm"].pop(_k, None)
+            else:
+                fb.CONFIG["llm"][_k] = _v
+        fb._detect_window = real_detect_miss
+        fb.AGENT._window_cache, fb.AGENT._envelope_cache = {}, None
+
     # ------------------------------------------------------------- the three routes
     check("vLLM's max_model_len is the window",
           window(Fake({"/v1/models": VLLM_MODELS})) == 32768)

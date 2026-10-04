@@ -38,6 +38,8 @@
     "_comment_context_window": "context_window says what the model's window IS: 'auto' (or 0/blank) asks the endpoint - llama.cpp answers /v1/models or /props, vLLM max_model_len, Ollama /api/ps, SGLang /get_server_info - and a NUMBER pins it when a local server will not answer. A busy llama.cpp box can time out one probe; the harness retries a miss in 20s instead of caching the empty answer for the full five-minute TTL. A pinned window wins over detection, and max_context_tokens still caps the messages payload on top of it.",
     "context_window": "auto",
     "max_context_tokens": "auto",
+    "_comment_window_presets": "Host-substring -> tokens for endpoints that report NO window (most hosted APIs), consulted before the built-in table (api.openai.com 128k, api.anthropic.com 200k, api.deepseek.com 128k - their own docs, checked 2026-10-04). max_context_tokens still caps whatever this says. Put your provider's documented number here when its window differs from the built-in - e.g. {\"api.deepseek.com\": 1000000} - and doctor/setup name this lever for an off-LAN endpoint on an assumed window.",
+    "window_presets": {},
     "max_tokens": 16384,
     "final_max_tokens": 8192,
     "max_tokens_ceiling": 65536,
