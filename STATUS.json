@@ -1275,13 +1275,14 @@
     },
     {
       "id": "release-1-0-68-pending",
-      "title": "the operator's pavilion batch is on main but not published",
-      "state": "open",
+      "title": "the operator's pavilion batch is published as v1.0.68",
+      "state": "shipped",
       "anchor": {
-        "file": "CHANGELOG.md"
+        "commit": "0982d65",
+        "expect": "tagged"
       },
-      "detail": "main carries the whole batch as of 0249e7f (the pavilion port, the theme-bound palette and art, the one-time token handover, the update path's introduction of the page, the privilege/firewall handling); the public release is still v1.0.67, so `tinycmdr update` anywhere fetches the old page. The cut was stopped on purpose (operator: 'hold on') AFTER the push, so there is no v1.0.68 tag and no assets - nothing needs undoing. The release body was written at /tmp/v1.0.68-notes.md (re-create it from the [1.0.68] CHANGELOG section if /tmp has been cleaned).",
-      "gate": "bash maintenance/release.sh /tmp/v1.0.68-notes.md - it builds, pushes, waits for a green gate on the sha, tags and attaches the assets. Afterwards re-anchor this item to the release commit (`maintenance/ledger-tag.py`) or close it."
+      "detail": "main carried the whole batch as of 0249e7f (the pavilion port, the theme-bound palette and art, the one-time token handover, the update path's introduction of the page, the privilege/firewall handling), and the cut was held after the push (operator: 'hold on') until the page had been looked at. Closed 2026-10-04: the visual pass landed (02f7708), the local gate went green on 0982d65 (85 suites, 0 failed, 0 skipped), CI agreed on the same sha, and maintenance/release.sh published v1.0.68 - all three archives, install.sh/install.ps1, update.sh/update.ps1, SHA256SUMS and the stable aliases; the README's download names all resolve. The ledger-tag promotion rode the same cut (b9cf7f7).",
+      "gate": "done - v1.0.68 published from 0982d65; assets verified by maintenance/check-readme-assets.py"
     },
     {
       "id": "webui-visual-pass-with-vision",
