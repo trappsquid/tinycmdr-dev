@@ -1290,9 +1290,11 @@ def main():
             fblob = "".join(
                 c if isinstance(c, str) else (c or b"").decode("utf-8", "replace")
                 for c in (e.stdout, e.stderr) if c is not None)
+        # Log lines, not the child's prints: a child killed at the deadline still has
+        # unflushed stdout in its pipe (measured on CI), while every log line was written.
         check("H1: `--web` serves the page and holds it open",
-              fcode == "serving" and "tinycmdr page:" in fblob
-              and "Serving the page" in fblob, (fcode, fblob[-240:]))
+              fcode == "serving" and "web UI listening on http" in fblob
+              and "serving the page" in fblob, (fcode, fblob[-240:]))
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

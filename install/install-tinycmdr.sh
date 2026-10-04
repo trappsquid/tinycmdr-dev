@@ -55,6 +55,7 @@
 #   --model <m>           llm.model (default: install/fleet-defaults.json)
 #   --force               reinstall in place (stops the running service first)
 #   --no-start            install and enable, do not start it now
+#   --no-service          files only: write no systemd unit (macOS's --no-launchd)
 #   --no-deps             do not touch apt (python3-venv must already be present)
 #   --no-sudoers         do not grant the service user passwordless sudo
 #   --no-path            do not put the `tinycmdr` verb on PATH
@@ -107,7 +108,7 @@ WEB_ON=1; WEB_HOST_ARG=""; WEB_HOST_GIVEN=0; WEB_PORT="8790"
 # an update must only change what it was told to change.
 MODEL_BASE_GIVEN=""; MODEL_GIVEN=""
 TG_TOKEN=""; TG_IDS=""
-FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0
+FORCE=0; NO_START=0; NO_DEPS=0; VERIFY_ONLY=0; UNINSTALL=0; NO_SUDOERS=0; NO_SERVICE=0
 SECRETS_FILE=""          # --secrets-file: KEY=VALUE lines, read BEFORE the lane is chosen
 YES=0                     # -y/--yes: ask nothing, take the switches and the defaults
 MODEL_KEY=""              # the model endpoint's key, when the reader gives one
@@ -154,6 +155,7 @@ while [ $# -gt 0 ]; do
         --model)            MODEL="$2"; shift 2 ;;
         --force)            FORCE=1; shift ;;
         --no-start)         NO_START=1; shift ;;
+        --no-service)       NO_SERVICE=1; shift ;;
         --no-path)          NO_PATH=1; shift ;;
         --no-deps)          NO_DEPS=1; shift ;;
         --no-sudoers)       NO_SUDOERS=1; shift ;;
@@ -1575,12 +1577,18 @@ fi
 # page on registers the service too - the page is what keeps it alive.
 SERVE=0
 if [ "$HAS_LANE" = 1 ] || [ "$WEB_ON" = 1 ]; then SERVE=1; fi
+if [ "$NO_SERVICE" = 1 ]; then SERVE=0; fi
 if [ "$SERVE" = 0 ]; then
     say "no service"
-    info "no chat account and --no-web: no systemd unit is written, enabled or started -"
-    info "a service with nothing to serve would exit at once."
+    if [ "$NO_SERVICE" = 1 ]; then
+        info "--no-service: files only. No systemd unit is written, enabled or started."
+    else
+        info "no chat account and --no-web: no systemd unit is written, enabled or started -"
+        info "a service with nothing to serve would exit at once."
+    fi
     info "the files are installed; a session (--cli) and a one-shot (--once) work now."
-    info "add a chat token (or drop --no-web) and re-run to register the service."
+    info "add a chat token (or drop --no-web / --no-service) and re-run to register the"
+    info "service."
 fi
 if [ "$SERVE" = 1 ]; then
 say "systemd unit"
@@ -1639,7 +1647,9 @@ if [ "$INSTALL_MODE" = user ]; then
     fi
 fi
 if [ "$_HAVE_BUS" = 1 ]; then
-    sctl enable "$SERVICE_NAME" >/dev/null 2>&1 || die "systemctl enable failed"
+    if ! _enable_out="$(sctl enable "$SERVICE_NAME" 2>&1)"; then
+        die "systemctl enable failed: $_enable_out"
+    fi
 else
     warn "no user systemd bus here (a container, CI, or a session that has not started):"
     warn "the unit is written but NOT enabled. In a user session, run:"

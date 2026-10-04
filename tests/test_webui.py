@@ -79,6 +79,10 @@ class _Collect(logging.Handler):
 def main():
     token = "tok-webui-suite-0123456789"
     base = None
+    # A suite never opens a browser: on a macOS CI runner webbrowser.open really does
+    # launch Safari (the job's cleanup kills it), which is a side effect a test must not
+    # have and a source of platform-only slowness.
+    fb._browser_possible = lambda: False
 
     # ---- no token: the server MINTS one, and never serves ungated ---------------
     # An install that predates the page - or a first start on a fresh host - has no
@@ -112,18 +116,27 @@ def main():
     check("minted TINYCMDR_WEB_TOKEN" in out0, "and the start says so", out0[:80])
     check("#token=" + minted in out0, "the link it prints carries it")
     port0 = srv0.server_address[1]
-    try:
-        r = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port0)
+
+    def probe0(path, headers=None):
+        """(status, seconds) against the freshly minted server - never raises, so a slow
+        platform reports as a fact instead of killing the suite with a traceback."""
+        r = urllib.request.Request("http://127.0.0.1:%d%s" % (port0, path),
+                                   headers=headers or {})
+        t0 = time.time()
         try:
-            with urllib.request.urlopen(r, timeout=5) as resp:
-                code0 = resp.status
+            with urllib.request.urlopen(r, timeout=30) as resp:
+                return resp.status, time.time() - t0
         except urllib.error.HTTPError as e:
-            code0 = e.code
-        check(code0 == 401, "the server it started is gated: no header -> 401", code0)
-        r = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port0,
-                                   headers={"X-Tinycmdr-Token": minted})
-        with urllib.request.urlopen(r, timeout=5) as resp:
-            check(resp.status == 200, "the minted token authenticates", resp.status)
+            return e.code, time.time() - t0
+        except Exception as e:                                        # noqa: BLE001
+            return type(e).__name__, time.time() - t0
+
+    try:
+        code0, dt0 = probe0("/api/commands")
+        check(code0 == 401, "the server it started is gated: no header -> 401",
+              (code0, round(dt0, 2)))
+        code1, dt1 = probe0("/api/commands", {"X-Tinycmdr-Token": minted})
+        check(code1 == 200, "the minted token authenticates", (code1, round(dt1, 2)))
     finally:
         srv0.shutdown()
         srv0.server_close()

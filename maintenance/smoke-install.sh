@@ -98,8 +98,10 @@ s = socket.socket(socket.AF_UNIX)
 s.bind(sys.argv[1])
 s.close()
 PY
+    # --no-service: files only, do not register a unit (the launchd analogue of
+    # --no-launchd; a CI runner has no user systemd bus to enable into)
     TINYCMDR_PYTHON="$PY_ABS" bash "$PKG/install/install-tinycmdr.sh" -y --mode user \
-        --no-deps --no-sudoers --no-start --install-dir "$WORK/inst"
+        --no-service --no-deps --no-sudoers --no-start --install-dir "$WORK/inst"
 fi
 
 say "smoke the install"

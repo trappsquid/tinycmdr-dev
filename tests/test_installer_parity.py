@@ -86,6 +86,8 @@ PLATFORM_ONLY = {
                                  "no such flag (see ~/whats-live/ISSUES.md)"),
     "--python": ((MAC,), "interpreter to build the venv from - macOS only"),
     "--no-launchd": ((MAC,), "skip the launchd agent - macOS only"),
+    "--no-service": ((SH,), "skip the systemd unit (files only) - Linux only; the macOS "
+                            "spelling is --no-launchd and Windows has -SkipTask"),
     "--label": ((MAC,), "launchd label - macOS only"),
     "--use-fleet-model": ((MAC,), "reuse the fleet's model config - macOS only"),
     "AddEndpoint": ((PS1,), "repeatable extra model endpoints - PowerShell only"),

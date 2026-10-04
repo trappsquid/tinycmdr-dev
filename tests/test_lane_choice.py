@@ -113,8 +113,13 @@ def main():
               f"no token, page on: the run serves instead of stopping ({code})")
         check("minted TINYCMDR_WEB_TOKEN" in said,
               "it mints the token the page requires", said[-400:])
-        check("no chat lane is configured" in said and "Serving the page" in said,
+        # Assert on the LOG lines, not the prints: a killed child's stdout is still in
+        # its pipe buffer (measured: the print output differs run to run on CI, the log
+        # never does).
+        check("no chat lane configured" in said and "serving the page" in said,
               "and says the page is the door", said[-400:])
+        check("web UI listening on http" in said,
+              "the page really started", said[-400:])
         check("cannot start" not in said, "it is NOT a startup abort")
         _env = (work / "cli_only" / ".env").read_text(encoding="utf-8")
         check("TINYCMDR_WEB_TOKEN=" in _env, "the minted token lands in .env", _env[-120:])
