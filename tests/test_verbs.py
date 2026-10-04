@@ -1047,11 +1047,13 @@ def main():
               "update.sh")
         _shim = (BASE / "tinycmdr").read_text(encoding="utf-8")
         check("the unix launcher falls back to the published updater for old installs",
-              "def _verb_update" in _shim and "releases/latest/download/update.sh" in _shim,
+              "releases/latest/download" in _shim
+              and "releases/latest/download/update.sh" in _shim,
               "shim")
         _cmd = (BASE / "tinycmdr.cmd").read_text(encoding="utf-8")
         check("...and so does the Windows launcher",
-              "def _verb_update" in _cmd and "releases/latest/download/update.ps1" in _cmd,
+              "releases/latest/download" in _cmd
+              and "releases/latest/download/update.ps1" in _cmd,
               "shim")
         check("...and chat can run it, so `/tinycmdr update` works from a channel",
               "update" in fb._CHAT_VERB_SET, sorted(fb._CHAT_VERB_SET))

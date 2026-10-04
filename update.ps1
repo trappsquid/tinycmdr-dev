@@ -76,7 +76,9 @@ try {
     } finally { Pop-Location }
     Write-Host "update: $Cur -> $New ($written file(s); host-owned files left alone)"
     if ($Cur -eq $New) { Write-Host "update: already current" }
-    else { Write-Host "update: restart to run it - `tinycmdr restart` for the bot (a terminal session just relaunches)" }
+    # Single quotes: PowerShell eats a backtick in a double-quoted string (measured: the
+    # message printed "inycmdr restart" - the backtick before "t" became a tab).
+    else { Write-Host 'update: restart to run it - "tinycmdr restart" for the bot (a terminal session just relaunches)' }
 } finally {
     Remove-Item $Work -Recurse -Force -ErrorAction SilentlyContinue
 }

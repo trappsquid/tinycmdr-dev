@@ -54,7 +54,12 @@ fi
 # the job this shim fetches the published updater and lets IT do the whole thing. The
 # probe is a marker, not a version compare: what matters is whether this copy has the
 # packaged updater at all.
-if [ "${1:-}" = "update" ] && ! grep -q "def _verb_update" "$HERE/tinycmdr.py" 2>/dev/null; then
+# The probe is a CAPABILITY marker, not a verb name: measured against a real 1.0.44 payload
+# (2026-10-03), that version HAS an `update` verb - one that shells out to `git pull`, which
+# dead-ends on the dirty checkout its own installer leaves behind - and has no
+# `releases/latest/download` anywhere in it. So the question is "can this copy fetch a
+# release package at all", and only the packaged updater can.
+if [ "${1:-}" = "update" ] && ! grep -q "releases/latest/download" "$HERE/tinycmdr.py" 2>/dev/null; then
     V="$(grep -m1 '^VERSION' "$HERE/tinycmdr.py" 2>/dev/null | sed 's/.*"\(.*\)".*/\1/')"
     echo "tinycmdr: this install (${V:-unknown version}) predates the packaged updater - using the published one"
     UPD="$(mktemp)"

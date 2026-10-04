@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.65] - 2026-10-03
+
+Fixed
+- **The launcher's old-install fallback probes the right thing.** It looked for the
+  `update` verb, which a real **1.0.44** payload HAS - one that shells out to `git pull`,
+  which dead-ends on the dirty checkout its own installer leaves behind (measured: 0
+  occurrences of `releases/latest/download` in that file, 1 of `git pull`). It probes for
+  the capability now: a copy that cannot fetch a release package is repaired by the
+  published updater.
+- The Windows updater's closing line lost the backtick before `tinycmdr` (PowerShell eats
+  one in a double-quoted string, so it printed "inycmdr restart"); it is quoted properly.
+
+Verified end to end on a real 1.0.44 install (planted on a Windows host, host-owned files
+and all): the **published** updater fetched the latest package, verified it, wrote 27 files
+and left `config.json`, `tools/mine.py`, `theme.toml` and `notes.md` byte-identical -
+`1.0.44 -> 1.0.64`, and the install now ships `theme.default.toml` too.
+
 ## [1.0.64] - 2026-10-03
 
 Added

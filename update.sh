@@ -91,4 +91,5 @@ if [ "$CUR" = "$NEW" ]; then
     echo "update: already current"
 else
     echo "update: restart to run it - the bot: 'tinycmdr restart'; a terminal session: relaunch"
+    # (the unix script needs no escaping here: sh has no backtick trap in double quotes)
 fi
