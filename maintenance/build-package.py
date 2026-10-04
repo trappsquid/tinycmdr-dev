@@ -162,10 +162,19 @@ SHIP = [
     # The page's figure: the chibi, content-cropped and resampled with alpha. The empty
     # transcript shows it, and the built-in emblem stands in when it is absent.
     "assets/page-chibi.png",
+    # The page's stylesheet and its fonts. THIS LIST MISSED both the stylesheet and the
+    # 600-weight face until 2026-10-04: the pavilion port (1.0.68) added
+    # assets/webui.css and assets/fonts/cinzel-600.woff2, the manifest was never told,
+    # and 1.0.68/1.0.69 packages served /page.css as a 404 - every install rendered
+    # the page as raw unstyled markup (found by LOOKING at the published page; no suite
+    # fetched an asset). tests/test_webui_page.py freezes this list against every asset
+    # the routes serve, so the next asset the page gains cannot ship half-wired.
+    "assets/webui.css",
     # The page's backdrop: the faint colonnade behind the transcript, drawn in the host's
     # accent (the server substitutes {{ACCENT}}), plus the bundled OFL fonts - a local page
     # must not need the internet for its own typography.
     "assets/roman-colonnade.svg",
+    "assets/fonts/cinzel-600.woff2",
     "assets/fonts/cinzel-700.woff2",
     "assets/fonts/inter.woff2",
     "assets/fonts/jetbrains-mono-400.woff2",

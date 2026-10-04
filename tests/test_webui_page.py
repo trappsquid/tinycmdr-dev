@@ -75,6 +75,47 @@ def page_script():
     return m.group(1)
 
 
+def page_served_assets():
+    """Every asset the page's routes actually serve, derived from the code.
+
+    Not a hand list: the pavilion port (1.0.68) added assets/webui.css and the
+    cinzel-600 face, the package manifest (maintenance/build-package.py SHIP) was never
+    told, and 1.0.68/1.0.69 shipped /page.css as a 404 to every install - the page
+    rendered as raw unstyled markup, found by LOOKING at a published install rather
+    than by any suite (measured 2026-10-04). This derives the served set from the code
+    and the stylesheet so the mirror cannot drift silently again.
+    """
+    src = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
+    assets = {f"assets/{m}" for m in re.findall(
+        r'BASE_DIR\s*/\s*"assets"\s*/\s*"([^"]+)"(?!\s*/)', src)}
+    fonts = {}
+    for node in ast.walk(ast.parse(src)):
+        if (isinstance(node, ast.Assign) and node.targets
+                and getattr(node.targets[0], "id", "") == "WEB_FONTS"):
+            fonts = ast.literal_eval(node.value)
+    css = (BASE / "assets" / "webui.css").read_text(encoding="utf-8")
+    refs = set(re.findall(r"url\(/fonts/([^)]+)\)", css))
+    assets |= {f"assets/fonts/{v}" for v in fonts.values()}
+    return assets, sorted(refs - set(fonts.values()))
+
+
+def package_manifest_check():
+    """(assets missing from SHIP, stylesheet font refs the server would 404).
+
+    SHIP is read from the source, not imported: importing build-package.py pulls the
+    fleet's private inventory (maintenance/private_rules.py), which is not on the
+    suite's import path and must never be needed to grade a public package.
+    """
+    bp = (BASE / "maintenance" / "build-package.py").read_text(encoding="utf-8")
+    ship = set()
+    for node in ast.walk(ast.parse(bp)):
+        if (isinstance(node, ast.Assign) and node.targets
+                and getattr(node.targets[0], "id", "") == "SHIP"):
+            ship = set(ast.literal_eval(node.value))
+    assets, stray = page_served_assets()
+    return sorted(a for a in assets if a not in ship), stray
+
+
 def run_page(scenario, script):
     with tempfile.TemporaryDirectory() as d:
         sp = Path(d) / "scenario.json"
@@ -111,6 +152,16 @@ def has(res, needle, cls=None):
 
 
 def main():
+    # -- 0. the package ships what the page asks for ---------------------------
+    # 1.0.68/1.0.69 shipped /page.css as a 404 (see page_served_assets). This runs
+    # before the node gate: it needs no browser and must not skip on a box that
+    # cannot render the page.
+    missing, stray = package_manifest_check()
+    check(not missing,
+          f"every asset the page's routes serve is in the package manifest ({missing})")
+    check(not stray,
+          f"every font the stylesheet asks for is one WEB_FONTS serves ({stray})")
+
     if not NODE:
         print("SKIP node is not installed; cannot run the page renderer")
         return SKIP_EXIT

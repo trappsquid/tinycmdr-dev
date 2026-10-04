@@ -9316,7 +9316,9 @@ def a2a_card():
     """This box's AgentCard (A2A v1.0 §4.4.1). Skills are the runbooks it holds."""
     skills = []
     try:
-        for s in (skill_index() or [])[:12]:
+        # Operator-only runbooks stay off the public card: another box's agent reads it
+        # the way a model reads a prompt, so the frontmatter switch binds here too.
+        for s in [x for x in (skill_index() or []) if not x.get("hide")][:12]:
             name = str(s.get("name") or "")
             if not name:
                 continue
@@ -10644,11 +10646,13 @@ def _skill_meta(text):
         km = re.search(rf"^{key}:\s*[\"']?(.*?)[\"']?\s*$", block, re.M)
         if km:
             meta[key] = km.group(1).strip()
-    for key in ("always", "hide", "alwaysApply", "disableModelInvocation"):
+    for key in ("always", "hide", "alwaysApply", "disableModelInvocation",
+                "disable-model-invocation"):
         km = re.search(rf"^{key}:\s*[\"']?(true|yes|on|1)[\"']?\s*$", block, re.M | re.I)
         if km:
             meta["always" if key == "alwaysApply" else
-                 "hide" if key == "disableModelInvocation" else key] = True
+                 "hide" if key in ("disableModelInvocation",
+                                   "disable-model-invocation") else key] = True
     return meta
 
 
@@ -10666,8 +10670,12 @@ def skill_index():
     2026-09-23: 76 parked skills were 5,366 of the prompt's 20,942 chars).
 
     Frontmatter may also carry `globs:` (when the runbook applies), `always: true`
-    (its body is injected into the trailing block) and `hide: true` (readable by name,
-    absent from the prompt index).
+    (its body is injected into the trailing block) and `hide: true` - spelled
+    `disable-model-invocation: true` in the omp/Claude skill format and accepted as-is.
+    An operator-only runbook is absent from the prompt index, the skill tool's
+    list/search, and the box's public A2A card, and a read is refused until the
+    OPERATOR names it in an order, which opens it for that session
+    (grant_named_skills). Dot-dir parking remains the harsher tier: never indexed.
     """
     out = []
     if not SKILLS_DIR.is_dir():
@@ -10809,7 +10817,13 @@ def tool_skill(args, ctx):
     action = args.get("action", "list")
     name = (args.get("name") or "").strip().lower()
     topic = (args.get("topic") or "").strip()
+    key = (ctx or {}).get("session_key") or ""
     skills = skill_index()
+    # Operator-only runbooks (frontmatter hide:/disable-model-invocation:) were absent
+    # from the prompt but still served by this tool - the switch used to stop at the
+    # prompt. They now go through _skill_granted everywhere: list/search omit them, a
+    # read is refused, and only the OPERATOR naming one in an order opens it for the
+    # session (grant_named_skills).
     # A TOOL name handed to THIS tool is the miss the drive keeps making, and it does not
     # care which verb was guessed. Measured 2026-09-23 (round 7): nine of eleven skill calls
     # in one round went to `skill{action:list|search, name:search_sessions}`, one of them
@@ -10826,20 +10840,31 @@ def tool_skill(args, ctx):
                 f"missing argument, find_tools {name!r} gives the whole schema.) Skills "
                 f"are prose runbooks; this box has {len(skills)} of them.")
     if action == "list":
-        if not skills:
+        vis = [s for s in skills if _skill_granted(s, key)]
+        if not vis and skills:
+            return ("This box's runbooks are all operator-only: the model does not see "
+                    "them, and the operator opens one by naming it in an order.")
+        if not vis:
             return ("No skills installed. Drop skill folders "
                     "(containing SKILL.md) into ./skills/ and they work "
                     "as-is.")
-        return "\n".join(f"- {s['name']}: {s['desc']}" for s in skills)
+        return "\n".join(f"- {s['name']}: {s['desc']}" for s in vis)
     match = [s for s in skills if s["name"].lower() == name
              or s["dir"].name.lower() == name]
+    if match and not _skill_granted(match[0], key):
+        return (f"{match[0]['name']!r} is an operator-only runbook: its frontmatter keeps "
+                "its body out of this tool's list/search and serves it only when the "
+                "OPERATOR names the runbook in an order. After the operator names it, it "
+                "is readable for the session; until then, this refusal is the whole "
+                "answer.")
     if not match:
         # A TOOL name asked for as a skill is a miss this harness now invites: the prompt
         # names the hidden tools, and the drive answered that by asking the skill tool for
         # one (measured 2026-09-23: skill{read, name: search_files} came back as 1.7 KB of
         # skill names and nothing about the tool). Say which door this is, and keep the
         # list bounded - 105 names is a page of nothing.
-        return (f"No skill named {name!r}. Installed: " + _skill_names_brief(skills))
+        return (f"No skill named {name!r}. Installed: "
+                + _skill_names_brief([s for s in skills if _skill_granted(s, key)]))
     sdir = match[0]["dir"]
     if action == "read":
         text = _read_text_any(sdir / "SKILL.md")
@@ -10854,6 +10879,9 @@ def tool_skill(args, ctx):
                    "is not in that list, this runbook was written for another build: say "
                    "so instead of hand-running its steps.]"
                    % ", ".join(sorted(set(CORE_TOOLS) | set(REGISTRY.custom))))
+        if match[0].get("hide"):
+            surface += ("\n[HARNESS: operator-only runbook, opened because the operator "
+                        "named it in this session's order.]")
         sec = (args.get("section") or "").strip()
         if sec:
             try:
@@ -13146,6 +13174,48 @@ _DEFAULT_CORE = ("shell", "execute_code", "read_file", "write_file", "edit_file"
 
 _revealed = {}
 _revealed_lock = threading.Lock()
+
+# Operator-only runbooks (frontmatter `hide:` / `disable-model-invocation:`): the model
+# cannot see them anywhere - prompt index, skill list/search, A2A card - and their body
+# is refused until the OPERATOR names one in an order. That naming is the whole door,
+# and it is per session: /new closes it again. It sits beside the tool reveals because
+# it is the same kind of state: per-session rent, paid by the operator's own words.
+_skill_grants = {}
+_skill_grants_lock = threading.Lock()
+
+
+def grant_named_skills(session_key, text):
+    """An operator-only runbook the operator names in an order opens for that session.
+
+    Matches the same two aliases the skill tool matches (frontmatter name and folder
+    name), word-bounded so "networking" does not open "net". Returns what it granted.
+    """
+    hidden = [s for s in skill_index() if s.get("hide")]
+    if not hidden or not str(text or "").strip():
+        return []
+    granted = []
+    for s in hidden:
+        for alias in {s["name"], s["dir"].name}:
+            if alias and re.search(
+                    rf"(?<![a-z0-9_-]){re.escape(alias.lower())}(?![a-z0-9_-])",
+                    str(text), re.I):
+                granted.append(alias.lower())
+    if granted:
+        with _skill_grants_lock:
+            _skill_grants.setdefault(session_key or "", set()).update(granted)
+        log.info("[skills] operator named operator-only runbook(s), granted for %s: %s",
+                 session_key or "(no key)", ", ".join(sorted(set(granted))))
+    return granted
+
+
+def _skill_granted(skill, session_key):
+    """May this session read this runbook? Non-hidden: always; hidden: only when granted."""
+    if not skill.get("hide"):
+        return True
+    with _skill_grants_lock:
+        g = set(_skill_grants.get(session_key or "", set()))
+    return bool({str(skill.get("name", "")).lower(),
+                 skill["dir"].name.lower()} & g)
 
 
 def disclosure_on():
@@ -16576,6 +16646,9 @@ class Agent:
             # payload: the alternative, measured three times on 2026-09-24, is a run that
             # substitutes a verb it holds for a tool it cannot see.
             reveal_tools_named_in(session_key, user_text)
+            # ...and an operator-only runbook the operator names opens with it: the
+            # frontmatter switch gates the model's own initiative, never the operator's.
+            grant_named_skills(session_key, user_text)
             # THE ORDER LANDS ON DISK BEFORE THE FIRST MODEL CALL. The transcript used to be
             # written only in this run's `finally`, so a process killed mid-run - a push, a
             # restart, a crash - took the operator's own message with it. Measured 2026-09-24
@@ -17843,6 +17916,10 @@ class Agent:
         # 6,505 -> 10,086 on identical orders).
         with _revealed_lock:
             _revealed.pop(session_key or "", None)
+        # An operator-only runbook is per-session rent too: after /new, the operator's
+        # naming has to happen again.
+        with _skill_grants_lock:
+            _skill_grants.pop(session_key or "", None)
         # ...and the same for the spill INDEX. The files stay on disk (nothing was dropped),
         # but this session's pointers to them do not ride the next prompt of this conversation:
         # measured 2026-09-25 driving a fleet box, /new answered "how much room is left on the
@@ -22526,7 +22603,7 @@ WEB_PAGE = """
           <p>Your legion is idle. Dispatch a new order, inspect the host, or resume an earlier campaign from the archive.</p>
           <div class="hero-actions">
             <button id=emptynew class="primary-action">Start a new campaign <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
-            <button id=emptyarch class="secondary-action">Open archives</button>
+            <button id=emptylast class="secondary-action">Resume the last campaign</button>
           </div>
           <div class="session-strip" aria-label="Current session statistics">
             <div class="stat-block"><small>SESSION</small><strong id=stat-session>&mdash;</strong></div>
@@ -22598,7 +22675,7 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       hostVerEl=document.getElementById('hostver'),
       stageStateEl=document.getElementById('stage-state'),
       emptyNew=document.getElementById('emptynew'),
-      emptyArch=document.getElementById('emptyarch'),
+      emptyLast=document.getElementById('emptylast'),
       railEl=document.getElementById('rail'),
       sessEl=document.getElementById('sessions'),titleEl=document.getElementById('title'),
       modelEl=document.getElementById('model'),meterFill=document.getElementById('meterfill'),
@@ -22888,6 +22965,11 @@ function renderRail(){
  meterFill.style.background=used>budget*0.8?'var(--bad)':'var(--accent)';
  modelEl.textContent=cur?(cur.model||''):'';
  statModel.textContent=cur?(cur.model||''):'\u2014';
+ // The hero's "resume" action needs a campaign with something IN it: the newest row is
+ // often the empty conversation the New Campaign button just made (found live,
+ // 2026-10-04 - the first cut of this opened that and looked as dead as the button it
+ // replaced, "Open archives").
+ emptyLast.hidden=!(sessions||[]).some(function(s){return s.exchanges;});
 }
 async function loadSessions(){
  const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
@@ -23319,7 +23401,13 @@ filterEl.oninput=function(){
  }
 };
 emptyNew.onclick=function(){newConversation();};
-emptyArch.onclick=function(){railEl.classList.remove('hide');sessEl.scrollIntoView({block:'nearest'});};
+// Resume the newest conversation that HAS exchanges - the same call a rail row makes.
+// The old handler here un-hid the rail, which on a desktop is already visible, so the
+// button read as dead (operator's report, 2026-10-04).
+emptyLast.onclick=function(){
+ const pick=(sessions||[]).filter(function(s){return s.exchanges;})[0];
+ if(pick){openSession(pick.key);}
+};
 (async function(){
  localStorage.fb_draft=localStorage.fb_draft||'';
  inp.value=localStorage.fb_draft;
@@ -24845,6 +24933,10 @@ WEB_FONTS = {
     # Bundled, never fetched from a CDN: this is a local page on a box that may have no
     # route to the internet, and a webfont that needs one is a font that sometimes is not
     # there. The OFL texts ride along in the same folder (assets/fonts/OFL-*.txt).
+    # cinzel-600: the headings' face, referenced by webui.css since the pavilion port -
+    # and served by neither this map nor the package manifest until 2026-10-04, so
+    # /fonts/cinzel-600.woff2 404'd on every install and every heading fell back a weight.
+    "cinzel-600.woff2": "cinzel-600.woff2",
     "cinzel-700.woff2": "cinzel-700.woff2",
     "inter.woff2": "inter.woff2",                      # variable: 100-900 in one file
     "jetbrains-mono-400.woff2": "jetbrains-mono-400.woff2",
@@ -28535,11 +28627,11 @@ def run_setup(rest=None):
     print()
 
     print(bold("4. The page (browser)"))
-    # The page is the default door, and its token is the one secret this project mints
-    # for you. An install that predates the page has none: setup is where a person is
-    # asked the two things nobody can infer - whether other machines may reach it, and
-    # on which port - and the token is minted here the same way `tinycmdr token set`
-    # mints an empty value, so the answer is a working link, not homework.
+    # The page is the default door; its token is the one secret this project will MINT
+    # for you - and since 2026-10-04 the wizard also lets the operator SET it. A token
+    # chosen elsewhere (a password manager, a fleet convention) used to force a hand-edit
+    # of .env after setup; that was the operator's own report. Enter keeps the host's own
+    # token or mints one, either way the answer is a working link, not homework.
     web = raw.setdefault("web", {})
     cur_on = bool(web.get("enabled", True))
     ans_on = input("   Serve the page? [%s]: " % ("y" if cur_on else "n")).strip().lower()
@@ -28562,6 +28654,30 @@ def run_setup(rest=None):
             except ValueError:
                 print(dim("   '%s' is not a port; keeping %s" % (ans_port, cur_port)))
         web.setdefault("port", 8790)
+        cur_tok = _web_token()
+        # The write path enforces the shape (`token set`'s rule: 20+ of letters, digits,
+        # _ or -), and a refused value must come back as a question, not as a link that
+        # quietly still carries the old token.
+        for _try in range(3):
+            ans_tok = input("   Access token (Enter to %s): "
+                            % ("keep the current one" if cur_tok else "mint one")).strip()
+            if not ans_tok:
+                break
+            if _env_set_safe("TINYCMDR_WEB_TOKEN", ans_tok):
+                os.environ["TINYCMDR_WEB_TOKEN"] = ans_tok
+                print(dim("   token saved to .env as TINYCMDR_WEB_TOKEN"))
+                if web.get("token"):
+                    # config.json is readable into a prompt, so the token lives in .env
+                    # only; a stale value here would silently outrank the one just set.
+                    # The LIVE CONFIG too: the link printed below reads it first.
+                    web.pop("token", None)
+                    CONFIG.setdefault("web", {}).pop("token", None)
+                    print(dim("   removed the older web.token from config.json - the "
+                              "token belongs in .env, which the agent never reads"))
+                break
+            if _try < 2:
+                print(dim("   try again, or press Enter to %s"
+                          % ("keep the current one" if cur_tok else "mint one")))
         if not _web_token():
             _web_token_mint(announce=True)
         tok = _web_token()
@@ -29258,7 +29374,9 @@ def _cli_command(text):
         if not sk:
             print(dim("  no runbooks in ./skills"))
         for s in sk:
-            print("  %-34s %s" % (s.get("name", "?"), (s.get("desc") or "")[:90]))
+            print("  %-34s %s%s" % (s.get("name", "?"), (s.get("desc") or "")[:90],
+                                    "  [operator-only]"
+                                    if s.get("hide") else ""))
         return True
     if verb == "/tools":
         for sch in REGISTRY.openai_schemas():
@@ -32955,6 +33073,12 @@ def main():
     if _rw:
         log.warning("%s", _rw)
         print("WARNING: " + _rw, file=sys.stderr)
+    # `tinycmdr cli` - the console alone, the deliberate opposite of the bare default.
+    # Normalised to `--cli` here (one spelling downstream) and handled before the verb
+    # dispatch, which would otherwise read the word as a typo.
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "cli":
+        sys.argv.pop(1)
+        sys.argv.append("--cli")
     # Management verbs, and the two inert flags. Nothing here starts the agent loop:
     # `tinycmdr status` asks the endpoint for metadata and answers a question.
     if len(sys.argv) > 1 and sys.argv[1].lower() in VERBS:
@@ -32994,10 +33118,16 @@ def main():
         idx = sys.argv.index("--once")
         run_cli(once=" ".join(sys.argv[idx + 1:]))
         return
-    # The page starts beside EVERY long-lived mode - the CLI session, the lanes, the
-    # supervised service - so the default door is up whichever one this is. `--once`
-    # is a scripted one-shot and stays clean.
-    _srv = start_web_surface(open_browser=not _web_no_browser)
+    # The page starts beside the LONG-LIVED SERVICE modes (bare, the lanes) - the default
+    # door whichever one this is. It does NOT start beside a terminal session: `--cli`
+    # and `--app` used to raise the browser and the console at once (operator's report,
+    # 2026-10-04: "typing tinycmdr opens the webui and the TUI/CLI at once"). `--web`
+    # still overrides, because typing it IS the asking; `--once` returns before this.
+    _terminal_mode = ("--cli" in sys.argv or "--app" in sys.argv)
+    if _terminal_mode and "--web" not in sys.argv:
+        _srv = None
+    else:
+        _srv = start_web_surface(open_browser=not _web_no_browser)
     if "--app" in sys.argv:
         run_cli(app=True)
     elif "--cli" in sys.argv:

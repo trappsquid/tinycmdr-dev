@@ -102,7 +102,7 @@ const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
              // and the empty state with its two actions
              'lanedetail', 'laneretry', 'lanemore',
              'configwarn', 'configtext', 'configdismiss',
-             'empty', 'emptymark', 'emptynew', 'emptyarch', 'medallionimg',
+             'empty', 'emptymark', 'emptynew', 'emptylast', 'medallionimg',
              // the pavilion shell: the rail's filter, the host card, the hero's stats and
              // the stage header's state
              'filter', 'hostver', 'stage-state', 'logwrap',

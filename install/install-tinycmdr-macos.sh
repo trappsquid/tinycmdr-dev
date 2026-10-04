@@ -27,6 +27,8 @@
 #   --web-host <addr>     the page's bind address: 127.0.0.1 (default) or 0.0.0.0
 #                         to reach it from other machines on your network
 #   --web-port <p>        the page's port (default 8790)
+#   --web-token <t>       the page's access token (TINYCMDR_WEB_TOKEN). Replaces the
+#                         host's own; absent: keep it, or mint a 32-byte one
 #   --no-web              install without the page (the chat lane only)
 #   --token-file <f>      read the token from a file (first non-empty line)
 #   --search-egress <b>   true|false: may web search send queries OFF this machine?
@@ -146,6 +148,7 @@ while [ $# -gt 0 ]; do
         --telegram-ids)    TG_IDS="$2"; shift 2 ;;
         --web-host)        WEB_HOST_ARG="$2"; shift 2 ;;
         --web-port)        WEB_PORT="$2"; shift 2 ;;
+        --web-token)       WEB_TOKEN_ARG="$2"; shift 2 ;;
         --no-web)          WEB_ON=0; shift ;;
         --allowed-user)    ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)  MM_URL_ARG="$2"; shift 2 ;;
@@ -1187,6 +1190,18 @@ if [ "$WEB_ON" = 1 ]; then
             WEB_HOST="0.0.0.0"
         fi
     fi
+    # The page's token: set your own here, or take the host's own (a redo keeps it) or
+    # a minted one. This question exists because the wizard used to be mint-or-nothing:
+    # a LAN operator who wanted a token they chose had to hand-edit .env afterwards
+    # (2026-10-04, the operator's own report).
+    if [ -n "${WEB_TOKEN_ARG:-}" ]; then
+        if [ "${#WEB_TOKEN_ARG}" -lt 12 ]; then
+            warn "the page token you set is only ${#WEB_TOKEN_ARG} characters; the token"
+            warn "  is the whole door on a LAN, so 16+ is the shape it deserves."
+        fi
+    elif [ "$ASK" = 1 ]; then
+        WEB_TOKEN_ARG="$(ask_secret "Web UI token (Enter = keep this host's own, or mint one)")"
+    fi
     if [ "$WEB_HOST" = "0.0.0.0" ]; then
     # The bind needs no root; the FIREWALL hole does. A launchd agent cannot answer
     # macOS's "allow incoming connections?" prompt, so say the one command that can.
@@ -1381,10 +1396,12 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     done
 fi
 SKIPPED_KEYS="$SECRET_SKIPPED"
-# The page's token: kept if this host has one, else MINTED here and never echoed
-# (the 1.0.24 lesson: a token in the install transcript is a leaked token).
-WEB_TOKEN=""
-if [ -f "$INSTALL_DIR/.env" ]; then
+# The page's token: a value set here (--web-token or the wizard's answer) REPLACES the
+# host's own; otherwise the host's is kept (a redo never rotates it silently); otherwise
+# MINTED and never echoed (the 1.0.24 lesson: a token in the install transcript is a
+# leaked token).
+WEB_TOKEN="${WEB_TOKEN_ARG:-}"
+if [ -z "$WEB_TOKEN" ] && [ -f "$INSTALL_DIR/.env" ]; then
     WEB_TOKEN=$(grep -m1 '^TINYCMDR_WEB_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)
 fi
 if [ -z "$WEB_TOKEN" ]; then

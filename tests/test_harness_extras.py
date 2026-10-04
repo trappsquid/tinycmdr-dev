@@ -283,13 +283,23 @@ def main():
         (hid / "SKILL.md").write_text(
             "---\nname: secret\ndescription: hidden runbook\nhide: true\n---\n\nX\n",
             encoding="utf-8")
+        opo = workdir / "skills" / "oponly"
+        opo.mkdir(parents=True)
+        (opo / "SKILL.md").write_text(
+            "---\nname: oponly\ndescription: operator-only runbook\n"
+            "disable-model-invocation: true\n---\n\nY\n", encoding="utf-8")
         idx = {s["name"]: s for s in fb.skill_index()}
         check(idx["net"]["globs"] == ["*.conf", "/etc/**"] and idx["net"]["always"],
               "globs and always parse", idx["net"])
         check(idx["secret"]["hide"], "hide parses", idx["secret"])
+        check(idx["oponly"]["hide"],
+              "omp's disable-model-invocation spelling parses as the same switch",
+              idx["oponly"])
         prompt = fb.build_system_prompt()
         check("secret" not in prompt,
               "a hidden runbook is not in the prompt index")
+        check("oponly" not in prompt,
+              "an operator-only runbook stays out of the prompt index too")
         check("trig (globs: *.conf, /etc/**): triggered runbook" in prompt,
               "a trigger is rendered in the index",
               [ln for ln in prompt.splitlines() if "trig (" in ln][:2])
@@ -299,6 +309,10 @@ def main():
         vol = fb.volatile_context(session_key="extras")
         check("Always check the resolver first." in vol,
               "an always-on runbook body rides the trailing block", vol[-400:])
+        card_ids = [s.get("id") for s in fb.a2a_card().get("skills", [])]
+        check("net" in card_ids and "oponly" not in card_ids,
+              "the public A2A card carries normal runbooks and not operator-only ones",
+              card_ids)
 
         # ---------------------------------------------------------- session state + fork
         check(fb._session_tail_state([{"role": "user", "content": "hi"}]) == "unfinished",

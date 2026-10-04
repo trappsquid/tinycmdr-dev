@@ -51,12 +51,13 @@ def stage(dirpath, egress):
     return dirpath
 
 
-def drive(dirpath, answer, page=("", "", "")):
+def drive(dirpath, answer, page=("", "", "", "")):
     """Run the wizard with every answer empty but the page's and the last one.
 
     Prompt order: local/cloud, url, model, Mattermost?, Telegram?, page-serve,
-    page-LAN (only when serving), page-port (only when serving), egress. `page`
-    carries the three page answers; `answer` is the egress one.
+    page-LAN (only when serving), page-port (only when serving), page-token (only
+    when serving), egress. `page` carries the four page answers; `answer` is the
+    egress one.
     """
     spec = importlib.util.spec_from_file_location("setup_" + dirpath.name,
                                                   dirpath / "tinycmdr.py")
@@ -115,7 +116,7 @@ def main():
         d = stage(work / "page-lan", False)
         # an earlier wizard in THIS process minted a token and left it in os.environ
         os.environ.pop("TINYCMDR_WEB_TOKEN", None)
-        rc, out, written, mod = drive(d, "", page=("y", "y", ""))
+        rc, out, written, mod = drive(d, "", page=("y", "y", "", ""))
         web = written.get("web") or {}
         check(rc == 0 and web.get("host") == "0.0.0.0",
               "answering yes puts the page on the network (web.host 0.0.0.0)", web)
@@ -131,12 +132,12 @@ def main():
               "the summary reports the bind", out[-400:])
 
         d = stage(work / "page-keep", False)
-        rc, out, written, mod = drive(d, "", page=("", "", ""))
+        rc, out, written, mod = drive(d, "", page=("", "", "", ""))
         check(rc == 0 and (written.get("web") or {}).get("host") == "127.0.0.1",
               "Enter keeps the loopback bind", written.get("web"))
 
         d = stage(work / "page-off", False)
-        rc, out, written, mod = drive(d, "", page=("n", "", ""))
+        rc, out, written, mod = drive(d, "", page=("n", "", "", ""))
         web = written.get("web") or {}
         check(rc == 0 and web.get("enabled") is False,
               "answering no turns the page off (web.enabled false)", web)
@@ -145,6 +146,30 @@ def main():
               "and mints no token for a page that will not start", env[-120:])
         check("Page         : (disabled)" in out,
               "the summary says so", out[-400:])
+
+        # ---- the token is SETTABLE, not mint-or-nothing (operator, 2026-10-04) -----
+        # The wizard used to mint the token or keep the host's own; an operator holding a
+        # token from a password manager had to hand-edit .env afterwards. Typing one must
+        # save it, use it for the link, and retire a stale web.token in config.json so
+        # nothing silently outranks it.
+        d = stage(work / "page-own-token", False)
+        (d / "config.json").write_text(json.dumps({
+            "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "main"},
+            "search": {"allow_cloud_egress": False},
+            "web": {"enabled": True, "token": "stale-config-token"},
+        }), encoding="utf-8")
+        os.environ.pop("TINYCMDR_WEB_TOKEN", None)
+        rc, out, written, mod = drive(d, "", page=("y", "y", "", "my-own-LAN-token-4242"))
+        env = (d / ".env").read_text(encoding="utf-8") if (d / ".env").exists() else ""
+        check(rc == 0 and "TINYCMDR_WEB_TOKEN=my-own-LAN-token-4242" in env,
+              "a token typed at the prompt is saved to .env", env[-160:])
+        check(mod._web_token() == "my-own-LAN-token-4242",
+              "and it is the token the page will require", mod._web_token())
+        check("token" not in json.dumps(written.get("web") or {}),
+              "a stale web.token in config.json was retired, so it cannot outrank .env",
+              json.dumps(written.get("web")))
+        check("#token=my-own-LAN-token-4242" in out,
+              "the printed link carries the operator's token", out[-300:])
 
         # ---- the endpoint is PROBED before the wizard moves on --------------------
         # Operator, 2026-09-30: "there should be a point in the interactive installer that
@@ -166,8 +191,8 @@ def main():
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
         answers = ["", "http://127.0.0.1:9/v1", "http://127.0.0.1:9/v2",
-                   "http://127.0.0.1:9/v3", "", "", "", "", "", "", ""]  # kind, urls,
-        # model, MM, TG, page x3, egress
+                   "http://127.0.0.1:9/v3", "", "", "", "", "", "", "", ""]  # kind, urls,
+        # model, MM, TG, page x4, egress
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -193,8 +218,8 @@ def main():
         spec.loader.exec_module(mod)
         mod.probe_endpoint = lambda url, key=None, **kw: {
             "ok": True, "ids": ["qwen3-14b", "glm-4.6"], "status": 200, "error": ""}
-        # kind (local), url, model NUMBER, Mattermost, Telegram, page x3, egress
-        answers = ["", "http://127.0.0.1:8081/v1", "2", "", "", "", "", "", ""]
+        # kind (local), url, model NUMBER, Mattermost, Telegram, page x4, egress
+        answers = ["", "http://127.0.0.1:8081/v1", "2", "", "", "", "", "", "", ""]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -234,9 +259,9 @@ def main():
         mod._is_local_url = lambda url: False
         mod._detect_window = lambda url, headers=None: 0
         # kind (cloud), key (wrong), url, key again (right), model NUMBER, MM, TG,
-        # page x3, egress
+        # page x4, egress
         answers = ["cloud", "sk-bad", "https://api.example.com/v1", "sk-good", "1",
-                   "", "", "", "", "", ""]
+                   "", "", "", "", "", "", ""]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()

@@ -34,6 +34,8 @@
 #   --web-host <addr>     the page's bind address: 127.0.0.1 (default) or 0.0.0.0
 #                         to reach it from other machines on your network
 #   --web-port <p>        the page's port (default 8790)
+#   --web-token <t>       the page's access token (TINYCMDR_WEB_TOKEN). Replaces the
+#                         host's own; absent: keep it, or mint a 32-byte one
 #   --no-web              install without the page (the chat lane only)
 #   --token-file <f>      read the token from a file (first token-looking line)
 #   --secrets-file <f>    KEY=VALUE lines for .env (search keys, and the bot token:
@@ -140,6 +142,7 @@ while [ $# -gt 0 ]; do
         --telegram-ids)     TG_IDS="$2"; shift 2 ;;
         --web-host)         WEB_HOST_ARG="$2"; shift 2 ;;
         --web-port)         WEB_PORT="$2"; shift 2 ;;
+        --web-token)        WEB_TOKEN_ARG="$2"; shift 2 ;;
         --no-web)           WEB_ON=0; shift ;;
         --install-dir)      INSTALL_DIR="$2"; DIR_GIVEN=1; shift 2 ;;
         --user)             RUN_USER="$2"; shift 2 ;;
@@ -1246,6 +1249,18 @@ if [ "$WEB_ON" = 1 ]; then
             WEB_HOST="0.0.0.0"
         fi
     fi
+    # The page's token: set your own here, or take the host's own (a redo keeps it) or
+    # a minted one. This question exists because the wizard used to be mint-or-nothing:
+    # a LAN operator who wanted a token they chose had to hand-edit .env afterwards
+    # (2026-10-04, the operator's own report).
+    if [ -n "${WEB_TOKEN_ARG:-}" ]; then
+        if [ "${#WEB_TOKEN_ARG}" -lt 12 ]; then
+            warn "the page token you set is only ${#WEB_TOKEN_ARG} characters; the token"
+            warn "  is the whole door on a LAN, so 16+ is the shape it deserves."
+        fi
+    elif [ "$ASK_Q" = 1 ]; then
+        WEB_TOKEN_ARG="$(ask_secret "Web UI token (Enter = keep this host's own, or mint one)")"
+    fi
     if [ "$WEB_HOST" = "0.0.0.0" ]; then
     # The bind needs no root; the FIREWALL hole does. ufw/firewalld are common on servers
     # and both refuse inbound by default, so name the command that opens it.
@@ -1382,7 +1397,7 @@ chmod 600 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
 "$PY" - "$INSTALL_DIR/.env" "$TOKEN" "${SECRETS_FILE:-$SRC/install/fleet-secrets.env}" "$TG_TOKEN" \
-        "$FB_ENV_LINES" "${SEARCH_EGRESS:-}" "$MODEL_KEY" <<'PY'
+        "$FB_ENV_LINES" "${SEARCH_EGRESS:-}" "$MODEL_KEY" "${WEB_TOKEN_ARG:-}" <<'PY'
 import os, pathlib, re, sys
 import secrets as _secrets
 envp, tok, secrets, tgtok = (pathlib.Path(sys.argv[1]), sys.argv[2],
@@ -1390,6 +1405,7 @@ envp, tok, secrets, tgtok = (pathlib.Path(sys.argv[1]), sys.argv[2],
 fb_env = sys.argv[5] if len(sys.argv) > 5 else ""
 egress = sys.argv[6] if len(sys.argv) > 6 else ""
 model_key = sys.argv[7] if len(sys.argv) > 7 else ""
+web_arg = sys.argv[8] if len(sys.argv) > 8 else ""
 # The extra-endpoint keys are managed only when THIS run wrote them: a scripted update
 # must carry the host's own lines over, or it drops keys its config.json points at.
 # TINYCMDR_LLM_API_KEY (the primary's key) is managed the same way - a redo with no key
@@ -1398,7 +1414,7 @@ _managed = ["TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN"]
 if model_key:
     _managed.append("TINYCMDR_LLM_API_KEY")
 lines, have, refused, per_bot = [], set(), [], []
-web_tok = ""
+web_tok = web_arg.strip()   # a token set here (--web-token or the answer) replaces the host's
 
 
 def placeholder(val):
@@ -1415,7 +1431,8 @@ if envp.exists():
             continue
         key = line.split("=", 1)[0].strip()
         if key == "TINYCMDR_WEB_TOKEN":
-            web_tok = line.split("=", 1)[1].strip()
+            if not web_tok:
+                web_tok = line.split("=", 1)[1].strip()
             continue          # kept below: a re-run never rotates it silently
         if key in _managed or key in have:
             continue          # installer-managed: written below, never carried over

@@ -83,7 +83,7 @@ sha256sum -c SHA256SUMS --ignore-missing     # macOS: shasum -a 256 -c SHA256SUM
 kind of install — a per-user launchd agent, `--no-launchd` to skip it — so it takes `--yes` and
 has no `--mode`. Every question has a switch: `--mattermost-url`, `--allowed-user`,
 `--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--web-host`, `--web-port`,
-`--no-web`, `--no-path`.
+`--web-token`, `--no-web`, `--no-path`.
 
 **A second install on one host** needs its own identity: `TINYCMDR_SERVICE=tinycmdr-work …` on
 Linux, `--label com.tinycmdr.work` on macOS, `-TaskName` on Windows.
@@ -114,10 +114,11 @@ Mac day-to-day notes: [`install/README-macos.md`](install/README-macos.md).
 
 ```bash
 tinycmdr setup        # once: endpoint, chat gateways, search consent
-tinycmdr              # the page (opens in your browser) + the full-screen session
-tinycmdr --cli        # the page + the same session, inline cards in the scrollback
+tinycmdr              # the page, opens in your browser (the default door)
+tinycmdr cli          # the console alone: this folder, inline cards, no page
+tinycmdr --app        # the full-screen session alone, no page
 tinycmdr --once "…"   # one task, then exit
-tinycmdr --no-web     # the session alone, no page for this run
+tinycmdr --no-web     # the page off for this run (the lanes/service only)
 ```
 
 **Keys (session):** `Enter` send · `↑`/`↓` line, `PgUp`/`PgDn` page, `Ctrl-Home`/`Ctrl-End` ends ·
@@ -126,8 +127,10 @@ walk back) · `Ctrl-B` copy transcript. Wheel scroll: `TINYCMDR_APP_MOUSE=1`.
 
 **Page:** token-gated always (`TINYCMDR_WEB_TOKEN` in `.env`; the installer mints one, and so does
 the first start of a host that has none — an install that upgraded into the page). `tinycmdr setup`
-asks the two things nobody can infer: loopback or LAN, and the port. Loopback by default; `0.0.0.0`
-puts it on your network — token in cleartext there, so trust the network. Rotate/reprint:
+asks the three things nobody can infer: loopback or LAN, the port, and the token (Enter keeps the
+host's own or mints one; a token you bring replaces it — `--web-token <t>` does the same at
+install). Loopback by default; `0.0.0.0` puts it on your network — token in cleartext there, so
+trust the network. Rotate/reprint:
 
 ```bash
 tinycmdr token set TINYCMDR_WEB_TOKEN   # empty value mints a fresh one, prints the link
@@ -157,7 +160,7 @@ tinycmdr web                            # print the tokenized link (opens a brow
 
 | Drop this | Get this |
 | :--- | :--- |
-| `skills/<name>/SKILL.md` (YAML frontmatter: name + description, then the runbook) | live next message; one prompt-index line, read in full only when relevant |
+| `skills/<name>/SKILL.md` (YAML frontmatter: name + description; optional `globs:`, `always: true`, and `hide: true` (omp spelling: `disable-model-invocation: true`) for operator-only, then the runbook) | live next message; one prompt-index line, read in full only when relevant; an operator-only runbook opens only when the operator names it |
 | `tools/<name>.py` or `<name>.tool.json` | callable next call; listed by name and shelf, descriptions one `find_tools` call away |
 | `create_tool` | the agent writes its own |
 

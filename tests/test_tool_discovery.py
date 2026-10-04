@@ -353,6 +353,62 @@ try:
 finally:
     fb.SKILLS_DIR = _keep_skills_dir
 
+# ---- the operator-only switch reaches the TOOL, not just the prompt -------------
+# The switch used to stop at the prompt: `hide: true` trimmed the index while
+# skill{list} still served the runbook's name and skill{read} its body. Operator-only
+# now means absent from list/search, refused on read, and opened for a session only
+# when the OPERATOR names it in an order.
+_tmp2 = Path(tempfile.mkdtemp(prefix="tinycmdr-oponly-"))
+(_tmp2 / "open").mkdir()
+(_tmp2 / "open" / "SKILL.md").write_text(
+    "---\nname: openskill\ndescription: a normal runbook\n---\nbody\n",
+    encoding="utf-8", newline="\n")
+(_tmp2 / "vault").mkdir()
+(_tmp2 / "vault" / "SKILL.md").write_text(
+    "---\nname: vaultrunbook\ndescription: operator-only runbook\nhide: true\n---\n"
+    "SECRET BODY\n", encoding="utf-8", newline="\n")
+_keep2 = fb.SKILLS_DIR
+try:
+    fb.SKILLS_DIR = _tmp2
+    out = fb.tool_skill({"action": "list"}, {"session_key": "opo1"})
+    check("an operator-only runbook is absent from skill list",
+          "vaultrunbook" not in out and "openskill" in out, out)
+    out = fb.tool_skill({"action": "read", "name": "vaultrunbook"},
+                        {"session_key": "opo1"})
+    check("reading it without the operator's word is refused",
+          "operator-only" in out and "SECRET BODY" not in out, out[:160])
+    out = fb.tool_skill({"action": "search", "name": "vaultrunbook", "topic": "secret"},
+                        {"session_key": "opo1"})
+    check("searching it is refused the same way",
+          "operator-only" in out and "SECRET BODY" not in out, out[:160])
+    out = fb.tool_skill({"action": "read", "name": "nope"}, {"session_key": "opo1"})
+    check("a name miss does not leak operator-only runbook names",
+          "vaultrunbook" not in out, out[:160])
+    check("the operator naming it grants the session",
+          bool(fb.grant_named_skills("opo1", "run the vaultrunbook procedure") and
+               fb._skill_granted([s for s in fb.skill_index()
+                                  if s["name"] == "vaultrunbook"][0], "opo1")))
+    out = fb.tool_skill({"action": "read", "name": "vaultrunbook"},
+                        {"session_key": "opo1"})
+    check("now the body serves, and the read says why",
+          "SECRET BODY" in out and "operator" in out.lower(), out[:160])
+    out = fb.tool_skill({"action": "read", "name": "vaultrunbook"},
+                        {"session_key": "opo2"})
+    check("the grant is per session, not per box", "operator-only" in out, out[:160])
+    check("the folder name is an alias the operator can name",
+          fb.grant_named_skills("opo3", "check the vault folder") != [])
+    out = fb.tool_skill({"action": "read", "name": "vaultrunbook"},
+                        {"session_key": "opo3"})
+    check("naming the folder alias opened it too", "SECRET BODY" in out, out[:160])
+    fb.grant_named_skills("opo4", "disvault is unrelated text")
+    out = fb.tool_skill({"action": "read", "name": "vaultrunbook"},
+                        {"session_key": "opo4"})
+    check("a name inside a longer word does not grant",
+          "operator-only" in out, out[:160])
+finally:
+    fb._skill_grants.clear()
+    fb.SKILLS_DIR = _keep2
+
 out = fb.tool_shell({"command": "list_tools"}, {"session_key": "s-bare"})
 check("a bare tool name typed into the shell is answered as a tool",
       "is a TOOL on this box" in out and "Call list_tools directly" in out

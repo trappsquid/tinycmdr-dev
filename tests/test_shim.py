@@ -1,17 +1,19 @@
-"""`tinycmdr` with nothing after it opens the app - in both shims, without breaking anything else.
+"""`tinycmdr` with nothing after it opens the PAGE, and `tinycmdr cli` the console - in both
+shims, without breaking anything else.
 
-Operator, 2026-09-22: "so I can open a terminal/cmd/powershell window on the Windows bed now and
-type tinycmdr and it will open a cli instance?"
+Operator, 2026-09-22: "type tinycmdr and it will open a cli instance?" - the shims then added
+`--cli` for the bare case, and as of 2026-09-30 the full-screen app instead. That made the
+bare door open BOTH the page and the app: the build starts the page beside every long-lived
+mode, and `--app` counted as one.
 
-It could not: the shims passed their arguments through and the build's no-argument case is
-the BOT lane, which on a supervised box answers "already running from this folder". The
-session was `--cli`. The shims then added `--cli` when there was nothing to pass, and as of
-2026-09-30 the human door opens the full-screen app instead (`--app`, which falls back to the
-inline cards on a console that cannot host it); `--cli` is the inline lane spelled out. These
-checks hold that mapping to the letter:
+Operator, 2026-10-04: "typing tinycmdr now opens the webui and the TUI/CLI at once; I want it
+default to web-ui and for a user to deliberately have to type `tinycmdr cli` for it to open
+the cli only". So the shims add NOTHING for the bare case (the build's no-argument start is
+the page), `cli` passes through as the deliberate terminal door, and `--cli`/`--app` are the
+terminal doors under their flag spellings. These checks hold that mapping to the letter:
 
-  * no arguments -> ["--app"], in `tinycmdr.cmd` (Windows) and `tinycmdr` (POSIX)
-  * a verb, `--once "<task>"` and a multi-word verb pass through untouched
+  * no arguments -> [], in `tinycmdr.cmd` (Windows) and `tinycmdr` (POSIX)
+  * `cli`, a verb, `--once "<task>"` and a multi-word verb pass through untouched
   * the BOT keeps starting the way it always has: `python tinycmdr.py` with no flags still
     runs the supervised lanes, because the scheduled task, the systemd unit and the VBS
     launcher name the file directly and never go through a shim
@@ -111,21 +113,24 @@ def check_pass_through(runner, label, args, want):
 def main():
     print("== the decision each shim makes ==")
     for runner, label in (((run_windows, "windows"),) if os.name == "nt" else ()):
-        check_pass_through(runner, label, [], ["--app"])
+        check_pass_through(runner, label, [], [])
+        check_pass_through(runner, label, ["cli"], ["cli"])
         check_pass_through(runner, label, ["status"], ["status"])
         check_pass_through(runner, label, ["--once", "reply with READY"], ["--once", "reply with READY"])
         check_pass_through(runner, label, ["model", "use", "main"], ["model", "use", "main"])
         check_pass_through(runner, label, ["help"], ["help"])
 
     if os.name == "posix":
-        for args, want in (([], ["--app"]), (["status"], ["status"]),
+        for args, want in (([], []), (["cli"], ["cli"]), (["status"], ["status"]),
                            (["--once", "reply with READY"], ["--once", "reply with READY"]),
                            (["model", "use", "main"], ["model", "use", "main"])):
             check_pass_through(run_posix, "posix", args, want)
     else:
         sh = open(os.path.join(ROOT, "tinycmdr"), encoding="utf-8").read()
-        check("posix: nothing -> --app (checked as text on Windows; MSYS rewrites $0)",
-              'if [ "$#" -eq 0 ]; then\n    exec "$PY" "$HERE/tinycmdr.py" --app\nfi' in sh, sh[-220:])
+        check("posix: nothing is added for the bare case (checked as text on Windows; "
+              "MSYS rewrites $0)",
+              'if [ "$#" -eq 0 ]' not in sh
+              and 'exec "$PY" "$HERE/tinycmdr.py" "$@"' in sh, sh[-220:])
         check("posix: real arguments still pass through",
               'exec "$PY" "$HERE/tinycmdr.py" "$@"' in sh, sh[-220:])
 
@@ -143,6 +148,12 @@ def main():
     check("no flags does NOT silently become a session",
           not re.search(r"else:\s*\n\s+run_cli\(\)", body),
           "main()'s no-flag branch now runs a session - the service path would follow it")
+    check("`tinycmdr cli` is a real door, normalised before the verb dispatch",
+          'sys.argv[1].lower() == "cli"' in body and 'sys.argv.append("--cli")' in body,
+          "main() lost the cli subcommand")
+    check("a terminal session does not raise the page (--cli/--app skip it)",
+          'if _terminal_mode and "--web" not in sys.argv:' in body,
+          "main() starts the page beside --cli/--app again")
     for name in ("tinycmdr", "tinycmdr.cmd"):
         raw = open(os.path.join(ROOT, name), "rb").read()
         if name.endswith(".cmd"):

@@ -68,6 +68,9 @@ PORTABLE = {
     # The page: bind, port, and the off switch, on all three platforms.
     "page host": ("--web-host", "--web-host", "WebHost"),
     "page port": ("--web-port", "--web-port", "WebPort"),
+    # The page's token: settable at install since the operator asked why the wizard
+    # only minted one (2026-10-04). Every platform must understand it.
+    "page token": ("--web-token", "--web-token", "WebToken"),
     "no page": ("--no-web", "--no-web", "NoWeb"),
 }
 

@@ -34,6 +34,8 @@
         -WebHost <addr>     page bind: 127.0.0.1 (default) or 0.0.0.0 to reach the
                            page from other machines on your network
         -WebPort <p>        the page's port (default 8790)
+        -WebToken <t>       the page's access token (TINYCMDR_WEB_TOKEN): set your
+                            own, or keep the host's own / a minted one
         -NoWeb              install without the page (the chat lane only)
         -VerifyOnly        is this install working? (no reinstall)
         -Uninstall [-Force] stop it, remove the folder and the autostart entry
@@ -88,6 +90,7 @@ param(
     [switch] $Uninstall,                         # remove the task and the folder
     [string] $WebHost         = "",              # page bind: "" = this machine, 0.0.0.0 = your LAN
     [int]    $WebPort         = 8790,            # page port (the published default)
+    [string] $WebToken        = "",              # page token: set your own, or keep/mint
     [switch] $NoWeb,                             # install without the page
     [switch] $NonInteractive                     # never ask: for scripts and fleet pushes
                                                  # (a redirected stdin also means "do not ask")
@@ -1089,6 +1092,15 @@ if ($Ask -and -not $KeepConn) {
                 $WebHost = "127.0.0.1"
             }
         }
+        # The page's token: set your own here, or take the host's own (a redo keeps it)
+        # or a minted one. This question exists because the wizard used to be
+        # mint-or-nothing (2026-10-04, the operator's own report).
+        if (-not $WebToken -and $Ask) {
+            $WebToken = (Read-Secret "Web UI token (Enter = keep this host's own, or mint one)").Trim()
+            if ($WebToken -and $WebToken.Length -lt 12) {
+                Write-Warning "the page token you set is only $($WebToken.Length) characters; the token is the whole door on a LAN, so 16+ is the shape it deserves."
+            }
+        }
         if ($WebHost -eq "0.0.0.0") {
             Write-Host "  page        : 0.0.0.0`:$WebPort - any machine on your network can open it"
             Write-Host "                the token travels in cleartext there, so trust the network"
@@ -1488,7 +1500,7 @@ $envPath = Join-Path $InstallDir ".env"
 # every one of them then showed the others' usage in that provider's dashboard.
 # No provider is named here on purpose - the key is whatever the endpoint issued.
 $ownKeys = @{}
-$WebToken = ""
+$EnvWebToken = ""
 if (Test-Path $envPath) {
     foreach ($line in (Get-Content $envPath)) {
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.+)$') {
@@ -1503,8 +1515,9 @@ if (Test-Path $envPath) {
             $managed = @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN")
             if ($ModelKey) { $managed += "TINYCMDR_LLM_API_KEY" }
             if ($k -eq "TINYCMDR_WEB_TOKEN") {
-                # Kept if this host has one; a redo never rotates it silently.
-                $WebToken = $v
+                # Kept if this host has one; a redo never rotates it silently - and a
+                # -WebToken / the wizard's answer outranks it (the priority below).
+                $EnvWebToken = $v
                 continue
             }
             if ($v -and ($managed -notcontains $k)) {
@@ -1513,6 +1526,9 @@ if (Test-Path $envPath) {
         }
     }
 }
+# Priority: -WebToken / the wizard's answer replaces the host's; else the host's own (a
+# redo never rotates it silently); else minted here.
+if (-not $WebToken) { $WebToken = $EnvWebToken }
 if (-not $WebToken) {
     # Minted HERE and never echoed (the 1.0.24 lesson: a token in the install
     # transcript is a leaked token). 32 random bytes, base64url - the same shape

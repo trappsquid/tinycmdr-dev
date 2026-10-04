@@ -1,13 +1,15 @@
 #!/bin/sh
 # tinycmdr - the door on Linux and macOS. On PATH (the installer puts it there):
-#     tinycmdr                     the page + a session in this folder (no arguments)
+#     tinycmdr                     the PAGE (no arguments; opens in your browser), and
+#                                  the chat lanes when this box has any
+#     tinycmdr cli                 the console alone: the session, no page
+#     tinycmdr --app               the full-screen session alone, no page
 #     tinycmdr status | doctor | model | logs | restart | token | help
-#     tinycmdr --app               the session, spelled out (the default door:
-#                                  a bare `tinycmdr` starts the page and the app)
-#     tinycmdr --no-web            the session alone, no page for this run
-#     tinycmdr --cli               the inline lane, cards in the scrollback
-# No arguments is the human case, so it opens a session; the bot keeps starting the
-# way it always has (systemd/launchd run tinycmdr.py itself, never this shim).
+#     tinycmdr --no-web            the same as bare, without the page for this run
+# No arguments means the page: the page is the default door, and a terminal session is
+# the deliberate choice (`tinycmdr cli`). Until 2026-10-04 this shim added `--app` for the
+# bare case, so the app and the page opened at once (the operator's report). The bot keeps
+# starting the way it always has (systemd/launchd run tinycmdr.py itself, never this shim).
 #
 # A shim, not a second build: it runs tinycmdr.py from the folder it RESOLVES to, so a
 # symlink in /usr/local/bin finds the install rather than the bin directory.
@@ -77,7 +79,5 @@ if [ "${1:-}" = "update" ] && ! grep -q "releases/latest/download" "$HERE/tinycm
     exit $RC
 fi
 
-if [ "$#" -eq 0 ]; then
-    exec "$PY" "$HERE/tinycmdr.py" --app
-fi
+# Nothing is added for the bare case: the build's no-argument start is the page.
 exec "$PY" "$HERE/tinycmdr.py" "$@"

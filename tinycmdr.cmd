@@ -1,10 +1,10 @@
 @echo off
 REM tinycmdr - the door on Windows. On PATH:
-REM     tinycmdr                     a session in this folder (no arguments)
+REM     tinycmdr                     the PAGE (no arguments; opens in your browser), and
+REM                                  the chat lanes when this box has any
+REM     tinycmdr cli                 the console alone: the session, no page
+REM     tinycmdr --app               the full-screen session alone, no page
 REM     tinycmdr status | doctor | model | logs | restart | token | help | clean | ...
-REM     tinycmdr --app               the same session, spelled out (the default
-REM                                  door: a bare `tinycmdr` opens the app)
-REM     tinycmdr --cli               the inline lane, cards in the scrollback
 REM     tinycmdr --once "<task>" | --telegram          a bot lane in the foreground
 REM A shim, not a second build: it runs tinycmdr.py from THIS folder, so the install
 REM stays one folder with one config.json and one .env.
@@ -43,11 +43,11 @@ if /i "%~1"=="update" (
     )
 )
 
-REM No arguments means a human at a keyboard, so give them the app (inline cards
-REM on a console that cannot host it). The bot keeps
-REM starting the way it always has: the scheduled task runs tinycmdr.py itself.
+REM No arguments means the PAGE (the build's no-argument start), so nothing is added; a
+REM terminal session is the deliberate choice (`tinycmdr cli`). The bot keeps starting the
+REM way it always has: the scheduled task runs tinycmdr.py itself.
 if "%~1"=="" (
-    "%PY%" "%HERE%tinycmdr.py" --app
+    "%PY%" "%HERE%tinycmdr.py"
 ) else (
     "%PY%" "%HERE%tinycmdr.py" %*
 )
