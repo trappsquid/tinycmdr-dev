@@ -277,7 +277,7 @@ def main():
           "the tab takes the transparent mark; the home-screen icon stays opaque")
     check("id=emptymark" in html and 'src="/mark.png"' in html,
           "and the empty state carries the emblem when there is no chibi")
-    check("Ave," in html and "Commander." in html and "Start a new campaign" in html,
+    check("Greetings," in html and "Commander." in html and "Start a new campaign" in html,
           "with the greeting and the way in")
     check(req("GET", "/mark.png")[0] == 200
           and req("GET", "/mark.png")[2].get("Content-Type") == "image/png",

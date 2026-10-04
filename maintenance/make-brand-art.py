@@ -14,6 +14,8 @@ dependencies, and neither of those is one).
     python maintenance/make-brand-art.py --ansi     # print the colour version to look at
     python maintenance/make-brand-art.py --master assets/branding/tinycmdr-helm-master.png \
         --crop 134,37,830,945 --cols 20 --rows 9    # the helm alternative, if ever wanted
+    python maintenance/make-brand-art.py --page-chibi 512 --readme-chibi 512
+        # the chibi art: the page's square mascot and the README's own-aspect figure
 """
 import argparse
 import json
@@ -256,17 +258,21 @@ def page_icon(size=512, bg=(0x0F, 0x11, 0x14), crop=None, alpha=False):
     return png_encode(size, size, out_rows, colortype=6 if alpha else 2)
 
 
-CHIBI = ROOT / "assets" / "page-chibi.png"
+CHIBI = ROOT / "assets" / "page-chibi.png"             # the page's mascot (square)
+CHIBI_README = ROOT / "assets" / "tinycmdr-chibi.png"  # the README figure (own aspect)
 CHIBI_MASTER = ROOT / "assets" / "branding" / "tinycmdr-chibi-master.png"
 
 
-def _rgba_crop(master=None, margin=0.06):
-    """(side, RGBA rows) - the master cut to its content square, alpha made real.
+def _rgba_crop(master=None, margin=0.06, square=True):
+    """(width, height, RGBA rows) - the master cut to its content, alpha made real.
 
     A cut-out master (RGBA: the chibi, the helm) keeps its own alpha and is cropped to
     what is actually drawn - that is what makes it usable at any CSS size without a
-    transparent margin doing the layout. An RGB master (the badge) has its plate turned
-    into transparency, with the edge alpha derived from luminance so the rim stays soft.
+    transparent margin doing the layout. `square=True` cuts the content's square (the
+    page's mascot sits in a square medallion); `square=False` keeps the content box's own
+    aspect, so the README's figure fills its image instead of floating in side padding.
+    An RGB master (the badge) has its plate turned into transparency, with the edge alpha
+    derived from luminance so the rim stays soft.
     """
     w, h, bpp, rows = decode_png(master or MASTER)
     xs, ys = [], []
@@ -282,36 +288,45 @@ def _rgba_crop(master=None, margin=0.06):
                 ys.append(y)
     if not xs:
         raise SystemExit("no content found in %s" % (master or MASTER))
-    cx, cy = (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
-    side = max(max(xs) - min(xs), max(ys) - min(ys))
-    side = min(w, h, int(side * (1.0 + 2 * margin)))
-    left = max(0, min(w - side, cx - side // 2))
-    top = max(0, min(h - side, cy - side // 2))
+    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+    if square:
+        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+        side = max(x1 - x0, y1 - y0)
+        side = min(w, h, int(side * (1.0 + 2 * margin)))
+        left = max(0, min(w - side, cx - side // 2))
+        top = max(0, min(h - side, cy - side // 2))
+        right, bottom = left + side, top + side
+    else:
+        mw = int((x1 - x0 + 1) * margin)
+        mh = int((y1 - y0 + 1) * margin)
+        left, right = max(0, x0 - mw), min(w, x1 + 1 + mw)
+        top, bottom = max(0, y0 - mh), min(h, y1 + 1 + mh)
     out = []
-    for y in range(top, top + side):
+    for y in range(top, bottom):
         line = bytearray()
-        for x in range(left, left + side):
+        for x in range(left, right):
             r, g, b, a = pixel(rows, bpp, x, y)
             if bpp == 3:
                 a = 0 if max(r, g, b) <= PAGE_FLAT else min(
                     255, int((max(r, g, b) - PAGE_FLAT) * 255 / 70.0))
             line += bytes((r, g, b, a))
         out.append(line)
-    return side, out
+    return right - left, bottom - top, out
 
 
-def _rgba_resample(side, rows, size):
-    """Box-resample RGBA rows, alpha-weighted: a pixel's coverage becomes its alpha, which
-    is what keeps a cut-out's edge clean at a smaller size instead of fringed."""
-    step = side / float(size)
+def _rgba_resample(src_w, src_h, rows, dst_w, dst_h):
+    """Box-resample RGBA rows to dst_w x dst_h, alpha-weighted: a pixel's coverage becomes
+    its alpha, which is what keeps a cut-out's edge clean at a smaller size instead of
+    fringed."""
+    sx, sy = src_w / float(dst_w), src_h / float(dst_h)
     out = []
-    for oy in range(size):
-        y0 = int(oy * step)
-        y1 = min(max(int((oy + 1) * step), y0 + 1), side)
+    for oy in range(dst_h):
+        y0 = int(oy * sy)
+        y1 = min(max(int((oy + 1) * sy), y0 + 1), src_h)
         line = bytearray()
-        for ox in range(size):
-            x0 = int(ox * step)
-            x1 = min(max(int((ox + 1) * step), x0 + 1), side)
+        for ox in range(dst_w):
+            x0 = int(ox * sx)
+            x1 = min(max(int((ox + 1) * sx), x0 + 1), src_w)
             r = g = b = n = 0.0
             total = 0
             for y in range(y0, y1):
@@ -337,14 +352,19 @@ def _rgba_resample(side, rows, size):
     return out
 
 
-def page_art(size=None, master=None, margin=0.06):
-    """The cut-out pipeline for page art: content-cropped square, real alpha, and an
-    optional resample (`size=None` keeps the designer's own pixels - the backdrop)."""
-    side, rows = _rgba_crop(master, margin)
-    if size and size != side:
-        rows = _rgba_resample(side, rows, size)
-        side = size
-    return side, png_encode(side, side, rows, colortype=6)
+def page_art(size=None, master=None, margin=0.06, square=True):
+    """The cut-out pipeline for chibi art: content-cropped, real alpha, and an optional
+    resample (`size=None` keeps the designer's own pixels - the backdrop). `square=True`
+    outputs a square sized by side; `square=False` keeps the content's aspect, sized by
+    width."""
+    w, h, rows = _rgba_crop(master, margin, square=square)
+    if size:
+        dst_w = size
+        dst_h = size if square else max(1, int(round(size * h / float(w))))
+        if (dst_w, dst_h) != (w, h):
+            rows = _rgba_resample(w, h, rows, dst_w, dst_h)
+            w, h = dst_w, dst_h
+    return w, h, png_encode(w, h, rows, colortype=6)
 
 
 def artifact():
@@ -373,15 +393,24 @@ def main():
     ap.add_argument("--page-mark", type=int, metavar="SIZE",
                     help="write assets/page-mark.png (the transparent emblem for the page)")
     ap.add_argument("--page-chibi", type=int, metavar="SIZE",
-                    help="write assets/page-chibi.png (the chibi, content-cropped and "
-                         "resampled with alpha) - the page's empty-state figure")
+                    help="write assets/page-chibi.png (the chibi master, content-cropped "
+                         "square and resampled with alpha) - the page's empty-state figure")
+    ap.add_argument("--readme-chibi", type=int, metavar="WIDTH",
+                    help="write assets/tinycmdr-chibi.png at WIDTH wide, keeping the "
+                         "chibi's own aspect - the README's figure")
     a = ap.parse_args()
     configure(a.master, a.crop, a.cols, a.rows)
     if a.page_chibi:
-        side, data = page_art(a.page_chibi, master=CHIBI_MASTER)
+        w, h, data = page_art(a.page_chibi, master=CHIBI_MASTER)
         CHIBI.write_bytes(data)
         print("wrote %s (%dx%d, %d bytes, transparent)"
-              % (CHIBI.relative_to(ROOT), side, side, len(data)))
+              % (CHIBI.relative_to(ROOT), w, h, len(data)))
+    if a.readme_chibi:
+        w, h, data = page_art(a.readme_chibi, master=CHIBI_MASTER, square=False)
+        CHIBI_README.write_bytes(data)
+        print("wrote %s (%dx%d, %d bytes, transparent)"
+              % (CHIBI_README.relative_to(ROOT), w, h, len(data)))
+    if a.page_chibi or a.readme_chibi:
         if not (a.write or a.ansi or a.page_icon or a.page_mark):
             return 0
     if a.page_icon or a.page_mark:

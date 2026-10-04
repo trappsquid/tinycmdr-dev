@@ -391,11 +391,15 @@ def main():
     res = run_page(dead, script)
     check("bad" in (res.get("ver") or {}).get("cls", ""),
           f"a dead lane marks the header ({res.get('ver')})")
+    check("brand-version" in (res.get("ver") or {}).get("cls", ""),
+          f"...and the marker keeps its own class ({res.get('ver')})")
     check((res.get("title") or "").startswith("CHAT LANE DOWN"),
           f"...and the tab title says it ({res.get('title')!r})")
     _warn = res.get("warn") or {}
     check("show" in (_warn.get("cls") or ""),
           f"...and the banner is actually displayed ({_warn.get('cls')!r})")
+    check("connection-banner" in (_warn.get("cls") or ""),
+          f"...carrying the design's own class, not just 'show' ({_warn.get('cls')!r})")
     check("mattermost" in (_warn.get("detail") or "") and "401" in (_warn.get("detail") or ""),
           f"...and the detail names the lane and the reason ({( _warn.get('detail') or '')[:80]!r})")
     check("401" in ((res.get("ver") or {}).get("title") or ""),
@@ -486,6 +490,9 @@ def main():
     check("show" in (res.get("config") or {}).get("cls", "")
           and "restart to apply" in (res.get("config") or {}).get("text", ""),
           f"a pending config edit is its own amber notice ({res.get('config')})")
+    check("connection-banner-amber" in (res.get("config") or {}).get("cls", "")
+          and "connection-banner" in (res.get("config") or {}).get("cls", ""),
+          f"...on the amber variant, base class and all ({res.get('config')})")
     check("show" not in (res.get("warn") or {}).get("cls", ""),
           "and NOT the error banner (different problems, different banners)")
     sc = dict(sc, steps=[{"kind": "polls", "n": 3},

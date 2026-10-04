@@ -73,6 +73,34 @@ Fixed
   page on every run (measured: ~60 tabs in one day of gate runs on a Mac);
   `TINYCMDR_NO_BROWSER=1` is the opt-out `_browser_possible()` honours, every suite that
   starts a server sets it, and the in-process suites patch the function.
+- **The ported page's controls came from a build this tree does not have, and the gaps
+  showed the moment a session could SEE the page.** Found with the vision model on
+  2026-10-04; what was wrong, and what it is now:
+  - the icons were sized by React's `size` prop, so every inlined `<svg>` filled its
+    container instead (measured: 110-161px in the rail, 29-35px in the banners); each
+    context carries the design's own number now;
+  - the banners' show/hide wrote `className='show'`, dropping `.connection-banner` - the
+    design's grid and colours never applied and both notices rendered as bare stacked
+    rows - and no rule ever hid them; the class store keeps the base classes and
+    `#lanewarn:not(.show)` / `#configwarn:not(.show)` do the hiding. The same wipe took
+    `brand-version` off the header's lane marker, and its `.bad` state had no rule at all;
+  - the shell was `min-height:100vh`: two notices grew it to 1115px, the body scrolled and
+    autofocus pulled the header off-screen. It is exactly the viewport now; the hero pane
+    and the transcript scroll inside themselves, and the command box never moves (checked
+    on a phone viewport too);
+  - the composer is a `<textarea>` while the design's rules were written for `<input>`, so
+    it rendered as a white UA box; the paperclip, placeholder and focus-ring rules match
+    both now;
+  - the rail's list had no height of its own, so 17 conversations pushed the host card
+    off-screen with nothing scrolling;
+  - the command palette had no backdrop frosting, so bright art ghosted through it;
+  - `Stop` was a raw UA button and always up: it wears the header's pill idiom and appears
+    only while a run is live;
+  - copy and the rail's delete were hover-only - present, but invisible until looked for;
+    both sit at a resting opacity.
+  Every item re-verified live on this Mac: desktop 1440x900 and phone 390x844, zero body
+  scroll, zero page errors; the three new class-store checks fail on the pre-fix build
+  (pinned in `tests/test_webui_page.py`).
 
 Changed
 - **The page is a modern imperial command pavilion.** The operator's brief, 2026-10-04:
@@ -93,6 +121,23 @@ Changed
   that re-checks immediately, a Details click for the technical reason, and a dismiss; a
   config edit that has not applied is a separate AMBER notice with its own dismiss. One
   banner carrying both read as one alarm that was mostly noise.
+- **The page obeys the operator's state spec (2026-10-04).** No lines shows the imperial
+  welcome screen and mascot; the FIRST line collapses the hero into a small brand mark
+  over the transcript (`#brandmark`: the badge and a mono wordmark); an active chat takes
+  the whole central stage and the colonnade steps back to 22%; the command box never
+  moves. The rail lists every conversation on this host by default (the "show every
+  conversation" toggle starts checked) and every row is deletable right there with its x,
+  through the same path as the open conversation's delete - refusal reasons included. The
+  hero's SESSION value ellipsizes instead of wrapping, the quietest text (`--muted-2`)
+  moved from 72% to 85% of muted (measured 4.1:1 -> 5.2:1 on the roman-night palette), and
+  the hero says "Greetings, Commander." (operator: "I do not want the harness to show
+  'AVE, Commander'").
+- **The page's mascot is the design's commander, and it is the brand everywhere.** The
+  provided chibi is the chibi master now; `assets/page-chibi.png` (512 square, the shape
+  the medallion needs) and the README's `assets/tinycmdr-chibi.png` (512x667, the
+  content's own aspect) are generated from it by `maintenance/make-brand-art.py
+  --page-chibi/--readme-chibi`, and the cut-out pipeline grew the own-aspect mode so the
+  README figure fills its image instead of floating in side padding.
 
 ## [1.0.67] - 2026-10-03
 

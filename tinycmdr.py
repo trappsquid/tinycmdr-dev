@@ -21708,7 +21708,7 @@ WEB_PAGE = """
       <div id=sessions class="campaign-list"></div>
     </div>
     <div class="sidebar-footer">
-      <label class="host-toggle"><input id=allclients type=checkbox><span></span> Show every conversation on this host</label>
+      <label class="host-toggle"><input id=allclients type=checkbox checked><span></span> Show every conversation on this host</label>
       <div class="host-card"><div><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 20v2" /> <path d="M12 2v2" /> <path d="M17 20v2" /> <path d="M17 2v2" /> <path d="M2 12h2" /> <path d="M2 17h2" /> <path d="M2 7h2" /> <path d="M20 12h2" /> <path d="M20 17h2" /> <path d="M20 7h2" /> <path d="M7 20v2" /> <path d="M7 2v2" /> <rect x="4" y="4" width="16" height="16" rx="2" /> <rect x="8" y="8" width="8" height="8" rx="1" /> </svg><strong id=host></strong></div><small id=hostver></small></div>
     </div>
   </aside>
@@ -21719,11 +21719,11 @@ WEB_PAGE = """
       <div><small>COMMAND CHANNEL</small><strong id=title title="click to rename">No active conversation</strong></div>
       <div class="stage-status"><span class="status-dot"></span><span id=stage-state>ready</span></div>
     </div>
-    <div id=logwrap><div id=log></div>
+    <div id=logwrap><div id=brandmark><img src="/mark.png" alt=""><span>tinycmdr</span></div><div id=log></div>
       <section id=empty class="empty-stage">
         <div class="hero-copy">
           <div class="eyebrow"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /> <path d="M20 2v4" /> <path d="M22 4h-4" /> <circle cx="4" cy="20" r="2" /> </svg> TINYCMDR &middot; IMPERIAL CONSOLE</div>
-          <h1><span>Ave,</span> Commander.</h1>
+          <h1><span>Greetings,</span> Commander.</h1>
           <p>Your legion is idle. Dispatch a new order, inspect the host, or resume an earlier campaign from the archive.</p>
           <div class="hero-actions">
             <button id=emptynew class="primary-action">Start a new campaign <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
@@ -21879,8 +21879,11 @@ function ensureRun(id){
 function syncEmpty(){
  emptyEl.hidden=log.children.length>0;
  // an empty transcript must not split the stage with the log pane: while the empty
- // state is up, the log stops growing and hands the room to the hero
+ // state is up, the log stops growing and hands the room to the hero. Once a line
+ // lands, the hero's collapsed form is the brand mark and the stage belongs to the
+ // transcript (operator spec, 2026-10-04).
  logwrapEl.classList.toggle('empty',!emptyEl.hidden);
+ document.body.classList.toggle('chat',emptyEl.hidden);
 }
 function clearLog(){
  log.textContent='';runs.clear();syncEmpty();
@@ -21941,7 +21944,7 @@ function status(j){
    :((j.status||'working')+' - '+j.elapsed+'s, '+j.steps+' tool calls');
 }
 function busy(on){document.body.classList.toggle('busy',on);inp.placeholder=on
-  ?'Steer it mid-run (/stop to cancel)...':'Message tinycmdr... ( / for commands )';}
+  ?'Steer it mid-run (/stop to cancel)...':'Issue a command\u2026  ( / for commands )';}
 // The LAN page is plain http://, which is NOT a secure context, so
 // navigator.clipboard is undefined there and click-to-copy did nothing at all
 // (measured 2026-09-20). A selection through the document is the path that works
@@ -22005,24 +22008,35 @@ function age(ts){
  if(s<172800)return Math.floor(s/3600)+'h ago';
  return Math.floor(s/86400)+'d ago';
 }
+// the design's campaign row: a 34px icon tile, then the title over a mono meta line
+const TERMINAL_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg>';
+const X_ICON='<svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
 function renderRail(){
  sessEl.textContent='';
  for(const s of sessions){
   const row=document.createElement('div');
-  row.className='row'+(s.key===sessionKey?' on':'')+(s.owner==='other'?' other':'');
+  row.className='campaign-item'+(s.key===sessionKey?' active':'')+(s.owner==='other'?' other':'');
   row.dataset.key=s.key;
-  const t=document.createElement('div');t.className='t';t.textContent=s.title;row.appendChild(t);
-  const m=document.createElement('div');m.className='m';
+  const ic=document.createElement('span');ic.className='campaign-icon';ic.innerHTML=TERMINAL_ICON;
+  row.appendChild(ic);
+  const tx=document.createElement('span');
+  const t=document.createElement('strong');t.textContent=s.title;tx.appendChild(t);
+  const m=document.createElement('small');
   if(s.live){const d=document.createElement('span');d.className='dot work';m.appendChild(d);}
-  else if(s.owner==='mine'){const d=document.createElement('span');d.className='dot';
-   d.style.background='color-mix(in srgb, var(--dim) 45%, var(--panel))';m.appendChild(d);}
+  else if(s.owner==='mine'){const d=document.createElement('span');d.className='dot quiet';m.appendChild(d);}
   const a=document.createElement('span');a.textContent=age(s.last_active);m.appendChild(a);
   if(s.exchanges){const e=document.createElement('span');
    e.textContent=s.exchanges+' exchange'+(s.exchanges===1?'':'s');m.appendChild(e);}
   if(s.live){const l=document.createElement('span');
    l.textContent='working '+s.live.steps+' steps';m.appendChild(l);}
   else if(s.model){const mo=document.createElement('span');mo.textContent=s.model;m.appendChild(mo);}
-  row.appendChild(m);
+  tx.appendChild(m);row.appendChild(tx);
+  const del=document.createElement('button');
+  del.type='button';del.className='campaign-del';
+  del.title='delete this conversation';del.setAttribute('aria-label','Delete '+s.title);
+  del.innerHTML=X_ICON;
+  del.onclick=function(ev){deleteRow(s.key,s.title,ev);};
+  row.appendChild(del);
   row.onclick=function(){openSession(s.key);};
   sessEl.appendChild(row);
  }
@@ -22079,21 +22093,27 @@ function renameSession(){
   body:JSON.stringify({op:'rename',key:sessionKey,title:name})})
   .then(function(){return loadSessions();});
 }
-function deleteSession(){
- const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
- if(!cur)return;
- note('delete "'+cur.title+'" and everything it said?',['Delete',function(){
+// one delete path for the × on a campaign row and for the open conversation (the
+// operator's ask, 2026-10-04: older sessions are deletable right from the rail)
+function deleteRow(key,title,ev){
+ if(ev&&ev.stopPropagation)ev.stopPropagation();
+ note('delete "'+title+'" and everything it said?',['Delete',function(){
   fetch('/api/sessions',{method:'POST',headers:H(),
-   body:JSON.stringify({op:'delete',key:sessionKey})})
+   body:JSON.stringify({op:'delete',key:key})})
    .then(function(r){return r.json().then(function(j){return [r.status,j];});})
    .then(function(pair){
     const code=pair[0],j=pair[1];
     if(code!==200){note(j.error||'could not delete that conversation');return;}
-    sessionKey=null;runId=null;clearLog();busy(false);
+    const wasOpen=(key===sessionKey);
+    if(wasOpen){sessionKey=null;runId=null;clearLog();busy(false);}
     return loadSessions().then(function(){
-     return openSession(sessions[0]?sessions[0].key:'web',true);});
+     if(wasOpen)return openSession(sessions[0]?sessions[0].key:'web',true);});
    });
  }]);
+}
+function deleteSession(){
+ const cur=sessions.filter(function(s){return s.key===sessionKey;})[0];
+ if(cur)deleteRow(cur.key,cur.title);
 }
 // ------------------------------------------------------------------- panels
 function panelRow(cls,left,body,meta){
@@ -22288,22 +22308,26 @@ var laneWasDown=false;
 // carrying both reads as one alarm that is mostly noise.
 let laneMuted='';
 try{laneMuted=localStorage.fb_lane_muted||'';}catch(e){}
+// The full class strings live here, not just 'show': the design's .connection-banner
+// carries the grid/border/background, so a write that drops it renders a bare row
+// (measured 2026-10-04 - both banners showed as unstyled stacked text).
+const WARN_CLS='connection-banner',CFG_CLS='connection-banner connection-banner-amber';
 function laneKey(){return (laneText.textContent||'')+'|'+(laneDetail.textContent||'');}
 function showWarn(text,detail){
  laneDetail.textContent=detail||'';
  if(!text){
   try{localStorage.removeItem('fb_lane_muted');}catch(e){}
-  laneMuted='';warnEl.className='';
+  laneMuted='';warnEl.className=WARN_CLS;
   return;
  }
- if(laneKey()===laneMuted){warnEl.className='';return;}
+ if(laneKey()===laneMuted){warnEl.className=WARN_CLS;return;}
  laneText.textContent=text;
- warnEl.className='show';
+ warnEl.className=WARN_CLS+' show';
 }
 laneDismiss.onclick=function(){
  laneMuted=laneKey();
  try{localStorage.fb_lane_muted=laneMuted;}catch(e){}
- warnEl.className='';
+ warnEl.className=WARN_CLS;
 };
 laneRetry.onclick=function(){laneRetry.textContent='checking...';versionCheck().then(function(){
  laneRetry.textContent='Retry';});};
@@ -22313,17 +22337,17 @@ try{cfgMuted=localStorage.fb_cfg_muted||'';}catch(e){}
 function showConfig(text){
  if(!text){
   try{localStorage.removeItem('fb_cfg_muted');}catch(e){}
-  cfgMuted='';configEl.className='';
+  cfgMuted='';configEl.className=CFG_CLS;
   return;
  }
- if(text===cfgMuted){configEl.className='';return;}
+ if(text===cfgMuted){configEl.className=CFG_CLS;return;}
  configText.textContent=text;
- configEl.className='show';
+ configEl.className=CFG_CLS+' show';
 }
 configDismiss.onclick=function(){
  cfgMuted=configText.textContent||'';
  try{localStorage.fb_cfg_muted=cfgMuted;}catch(e){}
- configEl.className='';
+ configEl.className=CFG_CLS;
 };
 // A conversation that will not load is a card with a way out, not an empty pane (brief).
 function showLoadError(msg){
@@ -22344,13 +22368,13 @@ function showLoadError(msg){
 async function versionCheck(){
  try{
   const r=await fetch('/api/health');const j=await r.json();
-  verEl.textContent=j.version||'';
+  verEl.textContent=j.version?('v'+j.version):'';
   const dl=Object.keys(j.lanes||{}).filter(function(k){return (j.lanes[k]||{}).state==='failed';});
   // className, not classList: one class store, and the DOM shim reads this one. The banner
   // is its own element rather than the note slot, because the note is shared with run
   // events and gets overwritten - but the banner is DISMISSIBLE (see showWarn above); the
   // marker in the header and the tab title are the parts that never go away.
-  verEl.className=dl.length?'bad':'';
+  verEl.className='brand-version'+(dl.length?' bad':'');
   verEl.title=dl.length?dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; '):'';
   // the banner says what it MEANS; the detail (lane, code, reason) is one click away
   const detail=dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; ');

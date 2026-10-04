@@ -202,7 +202,7 @@ pathlib.Path("/tmp/preview/tinycmdr/config.json").write_text(json.dumps(
     {"llm": {"base_url": "http://127.0.0.1:9/v1", "model": "probe"},
      "web": {"enabled": True, "host": "127.0.0.1", "port": 8791, "token": "preview"}}))
 EOF
-cd /tmp/preview/tinycmdr && TINYCMDR_NO_BROWSER=1 ../..//tinycmdr-dev/venv/bin/python tinycmdr.py --web --no-browser
+cd /tmp/preview/tinycmdr && TINYCMDR_NO_BROWSER=1 "$HOME/tinycmdr-dev/venv/bin/python" tinycmdr.py --web --no-browser
 # then open http://127.0.0.1:8791/#token=preview
 ```
 
