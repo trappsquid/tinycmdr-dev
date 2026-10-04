@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.66] - 2026-10-03
+
+Fixed
+- **A revealed tool schema now expires on idle time, not time since the reveal.** The
+  TTL stamped a tool only when it was revealed, so a schema was dropped 30 minutes after
+  its first reveal even while the run kept calling it - measured over seven days (2,087
+  calls / 133 runs): 36 expiry re-reveals, 2 of them inside one run, 5 despite a call
+  under 1,800s earlier, and every transition changed the request's tool block between
+  turns. Every executed call to a revealed tool now touches the stamp (the same
+  dispatcher hook that already revealed it), so only genuinely idle schemas decay; the
+  reveal banner says `(expires after Ns unused)` when the TTL is on. Pinned by
+  `tests/test_reveal_decay.py` (21 checks; the pre-fix build fails the idle-clock and
+  banner checks).
+
+Added
+- **The shadow event ledger records reveal/eject transitions of the tool block.** Each
+  reveal or eject writes a line with the names that moved, the wire's tool count and the
+  static re-measure it triggers, so schema drift inside a run is attributable in
+  `sessions/<key>.events.jsonl` (`agent.event_log`).
+
 ## [1.0.65] - 2026-10-03
 
 Fixed
