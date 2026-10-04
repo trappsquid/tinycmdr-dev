@@ -371,6 +371,10 @@ def scripted_run(seq, **cfg):
     fb.AGENT.last_usage.clear()
     saved_chat = fb.AGENT._chat
     saved_cfg = copy.deepcopy(fb.CONFIG["agent"])
+    # These scenarios script a SHORT conversation and pin "exactly one nudge"; the
+    # no-progress budget (agent.nudge_retries, default 3) is graded by test_stall.py,
+    # so it is pinned to ONE here unless the scenario overrides it.
+    fb.CONFIG["agent"]["nudge_retries"] = 1
     fb.CONFIG["agent"].update(cfg)
     seq = list(seq)
     events = []
@@ -468,6 +472,8 @@ def scripted_run_with_usage(seq, session="empty-turn"):
     fb.AGENT.model_overrides.clear()
     fb.AGENT.last_usage.clear()
     saved_chat = fb.AGENT._chat
+    saved_cfg = copy.deepcopy(fb.CONFIG["agent"])
+    fb.CONFIG["agent"]["nudge_retries"] = 1     # one ask, as above
     replies = list(seq)
     seen = []
 
@@ -487,6 +493,8 @@ def scripted_run_with_usage(seq, session="empty-turn"):
         out = fb.AGENT.run(session, "carry on with the job")
     finally:
         fb.AGENT._chat = saved_chat
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved_cfg)
     return out, seen
 
 
