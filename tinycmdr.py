@@ -1082,7 +1082,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.61"
+VERSION = "1.0.62"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -5851,6 +5851,25 @@ def _is_operator_text(text):
     return True
 
 
+_QUESTION_RX = re.compile(
+    r"(?i)^\s*(?:what|when|where|who|whom|whose|why|how|which|is|are|am|was|were|"
+    r"do|does|did|can|could|would|will|should|tell me|show me|list|give me)\b")
+
+
+def _looks_like_a_question(text):
+    """True for a lookup/ask, which the order census must not count.
+
+    The census exists to spot a ROUTINE ("the same order again"), and its evidence is the
+    operator's own repeated words. A question is not a routine: measured 2026-10-03, a
+    test question ("what is the date today?") was counted as an order and reached the
+    mint offer eight runs later - "the harness's repetition nag" - on a box where nothing
+    was being repeated but a test. A question is answered and forgotten; only work is
+    worth tooling.
+    """
+    s = str(text or "").strip()
+    return s.endswith("?") or bool(_QUESTION_RX.match(s))
+
+
 def order_census_note(session_key, text):
     """(repeats, sample) for an ORDER this box has been given before.
 
@@ -5862,6 +5881,8 @@ def order_census_note(session_key, text):
     """
     try:
         if not _census_enabled() or not _is_operator_text(text):
+            return None
+        if _looks_like_a_question(text):
             return None
         words = set(re.findall(r"[a-z][a-z0-9_]{2,}", str(text or "").lower()))
         if len(words) < 4:
@@ -12818,6 +12839,24 @@ def always_skills_block():
     return block
 
 
+# What a CONTINUATION looks like. The unfinished-run note is one line of real context
+# when the operator is picking up last run's work, and pure noise when they are asking
+# something new: measured 2026-10-03, a brand-new test question ("what is the date
+# today?") opened with "the previous run did not finish" and the model answered about the
+# previous run's ledger instead of the date. The note's own text asks the model to judge
+# ("if it asks to continue...") and a weak model does not; so the HARNESS judges.
+_CONTINUATION_RX = re.compile(
+    r"(?i)\b(continue|continuing|resume|resuming|carry on|carrying on|keep going|"
+    r"go on|finish(?: it| that| the)?|finish up|pick (?:it |that )?up|as before|"
+    r"same as before|the (?:previous|last) (?:task|work|run)|that task|it again|"
+    r"still (?:open|unfinished)|where (?:were|did) (?:you|we) (?:get|leave))\b")
+
+
+def continuation_like(text):
+    """True when the order is picking up work from a previous run."""
+    return bool(_CONTINUATION_RX.search(str(text or "")))
+
+
 def volatile_context(state_marker=True, session_key=None, atlas=False, shell=False,
                      prior_unfinished=""):
     """Notes — everything in the prompt that changes mid-run.
@@ -14292,9 +14331,27 @@ class Agent:
         messages = _repair_tool_arguments(_repair_tool_pairing(messages))
         if not state:
             return messages
+        _last_order = ""
+        for _m in reversed(messages or []):
+            if _m.get("role") == "user":
+                _last_order = str(_m.get("content") or "")
+                break
+        _unfinished = (self._prior_run_unfinished(session_key) if session_key else "")
+        if _unfinished and not continuation_like(_last_order):
+            # A wreck in a NEARLY-NEW conversation is exactly what this note is for: the
+            # operator has barely spoken, so their next line is very likely about it (the
+            # checkin suite's case). In a long-lived conversation - the shared `cli` session
+            # has hundreds of turns - a new topic must not inherit an old wreck (measured:
+            # a date question answered about the previous run's ledger).
+            _turns = len([m for m in ((self.histories or {}).get(session_key) or [])
+                          if m.get("role") == "assistant"])
+            if _turns > 3:
+                log.info("session %s: an unfinished run is on record, but this order is not "
+                         "a continuation and the conversation has %d turns - leaving it out",
+                         session_key, _turns)
+                _unfinished = ""
         v = volatile_context(session_key=session_key, atlas=atlas, shell=shell,
-                             prior_unfinished=(self._prior_run_unfinished(session_key)
-                                               if session_key else ""))
+                             prior_unfinished=_unfinished)
         if not v:
             return attach_tool_images(messages, session_key)
         if messages and messages[-1].get("role") == "user":
@@ -18686,6 +18743,7 @@ class TuiScreen:
         self.ellipsis = "..." if tui_ascii_only() else "\u2026"
         self.shown = []               # every renderable, in order, for the record
         self.status = ""
+        self.show_rail = True         # Ctrl-W hides it: a narrow pane copies cleanly
         self.on_status = None         # set by a console that shows it under the input
         self._status_at = 0.0
         self._plain_fallback = False
@@ -20094,6 +20152,8 @@ class AppScreen(TuiScreen):
                            style="class:app.body")
         rail = Window(pane_control(self._sidebar_text, self.scroll_lines),
                       width=Dimension.exact(self.RAIL_WIDTH), style="class:app.rail")
+        from prompt_toolkit.layout import ConditionalContainer
+        rail = ConditionalContainer(rail, filter=Condition(lambda: self.show_rail))
         # The footer is the run's own status and nothing else: the keys live in the
         # rail's KEYS section, and sharing the line cut the usage tuple in half at
         # 120 columns (round-3 P-05).
@@ -20176,6 +20236,15 @@ class AppScreen(TuiScreen):
         # way to do it - prompt_toolkit's). Measured 2026-09-30 on a real pty: the rail
         # advertised "↑↓ PgUp/PgDn scroll" while ↑ and ↓ were bound to nothing, so the
         # app read as unscrollable from the keyboard although PgUp/PgDn always worked.
+        @kb.add("c-w", filter=Condition(lambda: self.pick is None))
+        def _toggle_rail(event):
+            """Hide/show the rail. While it is hidden a drag-select copies the transcript
+            alone; the status line says how to bring it back."""
+            self.show_rail = not self.show_rail
+            self.status = ("rail hidden - Ctrl-W shows it again, then select freely"
+                           if not self.show_rail else "rail shown")
+            event.app.invalidate()
+
         @kb.add("up", filter=Condition(lambda: self.pick is None and not self.input.text))
         def _(event):
             self.scroll_lines(-1)
@@ -23527,6 +23596,52 @@ def _session_tail_state(hist):
     return "ok"
 
 
+_CLI_LAUNCH_SEQ = {"n": 0}      # two launches in one process (a test, a wrapper) differ
+
+
+def _fresh_cli_key():
+    """A NEW conversation for a new launch.
+
+    Typing `tinycmdr` means "start" - the operator should not land in yesterday's
+    transcript still asking about yesterday's ledger (measured 2026-10-03: a brand-new
+    window answered a new question about the previous run's work, and every `--once` run
+    on a box shared one `cli` conversation with every other). Older conversations stay on
+    disk, are listed by `/tinycmdr sessions`, and are resumed with `--continue` or
+    `/tinycmdr resume N`.
+    """
+    _CLI_LAUNCH_SEQ["n"] += 1
+    return "cli-%s-%d-%d" % (time.strftime("%Y%m%d-%H%M%S"), os.getpid(),
+                             _CLI_LAUNCH_SEQ["n"])
+
+
+def _cli_startup_session(argv=()):
+    """Which conversation this console opens in: fresh, unless asked to continue.
+
+    `--session NAME` names one exactly; `TINYCMDR_SESSION` does the same from the
+    environment (scripts and tests); `--continue` resumes the most recently used
+    conversation that is not already a fresh one. The bot lanes never come through here -
+    their keys are their channels.
+    """
+    argv = list(argv or ())
+    want = ""
+    for i, arg in enumerate(argv):
+        if arg == "--session" and i + 1 < len(argv):
+            want = argv[i + 1].strip()
+        elif arg.startswith("--session="):
+            want = arg.split("=", 1)[1].strip()
+    if want:
+        return want
+    env = (os.environ.get("TINYCMDR_SESSION") or "").strip()
+    if env:
+        return env
+    if "--continue" in argv or "--resume" in argv:
+        for row in _cli_session_rows():          # newest first
+            key = str(row.get("key") or "")
+            if key:
+                return key
+    return _fresh_cli_key()
+
+
 def _cli_session_rows():
     """Saved conversations, newest first: key, exchanges, when it was last used.
 
@@ -24855,6 +24970,10 @@ def _resolve_colour():
 def run_cli(once=None, app=False):
     global CONFIG
     _console_utf8()
+    # The conversation this launch opens in: a fresh one, unless --continue/--session (or
+    # TINYCMDR_SESSION) says otherwise. Set BEFORE anything reads _cli_key() - the banner,
+    # the rail and the reporter all name the session.
+    _CLI["session"] = _cli_startup_session(sys.argv[1:])
     _CLI["colour"] = _resolve_colour()
     # `--app` takes the terminal over: it draws its own banner in its own pane, so
     # dispatch before anything prints. A terminal that cannot host it falls back to

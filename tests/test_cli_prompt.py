@@ -195,6 +195,46 @@ def test_4_stop_releases_a_parked_question():
           got)
 
 
+def test_a_launch_opens_a_fresh_conversation():
+    """Typing `tinycmdr` means START: the console must not resume yesterday's transcript.
+
+    Measured 2026-10-03: a brand-new window (and every `--once` run on a box) shared one
+    `cli` conversation, so a new question was answered about the previous run's ledger and
+    the order census counted a test question across all of them. Older conversations stay
+    on disk, are listed by `/tinycmdr sessions`, and are resumed explicitly.
+    """
+    first = fb._cli_startup_session([])
+    second = fb._cli_startup_session([])
+    check("a fresh launch gets a fresh conversation key",
+          first != second and first.startswith("cli-") and first != "cli", (first, second))
+    check("--session names one exactly", fb._cli_startup_session(["--session", "work"]) == "work")
+    check("--session=NAME works too", fb._cli_startup_session(["--session=work2"]) == "work2")
+    os.environ["TINYCMDR_SESSION"] = "from-env"
+    try:
+        check("TINYCMDR_SESSION names one from the environment",
+              fb._cli_startup_session([]) == "from-env")
+    finally:
+        os.environ.pop("TINYCMDR_SESSION", None)
+    # `--continue` resumes the newest saved conversation
+    import json as _json
+    _d = fb.SESSIONS_DIR
+    _d.mkdir(parents=True, exist_ok=True)
+    _old = _d / "cli-old.json"
+    _new = _d / "cli-new.json"
+    _old.write_text(_json.dumps([{"role": "user", "content": "old"}]), encoding="utf-8")
+    _new.write_text(_json.dumps([{"role": "user", "content": "new"}]), encoding="utf-8")
+    _now = time.time()
+    os.utime(_old, (_now - 600, _now - 600))
+    os.utime(_new, (_now, _now))
+    try:
+        check("--continue resumes the newest conversation",
+              fb._cli_startup_session(["--continue"]) == "cli-new",
+              fb._cli_startup_session(["--continue"]))
+    finally:
+        _old.unlink(missing_ok=True)
+        _new.unlink(missing_ok=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items())
              if k.startswith("test_") and callable(v)]

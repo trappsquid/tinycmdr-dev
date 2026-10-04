@@ -1142,6 +1142,45 @@ def test_a_refused_read_only_repeat_does_not_end_the_run():
           "NOT RE-EXECUTED" in transcript or "already ran" in transcript, transcript[:200])
 
 
+def test_a_question_is_not_a_routine_and_a_new_order_is_not_a_continuation():
+    """Two measured leaks on the shared cli session (2026-10-03):
+
+    - a test question ("what is the date today?") was counted by the order census, so
+      eight runs later the harness offered to MINT A TOOL for it - "the harness's
+      repetition nag" - and the model answered about that instead of the date;
+    - a brand-new question opened with the unfinished-run note, so the model answered
+      about the previous run's ledger.
+
+    A question is answered and forgotten; only WORK is worth tooling. And only an order
+    that looks like a continuation gets the previous run's context.
+    """
+    _saved_op = fb._is_operator_text
+    _saved_census = getattr(fb, "_CENSUS_FORCE", False)
+    fb._is_operator_text = lambda t: True      # this test grades the question/continuation
+    fb._CENSUS_FORCE = True                    # ...not the census switch
+    try:
+        check("a question is not an order for the census",
+              fb.order_census_note("ramble-sess", "what is the date today?") is None
+              and fb.order_census_note("ramble-sess", "What is the date today") is None
+              and fb.order_census_note("ramble-sess", "list the ports") is None,
+              "a lookup counted as a routine")
+        check("...while real work still is",
+              isinstance(fb.order_census_note("ramble-sess",
+                                              "rebuild the search index and restart"), dict),
+              "an order was not counted")
+    finally:
+        fb._is_operator_text = _saved_op
+        fb._CENSUS_FORCE = _saved_census
+    check("a new question is not a continuation",
+          not fb.continuation_like("what is the date today?"),
+          fb.continuation_like("what is the date today?"))
+    check("...and a real continuation is",
+          fb.continuation_like("continue with the task")
+          and fb.continuation_like("please finish it")
+          and fb.continuation_like("carry on where you left off"),
+          "a continuation was not recognised")
+
+
 def test_duplicate_refusal_can_be_switched_off():
     fb.CONFIG["agent"]["loop_dedupe_after"] = 0
     counter = TMP / "dedupe_off.txt"

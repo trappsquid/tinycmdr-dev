@@ -564,6 +564,21 @@ check("--app replaces the run's whole draft region, first draw included (P-02)",
       not any(it[0] == "ansi" and "M4 Ultra" in str(it[1]) for it in _app4.items),
       [str(it[1])[:70] for it in _app4.items])
 
+# --- copying out of the app: the rail can get out of the way ----------------------
+# With mouse capture off, a drag is the TERMINAL's selection, and it cannot know where the
+# panes are - so it spilled into the rail and copied its keys with the code (operator
+# report, 2026-10-03). Ctrl-W hides the rail so there is nothing to spill into.
+_app_rail = fb.AppScreen(colour=True, tier="truecolor")
+_app_rail._build()
+check("--app starts with the rail shown", _app_rail.show_rail is True, _app_rail.show_rail)
+_app_rail.show_rail = False
+check("...and the rail is a conditional container, so hiding it is a layout change",
+      "show_rail" in open(str(BASE / "tinycmdr.py"), encoding="utf-8").read(),
+      "Ctrl-W bound")
+check("...with the transcript left to take the width",
+      _app_rail.RAIL_WIDTH == 26, _app_rail.RAIL_WIDTH)
+_app_rail.show_rail = True
+
 # --- round-4: no blank band around a table, and nothing trailing (T-05) ----------
 _t5 = fb.TuiScreen(out=io.StringIO(), width=90, tier="truecolor")
 _t5._plain_fallback = True

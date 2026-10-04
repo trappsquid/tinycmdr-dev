@@ -7,7 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.61] - 2026-10-03
+## [1.0.62] - 2026-10-03
+
+Fixed
+- **`tinycmdr` in a terminal now opens a FRESH conversation.** The console lane's key was
+  the constant `cli`, so every launch - and every `--once` run on a box - resumed one
+  shared transcript: a brand-new window answered a new question about the previous run's
+  ledger, and a test question accumulated an order count across all of them. A launch now
+  gets its own key (`cli-<stamp>-<pid>-<n>`); the older conversations stay on disk, are
+  listed by `/tinycmdr sessions`, and are resumed with `--continue` or
+  `/tinycmdr resume N`. `--session NAME` and `TINYCMDR_SESSION` name one exactly (which is
+  also how the suites pin a key), and the bot lanes are untouched.
+- **A question is no longer counted as a routine.** The order census exists to spot a
+  repeated ORDER, and a test question ("what is the date today?") was counted as one: eight
+  runs later the harness offered to mint a tool for it, and the model answered about that
+  instead of the date (operator report: "the harness's repetition nag"). A question - a
+  trailing "?", or a leading what/when/where/who/why/how/which/is/are/do/does/can/tell me/
+  show me/list - never enters the census now. Work still does.
+- **A new order does not inherit the previous run's unfinished-work note.** The note is
+  real context when the operator is picking up last run's work and pure noise when they are
+  asking something new - measured on the same box, where a brand-new question opened with
+  "the previous run did not finish" and the model answered about the previous run's ledger.
+  The note's own text asked the model to judge; a weak model does not, so the HARNESS
+  judges: the note rides only an order that looks like a continuation (continue, resume,
+  carry on, finish it, pick it up, the last task, ...).
+
+Added
+- **Ctrl-W in `--app` hides the rail**, so the transcript gets the whole width. With mouse
+  capture off a drag is the TERMINAL's selection and it cannot know where the panes are, so
+  it spilled into the sidebar and copied its keys along with the code. With the rail hidden
+  there is nothing to spill into; Ctrl-W brings it back (the status line says so).
+  A true in-app selection mode is the deeper fix and is not in this release.
+
 
 Added
 - **Reasoning effort, in the shape each endpoint understands.** Levels: `auto` (the
