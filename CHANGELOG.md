@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.63] - 2026-10-03
+
+Fixed
+- **The 16-colour tier read as one colour.** A 16-colour terminal cannot show four
+  neighbouring warm hues, and the theme's ANSI column mapped gold, ember, bronze and the
+  label gold all to `yellow` - so a Windows console drew the whole interface in yellow
+  while a truecolor one on macOS showed the palette (operator report: "all yellow and
+  almost no variation"). The tier now uses the closest DISTINCT members of the 16-colour
+  set, one per role: gold `bright yellow`, ember `red`, bronze `dark yellow`, crimson
+  `magenta`, error `bright red`, muted `dim`, text `white`, laurel `green`.
+- **The app-style table is built once per tier from the palette**, instead of a second
+  hardcoded table for 16 colours - which is how the ANSI column could drift from the
+  palette it was supposed to mirror.
+
+Note for Windows: Windows Terminal (and ConEmu) advertise themselves and get the
+truecolor palette; a legacy conhost or an ssh session has no way to say so and falls back
+to 16 colours. `--color always` with `TINYCMDR_COLOR=truecolor` forces the full palette
+anywhere.
+
 ## [1.0.62] - 2026-10-03
 
 Fixed

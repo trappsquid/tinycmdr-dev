@@ -32,14 +32,19 @@ crimson      = "#d75f5f"   # 167
 error        = "#ff5f5f"   # 203
 selection_bg = "#5f0000"   # 52
 
+# A 16-colour terminal cannot show four neighbouring warm hues: gold, ember, bronze and
+# the label-gold all collapsed to "yellow" and the whole screen read as one colour
+# (operator report, 2026-10-03). These are the closest DISTINCT members of the 16-colour
+# set, one per role, so the layout still reads at the lowest tier.
 [themes.roman-night.ansi]
 background   = "black"
 panel        = "black"
-text         = "bright white"
-muted        = "bright black"
-gold         = "yellow"
-ember        = "yellow"
-bronze       = "dark yellow"
-crimson      = "red"
+text         = "white"
+muted        = "dim"              # secondary text: grey, not another yellow
+gold         = "bright yellow"    # headings, labels, results
+ember        = "red"              # calls, warnings, live status
+bronze       = "dark yellow"      # borders, dividers, progress remainder
+crimson      = "magenta"          # decorative accents only
 error        = "bright red"
-selection_bg = "red"
+selection_bg = "reverse"
+laurel       = "green"

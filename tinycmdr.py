@@ -1082,7 +1082,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.62"
+VERSION = "1.0.63"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -18345,8 +18345,8 @@ TUI_PALETTE = {
                   "selection_bg": "#5f0000", "selection_fg": "#e4e4e4",
                   "laurel": "#87af5f"},
     "16":        {"background": "black", "panel": "black", "text": "white",
-                  "muted": "dim", "gold": "bold yellow", "ember": "yellow",
-                  "bronze": "dim yellow", "crimson": "red", "error": "bold red",
+                  "muted": "dim", "gold": "bold yellow", "ember": "red",
+                  "bronze": "dim yellow", "crimson": "magenta", "error": "bold red",
                   "selection_bg": "reverse", "selection_fg": "",
                   "laurel": "green"},
     "none":      {"background": "", "panel": "", "text": "", "muted": "dim",
@@ -20080,52 +20080,43 @@ class AppScreen(TuiScreen):
         return FormattedText([("class:app.hint", "  " + (self.status or "ready"))])
 
     def _app_style(self):
-        """The app's own surface colours, resolved through the SEMANTIC roles (so a retheme
-        touches theme.toml, never this table). A 16-colour terminal has no #171A1F, so a
-        surface it cannot paint keeps reverse video - the layering survives without depth.
+        """The app's own surface colours, from the ONE palette and SEMANTIC roles.
+
+        One table for every colour tier: the tier's own `background`/`panel` values carry
+        the difference (a hex here, `black`/`reverse` on a 16-colour terminal), so a
+        retheme - or a rule like "crimson is decorative only" - cannot drift between tiers.
+        `none` keeps the plain table.
         """
         pal, role = self.palette, self.style
-        bg, panel = pal.get("background") or "", pal.get("panel") or ""
-        def surf(style_string):
-            return (("bg:%s" % panel) + (" " + style_string if style_string else "")).strip()
-        if self.tier in ("truecolor", "256"):
-            return {
-                "app.frame": "bg:%s" % bg,
-                "frame.border": "%s bg:%s" % (role("border") or "default", bg),
-                "frame.label": "bg:%s" % bg,
-                "app.rail": "bg:%s" % panel,
-                "app.rail.title": surf("bold " + (role("heading") or "")),
-                "app.rail.value": surf(role("value") or ""),
-                "app.rail.art": surf("bold " + (role("heading") or "")),
-                "app.rail.fill": surf(role("progress_fill") or ""),
-                "app.rail.rest": surf("dim " + (role("progress_rest") or "")),
-                "app.body": "bg:%s" % bg,
-                "app.status": surf(role("status") or ""),
-                "app.status.hot": surf("bold " + (role("status_live") or "")),
-                "app.hint": surf(role("muted") or ""),
-                "app.composer": "bg:%s" % panel,
-                "line": "%s bg:%s" % (role("divider") or "default", bg),
-                "textarea": "%s bg:%s" % (role("value") or "default", panel),
-                "prompt": surf("bold " + (role("heading") or "")),
-                **model_pick_styles(pal),
-            }
-        if self.tier == "16":
-            return {
-                "app.rail": "bg:black",
-                "app.rail.title": "bg:black bold yellow",
-                "app.rail.value": "bg:black white",
-                "app.rail.art": "bg:black bold yellow",
-                "app.rail.fill": "bg:black bold yellow",
-                "app.rail.rest": "bg:black dim yellow",
-                "app.body": "bg:black",
-                "app.status": "bg:black dim",
-                "app.status.hot": "bg:black bold yellow",
-                "app.hint": "bg:black dim yellow",
-                "textarea": "",
-                "prompt": "bold yellow",
-                **model_pick_styles(pal),
-            }
-        return {}
+        if self.tier == "none":
+            return {}
+        bg = pal.get("background") or ""
+        panel = pal.get("panel") or ""
+        def surf(style_string, surface=None):
+            parts = ["bg:%s" % (surface if surface is not None else panel)]
+            if style_string:
+                parts.append(style_string)
+            return " ".join(parts).strip()
+        return {
+            "app.frame": "bg:%s" % bg,
+            "frame.border": "%s bg:%s" % (role("border") or "default", bg),
+            "frame.label": "bg:%s" % bg,
+            "app.rail": "bg:%s" % panel,
+            "app.rail.title": surf("bold " + (role("heading") or "")),
+            "app.rail.value": surf(role("value") or ""),
+            "app.rail.art": surf("bold " + (role("heading") or "")),
+            "app.rail.fill": surf(role("progress_fill") or ""),
+            "app.rail.rest": surf("dim " + (role("progress_rest") or "")),
+            "app.body": "bg:%s" % bg,
+            "app.status": surf(role("status") or ""),
+            "app.status.hot": surf("bold " + (role("status_live") or "")),
+            "app.hint": surf(role("muted") or ""),
+            "app.composer": "bg:%s" % panel,
+            "line": "%s bg:%s" % (role("divider") or "default", bg),
+            "textarea": "%s bg:%s" % (role("value") or "default", panel),
+            "prompt": surf("bold " + (role("heading") or "")),
+            **model_pick_styles(pal),
+        }
 
     def _build(self):
         from prompt_toolkit.application import Application
