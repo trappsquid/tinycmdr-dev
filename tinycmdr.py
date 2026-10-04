@@ -365,9 +365,12 @@ DEFAULT_CONFIG = {
         "verify_max_bytes": 2000000,
         # Tool disclosure: the payload carries a small always-visible tool set and the
         # rest is revealed on demand with find_tools (or by simply calling one, which the
-        # harness honours). Measured: the schemas are 2,847 of the 5,242 tokens of fixed
-        # overhead, and 88% of real calls use five primitives. core_tools overrides the
-        # visible list; tool_disclosure=false sends the whole registry again.
+        # harness honours). Re-measured 2026-10-03 (2,087 calls / 133 runs):
+        # the visible schemas are 1,702 of the 5,709 static tokens, and 79.5% of calls hit
+        # the five primitives (89.2% hit the 11 visible tools). One ops+dev box's workload,
+        # so re-run the census before pinning core_tools elsewhere - rent is a bigger share
+        # of the envelope under the 16K warn window. core_tools overrides the visible list;
+        # tool_disclosure=false sends the whole registry again.
         "tool_disclosure": True,
         "core_tools": [],
         # A revealed schema rides every later payload. This TTL lets one expire after
@@ -445,7 +448,8 @@ DEFAULT_CONFIG = {
         # admin-only commands.
         "shell_facts": True,
         # event_log: append one JSONL line per event - run start/end, tool call, tool
-        # result WITH its outcome - to sessions/<key>.events.jsonl. SHADOW ONLY for
+        # result WITH its outcome, and reveal/eject when the wire's tool block changes -
+        # to sessions/<key>.events.jsonl. SHADOW ONLY for
         # now: nothing reads it back and no prompt or history derives from it. Arguments
         # are scrubbed and digested, never stored raw, so a .env read cannot land in the
         # file. Off unless a host turns it on in its own config.json.
@@ -3646,8 +3650,8 @@ def _call_sig(name, args):
 # Tool-result post-processing: digestion (Phase 1a) + field notes (Phase 1d)
 # --------------------------------------------------------------------------
 #
-# Measured on this fleet's own log: 88% of about 2,760 real tool calls were five
-# primitives, shell first by a wide margin. Shell output is the haystack a small
+# Measured on this fleet's log (2026-10-03: 2,087 calls, 79.5% were the five primitives,
+# shell first by a wide margin). Shell output is the haystack a small
 # model loses the signal inside, and the existing cap only CUTS a 30-line error out
 # of 6k chars, it does not find it. Two deterministic passes fix that without
 # spending a single prompt token:
@@ -12350,19 +12354,19 @@ def annotate_repeat_read(name, args, out, ctx):
 # Tool disclosure (Phase 2a)
 # --------------------------------------------------------------------------
 #
-# Measured on this box: the tool schemas are 2,847 of the 5,242 tokens of fixed
-# overhead per call (core 2,155, custom 692), and the model reaches for a handful of
-# them. The same measurement from the log: 88% of ~2,760 real calls were five
-# primitives. So the payload carries a small always-visible set and everything else is
-# revealed on demand: by asking (find_tools), or by simply calling it, which the
-# harness honours and then keeps in the list for the rest of the session.
+# Re-measured 2026-10-03 on this box: the VISIBLE schemas are 1,702 of the 5,709 static
+# tokens per call, and 79.5% of 2,087 real calls were five primitives (89.2% hit the 11
+# visible tools), so the model reaches for a handful of them. The payload therefore
+# carries a small always-visible set and everything else is revealed on demand: by
+# asking (find_tools), or by simply calling it, which the harness honours and keeps in
+# the list WHILE IT STAYS IN USE (agent.reveal_ttl_secs; the clock is idle time).
 #
 # Auto-reveal rather than refusal, deliberately. A refusal costs a step and teaches the
 # model to distrust what it already knows about this box. None of this is a security
 # boundary (one registry either way); it is a token budget, and the rollback for it is
 # `tool_disclosure: false` in config.json.
 
-# The five primitives are 88% of real calls; the rest are the doors the standing
+# The five primitives are ~80% of real calls; the rest are the doors the standing
 # instructions name (runbooks, memory, research, and the discovery tool).
 _DEFAULT_CORE = ("shell", "execute_code", "read_file", "write_file", "edit_file",
                  "skill", "remember", "web_search",
@@ -12444,6 +12448,42 @@ def select_tool_schemas(session_key=None):
     """What the payload sends for this session. The whole registry when disclosure is
     off, so the off switch is a true rollback."""
     return REGISTRY.schemas_for(visible_tool_names(session_key))
+
+
+# The wire's tool block as the LAST request carried it, per session. A change between two
+# requests is a reveal or an eject; logging which names moved makes schema drift during a
+# run attributable in the event ledger, next to the static re-measure it causes
+# (static_prompt_tokens keys its cache on this same name set). Never raises, never blocks.
+_WIRE_TOOLS_LAST = {}
+_WIRE_TOOLS_LOCK = threading.Lock()
+
+
+def note_schema_transition(session_key, schemas):
+    """Log reveal/eject transitions of the wire's tool block into the event ledger."""
+    if not event_log_on():
+        return
+    try:
+        names = frozenset(str((s.get("function") or {}).get("name") or "")
+                          for s in (schemas or []))
+        key = session_key or ""
+        with _WIRE_TOOLS_LOCK:
+            before = _WIRE_TOOLS_LAST.get(key)
+            _WIRE_TOOLS_LAST[key] = names
+        if before is None:
+            return                       # the session's first request: nothing has drifted
+        added = sorted(n for n in names - before if n)
+        dropped = sorted(n for n in before - names if n)
+        if not (added or dropped):
+            return
+        static = static_prompt_tokens(session_key)
+        if added:
+            event("reveal", session_key=session_key, names=added,
+                  tools=len(names), static=static)
+        if dropped:
+            event("eject", session_key=session_key, names=dropped,
+                  tools=len(names), static=static)
+    except Exception:
+        log.debug("schema transition note failed", exc_info=True)
 
 
 def hidden_tools(session_key=None):
@@ -15079,7 +15119,9 @@ class Agent:
             if use_tools:
                 # Disclosure decides what is SENT, not what exists: the registry still
                 # holds every tool, so a call for a hidden one is executed and revealed.
-                payload["tools"] = select_tool_schemas(session_key)
+                _wire_tools = select_tool_schemas(session_key)
+                note_schema_transition(session_key, _wire_tools)
+                payload["tools"] = _wire_tools
                 payload["tool_choice"] = "auto"
             if CONFIG["llm"].get("no_think"):
                 # qwen3-style thinking models: ask the template to skip the
@@ -15596,14 +15638,21 @@ class Agent:
                    or f"ERROR in tool '{name}': {e}")
         except Exception as e:
             out = f"ERROR in tool '{name}': {e}"
-        # A call for a tool the payload did not carry is honoured and then revealed for
-        # the rest of the session: refusing would cost a step and teach the model to
-        # distrust what it knows about this box.
-        if disclosure_on() and name not in visible_tool_names(
-                ctx.get("session_key") if ctx else None):
-            reveal_tools(ctx.get("session_key") if ctx else None, [name])
-            out += (f"\n[HARNESS: `{name}` was not in your tool list; it is now, for the "
-                    f"rest of this session.]")
+        # A call for a tool the payload did not carry is honoured and then revealed:
+        # refusing would cost a step and teach the model to distrust what it knows about
+        # this box. A call to an ALREADY-revealed tool touches its stamp too - the TTL
+        # is idle time, not time since the reveal (measured 2026-10-03: `task` was
+        # dropped and re-revealed mid-run 30 minutes after its first reveal while the
+        # run was still calling it every ~11 minutes).
+        if disclosure_on() and name not in core_tool_names():
+            _key = ctx.get("session_key") if ctx else None
+            was = name in revealed_tools(_key)
+            reveal_tools(_key, [name])
+            if not was:
+                ttl = float(CONFIG["agent"].get("reveal_ttl_secs") or 0)
+                idle = f" (expires after {ttl:.0f}s unused)" if ttl > 0 else ""
+                out += (f"\n[HARNESS: `{name}` was not in your tool list; it is now, for "
+                        f"the rest of this session{idle}.]")
         # The mint census rides the same hook point: every hand-driven call is counted by
         # SHAPE across runs, and the third run of one shape earns a single line saying so.
         if name in MINT_HINT_TOOLS and not out.startswith(("ERROR", "BLOCKED", "DECLINED")):

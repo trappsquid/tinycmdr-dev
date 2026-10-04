@@ -9,6 +9,7 @@ call itself always executes, because disclosure is about schemas, never about ex
     python tests/test_reveal_decay.py
 """
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -76,6 +77,72 @@ def main():
     names = fb.reveal_tools(key, ["another_tool"])
     check(victim in names and "another_tool" in names,
           "reveal_tools returns the known names", names)
+
+    # ---- a call is a use: the TTL clock is idle time, not time since the reveal ----
+    # Spec (2026-10-03): reveal -> call at t+1700 -> still visible at t+1900, because the
+    # call moved the stamp; reveal -> never called -> gone at t+1900, and the call still
+    # executes and re-reveals; ttl=0 -> the old never-decay behaviour. The clock is aged
+    # directly, so the checks are deterministic.
+    bkey = "decay-use"
+    tool = "notes"                    # hidden by default and safe to run with no args
+    fb.CONFIG["agent"]["reveal_ttl_secs"] = 1800
+    fb.reveal_tools(bkey, [tool])
+    fb._revealed[bkey][tool] = time.time() - 1700            # a reveal 1700s old
+    _, _, out = fb.Agent._exec_tool(
+        fb.AGENT, {"function": {"name": tool, "arguments": {}}},
+        {"session_key": bkey})
+    check("was not in your tool list" not in out,
+          "a call inside the ttl is not treated as hidden")
+    fresh = time.time() - fb._revealed[bkey][tool]
+    check(fresh < 5, "the call moved the stamp (%ds old)" % int(fresh))
+    fb._revealed[bkey][tool] -= 200                          # t+1900 since the reveal
+    check(tool in fb.revealed_tools(bkey),
+          "...so the used schema is still visible at t+1900")
+
+    ikey = "decay-idle"
+    fb.reveal_tools(ikey, [tool])
+    fb._revealed[ikey][tool] = time.time() - 1900
+    check(tool not in fb.revealed_tools(ikey),
+          "an UNUSED reveal is gone at t+1900")
+    _, _, out = fb.Agent._exec_tool(
+        fb.AGENT, {"function": {"name": tool, "arguments": {}}},
+        {"session_key": ikey})
+    check(not out.startswith("ERROR"), "the call still executes")
+    check("was not in your tool list" in out, "...and re-reveals the tool")
+    check("expires after 1800s unused" in out,
+          "the banner says how long the schema stays")
+    check(tool in fb.revealed_tools(ikey), "the payload carries it again")
+
+    fb.CONFIG["agent"]["reveal_ttl_secs"] = 0
+    fb.reveal_tools("decay-off", [tool])
+    fb._revealed["decay-off"][tool] = time.time() - 10 ** 6
+    check(tool in fb.revealed_tools("decay-off"),
+          "ttl 0: an aged reveal never decays (the old behaviour)")
+    _, _, out = fb.Agent._exec_tool(
+        fb.AGENT, {"function": {"name": tool, "arguments": {}}},
+        {"session_key": "decay-off2"})
+    check("was not in your tool list" in out and "expires after" not in out,
+          "ttl 0 reveals without advertising an expiry")
+
+    # ---- reveal/eject transitions land in the event ledger -------------------
+    lkey = "decay-ledger"
+    fb.CONFIG["agent"]["event_log"] = True
+    fb.CONFIG["agent"]["reveal_ttl_secs"] = 1800
+    fb.note_schema_transition(lkey, fb.select_tool_schemas(lkey))     # baseline
+    fb.reveal_tools(lkey, [tool])
+    fb.note_schema_transition(lkey, fb.select_tool_schemas(lkey))
+    fb._revealed[lkey][tool] = time.time() - 4000
+    fb.note_schema_transition(lkey, fb.select_tool_schemas(lkey))
+    lpath = STAGE / "sessions" / (lkey + ".events.jsonl")
+    rows = ([json.loads(x) for x in lpath.read_text(encoding="utf-8").splitlines()
+             if x.strip()] if lpath.exists() else [])
+    by_kind = {}
+    for r in rows:
+        by_kind.setdefault(r.get("kind"), []).append(r.get("names") or [])
+    check([tool] in by_kind.get("reveal", []),
+          "a reveal is logged with the tool it revealed")
+    check([tool] in by_kind.get("eject", []),
+          "an eject is logged with the tool it dropped")
 
     print()
     if FAILS:
