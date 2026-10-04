@@ -1320,9 +1320,10 @@
     {
       "id": "page-ships-its-stylesheet",
       "title": "1.0.68/1.0.69 served /page.css as a 404 - every install rendered unstyled",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "2385279"
+        "commit": "2385279",
+        "expect": "tagged"
       },
       "detail": "Operator, 2026-10-04, looking at the updated live box: 'This is what we shipped worldwide to all users?' The pavilion port (0118cd8, 1.0.68) added assets/webui.css and assets/fonts/cinzel-600.woff2; maintenance/build-package.py's SHIP manifest was never told, and tinycmdr.py's WEB_FONTS never gained the 600 face - so every package from those tags carried neither, the page loaded its markup without a stylesheet, and /fonts/cinzel-600.woff2 404'd even from a source tree. Found by opening a published install in a browser, not by a suite: the release gate checked README download names, and the web suites run against the source tree where the file exists. Fixed (2385279): SHIP carries both, WEB_FONTS serves the 600 face, and tests/test_webui_page.py derives every asset the routes serve - from the code and the stylesheet, never a hand list - and fails when SHIP misses one; falsified against the released manifest, which it names exactly. The live box was repaired in place and the packages rebuilt.",
       "gate": "done - landed as 2385279; the 1.0.70 archives carry both files (unzip -l / tar -tzf, plus the freeze check), and ledger-tag states the release claim once the tag exists"
@@ -1330,9 +1331,10 @@
     {
       "id": "launcher-bare-is-the-page",
       "title": "a bare `tinycmdr` opened the page and the app at once; `tinycmdr cli` is the console now",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "2385279"
+        "commit": "2385279",
+        "expect": "tagged"
       },
       "detail": "Operator, 2026-10-04: 'typing tinycmdr now opens the webui and the TUI/CLI at once. I want it default to web-ui and for a user to deliberately have to type tinycmdr cli for it to open the cli only.' Two layers: both shims added --app for the bare case (2026-09-30), and main() raised the page beside every long-lived mode, so the app and the page started together. Fixed (2385279): the shims add nothing (the build's bare start is the page, with the chat lanes beside it when a box has any), `tinycmdr cli` is handled before the verb dispatch and normalised to --cli, and --cli/--app no longer raise the page unless --web is given; tests/test_shim.py pins the shim mapping and both main() rules.",
       "gate": "done - landed as 2385279; the shims and main() are graded by tests/test_shim.py"
@@ -1340,9 +1342,10 @@
     {
       "id": "setup-token-question",
       "title": "the wizard minted the page token but never let the operator set one",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "2385279"
+        "commit": "2385279",
+        "expect": "tagged"
       },
       "detail": "Operator, 2026-10-04: 'your config wizard doesn't let people set their own web-ui token there - that's worth fixing.' run_setup section 4 minted a token or kept the host's own; an operator holding a token from a password manager had to hand-edit .env afterwards. Fixed (2385279): the wizard asks (Enter keeps the host's own or mints one; a typed value goes through _env_set_safe, whose 20+ character shape is enforced and a refused value is re-asked, not swallowed), retires a stale config.json web.token so nothing silently outranks .env, and prints the link the new token makes; `--web-token <t>` does the same at install, on all three installers. tests/test_setup.py covers save/use/retire; test_installer_parity.py carries the flag row.",
       "gate": "done - landed as 2385279; tests/test_setup.py + tests/test_installer_parity.py"
@@ -1350,9 +1353,10 @@
     {
       "id": "hero-button-resumes",
       "title": "the page's 'Open archives' button was a dead link",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "2385279"
+        "commit": "2385279",
+        "expect": "tagged"
       },
       "detail": "Operator, 2026-10-04: 'the open archives button doesnt do anything at all in the webui. it is a dead link... it can be removed or renamed and a different feature added there.' Its handler only un-hid the rail - already visible on a desktop. Fixed (2385279): the hero's second action is 'Resume the last campaign' - the newest session with exchanges, the same call a rail row makes - and it hides itself when there is none. The first cut opened the empty conversation New Campaign had just made and looked as dead as the button it replaced; that was caught by clicking it live, and the fix resumes by exchanges instead of row order. Verified in a real browser: the click opens the transcript, the hero closes, the rail row goes active.",
       "gate": "done - landed as 2385279; the page suite runs the script clean, and the click path was verified live"
@@ -1360,9 +1364,10 @@
     {
       "id": "operator-only-skills-tool-gated",
       "title": "the skill frontmatter switch hid a runbook from the prompt but not from the skill tool",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "commit": "2385279"
+        "commit": "2385279",
+        "expect": "tagged"
       },
       "detail": "The omp-style switch (hide: true; disable-model-invocation: true accepted as-is) trimmed the prompt index while skill{list} still served the name and skill{read} the body. Fixed (2385279): the flag binds the tool - list/search omit, read refuses, name-miss lists do not leak, the A2A card skips - and the OPERATOR naming the runbook in an order grants it for that session (grant_named_skills; word-bounded on the frontmatter or folder name; cleared by /new); a granted read carries a HARNESS line saying why it opened. tests/test_tool_discovery.py + tests/test_harness_extras.py; falsified against 142207e (kebab unparsed, body served, names leaked).",
       "gate": "done - landed as 2385279; tests/test_tool_discovery.py + tests/test_harness_extras.py"
