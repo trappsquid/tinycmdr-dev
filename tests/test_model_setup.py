@@ -108,11 +108,13 @@ def main():
         check(not dead["ok"] and dead["status"] is None and dead["error"],
               "a dead host has no status and a reason", dead)
 
-        # ---- the interactive `model add`: cloud, key first, then the list -------------
+        # ---- the interactive `model add`: cloud, link first, then the key, then the list -
         mod2 = stage(work / "add")
         mod2._is_local_url = lambda url: False
-        # kind, key, url, number, alias, then the cloud-failover consent
-        answers = ["cloud", "sk-good", base, "2", "team-a", "y"]
+        # kind, url, key, number, alias, then the cloud-failover consent (the link is
+        # asked BEFORE the key: a key belongs to an endpoint - operator's order report,
+        # 2026-10-04)
+        answers = ["cloud", base, "sk-good", "2", "team-a", "y"]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -143,7 +145,7 @@ def main():
         mod3 = stage(work / "primary")
         mod3._is_local_url = lambda url: False
         mod3._detect_window = lambda url, headers=None: 0
-        answers = ["cloud", "sk-good", base, "1"]  # kind, key, url, model number
+        answers = ["cloud", base, "sk-good", "1"]  # kind, url, key, model number
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()

@@ -14,8 +14,10 @@ Fixed
   LINK before the key it needs (cloud only) - a key belongs to a link, and the old order
   was kind -> key -> url. A hosted endpoint that reports no context window is now ASKED
   for it at that moment (`llm.max_context_tokens`, "128k" or a number) instead of
-  leaving the config entry as homework. Both apply to `setup` and `model add` (operator's
-  order report, 2026-10-04; `tests/test_setup.py`).
+  leaving the config entry as homework. The link order applies to `setup` and
+  `model add` alike; the window question lives in `setup`, where the primary endpoint is
+  named (operator's order report, 2026-10-04; `tests/test_setup.py`,
+  `tests/test_model_setup.py`).
 - **The page stops prompting for its token when the cookie already authenticates.** The
   handover (POST `/api/login` -> HttpOnly cookie) already existed on both sides, but the
   boot prompted on every visit because a script cannot read the cookie. It now probes
