@@ -185,6 +185,45 @@ Traps this project has actually paid for:
 - The tag is created on the remote; `release.sh` fetches it back, and §1's
   `N commit(s) past <tag> (UNRELEASED)` line is what tells you afterwards whether the cut landed.
 
+## Looking at the page
+
+The web page is the operator's design (`assets/webui.css`, the colonnade SVG, the bundled
+fonts, the icons inlined into the markup). To look at the tree's own page WITHOUT touching
+the running service, serve a scratch copy - the service on 8790 belongs to the install:
+
+```bash
+rm -rf /tmp/preview && mkdir -p /tmp/preview/tinycmdr
+cp tinycmdr.py /tmp/preview/tinycmdr/
+cp -R assets /tmp/preview/tinycmdr/            # webui.css, fonts, colonnade, the mascot
+cp ~/tinycmdr/theme.toml /tmp/preview/tinycmdr/ 2>/dev/null || true
+python3 - <<'EOF'
+import json, pathlib
+pathlib.Path("/tmp/preview/tinycmdr/config.json").write_text(json.dumps(
+    {"llm": {"base_url": "http://127.0.0.1:9/v1", "model": "probe"},
+     "web": {"enabled": True, "host": "127.0.0.1", "port": 8791, "token": "preview"}}))
+EOF
+cd /tmp/preview/tinycmdr && TINYCMDR_NO_BROWSER=1 ../..//tinycmdr-dev/venv/bin/python tinycmdr.py --web --no-browser
+# then open http://127.0.0.1:8791/#token=preview
+```
+
+Never let a check open a browser for the operator (`TINYCMDR_NO_BROWSER=1` is the opt-out
+`_browser_possible()` honours; every suite sets it). Hard-reload (⌘⇧R) after an art or
+stylesheet change: `/icon.png` is cached for a day, and the tab keeps the old favicon even
+after the page is fixed.
+
+What is served, and where it comes from:
+
+| route | source |
+| :--- | :--- |
+| `/` | `WEB_PAGE` in tinycmdr.py, with `{{VERSION}}`, `{{THEME_COLOR}}`, `{{EMPTY_ART}}` and the inline colonnade substituted |
+| `/page.css` | `assets/webui.css`, with `{{THEME}}` = the host's theme roles (one theme.toml decides the terminal and the page) |
+| `/colonnade.svg` | `assets/roman-colonnade.svg`, `{{GOLD}}`/`{{BRONZE}}` substituted |
+| `/fonts/*.woff2` | the four bundled OFL faces (Cinzel 600/700, Inter variable, JetBrains Mono) |
+| `/chibi.png`, `/mark.png`, `/icon.png` | `assets/page-*.png` when the host ships them, else the built-in badge |
+
+A missing asset is a supported state, not an error: no chibi falls back to the mark, no
+colonnade draws nothing, and the page never logs a 404 for art it does not have.
+
 ## 8. Starting from nothing
 
 A fresh clone, or a new model told only "work on tinycmdr here":

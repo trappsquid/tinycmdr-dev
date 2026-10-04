@@ -621,7 +621,7 @@
         "commit": "4daa918",
         "expect": "tagged"
       },
-      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '\u2191\u2193 PgUp/PgDn scroll' while \u2191 and \u2193 were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: \u2191/\u2193 move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
+      "detail": "Fixed 2026-09-30 (4daa918), merged to main, from the operator's report after 1.0.44 shipped: 'I just realized I can't scroll up in the terminal/cmd app now that we have shipped it as an --app' - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '↑↓ PgUp/PgDn scroll' while ↑ and ↓ were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: ↑/↓ move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
       "gate": "done - merged to main; the README documents the keys; release.sh states the tagged claim on this anchor when the next tag exists"
     },
     {
@@ -1272,6 +1272,26 @@
       },
       "detail": "A computer-use runbook executed by hand produced 'say mint it and I will turn it into a tool' - but those calls were already tool calls, so wrapping the runbook changes nothing (operator: 'seems very stupid'). A run whose calls include a computer/GUI-shaped tool name (computer, gui, screen, screenshot, vision, desktop, mouse, keyboard, pyautogui) gets no offer and no report-time line.",
       "gate": "tests/test_route_hint.py (GUI-driven silent in both paths; shell-driven still offered)"
+    },
+    {
+      "id": "release-1-0-68-pending",
+      "title": "the operator's pavilion batch is on main but not published",
+      "state": "open",
+      "anchor": {
+        "file": "CHANGELOG.md"
+      },
+      "detail": "main carries the whole batch as of 0249e7f (the pavilion port, the theme-bound palette and art, the one-time token handover, the update path's introduction of the page, the privilege/firewall handling); the public release is still v1.0.67, so `tinycmdr update` anywhere fetches the old page. The cut was stopped on purpose (operator: 'hold on') AFTER the push, so there is no v1.0.68 tag and no assets - nothing needs undoing. The release body was written at /tmp/v1.0.68-notes.md (re-create it from the [1.0.68] CHANGELOG section if /tmp has been cleaned).",
+      "gate": "bash maintenance/release.sh /tmp/v1.0.68-notes.md - it builds, pushes, waits for a green gate on the sha, tags and attaches the assets. Afterwards re-anchor this item to the release commit (`maintenance/ledger-tag.py`) or close it."
+    },
+    {
+      "id": "webui-visual-pass-with-vision",
+      "title": "the page's look needs a pass from a session that can see it",
+      "state": "open",
+      "anchor": {
+        "file": "assets/webui.css"
+      },
+      "detail": "The operator's pavilion design is ported and gated (the stylesheet, the colonnade SVG, the four bundled fonts, the inlined lucide icons, the markup shell, the hero/chibi, the two banners), but the port was done by a TEXT session: it can measure an image, not look at one. The remaining work is visual - spacing, contrast, the mascot, the operator's pending chibi modification - and belongs to a session running the harness's vision model (modelRoles.vision in ~/.omp/agent/config.yml). How to look: docs/development.md, 'Looking at the page'.",
+      "gate": "Serve the tree's page (the recipe in docs/development.md), open it, and grade the surfaces against the design: /page.css, /colonnade.svg, /chibi.png, /mark.png, the empty state, the two banners. Close this item when the operator signs off."
     }
   ]
 }
