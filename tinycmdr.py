@@ -22538,8 +22538,8 @@ WEB_PAGE = """
 <meta name=apple-mobile-web-app-status-bar-style content=black-translucent>
 <meta name=apple-mobile-web-app-title content=tinycmdr>
 <link rel=manifest href="/manifest.webmanifest">
-<link rel=icon href="/mark.png">
-<link rel=apple-touch-icon href="/icon.png">
+<link rel=icon href="/mark.png?v={{VERSION}}">
+<link rel=apple-touch-icon href="/icon.png?v={{VERSION}}">
 <title>tinycmdr</title>
 <link rel=stylesheet href="/page.css">
 <style>body{background:#0b0d10;color:#e9e2d6;margin:0;font-family:Inter,system-ui,sans-serif}</style></head><body>
@@ -22549,12 +22549,11 @@ WEB_PAGE = """
 <header class="app-header">
   <div class="header-left">
     <button id=menu class="icon-button" aria-label="conversations" title="conversations"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg></button>
-    <div class="brand-medallion"><img id=medallionimg src="/mark.png" alt="tinycmdr badge"></div>
+    <div class="brand-medallion"><img id=medallionimg src="/mark.png?v={{VERSION}}" alt="tinycmdr badge"></div>
     <div class="brand-copy"><span class="brand-name">tinycmdr</span><span id=ver class="brand-version"></span></div>
   </div>
   <div class="header-center"><span id=model></span></div>
   <div class="header-right">
-    <div class="status-pill"><span class="status-dot"></span><span id=state>idle</span></div>
     <button id=tools class="icon-button" aria-label="tasks, jobs, log, inventory"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /> <circle cx="12" cy="12" r="3" /> </svg></button>
     <button id=stop>Stop</button>
   </div>
@@ -22593,9 +22592,9 @@ WEB_PAGE = """
     <div class="stage-vignette"></div>
     <div class="stage-header">
       <div><small>COMMAND CHANNEL</small><strong id=title title="click to rename">No active conversation</strong></div>
-      <div class="stage-status"><span class="status-dot"></span><span id=stage-state>ready</span></div>
+      <div class="stage-status" id=stage-status data-s=ready title="idle, and the server is answering"><span class="status-dot"></span><span id=stage-state>ready</span></div>
     </div>
-    <div id=logwrap><div id=brandmark><img src="/mark.png" alt=""><span>tinycmdr</span></div><div id=log></div>
+    <div id=logwrap><div id=brandmark><img src="/mark.png?v={{VERSION}}" alt=""><span>tinycmdr</span></div><div id=log></div>
       <section id=empty class="empty-stage">
         <div class="hero-copy">
           <div class="eyebrow"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /> <path d="M20 2v4" /> <path d="M22 4h-4" /> <circle cx="4" cy="20" r="2" /> </svg> TINYCMDR &middot; IMPERIAL CONSOLE</div>
@@ -22654,7 +22653,7 @@ WEB_PAGE = """
 const log=document.getElementById('log'),inp=document.getElementById('in'),
       sendBtn=document.getElementById('send'),stopBtn=document.getElementById('stop'),
       clipBtn=document.getElementById('clip'),fileEl=document.getElementById('file'),
-      stateEl=document.getElementById('state'),noteEl=document.getElementById('note'),
+      noteEl=document.getElementById('note'),
       noteText=document.getElementById('notetext'),noteAct=document.getElementById('noteact'),
       verEl=document.getElementById('ver'),warnEl=document.getElementById('lanewarn'),
       laneText=document.getElementById('lanetext'),
@@ -22673,6 +22672,7 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       statModel=document.getElementById('stat-model'),
       hostVerEl=document.getElementById('hostver'),
       stageStateEl=document.getElementById('stage-state'),
+      stageStatusEl=document.getElementById('stage-status'),
       emptyNew=document.getElementById('emptynew'),
       emptyLast=document.getElementById('emptylast'),
       railEl=document.getElementById('rail'),
@@ -22683,6 +22683,22 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       allEl=document.getElementById('allclients'),menuBtn=document.getElementById('menu'),
       toolsBtn=document.getElementById('tools'),newBtn=document.getElementById('newchat'),
       tabsEl=document.getElementById('tabs'),closePanelBtn=document.getElementById('panelclose');
+// ONE status, in the stage header: ready (idle, the server answering), working (a run in
+// flight), stopping (cancel asked), trouble (the server stopped answering). Every writer
+// goes through here, so the word, the dot's colour and the tooltip cannot drift - and a
+// finished run always returns to ready. The app bar used to carry a second pill for the
+// same state machine, which read as a contradiction ("idle" beside "working" while a run
+// went on) and its dot never changed colour (operator's report, 2026-10-04).
+const STAGE_TITLES={
+ ready:'idle, and the server is answering',
+ working:'a run is in flight',
+ stopping:'cancel asked - waiting for the run to stop',
+ trouble:'the server stopped answering; retrying'};
+function setStage(s,detail){
+ stageStateEl.textContent=s;
+ stageStatusEl.dataset.s=s;
+ stageStatusEl.title=(detail?detail+' - ':'')+(STAGE_TITLES[s]||'');
+}
 const PAGE_VER="{{VERSION}}";
 // The token comes from the link first (the installer prints one that contains it), then from
 // last time. The old prompt said "leave empty if loopback", which was wrong the moment an
@@ -22890,9 +22906,10 @@ function localRun(kind,text){          // slash-command output: not part of a ru
  return id;
 }
 function status(j){
- stateEl.textContent=j.done?((j.status&&j.status!=='done')?j.status
+ const detail=j.done?(j.status&&j.status!=='done'?j.status
    :('done in '+j.elapsed+'s, '+j.steps+' tool calls'))
    :((j.status||'working')+' - '+j.elapsed+'s, '+j.steps+' tool calls');
+ setStage(j.done?'ready':'working',detail);
 }
 function busy(on){document.body.classList.toggle('busy',on);inp.placeholder=on
   ?'Steer it mid-run (/stop to cancel)...':'Issue a command\u2026  ( / for commands )';}
@@ -23173,7 +23190,7 @@ function palTake(){
 }
 async function stop(){
  if(!runId){note('nothing is running here');return;}
- stateEl.textContent='stopping...';stageStateEl.textContent='stopping';
+ setStage('stopping');
  try{const r=await fetch('/api/stop',{method:'POST',headers:H(),
    body:JSON.stringify({run_id:runId})});
   const j=await r.json().catch(function(){return {};});
@@ -23224,7 +23241,7 @@ async function start(t){
  }
  if(code!==200||j.error){note('could not send: '+(j.error||code));return;}
  if(j.immediate){localRun('say',j.reply);return;}
- runId=j.run_id;fails=0;busy(true);stateEl.textContent='starting';stageStateEl.textContent='working';
+ runId=j.run_id;fails=0;busy(true);setStage('working','starting');
  note(j.steered?'a run was already going - that message went into it as a steer':'');
  poll(++gen);
 }
@@ -23248,8 +23265,8 @@ async function poll(my){
     loadSessions();if(panelWhich)refreshPanel();return;}
   }else if(r.status===404){
    note('that run is no longer on the server');if(runId===id)runId=null;busy(false);return;
-  }else{fails++;stateEl.textContent='connection trouble, retrying';stageStateEl.textContent='trouble';}
- }catch(e){fails++;stateEl.textContent='connection trouble, retrying';stageStateEl.textContent='trouble';}
+  }else{fails++;setStage('trouble');}
+ }catch(e){fails++;setStage('trouble');}
  timer=setTimeout(function(){poll(my);},fails?Math.min(5000,700*fails):700);
 }
 var laneWasDown=false;
@@ -23915,7 +23932,7 @@ WEB_MANIFEST = {
     "short_name": "tinycmdr",
     "start_url": "/",
     "display": "standalone",
-    "icons": [{"src": "/icon.png", "sizes": "512x512", "type": "image/png"}],
+    "icons": [{"src": "/icon.png?v={{VERSION}}", "sizes": "512x512", "type": "image/png"}],
 }
 
 
@@ -23946,7 +23963,12 @@ def _web_theme_vars():
 
 def _web_page_html():
     """The page, with the host's palette and art baked in and nothing left to fetch."""
-    figure = "/chibi.png" if _web_chibi_bytes() is not None else "/mark.png"
+    # The art URLs carry the app version: /page.css and the HTML revalidate, but the
+    # art routes cache for a day, so an update used to show a new stylesheet beside the
+    # OLD mascot until a hard reload (operator, 2026-10-04: "new background but old
+    # chibi"). Versioned URLs make a release invalidate exactly the art it changed.
+    figure = ("/chibi.png?v=%s" % VERSION if _web_chibi_bytes() is not None
+              else "/mark.png?v=%s" % VERSION)
     return (WEB_PAGE.replace("{{VERSION}}", VERSION)
                     .replace("{{THEME_COLOR}}", _web_theme_vars()["--bg"])
                     .replace("{{EMPTY_ART}}", figure)
@@ -25083,7 +25105,8 @@ def _web_page_css():
     except OSError:
         return None
     theme = _web_theme_vars()
-    return css.replace("{{THEME}}", "".join("%s:%s;" % kv for kv in theme.items()))
+    return (css.replace("{{THEME}}", "".join("%s:%s;" % kv for kv in theme.items()))
+               .replace("{{VERSION}}", VERSION))
 
 
 def _web_token_mint(announce=True):

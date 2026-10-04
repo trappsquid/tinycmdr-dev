@@ -103,6 +103,7 @@ const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
              'lanedetail', 'laneretry', 'lanemore',
              'configwarn', 'configtext', 'configdismiss',
              'empty', 'emptymark', 'emptynew', 'emptylast', 'medallionimg',
+             'stage-status', 'stage-state',
              // the pavilion shell: the rail's filter, the host card, the hero's stats and
              // the stage header's state
              'filter', 'hostver', 'stage-state', 'logwrap',
@@ -481,6 +482,8 @@ async function main() {
     pages,
     copied,
     prompts: promptCalls,
+    stage: (byId['stage-state'] || {}).textContent || null,
+    stageS: (byId['stage-status'] || {dataset:{}}).dataset.s,
     logins: loginCalls,
     promptMsg: promptMsg,
     replaced: replaced,

@@ -28,6 +28,7 @@ import io
 import json
 import logging
 import os
+import re
 import shutil
 import struct
 import sys
@@ -272,10 +273,10 @@ def main():
 
     # ---- the mark: the transparent form, on the page and in the tab ----------
     html = req("GET", "/", limit=400000)[1].decode("utf-8", "replace")
-    check('rel=icon href="/mark.png"' in html
-          and 'apple-touch-icon href="/icon.png"' in html,
+    check(re.search(r'rel=icon href="/mark\.png\?v=', html)
+          and re.search(r'apple-touch-icon href="/icon\.png\?v=', html),
           "the tab takes the transparent mark; the home-screen icon stays opaque")
-    check("id=emptymark" in html and 'src="/mark.png"' in html,
+    check("id=emptymark" in html and re.search(r'src="/mark\.png\?v=', html),
           "and the empty state carries the emblem when there is no chibi")
     check("Greetings," in html and "Commander." in html and "Start a new campaign" in html,
           "with the greeting and the way in")
@@ -300,7 +301,7 @@ def main():
     html = req("GET", "/", limit=400000)[1].decode("utf-8", "replace")
     check("{{EMPTY_ART}}" not in html and "{{BACKDROP}}" not in html,
           "no art placeholder is left in the served page")
-    check("id=emptymark" in html and 'src="/mark.png"' in html,
+    check("id=emptymark" in html and re.search(r'src="/mark\.png\?v=', html),
           "with no chibi the empty state falls back to the emblem")
     check(req("GET", "/chibi.png")[0] == 404,
           "and /chibi.png says so plainly")
@@ -309,10 +310,10 @@ def main():
         shutil.copy2(real_chibi, STAGE / "assets" / "page-chibi.png")
         try:
             html = req("GET", "/", limit=400000)[1].decode("utf-8", "replace")
-            check(html.count('src="/chibi.png"') >= 1,
-                  "with assets/page-chibi.png the hero shows the character (%d)"
-                  % html.count('src="/chibi.png"'))
-            check('id=medallionimg src="/mark.png"' in html,
+            n_chibi = len(re.findall(r'src="/chibi\.png\?v=', html))
+            check(n_chibi >= 1,
+                  "with assets/page-chibi.png the hero shows the character (%d)" % n_chibi)
+            check(re.search(r'id=medallionimg src="/mark\.png\?v=', html),
                   "and the header medallion keeps the badge (the design's pairing)")
             body = req("GET", "/chibi.png", limit=2000000)[1]
             check(body == real_chibi.read_bytes(),
@@ -347,6 +348,10 @@ def main():
           "the photo is served at /temple.jpg, as a JPEG, whole",
           (jpg[0], jpg[2].get("Content-Type"), len(jpg[1])))
     check(jpg[1][:3] == b"\xff\xd8\xff", "...with the JPEG signature")
+    check(bool(re.search(r'src="/(chibi|mark)\.png\?v=[0-9]', html)),
+          "the stage figure's URL carries the app version (an update invalidates the "
+          "day-long art cache - 'new background but old chibi', 2026-10-04)")
+    check("temple.jpg?v=" in css, "...and the backdrop URL in the stylesheet does too")
     for name in ("cinzel-700.woff2", "inter.woff2", "jetbrains-mono-400.woff2"):
         r = req("GET", "/fonts/" + name, limit=200000)
         check(r[0] == 200 and r[2].get("Content-Type") == "font/woff2",

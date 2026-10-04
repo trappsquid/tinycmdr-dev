@@ -188,6 +188,13 @@ def main():
     check(not res.get("token"),
           f"the handed-over token is dropped from localStorage ({res.get('token')!r})")
 
+    # the ONE status chip: a finished run must leave it at ready, with the dot's state
+    # agreeing - the chip used to stay "working" after a run while a second pill in the
+    # app bar said otherwise (operator's report, 2026-10-04)
+    check(res.get("stage") == "ready" and res.get("stageS") == "ready",
+          f"a finished run leaves the status chip ready "
+          f"({res.get('stage')!r}/{res.get('stageS')!r})")
+
     # -- 1b. the token prompt: a good cookie is not a reason to ask ------------
     # The page cannot read the HttpOnly cookie, so it probes GET /api/login first: 200
     # means the cookie authenticates and no prompt appears; 401 means a fresh browser

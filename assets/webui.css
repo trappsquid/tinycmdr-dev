@@ -271,23 +271,6 @@ textarea:focus-visible {
   color: var(--error);
 }
 
-.status-pill {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 7px 11px;
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
-  color: var(--muted);
-  background: rgba(255, 255, 255, 0.025);
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: 0.75rem;
-}
-
-.status-pill svg {
-  color: var(--gold);
-}
-
 .connection-banner {
   display: grid;
   min-height: 52px;
@@ -628,7 +611,7 @@ textarea:focus-visible {
   height: min(60vh, 580px);
   opacity: 0.6;
   pointer-events: none;
-  background: url(/temple.jpg) center bottom / cover no-repeat;
+  background: url(/temple.jpg?v={{VERSION}}) center bottom / cover no-repeat;
   filter: saturate(0.95) brightness(1.02);
   -webkit-mask-image: linear-gradient(180deg, transparent, #000 30%, #000 78%, transparent);
   mask-image: linear-gradient(180deg, transparent, #000 30%, #000 78%, transparent);
@@ -690,8 +673,25 @@ textarea:focus-visible {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--ok) 65%, transparent);
+}
+
+/* The dot FOLLOWS the state (setStage sets data-s): green at rest, gold while a run is
+   in flight or a cancel is settling, red when the server stopped answering. */
+.stage-status[data-s="working"] .status-dot,
+.stage-status[data-s="stopping"] .status-dot {
   background: var(--gold);
-  box-shadow: 0 0 14px rgba(215, 169, 74, 0.65);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--gold) 65%, transparent);
+}
+
+.stage-status[data-s="working"] .status-dot {
+  animation: pulse 1.4s infinite;
+}
+
+.stage-status[data-s="trouble"] .status-dot {
+  background: var(--bad);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--bad) 65%, transparent);
 }
 
 .empty-stage {
@@ -1128,7 +1128,6 @@ textarea:focus-visible {
   }
 
   .brand-version,
-  .status-pill,
   .banner-quiet,
   .banner-action,
   .command-meta {
