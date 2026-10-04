@@ -286,6 +286,13 @@ if [ "$INSTALL_MODE" = user ] && [ "$(id -u)" = 0 ]; then
     fi
 fi
 RUN_UID="$(id -u "$RUN_USER" 2>/dev/null || echo "")"
+if [ "$(id -u)" = 0 ]; then
+    info "rights      : root - system-level changes (a system service, firewall rules) are allowed"
+else
+    info "rights      : standard user - files and the page need no more; only a system"
+    info "              service or a LAN firewall rule would ask for root"
+fi
+
 # The PRIMARY GROUP, resolved rather than assumed to be named after the user. `id -gn`
 # answers for AD/LDAP/SSSD accounts, for `useradd -N`, wherever USERGROUPS_ENAB=no, and
 # on a Mac-style `staff` group - every one of which made `chown user:user` fail with
@@ -1217,6 +1224,18 @@ info "requests : $("$INSTALL_DIR/venv/bin/python" -c 'import importlib.metadata 
 # echoed; web.host decides who can reach it. 127.0.0.1 keeps it on this machine;
 # 0.0.0.0 is what a headless box wants, where the operator opens it from a laptop
 # on the same network.
+# Ports below 1024 are a PRIVILEGE boundary, not a preference: without root the bind fails
+# with EACCES and the page is simply absent. Fall back with the reason, in this terminal,
+# rather than leaving a host to discover it later.
+if [ "$WEB_ON" = 1 ] && [ "${WEB_PORT:-0}" -lt 1024 ] 2>/dev/null; then
+    if [ "$(id -u)" != 0 ]; then
+        warn "port $WEB_PORT needs root (ports below 1024 are privileged): using 8790."
+        warn "  re-run elevated, or pass --web-port 8790 (or any port above 1024),"
+        warn "  if you really need $WEB_PORT."
+        WEB_PORT="8790"
+    fi
+fi
+
 WEB_HOST="127.0.0.1"
 if [ "$WEB_ON" = 1 ]; then
     if [ -n "$WEB_HOST_ARG" ]; then
@@ -1228,6 +1247,16 @@ if [ "$WEB_ON" = 1 ]; then
         fi
     fi
     if [ "$WEB_HOST" = "0.0.0.0" ]; then
+    # The bind needs no root; the FIREWALL hole does. ufw/firewalld are common on servers
+    # and both refuse inbound by default, so name the command that opens it.
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -qi '^Status: active'; then
+        warn "ufw is active: allow the page once (needs root):"
+        warn "  sudo ufw allow ${WEB_PORT}/tcp"
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        warn "firewalld is running: open the port with"
+        warn "  sudo firewall-cmd --permanent --add-port=${WEB_PORT}/tcp && sudo firewall-cmd --reload"
+    fi
         info "page         : 0.0.0.0:$WEB_PORT - any machine on your network can open it;"
         info "               the token travels in cleartext there, so trust the network"
     else

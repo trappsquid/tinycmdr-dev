@@ -62,6 +62,7 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60):
                                       encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
     env["HOME"] = str(dirpath)
+    env["TINYCMDR_NO_BROWSER"] = "1"          # a test never opens a browser tab
     try:
         r = subprocess.run([sys.executable, str(dirpath / "tinycmdr.py"), *args],
                            cwd=str(dirpath), env=env, capture_output=True, text=True,
@@ -117,6 +118,9 @@ def serve_and_probe(dirpath, port, deadline=45):
         encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
     env["HOME"] = str(dirpath)
+    # a test must not put tabs in somebody's browser: every staged child that serves
+    # would otherwise auto-open the page (macOS says a browser is available)
+    env["TINYCMDR_NO_BROWSER"] = "1"
     proc = subprocess.Popen([sys.executable, str(dirpath / "tinycmdr.py")],
                             cwd=str(dirpath), env=env, stdin=subprocess.DEVNULL,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)

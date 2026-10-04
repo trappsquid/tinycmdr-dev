@@ -72,6 +72,8 @@ class El {
     this.parent = null;
   }
   addEventListener(ev, fn) { (this.listeners[ev] = this.listeners[ev] || []).push(fn); }
+  getAttribute(name) { return this._attrs ? this._attrs[name] : undefined; }
+  setAttribute(name, value) { (this._attrs = this._attrs || {})[name] = String(value); }
   focus() {}
   click() { for (const fn of this.listeners.click || []) { fn({ preventDefault() {} }); } }
   set textContent(v) { this.children = []; this._text = String(v); }
@@ -93,10 +95,26 @@ const IDS = ['log', 'in', 'send', 'stop', 'state', 'ver',
              'pal', 'host', 'allclients', 'menu', 'tools', 'newchat', 'tabs',
              'panelclose', 'lanewarn',
              // the page's composer gained a file button and a hidden input
-             'clip', 'file'];
+             'clip', 'file',
+             // the lane banner: its text span and its dismiss button
+             'lanetext', 'lanedismiss',
+             // the pavilion: the lane banner's detail/actions, the amber config notice,
+             // and the empty state with its two actions
+             'lanedetail', 'laneretry', 'lanemore',
+             'configwarn', 'configtext', 'configdismiss',
+             'empty', 'emptymark', 'emptynew', 'emptyarch', 'medallionimg',
+             // the pavilion shell: the rail's filter, the host card, the hero's stats and
+             // the stage header's state
+             'filter', 'hostver', 'stage-state', 'logwrap',
+             'stat-session', 'stat-context', 'stat-model'];
 const byId = {};
 function freshDom() {
   for (const id of IDS) { byId[id] = new El(id === 'in' ? 'textarea' : 'div'); }
+  // the page's own markup gives the empty state its art (`<img id=emptymark src=...>`) and
+  // the lane detail starts closed (`<span id=lanedetail hidden>`); the shim has no HTML
+  // parser, so put the two attributes the driver reads back
+  byId.emptymark.setAttribute('src', '/mark.png');
+  byId.lanedetail.hidden = true;
   globalThis.document.body = new El('body');
 }
 
@@ -130,6 +148,7 @@ const replaced = [];
 globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
 const authSeen = [];
 const uploads = [];
+let healthFetches = 0;
 
 // -------------------------------------------------------- fake web server
 // Mirrors tinycmdr.py's WebRun: growth follows an explicit "streaming line"
@@ -227,6 +246,7 @@ function fetchShim(url, opts) {
   }
   // the scenario may carry a health payload, so the page's lane banner is gradeable
   if (url.indexOf('/api/health') === 0) {
+    healthFetches++;
     return jres(scenario.health || { ok: true, version: 'harness' });
   }
   if (url.indexOf('/api/sessions') === 0) {
@@ -247,7 +267,12 @@ function fetchShim(url, opts) {
                   host: 'harness', version: 'harness' });
   }
   if (url.indexOf('/api/session?') === 0) {
-    // what a reload paints: THIS conversation's runs, in order
+    // what a reload paints: THIS conversation's runs, in order. scenario.session_status
+    // >= 400 makes the load fail, which the page must show as a card with a way out.
+    if (scenario.session_status >= 400) {
+      return Promise.resolve({ ok: false, status: scenario.session_status,
+                               json: () => Promise.resolve({}) });
+    }
     const key = (url.split('key=')[1] || 'web').split('&')[0];
     const mine = runs.filter((r) => r.conv === key);
     return jres({ key: key, runs: mine.map((r) => ({ run_id: r.id, lines: r.lines,
@@ -326,7 +351,7 @@ async function tick() {
 // page source itself is untouched: this appended line is the whole difference.
 const EXPORTS = "\n;globalThis.__page={send:send,stop:stop,"
   + "newConversation:newConversation,openSession:openSession,"
-  + "uploadFiles:uploadFiles,"
+  + "uploadFiles:uploadFiles,versionCheck:versionCheck,"
   + "renameSession:renameSession,state:function(){return {sessionKey:sessionKey,"
   + "sessions:sessions};}};";
 
@@ -395,6 +420,21 @@ async function main() {
       const fn = page()[step.fn];
       if (typeof fn === 'function') { await fn.apply(null, step.args || []); }
       for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
+    } else if (step.kind === 'click') {
+      // click an element by id: either wiring works (`onclick=`, or addEventListener)
+      const el = byId[step.id];
+      if (!el) {
+        errors.push('click step: no element #' + step.id);
+      } else if (typeof el.onclick === 'function') {
+        await el.onclick({ preventDefault() {} });
+      } else {
+        for (const fn of (el.listeners.click || [])) { await fn({ preventDefault() {} }); }
+      }
+      for (let i = 0; i < (step.polls || 2); i++) { await tick(); }
+    } else if (step.kind === 'health') {
+      // swap the health payload mid-scenario (a lane that fails differently)
+      scenario.health = step.value;
+      for (let i = 0; i < (step.polls || 2); i++) { await tick(); }
     } else if (step.kind === 'polls') {
       for (let i = 0; i < (step.n || 1); i++) { await tick(); }
     } else if (step.kind === 'copy') {
@@ -427,7 +467,14 @@ async function main() {
     uploads: uploads,
     composer: byId.in.value,
     ver: { cls: byId.ver.className, title: byId.ver.title },
-    warn: { cls: byId.lanewarn.className, text: byId.lanewarn.textContent },
+    warn: { cls: byId.lanewarn.className, text: byId.lanetext.textContent,
+            detail: byId.lanetext ? byId.lanedetail.textContent : '',
+            detailShown: byId.lanedetail ? !byId.lanedetail.hidden : false },
+    config: { cls: byId.configwarn.className, text: byId.configtext.textContent },
+    empty: { hidden: !!byId.empty.hidden, text: byId.empty.textContent,
+             img: byId.emptymark.getAttribute('src') },
+    retryLabel: byId.laneretry.textContent,
+    healthFetches: healthFetches,
     title: globalThis.document.title,
     errors,
   };

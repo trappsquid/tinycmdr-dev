@@ -267,6 +267,11 @@ def main():
         rc, out, err = call(fb, ["doctor"])
         check("doctor exits 0 on a healthy chat install", rc == 0, (rc, err[:300]))
         check("doctor says so plainly", "no problems found" in out, out[-200:])
+        # An install that predates the page has no token; doctor is where that state is
+        # named (it is a note, not a problem - the next start mints one).
+        check("doctor names the page and its token state",
+              "page      : on, port" in out
+              and "no token yet - the next start mints one" in out, out[-500:])
 
         fb._detect_window = lambda url, headers=None: 0
         forget_probes()
@@ -276,6 +281,80 @@ def main():
               "did not answer" in err and fb.CONFIG["llm"]["base_url"] in err, err[:300])
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
+
+        # ---- the firewall note: a LAN bind is where a firewall eats the page ------
+        # The bind never needs root; the firewall HOLE does, and a service cannot answer an
+        # interactive prompt. The note's mapping is graded per OS here, because the real
+        # branches need a firewall this bed does not have (the installers carry the same
+        # text at install time; `setup`, `doctor` and the startup announce carry it when a
+        # running install is switched to the LAN).
+        _real_platform, _real_capture = fb.sys.platform, fb.run_capture
+        try:
+            fb.sys.platform = "darwin"
+            fb.run_capture = lambda *a, **k: (0, "Firewall is enabled. (State = 1)", "", False)
+            mac = fb._firewall_note(8790)
+            check("a macOS LAN bind names socketfilterfw when the firewall is on",
+                  any("socketfilterfw --add" in l for l in mac)
+                  and any("unblockapp" in l for l in mac), mac)
+            fb.run_capture = lambda *a, **k: (0, "Firewall is disabled. (State = 0)", "", False)
+            check("...and says nothing when it is off", fb._firewall_note(8790) == [])
+
+            fb.sys.platform = "linux"
+
+            def _linux_probe(argv, *a, **k):
+                cmd = " ".join(argv)
+                if "command -v ufw" in cmd:
+                    return (0, "/usr/sbin/ufw", "", False)
+                if "command -v firewall-cmd" in cmd:
+                    return (0, "/usr/sbin/firewall-cmd", "", False)
+                if "ufw status" in cmd:
+                    return (0, "Status: active\n", "", False)
+                if "firewall-cmd --state" in cmd:
+                    return (0, "running", "", False)
+                return (1, "", "", False)
+
+            fb.run_capture = _linux_probe
+            lin = fb._firewall_note(8790)
+            check("a Linux LAN bind names ufw and firewalld when they are active",
+                  any("ufw allow 8790/tcp" in l for l in lin)
+                  and any("firewall-cmd" in l for l in lin), lin)
+            fb.run_capture = lambda *a, **k: (1, "", "", False)
+            check("...and stays quiet with neither", fb._firewall_note(8790) == [])
+        finally:
+            fb.sys.platform, fb.run_capture = _real_platform, _real_capture
+
+        # ---- the update path introduces the page --------------------------------
+        # The published updaters are the one code that runs on EVERY released version, so
+        # the ask lives there: a host with no page token is offered the mint (the default)
+        # or its own token, and handed the link. The new build's first start also mints
+        # and orients (graded in test_webui).
+        for rel, pats in (
+                ("install/install-tinycmdr.sh",
+                 ("port $WEB_PORT needs root", "ufw allow ${WEB_PORT}/tcp",
+                  "firewall-cmd --permanent --add-port=${WEB_PORT}/tcp", "rights      :")),
+                ("install/install-tinycmdr-macos.sh",
+                 ("port $WEB_PORT needs root", "socketfilterfw --add", "rights      :")),
+                ("install/install-tinycmdr.ps1",
+                 ("ports below 1024 are privileged", "New-NetFirewallRule",
+                  "WindowsBuiltInRole]::Administrator"))):
+            body = (BASE / rel).read_text(encoding="utf-8")
+            missing = [pat for pat in pats if pat not in body]
+            check("%s refuses a privileged port without rights and names the firewall"
+                  % rel, not missing, missing)
+
+        upd_sh = (BASE / "update.sh").read_text(encoding="utf-8")
+        check("update.sh asks for the page token when a host has none",
+              "TINYCMDR_WEB_TOKEN" in upd_sh
+              and "Page token (empty mints one" in upd_sh
+              and "page link: http://127.0.0.1:" in upd_sh, upd_sh[-300:])
+        upd_ps = (BASE / "update.ps1").read_text(encoding="utf-8")
+        check("update.ps1 asks too, and never blocks a non-interactive run",
+              "TINYCMDR_WEB_TOKEN" in upd_ps
+              and "Page token (empty mints one" in upd_ps
+              and "UserInteractive" in upd_ps, upd_ps[-300:])
+        check("both updaters leave an existing token alone",
+              "grep -q '^TINYCMDR_WEB_TOKEN='" in upd_sh
+              and "TINYCMDR_WEB_TOKEN=" in upd_ps, "the guard is missing")
 
         # ---- the persona: which soul this agent is actually running ----------------
         # soul.md is the one TRACKED file an operator is invited to edit, so a persona is an
@@ -1235,7 +1314,7 @@ def main():
         shutil.copy2(BASE / "tests" / "fixture-config.json", stage / "config.json")
         proc = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "taks"],
                               cwd=str(stage), capture_output=True, text=True, timeout=120,
-                              env=dict(os.environ, TINYCMDR_PLAIN="1"))
+                              env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
         blob = proc.stdout + proc.stderr
         check("H1: an unknown verb exits 2", proc.returncode == 2, proc.returncode)
         check("H1: it NAMES the word it did not know",
@@ -1251,14 +1330,14 @@ def main():
             gone = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), *argv],
                                   cwd=str(stage), capture_output=True, text=True,
                                   timeout=120, stdin=subprocess.DEVNULL,
-                                  env=dict(os.environ, TINYCMDR_PLAIN="1"))
+                                  env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
             gblob = gone.stdout + gone.stderr
             check("H1: `%s` exits 2" % " ".join(argv), gone.returncode == 2, gone.returncode)
             check("H1: `%s` says %r" % (" ".join(argv), want), want in gblob, gblob[-200:])
         wv = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "web"],
                             cwd=str(stage), capture_output=True, text=True,
                             timeout=120, stdin=subprocess.DEVNULL,
-                            env=dict(os.environ, TINYCMDR_PLAIN="1"))
+                            env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
         wblob = wv.stdout + wv.stderr
         check("H1: `web` exits 0", wv.returncode == 0, (wv.returncode, wblob[-200:]))
         check("H1: `web` mints the token the page needs",
@@ -1288,7 +1367,7 @@ def main():
         _proc = subprocess.Popen([sys.executable, str(stage / "tinycmdr.py"), "--web"],
                                  cwd=str(stage), stdin=subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 env=dict(os.environ, TINYCMDR_PLAIN="1"))
+                                 env=dict(os.environ, TINYCMDR_PLAIN="1", TINYCMDR_NO_BROWSER="1"))
         _served = False
         _t0 = time.time()
         while time.time() - _t0 < 45 and _proc.poll() is None:

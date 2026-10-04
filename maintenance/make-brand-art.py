@@ -25,6 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "assets" / "branding" / "tinycmdr-badge-master.png"
 ART = ROOT / "assets" / "tui-rail-badge.json"
+PAGE_ICON = ROOT / "assets" / "page-icon.png"
+PAGE_MARK = ROOT / "assets" / "page-mark.png"
 # left, upper, right, lower: the designer's framing with the bottom EXTENDED. Their
 # original box stopped at y=850 while the badge's content reaches y=939, so the emblem's
 # bottom was cut off in the rail (operator report, 2026-10-03). Measured content box at
@@ -32,6 +34,10 @@ ART = ROOT / "assets" / "tui-rail-badge.json"
 # a box on the whole content box includes the plate's glow and shrinks the emblem.
 CROP = (225, 80, 900, 940)
 COLS, ROWS = 24, 9                  # the app rail's budget (RAIL_WIDTH is 26)
+# The PAGE icon is square, so it takes a square box around the same measured content
+# (x 58..912, y 5..939): 854 wide, centred vertically -> y 43..897.
+PAGE_CROP = (58, 43, 912, 897)
+PAGE_FLAT = 45                      # max(rgb) at/below this is plate, not emblem
 
 
 def configure(master=None, crop=None, cols=None, rows=None):
@@ -178,6 +184,169 @@ def to_cells(small):
     return cells
 
 
+def png_encode(w, h, rows, colortype=2):
+    """A PNG (8-bit, filter-0 rows) from raw RGB or RGBA byte rows - stdlib only."""
+    def chunk(tag, data):
+        return (struct.pack(">I", len(data)) + tag + data
+                + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF))
+    raw = b"".join(b"\x00" + bytes(r) for r in rows)
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, colortype, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9))
+            + chunk(b"IEND", b""))
+
+
+def page_icon(size=512, bg=(0x0F, 0x11, 0x14), crop=None, alpha=False):
+    """The PAGE icon: the emblem from the master, flattened and box-downscaled.
+
+    Same doctrine as the rail art - the master is the source of truth, this is the
+    dependency-free derivation - except this one ships as FILES (assets/page-icon.png and
+    assets/page-mark.png): the page asks for them by URL, and a browser wants a real PNG.
+
+    Two forms, because they are used in two places:
+      * alpha=False (page-icon.png): the plate flattened to the theme background. This is
+        what an OS composites for a home-screen icon or an apple-touch-icon, where a
+        transparent PNG lands on white or black depending on the OS mood.
+      * alpha=True (page-mark.png): the same emblem with the plate TRANSPARENT, so it sits
+        on the page's own background (header, empty state) with no square edge.
+
+    The master's near-black plate and its glow are dropped either way (the plate is
+    grainy: keeping it is both noisy to look at and ~300KB to transfer), and a pixel's
+    coverage becomes its alpha, which is what gives the transparent form clean edges.
+    """
+    w, h, bpp, rows = decode_png(MASTER)
+    left, upper, right, lower = crop or PAGE_CROP
+    right, lower = min(right, w), min(lower, h)
+    span = min(right - left, lower - upper)
+    step = span / float(size)
+    out_rows = []
+    for oy in range(size):
+        y0 = int(upper + oy * step)
+        y1 = min(max(int(upper + (oy + 1) * step), y0 + 1), lower)
+        line = bytearray()
+        for ox in range(size):
+            x0 = int(left + ox * step)
+            x1 = min(max(int(left + (ox + 1) * step), x0 + 1), right)
+            r = g = b = n = 0.0
+            total = 0
+            for y in range(y0, y1):
+                for x in range(x0, x1):
+                    total += 1
+                    pr, pg, pb, pa = pixel(rows, bpp, x, y)
+                    if pa == 0 or max(pr, pg, pb) <= PAGE_FLAT:
+                        continue
+                    f = pa / 255.0
+                    r += pr * f
+                    g += pg * f
+                    b += pb * f
+                    n += f
+            if n == 0:
+                line += bytes((0, 0, 0, 0)) if alpha else bytes(bg)
+                continue
+            cover = min(1.0, n / max(1, total))
+            if alpha:
+                line += bytes((int(r / n + 0.5), int(g / n + 0.5), int(b / n + 0.5),
+                               int(cover * 255 + 0.5)))
+            else:
+                rr = bg[0] + (r / n - bg[0]) * cover
+                gg = bg[1] + (g / n - bg[1]) * cover
+                bb = bg[2] + (b / n - bg[2]) * cover
+                line += bytes((int(rr + 0.5), int(gg + 0.5), int(bb + 0.5)))
+        out_rows.append(line)
+    return png_encode(size, size, out_rows, colortype=6 if alpha else 2)
+
+
+CHIBI = ROOT / "assets" / "page-chibi.png"
+CHIBI_MASTER = ROOT / "assets" / "branding" / "tinycmdr-chibi-master.png"
+
+
+def _rgba_crop(master=None, margin=0.06):
+    """(side, RGBA rows) - the master cut to its content square, alpha made real.
+
+    A cut-out master (RGBA: the chibi, the helm) keeps its own alpha and is cropped to
+    what is actually drawn - that is what makes it usable at any CSS size without a
+    transparent margin doing the layout. An RGB master (the badge) has its plate turned
+    into transparency, with the edge alpha derived from luminance so the rim stays soft.
+    """
+    w, h, bpp, rows = decode_png(master or MASTER)
+    xs, ys = [], []
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = pixel(rows, bpp, x, y)
+            if bpp == 4:
+                if a > 15:
+                    xs.append(x)
+                    ys.append(y)
+            elif a > 15 and max(r, g, b) > PAGE_FLAT:
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        raise SystemExit("no content found in %s" % (master or MASTER))
+    cx, cy = (min(xs) + max(xs)) // 2, (min(ys) + max(ys)) // 2
+    side = max(max(xs) - min(xs), max(ys) - min(ys))
+    side = min(w, h, int(side * (1.0 + 2 * margin)))
+    left = max(0, min(w - side, cx - side // 2))
+    top = max(0, min(h - side, cy - side // 2))
+    out = []
+    for y in range(top, top + side):
+        line = bytearray()
+        for x in range(left, left + side):
+            r, g, b, a = pixel(rows, bpp, x, y)
+            if bpp == 3:
+                a = 0 if max(r, g, b) <= PAGE_FLAT else min(
+                    255, int((max(r, g, b) - PAGE_FLAT) * 255 / 70.0))
+            line += bytes((r, g, b, a))
+        out.append(line)
+    return side, out
+
+
+def _rgba_resample(side, rows, size):
+    """Box-resample RGBA rows, alpha-weighted: a pixel's coverage becomes its alpha, which
+    is what keeps a cut-out's edge clean at a smaller size instead of fringed."""
+    step = side / float(size)
+    out = []
+    for oy in range(size):
+        y0 = int(oy * step)
+        y1 = min(max(int((oy + 1) * step), y0 + 1), side)
+        line = bytearray()
+        for ox in range(size):
+            x0 = int(ox * step)
+            x1 = min(max(int((ox + 1) * step), x0 + 1), side)
+            r = g = b = n = 0.0
+            total = 0
+            for y in range(y0, y1):
+                row = rows[y]
+                for x in range(x0, x1):
+                    o = x * 4
+                    a = row[o + 3]
+                    total += 1
+                    if a == 0:
+                        continue
+                    f = a / 255.0
+                    r += row[o] * f
+                    g += row[o + 1] * f
+                    b += row[o + 2] * f
+                    n += f
+            if n == 0:
+                line += bytes((0, 0, 0, 0))
+            else:
+                cover = min(1.0, n / max(1, total))
+                line += bytes((int(r / n + 0.5), int(g / n + 0.5), int(b / n + 0.5),
+                               int(cover * 255 + 0.5)))
+        out.append(line)
+    return out
+
+
+def page_art(size=None, master=None, margin=0.06):
+    """The cut-out pipeline for page art: content-cropped square, real alpha, and an
+    optional resample (`size=None` keeps the designer's own pixels - the backdrop)."""
+    side, rows = _rgba_crop(master, margin)
+    if size and size != side:
+        rows = _rgba_resample(side, rows, size)
+        side = size
+    return side, png_encode(side, side, rows, colortype=6)
+
+
 def artifact():
     src = load_cropped()
     small = box_resample(src, COLS * 2, ROWS * 4)
@@ -199,8 +368,36 @@ def main():
     ap.add_argument("--crop", help="left,upper,right,lower (default: the badge's)")
     ap.add_argument("--cols", type=int, help="cells wide (default 24)")
     ap.add_argument("--rows", type=int, help="cells tall (default 9)")
+    ap.add_argument("--page-icon", type=int, metavar="SIZE",
+                    help="write assets/page-icon.png (the opaque favicon/home-screen icon)")
+    ap.add_argument("--page-mark", type=int, metavar="SIZE",
+                    help="write assets/page-mark.png (the transparent emblem for the page)")
+    ap.add_argument("--page-chibi", type=int, metavar="SIZE",
+                    help="write assets/page-chibi.png (the chibi, content-cropped and "
+                         "resampled with alpha) - the page's empty-state figure")
     a = ap.parse_args()
     configure(a.master, a.crop, a.cols, a.rows)
+    if a.page_chibi:
+        side, data = page_art(a.page_chibi, master=CHIBI_MASTER)
+        CHIBI.write_bytes(data)
+        print("wrote %s (%dx%d, %d bytes, transparent)"
+              % (CHIBI.relative_to(ROOT), side, side, len(data)))
+        if not (a.write or a.ansi or a.page_icon or a.page_mark):
+            return 0
+    if a.page_icon or a.page_mark:
+        size = a.page_icon or a.page_mark
+        if a.page_icon:
+            data = page_icon(size)
+            PAGE_ICON.write_bytes(data)
+            print("wrote %s (%dx%d, %d bytes, opaque)"
+                  % (PAGE_ICON.relative_to(ROOT), size, size, len(data)))
+        if a.page_mark:
+            data = page_icon(size, alpha=True)
+            PAGE_MARK.write_bytes(data)
+            print("wrote %s (%dx%d, %d bytes, transparent)"
+                  % (PAGE_MARK.relative_to(ROOT), size, size, len(data)))
+        if not (a.write or a.ansi):
+            return 0
     art = artifact()
     if a.ansi:
         for row in art["cells"]:

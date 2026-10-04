@@ -1111,7 +1111,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.67"
+VERSION = "1.0.68"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -18676,7 +18676,13 @@ def theme_palette(path=None, palette=None, name=None):
         return base
     chosen = themes.get(want) or {}
     for tier, roles in base.items():
-        over = dict(chosen.get(tier) or {})
+        # [themes.NAME] IS the truecolor table: a section's bare keys are its truecolor
+        # roles, and [themes.NAME.256] / [themes.NAME.ansi] carry the lower tiers. Until
+        # 2026-10-04 this tier looked for a nested "truecolor" key no theme file has, so
+        # a host's own hexes were silently ignored - only .256/.ansi ever applied. Found
+        # by wiring the page to this same palette and watching it not move; pinned by
+        # tests/test_theme.py.
+        over = dict(chosen) if tier == "truecolor" else {}
         over.update({k: v for k, v in (tiers_of.get(want, {}).get(
             "ansi" if tier == "16" else tier) or {}).items()})
         for name, value in over.items():
@@ -21650,178 +21656,117 @@ def _web_ascii_name(name):
 WEB_PAGE = """
 <!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name=theme-color content="#1a1d23">
+<meta name=theme-color content="{{THEME_COLOR}}">
 <meta name=mobile-web-app-capable content=yes>
 <meta name=apple-mobile-web-app-capable content=yes>
 <meta name=apple-mobile-web-app-status-bar-style content=black-translucent>
 <meta name=apple-mobile-web-app-title content=tinycmdr>
 <link rel=manifest href="/manifest.webmanifest">
-<link rel=icon href="/icon.png">
+<link rel=icon href="/mark.png">
 <link rel=apple-touch-icon href="/icon.png">
-<title>tinycmdr</title><style>
-:root{--bg:#1a1d23;--panel:#14161a;--line:#2b2f36;--fg:#e6e6e6;--dim:#8b939e;
---you:#2b5278;--tool:#7fa8d4;--ok:#5fbf7f;--bad:#e0736a;--say:#c9b47a;--accent:#4a76a8}
-*{box-sizing:border-box}
-body{background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;
-margin:0;height:100dvh;display:flex;flex-direction:column;overflow:hidden}
-header{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--panel);
-border-bottom:1px solid var(--line);font-size:13px;color:var(--dim);flex:0 0 auto}
-header b{color:var(--fg);font-weight:600}
-header .grow{flex:1}
-header .chip{background:var(--line);border-radius:20px;padding:2px 10px;font-size:12px;
-white-space:nowrap}
-header #title{color:var(--fg);max-width:38vw;overflow:hidden;text-overflow:ellipsis;
-white-space:nowrap;cursor:pointer}
-header #stop{display:none;background:#8a3b34;padding:5px 14px;font-size:13px}
-body.busy header #stop{display:inline-block}
-header .icon{background:transparent;color:var(--dim);padding:2px 8px;font-size:16px;border-radius:6px}
-header .icon:hover{background:var(--line);color:var(--fg)}
-header #ver.bad{color:var(--bad);font-weight:600}
-#lanewarn{display:none;padding:7px 12px;background:#3a2323;border-bottom:1px solid var(--line);
-color:var(--bad);font-size:13px}
-#lanewarn.show{display:block}
-#meter{flex:0 0 auto;height:3px;background:#20242b}
-#meterfill{height:100%;width:0;background:var(--accent);transition:width .3s}
-#note{flex:0 0 auto;background:#1d2530;border-bottom:1px solid var(--line);color:#a9b6c6;
-font-size:12.5px;padding:6px 14px;display:none;gap:10px;align-items:center}
-#note.show{display:flex}
-#note span{flex:1}
-#note button{padding:3px 10px;font-size:12.5px}
-main{flex:1;display:flex;min-height:0;position:relative}
-#rail{width:255px;flex:0 0 auto;background:var(--panel);border-right:1px solid var(--line);
-display:flex;flex-direction:column;min-height:0}
-#rail.hide{display:none}
-#newchat{margin:10px;background:var(--line);color:var(--fg);padding:8px;border-radius:8px;
-text-align:left;font-size:13.5px}
-#newchat:hover{background:#343a44}
-#sessions{flex:1;overflow-y:auto;padding:0 6px 8px}
-.row{padding:7px 9px;border-radius:8px;cursor:pointer;display:flex;flex-direction:column;gap:2px}
-.row:hover{background:#20242b}
-.row.on{background:#26313f}
-.row .t{font-size:13.5px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.row .m{font-size:11.5px;color:var(--dim);display:flex;gap:7px;align-items:center}
-.row .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:0 0 auto}
-.row .dot.work{background:var(--say);animation:pulse 1.4s infinite}
-.row.other .t{color:#9aa3ad}
-@keyframes pulse{50%{opacity:.35}}
-#railfoot{border-top:1px solid var(--line);padding:8px 10px;font-size:11.5px;color:var(--dim)}
-#railfoot label{display:flex;gap:7px;align-items:center;cursor:pointer}
-#logwrap{flex:1;display:flex;min-width:0;flex-direction:column}
-#log{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:8px;scroll-behavior:smooth}
-.run{display:contents}
-.msg{max-width:860px;padding:9px 13px;border-radius:10px;white-space:pre-wrap;word-break:break-word;
-font-size:15px}
-.msg.copyable{position:relative;padding-right:58px}
-.copyb{position:absolute;top:4px;right:6px;font:inherit;font-size:11px;line-height:1;padding:3px 7px;
-border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--dim);cursor:pointer;
-opacity:0;transition:opacity .12s}
-.copyable:hover .copyb,.copyb:focus{opacity:.95}
-.copyb.done{color:var(--ok);border-color:var(--ok);opacity:1}
-@media (hover:none){.copyb{opacity:.5}}
-.you{align-self:flex-end;background:var(--you)}
-.say{align-self:flex-start;color:var(--say);background:transparent;padding:2px 13px;font-style:italic}
-.thinking{align-self:flex-start;color:#767f8d;background:transparent;padding:2px 13px;
-font-style:italic;font-size:13.5px}
-/* The tones are CARDS: a 3px accent bar, a tint, and a glyph, the way the chat
-lane's attachments read. The chrome lives in CSS and ::before, never in the DOM,
-so a line's textContent stays exactly what the model or the tool said. */
-.final{align-self:flex-start;background:#242c37;color:#f2f5f9;cursor:copy;
-border-left:3px solid var(--accent);border-radius:0 10px 10px 0;padding-left:12px;
-box-shadow:0 1px 0 #2f3641}
-.ask{align-self:flex-start;background:#2b2a1f;color:#e2cf8a;border:1px solid #4a442b;
-border-left:3px solid #b99a3f}
-.tool,.tool_done,.tool_fail{align-self:flex-start;max-width:860px;white-space:pre-wrap;
-font-family:ui-monospace,Consolas,monospace;font-size:12.5px;padding:5px 11px;
-border-left:3px solid var(--tool);background:#171b21;border-radius:0 8px 8px 0}
-.tool{color:#9dbde0}
-.tool::before{content:"▸ ";color:var(--tool)}
-/* done and failed carry the reporter's own mark and a tint; only the CALL
-gets a glyph, or every line wears two */
-.tool_done{color:#a9d8b8;border-left-color:var(--ok);background:#151d18}
-.tool_fail{color:#f0b8b2;border-left-color:var(--bad);background:#1f1616}
-.system{align-self:center;color:var(--dim);font-size:12.5px}
-.file{align-self:flex-start;max-width:860px;display:flex;gap:8px;align-items:center;
-background:#1b1f27;border-left:3px solid var(--ok);border-radius:0 8px 8px 0;
-padding:6px 11px;font-size:12.5px;color:#cfe3d5}
-.file a{color:#a9d8b8;text-decoration:underline;word-break:break-all;cursor:pointer}
-.checkin{align-self:flex-start;color:#98a2ae;background:#161a1f;padding:3px 11px;
-font-size:12.5px;font-family:ui-monospace,Consolas,monospace;
-border-left:3px solid #3a414b;border-radius:0 8px 8px 0}
-.error{align-self:flex-start;color:#f0b8b2;background:#1f1616;padding:5px 11px;
-border-left:3px solid var(--bad);border-radius:0 8px 8px 0}
-.stamp{color:#5c636d;font-size:11px;margin-right:7px}
-#drawer{position:absolute;top:0;right:0;bottom:0;width:370px;max-width:92vw;background:var(--panel);
-border-left:1px solid var(--line);display:none;flex-direction:column}
-#drawer.show{display:flex}
-#tabs{display:flex;gap:4px;padding:8px;border-bottom:1px solid var(--line);flex:0 0 auto}
-#tabs button{background:transparent;color:var(--dim);padding:5px 10px;font-size:13px}
-#tabs button.on{background:var(--line);color:var(--fg)}
-#panel{flex:1;overflow-y:auto;padding:10px 12px;font-size:13px}
-#panel .p{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #23272e;align-items:flex-start}
-#panel .p .g{flex:0 0 auto;font-size:11px;color:var(--dim);min-width:52px}
-#panel .p .b{flex:1;white-space:pre-wrap;word-break:break-word}
-#panel .p.done .b{color:var(--dim)}
-#panel .p .n{color:var(--dim);font-size:11.5px;margin-top:3px}
-#panel .mono{font-family:ui-monospace,Consolas,monospace;font-size:11.5px;white-space:pre-wrap;
-word-break:break-all;color:#c3cad3}
-#panel h4{margin:2px 0 8px;font-size:12px;color:var(--dim);font-weight:600;text-transform:uppercase}
-#bar{position:relative;display:flex;gap:8px;padding:12px;background:var(--panel);
-border-top:1px solid var(--line);flex:0 0 auto}
-#in{flex:1;background:var(--line);border:1px solid #3a3f47;border-radius:8px;color:var(--fg);
-padding:10px 12px;font:inherit;resize:none;max-height:30dvh}
-#in:focus{outline:none;border-color:#4a76a8}
-#pal{position:absolute;left:12px;right:12px;bottom:100%;margin-bottom:6px;background:var(--panel);
-border:1px solid var(--line);border-radius:10px;max-height:40dvh;overflow-y:auto;
-box-shadow:0 10px 30px rgba(0,0,0,.45);z-index:9}
-#pal.hide{display:none}
-#pal div{padding:7px 12px;font-size:13px;cursor:pointer;display:flex;gap:10px}
-#pal div.on{background:#26313f}
-#pal .c{color:var(--fg);font-family:ui-monospace,Consolas,monospace}
-#pal .h{color:var(--dim)}
-button{background:var(--accent);border:0;border-radius:8px;color:#fff;padding:0 18px;font:inherit;cursor:pointer}
-button:hover{background:#5585b8}
-@media(max-width:760px){
- #rail{position:absolute;top:0;bottom:0;left:0;z-index:8;box-shadow:0 0 30px rgba(0,0,0,.5)}
- header #title{max-width:26vw}
-}
-</style></head><body>
-<header>
-<button id=menu class=icon title="conversations">&#9776;</button>
-<b>tinycmdr</b><span id=ver></span>
-<span id=title title="click to rename"></span>
-<span class=grow></span>
-<span id=model class=chip></span><span id=state>idle</span>
-<button id=stop>Stop</button>
-<button id=tools class=icon title="tasks, jobs, log, inventory">&#8943;</button>
+<title>tinycmdr</title>
+<link rel=stylesheet href="/page.css">
+<style>body{background:#0b0d10;color:#e9e2d6;margin:0;font-family:Inter,system-ui,sans-serif}</style></head><body>
+<div class="app-shell">
+<div class="ambient ambient-crimson"></div>
+<div class="ambient ambient-gold"></div>
+<header class="app-header">
+  <div class="header-left">
+    <button id=menu class="icon-button" aria-label="conversations" title="conversations"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg></button>
+    <div class="brand-medallion"><img id=medallionimg src="/mark.png" alt="tinycmdr badge"></div>
+    <div class="brand-copy"><span class="brand-name">tinycmdr</span><span id=ver class="brand-version"></span></div>
+  </div>
+  <div class="header-center"><span id=model></span></div>
+  <div class="header-right">
+    <div class="status-pill"><span class="status-dot"></span><span id=state>idle</span></div>
+    <button id=tools class="icon-button" aria-label="tasks, jobs, log, inventory"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" /> <circle cx="12" cy="12" r="3" /> </svg></button>
+    <button id=stop>Stop</button>
+  </div>
 </header>
 <div id=meter><div id=meterfill></div></div>
-<div id=lanewarn></div>
+<section id=lanewarn class="connection-banner" aria-label="Connection warning">
+  <div class="banner-icon"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /> <path d="M12 9v4" /> <path d="M12 17h.01" /> </svg></div>
+  <div class="banner-copy"><strong id=lanetitle>Chat lane unavailable</strong><span id=lanetext></span><span id=lanedetail hidden></span></div>
+  <button id=laneretry class="banner-action"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /> <path d="M21 3v5h-5" /> <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /> <path d="M8 16H3v5" /> </svg> Retry connection</button>
+  <button id=lanemore class="banner-quiet">View details</button>
+  <button id=lanedismiss class="banner-close" aria-label="Dismiss warning"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg></button>
+</section>
+<section id=configwarn class="connection-banner connection-banner-amber" aria-label="Configuration notice">
+  <div class="banner-icon"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /> <path d="M20 2v4" /> <path d="M22 4h-4" /> <circle cx="4" cy="20" r="2" /> </svg></div>
+  <div class="banner-copy"><strong>Configuration edited</strong><span id=configtext></span></div>
+  <button id=configdismiss class="banner-close" aria-label="Dismiss notice"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg></button>
+</section>
 <div id=note><span id=notetext></span><button id=noteact style="display:none"></button></div>
-<main>
-<aside id=rail>
-<button id=newchat>+ New conversation</button>
-<div id=sessions></div>
-<div id=railfoot>
-<label><input id=allclients type=checkbox> show every conversation on this host</label>
-<div id=host></div>
+<div class="workspace">
+  <aside id=rail class="sidebar">
+    <div class="sidebar-section sidebar-actions">
+      <button id=newchat class="new-campaign"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z" /> <path d="M12 8v6" /> <path d="M9 11h6" /> </svg> New campaign</button>
+      <label class="archive-search"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m21 21-4.34-4.34" /> <circle cx="11" cy="11" r="8" /> </svg><input id=filter placeholder="Search the archive" autocomplete=off></label>
+    </div>
+    <div class="sidebar-section">
+      <div class="section-heading"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <rect width="20" height="5" x="2" y="3" rx="1" /> <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" /> <path d="M10 12h4" /> </svg> Legion archive</div>
+      <div id=sessions class="campaign-list"></div>
+    </div>
+    <div class="sidebar-footer">
+      <label class="host-toggle"><input id=allclients type=checkbox><span></span> Show every conversation on this host</label>
+      <div class="host-card"><div><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 20v2" /> <path d="M12 2v2" /> <path d="M17 20v2" /> <path d="M17 2v2" /> <path d="M2 12h2" /> <path d="M2 17h2" /> <path d="M2 7h2" /> <path d="M20 12h2" /> <path d="M20 17h2" /> <path d="M20 7h2" /> <path d="M7 20v2" /> <path d="M7 2v2" /> <rect x="4" y="4" width="16" height="16" rx="2" /> <rect x="8" y="8" width="8" height="8" rx="1" /> </svg><strong id=host></strong></div><small id=hostver></small></div>
+    </div>
+  </aside>
+  <main class="stage">
+    {{COLONNADE}}
+    <div class="stage-vignette"></div>
+    <div class="stage-header">
+      <div><small>COMMAND CHANNEL</small><strong id=title title="click to rename">No active conversation</strong></div>
+      <div class="stage-status"><span class="status-dot"></span><span id=stage-state>ready</span></div>
+    </div>
+    <div id=logwrap><div id=log></div>
+      <section id=empty class="empty-stage">
+        <div class="hero-copy">
+          <div class="eyebrow"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M11.017 2.814a1 1 0 0 1 1.966 0l1.051 5.558a2 2 0 0 0 1.594 1.594l5.558 1.051a1 1 0 0 1 0 1.966l-5.558 1.051a2 2 0 0 0-1.594 1.594l-1.051 5.558a1 1 0 0 1-1.966 0l-1.051-5.558a2 2 0 0 0-1.594-1.594l-5.558-1.051a1 1 0 0 1 0-1.966l5.558-1.051a2 2 0 0 0 1.594-1.594z" /> <path d="M20 2v4" /> <path d="M22 4h-4" /> <circle cx="4" cy="20" r="2" /> </svg> TINYCMDR &middot; IMPERIAL CONSOLE</div>
+          <h1><span>Ave,</span> Commander.</h1>
+          <p>Your legion is idle. Dispatch a new order, inspect the host, or resume an earlier campaign from the archive.</p>
+          <div class="hero-actions">
+            <button id=emptynew class="primary-action">Start a new campaign <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M5 12h14" /> <path d="m12 5 7 7-7 7" /> </svg></button>
+            <button id=emptyarch class="secondary-action">Open archives</button>
+          </div>
+          <div class="session-strip" aria-label="Current session statistics">
+            <div class="stat-block"><small>SESSION</small><strong id=stat-session>&mdash;</strong></div>
+            <div class="stat-block"><small>CONTEXT</small><strong id=stat-context>&mdash;</strong></div>
+            <div class="stat-block"><small>MODEL</small><strong id=stat-model>&mdash;</strong></div>
+          </div>
+        </div>
+        <div class="mascot-scene">
+          <div class="hero-seal" aria-hidden="true"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /> </svg><span>SPQR</span></div>
+          <div class="mascot-aura"></div>
+          <img id=emptymark class="mascot" src="{{EMPTY_ART}}" alt="Chibi tinycmdr, the Roman commander">
+          <div class="mascot-pedestal"><span></span><strong>COHORS I</strong><span></span></div>
+        </div>
+      </section>
+    </div>
+    <aside id=drawer>
+      <div id=tabs>
+        <button data-p=tasks>Tasks</button><button data-p=jobs>Jobs</button>
+        <button data-p=log>Log</button><button data-p=inventory>Skills</button>
+        <button id=panelclose style="margin-left:auto;background:transparent;border:0;color:var(--muted)"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M18 6 6 18" /> <path d="m6 6 12 12" /> </svg></button>
+      </div>
+      <div id=panel></div>
+    </aside>
+    <footer id=bar class="command-deck">
+      <div id=pal class="hide"></div>
+      <div class="command-frame">
+        <span class="prompt-sigil">&gt;_</span>
+        <textarea id=in rows=1 placeholder="Issue a command&hellip;  ( / for commands )" autofocus></textarea>
+        <button id=clip class="deck-icon" aria-label="Attach a file" title="Attach a file (or drop/paste one)"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="m16 6-8.414 8.586a2 2 0 0 0 2.829 2.829l8.414-8.586a4 4 0 1 0-5.657-5.657l-8.379 8.551a6 6 0 1 0 8.485 8.485l8.379-8.551" /> </svg></button>
+        <input id=file type=file multiple hidden>
+        <button id=send class="dispatch-button">Dispatch <svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.842 7.627a.498.498 0 0 0 .682.627l18-8.5a.5.5 0 0 0 0-.904z" /> <path d="M6 12h16" /> </svg></button>
+      </div>
+      <div class="command-meta">
+        <span><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 6v6h4" /> <circle cx="12" cy="12" r="10" /> </svg> history</span><span>/ commands</span><span><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M16 14v2.2l1.6 1" /> <path d="M7 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H20a2 2 0 0 1 2 2" /> <circle cx="16" cy="16" r="6" /> </svg> saved locally</span>
+      </div>
+    </footer>
+  </main>
 </div>
-</aside>
-<div id=logwrap><div id=log></div></div>
-<aside id=drawer>
-<div id=tabs>
-<button data-p=tasks>Tasks</button><button data-p=jobs>Jobs</button>
-<button data-p=log>Log</button><button data-p=inventory>Skills</button>
-<button id=panelclose style="margin-left:auto;background:transparent;color:var(--dim)">&#10005;</button>
 </div>
-<div id=panel></div>
-</aside>
-</main>
-<div id=bar>
-<div id=pal class=hide></div>
-<textarea id=in rows=1 placeholder="Message tinycmdr... ( / for commands )" autofocus></textarea>
-<button id=clip title="Attach a file (or drop/paste one)">📎</button>
-<input id=file type=file multiple hidden>
-<button id=send>Send</button></div>
 <script>
 // The transcript is a pure function of the server's ordered line lists.
 //
@@ -21837,6 +21782,24 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
       stateEl=document.getElementById('state'),noteEl=document.getElementById('note'),
       noteText=document.getElementById('notetext'),noteAct=document.getElementById('noteact'),
       verEl=document.getElementById('ver'),warnEl=document.getElementById('lanewarn'),
+      laneText=document.getElementById('lanetext'),
+      laneDetail=document.getElementById('lanedetail'),
+      laneRetry=document.getElementById('laneretry'),
+      laneMore=document.getElementById('lanemore'),
+      laneDismiss=document.getElementById('lanedismiss'),
+      configEl=document.getElementById('configwarn'),
+      configText=document.getElementById('configtext'),
+      configDismiss=document.getElementById('configdismiss'),
+      emptyEl=document.getElementById('empty'),
+      logwrapEl=document.getElementById('logwrap'),
+      filterEl=document.getElementById('filter'),
+      statSession=document.getElementById('stat-session'),
+      statContext=document.getElementById('stat-context'),
+      statModel=document.getElementById('stat-model'),
+      hostVerEl=document.getElementById('hostver'),
+      stageStateEl=document.getElementById('stage-state'),
+      emptyNew=document.getElementById('emptynew'),
+      emptyArch=document.getElementById('emptyarch'),
       railEl=document.getElementById('rail'),
       sessEl=document.getElementById('sessions'),titleEl=document.getElementById('title'),
       modelEl=document.getElementById('model'),meterFill=document.getElementById('meterfill'),
@@ -21868,6 +21831,17 @@ function askToken(retry){
 }
 if(!token){askToken(false);}
 if(token){localStorage.fb_token=token;}
+// Hand the token to the server ONCE (a POST with the header) and take an HttpOnly
+// cookie back: from then on the browser authenticates by cookie, so the token is in no
+// URL, no history entry, and - once the handover lands - no localStorage either (a
+// script on this page can read localStorage; it cannot read an HttpOnly cookie).
+async function login(){
+ if(!token)return;
+ try{
+  const r=await fetch('/api/login',{method:'POST',headers:H()});
+  if(r.ok){try{localStorage.removeItem('fb_token');}catch(e){}}
+ }catch(e){}
+}
 // Keep the address bar usable as a bookmark without the token sitting in it - and
 // scrub both carriers: ?token= reached the server's log, #token= never did.
 if(location.search||location.hash){
@@ -21902,8 +21876,14 @@ function ensureRun(id){
   log.appendChild(el);r={el:el,nodes:new Map(),txt:new Map(),data:[]};runs.set(id,r);}
  return r;
 }
+function syncEmpty(){
+ emptyEl.hidden=log.children.length>0;
+ // an empty transcript must not split the stage with the log pane: while the empty
+ // state is up, the log stops growing and hands the room to the hero
+ logwrapEl.classList.toggle('empty',!emptyEl.hidden);
+}
 function clearLog(){
- log.textContent='';runs.clear();
+ log.textContent='';runs.clear();syncEmpty();
 }
 function lineStamp(l){return (l.kind==='final'||l.kind==='thinking')?(l.t+'s'):null;}
 function paint(node,l){
@@ -21928,7 +21908,7 @@ function paint(node,l){
  if(COPYABLE[l.kind]){node.classList.add('copyable');attachCopy(node);}
 }
 function reconcile(id,lines){
- const r=ensureRun(id);
+ const r=ensureRun(id);syncEmpty();
  const near=log.scrollHeight-log.scrollTop-log.clientHeight<90;
  const seen=new Set();
  let pos=0;
@@ -22035,7 +22015,7 @@ function renderRail(){
   const m=document.createElement('div');m.className='m';
   if(s.live){const d=document.createElement('span');d.className='dot work';m.appendChild(d);}
   else if(s.owner==='mine'){const d=document.createElement('span');d.className='dot';
-   d.style.background='#3a4048';m.appendChild(d);}
+   d.style.background='color-mix(in srgb, var(--dim) 45%, var(--panel))';m.appendChild(d);}
   const a=document.createElement('span');a.textContent=age(s.last_active);m.appendChild(a);
   if(s.exchanges){const e=document.createElement('span');
    e.textContent=s.exchanges+' exchange'+(s.exchanges===1?'':'s');m.appendChild(e);}
@@ -22050,17 +22030,21 @@ function renderRail(){
  titleEl.textContent=cur?cur.title:'';
  const used=cur?cur.tokens:0;
  meterFill.style.width=(budget?Math.min(100,Math.round(100*used/budget)):0)+'%';
+ statContext.textContent=(budget?Math.round(100*used/budget)+'%':'\u2014');
  meterFill.style.background=used>budget*0.8?'var(--bad)':'var(--accent)';
  modelEl.textContent=cur?(cur.model||''):'';
+ statModel.textContent=cur?(cur.model||''):'\u2014';
 }
 async function loadSessions(){
  const r=await fetch('/api/sessions'+(allEl.checked?'?all=1':''),{headers:H()});
- if(!r.ok)return null;
+ if(!r.ok){showLoadError('the conversation list answered '+r.status);return null;}
  const j=await r.json();
  sessions=j.sessions||[];budget=j.budget||0;
- hostEl.textContent=(j.host||'')+' · v'+(j.version||'');
+ hostEl.textContent=(j.host||'');hostVerEl.textContent='tinycmdr \u00b7 v'+(j.version||'');
  if(!sessionKey)sessionKey=j.open||null;
  renderRail();
+ const open=(sessions.filter(function(s){return s.key===sessionKey;})[0]||{});
+ statSession.textContent=(open.title||sessionKey||'\u2014');
  return j;
 }
 async function openSession(key,quiet){
@@ -22073,8 +22057,8 @@ async function openSession(key,quiet){
   const r=await fetch('/api/session?key='+encodeURIComponent(key),{headers:H()});
   if(r.ok){const j=await r.json();
    for(const run of (j.runs||[]))reconcile(run.run_id,run.lines||[]);}
-  else note('could not load that conversation ('+r.status+')');
- }catch(e){note('could not load that conversation: '+e);}
+  else showLoadError('the server answered '+r.status);
+ }catch(e){showLoadError(String(e));}
  if(!quiet)note('');
  await loadSessions();
  await attach();
@@ -22213,7 +22197,7 @@ function palTake(){
 }
 async function stop(){
  if(!runId){note('nothing is running here');return;}
- stateEl.textContent='stopping...';
+ stateEl.textContent='stopping...';stageStateEl.textContent='stopping';
  try{const r=await fetch('/api/stop',{method:'POST',headers:H(),
    body:JSON.stringify({run_id:runId})});
   const j=await r.json().catch(function(){return {};});
@@ -22264,7 +22248,7 @@ async function start(t){
  }
  if(code!==200||j.error){note('could not send: '+(j.error||code));return;}
  if(j.immediate){localRun('say',j.reply);return;}
- runId=j.run_id;fails=0;busy(true);stateEl.textContent='starting';
+ runId=j.run_id;fails=0;busy(true);stateEl.textContent='starting';stageStateEl.textContent='working';
  note(j.steered?'a run was already going - that message went into it as a steer':'');
  poll(++gen);
 }
@@ -22288,26 +22272,90 @@ async function poll(my){
     loadSessions();if(panelWhich)refreshPanel();return;}
   }else if(r.status===404){
    note('that run is no longer on the server');if(runId===id)runId=null;busy(false);return;
-  }else{fails++;stateEl.textContent='connection trouble, retrying';}
- }catch(e){fails++;stateEl.textContent='connection trouble, retrying';}
+  }else{fails++;stateEl.textContent='connection trouble, retrying';stageStateEl.textContent='trouble';}
+ }catch(e){fails++;stateEl.textContent='connection trouble, retrying';stageStateEl.textContent='trouble';}
  timer=setTimeout(function(){poll(my);},fails?Math.min(5000,700*fails):700);
 }
 var laneWasDown=false;
+// The lane warning is a NOTIFICATION, not a fixture: the operator can dismiss it, and
+// the dismissal is remembered for that exact wording - a different failure (another lane,
+// another reason, a config edit) speaks again, and so does the same one after a recovery.
+// The permanent record is the header marker and the tab title, which never hide:
+// "dismissed" means "I have read this", not "stop telling me the bot is deaf".
+//
+// Two banners on purpose (operator brief, 2026-10-04): a lane that cannot be heard is an
+// ERROR with a Retry; a config edit that has not applied is an amber NOTICE. One banner
+// carrying both reads as one alarm that is mostly noise.
+let laneMuted='';
+try{laneMuted=localStorage.fb_lane_muted||'';}catch(e){}
+function laneKey(){return (laneText.textContent||'')+'|'+(laneDetail.textContent||'');}
+function showWarn(text,detail){
+ laneDetail.textContent=detail||'';
+ if(!text){
+  try{localStorage.removeItem('fb_lane_muted');}catch(e){}
+  laneMuted='';warnEl.className='';
+  return;
+ }
+ if(laneKey()===laneMuted){warnEl.className='';return;}
+ laneText.textContent=text;
+ warnEl.className='show';
+}
+laneDismiss.onclick=function(){
+ laneMuted=laneKey();
+ try{localStorage.fb_lane_muted=laneMuted;}catch(e){}
+ warnEl.className='';
+};
+laneRetry.onclick=function(){laneRetry.textContent='checking...';versionCheck().then(function(){
+ laneRetry.textContent='Retry';});};
+laneMore.onclick=function(){laneDetail.hidden=!laneDetail.hidden;};
+let cfgMuted='';
+try{cfgMuted=localStorage.fb_cfg_muted||'';}catch(e){}
+function showConfig(text){
+ if(!text){
+  try{localStorage.removeItem('fb_cfg_muted');}catch(e){}
+  cfgMuted='';configEl.className='';
+  return;
+ }
+ if(text===cfgMuted){configEl.className='';return;}
+ configText.textContent=text;
+ configEl.className='show';
+}
+configDismiss.onclick=function(){
+ cfgMuted=configText.textContent||'';
+ try{localStorage.fb_cfg_muted=cfgMuted;}catch(e){}
+ configEl.className='';
+};
+// A conversation that will not load is a card with a way out, not an empty pane (brief).
+function showLoadError(msg){
+ clearLog();
+ const card=document.createElement('div');card.className='loadfail';
+ const t=document.createElement('div');t.className='title';t.textContent='Could not load this conversation';
+ const w=document.createElement('div');w.className='why';w.textContent=String(msg||'');
+ const acts=document.createElement('div');acts.className='acts';
+ const retry=document.createElement('button');retry.className='button-primary';retry.textContent='Retry';
+ retry.onclick=function(){if(sessionKey){openSession(sessionKey,true);}else{loadSessions().then(syncEmpty);}};
+ const fresh=document.createElement('button');fresh.className='button-secondary';
+ fresh.textContent='Start a new conversation';
+ fresh.onclick=function(){newConversation();};
+ acts.appendChild(retry);acts.appendChild(fresh);
+ card.appendChild(t);card.appendChild(w);card.appendChild(acts);
+ log.appendChild(card);syncEmpty();
+}
 async function versionCheck(){
  try{
   const r=await fetch('/api/health');const j=await r.json();
   verEl.textContent=j.version||'';
   const dl=Object.keys(j.lanes||{}).filter(function(k){return (j.lanes[k]||{}).state==='failed';});
   // className, not classList: one class store, and the DOM shim reads this one. The banner
-  // is a persistent element rather than the note slot, because the note is shared with run
-  // events and gets overwritten - a "you cannot be heard" warning must not be transient.
+  // is its own element rather than the note slot, because the note is shared with run
+  // events and gets overwritten - but the banner is DISMISSIBLE (see showWarn above); the
+  // marker in the header and the tab title are the parts that never go away.
   verEl.className=dl.length?'bad':'';
   verEl.title=dl.length?dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; '):'';
-  const msgs=[];
-  if(dl.length){msgs.push('this bot cannot reach its chat lane - '+verEl.title+'. It is running and this page works; the lane is not, so messages sent here may not be answered.');}
-  if(j.config_changed){msgs.push(j.config_changed+'.');}
-  warnEl.className=msgs.length?'show':'';
-  warnEl.textContent=msgs.join(' ');'';
+  // the banner says what it MEANS; the detail (lane, code, reason) is one click away
+  const detail=dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; ');
+  showWarn(dl.length?'Messages can be drafted locally, but they may not be dispatched.':'', detail);
+  showConfig(j.config_changed?j.config_changed+'.':'');
   document.title=(dl.length?'CHAT LANE DOWN - ':'')+'tinycmdr'+(j.version?' '+j.version:'');
   if(dl.length&&!laneWasDown){laneWasDown=true;note('chat lane down: '+verEl.title);}
   else if(!dl.length){laneWasDown=false;}
@@ -22400,11 +22448,18 @@ async function attach(){
   if(j.run_id&&j.run_id!==runId){runId=j.run_id;fails=0;busy(true);poll(++gen);}
  }catch(e){}
 }
+filterEl.oninput=function(){
+ const q=filterEl.value.trim().toLowerCase();
+ for(const row of sessEl.children){
+  row.style.display=(!q||String(row.textContent).toLowerCase().indexOf(q)>=0)?'':'none';
+ }
+};
+emptyNew.onclick=function(){newConversation();};
+emptyArch.onclick=function(){railEl.classList.remove('hide');sessEl.scrollIntoView({block:'nearest'});};
 (async function(){
  localStorage.fb_draft=localStorage.fb_draft||'';
  inp.value=localStorage.fb_draft;
- note('no chat server needed: this page drives the same agent. / for commands, '+
-  'the rail on the left is every conversation this browser has had');
+ await login();
  await versionCheck();
  await loadCommands();
  await loadSessions();
@@ -22419,17 +22474,556 @@ async function attach(){
 </script></body></html>
 """
 
-WEB_ICON_PNG_B64 = ("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")
 
-WEB_MANIFEST = json.dumps({
+# The last-resort page icon, for a tree with no assets/ at all: the project's own
+# badge at 192px (the shipped assets/page-icon.png is the 512px render). It used to
+# be the deleted page lane's placeholder - a white monogram on a blue disc, which at
+# favicon size read as somebody else's logo (operator report, 2026-10-04).
+WEB_ICON_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAABh9ElEQVR42uy953dbZ5rteb+2SAAn"
+    "Z+RAkAQJIhEMCERgTmDOFBWsnHOynJOclbNIKktUdC5Xdff0ut0zc+f2mjX/0eznyO5ul+Wqkqvc"
+    "XV3GWu/iAkEKpHW29/7t530P9D9srPAHFstLf/gbyutXvv5H+a+gvMoCKq+ygMqrLKDyKguovMqr"
+    "LKDyKguovMoCKq9fh4BYXiz/LZRX2YHKqyyg8ioLqLzKAiqvv7WlBt1GPKDH/ViC0ygLqLxebFW/"
+    "31v1L1P+f5nw/R8T9ulEWUD/LRfHCg5Wqhe1JtnIyXqPpA8r9inVOa06Vuuu1YZnRnONKvYRzVFS"
+    "HTnZiEtatSC7eIn9s3+0972C8+8H3f844vqHYWMmXhbQX/WSODFr2Bfc7v0+/+su33lX1aIr+Btf"
+    "4B88gW+dwd8Ygc805xPV/jvd+0R23ZccX+iuR6rzjuK4LTnuS867svMzxfUbyfM71fuPhvf/9lT/"
+    "oyv4W3ftLXfVpw7PUZd7l9s/a/emFMPg/tT5i+9E0flPQ85/Hnb807B9trEsoL+i5ZPkPrt7vdN/"
+    "3OE74/I88fi/dQUf6N5bir4kK7ck+23RuaI4VjRjRbHflJwPFdddWbsjaw8l+0PJ8VixP9Ecnxuu"
+    "rwz3b+3eLw3Pl3bPt4rrn1TP3yvub1XXZ6rjG7vna937le79XHd+bjie0JP+L3X/P7i8n7m8V+w+"
+    "2NUf/iXdO1pdlzsdlzuNS51qX8MfOUJoKDVvFAJv5jyv5ZWumrKA/vKrTtK2uPwfunxf+au+8Hjv"
+    "yc5HsgfX9b6iPlCNB5JrRXLeUrU7qnpbdTzU3HcV44GmP1Adj1XvYwV+o3+mGV8qzs8V11eq80vD"
+    "+ZXd/bXufqK5nurup5rrie5ckY1HiuOh6niqOT/XHE9V1+ea55Hq+AJ/0HB+oXh/o/q+VRzfqo6v"
+    "FOeg/JfkYsajBv+fYec/D6r/57C4M1EW0F9mAUTSonxIt990eJ8avoeS+65kX1GNW4qKALorOe/g"
+    "U11bUfWHsgsqua/pdzUNDx7K7psihKU9VByPFM8Txfk1qcf4ElElIa3sTzVozngoGk8Vx2PZ/rni"
+    "+Ey24/HXiutrFcv5her41vB+q3m/VF1f6vYvNftXmvup4v5CNj6XtaeyUZK1v+R/qVcN/uuY85+H"
+    "lP9rSNxdFtCft2oVbYPd9b7hfmD478ggFfstSbspGTdF45qg3VG0B7q+Iuu3Bft9yX5f024iniTH"
+    "HdkBYUFAMKc7ovOBoq9o+n3F+VTxPtYcK9CcrH+luL9SPV9qzq91iMYOPX2tOGEn8KSv6UnXF6rz"
+    "qer8DEuHD1FyPVScjzX7U934QnM+ll2PZOMzRX8i6yVZ+csKqOb/G3f87xHtfw2p+5JlAf2cJXDi"
+    "nMtzzVf91OG/oxi3JAPquaE4bqn226oOETyUnPCSW5JyU5FvS9pD0QFDuibLi4pyW3bcU5xQDyLs"
+    "M829IiHa9Juy8gC2JHngQ1/oxm9155eyBwL6DOrRdGgFpgKtAIngPVDVbwz3N7rnC9X1RHU+gGgM"
+    "5yPV9UhzI90eaQbA6CmcDF6lGCuiOiT9JQXECKLS5JeaAkKTj/MbZQG9WE7lNfsrds9XHv9j2flU"
+    "dv4GRKIYX+lOupy6575mvyEpy6JyUzBuC8YNSb0hy7ck9a5oh4Buq8pdRVuRneZjAJCyIjkeSO6H"
+    "qvFI054orqey94liX1GUr1XH7xTvb2X3Y1l7Imufy/YvJQfS6hsQj+p4grCTjScyKNt+T9Rvyeoj"
+    "RQcGfa15PyNUsj9WjRXJ/kQ27kjaDUG5ZbjOG77zdt85u+e83Xta832k+t7TPB9orpO6q1M1ftG/"
+    "tLKAvhvSjNtdy07vXcV5W7LfFfU7vP5Usj+S9HuSel1Ur/HqEq/dEdVbonKbBKRDNA8U446iQkaL"
+    "HD41VlTtARhIckB5AOoVFVHlXEELk5FlyopoPBBcDyTtS0X5QjS+Epy/ER2fy+rXio5PvxbsX4j6"
+    "Y0l/IEBqxu90F6zoC8X5jeqCyO6KCn4cbO+ebDxUDFD5h5KGdUJSP5Lw+2j3eQfIfUW131MMQNgj"
+    "EQHngv7uCtrEDwXEKbLg0USvzns10W/I1U6lzsNIcllAP3O5RHmd3X3T5VtB99HdnxsetO770I2o"
+    "L3LyNU6+yomLvHKD0+4K+iPV/gCUI6KEO+6JjlugHwhIhAOhnyO2VEQVrvR9GA/EpIFwnY8k1z2U"
+    "dkWFpX0peRE6XyrqZ6L+Fe/8WjCeiMojQf1csn8tu6CVbxTH73QPsbPi+lxxfgYXJBGrT2Ud+sNL"
+    "ERVp9pO6/T/+J7xtIhTW5xRt9s9lJyJ1RbQ/xh9RjAlZ/Y/f7JltrvnNTNVvpn2/nfR9Oxn8drLq"
+    "mwm5KVAW0AsvmRP3ONx/7/R9qbk+U1zg4suCelnUliWAsL7Eqcs8lKE+1gyUo88U4DBgSL8tq7dk"
+    "7YZoXBeMa6J6m1oYCpTnKRBHVe/IKrT1SIEWDfD1HYhJcFLGySq+wTQG/bGsfCXbv+adnwnoYvo3"
+    "ih117AvJhfKFwvVYdnyO0q44EGEPBOMB3EVW74kwM7Qz/J4o//aPVf0//oe8LGiPROMzCb+k8USF"
+    "4Ax4z1O8jgIZaWM/JCTHTNLzdNj1qOR6MuB8NOB5MuR82i81+coCejHpbLG779u9S4IKBF7iVUTS"
+    "bVFHQDygAYz9HiqVSIRxV9Ku8fJVXr7GK5RiAvxGuSupt80Ig7XclpU7sgYkuoUlyTclcA81MkTV"
+    "fVl5hG5P4UIieALKkb3faI7PNe1L1HXeBdcBAD0Q1Ae8/pgnpnkg6TC/+yJyEJSjP5GMz5BZxEn6"
+    "I8hLBkU5ngj62R+m0quC+lSEFu14cajwiQzd6Hd55T6n3BHU8R86kH0q4XlU8jwYcj8ccK8MelYG"
+    "XU8GywJ6gTVsd951+e4CU+Dzsn5TVO4J2l0eAtIWRWVJVC8LyqKgLvLqVUFZEugZFLH7MngCjgLB"
+    "kWJuoMPz+nX8WUkmGQmkuWVJviHJt0XjIY/LqT1VtMei/UsB7oKyDQHZPxNdjxX9oaI8lY3PBddX"
+    "EjhdWxGUB5RlJKAvaD7k+Ep2fKM4v4Dt4UlEmKKDmuE9T0UnfUr08wNNvKvan5ixC2K7I+gPRQP/"
+    "RZDOTVZe4qQJ5QdTIn085r5X8t0ddt7td97uc93uc670iUlvWUB/Cu4oH3mDnxuuOzLQ2IWgAQ4v"
+    "iwAd5SoLd1HgLlcF+bqAyDBgMJDUXZR2wwlohWJIYYJyXZAXBfmugItkQE8rYFgJ3+94IDtQwe4r"
+    "GqLwEYAX1iIrT8g23LAxtDCA0W91PyD3Keo9UFdw3uPhNMpTUftcgCEhyIxvTQt5LBmkBhn2A45G"
+    "q7d/rhokHdEBun8o69dl/bTDc87hP6m7z+ium7IDErzLQ8dgcOORYFzllaOseIwVD/Ny2w8jDAJy"
+    "3Rl03xly3hn03Bl03e53PRgQG3/fgRhe1Bo8Wr1LqXMIf7DM/1oENKza7zj91wR9WVCuiNCKscjr"
+    "4N/LvLQsqLc4bZknccCQIKDrgo60wmUA7qwo9tuSfkukpHsmspsiKYw6tqQitu7KuKjoR45bikY1"
+    "XiKABTytoH6LxmPJ9RCaUPQVUoBzRTGIr6EPETTj/EIh26Bv+86BaBJNY2jiaEA0XkdDyKLo3TTF"
+    "AaYxY04DKt0TaHZwD8QjOx7TzpqB7KPk5ZS3hZ9sVep4FNJx3io5bw24bw1AQI4HfULC8/sCsks1"
+    "/+9qz79OOv73tPNUZ1lAwmpRuyVo98zufV817sjUlaCSS4J4hZOXWfU6FXXxOi/fEbQbvHaBQ37J"
+    "t3hliZWv88oip1zn5CVeumZaFK7TbR4yUlDXcYERYTclY1lWb8jwJFx1+wq+R5A/gxvRkBrgrMFL"
+    "vqBtMv1rh+NLw/U7zYfe9IVq/0yFaJxPKAT1B4hUqBZkxkPEIC1KIlM0QCXKpieERNAcBASTQyUk"
+    "aga9PSRjczySHCCtz0TtI/UnNzfgQL6Hw55HY+4Ho+5Ho74nY96vR8XG348wxiX7/nXC/j8H5X8p"
+    "qZ8UygISajkJRoL/jxdF7aqkXiGDwaeAYtIHWvotTr0lKDcFAs8bqGCcsshLt+hLyj2e5HWNBCSD"
+    "e0hPrHyTjAqfyjCw6/yzORAw/Fldcj4ScZnVx6L+tej4WnJ8gUQTtW9k91ea8xFta+iQ8h2QsqKh"
+    "xN2XkFA0PLwHuUArMu2LIf6eEIzjldX7NOzWH5Cf6XjmoUIfIbiHYCnF/hjmSlsoOiUvp9/mlXf/"
+    "7M0Nxq14/9eY8S/D8v8sqZ/mfo0Ckjhx3PGD/7HOK6AW/Q4iSdGXJR05BVJGhF2FD7HQB/HQFaQY"
+    "r12HmHj1BgILNE3eo9xGzInQHOxKMsNOQ7jcFWVg0AMklOxEgkA9DxQNbR9IDs8AHZMgeOMJmYf8"
+    "SMQzqOUGituKZn+iuh5rLiTafcV4RPMbMJn9C43q2wO8FH5PaAXFUNRgOXCmuyQdhBR+qHqHvgdP"
+    "AtRU/Br3zJYH5a3Q1MB4ICjv/BmDwe8EpEj6hkZpY5xfF+G6qn91AoqJynmVzmf1qY5/e3IjGQwg"
+    "FywsXxOUi5x6nkXhkiCdG5yBL10VpEVevsKpF/E8D1iWbuNq8dpNTqXnBZgNIAkeg4TCNYZWCJIg"
+    "JggOLwg3uklDargFWr1CV5enhkUXnoBa+1ZxfaW5vjHoQBkU80Rxfak5n8BCaNfCcRcOhBoFiQiQ"
+    "gn5fJpsh4hEpyO6YFH9TUvEr4XfAR6jzrqA+kmBCxiNZ/Ua3P5Wd32juz2X1lKKWD9X//NWtaIt0"
+    "XYlmnjqrnN8TZYqTFhnpOsqtIOECo4eviMYNomblrkC7TtcE6QInXedBS+BrbVlSbuKKSnYUK0A0"
+    "SHZJVC6T8uQrMCFRWaT8Ipe6S5St3nzG1xIUQyMiOAeE8q3q+UyCwehPsAQ75Aj0fqjgI16TXpa2"
+    "9IHPuhsQA0J6BJrRHMA1+BzgDEJ5SGisYd0DmItkRUgu6OwRAF/UgFndovyjTT2+LKCfudYrdL0X"
+    "wSuCvAK3EIxXdPezL4ms8FBx3AHQAH5l2tu6yqsQwU2JIuk6DX6IkZcRYYJ+hSxHWpK066L9qqBd"
+    "gW546SIvX0KiifoNSVuG/UjKA/IJYwVVSLHTSFqDCOB8NLx5IJNnUGYJ5FX3gTICGBkArtyTlCcK"
+    "6YzGhooGiLkH4oGAVAQcQMqUkWqHCd0lm6HNk/vUACAjGngCie7SMyrgDMlYel5gVU+naqcz1XMt"
+    "1QuNwdmm4FxLcHWrf02TXOMqC+gn11GPf5kzLjDKJQopBIr2iDe+Uly572f/B2AAPFkF4gbYC5K9"
+    "qajXZfUar19mQdbSRfxBXrvMqac56awgnueVi4J+TdQvi8olkYLvuqQvicY1XD/VuGdC1W2BLOGJ"
+    "5rgj49LSyJFIS1Lvy9SVULXuCbQj+4RmhoQ1tOGg6Y+pfznhOk/pAZ1tBUvdNMc8D+lltWuCChHf"
+    "pu1bDSZ3AzhPr0nj8vvmWAE/FG4EZC7JzxFQ1XIpcH3Ee7Pkvt3pvt3tuz3svzPqvNWn5mvKAnre"
+    "7gQvnnB4wB+LnHaTByBTTuF6o2rdFYw7TrdboHcLzfBIGcX8kgTXWea0i4J0SZDQ21HQlkgiqFra"
+    "Iq9dEeULkrRM5d+OrEE2gT/w6TJejY4H6VR8FP2h6oCR4HrfkgitblAjI3uAgO7STgilJHgcNf4r"
+    "Rf9cMr6Q8f3aXVlD5C3xJI4ls/rdptJOnE6P0eQ5ZcWMLTyANd6ll1XQ8CGjJXykPwunVJYJ9n9C"
+    "QItDvsUhz/WS+0aP53qfd3nEd2PUcb1Xz9c9p3B47L5CvbdQ70qFnK11jCD9ugTEs8InHtdZXkK+"
+    "nOPlM6x8khWuiNJNGgO6kCk3Je0j33fD1iXZWCSnEa/yylVOvSErMB5c9RuCdlmQaRIt6jdlxw1Z"
+    "X5bxP72+xBrU16AtXqRdM15Hb4cxXJdwIbVLHKoZ3AJ/EGqjq0sIBc8wURdKQhV/KqJ8QR9gMpIX"
+    "NSlgkEx5RBufsBxJRxt/aKbSDXId+hIA6Cor3xM0s8lDx8o98yPy6w7Ai5eXzG+4xkkl+TnX23d1"
+    "yHttyLU06Fruc1/v9y2N+K6POJZ79OJzBKQVq+0Pexz3e/SVAXVl2OpUfl0C+sTrX0QqSbiW6FDK"
+    "NVxUQYaFXEXuCLi6+nVZu2c4ihoF2VG6NtKyJN+lymMHQd9Q1DuycUN6dkBMxYNFQVuS1JsaPuLi"
+    "Oa8TU9Ocepn6mnqVky6J0gVRvsSDqfFD6UjQXYXOdoHE8c3LPLW2JRopabcRmoK+IqN7q7RdKhpf"
+    "qI7PVDrWs0KRhwRUIAsYzB2KKiJ6KAMLhkRtkZWusTINLQWVJk8iDRgfK/gRMmwJfL0iKUPPE5B/"
+    "eRgC8iyXoB7Xcr9vccS/POJc6tbaQ88ZT/fW+p4M+O+XXHcHHQ+HrA71VySg/S7fOV6F/ZzmxEuc"
+    "jGYOXwE9XPouwrQleIaooi5ddnlEThwWdcQNjOe2pN2i3QxlyRwG3pbsdL5H1shReMJkfA8g+iKn"
+    "X4VKBPESDYHki4xMOxsK8stYEvVFM/sWBdpEI/uh6SIYnEY1kALyhaYA5tDoAfUy2gAxt9VQ1lD9"
+    "6PmHCkEx0HjZnDzRmTXKVryOskyvoN7ktOuscol/sdEOAdDiMATkXOpxL30voMUereN5Auqr9Twa"
+    "8NwZdt4ecj0csjl/NQLa7nTDMC7z6hkeF1i6zMkg6MusdIGXznPikimgC+YxDBgAGtNul9fLSeZA"
+    "RaaLhxqP/+N58RqvLAo6vOSyIF1Gf+a186wI0dBV5HQogPa8JIWQWbTTXr0omx1exZVGjuDnUqs3"
+    "rzcUc586HYWLKSB1hSZDqGPqfem7yvaUJtHKfRKQbmIy3AVCV66w0iVGXILP8eB6Gc50m8Myt9al"
+    "FxvtBG+N+pZHPNeHXIu97sU+37Vh39Kwc7FXfa6AekPuh33OuyXH7ZLr/iDj+nUIqE9Wryj2CwIk"
+    "IuPC4/rBflCmFnkaA14W8STiQLvGaWRInIjouSc7k5J6SkJbpqHfRUaFqYCWQD9LnH7d3H6HSsDd"
+    "ZtORzQ0pO4QFTrpMzU67zGuXzB+HHocfdA2JKUB2kBdxMVr6MsWNydEiES5S7y5Pm1l3SH8qBERa"
+    "oU1ZenGaA9HICoAM41FvcLT7Bmpe/H4yiWhb4mhKfkn8SS4JbGurPzVYe7pU/fFA9Ue9vqNtJKAb"
+    "w/7lUe/1ITcEdLXfd2UEGnJe61Hba59zotety7kqKRcU2oJyIciIvwKIrpGUi6rxKSefFdQzgnxK"
+    "FE9y0mlWucir53kwsoSPZ3n5PKdeQquiCJNoo5RVP1Ed63j4hwgUfUDHT+lOnRvUmBzLAk13UNSv"
+    "0ByIhtTwlUv0Cso5QbxG58UMBCKq1kMVnqRQ6JgJRQNryWQUnvY94GqLnIzGBOw1zwei2+u3JXVF"
+    "Me7JtH+OFnabzjJDQOY5JNOuIOVLrHgZi5OAcTfN35mmlIKpuZ92INeRNt/yYGB5OLA07Lna73ov"
+    "T0/ONDsXmo3VCW0ups3E9JlGfS6pzkS5oLNc4wU7L10wHGdY8RQrn+bk06QV8SwrnWfVy6xCM0Ce"
+    "DInOaaDYC7ThdYETznKUDncE/U0DFxKUSjX4EivTl3jxIqtcYOWzZhTiMXDqMi9epZGj8zYuoaxc"
+    "pdjS78oOGBV46CqP8g+Poa2MmzRvxCWnGIKRoGA/oB0Jspz7dAxDg8HQsSHp2ZYnjYVWJNpmN4sV"
+    "ie8O7c3hD0J2stnjdOp0EsodId0iR0dQflJAh/P+xZLv2pD/Ssl7edD+VrH8/kB/ZB10uU6z4sem"
+    "gM5yygVBvsiLiIPLrHaZA9NI5zjhIieZJ3gQcAqQ6CokwpFKruIbROUCx1/ipKuseo2aMFgHfUe5"
+    "wQJTaNfpPh3o0SmV0MIk5y3BWJJwCWX8iCu8fpleUDjPCRcgWQ65iTomP+vwkM59cwf0AR1ZpHGO"
+    "eeqDdkNR15Frj0hPtMF+U4BQ0NS+g+VFyj4aUMGNbqD0IWQl/OawUpVCk6PB1U/e+n6o4L9W8l8b"
+    "9l4uuS8OOk90lQX0h1aHrF4UKaeAPlfRgGisp8IeAENLonGF/sZhHtCQDE86x0kXUc04Ug96GUo+"
+    "BHSVduApKW5w2pK5CU8HVUXq29dICmAOFCLtkihfxMty6jlOxbUE91yk+zSgIbT375h92XQ48gme"
+    "9sXMCJNvmv3rFokJzYtOu96FEOnEhbZiHnl+TIfCVLIfc2J0jQaJGjJrieafMuzqIq9FBAkrzNOq"
+    "58UQy59yuE/ZfZ/qvg819wnVcdr+3VmDwNGO4I2R6lvj/qUx75UR1zvtZQH95DJgFbrzmiCjdp3h"
+    "lDOcdlpQT3LCJSCRoF0UjAsCXeyTrHCOlZbpEA/hCMIIcrnASWcY+Rwrf8IIpzgetHGVQYeiQeIl"
+    "SjcwrEZtn5dom4ylfdNrkoJKj4JGJkdzAdXc6ABpiRd4EYACRSLXFunaK6adqDdghIAtM5tgOcu0"
+    "e2rceJZuIoXREo2PzYNENPuhE5KUgALtV9wWTVti5XPC7xMPPoctneXUi5y+yNNBlDvidydNOZfG"
+    "Vxl80M5h+Q3Go5UF9JNri2b/1Ibk4j7m+FOkBvUsAkWUzsByePUcDYVVGAzyCz5x1iZeQjFmxfMs"
+    "f54RyLRY8A2WeI7lF1npOqeZNUdaFkQ6UEaJhrCjCeEi2YAEbQGMzttgZsIZTqDJL0KQla9wIjDr"
+    "NtV1uvZ0OIRG2JAXDREgplsiChrdy4Gv3kce8bSX/lBUV3jtkbkdZs4PIQI6oUFmZnLPLZPEF1nl"
+    "PP9jAXHXJQ2JeYWO22r4xa6+4GSIkSVWl1hNZA2JMeRfo4ASMhxCvUDBJFxCiHDqdc5AJFE2iWhA"
+    "9iucdoGTz1FgSZfpTI8KFj7Hgq+BLOI5AXkkn2egJ+FTloe2LtjkZRZOIF1DqMGxGAlVH4l2V6b7"
+    "wiARmjFy6hKdmJZBUWCRizb5AiPRUJG4SqHDaM8GxOaxEHD0bZFY5w6NiWkX/dloke4Kon1+2Rw9"
+    "m+YkqebpZgNkvUKH/A2UQQQxORkL7f6+gASWvwx045UzrHKO2Eu4/oICcpQS1den627NVN+ZCt6a"
+    "/lPue/9bE9A5w3OWkc5yJsGQN8BsjGuSek4ULxKQ2pfpZj/lsiif46mdEVALIBjxKu2xEw+dYsTT"
+    "jHiWE05y3FkGTG1uScItBDpn+JjurNBvIrYQXhSIeB2BptuEQfhxeCxeoVETIgbmBHJH3sF+tGt0"
+    "OwdqGhX+JRKTqRs6sY+wo5uEgPNUtcRnIyL9oUQ13swscwgkaTAVCPEqHRNQ7nL6FeH3Y0hkODDZ"
+    "FR6o5CDpsxTBL/S3p5Wi7nP93vMl78VB1+UBzmf/dQlonWE/y8qnbCIE8QnLg3LOM8olVj3JihcE"
+    "AT3oLKOixkMr4GW4zrJZyy+Z8xXaY6emo1xhZUTYNY4sBAB7k6bPdHj+2cnoyzayq4skDoVYh5ev"
+    "SeAn+RJEg9f/3tigS0pDgSD6IngINZATzwvSKY6m2EiuS6Y53RColD0kajZu0U4WwfV12o4luL75"
+    "7AYPgeCJ6Ns8KnmNRIlfWD3zIwaSGO4yjSrwN4DeJ51l+RvCizmQNhJzXRzwnC+5zw+6rpRY/69J"
+    "QHZeWlYdF0z/OMkInzDcaUa4xKjnbLAH4SzH4+/0glU9bRXhE6dZ/gIAmZVv0I0WMorxOV4E3NCk"
+    "jpFumGkCA0NaIf6W6dZBQlp0H9ooZWnP64KonKN+LoF7KO8Y6RMbqfZjhv+ULp4MAcGEznIyMoXm"
+    "1OZPoRuGCI/gdrAK+ki3WLB4WeW+oH6h6iuSRrvugr4iqA9kAD7ZHnR2hfKRJtqniLogd/08r79l"
+    "d7yu6W/rzg/s/vd1zzu6luO4Jk7MWPmMjWvhhGbhxf45W2M84brU57jYbz/fZ1ztZQK/pgjbKOu4"
+    "cqdwRRkBBnOG5WEV56zAEfzvjkjizwFfGA2ehH50nhdQvq7QkWcoRgC7XIdiOMJn2m8iFwHBiFfp"
+    "AtORnWWJ7tdBP6JsgnvxMCH0O/gKDIZ+3EVGPsNIpzl0N6hTwjrLS5/gMZG7AorH85dFcBghEbzk"
+    "kayvyHTk9KlsPJUd6O0rIt3+sWgeyr4FrFb0q7Q3At6ijZcrNOahu2CvA6IlFHvd3MKDyQmAoSuc"
+    "46pgnJF+EFgsJzTVBBLBqtZgwKn+SbVLqHaqHbVqZ0gu1kjFKpsi/1oEJAI+FP1Dm/gRg8V/wPIf"
+    "oRMxIuznpE0CDkMxl3nYj3KBgXMIl81wucAhhhSzRgnXaIQjLZJbyDCeGxKNlS/R//dEJ1fplmSF"
+    "Bj80EpSebY1d41VAEszsJMPjp4DckVmnqb3DIdTzPB0XwTrPK8Q9soIXOU8/TqMbommzTLzCCbA9"
+    "ZNZtwix6G6GHmp3ecFO2A9If0D2sNLy+Srtp+MWQkso5XgLonKc9DRkt4QzPfUrDT+2cTfmU++ER"
+    "KFTCicKlsc6zvfmOgP+/8Or8NxDQGkU7wYhnOPkDG/8hw33EcO8jSmzieZuERLsAJyAHkq8x2hUW"
+    "BiBd4IWLtK1BdeksSwMb4Aso+DxHwrpGZiNdJ8ohmrlCDCRe5sTT6Pw2XG+EiNm2OPmsDZjFn2b4"
+    "MzYRegV1wYQQnWdtYBHxFMufMXWMzIJcLsvSOVH5mJM/hDnxwoccf4YTlzm68f6BoH6p0tt63Kez"
+    "qsaKqIOgb5IhESqhV16io3BYMowNr4kfTadQQEgyJdoFmwpnRXX4gZ3AaAczH/bnT/cVO/y+soB+"
+    "2njxFyrJH7PihwylxjnKERFEAkP60CJ+bBM+ZnkkyEnIhVXPmRtb0NMpVliinXOa5ZxmBeTXFXqn"
+    "AfkKSAgCEum8xxWiV23RdClUpCXaA9fOgc2Rj+aPOGejx+Ctswx0QyUO9e08A7Upb/DydkEa48UM"
+    "L9ZygvQH74JwcHxMEAcleaeknTC7/WM6bw9Eo0g9y9K06bJESiJsF+GR1AY+5eX3efYEy8F+TttI"
+    "7j8YC4ni+e7mk31tZztzXV5PWUA/uSJ0L4QAAPqEld9nhA8Y9kNEmE34wAqqld5mhPc4CrWTrPQR"
+    "GgqHlBHOfXe+R7uCrDF3MC6YAERvomDue9NeB5UgAwiMEneGF2EtqFefkNPwZ3keAQepXWOoLZ9m"
+    "uJNWDs35TU6c54QY+IP5s+fpLN/Oi1tZ8bx5SOiKTOEFAS2J6llepKEop9JIXRTQts7Q5Ana+kEv"
+    "4zih2+to9zjzTqf3L/omm3+DEdbKwX7EU6Qe7j2GRZScYiQ0IzxzClREtQvVCSyiXuJoI+KcIH7M"
+    "iZ9CTwzEh/BCTZPMJX/ICPj+T3nxJC++B/HZBLjaKV44SdlEY+trnHhLooM+S5z6QNQvicpOQerg"
+    "RPsv9l/nZYUeVtyB8OIVhCztCkvQN930iJT8lOXOsNJJRv6Uk/86r85/jxbWxAgnrewHNtunNvaM"
+    "TbhoE09bhU9t/EdWDr3sU4ay7CQo28ZDVefNOdApqwh2OccI5xj+IiNcQH0zqYh2VTnxLE0BaPp8"
+    "3iacsfGnbfwSfSpfZMVFXnqsOl4VlAyZDf+fGdbdgnyQ447w/Muc9DIr7WW5XQy7x8bvsYnbOaks"
+    "oD9PQzAVhr3EsKQbG9QjfGzj3rdxH9r4T2zkHx9Y+Q+t+F8WhkQaumBy9CUWcSYu0ntG0WyQOhe9"
+    "7eGzWaJ8EvJC/NnYy4xAN9AwtMG0SVKC5X8G9G9AQCwrBH94DM/HCR+jFlkFNKaPrMKHNu5dG2q2"
+    "+CknfUzTRZGAhqW7S80bSdUrvIrH4JsPWOET2kGTPwGMs/z7wBpWPGcK6CzD02YqvYeLPMNL/M+y"
+    "HLfTkWqOF7MtHbl0V3uuK9/akUtlmxtj4TpNVcsC+q9ZKVFZko19qt3H/7t7VzHCK1YkFw+/OUH2"
+    "w71vPka7PoPGzslo+zAh6OwsK59m6VzHSYAwMIgFNlG0neP4C8g49H86PyqZFVqYY3j1T/utfF5X"
+    "ZyY5XyruXN3/1s7JTw7Mnzu85uzh+VP7Jy8enju7b/bT3WPvbO0/sXXk/N658wfmLxyZufLawslD"
+    "c+/umNkzP7hmvKu3I+10OsoC+sXXrCC/a+U+YKQbkmu73cH/2x1PrAABnbayn1rZUzaUFOETC2KI"
+    "/5TBQl8DcfMnGO4dG/+uTXifvIenA0AsIJqmKeepivM0H2LoGNBuXnRwf/yXKaabtsz0vbtr/MTO"
+    "kTfWDx6b73llXe/bWwbe3z7y1obBd7cMvbe19MG2kTfX97+1oe/E9sH3t40cn+t9Y13/+zuG3t02"
+    "eHxN74mNox9uHXtnc/+bG7svHVv94d75LRPdtdVVZQH9Uus1UXoHIWWB3wCThauGY4PdZZg7iCHI"
+    "ArBsIvN7lGXC23Ajc0KNbEIp+8B8cIGV4TTE0ZxIG1uMbBY3mussMnSgMfcHWUcQ5f6O1s1Tne9u"
+    "Hz8y07FzJHNgtrB7om3vRGH7UHbfVGHPZO7YQtf+ycKh2Y6j853HF7oPz3QcW+g8OFc8Ot/18nzP"
+    "kbmuQ/PF/XMFfPXgVNeB6Y4jq9tfe6nr1TVdp3dPvL5lUhClsoB+mTfEZKlgv47mZeWhIcgFpAzc"
+    "uWk4R8232fZx4lsM8ot708K9ZeXfs4Fs+I944UOz2J/ixY95EcTzEUtj6E8YSE26xNL+6DInLrP8"
+    "AbP1/OScxrCvH+t9b8fEkfnCsYX219b0HJ3pgFA2DLbsHMvuHM3tn2zfPprdMda2fTi9fTiza6zt"
+    "wHQR69h814Gp/NGFzpfX9ByYbD80075nKrtjIrtjJLNvvP3Y6u59M/hqxytru4+vL5Uj7BdcY7L6"
+    "McOdgCysAn1k+bcZ9oSVo+McrPSR7hjUHWFOgGjetvLv24QPbMQ6HzDcKeJomBB1sQt0FlH8BKDN"
+    "8mfMLYhTNuEiww2y3E/93FBNYN1I8dia/t3D2R3DqW3DLduGW3cMpbcPZeBAWyGX0czGfjzftnM8"
+    "v3e6cGCmHWvvRP6VtT3QByznlbW9h+Y79k0Vd48V9k4Wdk+27ZnKwXv2jLfvGssdmCscX9f5wfbR"
+    "uupAWUC/4NoryG9aWbjLq5Xs6xbmTRv7po07YSLOSdr/ot2o07p9QFVPmsfEoKETNvYThvuEaBqg"
+    "A5qmAzofMzQcgnrM8x7iKasQ/unA2jDRdXx9z6ZSasdI29ZSZvtIautw69re5Gx7YnVXcr6rcXU3"
+    "rc2l9LaRHHSzeyq/fSx3ZK7znc1Dr63vf2PDwCsLvfCew6u7Ds92Hl/Td2Sh9+Dqzk3DqYXu5o0D"
+    "6W2j2c0jKYRaVzpWhuhfdqGWv2lhTljxkXvPAlkgpLjTNI8WQTzvU/niPrDxFwX5DV76CAKiETP/"
+    "DsOBfj6mb+A/4oT3zG4PSV3EsvEXWKnqJ/6d0Whd9WubRl7qbdo42LxhoHltd9N0LjrbHp3vjEMx"
+    "U4XYTDEx25FY09u0dSSzfbRt21B2J2JrtuPYmu6DSLfpjl0ThV3j+UOznYfnu46v7T041717vH0z"
+    "fGsyh4VvODLTTapa37Nzuliu8b/sCqBsM/zHNg5SeNfKv17JvGK1vcWwr9m4ly3sa1b2XXyJxjkC"
+    "hRdLGQcGAkTjeSjmHK8gyPAk7OdTG5ZwBTLiJN/z1KPr+upSDomzsa8V6lndFZ/riI1lGkbT4fG2"
+    "hrFcw3QxRg7UmZxuT0wWo7OdieliYm1P89q+ppcGWraNZPdMFHaP5/dPFw/OEuUgtg7OdRAvz3bv"
+    "n2rfNZHbMQ5Uyu0Yyu0ayx9e06WpWllAv+zK89IrFuY9K/t2Jf+BVYD3vGphPmQBOiL09CbDv8vx"
+    "b9j4d1jazzpBe2Tiuzb+bRv7lpV5x8q9ZeFft7D4Ux8z/Hna9OCP2XjpeT8oHq45sLp9fV/jZC46"
+    "2dYw2FIz2FozlK6bysem8tHJfGSyEJ0qxqaLcWhoXX/rmt7m7SMZhBEUs2U4s3e6/fBcJwS0YzQH"
+    "44F0IMR90+1HFrqPr+3fMZLfNVHcPp7dPJzaPV7YPlzYMpQZyMXLg8RffgLEie9bmbdJQzzUQGWe"
+    "5V6xscetHNYrYCMG6hGeaegNekDbomZ+cW+bpvUBeRJ3khHerWD32OifA/vxTxlqb9kxlp5qD0/l"
+    "GyayDSPp+qFUaKC1tpSqG6bH9aPZ8FQhuhro05Wc60yu7k7Cdea7kut6m1/qa9lYSkNPm0rpl/pb"
+    "t4/mXlnXDyraP01MvXsiD1VtKZlhN5bdQvQNju55e9OQ629ohPjXK6CtrPiaxfaWhXnHJqCiv2xh"
+    "XmWgG+5VG3cEGrLxr7LcCU58lxU/4CRo6FXEnE14neEQc+8w4CcJ7YzOL0NVrPTcuj5fys8WYiOZ"
+    "0GC6ujcZRGCNtUWGM3Wl1tqhdP1AS2giHxtta5juiI/nIqOZBlDwQk/T2r5miGZ9T/O6XuRdavNw"
+    "et90cXMps2U4C+N5eW3P8XWoYF07xnM7J4o7xgqbUOXGs7snc4i2o7M9awfS5a2M/5T3ykRptzHv"
+    "Wdi3LTxM6A0bfIV7j+HfxGMrvsQBg163sq9ZWKjqNfoG0A//spV5A76FLLMKb1i5d63Mm4xg/9He"
+    "liQra4ez63qAyZHRbN14rm4kU19qretrru1qDA60hsbzUYgJoTZVJIhe6E7OdyTnOhrnu5Nr+pIL"
+    "3Y0oaGt7WjYOwoRaUOy3DWd3jyPCOg7NFg5M5Y7Ntx+Yzh+Z7Tg83XForuPo2o59M/mdY4U31pcc"
+    "hlEW0H/GeoPh3rMxb1u516088ugtG/86Sz50xMIetRBKv83yaPX4hjdthETvMPxxFH4wEMu9buPe"
+    "sCD42E9sXP3zDgq+NNw2lK4ZaK7pSVYXo75iwp8Je3uTNRDNeK5hrC0M4yEBFWLwnsl28qHV3U3z"
+    "nU2ruxLzXbHto5n5rubxQqI3E8kmauuDvrqgz+N0aKoqSZLTbvjcztqAp70l0pOKTbQ3rh9oOjhX"
+    "3D1RnO3+G7Sfv0YBeVnhHRsLB0JXf8VKW6evMNxxLCv7MujHysFdXrWysCUsyOV1BvkFGQnvcsKb"
+    "LPcuQwyELtb647dR4sWFgcxYW31fSzXSqq8JuBPqSAT6mmsGW0LQUG9z9YAZYVPFxHguOp5vGCuE"
+    "57sSY22xfLymMeQNep3ci5/0EAQpHgrUBrxlAf2n3L/MS68zzMs22ysW9nUbYIintEJsocMTRPOv"
+    "omcxZDzHrCzWy+hoNv4oERIeM++xAGp+7nmNfSAbKzXXjufqS+navqbqjlhVIeItRL0d8UBHvGqo"
+    "tW4kWzdRaAA4zxTiM+2x+Z5EWzxo13/6X77RtMZIqCOTnB4ozpaKc0Mdc6WOwfZUPtVYF/T/Tcrl"
+    "v4GAOnn5ZYv1VasNbevVSpANfIh5w8a8amFftnDHKgE9VMRgSIgzBNlxwiPxdQv/GtU025sW9l1G"
+    "NH70svXV3ulCQ19TTU9zsBDzdcar4DrteNAY6IcDNYdGM/VjufBINrS6M7G+tzVe+xzDQIca6yus"
+    "HercN9d3Ys/0OzvHUL42l7J7xvN7J3P7Z/K7x9uOru56fcPAh3umzxxad2Lv3MH1A/PDHQ2hmrKA"
+    "/pPWEC8ftdqO20hAr1kFEPHrNvY1hoWAjleyxyoZSOqolTlmJtpRLBt32ETp18zR0Yc2vpn//S1u"
+    "cMnq7uhAS3Vfsrq3KdCdDHTEAh3RQDHqLca83ckghDWUqhvL1XU2Bau9jt/bWO0vpFYP5nfNdBxc"
+    "6JzrSm7oz2zsz7w02AK+Wd3TjIK2faRty1Bqq1nK0Mh2juVow3W68+Bc16G59ldf6v90z8zHe+d3"
+    "zPfn041lAf3Cd4FxMvUpFinGHrLy+y3cNottv4WB3xwy1fOKjT9uY4E+8J5jFFvcIStNqN9iuLcZ"
+    "bjXzHPTZNJTqbvJ3RL1t9Z58xNPdVNUe8/ejdiUCvS3BrsZAb2OwKxGs8v7g/QMRT9sX+t7ZMb62"
+    "s3kyF5tuj852xcbykfG2+HSxcbYzMdUR21xq3dzfunkgtXOsbctwesdo2+6JPD5uHaJ5466x3LaR"
+    "zO6J3M6x/L6J9lfW9p3YNXrujU0bZocEUS4L6BdZqxnxFRtz2GYlcViFg5XcESuDFDtSaTtawbxc"
+    "QV0M2oKGjtHz7OFKeuYVWrY3LIzjRwLqS0dKrdUdCcRWoKcx2JHwt8d9XfGqzhjCq3owBXCuDnkd"
+    "7PfHyjhB6krFd011rS+1TLY3zLTHV3eihSVH0NHyDTOdCXw6U0xMtcfHi9GJQnS2PbGGdjaaNw+n"
+    "57ub1ve3bC6lsLaU0qj3aG17p/JH57uPzHUfmOs8trb76Jqu19b2frpvbrw3x//3l9FfnYA2stKr"
+    "lFkMsmmPhdtv5Q5BSRbby5XMa5UMUuxoJbvPYttjte6tsByotEJeaPiItjctttKPKpJd11d3NLbH"
+    "/V3JqkLUnwv7IKBs2J1v8LZH/APNVdkG73881dXZ1nhsff9YOjyejYwXqIWhlHU11vS31HU11ZQy"
+    "9cNtkaFMBA4009k4151c6Gle09u6pqdlbS+NGRe6mxZ6kmu6k6u7Gtf2NEFGEND20eyBmc53t4y8"
+    "u3XolfW9B+c6Ds91Hphs3zdeeHvPtPe/9LbAv0EB7eJksPCrDHOcKrp40MLthSFV2rAOVdqOIMWQ"
+    "ZRbmgMWKtd/KHIIJWUBI9P0/3rJY3ZXsBzg3VXU0+k0BefNRLyC6O1HVnQj4nPq/t7+G2m3TnesH"
+    "m8fzkYlcbKwtAqbuT9UOtNb1N4dGMpHhtoaBTN1ILjpZSIzmYqPo+YXINHwoF5vvSq7uboR0FrqT"
+    "eGZtb/OWofRWONBEftc44Lp4eHXPodnOAzPFA3PtRxc6D0y3H57pOjjVcXxN57s7S8M9mbKA/mJr"
+    "EyMetlgP2qx7Kqx7V7GvWPnDACDkV6UN0oH9HKxgDuIZhJqVAT4fIabmXrcwLT96qYZq32BTdVsd"
+    "cU+2wd0ScrcDnBOBXMSdqXNJ/8F4JrtTcx3J4XTdYBpqq+mIA4yqi7FAb3NNZ2N1T7K2r7mutxli"
+    "CpUyDYOt4YFUuJSuL2XqeppqR9uiM+2NSLQNg60z7Yn1fS2bSumtQ+k9Y3k62Lqm+/WX+umYx1z3"
+    "zvHCjvG2LaVWfHXHSG7HSGbHSGrXePr1Db27Vw+UBfSXWdvhQDbklw2Ic6iSO1wJv7EBq49ZmP2V"
+    "jKke9qCpHpD1PgsDecGcdjPPOWQ4kosMNtd0JaraIp581JMKubJ1nmzYmax18MJ3YRerC2wayUwX"
+    "osPp+u6m6q7Gqp6m6oGWUHdjTSldN5AKDabqEGGdieq+ltBgur63OVRKh4czkcFU/XA2jI+Thfhw"
+    "pmG6PTZVjMKBNgyijmU39Lei2x+e7zo4W0Q1OzTTCQw6NNd5aL7j4Aw+bd83Wdg5mt05mqFD1lP5"
+    "/VPtO2cHWa4soD97beHk11juTZ4/Qsrg9gJ6rBAKwst2hKyIO0hgxO60WPciwiqtByvoY8eP9rx8"
+    "Lkd/KtQRq2oLexI1jsZqIxVyFyPeRM2/V62uTGS+K9qTDPYmq8ldUnXQUDciz1RMO6C7uaavpXYw"
+    "FZ7Ix/tb6yCdoUxDfyvsp2EgXT+ej43lYuO5ONxrTQ9AOwEBoX/tGGvbMZpBBduBPj/eBgEdnus6"
+    "ttB7bKH76ELX/pn2bUOZ7cOZ7SOZnWPZXeOZbSPpg7Md728ZObR+uCygP1tArHTQSox8wEwo8wgH"
+    "Qc/B78o8zaOPEF9bQdB4/piVfY/htB+9TqktAnYGNWfDnlTYRSbU4G2scrDfg/ZgPjHbEetBjU8G"
+    "gUeZsLetwYdVjFchwvqaQz1QVaoOEdadrBlKh5FW0BAZTybyTE/4HugJjxFhMx34SGttT/NLAy3Q"
+    "0N7J4naaBuWPLHQdnOk8NNv98pqe/bMdx9f2Hl/ogbz2Tub3TGS3D8OxUutR4lD7R9um+7NlAf1Z"
+    "6yVBPsowLzNEOQcq2b3IKSuzl9Rj21OJxeyqtO2osO2sIO95BtdzP3oRWVbGc3XgZQgoFXK21DnS"
+    "dY5ktZP9fotjtBCfyEaKwOqopxClwTREk4/6OxJVhVigGK1qj2MF8PGZgIqxYC9yjXi8xkSiUG9L"
+    "LUoZ2hnwCKCN/JrrpGOvGwda0bz2T7cjlfZNFdG5dk8Vjq/tO7a65/ianlfX9x2e79w/VUDD3zWa"
+    "3TeVW9eT3DjQtHmwdVN/astA6tia9ram+rKAfv6aZqXXeB4LdAyzOWZh95shhQq2t5I5hPyqZPaQ"
+    "hiy7V1kA2si14I/QIR7yZcKuphp7ImBvrnG01jmyDS7h+zcVnOpNjmfru+NB2kltre6IB7oag52N"
+    "5ENY+Zi/GKsiB2quRX6BneE9fRBKS2g0FzEBqGE022Ae/ID9RFd3NY1mST3juYapQnxNT/OWkcz6"
+    "gZaNA+mNg5kDs+3gHqjntfX9ENAra7vBQHCaXWNtG/qbNw22vNTbtK636aX+FjyzrZTaNNj0ysae"
+    "SG1VWUA/cw2z4gGrDSl2GMYDaq5kyHsstn2VJjWTepgdFdbdFZa9FRZoa9/z8Dkb8aXgOiFXqsaV"
+    "rXdlwnb5+3/Wr7Ml1NNSRdFW720OuRqq7Kk6VzbsRedCfmUbvPCY3qZQd7K2PREsxPz42JkECVEL"
+    "M5sXZRk01NcaIjxK1w+lG8wm3zjX1bi6M7lpML3Q27xxCHRcPIzytbpr91TuwEzH0bnuQ7Pt20dp"
+    "MgRnOjBdAABtG07vHMug828bya7vb4IbvTTQfGAm9/qGfl3TywL6OauDlQ7ZbEdsDAnIwuyusIGg"
+    "91baDlkoznZX2g5UMuanz6jINmZlf/wihbi/tc7ZGnJF/I7GoN1Qvxv4JsNVk/m6Ypx24PNhXz7i"
+    "zUY86Tp3W703TQXNCwEV4oG2sL8jbtJ0cw2aPCp9d1NtR2OwHR2tuYZIqDU8nG1AhCG8YD8wnrEC"
+    "TaUn87H1fa17plDXc4gwsPO+mcKh1e3HVtPUZ/9U/sAsqln7juG2vRP59f3NkNeu8fz20ezmUgoe"
+    "tqa3abYjOtUe29jfvG6kWBbQz1ktrLiz0rKzkgbNO1bBaaz7LdbD0EoFTYZ2VRAGQUYHK+FJVmio"
+    "9Uenxtx2PRdxN9YYyaAjGbDXer47B1gT8G7oSXbGfeAeElCDPxfxphvcsJlCxJ9r8OUavHkzxYiH"
+    "IoFcBECNTwN4BqUMGQf1gIfAPaVWkk5/K6woPJJuKKXCkx3xdX1N63vo/q+NpdQGCqP07jFSzP7Z"
+    "AiLsxJbh19b3HF/XBXkdnO3cPUE3b8CEEF5Ya3ua1vSgyiU3DrZsGGze0N+yd6JQ7feWBfTCK8aJ"
+    "yC9w9DErpRWhT4V1r2k821dZt5OGSEbbKqzbKi1HrDbpRwW+pT6QBP3U2JNBe9Rn/7cjYGNt0fYG"
+    "tC1XMuRM1rja6n2tdZ5Cwp+qc4OvGwLOeBWBdhZFLBpojwUBPTRITFT3NocA0V3J6mI8AKbuSphP"
+    "ttQ+8yfk10yxcU1vcl1fcq4YX+hMbhhsRXvfNpLbNV48utBxbF3XjpG2fRPFAzPF1zf1vby298BU"
+    "OwT00kDr5qHUjrHsfGcjxDeei0wVIiNt4YlCw3hbw7qelt3TnWUBvfDyMPwB+E2l5ZDFtquCcGeX"
+    "xQpqRpbBgXasspgARKGGb9vKMD9+hbaGANQTrdKaa+xO/bu352lPVg8217ZHAhBQc8iRCDpSIW8q"
+    "5ErWOooxVH0wE+VXpt6D8lWMoJRVQS4FE6jb48Hu5lAeqkrgySrAEBAbVFTKYNXDfsay0aFM3Ui2"
+    "frYYW92RWN2d2DSUgv1sHcpuGUltH0/vB/RMdRyc7YAbre9r2T6Sgz9tG2tb19+MIFvoaQJCTRZj"
+    "U8XYhHnr2dreJuAUVjIcLAvohdc+q223FWaDkkW4s7/Str2SLGezqZ4DFhZutGcVDRJHbM8BoN5E"
+    "NfIrHNDqvN8dJgx47L1NVZmQN+azN9faq91qLGBvqXE3VjtS9c50nStV686GYUUerNY6dybsb633"
+    "FWPIOB9aPVIsF/F3N9cMZ8ND2QZE2GALIgxN3nymFQKK9LXWlDJ0GA0mtKnUunuShsubBlJbR1o3"
+    "j7TumSi8PN/76ku9e6fp+P2B6U6Y00JPcvNwigTU3Yj+P48/25kYyoShJAAWuArONN3VVBbQC6+1"
+    "lVBPJRCHomqVlSqYuWsBHwJH77IwOyphTlY0+cyP3iYBXT0TckMiDQFN/56dx4rhDKTQ4G+r88CB"
+    "UmFXLuzJQCshV1vUixYGHsqYDtTW4CXRwKjqvZmwt522QfxdSdode2ZI5nyoqhCtwpdG8w2Txeg4"
+    "IBrsPNC8Zbhl21Bm82Bm63B210Tu0GwXdLN/urBjIrttKLt7rLhttA2Pt47Q9+wczW0bSa/thXTi"
+    "U3lgeGy6GB1raxjLR8fyEdpFaa3vb60HEjnsRllAL3hjIc0MK7ehpVcyMJt9yC8Ls9VcWyzMdgt4"
+    "iCR1nOF8PxKQXdOKEV9jtR4Nfvf3Hq1GvUJUORurHM3Vzni1I1FtNNc4W2vdTTXOljonPjYGnbkG"
+    "vzmP9kBGqZCnLRJI1roo1FDNwl76agxKqu5KAqVrB1rq0OQHEVttYbptvr2Rjpt1RreUUlsH08cW"
+    "uo6t6T620LttqG33ZG7/bP742t5tpdzWocym4ZYtQ6ldY/mFjuREITJZjMx0xOc6EiNtUfD4ZD4y"
+    "no/0tdQOpUMQ07re5s2llpFivCygF1t9VmbT362CCYGaUce2VVr3W9ndVm6Hhd1jZfea9f4AHSt7"
+    "DgC5dA3NK+LXDO07+ykmqsHUsaAd6kmHPC21jqZae2vInaMW5kuFEViefMSPLyVrnPg2RBiQCJmV"
+    "DXvgOjQNoiIWyEd9WEU6gR/splJW3ZcKDbfVD6XDw+kGdO+FvsapQnR9b8t8N8QRnW5PbC5ld47n"
+    "dk21wZkOTHbun85vQaKVWjb0tmzoT8Fp1vUnNwy00j4aRVh8gd7IITqWa5jBp11J2NJwpm5DqbUs"
+    "oBds8jZu89+t2g0BmYULfZ5MqNLUjTmGPgg9VTK7rM8RkM9uRP1G4nv7UVUVHQqkHA3awz4jTAzk"
+    "BPe0hNxgIHgPvtRsMlAq5G6qdbbUu2kUFK1qQ6uPotUTA+WfFfuoH60+FzPH1vEg+tdgJtRLtwE1"
+    "TOZiCJ2+VM1oW3ihq2l1F92C+FJ/687R/Jah9Nr+5Oah9NbBNjwmAaGo97Wupzd8aZnpiE53xCCU"
+    "l/qaYUgDqfrRtobJQnQ4Wz+Yqiul6gZTtZPFht87a1sW0B9ZPobfvapiP42CbMCdHZW0lXFglXU3"
+    "DKmCGtl+C4MH8xbbc24rc+ghj+HUv3vz9nQkmK3z5KPuer8OlbTWuCGg1npXosaZCLrgQyGorRpA"
+    "7UqHvC3A54ZnAgqk673pBk+q3pUGLYXpGaJpczDd1Vgz2Frf3VTT3hjoaaHJUE+yFnYy1RFZ3d04"
+    "U0hQLR9onu5MwGbQsDaBlAdSO0by20eye2cLO8bSu0Zze+gtiFo2D7Ws6Wkcy4RHU1BM7WDq2XS7"
+    "jm7RbyUBjWRCo211zX/FXeyvUUAMK+w2B4kHTF5Glu2qsOAZUPMhK0H0LhOo1z6vgvkcRsSrGep3"
+    "AupurAbrxIJGQ0CHA8X8jnqfHgk6IlUoX16gD9wIVNRc405UwZbgQKAiFwF12JuJeHLRZ1mGku+B"
+    "vJBfuagfAupphG6qe1tr+lO1pJ5sFKVsIE23Jk7nY2u7m+a6Ewu9jRDQplJm73T+2Ru+bBvObhxq"
+    "me2MTRdiU4CeVGg0V9ffUt3fUjtTiI/lIiMZMh7ynnR9qTVE9xulaiYLDe3JurKAXpijoZsNFdYt"
+    "ZoHfa7HtqqT9rx30mDXrmG3ieQJy6WqtR3+2666rajzojvmNkFcLefVElSMZdNb7YDnIOHvC70CZ"
+    "D7jUhiq9qdoFnaGUQT2pene+IUBjIZpTe9C5ijFUsGB7Y3VPS20hHsDjYrSqI4lPg9DQcDaCFDMb"
+    "eGi80LC6MzneFl2Dct7XtH0kt32kbWOpdW1fcq698aW+1pcGmhd6EpOoWtnIeFsDomqM7qeOlGiv"
+    "rWYgTeoZydaXUqGuBN332JXwt8d8fan6soBebLXbOBSxPebW6R6KLYSXBZJCqB2qZIFEgOuS5TkC"
+    "0hWl4ft/TrYu4I5XoXw5Y1VG2K9H/Pao39FU7WisQRFz4PkkdFPnaAo5YTm5sL8pRA2/JeRqrnY1"
+    "17iaaulLBEMNgWKsqi3mh3o6GoMd5gGPnuaaoWwIDtTbFBpJ0/2sw9k6CGhdT/NCV/NMZ3yqI7q2"
+    "t3l9b2q+u2nTEL2bBwQ015VY6EHtipvf1ggAwjLfACQMioID9TRV9zbXEmC1hvogqdaavubgdDFW"
+    "FtCLLScwyGLZWIFl2w4NUXJZDtloT35vBUlqX6V13PacfXhNUT3Gd9PnWq8drhP322u9aqJaj1cZ"
+    "iQBtVkAZ4J6manemzgOJxFHQatzJoAt4lIt5kVngawioOeRAR8s2+DJ1PpolxgJwiL5WOgfdnaAd"
+    "1mJjoLOpaoBgJWwe9ghjDaXCU7k4cmq0EIYy1vbQEemNg62mmOjdPDaWWnZNZDcPpNb2NE+3x8bz"
+    "DUDv+c7kZJEOqU0WIcQwnTpqrG4nyfoQi+NtYVVRygJ6wXcJsloPVFr20TCaRe06APVYqYvtrmB2"
+    "0e6YZfR5+/CSKHns3x2EaKxxxqvsNS69zqtVu9UqpxrxGVjgoXo/ypojAiTCgyqjKeiCV0FY6QZ3"
+    "stadrfODr7NRDwpaLhIAX6OXFRuD0FA+RifOCpEqmBDyq5QFxMAqQmj1ncmqvtbqkUzDVD4+0lY/"
+    "mq9fP9A6055c09OCRHtpoHXTYHquk3r7lpHMxsH02t6W2a7GtQi73qZSyhwHZOt76RBtTW9TTUes"
+    "qruxqr3RX4j52qMBv8tRFtAL3uPMsGjyeyuZTX9H06AtlsqtFssuUg9MCPW+cvYn/l0Lp/GdgMIB"
+    "RyzojAYcIY9W61HDPj0ZdMT89njQIK2EPG1hX0MVuVFztbO52g24bqx1QDqZGg/SLR12Nde50/Xg"
+    "aDT5QFvUl2kAVvvhSaQnXOAmSMoLQ+pK1AxnGgbSSLSa0Wyk1Bqe7UpMtkfmuxrX9aU2D2Xx6UJv"
+    "Em0fJX9tb3IkGx5DXac3KAp3NQXRuUbT4ZFMuL81BL/pbwWYV4+k63ubqruaAr3Nwe5Eld9lLwvo"
+    "xVYTwx2wQijMdirzlm2Wim0WdDGoChCNRlY5bH3+2z3/242CdV69zq35DMWhylUuNR7Q436jwWdv"
+    "rLYDg+IBJ9p7ks4rOlMhZBZE42itd2bqPS1Bd7oOWkGxd0FALbXuFJRkDqlzEeplwOr2eLA17H1W"
+    "403/aBjNN5TA0W0Amhi91VA+PE1TZmLnBbrtMLm+vwWP1/U1vdTfPN2RWNfbPFmIwaugmJFsA16k"
+    "j+4iIl3iQW+yBj8oH6O79zvjVVUeZ1lAL7ZUTthhtW1eZd28yrYNirFWbqdteW5XBbsFQL2qcorh"
+    "/shAEnzjN5JV9jpyIC3i1xuDDogGwQQHAkQDdNCzkiFXIuhKArer7fV+PVZlb632NHiNppAjXkOb"
+    "9uk6X1uDNx/3FxOoYFW5aCAfQYoBqKu6m4MDLSE64GFGWE9zcDgdnmiLj+WjSLeJYmSqEJ/K0130"
+    "M12xmfb4ut6W1d0ItcapYmymGJ/tSEx3RIHeENAotbn6gVTtQLoWAupOBDvx4xLetoinMxbwOcsO"
+    "9OJrwcZsox142xar9SVrxcbKyh0V7PYKdmuFZWtF5fzzavx/XCl08pCr2qWFfVpzyA6IBkE3VlEL"
+    "i1c7at16tUuPBe11fo3IOuhqqQVQG20NnnqvvYl05jQTzQtzStd7zDEjbYrBewogoSgJCAvS6W+p"
+    "L6XDY4UIXGc8Fx1KR0baIlOddEwRAjLfiSG+bqAZ9IOSP0fnPRrX9DVN5WOT+dhwW3g4R/eXDbaG"
+    "0b8GM3UQZU+ypg/JCAZK0KE2uJHfXXagF1/NVnbjqopNf0cHFLdZKcK2r2J3rmK2VUBJlWttf8SB"
+    "4CUBh4ZSBgGFvFoEQO3WmoKOhoCRhDJqXXVu3dzZcKDvdEaDuYgn1eCitKr1JYLulnpXYwgZ52mu"
+    "pXNCzxioIw5joG0Nc6/Dh2JP3T5e3Zmo7mmp7k/XjrZFRjKRsVwEiD2Ypjd8BfqMFqJjxcja3qbZ"
+    "9iT6/ExnbCwXnm2PU96Z74MGB5rMJ2gHPl0L7hloDaXqAwMtNXjc2ejviAWculYW0AsvHl0M6vk7"
+    "2zaLbZfVsq3SsnUVu30Vcq1i858goChNDu11XiMaeLbsUb/RWGWPBIxar478smuqeQRWba3zDCbR"
+    "pAL5BJ1wzYT84OtotR0aSla7W2s9MepoNKRG2OEPZsJ07qw9ESiYodYRrymlG/pTtWjdnfHgYGs9"
+    "Wv14MTyUqYPHTBcSE6SShqFMGK6DyJssRkBLg62hkXR41Oxrw5n60Wy0ryk03BZKoShqGmpXqbW2"
+    "uynQn67pjgf/rRmUBfRia7zCunUVbchvtVRuqUScsdsq2V10W6ptzx/71wXDfnvAqXkNxWtXgi41"
+    "FjBCbi3o0iCgaNAeD9hrPP8OFpqsNAScxaQnH/V1RWs7osF8wtMWc2frfdk6uoUD9oMIA1y3NfjT"
+    "dBci6MSH1ZEItseC3cRAAROJ6vqb6wbS9UPZeoTaVDE+mY9Pg4E6Y7OdifmO5Jqu5JreRqpp5r+g"
+    "MA70zoZG2sLjbfFMpNr43mnCATe9DWjc24WXTQQVqfyP7v6s1WblN/+dZf0qANCqrZWWPRXkQDss"
+    "FhSxfVb2jzkQepYz4gcDqXVetd6rNfj0lmpHIkgRhnofDTwHLKpceqrGVwj7CwlvodELK8rV+ej0"
+    "Wb0TxR5ZRgfTwt58hO55BRv1NNUQU0f9HTQHon3WoRT9GwlD2brhbD3UM5GLzXc3TnfGJvLR2WJi"
+    "oQsEbZ4EKsbAQ7NdsTX9iUIypCg/+Mcx49U+wvOmQD7uQ26WJ9E/e2de2FvBwHI2ViC2LDtWMTtp"
+    "Nk0MtM9q+8N/FuAQDxgAoGqXUutRA05zlug36nwwIa2Z9jR+8r15XIYGgm5Puttjgb5ECB7Q0eTP"
+    "Rt3FKN3OYfqQFz2/LeItRvztUTpD3U5xRgc/htMNg+bpjlK63txnrUNgTXVE57uSENNkMYrmNYGP"
+    "xfia3qZ8slZ53pQ5HQ7C23L4iQlve6yqLKA/403vVlnXV6zaZq3cQKek2W3mWGivxXqY+SMO5NDU"
+    "gIMIurHGaEARq3Ema9CzANF6JEBWlIv+kQsjSVKs2t0Zrc2H/ZmIOxf3gJDyDYFcgy8b8bYn/N1N"
+    "yC+6FbqTtskCgJ6BlvpuekOqGrR6sPBUAWgcgv1MFiITbREg0Qypp36ht6nQFP4Dbxrc0Rjqaaru"
+    "SvoLcaRnoCygn78GKplNlYiwig0W60uV7A4Ls4dG0pbDzzuR+INJkiyjwyO5olValUurAf347TRd"
+    "9GktIQcE1B7/U//PrvU6O5uDQ7mawZaa3jjtM9AdiWEXgKmx2t0S8nY1EgAVYoGueDUwCPYznKO3"
+    "YSAeSoWGsqGJQnRNd/Pa7uTWkZbetigv/JF/7LKUCvfTnUNVSLFErbcsoJ+/6hhuh6Vyu6Viu8W6"
+    "q5LdVGHdsqoCTf6IjRHYP8TRLCc21zga/CjwerTKqHVpfrsMQ6r3aYkqIxtyD7eGXmyL167Gq51d"
+    "seqhVvOtqFqDXcmq/qbageZQb1MVSlxnEgqjIxmDmVBPS02ptYHe2ixXN5StRWkfa4uFq9x/4s+a"
+    "zEV6mwiiU3WOSJWrLKCfvziW3221bKqo2FJh2VxBtxfuWFWxs6LymI3R/tgwOuqnG8TiQVJMnVuv"
+    "dWthvx6vovkhOKYzFnAaLzxf4Xjp/2/vun/cSq/rb0Gk4fRG8vXee+V77HXIGQ5nOCqjZq3txFqt"
+    "V8XrXa9LHCyQAE6ADWzEAZwgARLY/2jupRLbq9WuZigFUXnABcEBREp4c3TuOd8tnyXQk5o8b+uz"
+    "unGSO/OGMwH/1dDnTWeWY0lrwUDueTs8a7ofztNrA1/mLlENJauVs6bTdcVewA9CwRDpAkCvNuiz"
+    "Bk6+9KC09hhrYeufYIPi6k9W1/ZfBiCdI4CBbIkABZ0oTKRQqU4BhmpYo2BbNhfo3JKw3t41Jbrh"
+    "itPEOkpN8PDTOq4RgtSDfR1d+6zlnDX8uivTl8eorwlAbJMItDkkR4GsVgoAvVKcbGx+tFp6uLr2"
+    "Q2CgxW6XRyuln62ubb7sg/t7ewpbkehyqFAmR4CmlpiyIVRjFavxXZe/NfSm3Veam9nb3bvd9e8d"
+    "BHPw7Q3nVhenVMHDj2pL9qFGjv5wlvWw3Cb0fG7eeKOHU98OADU3tj4BElpZe1TC4vyjEgBo9eer"
+    "axf5LDh2VwbEYDuiwVd1vmKLZKoxEMBAQEjTXLszrsnikut2y3v7d/s+fMk01xfX1LnzFnbCT3N3"
+    "iW87P8x/cFKb1rRhII9jZRSJnUAqAPSqEW9ugxF7Ulr9uLQO8fBqCTTQ365tXEiD4yli2RUIgSiz"
+    "xL4hlONFA1BmYC9HzWJaDu5OfHqz08+8ZboG9ssPpjkOiDWt0aJTEYsPKTiyy92PQRLE41vdmx17"
+    "iiV9E4fzA6mNqyD4AkCvGubmNmigR4tZ1ael9Serawim1fWLfFZmADFEKFMKXdW5is6XXYmIFRr0"
+    "NTYGGXSGzWVs02BP6ubtw5rAXc7yEJXK9aZzlGM7xyBQwYKB957lxqUYqBE6j292b3bN04aOXRy+"
+    "uDjp5g5jaQmZXwDoayDY2nlSWnm8Unpa2sAtCzjoU3r4snaO/22z3480MlXoQKB8GdT0fqySNY1N"
+    "gIRMnFJNdKZhcQNfGoXyNJUfzLPeZX73FEHcbDoHIKJz/RhXc6qTTOl74igyLnpSOmv/1bh2rWlM"
+    "EhEBFEpdjx9gJ6sAACqWK7yGEDZ3nqyuPC6V/hoE0Aru7niytva9lxVT/9RZZlEoelQGUhgwkC1U"
+    "DZZwBMKRSV9Bbx8oDA6C2dwwEI8z9fvT6O7xRbfHiyx9s+XMGsZBooxj47huDRP5ODP6/svFryhw"
+    "X3w0+9G8Mcedr8o0U9oOB8TTdvmOy/dcrhvIBYBeD4Aerlz9aKX0cWnj07XNz9YBQ+unFwPQ/v4e"
+    "0IwjUp5Ig58HER3IJFh6R6IEupwYdKozuc4GMoXbXiCX2ew4lm51vCfnoyx8uZPiKOp6wzrMtFkd"
+    "6McYJ/pRXcc6aPySU8prh43P7oPosc7q9kkGH5SRdQIRvCGQ0CRWAM25LRQAeh0pDAB09Qq49ycr"
+    "G5+WNoGBPl9fb21dCEAqT4AGAt8eiGSgAOtUTJ5wBUplq5ZIZBaoaaauYzti3XwWLNBA0+B6jnRn"
+    "6H/vRqdc+bZjGJGhT3PzIFUWKczC+kOmHqb6tGZ/M6Yrf/Pg+g+m8f0D5+7Am+NgkDmO5UGIaxuB"
+    "fpoWix7eE/phkcJeR7gbW09LK09LeA706ermj1ZXf7G6xl2MgQIV2zBqOu0t2ulNsWoLBGigSMWJ"
+    "sFCj4MdEoeEPpBqVo6amGhaqoo4jjSP5uC7/+H5/kPvfKPBFdp6bx3W9F4h9TzrOjVEiz3Dv/Ys9"
+    "3cmg9sv7xx8M47OWcdbWT3J9VjOmqXoQSwd4J5UEyQv/do8HAB3Vig1lryOize0HKyuPcD51MVhY"
+    "enkvxx9jFEmhCiSEGsjBobCqJ1UBTBxZFumyI+ERUa4zNQx0ZJmJbNRxhIMAiESb1uFVvtePnt4Z"
+    "Uy+6t9tV+KNE7QZYnB/4yhGgoa6dNZ2b3eh5w1+pfv7g6MlZ/cPD+v1hNAcAtYxZTT9OtV4ow7/z"
+    "ONfAfOEFeKk6DKV+IMKbJa75LQD0fPQ2t5+slp7gONjG5yvrP11dvbW5dTGLVG06PG68E4lQWoxn"
+    "COVQJROVdSUqUkkbS2MkunqFfpa/6jbXgDA53CWNg2AcvI4D7SjSPrxe963nC/iJKZ81zKNcXUwA"
+    "KjiRk2sHsXbe/gpphab6i++N7x0490fB3W5whksUwPNrAL6jRDttmHgRJ/aO4e7Y3MTFey2bGwTS"
+    "c1dwFgBaqrF1Y/uTNRBAOKj6dGX9J6tr9uaF8lfN5GsGHWokvLoiBfJZYSsahyOqqUpHKgGEFCoU"
+    "DsMbmOZskVy4erZusA2DAypK4HdpswNPHofaYU1pfq050JUh14hg4weLhmhQM5NMAx66+VUA5a52"
+    "b+DeGbnfHYc3Wu6tjnur797u29NUO6kZQ9wnLIwiueUK8B5w03L4jsP3faHuiAWAXjUebmx9trr2"
+    "EET01fXHV9Y+utgR4ubW7jhWAQTgwgIFRwoTjfUVMrfYWMVSRqLRuBBYo3ODWwCIqVscuDDgodzk"
+    "27gmES8aq9tsx+ZHeM2q3PSeV7WxIQ4DaRjjHQk9Tz5KtUEszzIDVM5XjhIc9e7AvTVw7g39O73g"
+    "dtebt6xreO4MANJnmXacaWC72g4P6Bn44rMryXvYtqYUAHrFdo6dH6+uP1kpfbQAECSy3saF8pfC"
+    "4VLESCE9pZrqVCxTqUKDHpKYikBVLIG0BAJ8GdoxnvBkerGwjAsUCm/uscW6yWcm13LYpsMNPanv"
+    "SymQ2deq93VLAtaZt8xJqk5T47CmjVNMZHe6XxHRoS7d6Tl3R953hv7dQXB/EIL/utG25g3jNDcW"
+    "lS9MYQeR3MatjDzQIZ5L+cJxrQDQK1ZScd8UCCDsQsRLetY39y9YH3Ckriu4IuapQAbrTqpM1ZWq"
+    "NRNgRIeLKR9lYeYBOqkB5EQvlnIgM8XKYqGiyaYmKGvm2ck1OKPEev5gJgMG8oVBiDdpQqbrB/Iw"
+    "Qhzc6TgbW39OVNJ5xzlt6jc61rWWcwOibd/ErkX7ONPPcBpVBRkENn4YykBCkMhAA40C8bxr/vmt"
+    "rgWAlphP3Xx8tfTDK6WPr5SeXFntbl70ALrjC4HCKEzFEisqXzW5qo0DzhVgHeAekaqAgXdlMGh4"
+    "n0asI0TgTWbhTqBU51s2X7fY3AL0AJOxeF9dKGRfUyQNWwYhPMVamDyJ8O6fSQopTLvetMr7f5rF"
+    "afnadw9CyF/XWtYHB9G9vg8AOmuat3vuDEgLPZcEAgiQBwmx5/Jtl4P8BRhqOZzKUQWAlu222dz5"
+    "+cYGAOjjqwigB6sbF/ygpwughSFnAQP5CuFIRCBRgYRDGoECQSY4dogNr/AexDWkMLxbQ2ccGaw+"
+    "hdsUF2o6xX1T9OJHyGVsZDxfam06Crj9w0zBu6EjdZJgD8a0pt7tutU/G7cAqTRvWtfaQDnmzZZz"
+    "3rJvdd3rbavtSRPAX6KNE2WSyB3wfY6AoiqSEp0bhSC8VKdoaV06Wls7j64C8ZQ+uQIWbF2/MP0c"
+    "1LTcYBabWQFAVdDONohohQpVKtFpXybw/WIhMC5UkElgI19CQZ2ZTA1E9IKQApXyVRJSWGbghYcN"
+    "h6tZzzdX9FxlXtdnDQ3wcZjouNiwAa/KnY79HIAOE/Uk16+3TBA9d3oggOzzjn2n7x2hjtaAewaR"
+    "jK8h5EEJctlBLD8rz+VvsBF70wH0w83tn5ZWn15Z/dHKWnfjop+SOKppMwnQjEw6QlVhyhZfdgSC"
+    "I/ZVtgLOy8ZhMQK8GNh7+BEsGGggQIy3GJuP8GiRzXQW1zM4bMPC9a6QwnKbCbTnyUCkSOCJQSwA"
+    "ZxxGwCXq9bbxnZE7jLSvjMnK7GnduN5xQPecdx0wX+DXAENAMKNQrJno2HseD3Dp4VJ9fN9xuLbD"
+    "5gYN3rAA0DLh7Ox+sbr+yZWVJ1dLvQvX3vFwzxYykwYtDLwCckfjKhaPigdENABIBTyJ1XSxqQMU"
+    "tI1zhjhCH0IWM3DHVKBizsIN9hqVYHGDbVp8w+Y6Hhe+qIeaIqrjTBnF0iRUJ5Fys6PX3ee1dqDz"
+    "pw1rmulgu0D6HNc04K0bLfNa0wAMTeJnp4hg47lnAdInM+i+x7VtFqR0AaBl4vPN3U+vrEBML3bu"
+    "/KdTO5vNTDRZEM5iLgyopQE0g4eHmKcSsFca7gTC+VQDTVmsMTUVt5XZElkzGF/Gfa6pgR1ngCSw"
+    "9LnFtlwmtYRv6CesXO9YsxREsVf3XlABTW3pIFYBQEeZdpgoACMgIUhVBzEW3seYvKSDUBzgOinc"
+    "zAoKuuuBimdyrKvwf7zttQDQRWO0vfezlfWf/OXVwdrGZT+7u7tX0/FCjExnbB4b6UE762zVFQid"
+    "q9hiBTS1j/sSKTyGNhBSwcLV49CPijumIH/hulaTBleP6xM1LjGYpsvXLPFbZnFutf1QfXG6iXTI"
+    "ccocr4cycDf0om/1vOseZwbqHlDNgQgxWhxJY1OHj7vJAEN9nzeLsZ7LBrm18+P1rQ//4op/efQ8"
+    "i+3tXfi/W9coV8Smeluo6GxFpnFTB4CJo8oGW8V9iRo2CYFYXhQ0sGoB0bSFHC+A4sHSRzqeUzct"
+    "Afx8gvpa+Naz728uqtjSSW4CXABA11omqJ+T3AAq6vli3xeBfoCN8HoyQI8vACchkjy+h9P4b3RL"
+    "0JsIoJ2t3V/u7t9dWSc2tl7le/b39nIdyAMhYgggeqiGwcQqDTLIkogUOEZjI4VIdBKsVqjQDZOD"
+    "/AVpK1KoWEFBnRoMiCTgrUTFWzXqNhNpS+pZUN/jBFeP3Wg7oIHOGuZJrp3U9dO6Dm8OccYeNJA8"
+    "imRgINA9LZvretwklapv6oLfNxdAH2zv2etbr+WrKvv7gUxEakXnKx6IZaEKkgiXjstYvgDVDJLI"
+    "Qwzh/T0AGl+lwfBj0UNlcjBfFmTAKrwPFDoFNW0xTW/JwkJmi+MYDJp7XFMPE3mWqTda1mndPMLO"
+    "DTy5BtPexk4g4D8GSOg4VYYBbwhv+t3NbxyAKovDw9f4hVRlP1DKoQKIqZq4X4HwIaPhrA8WNyC1"
+    "uRIuAcY7fmTsundlMkPeYgFbgUqCNgKcAZPhMlebjbUlh2zqrjyOteOafoSVMmWW43vIYuDt503j"
+    "Wc5q2ZCzxCE6MmmE1QzxDUfPW1ONf8XgqUrLoRsG1lbBbXkKZUm48c7iqiYPACoHMuprh68CYkKV"
+    "jHETHvgyvCQKPlI3uAT8vE7WTTo1l1QkicFPIjD58hQAlMjAQ9OafgoKGtx7IBwm6jjEBsiTXD2I"
+    "BFDTJ5n6Jk80v18AwuGeahkkRdviYpk0+DJV2VPoisPj7kRIE7h0YZHdkIrkKhg0zGIaggkxJ4Mq"
+    "IhoOk2jkt+ykellnLTsJlVEAENFmuQr4AEKa1cxZDV6RfsbY0CjWDLofcgOfX1psFQD6vwq6Wuna"
+    "XMtkLbGqcmVcHcQToKx9hYC8ZnGEr2CJwxaruIhTqMYaWbc5vP7SFhOdBt5qOVxqLplWMkscR5C2"
+    "jGlNOazJR6k8r2MzK9DPIACrxfc94TCGNCcdZ6CW5G8xdAWA/t+iur+fa3SgEBGwC4ghgVhooIrN"
+    "lwORMNkKMFBm0p5Ihng2jRjyRKAfBg+KVCLTqaUZyNf4oQeZSxtGQstj+4AbTzjBdCZNa9IET7Gl"
+    "aaJMa/Jhyu+9qSs133cAreOFYuWaQSYGIKMaLs6pQVCjEuIxhWlsBVW2hIPPjlR9do0G3kVnsYFK"
+    "ZToIoyUzi6+wI18+ipVByHc8FojnKFFmYMECXOAyiaQDXxi4fM9jOLL8Fj3P9w5AqKnpCnBABI5d"
+    "okOF0LlyJFcjzF9krBGuRKaL9a6xDj9i6zRoIEhzNROPkdJlGQg+eBRrXVcYRQKksJNMO2/ZB4E0"
+    "TqRBBLjh+64IkGo4wtv1MN9HAGEJna5CPso01l2cMeJptYijhi4eGlGZSjuL/BWBiFYZJCENsRUp"
+    "1As3A19IRCtsx+KwTBFykMVGC6MOCvqkrhwkwEbyPNev5/r2zm4BoLcjZIboO8JiEIxIVCpVKLwd"
+    "fCGowYVFClnTydygU4VOFswUq0TH5pZPYTLdc/hxLPZ8EEDgs0Sgn9NMg/fDkAMNdK9jCzTx1j3G"
+    "9xdAOFTKU5lBRjoZLG6CwtYzebH9zmDAiAFobKGaqUwO0kcnsZsMpziWTGGRynVx4ozNbXoYCtca"
+    "5izVcA7V405y+Xbb7Pvy2/gM32sAIYYEouVixw8oZUDPovMVb8YEBkp0EvkJUxjWN0KVatmct2wK"
+    "y8HGB9JxTQHJPK+r4xAENShoERhoHHHTWNze3i0A9JbqoXJdo0KJAkHtyVU8j5bIOt6rSjYtNtNQ"
+    "UCcG1XTYuskEy7Yn+xLTdUADcQmSGdv3BHBkYL5O69KtlsJS1bf06RUAwtA4smNyqY6sk6CIpkKZ"
+    "CJTFHXUyFclkoFaThSQyeXJJF6axh7E4CoVhgE0abYcb+dI8187batPj395HVwDof0LlyKZN5yaZ"
+    "aXSu0akGoMERjhQBRCQaLrcfhpK/LANlJnr1QSC0bLbr80NfmETKrbZ5Un9rDp0LAL0kDIHoOFTf"
+    "FeqQs7CqSuhsJZZIT6gGKhY9UpVe2sYnOtPzOEBP2+K6Lj+v62e5ebtjVsv7b/VDKwD01Wlopjxw"
+    "+TquKqNqBol3rGoMKOtIrbZspmkyS4voWGNGMTatTkL5OFMhl418wRHpt/2JFQD62kSiSA89AbvZ"
+    "Taqu0zWFAiWUYIc11TTpQGVfgYGYnsN1bDwNGgRsP5DegcdVAOiFeojoe2xu0g2DaRpMiIWOCqii"
+    "TKeWZiAgsJZDt22uaYCaFm60tJ2dvQJA72zofLVjkzmChgkVEuuvGt112FBdNoXpVNtlu7ZwraZ/"
+    "f+wYIvVuPKgCQN98dqwzh5HYsdgaVlWJVCVihVz6HCjWyVkmzmLtZq51AvGdeUoFgL4tQoUe4JAo"
+    "E2tVAFCiYM11ua/qhnxNI4c2f5qq79IjKgD0Mk0t0eOA63l0w6RbJu1JSwJoUpN6LjNwhL3dvQJA"
+    "71dIdHkSsW2b6lh0vuzVJ8NYmCaCxpLv2MMpAHShsATyIGB7OHK/JIAGIdd2uXfvyRQAurgvI+aZ"
+    "2nSWPLw5TKWt7Z0CQO912DyZGUsyUKVcfiefSQGgy0V5v1w8hAJARRQAKqIAUBEFgIooAFQ8hSIK"
+    "ABVRAKiIAkBFFAAqoogCQJcI9syn2ub6VgGFAkCXD3pssX/Xob9oyR82N/f3CzQUALpEbO3u7cm0"
+    "+48n2u9O+C8P7L+flDW2AEQBoEvE9n55lyHkW3nwn/ekf5loX464Q7fARAGgywVgiAiV/L8+0P59"
+    "Kvy6bz7tbBXprADQ5dJZpbwv0c5nk+AP59JvhvYXIypSi8dSAOgSsbGzuydS/MCL/3BX/u2h+uXE"
+    "vFvf2NktnkwBoAvH1u4uS1Y80fmHmf0fN5TfjO2fDSpqoawLAF0qnVXLuxxh/KAb/f6u8tsD459G"
+    "0swvHksBoMukM3D4LMF2bP+f59KvR+Kvusajzh5PF0+mANAlYnN3j+u48e/vCF/2hV8N488ON7YL"
+    "SVQA6ILo2dvX73ecf7sh/+7A+teZca+1TVaK0+qvx38DC1U3UJKYz6IAAAAASUVORK5CYII=")
+
+WEB_MANIFEST = {
+    # The PWA's own chrome. background/theme colour are filled from the HOST's theme at
+    # send time (see _web_manifest): a home-screen icon that opens into a blue-grey frame
+    # is the page telling the operator their brand does not apply here.
     "name": "tinycmdr",
     "short_name": "tinycmdr",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#1a1d23",
-    "theme_color": "#1a1d23",
     "icons": [{"src": "/icon.png", "sizes": "512x512", "type": "image/png"}],
-})
+}
+
+
+def _web_theme_vars():
+    """The page's CSS variables, from the SAME theme the terminal uses (theme_palette()).
+
+    theme.toml is host-owned and update never overwrites it, so one file decides both the
+    TUI and the page and the two cannot drift. A missing file (or a typo) already fell
+    back inside theme_palette(); here a non-hex value falls back again, because a page
+    that cannot paint is worse than a page in the wrong colour.
+    """
+    true = (theme_palette().get("truecolor") or {})
+    # theme role -> the page's CSS variable. The derived names the page also paints with
+    # (--panel translucent, --line, --gold-bright, --error-bg, --fg/--dim aliases) are
+    # computed in the stylesheet FROM these, so a host's theme.toml stays the one source.
+    roles = (("background", "--bg", "#0d0f12"), ("panel", "--panel-solid", "#17191d"),
+             ("text", "--ivory", "#e9e2d6"), ("muted", "--muted", "#a79b88"),
+             ("gold", "--gold", "#d7a94a"), ("ember", "--ember", "#d9782d"),
+             ("bronze", "--bronze", "#75654d"), ("crimson", "--crimson", "#c43a32"),
+             ("error", "--error", "#e05245"), ("laurel", "--laurel", "#8fae6b"),
+             ("selection_bg", "--sel", "#3a2524"))
+    out = {}
+    for role, var, fallback in roles:
+        v = str(true.get(role) or "").strip()
+        out[var] = v if re.match(r"^#[0-9a-fA-F]{6}$", v) else fallback
+    return out
+
+
+def _web_page_html():
+    """The page, with the host's palette and art baked in and nothing left to fetch."""
+    figure = "/chibi.png" if _web_chibi_bytes() is not None else "/mark.png"
+    return (WEB_PAGE.replace("{{VERSION}}", VERSION)
+                    .replace("{{THEME_COLOR}}", _web_theme_vars()["--bg"])
+                    .replace("{{EMPTY_ART}}", figure)
+                    .replace("{{COLONNADE}}", _web_colonnade_svg()))
+
+
+def _web_manifest():
+    """The manifest JSON, with the theme's background/theme colour."""
+    bg = _web_theme_vars()["--bg"]
+    return json.dumps(dict(WEB_MANIFEST, background_color=bg, theme_color=bg))
+
+
+def _web_chibi_bytes():
+    """The page's CHIBI - the character - or None when the host ships none."""
+    path = BASE_DIR / "assets" / "page-chibi.png"
+    try:
+        data = path.read_bytes()
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return data
+        log.warning("assets/page-chibi.png is not a PNG - serving no chibi")
+    except OSError:
+        pass
+    return None
+
+
+def _web_icon_bytes():
+    """The page's icon: the host's own assets/page-icon.png, else the built-in one.
+
+    The shipped file is derived from the same badge master the terminal's rail art comes
+    from (maintenance/make-brand-art.py --page-icon), so the tab, the home-screen icon
+    and the rail all show one emblem - and a host that wants different art drops its own
+    PNG at that path, no code and no restart of anything but the page's cache.
+    """
+    path = BASE_DIR / "assets" / "page-icon.png"
+    try:
+        data = path.read_bytes()
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return data
+        log.warning("assets/page-icon.png is not a PNG - serving the built-in icon")
+    except OSError:
+        pass
+    return base64.b64decode(WEB_ICON_PNG_B64)
+
+
+def _web_mark_bytes():
+    """The page's MARK: the same emblem with a transparent plate.
+
+    Two files because they answer two different questions: an apple-touch icon is
+    composited by the OS (white or black under transparency), while the header and the
+    empty state sit ON the page's own background and want no square edge. Absent art
+    falls back to the built-in icon, which is opaque - a mark with a plate still beats a
+    broken image.
+    """
+    path = BASE_DIR / "assets" / "page-mark.png"
+    try:
+        data = path.read_bytes()
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return data
+        log.warning("assets/page-mark.png is not a PNG - serving the built-in icon")
+    except OSError:
+        pass
+    return base64.b64decode(WEB_ICON_PNG_B64)
+
 
 def _web_command(text, key="web"):
     """Slash commands for the web UI / gateway. Returns ('reply', msg) when
@@ -22681,7 +23275,7 @@ def run_webui():
         def log_message(self, *a):
             pass
 
-        def _send(self, body, code=200, ctype="text/html; charset=utf-8"):
+        def _send(self, body, code=200, ctype="text/html; charset=utf-8", extra=None):
             data = body.encode()
             self.send_response(code)
             self.send_header("Content-Type", ctype)
@@ -22690,11 +23284,13 @@ def run_webui():
             # how a real fix gets reported as "still broken". Poll responses too.
             self.send_header("Cache-Control", "no-store, must-revalidate")
             self.send_header("Content-Length", str(len(data)))
+            for name, value in (extra or ()):
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(data)
 
-        def _json(self, obj, code=200):
-            self._send(json.dumps(obj), code, "application/json")
+        def _json(self, obj, code=200, extra=None):
+            self._send(json.dumps(obj), code, "application/json", extra=extra)
 
         def _file(self, path):
             """Stream an OFFERED file to the token holder, as an attachment.
@@ -22730,9 +23326,20 @@ def run_webui():
             # this box, and a plain compare leaks its prefix through response
             # timing (security review, 2026-09-23). Bytes on both sides so a
             # header carrying non-ASCII can never raise here.
+            #
+            # The header is what every non-browser caller uses (the probes, curl, the
+            # installer). A BROWSER gets an HttpOnly cookie from /api/login instead, so
+            # the token stops living in its URL and its localStorage - see the page's
+            # boot: it hands the fragment over once and forgets it.
+            given = self.headers.get("X-Tinycmdr-Token") or ""
+            if not given:
+                for part in (self.headers.get("Cookie") or "").split(";"):
+                    name, _, value = part.strip().partition("=")
+                    if name == "tinycmdr_token":
+                        given = value
+                        break
             return hmac.compare_digest(
-                (self.headers.get("X-Tinycmdr-Token") or "").encode("utf-8", "replace"),
-                token.encode("utf-8"))
+                given.encode("utf-8", "replace"), token.encode("utf-8"))
 
         def _origin_ok(self):
             """Same-origin/Host check for EVERY route (BUGREPORT §S7).
@@ -22911,17 +23518,70 @@ def run_webui():
                     return
                 self._file(Path(str(line.get("text") or "")))
             elif self.path.startswith("/manifest.webmanifest"):
-                self._send(WEB_MANIFEST, 200, "application/manifest+json")
+                self._send(_web_manifest(), 200, "application/manifest+json")
             elif self.path.startswith("/icon.png"):
-                data = base64.b64decode(WEB_ICON_PNG_B64)
+                data = _web_icon_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "max-age=86400")
                 self.end_headers()
                 self.wfile.write(data)
+            elif self.path.startswith("/mark.png"):
+                data = _web_mark_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "max-age=86400")
+                self.end_headers()
+                self.wfile.write(data)
+            elif self.path.startswith("/chibi.png"):
+                art = _web_chibi_bytes()
+                if art is None:
+                    self._send("not found", 404, "text/plain")
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/png")
+                    self.send_header("Content-Length", str(len(art)))
+                    self.send_header("Cache-Control", "max-age=86400")
+                    self.end_headers()
+                    self.wfile.write(art)
+            elif self.path.startswith("/fonts/"):
+                name = self.path.split("/fonts/", 1)[1].split("?", 1)[0]
+                path = _web_font_path(name)
+                if path is None:
+                    self._send("not found", 404, "text/plain")
+                else:
+                    data = path.read_bytes()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "font/woff2")
+                    self.send_header("Content-Length", str(len(data)))
+                    # the fonts are ours and immutable: a week is safe, they never change
+                    # under a running page (a release writes new bytes, new generation)
+                    self.send_header("Cache-Control", "max-age=604800")
+                    self.end_headers()
+                    self.wfile.write(data)
+            elif self.path.startswith("/page.css"):
+                css = _web_page_css()
+                if css is None:
+                    self._send("not found", 404, "text/plain")
+                else:
+                    self._send(css, 200, "text/css; charset=utf-8")
+            elif self.path.startswith("/colonnade.svg"):
+                svg = _web_colonnade_svg()
+                if svg is None:
+                    self._send("not found", 404, "text/plain")
+                else:
+                    data = svg.encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/svg+xml")
+                    self.send_header("Content-Length", str(len(data)))
+                    # themed, so never cached: a changed theme changes these bytes
+                    self.send_header("Cache-Control", "no-store, must-revalidate")
+                    self.end_headers()
+                    self.wfile.write(data)
             elif self.path == "/" or self.path.startswith("/?"):
-                self._send(WEB_PAGE.replace("{{VERSION}}", VERSION))
+                self._send(_web_page_html())
             else:
                 self._send("not found", 404, "text/plain")
 
@@ -23013,6 +23673,19 @@ def run_webui():
         def do_POST(self):
             if not self._origin_ok():
                 self._forbidden()
+                return
+            if self.path.startswith("/api/login"):
+                # The browser's one handover: the page reads the token from the URL
+                # fragment, POSTs it here with the header, and gets an HttpOnly cookie
+                # back. After this the token is in no URL, no history entry and no
+                # localStorage, and the page authenticates by cookie alone.
+                self._drain()
+                if not self._auth_ok():
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                self._json({"ok": True}, 200, extra=[
+                    ("Set-Cookie", "tinycmdr_token=%s; Path=/; HttpOnly; SameSite=Strict; "
+                                   "Max-Age=31536000" % token)])
                 return
             if self.path.startswith("/api/run"):
                 if not self._auth_ok():
@@ -23192,6 +23865,13 @@ def run_webui():
             srv = QuietServer((host, port), Handler)
             break
         except OSError as e:
+            if getattr(e, "errno", None) in (1, 13):          # EPERM / EACCES
+                # A privilege boundary, not a busy port: nothing will change by waiting.
+                # (Ports below 1024 need root; a host that asked for 80 gets told why.)
+                log.error("web UI disabled: cannot bind %s:%d (%s). Ports below 1024 need "
+                          "root - set web.port to a port above 1024 (the default is 8790), "
+                          "or run the service elevated.", host, port, e)
+                return None
             if attempt == 5:
                 # A taken port must never kill the bot (8787 - RStudio Server's
                 # default - is why this default moved to 8790; web.port moves it,
@@ -23270,6 +23950,117 @@ def _web_token():
                or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip()
 
 
+WEB_FONTS = {
+    # Bundled, never fetched from a CDN: this is a local page on a box that may have no
+    # route to the internet, and a webfont that needs one is a font that sometimes is not
+    # there. The OFL texts ride along in the same folder (assets/fonts/OFL-*.txt).
+    "cinzel-700.woff2": "cinzel-700.woff2",
+    "inter.woff2": "inter.woff2",                      # variable: 100-900 in one file
+    "jetbrains-mono-400.woff2": "jetbrains-mono-400.woff2",
+}
+
+
+def _web_font_path(name):
+    """The file for a font slug, or None - the slug must be one we ship (no traversal)."""
+    if name not in WEB_FONTS:
+        return None
+    path = BASE_DIR / "assets" / "fonts" / WEB_FONTS[name]
+    return path if path.exists() else None
+
+
+def _web_colonnade_svg():
+    """The faint colonnade, inline in the stage, in the host's own gold and bronze.
+
+    The operator's design ("modern imperial command pavilion", 2026-10-04): four arches on
+    six fluted columns, drawn at ~5.5% effective opacity behind the transcript. The two
+    colours are placeholders in the asset, so a host that rethemes gets THEIR linework.
+    """
+    try:
+        svg = (BASE_DIR / "assets" / "roman-colonnade.svg").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    theme = _web_theme_vars()
+    return (svg.replace("{{GOLD}}", theme["--gold"])
+               .replace("{{BRONZE}}", theme["--bronze"])
+               .replace("{{ACCENT}}", theme["--gold"]))     # older asset revisions
+
+
+def _firewall_note(port):
+    """How to open `port` to this box's LAN, for the OS we are on - [] when nothing is
+    likely to block it or we cannot tell.
+
+    The bind itself never needs root; the firewall HOLE does (checked for real on macOS
+    and Linux: a launchd/systemd service cannot answer an interactive prompt, and Windows
+    Defender refuses inbound by default). `setup`, `doctor` and the startup announce all
+    say the same thing, because switching a running install to the LAN happens long after
+    the installer asked.
+    """
+    port = int(port or 8790)
+    if os.name == "nt":
+        return ["to reach it from other machines, Windows Defender Firewall needs an inbound rule",
+                "  (once, in an ELEVATED PowerShell):",
+                "    New-NetFirewallRule -DisplayName 'tinycmdr page' -Direction Inbound "
+                "-Protocol TCP -LocalPort %d -Action Allow" % port,
+                "or skip the firewall with a tunnel: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
+                % (port, port)]
+    if sys.platform == "darwin":
+        try:
+            rc, out, _err, _to = run_capture(
+                ["/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate"], 10)
+        except Exception:                                        # noqa: BLE001
+            return []
+        if "enabled" not in (out or "").lower():
+            return []
+        py = str(Path(sys.executable))
+        return ["the macOS firewall is ON, and a launchd agent cannot answer its prompt",
+                "  (once, with your password):",
+                "    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add " + py,
+                "    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp " + py,
+                "or skip the firewall with a tunnel: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
+                % (port, port)]
+    def _probe(command):
+        """(found, output) for a shell command - through run_capture, never shutil, because
+        this module keeps its imports local and a probe must be patchable in a test."""
+        try:
+            rc, out, _err, _to = run_capture(["sh", "-c", command], 10)
+        except Exception:                                        # noqa: BLE001
+            return False, ""
+        return rc == 0, out or ""
+
+    lines = []
+    found, _out = _probe("command -v ufw")
+    if found:
+        _found, status = _probe("ufw status 2>/dev/null")
+        if "Status: active" in status:
+            lines += ["ufw is active; open the page once (needs root): "
+                      "sudo ufw allow %d/tcp" % port]
+    found, _out = _probe("command -v firewall-cmd")
+    if found:
+        _found, status = _probe("firewall-cmd --state 2>/dev/null")
+        if "running" in status.lower():
+            lines += ["firewalld is running: sudo firewall-cmd --permanent --add-port=%d/tcp "
+                      "&& sudo firewall-cmd --reload" % port]
+    if lines:
+        lines.append("or skip the firewall with a tunnel: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
+                     % (port, port))
+    return lines
+
+
+def _web_page_css():
+    """The page's stylesheet, themed - or None when the host ships none.
+
+    It is a real asset (assets/webui.css, the operator's design) rather than a string in
+    this file: editable, reviewable, and served with the palette substituted from the SAME
+    theme.toml the terminal reads.
+    """
+    try:
+        css = (BASE_DIR / "assets" / "webui.css").read_text(encoding="utf-8")
+    except OSError:
+        return None
+    theme = _web_theme_vars()
+    return css.replace("{{THEME}}", "".join("%s:%s;" % kv for kv in theme.items()))
+
+
 def _web_token_mint(announce=True):
     """Mint the page's token into .env when a host has none, and say so.
 
@@ -23291,6 +24082,8 @@ def _web_token_mint(announce=True):
     if announce:
         print("minted TINYCMDR_WEB_TOKEN (the page's access token; it is in %s, never "
               "printed in full here)." % ENV_FILE.name)
+        print("  the page is this install's door - the link is printed as the server "
+              "starts; `tinycmdr setup` picks LAN vs loopback and the port.")
     log.info("minted TINYCMDR_WEB_TOKEN into .env: the page is enabled and had none")
     return tok
 
@@ -23309,7 +24102,16 @@ def _web_lan_ip():
 
 def _browser_possible():
     """Is there a GUI this process could open a browser in? Best-effort by design:
-    the server does not depend on the answer, only the auto-open does."""
+    the server does not depend on the answer, only the auto-open does.
+
+    TINYCMDR_NO_BROWSER=1 forbids the auto-open everywhere (main's --no-browser is the
+    per-run spelling). It exists for the suites: a staged child that opens the page once
+    per test puts real tabs in the operator's browser (measured: ~60 across a day of
+    gate runs on a Mac), and a test must not have that side effect.
+    """
+    if str(os.environ.get("TINYCMDR_NO_BROWSER") or "").strip().lower() in (
+            "1", "true", "yes", "on"):
+        return False
     if os.name == "nt" or sys.platform == "darwin":
         return True
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
@@ -23365,6 +24167,8 @@ def _announce_web(port, open_browser=True):
     if str(web.get("host") or "") in ("0.0.0.0", "::"):
         print("  token required; that link works from any machine on your network - "
               "the token travels in cleartext there, so use a network you trust")
+        for _line in _firewall_note(int(web.get("port") or 8790)):
+            print("  " + _line)
     else:
         print("  from another machine: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
               % (port, port))
@@ -26872,6 +27676,8 @@ def run_setup(rest=None):
             if web.get("host") in ("0.0.0.0", "::"):
                 print(dim("   that link works from your network; the token rides in "
                           "cleartext there, so use a network you trust"))
+                for _line in _firewall_note(int(web.get("port") or 8790)):
+                    print(dim("   " + _line))
     else:
         print(dim("   the page will not start; `tinycmdr --web` can still serve it for "
                   "one run."))
@@ -28847,6 +29653,25 @@ def _verb_doctor():
     _llm_key = str(CONFIG["llm"].get("api_key") or "").strip()
     if _llm_key and _llm_key.lower() != "none":
         notes.append("llm.api_key is set in config.json — .env is the safer home")
+
+    # The page is the door a bare start opens, and "no token" is a supported state (the
+    # next start mints one) - but it is worth NAMING, because an install that predates the
+    # page has exactly that and nothing else in this output would say the page exists.
+    web = CONFIG.get("web") or {}
+    port, port_note = _web_port(web)
+    if not web.get("enabled", True):
+        print("  page      : off (web.enabled false; `tinycmdr setup` turns it on)")
+    elif _web_token():
+        print("  page      : on, port %d, token set (`tinycmdr web` prints the link)" % port)
+        if str(web.get("host") or "").strip() in ("0.0.0.0", "::"):
+            for _line in _firewall_note(port):
+                notes.append(_line)
+    else:
+        print("  page      : on, port %d, no token yet - the next start mints one" % port)
+        notes.append("no page token yet: the next start mints one into .env, or choose "
+                     "your own with `tinycmdr token set TINYCMDR_WEB_TOKEN`")
+    if port_note:
+        notes.append(port_note)
 
     for mod, why in (("requests", "the HTTP layer"), ("croniter", "scheduling"),
                      ("mmpy_bot", "the Mattermost layer")):

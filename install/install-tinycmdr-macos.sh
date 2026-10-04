@@ -1157,6 +1157,26 @@ fi
 # echoed; web.host decides who can reach it. 127.0.0.1 keeps it on this machine;
 # 0.0.0.0 is what a headless box wants, where the operator opens it from a laptop
 # on the same network.
+# Ports below 1024 are a PRIVILEGE boundary, not a preference: without root the bind fails
+# with EACCES and the page is simply absent. Fall back with the reason, in this terminal,
+# rather than leaving a host to discover it later.
+if [ "$WEB_ON" = 1 ] && [ "${WEB_PORT:-0}" -lt 1024 ] 2>/dev/null; then
+    if [ "$(id -u)" != 0 ]; then
+        warn "port $WEB_PORT needs root (ports below 1024 are privileged): using 8790."
+        warn "  re-run elevated, or pass --web-port 8790 (or any port above 1024),"
+        warn "  if you really need $WEB_PORT."
+        WEB_PORT="8790"
+    fi
+fi
+
+
+if [ "$(id -u)" = 0 ]; then
+    info "rights      : root - system-level changes (firewall rules, a system service) are allowed"
+else
+    info "rights      : standard user - the files, the launchd agent and the page need no"
+    info "              more; only a LAN firewall rule would ask for root"
+fi
+
 WEB_HOST="127.0.0.1"
 if [ "$WEB_ON" = 1 ]; then
     if [ -n "$WEB_HOST_ARG" ]; then
@@ -1168,6 +1188,18 @@ if [ "$WEB_ON" = 1 ]; then
         fi
     fi
     if [ "$WEB_HOST" = "0.0.0.0" ]; then
+    # The bind needs no root; the FIREWALL hole does. A launchd agent cannot answer
+    # macOS's "allow incoming connections?" prompt, so say the one command that can.
+    _alf="$(/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate 2>/dev/null || true)"
+    case "$_alf" in
+        *enabled*)
+            warn "the macOS firewall is ON. If the page does not answer from another"
+            warn "machine, allow the interpreter once (it asks for your password):"
+            warn "  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add $INSTALL_DIR/venv/bin/python"
+            warn "  sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp $INSTALL_DIR/venv/bin/python"
+            warn "or skip the firewall entirely with a tunnel:"
+            warn "  ssh -N -L $WEB_PORT:127.0.0.1:$WEB_PORT <user>@<this-box>" ;;
+    esac
         info "page         : 0.0.0.0:$WEB_PORT - any machine on your network can open it;"
         info "               the token travels in cleartext there, so trust the network"
     else

@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" class="colonnade" viewBox="0 0 1400 560" aria-hidden="true"
+     preserveAspectRatio="xMidYMax slice">
+  <!-- A faint Roman colonnade with four arches, the operator's design
+       ("Kimi_Agent_ASCII Branding for TUI", 2026-10-04). The two colours are placeholders:
+       the server substitutes the HOST's gold and bronze (theme.toml), so a rethemed box
+       gets its own linework. Rendered at ~5.5% opacity behind the stage. -->
+  <defs>
+    <linearGradient id="columnFill" x1="0" x2="1">
+      <stop offset="0" stop-color="{{BRONZE}}" stop-opacity="0.04"/>
+      <stop offset="0.48" stop-color="{{GOLD}}" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="{{BRONZE}}" stop-opacity="0.04"/>
+    </linearGradient>
+    <linearGradient id="archStroke" x1="0" x2="1">
+      <stop offset="0" stop-color="{{BRONZE}}" stop-opacity="0.05"/>
+      <stop offset="0.5" stop-color="{{GOLD}}" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="{{BRONZE}}" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+  <path d="M88 214 C210 48 344 48 466 214 M358 214 C480 48 614 48 736 214 M628 214 C750 48 884 48 1006 214 M898 214 C1020 48 1154 48 1276 214"
+        fill="none" stroke="url(#archStroke)" stroke-width="3"/>
+  <path d="M50 224 H1350" stroke="{{GOLD}}" stroke-opacity="0.12" stroke-width="3"/>
+    <g transform="translate(100 0)">
+      <path d="M-52 220 H52 L38 248 H-38 Z" fill="url(#columnFill)"/>
+      <path d="M-42 250 H42 V268 H-42 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-30 268 H30 V480 H-30 Z" fill="url(#columnFill)"/>
+      <path d="M-18 278 V470 M-6 278 V470 M6 278 V470 M18 278 V470" stroke="{{GOLD}}" stroke-opacity="0.09" stroke-width="2"/>
+      <path d="M-48 480 H48 L60 506 H-60 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-66 506 H66 V526 H-66 Z" fill="{{BRONZE}}" opacity="0.08"/>
+    </g>
+    <g transform="translate(340 0)">
+      <path d="M-52 220 H52 L38 248 H-38 Z" fill="url(#columnFill)"/>
+      <path d="M-42 250 H42 V268 H-42 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-30 268 H30 V480 H-30 Z" fill="url(#columnFill)"/>
+      <path d="M-18 278 V470 M-6 278 V470 M6 278 V470 M18 278 V470" stroke="{{GOLD}}" stroke-opacity="0.09" stroke-width="2"/>
+      <path d="M-48 480 H48 L60 506 H-60 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-66 506 H66 V526 H-66 Z" fill="{{BRONZE}}" opacity="0.08"/>
+    </g>
+    <g transform="translate(580 0)">
+      <path d="M-52 220 H52 L38 248 H-38 Z" fill="url(#columnFill)"/>
+      <path d="M-42 250 H42 V268 H-42 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-30 268 H30 V480 H-30 Z" fill="url(#columnFill)"/>
+      <path d="M-18 278 V470 M-6 278 V470 M6 278 V470 M18 278 V470" stroke="{{GOLD}}" stroke-opacity="0.09" stroke-width="2"/>
+      <path d="M-48 480 H48 L60 506 H-60 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-66 506 H66 V526 H-66 Z" fill="{{BRONZE}}" opacity="0.08"/>
+    </g>
+    <g transform="translate(820 0)">
+      <path d="M-52 220 H52 L38 248 H-38 Z" fill="url(#columnFill)"/>
+      <path d="M-42 250 H42 V268 H-42 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-30 268 H30 V480 H-30 Z" fill="url(#columnFill)"/>
+      <path d="M-18 278 V470 M-6 278 V470 M6 278 V470 M18 278 V470" stroke="{{GOLD}}" stroke-opacity="0.09" stroke-width="2"/>
+      <path d="M-48 480 H48 L60 506 H-60 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-66 506 H66 V526 H-66 Z" fill="{{BRONZE}}" opacity="0.08"/>
+    </g>
+    <g transform="translate(1060 0)">
+      <path d="M-52 220 H52 L38 248 H-38 Z" fill="url(#columnFill)"/>
+      <path d="M-42 250 H42 V268 H-42 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-30 268 H30 V480 H-30 Z" fill="url(#columnFill)"/>
+      <path d="M-18 278 V470 M-6 278 V470 M6 278 V470 M18 278 V470" stroke="{{GOLD}}" stroke-opacity="0.09" stroke-width="2"/>
+      <path d="M-48 480 H48 L60 506 H-60 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-66 506 H66 V526 H-66 Z" fill="{{BRONZE}}" opacity="0.08"/>
+    </g>
+    <g transform="translate(1300 0)">
+      <path d="M-52 220 H52 L38 248 H-38 Z" fill="url(#columnFill)"/>
+      <path d="M-42 250 H42 V268 H-42 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-30 268 H30 V480 H-30 Z" fill="url(#columnFill)"/>
+      <path d="M-18 278 V470 M-6 278 V470 M6 278 V470 M18 278 V470" stroke="{{GOLD}}" stroke-opacity="0.09" stroke-width="2"/>
+      <path d="M-48 480 H48 L60 506 H-60 Z" fill="{{GOLD}}" opacity="0.08"/>
+      <path d="M-66 506 H66 V526 H-66 Z" fill="{{BRONZE}}" opacity="0.08"/>
+    </g>
+</svg>

@@ -93,3 +93,40 @@ else
     echo "update: restart to run it - the bot: 'tinycmdr restart'; a terminal session: relaunch"
     # (the unix script needs no escaping here: sh has no backtick trap in double quotes)
 fi
+
+# ---- the page: an install that predates it has no token, and without one the server
+# stays off (never an open port - and also no door). This script is the one updater that
+# runs on ANY released version, so the ask belongs here: in the terminal the operator is
+# standing at, with the mint as the default and their own token always an option.
+ENVF="$DIR/.env"
+if [ -f "$ENVF" ] && ! grep -q '^TINYCMDR_WEB_TOKEN=' "$ENVF"; then
+    echo
+    echo "This install has no page token yet (the browser page arrived in 1.0.67)."
+    echo "Without one the page does not start, and nothing opens on its own."
+    TOK=""
+    MINTED=""
+    if [ -t 0 ]; then
+        printf "Page token (empty mints one, or paste your own): "
+        IFS= read -r TOK || TOK=""
+    fi
+    if [ -z "$TOK" ]; then
+        TOK="$("$PY" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+        MINTED=1
+    fi
+    printf 'TINYCMDR_WEB_TOKEN=%s\n' "$TOK" >> "$ENVF"
+    chmod 600 "$ENVF" 2>/dev/null || true
+    PORT="$("$PY" - "$DIR/config.json" <<'PYEOF'
+import json, sys, pathlib
+try:
+    print(int((json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+               .get("web") or {}).get("port") or 8790))
+except Exception:
+    print(8790)
+PYEOF
+)"
+    echo "page token written to $ENVF (mode 600 where the OS honours it)${MINTED:+ - minted for you}"
+    echo "page link: http://127.0.0.1:${PORT}/#token=${TOK}"
+    echo "  from another machine: ssh -N -L ${PORT}:127.0.0.1:${PORT} <user>@<box>"
+    echo "  LAN access instead:   tinycmdr config set web.host 0.0.0.0   (then restart)"
+    echo "  link again later:     tinycmdr web        (LAN/port wizard: tinycmdr setup)"
+fi

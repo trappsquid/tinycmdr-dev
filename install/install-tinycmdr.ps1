@@ -1072,6 +1072,16 @@ if ($Ask -and -not $KeepConn) {
     if ($NoWeb) {
         Write-Host "  page        : disabled (-NoWeb)"
     } else {
+        # Ports below 1024 are a PRIVILEGE boundary: without Administrator the bind fails
+        # and the page is simply absent. Fall back here, with the reason, rather than
+        # leaving the host to discover it at first start.
+        $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+                   [Security.Principal.WindowsBuiltInRole]::Administrator)
+        if ($WebPort -lt 1024 -and -not $IsAdmin) {
+            Write-Warning "port $WebPort needs Administrator (ports below 1024 are privileged): using 8790."
+            Write-Warning "  re-run elevated, or pass -WebPort 8790 (or any port above 1024), if you really need $WebPort."
+            $WebPort = 8790
+        }
         if (-not $WebHost) {
             if (Ask-Yes "Should the page be reachable from other machines on your network?" $false) {
                 $WebHost = "0.0.0.0"
@@ -1082,6 +1092,13 @@ if ($Ask -and -not $KeepConn) {
         if ($WebHost -eq "0.0.0.0") {
             Write-Host "  page        : 0.0.0.0`:$WebPort - any machine on your network can open it"
             Write-Host "                the token travels in cleartext there, so trust the network"
+            # The bind needs no Administrator; the FIREWALL hole does. Windows Defender
+            # Firewall refuses inbound by default, so name the command that opens it.
+            Write-Host "  firewall    : if the page is unreachable, open the port once in an"
+            Write-Host "                ELEVATED PowerShell:"
+            Write-Host "                  New-NetFirewallRule -DisplayName 'tinycmdr page' -Direction Inbound -Protocol TCP -LocalPort $WebPort -Action Allow"
+            Write-Host "                or skip the firewall with a tunnel:"
+            Write-Host "                  ssh -N -L ${WebPort}:127.0.0.1:${WebPort} <user>@<this-box>"
         } else {
             Write-Host "  page        : $WebHost`:$WebPort - this machine only"
         }

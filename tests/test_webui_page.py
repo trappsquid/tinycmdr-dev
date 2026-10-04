@@ -146,6 +146,8 @@ def main():
           f"(got {len(res['rendered'])})")
     check(not any(not t for _c, t in drawn(res)),
           "no empty container is left behind in the transcript")
+    check(not res.get("token"),
+          f"the handed-over token is dropped from localStorage ({res.get('token')!r})")
 
     # -- 2. a line that grows in place must reach its final text --------------
     full = "The sky is blue because of Rayleigh scattering."
@@ -394,8 +396,8 @@ def main():
     _warn = res.get("warn") or {}
     check("show" in (_warn.get("cls") or ""),
           f"...and the banner is actually displayed ({_warn.get('cls')!r})")
-    check("mattermost" in (_warn.get("text") or "") and "401" in (_warn.get("text") or ""),
-          f"...and it names the lane and the reason ({( _warn.get('text') or '')[:80]!r})")
+    check("mattermost" in (_warn.get("detail") or "") and "401" in (_warn.get("detail") or ""),
+          f"...and the detail names the lane and the reason ({( _warn.get('detail') or '')[:80]!r})")
     check("401" in ((res.get("ver") or {}).get("title") or ""),
           f"...and the marker explains itself on hover ({(res.get('ver') or {}).get('title')!r})")
 
@@ -406,6 +408,99 @@ def main():
           f"a healthy bot shows NO banner ({(res.get('ver'), res.get('note'))})")
     check((res.get("title") or "").startswith("tinycmdr"),
           f"...and its tab title is just the app ({res.get('title')!r})")
+
+    # -- the lane banner is a notification, not a fixture -----------------------
+    # Operator, 2026-10-04: "make that a closeable notification, not a permanent banner".
+    # Dismissing mutes THAT wording; the header marker and the tab title stay, because
+    # "I have read this" is not "stop telling me the bot is deaf".
+    dead = {"health": {"ok": False, "version": "harness", "pid": 1,
+                       "lanes": {"mattermost": {"state": "failed",
+                                                "detail": "401 Invalid or expired session"},
+                                 "web": {"state": "up"}}},
+            "runs": [], "steps": [{"kind": "polls", "n": 3}]}
+    res = run_page(dead, script)
+    check("show" in (res.get("warn") or {}).get("cls", ""),
+          f"a dead lane shows the banner ({res.get('warn')})")
+    check("dispatched" in (res.get("warn") or {}).get("text", ""),
+          "the banner says what it MEANS (messages may not be dispatched)")
+    check("401" in (res.get("warn") or {}).get("detail", ""),
+          "and the technical reason is one click away")
+
+    sc = dict(dead, steps=[{"kind": "polls", "n": 3},
+                           {"kind": "click", "id": "lanedismiss", "polls": 3},
+                           {"kind": "polls", "n": 3}])
+    res = run_page(sc, script)
+    check(not res["errors"], f"the dismiss path runs clean ({res['errors'][:1]})")
+    check("show" not in (res.get("warn") or {}).get("cls", ""),
+          f"the x dismisses the banner ({res.get('warn')})")
+    check("bad" in (res.get("ver") or {}).get("cls", "")
+          and (res.get("title") or "").startswith("CHAT LANE DOWN"),
+          "while the header marker and the tab title still say it")
+
+    sc = dict(dead, steps=[{"kind": "polls", "n": 3},
+                           {"kind": "click", "id": "lanedismiss", "polls": 3},
+                           {"kind": "health", "polls": 1,
+                            "value": {"ok": False, "version": "harness", "pid": 1,
+                                      "lanes": {"mattermost": {
+                                          "state": "failed", "detail": "502 Bad Gateway"},
+                                          "web": {"state": "up"}}}},
+                           {"kind": "call", "fn": "versionCheck", "polls": 3}])
+    res = run_page(sc, script)
+    check("show" in (res.get("warn") or {}).get("cls", ""),
+          f"a DIFFERENT failure speaks again ({res.get('warn')})")
+    check("502" in (res.get("warn") or {}).get("detail", ""), "with the new reason")
+
+    # -- the pavilion: empty state, details, retry, the amber notice, a failed load -----
+    # Operator brief, 2026-10-04 ("modern imperial command pavilion"): the empty area is an
+    # empty STATE with a way in, the lane banner's technical reason is one click away, a
+    # config edit that has not applied is a separate amber notice, and a conversation that
+    # will not load is a card with a way out - not a blank pane.
+    res = run_page({"runs": [], "steps": [{"kind": "polls", "n": 3}]}, script)
+    check(not (res.get("empty") or {}).get("hidden", True),
+          f"an empty transcript shows the empty state ({res.get('empty')})")
+    check(str((res.get("empty") or {}).get("img", "")).endswith(".png"),
+          f"and the empty state carries the character ({(res.get('empty') or {}).get('img')!r})")
+    res = run_page({"runs": [[["final", "an answer"]]],
+                    "steps": [{"kind": "message", "text": "a question", "polls": 12}]},
+                   script)
+    check((res.get("empty") or {}).get("hidden") is True,
+          "and it gets out of the way once there is a transcript")
+
+    res = run_page(dict(dead, steps=[{"kind": "polls", "n": 3},
+                                     {"kind": "click", "id": "lanemore", "polls": 2}]),
+                   script)
+    check((res.get("warn") or {}).get("detailShown") is True,
+          "Details reveals the technical reason")
+    before = res.get("healthFetches")
+    res = run_page(dict(dead, steps=[{"kind": "polls", "n": 3},
+                                     {"kind": "click", "id": "laneretry", "polls": 4}]),
+                   script)
+    after = res.get("healthFetches")
+    check(after > before, f"Retry asks the server again ({before} -> {after})")
+    check(res.get("retryLabel") == "Retry", "and the button never sticks on 'checking...'")
+
+    sc = {"health": {"ok": True, "version": "harness",
+                     "config_changed": "port changed in config.json; restart to apply"},
+          "runs": [], "steps": [{"kind": "polls", "n": 3}]}
+    res = run_page(sc, script)
+    check("show" in (res.get("config") or {}).get("cls", "")
+          and "restart to apply" in (res.get("config") or {}).get("text", ""),
+          f"a pending config edit is its own amber notice ({res.get('config')})")
+    check("show" not in (res.get("warn") or {}).get("cls", ""),
+          "and NOT the error banner (different problems, different banners)")
+    sc = dict(sc, steps=[{"kind": "polls", "n": 3},
+                         {"kind": "click", "id": "configdismiss", "polls": 3}])
+    res = run_page(sc, script)
+    check("show" not in (res.get("config") or {}).get("cls", ""),
+          "the config notice is dismissible too")
+
+    res = run_page({"runs": [], "session_status": 500, "steps": [{"kind": "polls", "n": 4}]},
+                   script)
+    check(not res.get("errors"), f"the failed-load path runs clean ({res.get('errors')[:1]})")
+    check(has(res, "Could not load this conversation"),
+          "a failed load is a card, not a blank pane")
+    check(has(res, "Retry") and has(res, "Start a new conversation"),
+          "with both ways out")
 
     # -- the fragment carry: #token= never reaches the server, the page uses it ---
     # The installer prints the link with the token in the URL FRAGMENT (it is not
@@ -421,8 +516,9 @@ def main():
     check(not res["errors"], f"the fragment page runs clean ({res['errors'][:1]})")
     check(res["prompts"] == 0,
           f"a fragment link does not ask for a token ({res['prompts']})")
-    check(res["token"] == "from-the-fragment",
-          f"the page takes the token from the fragment ({res['token']!r})")
+    check(res.get("token") is None,
+          f"the fragment token is handed over for a cookie, then dropped from "
+          f"localStorage ({res.get('token')!r})")
     check(res["auth"] and all(t == "from-the-fragment" for t in res["auth"]),
           f"every call carries it ({set(res['auth'] or [])})")
     check(res["replaced"] == ["/"],

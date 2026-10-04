@@ -9,6 +9,8 @@ Run:  python tests/test_installer_windows.py
 """
 import os
 import re
+import shutil
+import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -351,6 +353,25 @@ def main():
     check("the Telegram ids are read back from the existing config",
           "$cfg.telegram.allowed_users" in ps1 and "-not $TelegramIds" in ps1,
           "the token-with-no-id guard would refuse a valid kept install")
+
+    # ---- every shipped .ps1 PARSES when a PowerShell is here to say so ------------
+    # The checks above are [READ] by design (the bed is macOS). The Windows CI job HAS a
+    # PowerShell, so there the same files get a real parse - which is how a syntax error
+    # in update.ps1 (a file nothing else executes, and the one code that must run on every
+    # released version) is caught before a release rather than by a user.
+    ps = shutil.which("powershell") or shutil.which("pwsh")
+    if not ps:
+        skip("every shipped .ps1 parses", "no PowerShell on PATH here (the Windows job)")
+    else:
+        for rel in ("update.ps1", "install.ps1", "install/install-tinycmdr.ps1",
+                    "install/uninstall-tinycmdr.ps1"):
+            probe = ("$e=$null;[System.Management.Automation.Language.Parser]::"
+                     "ParseFile('%s',[ref]$null,[ref]$e)|Out-Null;"
+                     "if($e.Count){$e|ForEach-Object{$_.Message};exit 1}" % rel)
+            r = subprocess.run([ps, "-NoProfile", "-NonInteractive", "-Command", probe],
+                               capture_output=True, text=True)
+            check("%s parses" % rel, r.returncode == 0,
+                  (r.stdout + r.stderr).strip()[:200])
 
     print("")
     if FAILED:

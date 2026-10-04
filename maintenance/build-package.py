@@ -152,6 +152,26 @@ SHIP = [
     # the badge master by maintenance/make-brand-art.py; the app degrades to no art when
     # the terminal cannot show braille, so its absence is survivable but dull.
     "assets/tui-rail-badge.json",
+    # The page's icon: the same badge, squared and flattened, served as /icon.png. A host
+    # that wants different art drops its own file at this path; the built-in PNG in
+    # tinycmdr.py is the fallback for a tree without assets/ at all.
+    "assets/page-icon.png",
+    # The page's mark: the same emblem with a transparent plate, served as /mark.png and
+    # used by the header and the empty-transcript art, where a square edge would show.
+    "assets/page-mark.png",
+    # The page's figure: the chibi, content-cropped and resampled with alpha. The empty
+    # transcript shows it, and the built-in emblem stands in when it is absent.
+    "assets/page-chibi.png",
+    # The page's backdrop: the faint colonnade behind the transcript, drawn in the host's
+    # accent (the server substitutes {{ACCENT}}), plus the bundled OFL fonts - a local page
+    # must not need the internet for its own typography.
+    "assets/roman-colonnade.svg",
+    "assets/fonts/cinzel-700.woff2",
+    "assets/fonts/inter.woff2",
+    "assets/fonts/jetbrains-mono-400.woff2",
+    "assets/fonts/OFL-cinzel.txt",
+    "assets/fonts/OFL-inter.txt",
+    "assets/fonts/OFL-jetbrainsmono.txt",
     # The theme: the designer's palette as a host-owned file (an update seeds it once and
     # never overwrites it), so a host can retheme without patching the build.
     "theme.toml",

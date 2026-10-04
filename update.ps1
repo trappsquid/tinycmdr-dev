@@ -79,6 +79,39 @@ try {
     # Single quotes: PowerShell eats a backtick in a double-quoted string (measured: the
     # message printed "inycmdr restart" - the backtick before "t" became a tab).
     else { Write-Host 'update: restart to run it - "tinycmdr restart" for the bot (a terminal session just relaunches)' }
+
+    # ---- the page: an install that predates it has no token, and without one the server
+    # stays off (never an open port - and also no door). This updater runs on any released
+    # version, so the ask belongs here: in the operator's own console, with the mint as the
+    # default and their own token always an option.
+    $EnvFile = Join-Path $Dir ".env"
+    if ((Test-Path $EnvFile) -and -not (Select-String -Path $EnvFile -Pattern '^TINYCMDR_WEB_TOKEN=' -Quiet)) {
+        Write-Host ""
+        Write-Host "This install has no page token yet (the browser page arrived in 1.0.67)."
+        Write-Host "Without one the page does not start, and nothing opens on its own."
+        $Tok = ""
+        if ([Environment]::UserInteractive -and -not $env:TINYCMDR_NONINTERACTIVE) {
+            $Tok = Read-Host "Page token (empty mints one, or paste your own)"
+        }
+        $Minted = $false
+        if ([string]::IsNullOrWhiteSpace($Tok)) {
+            $Bytes = New-Object byte[] 32
+            [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
+            $Tok = [Convert]::ToBase64String($Bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
+            $Minted = $true
+        }
+        Add-Content -Path $EnvFile -Value "TINYCMDR_WEB_TOKEN=$Tok"
+        $Port = 8790
+        try {
+            $cfg = Get-Content (Join-Path $Dir "config.json") -Raw | ConvertFrom-Json
+            if ($cfg.web.port) { $Port = [int]$cfg.web.port }
+        } catch { }
+        $Suffix = ""
+        if ($Minted) { $Suffix = " (minted for you)" }
+        Write-Host "page token written to $EnvFile$Suffix"
+        Write-Host "page link: http://127.0.0.1:$Port/#token=$Tok"
+        Write-Host "  link again later:  tinycmdr web      (LAN/port wizard: tinycmdr setup)"
+    }
 } finally {
     Remove-Item $Work -Recurse -Force -ErrorAction SilentlyContinue
 }
