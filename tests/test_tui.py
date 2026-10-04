@@ -778,7 +778,10 @@ if HAVE_APP:
 
         class _NoNetSocket(_real_socket):
             """asyncio's event loop makes an AF_UNIX socketpair for its own wakeup;
-            what --app must never do is open a NETWORK socket (a port)."""
+            the APP SURFACE itself must never open a NETWORK socket (a port). The
+            page lane is a sibling door that main() starts - this test drives the
+            console loop alone, so a bind here would be the app doing it behind
+            main()'s back."""
 
             def __init__(self, family=-1, *a, **kw):
                 if family in (fb.socket.AF_INET, fb.socket.AF_INET6):
@@ -818,7 +821,8 @@ if HAVE_APP:
               not any("tok" in l for l in _lines)
               and "Done" in app_screen.status, (app_screen.status, _lines))
         check("--app: /exit leaves the loop and the app", fb._CLI["leave"] is True)
-        check("--app opens no NETWORK socket", not _sockets, _sockets)
+        check("--app's own surface opens no NETWORK socket (the page lane is main()'s)",
+              not _sockets, _sockets)
 
         # scrolling: auto-follow at the bottom, and a page up suspends it
         _full = fb.AppScreen(colour=False, tier="truecolor")

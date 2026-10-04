@@ -24,6 +24,10 @@
 # runs as you.
 #
 #   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
+#   --web-host <addr>     the page's bind address: 127.0.0.1 (default) or 0.0.0.0
+#                         to reach it from other machines on your network
+#   --web-port <p>        the page's port (default 8790)
+#   --no-web              install without the page (the chat lane only)
 #   --token-file <f>      read the token from a file (first non-empty line)
 #   --search-egress <b>   true|false: may web search send queries OFF this machine?
 #                         default false - both built-in providers are third parties,
@@ -118,6 +122,7 @@ DEFAULT_MODEL_BASE="http://127.0.0.1:8081/v1"
 DEFAULT_MODEL="main"
 
 TOKEN=""; TOKEN_FILE=""; BOT_NAME=""; MODEL_BASE_URL=""; MODEL=""; ALLOWED_ARG=""
+WEB_ON=1; WEB_HOST_ARG=""; WEB_HOST_GIVEN=0; WEB_PORT="8790"
 TG_TOKEN=""; TG_IDS=""
 MM_URL_ARG=""; MM_PORT_ARG=""; SECRETS_FILE=""
 FORCE=0; NO_START=0; VERIFY_ONLY=0; UNINSTALL=0
@@ -139,6 +144,9 @@ while [ $# -gt 0 ]; do
         --token-file)      TOKEN_FILE="$2"; shift 2 ;;
         --telegram-token)  TG_TOKEN="$2"; shift 2 ;;
         --telegram-ids)    TG_IDS="$2"; shift 2 ;;
+        --web-host)        WEB_HOST_ARG="$2"; shift 2 ;;
+        --web-port)        WEB_PORT="$2"; shift 2 ;;
+        --no-web)          WEB_ON=0; shift ;;
         --allowed-user)    ALLOWED_ARG="$2"; shift 2 ;;
         --mattermost-url)  MM_URL_ARG="$2"; shift 2 ;;
         --install-dir)     INSTALL_DIR="$2"; LOGDIR="$INSTALL_DIR/logs"; shift 2 ;;
@@ -665,7 +673,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
     fi
     if [ "$_mm" = yes ]; then info "lane: mattermost"
     elif [ "$_tg" = yes ]; then info "lane: telegram"
-    else warn "lane: none - no chat account, so nothing remote is served"; fi
+    else warn "lane: none - no chat account; the page (web.enabled) is the only door"; fi
     info "verify-only changed nothing"
     exit 0
 fi
@@ -732,7 +740,7 @@ if [ "$ASK" = 1 ]; then
         mm_take_url "$(ask_text "Mattermost server, no https:// (e.g. chat.example.com)" "$MM_URL_ARG")"
         ALLOWED_ARG="$(ask_text "Your Mattermost user id (optional, but without it the bot ignores your DMs)" "$ALLOWED_DFLT")"
     elif [ -z "$TG_TOKEN" ]; then
-        info "no chat token: this install will have nothing remote to serve. A token"
+        info "no chat token: the page is this install's door. A chat token"
         info "can be added later with --token-file, no reinstall of the app itself."
     fi
 fi
@@ -1104,10 +1112,14 @@ if [ -z "$TOKEN" ] && [ -n "$TG_TOKEN" ]; then
     info "allowlist  : $TG_IDS_CLEAN"
 elif [ -z "$TOKEN" ]; then
     HAS_LANE=0
-    info "no Mattermost bot token and no Telegram token: a CLI-only install - a"
-    info "supported way to run it. Nothing remote is served, and no launchd agent"
-    info "is registered (an agent with no lane would exit at once and KeepAlive loop)."
-    info "this host has two doors, both work right now:"
+    if [ "$WEB_ON" = 1 ]; then
+        info "no Mattermost bot token and no Telegram token: no chat lane - the PAGE is"
+        info "this install's door, and the launchd agent will serve it."
+    else
+        info "no Mattermost bot token and no Telegram token, and --no-web was given: no"
+        info "chat lane and no page - a files-only install; no launchd agent is registered."
+    fi
+    info "you can also run it by hand right now:"
     info "  the app   : $VPY $INSTALL_DIR/tinycmdr.py --app"
     info "  inline    : $VPY $INSTALL_DIR/tinycmdr.py --cli"
     info "  one task  : $VPY $INSTALL_DIR/tinycmdr.py --once \"<task>\""
@@ -1140,6 +1152,31 @@ fi
 [ -n "$MODEL" ] || MODEL="$DEFAULT_MODEL"
 [ -n "$BOT_NAME" ] || BOT_NAME="$(hostname -s)"
 
+# ---- the page: loopback, or reachable from your network? --------------------
+# The page is the default door. Its token is minted into .env below and never
+# echoed; web.host decides who can reach it. 127.0.0.1 keeps it on this machine;
+# 0.0.0.0 is what a headless box wants, where the operator opens it from a laptop
+# on the same network.
+WEB_HOST="127.0.0.1"
+if [ "$WEB_ON" = 1 ]; then
+    if [ -n "$WEB_HOST_ARG" ]; then
+        WEB_HOST="$WEB_HOST_ARG"; WEB_HOST_GIVEN=1
+    elif [ "$ASK" = 1 ]; then
+        WEB_HOST_GIVEN=1
+        if ask_yes "Should the page be reachable from other machines on your network?" n; then
+            WEB_HOST="0.0.0.0"
+        fi
+    fi
+    if [ "$WEB_HOST" = "0.0.0.0" ]; then
+        info "page         : 0.0.0.0:$WEB_PORT - any machine on your network can open it;"
+        info "               the token travels in cleartext there, so trust the network"
+    else
+        info "page         : 127.0.0.1:$WEB_PORT - this machine only"
+    fi
+else
+    info "page         : disabled (--no-web)"
+fi
+
 # Every file this installer writes under $INSTALL_DIR is ours alone - config.json can
 # hold a live llm.api_key, .env holds the tokens, and the log transcribes both. Owned by
 # one user, readable by one user: umask 077 from here to the end of the writes, plus an
@@ -1155,6 +1192,7 @@ MODEL_BASE_GIVEN="$MODEL_BASE_GIVEN" MODEL_GIVEN="$MODEL_GIVEN" \
 MODEL_KEY="$MODEL_KEY" \
 FALLBACK_SPECS="$FALLBACK_SPECS" FB_ENV_LINES="$FB_ENV_LINES" \
 MM_PORT_ARG="$MM_PORT_ARG" \
+WEB_ON="$WEB_ON" WEB_HOST="$WEB_HOST" WEB_HOST_GIVEN="$WEB_HOST_GIVEN" WEB_PORT="$WEB_PORT" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
 import json, os, sys
 src, dst = sys.argv[1], sys.argv[2]
@@ -1187,6 +1225,21 @@ _tg_ids = os.environ.get("TG_IDS_CLEAN", "").split()
 if _tg_ids or fresh:
     tg["allowed_users"] = _tg_ids
 cfg.setdefault("agent", {})["bot_name"] = os.environ["BOT_NAME"]
+# The page: ON unless --no-web. host/port change only when this run was TOLD them
+# (a flag, an answered question, or a fresh install) - a scripted update keeps the
+# host's own bind, which is the difference between reaching the page from a laptop
+# and wondering why it stopped answering.
+web = cfg.setdefault("web", {})
+web["enabled"] = bool(int(os.environ.get("WEB_ON") or 1))
+try:
+    web.setdefault("port", int(os.environ.get("WEB_PORT") or 8790))
+except (TypeError, ValueError):
+    pass
+_wh = os.environ.get("WEB_HOST", "").strip()
+if _wh and (os.environ.get("WEB_HOST_GIVEN") == "1" or fresh):
+    web["host"] = _wh
+elif fresh:
+    web.setdefault("host", "127.0.0.1")
 llm = cfg.setdefault("llm", {})
 if os.environ.get("CLOUD_FALLBACK") == "true":
     llm["allow_cloud_fallback"] = True
@@ -1241,6 +1294,8 @@ print("    config.json: %s (mattermost=%s, model=%s, allowed_users=%s)"
       % ("kept this host's settings, applied what this run changed" if not fresh
          else "written", mm.get("url", "?"), llm.get("model", "?"),
          mm.get("allowed_users", [])))
+print("    page       : %s:%s%s" % (web.get("host"), web.get("port"),
+                                   "" if web.get("enabled", True) else " (disabled)"))
 if _specs:
     print("    fallbacks  : %d extra endpoint(s), keys in .env" % len(llm.get("fallbacks") or []))
 PY
@@ -1257,7 +1312,7 @@ SHARED_KEYS='^(TINYCMDR_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
 # --secrets-file dropped a working host's TAVILY/ANYSEARCH keys - the same loss the
 # config writer had, one file over. A secrets file still supplies them when the host
 # has none, and wins when it does (it is the fleet's canonical copy).
-MANAGED_ALT='TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN'
+MANAGED_ALT='TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN'
 # The extra-endpoint keys are managed only when THIS run wrote them: on a scripted
 # update the host's own lines must be carried over, or an answered install would
 # drop the keys its own config.json still points at. The primary's key is managed the
@@ -1294,11 +1349,22 @@ if [ -f "$INSTALL_DIR/.env" ]; then
     done
 fi
 SKIPPED_KEYS="$SECRET_SKIPPED"
+# The page's token: kept if this host has one, else MINTED here and never echoed
+# (the 1.0.24 lesson: a token in the install transcript is a leaked token).
+WEB_TOKEN=""
+if [ -f "$INSTALL_DIR/.env" ]; then
+    WEB_TOKEN=$(grep -m1 '^TINYCMDR_WEB_TOKEN=' "$INSTALL_DIR/.env" | cut -d= -f2- || true)
+fi
+if [ -z "$WEB_TOKEN" ]; then
+    WEB_TOKEN="$("$PY" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+    info "minted TINYCMDR_WEB_TOKEN (the page's access token; it is in .env, never echoed here)"
+fi
 {
     printf 'TINYCMDR_MM_TOKEN=%s\n' "$TOKEN"
     if [ -n "$TG_TOKEN" ]; then
         printf 'TINYCMDR_TG_TOKEN=%s\n' "$TG_TOKEN"
     fi
+    printf 'TINYCMDR_WEB_TOKEN=%s\n' "$WEB_TOKEN"
     # The primary's key: only when THIS run resolved one (a switch or an answer). An
     # empty value means "leave this host's own", and KEEP_ENV carries that line over.
     if [ -n "$MODEL_KEY" ]; then
@@ -1335,7 +1401,7 @@ fi
 if [ -z "$TOKEN" ] && [ -z "$TG_TOKEN" ]; then
     # Nothing on a token-less install reads mattermost.url, so a missing host is not a
     # problem to report (the Linux installer states the same rule).
-    info "no chat account: nothing remote to serve (only --app / --cli / --once here)"
+    info "no chat account: the page is the only door (or --app / --cli / --once by hand)"
 elif [ -z "$TOKEN" ] && [ -z "$MM_URL_ARG" ]; then
     # Read the file that was just written: on an UPDATE the host already has its own
     # mattermost.url, and warning about a missing one there is a false alarm on the
@@ -1485,13 +1551,18 @@ if [ -n "$VERB_PATH" ]; then
 else
     info "verbs      : not on PATH - run $INSTALL_DIR/tinycmdr (or re-run without --no-path)"
 fi
-if [ "$HAS_LANE" = 0 ]; then
+# A lane-less agent used to be refused outright ("it would exit at once and KeepAlive
+# would loop it forever"). That was true while a chat lane was the only long-lived
+# thing; the PAGE is now a reason to run, so a lane-less install with the page on
+# registers the agent too - the page is what keeps it alive.
+SERVE=0
+if [ "$HAS_LANE" = 1 ] || [ "$WEB_ON" = 1 ]; then SERVE=1; fi
+if [ "$SERVE" = 0 ]; then
     say "no agent"
-    info "no chat account: the launchd agent is not registered - an agent with no lane"
-    info "would exit at once and KeepAlive would loop it forever. The files and the verb"
-    info "above are in place; the app (--app), the inline lane (--cli) and a one-shot (--once) work now."
-    info "add a chat token and re-run to register the agent:"
-    info "  --token-file <file>  (Mattermost)  |  --telegram-token <t> --telegram-ids <id>"
+    info "no chat account and --no-web: the launchd agent is not registered."
+    info "the files and the verb above are in place; the app (--app), the inline lane"
+    info "(--cli) and a one-shot (--once) work now."
+    info "add a chat token (or drop --no-web) and re-run to register the agent."
 else
 mkdir -p "$PLIST_DIR"
 TPL="$SRC/install/com.tinycmdr.agent.plist"
@@ -1519,12 +1590,19 @@ fi
 
 say "done"
 info "install dir : $INSTALL_DIR"
-if [ "$HAS_LANE" = 1 ]; then
+if [ "$SERVE" = 1 ]; then
     info "agent       : $LABEL  ($PLIST)"
     info "logs        : $INSTALL_DIR/tinycmdr.log, $LOGDIR/launchd.err.log"
     info "restart     : bash $INSTALL_DIR/maintenance/restart-tinycmdr-macos.sh"
+    if [ "$WEB_ON" = 1 ]; then
+        if [ "$WEB_HOST" = "0.0.0.0" ]; then
+            info "page        : http://<this-host>:$WEB_PORT - any machine on your network; token in .env"
+        else
+            info "page        : http://127.0.0.1:$WEB_PORT - token in .env (tinycmdr web prints the link)"
+        fi
+    fi
 else
-    info "agent       : none - no chat account, so nothing runs in the background"
+    info "agent       : none - no chat account and the page is off, so nothing runs in the background"
     info "session     : $VPY $INSTALL_DIR/tinycmdr.py --cli"
     info "one task    : $VPY $INSTALL_DIR/tinycmdr.py --once \"<task>\""
     info "add a lane  : re-run with --token-file <file>, or"

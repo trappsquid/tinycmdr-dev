@@ -17,14 +17,32 @@
 
 ---
 
-tinycmdr runs **on the machine it manages**. You send it a task; it does the work with real
-tools (`shell`, `execute_code`, `edit_file`, `fetch_url`, …), narrates what it is doing, and keeps
-its state in plain files beside itself. It is built for small and local models: the prompt is a
-stable, cache-friendly prefix, and the runtime is built so a confused model cannot wedge your
-inference slot.
+Runs **on the machine it manages**: you send a task, it uses real tools (`shell`, `execute_code`,
+`edit_file`, `fetch_url`, …), narrates its work, keeps state in plain files beside itself.
 
-Reach it from a **terminal** or **chat** (Mattermost, Telegram) — one process, one
-vocabulary, the same conversations either way.
+## Problems → what it does
+
+| With a self-hosted model, the cost is | tinycmdr |
+| :--- | :--- |
+| 15–30K tokens of harness boilerplate re-prefilled every uncached turn | **~3.5K-token fixed prompt** (`tinycmdr status` prints this install's) |
+| a volatile prefix that invalidates the KV cache every request | static prefix, volatile context **tail-anchored** |
+| a looping or stuck model wedging your inference slot | loop guard, per-run scan budget, stall watchdog, supervised restart |
+| "the UI" requiring a hosted service or an open LAN port | built-in **browser page**, token-gated, loopback by default — or CLI, `--once`, Mattermost/Telegram |
+| no way to hand files back and forth | page **uploads** (drag-drop/paste) and **downloads** for files the agent offers |
+| upgrade procedures per version | **one update command from every version**; host files never overwritten |
+| infrastructure sprawl | no database, no container, no daemon: one process, plain files |
+| secrets leaking into prompts | tokens live in `.env` only; `config.json` never holds one |
+
+## Doors
+
+| Door | For |
+| :--- | :--- |
+| **Page** (default) | live cards, file upload/download, conversation rail, tasks/jobs/log/inventory — browser, phone on your LAN |
+| Terminal (`--app`, `--cli`) | ops on the box |
+| Chat (Mattermost / Telegram) | steering from anywhere; uploads both ways |
+| `--once "…"` | scripts |
+
+One process serves whichever are configured; same sessions, notes, skills, model switches.
 
 ## Install
 
@@ -40,12 +58,8 @@ irm https://github.com/trappsquid/tinycmdr/releases/latest/download/install.ps1 
 curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash
 ```
 
-Either installer fetches the newest build, creates its own private Python environment, and starts
-the agent with the machine. Needs **Python 3.10–3.12** — other versions are refused by name, and
-`--install-python` installs a supported one. Only a Linux *system* install and a macOS install
-with `sudo` ask for root; a Windows install and a Linux *user* install never do.
-
-By hand, if you prefer — download, unpack, run the installer inside:
+Needs **Python 3.10–3.12** (`--install-python` installs one). Only a Linux *system* install and a
+macOS install with `sudo` ask for root.
 
 | OS | download | then |
 | :--- | :--- | :--- |
@@ -53,10 +67,8 @@ By hand, if you prefer — download, unpack, run the installer inside:
 | Linux | [`tinycmdr-linux.tar.gz`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-linux.tar.gz) | `sudo bash install/install-tinycmdr.sh` |
 | macOS | [`tinycmdr-macos.zip`](https://github.com/trappsquid/tinycmdr/releases/latest/download/tinycmdr-macos.zip) | `bash install/install-tinycmdr-macos.sh` |
 
-Those names always point at the newest build, so a link never needs re-pinning to a version.
-
-Every release carries a `SHA256SUMS` asset covering all eight published files. Verify what you
-downloaded before running it:
+Stable names always point at the newest build. `SHA256SUMS` covers all eight published files
+(checksummed, not signed — it catches corruption, not a replaced release):
 
 ```bash
 base=https://github.com/trappsquid/tinycmdr/releases/latest/download
@@ -64,234 +76,125 @@ curl -fsSLO $base/tinycmdr-linux.tar.gz && curl -fsSLO $base/SHA256SUMS
 sha256sum -c SHA256SUMS --ignore-missing     # macOS: shasum -a 256 -c SHA256SUMS
 ```
 
-Releases are checksummed but **not signed** — there is no project key, so the sums protect
-against a corrupted or truncated download, not against the release itself being replaced.
-
 <details>
-<summary><b>Unattended installs, every switch, and a second install on one host</b></summary>
+<summary><b>Unattended installs, every switch, a second install on one host</b></summary>
 
-**Linux.** `--mode user|system` decides without a prompt and `--yes` takes the defaults for your
-platform; a run with no terminal at all never asks. **macOS** has one kind of install — a
-per-user launchd agent, `--no-launchd` to skip it — so it takes `--yes` and everything below,
-and has no `--mode`. Every question has a switch: `--mattermost-url`, `--allowed-user`,
-`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--no-path`.
+**Linux.** `--mode user|system`, `--yes`; a run with no terminal never asks. **macOS** has one
+kind of install — a per-user launchd agent, `--no-launchd` to skip it — so it takes `--yes` and
+has no `--mode`. Every question has a switch: `--mattermost-url`, `--allowed-user`,
+`--telegram-token`, `--telegram-ids`, `--model-base-url`, `--model`, `--web-host`, `--web-port`,
+`--no-web`, `--no-path`.
 
-A **second** install on one host needs its own identity: `TINYCMDR_SERVICE=tinycmdr-work bash
-install/install-tinycmdr.sh …` on Linux, `--label com.tinycmdr.work` on macOS. A service name
-belongs to the host rather than to a folder, so the installer refuses instead of taking the first
-install's autostart away.
+**A second install on one host** needs its own identity: `TINYCMDR_SERVICE=tinycmdr-work …` on
+Linux, `--label com.tinycmdr.work` on macOS, `-TaskName` on Windows.
 
-**Windows** switches — `INSTALL-WINDOWS.cmd` asks the same questions when run bare:
+**Windows** — `INSTALL-WINDOWS.cmd` asks the same questions when run bare:
 
 ```text
 -InstallDir <folder>   somewhere other than %USERPROFILE%\tinycmdr
--TaskName <name>       the autostart entry this install owns (a second install needs its own)
+-TaskName <name>       the autostart entry this install owns
 -NoPath                leave the user PATH alone
 -SkipTask              files only: no autostart
 -VerifyOnly            report on an existing install, change nothing
 -Uninstall [-Force]    stop it, remove the folder and the autostart entry
--AsService             boot-start task instead of a logon shortcut (needs an elevated shell)
+-AsService             boot-start task instead of a logon shortcut (elevated shell)
 -TelegramToken <t>     a Telegram bot token
--TelegramIds <ids>     your numeric Telegram id(s), comma or space separated
+-TelegramIds <ids>     your numeric Telegram id(s)
 -AddEndpoint <spec>    another endpoint, repeatable: "<base_url>;<model>;<alias>;<key>"
--NonInteractive        ask nothing: take the switches and the defaults
+-WebHost <addr>        page bind: 127.0.0.1 (default) or 0.0.0.0
+-WebPort <p>           page port (default 8790)
+-NoWeb                 install without the page
+-NonInteractive        ask nothing
 ```
 
-Day-to-day notes for a Mac: [`install/README-macos.md`](install/README-macos.md).
+Mac day-to-day notes: [`install/README-macos.md`](install/README-macos.md).
 </details>
 
-## Start it
+## Start
 
 ```bash
 tinycmdr setup        # once: endpoint, chat gateways, search consent
-tinycmdr              # the session as a full-screen terminal app
-tinycmdr --cli        # the same session, inline cards in the scrollback
-`tinycmdr --once "…"   # one task, then exit
+tinycmdr              # the page (opens in your browser) + the full-screen session
+tinycmdr --cli        # the page + the same session, inline cards in the scrollback
+tinycmdr --once "…"   # one task, then exit
+tinycmdr --no-web     # the session alone, no page for this run
 ```
 
-A bare `tinycmdr` opens that session as a full-screen app in the terminal. Type and press Enter to
-send; `↑`/`↓` scroll a line, `PgUp`/`PgDn` a page, `Ctrl-Home`/`Ctrl-End` jump to either end;
-`Ctrl-C` stops the run in flight (and quits when nothing is running), `Ctrl-D`/`Ctrl-Q`/`Esc` quit,
-leaving the last answer in the scrollback. The app draws in an alternate screen, so the terminal's
-own scrollback is not there while it runs - the app's keys are the way back up. The mouse wheel
-scrolls the transcript too, but only with capture on: `TINYCMDR_APP_MOUSE=1 tinycmdr`. Capture is
-off by default so native selection and copy keep working without a modifier key.
+**Keys (session):** `Enter` send · `↑`/`↓` line, `PgUp`/`PgDn` page, `Ctrl-Home`/`Ctrl-End` ends ·
+`Ctrl-C` stop run / quit idle · `Ctrl-D`/`Ctrl-Q`/`Esc` quit · `Ctrl-Y` copy newest item (again:
+walk back) · `Ctrl-B` copy transcript. Wheel scroll: `TINYCMDR_APP_MOUSE=1`.
 
-`/tinycmdr model` opens the same picker inside the app: the list of models this install can route
-to, the one in use marked, `↑`/`↓` to move, typing to filter, Enter to switch. If the endpoint itself
-is wrong, `/tinycmdr model endpoint <url>` reads or replaces it - it is refused unless it answers
-(`--force` overrides) - and then offers that endpoint's models to pick from.
+**Page:** token-gated always (`TINYCMDR_WEB_TOKEN` in `.env`, minted at install; a bare `tinycmdr`
+serves it). Loopback by default; the installer can set `0.0.0.0` for LAN access — token in
+cleartext there, so trust the network. Rotate/reprint:
 
-To take an item OUT of the app, `Ctrl-Y` copies the newest one - the answer, a tool call, a tool
-result, a question - as its own text rather than the frame it was painted in, and pressing it again
-walks back through the transcript an item at a time; the status line names what landed and where it
-was. `Ctrl-B` copies the whole transcript. The text goes to every clipboard door this host has: its
-own tool (`pbcopy`, `clip`, `wl-copy`/`xclip`), the terminal over OSC 52 (which works through ssh,
-and which tmux needs `set-clipboard on` for), and `tinycmdr-copy.txt` in the temp directory, mode
-0600, because a terminal that refuses OSC 52 says nothing at all.
+```bash
+tinycmdr token set TINYCMDR_WEB_TOKEN   # empty value mints a fresh one, prints the link
+tinycmdr web                            # print the tokenized link (opens a browser when there is one)
+```
 
-A chat lane is where a working agent is easiest to watch: tool calls stream in as they happen,
-and a message sent mid-run steers the run instead of queueing behind it. Each lane is its own
-door into the same agent: whichever token you configure is the lane that runs, and if both are
-configured one process serves both, sharing the same sessions, notes and skills.
+**Chat:** whichever token you configure runs that lane; both → one process serves both.
 
-A chat account is optional. With **no** Mattermost and no Telegram token the install is a
-**CLI-only** one: `tinycmdr` opens a session and `tinycmdr --once "<task>"` runs one task,
-with nothing remote to serve. With **both** tokens set one process serves both lanes, so a bare
-start answers Mattermost and Telegram at once.
+## Use
 
-## Use it
+`tinycmdr <verb>` in a shell, `/tinycmdr <verb>` in the session and in chat:
 
-The same verbs work in a shell (`tinycmdr <verb>`), in the interactive CLI (`/tinycmdr <verb>`),
-and in chat:
-
-| Verb | What it does |
+| Verb | Does |
 | :--- | :--- |
 | `status` | version, folder, model, endpoint, context, log, instance |
-| `doctor` | check this install and name what is wrong (exit 1 when something is) |
-| `health` | one line and an exit code, no network — for scripts |
-| `model` | pick a model from a list you move through (↑↓, type to filter, Enter; the first row adds an endpoint); a dead or refused endpoint offers the wizard |
-| `model setup` | the model wizard: local or cloud, the key, the link, the bearer `GET /models`, then the models it serves to choose from |
-| `model use <name>` · `model add [<url>]` · `model remove <x>` | switch; add an endpoint (no URL: it asks local/cloud, the key and the link, proves the key with a bearer `GET /models`, then offers the models to choose from); or drop one |
-| `model endpoint [<url>]` | read the endpoint or fix it - a `401` asks for the key (saved to `.env`), a typo is refused unless it answers (`--force` writes an unverified one) |
-| `logs [n]` · `version` · `proc` | log tail, version, this install's process and lock state |
-| `update` | fetch the published build - works from any version (`update <file\|zip\|folder>` puts one in place by hand) |
-| `clean` · `token` · `config get\|set <dotted.key>` | junk in this folder, where secrets live, edit config.json |
-| `restart` | restart through this host's own door (launchd, systemd, Task Scheduler) |
-| `/stop` in the CLI or chat | cancel the run that is going, now |
-| *a plain message mid-run* | steer it: the run folds your correction in at its next step |
+| `doctor` | check this install, name what is wrong (exit 1) |
+| `health` | one line + exit code, no network |
+| `model` | picker; `model setup` wizard; `model endpoint [<url>]` read/fix; `model use/add/remove` |
+| `logs [n]` · `version` · `proc` | log tail, version, process + lock state |
+| `update` | fetch the published build (`update <file\|zip\|folder>` by hand) |
+| `clean` · `token` · `config get\|set <dotted.key>` | folder junk, secrets, config.json |
+| `restart` | through this host's own door (launchd, systemd, Task Scheduler) |
+| `/stop` in the session/chat | cancel the run now |
+| a plain message mid-run | steer: folded in at the next step |
 
-`tinycmdr help` prints the same list, and so does `/tinycmdr help` in chat.
+## Extend
 
-## Extend it
+| Drop this | Get this |
+| :--- | :--- |
+| `skills/<name>/SKILL.md` (YAML frontmatter: name + description, then the runbook) | live next message; one prompt-index line, read in full only when relevant |
+| `tools/<name>.py` or `<name>.tool.json` | callable next call; listed by name and shelf, descriptions one `find_tools` call away |
+| `create_tool` | the agent writes its own |
 
-**Prose skills.** Drop a runbook folder into `skills/` and it is live on the next message. Each
-one costs a single line of prompt index and is read in full only when the task looks relevant:
+Flat as it grows: ~5.9 characters of tool index per tool at 80 tools.
 
-```text
-skills/web-server/SKILL.md     # YAML frontmatter: name + description, then the runbook
-```
-
-**Custom tools.** Drop a `.py` (or a `<name>.tool.json` manifest) into `tools/` and it is
-callable from the next call — listed in the prompt by name and shelf, with descriptions one
-`find_tools` call away. The agent can write one for itself with `create_tool`.
-
-Both stay flat as the folder grows: 5.9 characters of tool index per tool at 80 tools.
-
-## Update it
-
-**One command, from any version.** Type it in chat (`/tinycmdr update`) or in a terminal
-(`tinycmdr update`); the same command fetches the latest published build, verifies it
-against `SHA256SUMS`, applies it over this install - your `config.json`, `.env`, `soul.md`,
-notes, `tools/`, `skills/` and `theme.toml` are never overwritten - and, in chat, restarts
-onto it. In a terminal session, relaunch the session (or run `tinycmdr restart` for the
-service).
+## Update
 
 ```bash
 tinycmdr update      # fetch the published build (verified against SHA256SUMS)
-tinycmdr restart     # start running it (chat does this for you)
+tinycmdr restart     # start running it (chat restarts itself)
 ```
 
-An install too old to update itself (its own `update` predating the release package, or
-broken) is repaired by the same command: the `tinycmdr` launcher detects that and runs the
-published updater (`update.sh` / `update.ps1`, attached to every release) instead. That is
-a rule of this project, not a compatibility note: **the update path must work from every
-released version**, because the one thing a user cannot be asked to do is work out which
-upgrade procedure their version needs.
+Never overwrites `config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, `theme.toml`.
+An old or broken install updates with the same command (the launcher falls back to the published
+`update.sh` / `update.ps1`).
 
-## Remove it
+## Remove
 
-| OS | command |
+| OS | Command |
 | :--- | :--- |
-| Windows | `INSTALL-WINDOWS.cmd -Uninstall -Force` — add `-InstallDir <folder>` if you did not take the default |
-| Linux | `sudo bash ~/tinycmdr/install/install-tinycmdr.sh --uninstall` — add `--mode user` for a user install |
-| macOS | double-click `UNINSTALL-MACOS.command`, or `bash ~/tinycmdr/install/uninstall-tinycmdr-macos.sh --uninstall` |
+| Windows | `INSTALL-WINDOWS.cmd -Uninstall -Force` (+ `-InstallDir <folder>` if not default) |
+| Linux | `sudo bash ~/tinycmdr/install/install-tinycmdr.sh --uninstall` (+ `--mode user`) |
+| macOS | `UNINSTALL-MACOS.command`, or `bash ~/tinycmdr/install/uninstall-tinycmdr-macos.sh --uninstall` |
 
-None of these touch your Mattermost bot account. Its token is yours to revoke in
-**Profile → Security → Personal Access Tokens** once the agent is gone.
+Your Mattermost bot token is not touched; revoke it in **Profile → Security → Personal Access
+Tokens**.
 
-## Why it looks like this
-
-Most harnesses assume a cloud endpoint behind a fat server. Against a self-hosted model the costs
-are concrete: 15,000–30,000 tokens of boilerplate re-prefilled on every uncached turn, a volatile
-prefix that invalidates the KV cache each request, and generation slots left running when an agent
-loops. tinycmdr is one Python file with three dependencies (`requests`, `croniter`, `mmpy_bot`):
-its fixed prompt is **~3.5K tokens on a clean unpack**, measured with the endpoint's own
-tokenizer (the harness's estimator, which the 5,400-token gate uses, reads 4,145 - it is
-deliberately conservative; `tinycmdr status` prints this box's own), and 3,633 on this install,
-volatile context sits at the tail so
-the prefix stays cacheable, and the runtime guards the slot. Local failures never fall through to
-a public API unless you set `allow_cloud_fallback`. Web search is the same shape, one lane over:
-the installers ask whether it may leave the machine (and `tinycmdr setup` asks later), search is
-ON once you say yes, and `search.allow_cloud_egress: false` is the opt-out that REFUSES every
-off-LAN provider - `fetch_url` included. A SearxNG on your own LAN never needs the flag, and
-neither does a fetch from it.
-
-The long version — measured surface, budgets, failure handling, what it deliberately does not
-have, and how it compares with other harnesses — is
-[`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md).
-
----
-
-## Run the gate
-
-The suites need no model, no endpoint and no chat token, and `tests/run_all.py` is the gate a
-release is cut against - the same command CI runs on macOS and Linux (the Windows job runs the
-pure-Python subset):
+## Develop
 
 ```bash
-python3.12 -m venv venv                    # 3.10-3.12; run_all.py refuses anything else
-venv/bin/pip install -r requirements.txt -r requirements-test.txt
-venv/bin/python tests/run_all.py           # non-zero if any suite fails
+python3.12 -m venv venv && venv/bin/pip install -r requirements.txt -r requirements-test.txt
+venv/bin/python tests/run_all.py     # the gate; non-zero if any suite fails
+bash maintenance/pre-push.sh         # cheap pre-push: leak gate, regenerated numbers, ledger anchors
 ```
 
-A suite that cannot run exits 77 and counts as **red**, so a machine that grades nothing cannot
-report success. `--select 'tests/test_setup*.py'` narrows the run while you work on one suite.
-
-Before pushing, `bash maintenance/pre-push.sh` decides the cheap things - the leak gate, that the
-published numbers are still regenerated from the tree, and that the work ledger's anchors agree
-with the repository - in about a second. Install it as the hook once per clone:
-
-```bash
-printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/maintenance/pre-push.sh"\n' \
-    > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
-```
-
-## What is live, what is dev, what is on disk
-
-On a box with more than one checkout - the install the bot runs from, the tree releases are cut
-from, a backup clone - the roles are stated once and every fact is read from the tree itself:
-
-```bash
-python3 maintenance/where.py           # the table: version, commit, tag, changes, distance from origin
-python3 maintenance/where.py --check   # non-zero when a tree that must be clean is not
-python3 maintenance/where.py --remote  # ... plus what GitHub has NOW (network, read-only)
-```
-
-There is no map to keep in sync, on purpose: a hand-written one lived outside this repository,
-went two releases stale, and named a scratch tree that had been deleted. `where.py --check` also
-runs in `maintenance/pre-push.sh`, because a live tree with an uncommitted change to a tracked
-file is invisible until the next `git pull` there fails.
-
-The shipped table declares `live` and `dev` - true of any box. A box with a backup clone or an
-ops workspace declares its own in `maintenance/where-roles.json` (gitignored, because a path on
-somebody's share is not source):
-
-```json
-[{"role": "backup", "path": "~/somewhere/tinycmdr", "why": "pre-rewrite history"}]
-```
-
-A host entry may also **override** a shipped role by name, and a role may declare that it shares
-another's tree - the shape a box uses when it develops in the install itself:
-
-```json
-[{"role": "dev", "same_as": "live", "why": "one tree: code work happens in the install"}]
-```
-
-The full development contract - the flow, the gate, what is deliberately not in git, and where the
-truth about this box lives - is [`docs/development.md`](docs/development.md).
-
----
+Release flow, tree roles (`maintenance/where.py`), and what is deliberately not in git:
+[`docs/development.md`](docs/development.md). Longer version — measured surface, budgets, failure
+handling, comparisons: [`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md).
 
 ## License
 

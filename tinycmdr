@@ -1,9 +1,10 @@
 #!/bin/sh
 # tinycmdr - the door on Linux and macOS. On PATH (the installer puts it there):
-#     tinycmdr                     a session in this folder (no arguments)
+#     tinycmdr                     the page + a session in this folder (no arguments)
 #     tinycmdr status | doctor | model | logs | restart | token | help
-#     tinycmdr --app               the same session, spelled out (the default
-#                                  door: a bare `tinycmdr` opens the app)
+#     tinycmdr --app               the session, spelled out (the default door:
+#                                  a bare `tinycmdr` starts the page and the app)
+#     tinycmdr --no-web            the session alone, no page for this run
 #     tinycmdr --cli               the inline lane, cards in the scrollback
 # No arguments is the human case, so it opens a session; the bot keeps starting the
 # way it always has (systemd/launchd run tinycmdr.py itself, never this shim).

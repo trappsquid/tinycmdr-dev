@@ -1172,19 +1172,15 @@ def main():
             if saved_owned is not None:
                 fb._scheduled_task_owned = saved_owned
 
-        # --- the local web UI is gone: `web` is not a verb, and nothing teaches it ------
-        # It was a page lane reached through `tinycmdr web` / `--web`; the whole surface
-        # (port, token, page) is removed. The word must fall through to the dispatcher that
-        # names it, and the flag must be refused with the removal, both exercised at the
+        # --- the page lane is BACK, as the default door ---------------------------------
+        # `web` is a management verb, the help names it, and the page flags adjust the
+        # page per run instead of being refused; the flag path is exercised at the
         # process boundary in the H1 block below.
-        check("`web` is not a management verb", "web" not in fb.VERBS, sorted(fb.VERBS)[:6])
-        check("VERB_HELP no longer names a page lane", "tinycmdr web" not in fb.VERB_HELP,
+        check("`web` is a management verb", "web" in fb.VERBS, sorted(fb.VERBS)[:6])
+        check("VERB_HELP names the page verb", "open the page" in fb.VERB_HELP,
               fb.VERB_HELP[-220:])
         check("VERB_HELP stopped teaching the retired prefix", "/cmdr " not in fb.VERB_HELP,
               fb.VERB_HELP[-220:])
-        check("no page flag survives in the help",
-              not any(f in fb.VERB_HELP for f in ("--web", "--web-port", "--web-host",
-                                                  "--no-web")), fb.VERB_HELP[-220:])
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -1244,17 +1240,32 @@ def main():
         check("H1: and prints the verb list instead of starting the agent",
               "tinycmdr <verb>" in blob, blob[-300:])
 
-        # The removed page lane: the word is an unknown verb, the flag is refused by name.
-        for argv, want in ((["web"], "unknown verb"),
+        # The page lane: `web` is a verb (it explains the missing token), and only the
+        # retired spellings are unknown. `--web` gets its own run: the chat-intent
+        # fixture would send it through the chat startup gate first, so the config is
+        # blanked to no-intent and the run must explain the token and exit 0.
+        for argv, want in ((["web"], "no token: mint one"),
                            (["webui"], "unknown verb"),
-                           (["page"], "unknown verb"),
-                           (["--web"], "has been removed")):
+                           (["page"], "unknown verb")):
             gone = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), *argv],
                                   cwd=str(stage), capture_output=True, text=True,
-                                  timeout=120, env=dict(os.environ, TINYCMDR_PLAIN="1"))
+                                  timeout=120, stdin=subprocess.DEVNULL,
+                                  env=dict(os.environ, TINYCMDR_PLAIN="1"))
             gblob = gone.stdout + gone.stderr
             check("H1: `%s` exits 2" % " ".join(argv), gone.returncode == 2, gone.returncode)
             check("H1: `%s` says %r" % (" ".join(argv), want), want in gblob, gblob[-200:])
+        _cfg = json.loads((stage / "config.json").read_text(encoding="utf-8"))
+        _cfg["mattermost"]["url"] = ""
+        _cfg["mattermost"]["token"] = ""
+        _cfg["mattermost"]["allowed_users"] = []
+        (stage / "config.json").write_text(json.dumps(_cfg), encoding="utf-8")
+        fl = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "--web"],
+                            cwd=str(stage), capture_output=True, text=True, timeout=120,
+                            stdin=subprocess.DEVNULL,
+                            env=dict(os.environ, TINYCMDR_PLAIN="1"))
+        fblob = fl.stdout + fl.stderr
+        check("H1: `--web` without a token exits 0 and explains the token",
+              fl.returncode == 0 and "no token" in fblob, (fl.returncode, fblob[-220:]))
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

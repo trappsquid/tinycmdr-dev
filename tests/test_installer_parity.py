@@ -65,6 +65,10 @@ PORTABLE = {
     "force": ("--force", "--force", "Force"),
     "verify only": ("--verify-only", "--verify-only", "VerifyOnly"),
     "uninstall": ("--uninstall", "--uninstall", "Uninstall"),
+    # The page: bind, port, and the off switch, on all three platforms.
+    "page host": ("--web-host", "--web-host", "WebHost"),
+    "page port": ("--web-port", "--web-port", "WebPort"),
+    "no page": ("--no-web", "--no-web", "NoWeb"),
 }
 
 # flag -> (files it must exist in, why it is not portable)

@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Added
+- **The page is back, as the default door** (the lane was removed in 1.0.36). A bare
+  `tinycmdr` serves it and opens a browser when the machine has one, `--no-web` runs the
+  session alone, `--web-port` / `--web-host` move the bind, and `tinycmdr web` prints the
+  tokenized link without binding anything. Each run draws as its own card
+  (thinking / tool call / result / answer); the rail creates, renames, opens and deletes
+  conversations from one registry every browser shares (`web-sessions.json`); the panel
+  carries tasks, jobs, log and inventory; uploads arrive by drop, paste or the file
+  button and put the saved path in the composer; a file the agent offers is a download
+  link. A page loaded mid-run asks who is running (`/api/live`) and re-attaches instead
+  of posting its message again - the old page's message became a steer, so the operator
+  saw their own message twice.
+- **The token is mandatory, and it lives in `.env` as `TINYCMDR_WEB_TOKEN`.** The
+  installers mint one and keep the host's existing one across updates, never echoing it
+  (the 1.0.24 lesson); `tinycmdr token set TINYCMDR_WEB_TOKEN` with an empty value mints
+  a fresh one and prints the link. No token means no server, never an open port.
+  `/api/health` stays open so a page that has no token can still say the chat lane is
+  down; every other route answers 401 without the `X-Tinycmdr-Token` header, and a
+  `?token=` query is not a credential. The link carries the token in the URL fragment,
+  which never leaves the browser; the page scrubs it from the address bar and keeps it
+  in `localStorage`.
+- **A lane-less install now has a reason to run.** `web.enabled` alone registers the
+  autostart agent - before, "no chat token" meant no agent at all - and the installer
+  asks whether the page should be reachable from other machines (`0.0.0.0`, where the
+  token travels in cleartext, said at install time) or loopback only. A scripted update
+  keeps the host's own bind: `web.host` / `web.port` change only when the run was told
+  them.
+- **Two suites grade the page itself, not just its server.** `tests/test_webui.py`
+  (37 checks) drives the HTTP surface; `tests/test_webui_page.py` (82 checks) runs the
+  page's real script in Node against a DOM shim and a fake server that mirrors
+  `WebRun`'s line semantics - in-place growth, uid keying, steer ordering, reload
+  re-attachment, copy-to-clipboard, the fragment handover, file lines, uploads. Without
+  node it exits 77, which the gate counts as red. The lane's five instruments
+  (`drive-web-cases.py`, `probe-web-surface.py`, `probe-web-sessions.py`,
+  `stub-openai-endpoint.py`, `wait-for-endpoint.py`) come back with it, reading the live
+  install's port and token from `config.json` / `.env` instead of assuming the defaults.
+
+Changed
+- **The page's default is port 8790** (8787 is RStudio Server's default, which is what
+  drove the move), and it is the door a bare `tinycmdr` opens: `--app` / `--cli` are the
+  terminal doors, `--once` runs one task, and a chat token is optional again.
+
 ## [1.0.66] - 2026-10-03
 
 Fixed

@@ -20,7 +20,7 @@ mid-run steering, truthful stop and restart semantics, and prose runbooks it rea
 
 <!-- measured:surface:start -->
 ```
-code                28,550 lines / 1.31 MB in ONE file, no package, no framework
+code                31,253 lines / 1.44 MB in ONE file, no package, no framework
 dependencies        3 required (requests, mmpy_bot, mattermostautodriver); 3 optional
                     (croniter for `schedule`; rich + prompt_toolkit for the console)
                     - 6 lines in requirements.txt, none of them a framework
@@ -33,13 +33,13 @@ core tools          21, of which 11 are always-on; the rest answer by name (sect
 custom tools        3 example tools ship in ./tools/ (native .py, register-style .py,
                     <name>.tool.json); a working box's own drop-ins load from the same
                     folder, and the agent writes its own with create_tool
-chat commands       18 CLI verbs, 10 chat verbs (section 3.1)
+chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               81 suites / 27,125 lines / 3,143 checks that need no model, plus a graded
+tests               83 suites / 27,879 lines / 3,263 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
-config              config.json, 5 blocks: llm 30, telegram 2, mattermost 6, search 3, agent 108
+config              config.json, 5 blocks: llm 30, telegram 2, mattermost 6, search 3, agent 109
                     (all of section 3 is configurable)
 state on disk       sessions/*.json (per channel), notes.md, jobs.json (cron),
                     uploads/, logs
@@ -306,8 +306,8 @@ Interop and ecosystem
   no LSP or language tooling; no repo map, no symbol index, no call-graph tooling (an Aider
   strength); search is ripgrep plus the model's own reading
   no native Anthropic/Google message formats: OpenAI-compatible endpoints only
-  no browser automation built in (the fleet uses a separately installed computer-use driver where
-  a host has one)
+  no browser automation built in (a computer-use tool can be installed separately where one
+  is needed)
 
 Agent architecture
   no plan/act phases, no explicit plan-approval gate, no graph or state-machine orchestration
@@ -372,7 +372,7 @@ Same job, different choices:
 ```
                      tinycmdr                            OpenClaw
 runtime              Python, one file, 3 dependencies    Node.js, plugin architecture
-channels             Mattermost, the fleet's own server  Discord, WhatsApp, Slack, iMessage,
+channels             Mattermost (self-hosted)            Discord, WhatsApp, Slack, iMessage,
                                                          Teams, Signal, Matrix, Telegram, Zalo,
                                                          WebChat
 identity and memory  notes.md plus per-host skills read   AGENTS.md/SOUL.md/MEMORY.md injected into
@@ -418,7 +418,7 @@ means read out of this repo.
 ```
                               tinycmdr (observed)        OpenHands              Claude Code            Aider
 -----------------------------------------------------------------------------------------------
-shape                         one 28,550-line file,       full platform:         closed-source CLI      CLI pair
+shape                         one 31,253-line file,       full platform:         closed-source CLI      CLI pair
                               one process, no daemon      agent server + SDK     + IDE + web
 execution                     directly on the host,       per-session Docker     local machine with     local machine
                               as the login user           sandbox runtime        permission prompts
@@ -461,7 +461,7 @@ surface, no ops runtime. Comparing tinycmdr to them mostly measures "library ver
 fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with
                           the endpoint's own tokenizer - section 4.1 has both legs and
                           the command
-readability               28,550 lines, one file, no dependency tree to audit
+readability               31,253 lines, one file, no dependency tree to audit
 ops runtime               stall watchdog, periodic check-ins, live steering, and a
                           /tinycmdr stop that reports the truth about three different states
 self-extension            a new tool is a .py file the agent writes itself, live on the next call

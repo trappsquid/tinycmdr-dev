@@ -128,6 +128,12 @@
     ],
     "ssl_verify": true
   },
+  "web": {
+    "_comment": "The page: the default door. ON by default - a bare `tinycmdr` serves it and opens a browser when the machine has one. The token is MANDATORY and lives in .env as TINYCMDR_WEB_TOKEN (the installer mints one; `tinycmdr token set TINYCMDR_WEB_TOKEN` with an empty value mints a fresh one and prints the link). No token = no server, never an open port. host 127.0.0.1 keeps it on this machine; a headless box reached from the LAN sets host to 0.0.0.0 (the installer asks), where the token travels in cleartext - use it on a network you trust. 8790 is the published default (8787 belongs to RStudio Server).",
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 8790
+  },
   "search": {
     "_comment": "Web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network. `allow_cloud_egress` is ON by default - a box with providers configured wants to search, and a silent refusal reads as a broken tool; set it false to REFUSE every off-LAN provider, which also refuses fetch_url for a URL off this network. A searxng provider never needs the flag. The installers ask (--search-egress), setup asks, and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
     "providers": [

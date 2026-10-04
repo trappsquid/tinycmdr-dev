@@ -283,16 +283,16 @@ def main():
           "%d literal site(s), %d -replace site(s): %r" % (len(env_lit), len(env_repl), env_repl[:1]))
 
     print("\n== no chat account -> no service is registered, nothing remote to serve ==")
-    # A token-less install used to register the local page as its lane. That lane was removed
-    # from the assistant, so with no Mattermost and no Telegram token there is nothing remote
-    # to serve: no task and no logon shortcut is registered, because that process would exit at
-    # once and the supervisor would loop it. The files land; the run says so.
+    # The page is the default door again, so the task has TWO reasons to exist: a chat
+    # lane, or the page. A lane-less install with the page on registers the task (the
+    # page keeps it alive); only -NoWeb leaves a files-only install. $LocalWeb is still
+    # gone - the page lane is not a separate lane object now.
     check("the local-page lane variable is gone", "$LocalWeb" not in install,
           "the installer still computes a page lane")
-    check("registration needs a real chat lane",
-          "$RegisterTask = (-not $SkipTask) -and ($AnyLane -or $LocalWeb)" not in install
-          and "$RegisterTask = (-not $SkipTask) -and $AnyLane" in install,
-          "RegisterTask still counts a page lane")
+    check("registration counts a chat lane or the page",
+          "$Serve = $AnyLane -or (-not $NoWeb)" in install
+          and "$RegisterTask = (-not $SkipTask) -and $Serve" in install,
+          "RegisterTask does not count the page")
     check("the supervisor argument variable is gone", "$SuperviseArgs" not in install,
           "the launcher still carries a page argument")
     check("the token-less run says nothing runs in the background and names the local doors",

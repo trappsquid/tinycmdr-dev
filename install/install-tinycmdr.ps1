@@ -31,6 +31,10 @@
         -SearchEgress <b>  true|false: may web search send queries OFF this machine?
                            default false - both built-in providers are third parties,
                            and a provider on this LAN (a searxng entry) never needs it
+        -WebHost <addr>     page bind: 127.0.0.1 (default) or 0.0.0.0 to reach the
+                           page from other machines on your network
+        -WebPort <p>        the page's port (default 8790)
+        -NoWeb              install without the page (the chat lane only)
         -VerifyOnly        is this install working? (no reinstall)
         -Uninstall [-Force] stop it, remove the folder and the autostart entry
 
@@ -82,6 +86,9 @@ param(
     [switch] $NoPause,                           # for scripted runs (the .cmd uses this)
     [switch] $VerifyOnly,                        # just probe -InstallDir and stop
     [switch] $Uninstall,                         # remove the task and the folder
+    [string] $WebHost         = "",              # page bind: "" = this machine, 0.0.0.0 = your LAN
+    [int]    $WebPort         = 8790,            # page port (the published default)
+    [switch] $NoWeb,                             # install without the page
     [switch] $NonInteractive                     # never ask: for scripts and fleet pushes
                                                  # (a redirected stdin also means "do not ask")
 )
@@ -1059,6 +1066,27 @@ if ($Ask -and -not $KeepConn) {
         }
     }
 
+    # ---- the page: loopback, or reachable from your network? ----
+    # The page is the default door. Its token is minted into .env below and never
+    # echoed; web.host decides who can reach it.
+    if ($NoWeb) {
+        Write-Host "  page        : disabled (-NoWeb)"
+    } else {
+        if (-not $WebHost) {
+            if (Ask-Yes "Should the page be reachable from other machines on your network?" $false) {
+                $WebHost = "0.0.0.0"
+            } else {
+                $WebHost = "127.0.0.1"
+            }
+        }
+        if ($WebHost -eq "0.0.0.0") {
+            Write-Host "  page        : 0.0.0.0`:$WebPort - any machine on your network can open it"
+            Write-Host "                the token travels in cleartext there, so trust the network"
+        } else {
+            Write-Host "  page        : $WebHost`:$WebPort - this machine only"
+        }
+    }
+
     Write-Host ""
     Write-Host "  ---- about to install ----"
     Write-Host ("  folder       : {0}" -f $InstallDir)
@@ -1141,20 +1169,20 @@ if (-not $TelegramToken -and (Test-Path (Join-Path $InstallDir ".env"))) {
 }
 
 # -------------------------------------------------------------------- the chat lane
-# A chat account is what the background task runs. The harness also runs as a session
-# (`python tinycmdr.py --cli`) and a single task (`--once`), but with NO Mattermost and
-# NO Telegram token there is nothing remote to serve: a lane-less task prints the
-# CLI-only guidance and returns (tinycmdr.py stops cleanly rather than aborting, on
-# purpose: a missing token used to fail silently as "never connects"), so a supervised
-# task would respawn it every few seconds. A token-less install registers nothing -
-# a CLI-only install is a supported way to run it.
+# A chat account is one reason the background task exists; the PAGE is the other. With
+# NO Mattermost and NO Telegram token, a lane-less install with the page on registers
+# the task and the page keeps it alive. Only -NoWeb on a lane-less box leaves a
+# files-only install (a task with nothing to serve would print the CLI-only guidance
+# and return, and a supervised task would respawn it every few seconds).
 $ChatLane = [bool]($MattermostToken) -and ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com")
 # Telegram is a chat lane too, and its token alone is enough: with no Mattermost token the
 # build runs the Telegram lane by itself, so a Telegram-only install NEEDS the background
 # task - otherwise it only answers while a window is open.
 $TgLane = [bool]($TelegramToken)
 $AnyLane = $ChatLane -or $TgLane
-$RegisterTask = (-not $SkipTask) -and $AnyLane
+# The page counts as something to serve, so it registers the task too.
+$Serve = $AnyLane -or (-not $NoWeb)
+$RegisterTask = (-not $SkipTask) -and $Serve
 
 # ---------------------------------------------------------------- 3. copy files
 Head "copying the app"
@@ -1367,6 +1395,28 @@ if (-not $cfg.PSObject.Properties['telegram']) {
 $cfg.telegram.token = ""
 if ($tgIds.Count -gt 0) { $cfg.telegram.allowed_users = @($tgIds) }
 $cfg.agent.bot_name       = $BotName
+# The page: ON unless -NoWeb. host/port change only when this run was TOLD them (a
+# switch, an answered question, or a fresh install) - a redo keeps the host's own bind.
+if (-not $cfg.PSObject.Properties['web']) {
+    $cfg | Add-Member -NotePropertyName web -NotePropertyValue ([pscustomobject]@{})
+}
+if (-not $cfg.web.PSObject.Properties['enabled']) {
+    $cfg.web | Add-Member -NotePropertyName enabled -NotePropertyValue $true
+}
+if (-not $cfg.web.PSObject.Properties['host']) {
+    $cfg.web | Add-Member -NotePropertyName host -NotePropertyValue "127.0.0.1"
+}
+if (-not $cfg.web.PSObject.Properties['port']) {
+    $cfg.web | Add-Member -NotePropertyName port -NotePropertyValue 8790
+}
+$cfg.web.enabled = (-not $NoWeb)
+if ($WebHost) { $cfg.web.host = $WebHost }
+if ($PSBoundParameters.ContainsKey('WebPort') -or $cfgFresh) { $cfg.web.port = $WebPort }
+# What the config actually says, for every summary below: on an update this run was
+# not told a host, and printing 127.0.0.1 over a kept 0.0.0.0 bind is the line a
+# reader would act on wrongly.
+if (-not $WebHost) { $WebHost = [string]$cfg.web.host }
+if (-not $PSBoundParameters.ContainsKey('WebPort') -and $cfg.web.port) { $WebPort = [int]$cfg.web.port }
 $cfg.agent.debug_dump_dir = ""
 
 # Write UTF-8 WITHOUT a BOM: PowerShell 5.1's Set-Content -Encoding UTF8 adds one,
@@ -1421,6 +1471,7 @@ $envPath = Join-Path $InstallDir ".env"
 # every one of them then showed the others' usage in that provider's dashboard.
 # No provider is named here on purpose - the key is whatever the endpoint issued.
 $ownKeys = @{}
+$WebToken = ""
 if (Test-Path $envPath) {
     foreach ($line in (Get-Content $envPath)) {
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)=(.+)$') {
@@ -1432,22 +1483,37 @@ if (Test-Path $envPath) {
             # one file over (measured 2026-09-24 on the macOS bed). The primary's
             # key is withheld only when THIS run resolved one; otherwise the host's
             # own TINYCMDR_LLM_API_KEY line is carried over like any other.
-            $managed = @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN")
+            $managed = @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN")
             if ($ModelKey) { $managed += "TINYCMDR_LLM_API_KEY" }
+            if ($k -eq "TINYCMDR_WEB_TOKEN") {
+                # Kept if this host has one; a redo never rotates it silently.
+                $WebToken = $v
+                continue
+            }
             if ($v -and ($managed -notcontains $k)) {
                 $ownKeys[$k] = $v
             }
         }
     }
 }
+if (-not $WebToken) {
+    # Minted HERE and never echoed (the 1.0.24 lesson: a token in the install
+    # transcript is a leaked token). 32 random bytes, base64url - the same shape
+    # `tinycmdr token set TINYCMDR_WEB_TOKEN` mints.
+    $bytes = New-Object byte[] 32
+    ([System.Security.Cryptography.RandomNumberGenerator]::Create()).GetBytes($bytes)
+    $WebToken = ([Convert]::ToBase64String($bytes)).TrimEnd('=').Replace('+','-').Replace('/','_')
+    Say "minted  : TINYCMDR_WEB_TOKEN (the page's access token; it is in .env, never echoed here)"
+}
 Copy-Item (Join-Path $InstallDir ".env.example") $envPath -Force
 $envText = Get-Content $envPath -Raw
 $written = @()
 $refused = @()
-foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_LLM_API_KEY", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
+foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN", "TINYCMDR_LLM_API_KEY", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
     $val = ""
     if ($key -eq "TINYCMDR_MM_TOKEN") { $val = $MattermostToken }
     elseif ($key -eq "TINYCMDR_TG_TOKEN") { $val = $TelegramToken }
+    elseif ($key -eq "TINYCMDR_WEB_TOKEN") { $val = $WebToken }
     elseif ($key -eq "TINYCMDR_LLM_API_KEY") { $val = $ModelKey }
     else { $val = $secrets[$key] }
     if (-not $val) { continue }
@@ -1654,8 +1720,8 @@ try {
 #     needs an elevated shell. Nothing else in this installer does.
 if (-not $SkipTask -and -not $RegisterTask) {
     Head "autostart: skipped"
-    Say "no chat account, so there is nothing to keep running in the background. A host"
-    Say "with no chat token has only these two doors, from a shell:"
+    Say "no chat account and -NoWeb, so there is nothing to keep running in the background."
+    Say "A host with neither a chat token nor the page has only these doors, from a shell:"
     Say "  python tinycmdr.py --app                (the session, full screen)"
     Say "  python tinycmdr.py --cli                (the same session, inline cards)"
     Say "  python tinycmdr.py --once `"<task>`"     (one task, then exit)"
@@ -1785,8 +1851,17 @@ if ($TgLane -and -not $ChatLane) {
     Say ""
     Say "  DM your bot and it answers; a group message is refused on purpose."
     if (-not $RegisterTask) { Say "  NOTE   : no background task was registered (-SkipTask), so nothing is listening yet." }
+} elseif (-not $AnyLane -and -not $NoWeb) {
+    Say "This install has NO chat account: the PAGE is the door, and the background task"
+    Say "serves it. Open it from a browser on this machine:"
+    Say "  http://127.0.0.1:$WebPort"
+    if ($WebHost -eq "0.0.0.0") {
+        Say "  or from any machine on your network: http://<this-pc>:$WebPort"
+    }
+    Say "the tokenized link:  cd $InstallDir ; python tinycmdr.py web"
+    Say ""
 } elseif (-not $AnyLane) {
-    Say "This install has NO chat account, which is a supported way to run it. Nothing"
+    Say "This install has NO chat account and -NoWeb, a files-only install. Nothing"
     Say "runs in the background and nothing remote is served; from a shell:"
     Say ""
     Say "  the app     :  cd $InstallDir ; python tinycmdr.py --app"
@@ -1815,6 +1890,7 @@ if ($todo.Count -gt 0 -and $RegisterTask) {
     }
 }
 if ($todo.Count -gt 0 -and -not $RegisterTask) { Say "after editing, just start it:  cd $InstallDir ; python tinycmdr.py --app" }
+if ($RegisterTask -and -not $AnyLane -and -not $NoWeb) { Say "page    : http://127.0.0.1:$WebPort  (or a machine on your network when web.host is 0.0.0.0)"; Say "token   : in $envPath; 'python tinycmdr.py web' prints the link" }
 Say "logs: $InstallDir\tinycmdr.log"
 if ($Ask) {
     if ($WantChat) { Say "DM the bot account on $MattermostUrl and it will answer." }

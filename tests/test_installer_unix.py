@@ -7,11 +7,11 @@ to a suite that only reads the scripts:
       folder is never created (systemd has no tmpfiles entry for it). A fresh
       Debian/Ubuntu user-mode install - THE door the README prints - died after the
       venv, config.json and .env existed and before any unit, enable or start.
-  D6  the token-less install used to register the local web page as its lane. That lane is
-      gone: with no Mattermost and no Telegram token there is nothing remote to serve, and a
-      CLI-only install is a supported way to run it - the files are installed and no service
-      is registered (a lane that exits at once would be looped by Restart=always) - and the
-      run says so and names the two local doors (--cli, --once).
+  D6  the token-less install's service story changed twice. It once registered the local
+      web page as its lane; that lane was removed, so a lane-less install registered
+      nothing and the run said so. The page is BACK as the default door: a lane-less
+      install with the page on registers the unit for the page (token minted into .env,
+      no chat token), and only --no-web leaves a files-only install.
   D5  config.json shipped 0644 (the macOS writer opened it before `umask 077`; Linux
       hardcoded `chmod 644`) beside a 0600 .env, and the install log was 0644 in /tmp.
   D2  every documented removal door derived its paths from $HOME, so `sudo bash
@@ -331,8 +331,9 @@ def case_linux_no_chat_token(sb, pkg, bindir, user, py):
           "nothing remote" in out.lower() and "--cli" in out and "--once" in out,
           f"the run did not explain the no-lane install: {got.stdout[-400:]}")
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
-    check("D6 no chat token: no page/secret token is minted into .env",
-          env_text.count("_TOKEN=") == 1,
+    check("D6 no chat token: the page's token is minted into .env (the page is the door)",
+          "TINYCMDR_MM_TOKEN=\n" in env_text
+          and re.search(r"^TINYCMDR_WEB_TOKEN=.{20,}$", env_text, re.M) is not None,
           f"{[l for l in env_text.splitlines() if '_TOKEN' in l]}")
     return inst
 
