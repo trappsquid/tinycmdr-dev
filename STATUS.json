@@ -1286,12 +1286,13 @@
     {
       "id": "webui-visual-pass-with-vision",
       "title": "the page's look needs a pass from a session that can see it",
-      "state": "open",
+      "state": "shipped",
       "anchor": {
-        "file": "assets/webui.css"
+        "commit": "02f7708",
+        "expect": "untagged"
       },
-      "detail": "The operator's pavilion design is ported and gated (the stylesheet, the colonnade SVG, the four bundled fonts, the inlined lucide icons, the markup shell, the hero/chibi, the two banners), but the port was done by a TEXT session: it can measure an image, not look at one. The remaining work is visual - spacing, contrast, the mascot, the operator's pending chibi modification - and belongs to a session running the harness's vision model (modelRoles.vision in ~/.omp/agent/config.yml). How to look: docs/development.md, 'Looking at the page'.",
-      "gate": "Serve the tree's page (the recipe in docs/development.md), open it, and grade the surfaces against the design: /page.css, /colonnade.svg, /chibi.png, /mark.png, the empty state, the two banners. Close this item when the operator signs off."
+      "detail": "The operator's pavilion design is ported and gated (the stylesheet, the colonnade SVG, the four bundled fonts, the inlined lucide icons, the markup shell, the hero/chibi, the two banners), but the port was done by a TEXT session: it can measure an image, not look at one. The remaining work is visual - spacing, contrast, the mascot, the operator's pending chibi modification - and belongs to a session running the harness's vision model (modelRoles.vision in ~/.omp/agent/config.yml). How to look: docs/development.md, 'Looking at the page'. Closed 2026-10-04: the vision pass ran (commit 02f7708). Every surface was looked at and the defects it found are fixed - icons take the design's sizes, the banner/version class-store wipes and the missing hidden state, the shell is the viewport, the rail's list scrolls, the palette is frosted, Stop is a header pill, copy and delete affordances sit at a resting opacity - the operator's states are implemented (empty -> welcome+mascot, first line -> brand mark, active chat -> the stage, colonnade 0.22, the command box pinned), the provided chibi is the brand art everywhere, and the operator signed off by ordering the 1.0.68 cut.",
+      "gate": "done - landed as 02f7708 and rides v1.0.68; maintenance/ledger-tag.py states the release claim once the tag exists"
     }
   ]
 }
