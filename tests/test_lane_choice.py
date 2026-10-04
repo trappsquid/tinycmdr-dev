@@ -2,8 +2,10 @@
 
 The lane rules this grades, all of them visible only by RUNNING the file:
 
-  * no token at all is a supported CLI-only install: it must explain itself and stop
-    cleanly (exit 0), not abort, and not start a lane that has no account;
+  * no token and the page ON (the default) is a serving install: the first start mints
+    the token the page requires and holds the process open - the shape the autostart
+    agent runs on. The CLI-only end state is the page OFF (`--no-web` or
+    web.enabled: false), which explains itself and stops cleanly (exit 0);
   * the shipped placeholders ("PASTE_BOT_TOKEN_HERE", "your-mattermost-user-id") are
     NOT a lane - counting them made a fresh install look like a Mattermost host with a
     broken URL, and `tinycmdr health` claimed a `mattermost` lane on a CLI-only box;
@@ -37,9 +39,20 @@ def check(cond, what, extra=""):
         print(f"ok   {what}")
 
 
-def run(dirpath, args=(), tokens=(), with_mm=False):
-    """Run the harness in `dirpath` and return (exit_code, stdout+stderr+log)."""
+def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, web=False):
+    """Run the harness in `dirpath` and return (exit_code, stdout+stderr+log).
+
+    A child that SERVES (the page holds the process open) never exits on its own, so
+    the deadline is the caller's: a timeout comes back as the string "serving" with
+    everything the child had printed, instead of an exception that grades the test.
+
+    `web=True` stages the page ON with port 0 (an ephemeral one). Port 8790 is the
+    product's default and a box that runs tinycmdr already holds it - a suite that
+    binds it grades which process got there first, not the rule.
+    """
     cfg = {"llm": LLM}
+    if web:
+        cfg["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
     if with_mm:
         cfg["mattermost"] = {"url": "chat.invalid", "scheme": "https", "port": 443,
                              "token": "", "allowed_users": ["u1"]}
@@ -50,14 +63,20 @@ def run(dirpath, args=(), tokens=(), with_mm=False):
                                       encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
     env["HOME"] = str(dirpath)
-    r = subprocess.run([sys.executable, str(dirpath / "tinycmdr.py"), *args],
-                       cwd=str(dirpath), env=env, capture_output=True, text=True,
-                       timeout=60, stdin=subprocess.DEVNULL)
-    said = r.stdout + r.stderr
+    try:
+        r = subprocess.run([sys.executable, str(dirpath / "tinycmdr.py"), *args],
+                           cwd=str(dirpath), env=env, capture_output=True, text=True,
+                           timeout=timeout, stdin=subprocess.DEVNULL)
+        code, said = r.returncode, r.stdout + r.stderr
+    except subprocess.TimeoutExpired as e:
+        code = "serving"
+        said = (e.stdout or "") + (e.stderr or "")
+        if isinstance(said, bytes):
+            said = said.decode("utf-8", "replace")
     logf = dirpath / "tinycmdr.log"
     if logf.exists():
         said += logf.read_text(encoding="utf-8", errors="replace")
-    return r.returncode, said
+    return code, said
 
 
 def load(dirpath):
@@ -78,12 +97,30 @@ def main():
             d.mkdir(parents=True, exist_ok=True)
             shutil.copy2(SRC, d / "tinycmdr.py")
 
-        # -- no token: a CLI-only install, explained and clean --------------------
-        code, said = run(work / "cli_only")
-        check(code == 0, f"no token at all stops cleanly, exit 0 ({code})")
+        # -- no token and the page on: the page is the door ------------------------
+        # The page's token is MINTED at first start now, so a bare run on a lane-less
+        # box does not stop: it mints, serves the page and holds the process open -
+        # which is what the installer's autostart agent relies on. The CLI-only end
+        # state is the page OFF (next case).
+        code, said = run(work / "cli_only", timeout=8, web=True)
+        check(code == "serving",
+              f"no token, page on: the run serves instead of stopping ({code})")
+        check("minted TINYCMDR_WEB_TOKEN" in said,
+              "it mints the token the page requires", said[-400:])
+        check("no chat lane is configured" in said and "Serving the page" in said,
+              "and says the page is the door", said[-400:])
+        check("cannot start" not in said, "it is NOT a startup abort")
+        _env = (work / "cli_only" / ".env").read_text(encoding="utf-8")
+        check("TINYCMDR_WEB_TOKEN=" in _env, "the minted token lands in .env", _env[-120:])
+
+        # -- the CLI-only end state: no chat lane and the page OFF ----------------
+        code, said = run(work / "cli_only", args=("--no-web",))
+        check(code == 0, f"no token and --no-web stops cleanly, exit 0 ({code})")
         check("no chat lane is configured" in said and "--cli" in said,
               "and says an install with no chat account is CLI-only", said[-400:])
         check("cannot start" not in said, "it is NOT a startup abort")
+        check("Serving the page" not in said, "and it does not serve a page it was told to skip",
+              said[-300:])
 
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -

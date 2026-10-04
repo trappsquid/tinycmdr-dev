@@ -36,12 +36,20 @@ Added
   token travels in cleartext, said at install time) or loopback only. A scripted update
   keeps the host's own bind: `web.host` / `web.port` change only when the run was told
   them.
+- **An install that upgrades into the page gets its token minted, not homework.** The
+  first start of a host with no token mints one into `.env` (`tinycmdr web` does too),
+  and `tinycmdr setup` asks the two things nobody can infer - loopback or LAN, and the
+  port - then prints the link. No token still means no server: the server makes the
+  token it requires, so an upgrade introduces the page instead of stranding it behind a
+  command the operator has to be told about.
 - **Two suites grade the page itself, not just its server.** `tests/test_webui.py`
-  (37 checks) drives the HTTP surface; `tests/test_webui_page.py` (82 checks) runs the
-  page's real script in Node against a DOM shim and a fake server that mirrors
-  `WebRun`'s line semantics - in-place growth, uid keying, steer ordering, reload
-  re-attachment, copy-to-clipboard, the fragment handover, file lines, uploads. Without
-  node it exits 77, which the gate counts as red. The lane's five instruments
+  (47 checks) drives the HTTP surface, the token's minting rules, uploads, downloads and
+  the Host/Origin gates; `tests/test_webui_page.py` (82 checks) runs the page's real
+  script in Node against a DOM shim and a fake server that mirrors `WebRun`'s line
+  semantics - in-place growth, uid keying, steer ordering, reload re-attachment, copy,
+  the fragment handover, file lines, uploads; `tests/test_page_upgrade.py` (9 checks)
+  stages an install that predates the page and grades the upgrade into it. Without node
+  the page suite exits 77, which the gate counts as red. The lane's five instruments
   (`drive-web-cases.py`, `probe-web-surface.py`, `probe-web-sessions.py`,
   `stub-openai-endpoint.py`, `wait-for-endpoint.py`) come back with it, reading the live
   install's port and token from `config.json` / `.env` instead of assuming the defaults.
@@ -50,6 +58,17 @@ Changed
 - **The page's default is port 8790** (8787 is RStudio Server's default, which is what
   drove the move), and it is the door a bare `tinycmdr` opens: `--app` / `--cli` are the
   terminal doors, `--once` runs one task, and a chat token is optional again.
+
+Fixed
+- **A minted page token could kill startup on an upgraded install.** `TINYCMDR_WEB_TOKEN`
+  in `.env` (which is exactly what an install that upgraded into the page carries) plus a
+  config.json written before the page existed (no `web` block) raised `KeyError: 'web'`
+  at import: the env-to-config mapping indexed `cfg["web"]` directly, and DEFAULT_CONFIG's
+  `web` defaults were filed under `agent`, where nothing read them, so the section was
+  never merged in. The defaults are a real top-level section now, the mapping creates the
+  section it needs (a `web: false` in a hand-edited config.json is replaced rather than
+  fatal), and `tests/test_page_upgrade.py` stages that tree and grades both halves -
+  the pre-fix build dies with the KeyError, which is the check's own falsification.
 
 ## [1.0.66] - 2026-10-03
 

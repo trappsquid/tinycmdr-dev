@@ -1240,12 +1240,10 @@ def main():
         check("H1: and prints the verb list instead of starting the agent",
               "tinycmdr <verb>" in blob, blob[-300:])
 
-        # The page lane: `web` is a verb (it explains the missing token), and only the
-        # retired spellings are unknown. `--web` gets its own run: the chat-intent
-        # fixture would send it through the chat startup gate first, so the config is
-        # blanked to no-intent and the run must explain the token and exit 0.
-        for argv, want in ((["web"], "no token: mint one"),
-                           (["webui"], "unknown verb"),
+        # The page lane: `web` is a verb, and it MINTS the token the page requires (an
+        # install that upgraded into the page has none); only the retired spellings are
+        # unknown.
+        for argv, want in ((["webui"], "unknown verb"),
                            (["page"], "unknown verb")):
             gone = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), *argv],
                                   cwd=str(stage), capture_output=True, text=True,
@@ -1254,18 +1252,45 @@ def main():
             gblob = gone.stdout + gone.stderr
             check("H1: `%s` exits 2" % " ".join(argv), gone.returncode == 2, gone.returncode)
             check("H1: `%s` says %r" % (" ".join(argv), want), want in gblob, gblob[-200:])
+        wv = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "web"],
+                            cwd=str(stage), capture_output=True, text=True,
+                            timeout=120, stdin=subprocess.DEVNULL,
+                            env=dict(os.environ, TINYCMDR_PLAIN="1"))
+        wblob = wv.stdout + wv.stderr
+        check("H1: `web` exits 0", wv.returncode == 0, (wv.returncode, wblob[-200:]))
+        check("H1: `web` mints the token the page needs",
+              "minted TINYCMDR_WEB_TOKEN" in wblob, wblob[-200:])
+        _tok = [ln.split("=", 1)[1] for ln in
+                (stage / ".env").read_text(encoding="utf-8").splitlines()
+                if ln.startswith("TINYCMDR_WEB_TOKEN=")]
+        check("H1: `web` prints the link built from it",
+              bool(_tok) and ("#token=" + _tok[-1]) in wblob, wblob[-200:])
+        # `--web` gets its own run: the chat-intent fixture would send it through the
+        # chat startup gate first, so the config is blanked to no-intent and the run
+        # must serve the page - and hold it open, which is the whole point of the flag.
+        # The token is already in .env from the verb above, so nothing mints here.
         _cfg = json.loads((stage / "config.json").read_text(encoding="utf-8"))
         _cfg["mattermost"]["url"] = ""
         _cfg["mattermost"]["token"] = ""
         _cfg["mattermost"]["allowed_users"] = []
+        # port 0: an ephemeral one, so this grades "it serves", not "8790 was free" -
+        # the product's default port belongs to whatever tinycmdr the box really runs.
+        _cfg["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
         (stage / "config.json").write_text(json.dumps(_cfg), encoding="utf-8")
-        fl = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "--web"],
-                            cwd=str(stage), capture_output=True, text=True, timeout=120,
-                            stdin=subprocess.DEVNULL,
-                            env=dict(os.environ, TINYCMDR_PLAIN="1"))
-        fblob = fl.stdout + fl.stderr
-        check("H1: `--web` without a token exits 0 and explains the token",
-              fl.returncode == 0 and "no token" in fblob, (fl.returncode, fblob[-220:]))
+        try:
+            fl = subprocess.run([sys.executable, str(stage / "tinycmdr.py"), "--web"],
+                                cwd=str(stage), capture_output=True, text=True, timeout=8,
+                                stdin=subprocess.DEVNULL,
+                                env=dict(os.environ, TINYCMDR_PLAIN="1"))
+            fcode, fblob = fl.returncode, fl.stdout + fl.stderr
+        except subprocess.TimeoutExpired as e:
+            fcode = "serving"
+            fblob = (e.stdout or "") + (e.stderr or "")
+            if isinstance(fblob, bytes):
+                fblob = fblob.decode("utf-8", "replace")
+        check("H1: `--web` serves the page and holds it open",
+              fcode == "serving" and "tinycmdr page:" in fblob
+              and "Serving the page" in fblob, (fcode, fblob[-240:]))
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 

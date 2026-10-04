@@ -4,8 +4,10 @@ This is the revived web UI's suite, written against the lane as it EXISTS now (t
 original suite died with the old lane). Every check below is either a behaviour the
 lane promises or an incident the old one paid for:
 
-    * no token -> no server (the old lane served loopback with no auth: CSRF against
-      shell access, BUGREPORT S7). web.enabled false -> no server either.
+    * no token -> the start path MINTS one (into .env) rather than serving ungated; the
+      old lane served loopback with no auth at all: CSRF against shell access, BUGREPORT
+      S7. A host that upgrades into the page gets a token and a link, not homework.
+      web.enabled false -> no server either.
     * the token is compared in constant time, and it never appears in the log.
     * Host/Origin rules: a cross-origin request is refused, a foreign Host is refused.
     * the body is capped BEFORE it is read (S8); uploads have their own cap.
@@ -24,6 +26,7 @@ import importlib.util
 import io
 import json
 import logging
+import os
 import shutil
 import sys
 import tempfile
@@ -77,9 +80,54 @@ def main():
     token = "tok-webui-suite-0123456789"
     base = None
 
-    # ---- no token, no server ------------------------------------------------
+    # ---- no token: the server MINTS one, and never serves ungated ---------------
+    # An install that predates the page - or a first start on a fresh host - has no
+    # token in .env. The rule is "no token, no server", not "no token, no page": the
+    # start path makes the token it requires (into .env, never config.json) and then
+    # serves gated, so an upgrade introduces the page instead of stranding it behind a
+    # command the operator has to be told about.
     fb.CONFIG["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0}
-    check(fb.run_webui() is None, "no token: the server refuses to start")
+    os.environ.pop("TINYCMDR_WEB_TOKEN", None)
+    if fb.ENV_FILE.exists():
+        fb.ENV_FILE.unlink()
+    check(fb.run_webui() is None,
+          "run_webui itself still refuses to serve without a token")
+    check("token" not in (fb.CONFIG.get("web") or {}),
+          "and the low-level start writes no token into config.json")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        srv0 = fb.start_web_surface(open_browser=False)
+    out0 = buf.getvalue()
+    minted = fb._web_token()
+    check(srv0 is not None,
+          "start_web_surface mints the token it needs instead of giving up")
+    check(bool(minted) and len(minted) >= 32,
+          "the minted token is long", len(minted or ""))
+    check(fb.ENV_FILE.exists()
+          and ("TINYCMDR_WEB_TOKEN=%s" % minted) in fb.ENV_FILE.read_text(encoding="utf-8"),
+          "it lands in .env (the one file the agent cannot read into a prompt)")
+    check((fb.ENV_FILE.stat().st_mode & 0o077) == 0,
+          "not group- or world-readable", oct(fb.ENV_FILE.stat().st_mode & 0o777))
+    check("minted TINYCMDR_WEB_TOKEN" in out0, "and the start says so", out0[:80])
+    check("#token=" + minted in out0, "the link it prints carries it")
+    port0 = srv0.server_address[1]
+    try:
+        r = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port0)
+        try:
+            with urllib.request.urlopen(r, timeout=5) as resp:
+                code0 = resp.status
+        except urllib.error.HTTPError as e:
+            code0 = e.code
+        check(code0 == 401, "the server it started is gated: no header -> 401", code0)
+        r = urllib.request.Request("http://127.0.0.1:%d/api/tasks" % port0,
+                                   headers={"X-Tinycmdr-Token": minted})
+        with urllib.request.urlopen(r, timeout=5) as resp:
+            check(resp.status == 200, "the minted token authenticates", resp.status)
+    finally:
+        srv0.shutdown()
+        srv0.server_close()
+
     fb.CONFIG["web"] = {"enabled": False, "host": "127.0.0.1", "port": 0,
                         "token": token}
     check(fb.run_webui() is None, "web.enabled false: no server")
@@ -230,9 +278,16 @@ def main():
     check(rc == 0 and "#token=" + token in buf.getvalue(),
           "the web verb prints the tokenized link", buf.getvalue()[:60])
     saved_tok = fb.CONFIG["web"].pop("token", None)
+    os.environ.pop("TINYCMDR_WEB_TOKEN", None)
+    if fb.ENV_FILE.exists():
+        fb.ENV_FILE.unlink()
+    buf = io.StringIO()
     with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(err):
         rc = fb._verb_web()
-    check(rc == 2, "the web verb refuses without a token")
+    check(rc == 0 and "minted TINYCMDR_WEB_TOKEN" in buf.getvalue(),
+          "the web verb mints a token when the host has none", buf.getvalue()[:80])
+    check("#token=" + (fb._web_token() or "\u0000") in buf.getvalue(),
+          "and prints the link built from it")
     fb.CONFIG["web"]["token"] = saved_tok
 
     # ---- LAN announcement order (no bind: the announce path only) -----------

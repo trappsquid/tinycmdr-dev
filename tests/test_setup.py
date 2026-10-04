@@ -15,6 +15,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -50,15 +51,19 @@ def stage(dirpath, egress):
     return dirpath
 
 
-def drive(dirpath, answer):
-    """Run the wizard with every answer empty but the last one."""
+def drive(dirpath, answer, page=("", "", "")):
+    """Run the wizard with every answer empty but the page's and the last one.
+
+    Prompt order: local/cloud, url, model, Mattermost?, Telegram?, page-serve,
+    page-LAN (only when serving), page-port (only when serving), egress. `page`
+    carries the three page answers; `answer` is the egress one.
+    """
     spec = importlib.util.spec_from_file_location("setup_" + dirpath.name,
                                                   dirpath / "tinycmdr.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
-    # 6 prompts in order: local/cloud, url, model, Mattermost?, Telegram?, egress.
-    mod.__dict__["_ANSWERS"] = ["", "", "", "", "", answer]
+    mod.__dict__["_ANSWERS"] = ["", "", "", "", ""] + list(page) + [answer]
     old_in = sys.stdin
     sys.stdin = FakeTTY("\n".join(mod.__dict__["_ANSWERS"]) + "\n")
     buf = io.StringIO()
@@ -103,6 +108,44 @@ def main():
                   f"Enter keeps the current value ({current})",
                   json.dumps(written.get("search")))
 
+        # ---- the page: the wizard asks the bind and mints the token ---------------
+        # The page is the default door and the one secret this project mints for you.
+        # An install that predates it has no TINYCMDR_WEB_TOKEN, and the wizard is where
+        # a person says whether other machines may reach it.
+        d = stage(work / "page-lan", False)
+        # an earlier wizard in THIS process minted a token and left it in os.environ
+        os.environ.pop("TINYCMDR_WEB_TOKEN", None)
+        rc, out, written, mod = drive(d, "", page=("y", "y", ""))
+        web = written.get("web") or {}
+        check(rc == 0 and web.get("host") == "0.0.0.0",
+              "answering yes puts the page on the network (web.host 0.0.0.0)", web)
+        env = (d / ".env").read_text(encoding="utf-8") if (d / ".env").exists() else ""
+        tok = mod._web_token()
+        check(bool(tok) and ("TINYCMDR_WEB_TOKEN=%s" % tok) in env,
+              "the token the page requires is minted into .env", env[-120:])
+        check("token" not in json.dumps(web),
+              "and never into config.json", json.dumps(web))
+        check("page link" in out and ("#token=" + tok) in out,
+              "the wizard prints the link to open", out[-300:])
+        check("Page         : http://0.0.0.0:8790" in out,
+              "the summary reports the bind", out[-400:])
+
+        d = stage(work / "page-keep", False)
+        rc, out, written, mod = drive(d, "", page=("", "", ""))
+        check(rc == 0 and (written.get("web") or {}).get("host") == "127.0.0.1",
+              "Enter keeps the loopback bind", written.get("web"))
+
+        d = stage(work / "page-off", False)
+        rc, out, written, mod = drive(d, "", page=("n", "", ""))
+        web = written.get("web") or {}
+        check(rc == 0 and web.get("enabled") is False,
+              "answering no turns the page off (web.enabled false)", web)
+        env = (d / ".env").read_text(encoding="utf-8") if (d / ".env").exists() else ""
+        check("TINYCMDR_WEB_TOKEN" not in env,
+              "and mints no token for a page that will not start", env[-120:])
+        check("Page         : (disabled)" in out,
+              "the summary says so", out[-400:])
+
         # ---- the endpoint is PROBED before the wizard moves on --------------------
         # Operator, 2026-09-30: "there should be a point in the interactive installer that
         # checks if your link is even reachable before it continues". The staged URL is
@@ -123,7 +166,8 @@ def main():
         sys.modules[spec.name] = mod
         spec.loader.exec_module(mod)
         answers = ["", "http://127.0.0.1:9/v1", "http://127.0.0.1:9/v2",
-                   "http://127.0.0.1:9/v3", "", "", "", ""]  # kind, urls, model, MM, TG
+                   "http://127.0.0.1:9/v3", "", "", "", "", "", "", ""]  # kind, urls,
+        # model, MM, TG, page x3, egress
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -149,8 +193,8 @@ def main():
         spec.loader.exec_module(mod)
         mod.probe_endpoint = lambda url, key=None, **kw: {
             "ok": True, "ids": ["qwen3-14b", "glm-4.6"], "status": 200, "error": ""}
-        # kind (local), url, model NUMBER, Mattermost, Telegram, egress
-        answers = ["", "http://127.0.0.1:8081/v1", "2", "", "", ""]
+        # kind (local), url, model NUMBER, Mattermost, Telegram, page x3, egress
+        answers = ["", "http://127.0.0.1:8081/v1", "2", "", "", "", "", "", ""]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()
@@ -189,9 +233,10 @@ def main():
         # no real DNS, no real window probe: the wizard's cloud path calls both
         mod._is_local_url = lambda url: False
         mod._detect_window = lambda url, headers=None: 0
-        # kind (cloud), key (wrong), url, key again (right), model NUMBER, MM, TG, egress
+        # kind (cloud), key (wrong), url, key again (right), model NUMBER, MM, TG,
+        # page x3, egress
         answers = ["cloud", "sk-bad", "https://api.example.com/v1", "sk-good", "1",
-                   "", "", ""]
+                   "", "", "", "", "", ""]
         old_in = sys.stdin
         sys.stdin = FakeTTY("\n".join(answers) + "\n")
         buf = io.StringIO()

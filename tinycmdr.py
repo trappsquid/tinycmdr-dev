@@ -288,6 +288,23 @@ DEFAULT_CONFIG = {
         "allowed_users": ["your-mattermost-user-id"],
         "ssl_verify": True,
     },
+    "web": {
+        # The browser door. ON by default: a bare `tinycmdr` starts this lane and opens
+        # a browser when the machine has one. It is token-gated ALWAYS - the token lives
+        # in .env as TINYCMDR_WEB_TOKEN (the installer mints one, and so does the first
+        # start of a host that has none; rotate with `tinycmdr token set
+        # TINYCMDR_WEB_TOKEN`). No token means NO server: never an open loopback port.
+        # host 127.0.0.1 keeps it on this machine; a headless box reached from the LAN
+        # sets host to 0.0.0.0 (the installer and `tinycmdr setup` ask), where the token
+        # travels in cleartext - use it on a network you trust. 8790 is the published
+        # default (8787 is RStudio Server's). This block MUST stay top-level: the
+        # sections above are what config.json's own keys merge into, and a `web` nested
+        # under `agent` would leave every upgraded install without one (their
+        # config.json predates the page) while TINYCMDR_WEB_TOKEN arrives from .env.
+        "enabled": True,
+        "host": "127.0.0.1",
+        "port": 8790,
+    },
     "search": {
         # PROVIDERS, in order: the first that answers wins. `kind` picks the adapter,
         # `url` its endpoint, `api_key_env` the .env variable holding that provider's
@@ -447,18 +464,6 @@ DEFAULT_CONFIG = {
         # normal case for the CLI, and the model must know it before it burns calls on
         # admin-only commands.
         "shell_facts": True,
-        # The browser door. ON by default: a bare `tinycmdr` starts this lane and opens
-        # a browser when the machine has one. It is token-gated ALWAYS - the token is
-        # minted into .env as TINYCMDR_WEB_TOKEN (rotate with `tinycmdr token set
-        # TINYCMDR_WEB_TOKEN`), and no token means NO server: never an open loopback
-        # port. host 127.0.0.1 keeps it on this machine; a headless box reached from
-        # the LAN sets host 0.0.0.0 (the installer asks), where the token travels in
-        # cleartext - use it on a network you trust. 8790 is the published default.
-        "web": {
-            "enabled": True,
-            "host": "127.0.0.1",
-            "port": 8790,
-        },
         # event_log: append one JSONL line per event - run start/end, tool call, tool
         # result WITH its outcome, and reveal/eject when the wire's tool block changes -
         # to sessions/<key>.events.jsonl. SHADOW ONLY for
@@ -1002,11 +1007,18 @@ def load_config():
             continue
         section, key = spec[0], spec[1]
         parse = spec[2] if len(spec) > 2 else None
+        # setdefault, not []: an env var whose section is missing from this host's
+        # config.json must never be a startup traceback. The morning this bit, a minted
+        # TINYCMDR_WEB_TOKEN met a config.json written before the page existed (no `web`
+        # block) and the process died at import - the upgrade path, not a corner.
+        bucket = cfg.setdefault(section, {})
+        if not isinstance(bucket, dict):
+            bucket = cfg[section] = {}
         if parse is None:
-            cfg[section][key] = raw
+            bucket[key] = raw
             continue
         try:
-            cfg[section][key] = parse(raw)
+            bucket[key] = parse(raw)
         except Exception:                                        # noqa: BLE001
             log.warning("%s could not be parsed as %s; left at its default", env, key)
     # The Telegram token is .env-ONLY (audit, 2026-09-22). Every other secret here
@@ -23207,6 +23219,31 @@ def _web_token():
                or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip()
 
 
+def _web_token_mint(announce=True):
+    """Mint the page's token into .env when a host has none, and say so.
+
+    The token is OURS to generate (unlike a provider's), so an install that was set up
+    before the page existed - or that starts it for the first time - never has to invent
+    43 characters by hand, and still never gets an open port: "no token, no server" is
+    kept by the server minting the token it requires. The value goes to .env (the one
+    file the agent cannot read into a prompt) and to this process's environment; it is
+    never written to config.json, and only the link built from it is printed.
+    """
+    import secrets as _secrets
+    tok = _secrets.token_urlsafe(32)
+    try:
+        _env_set("TINYCMDR_WEB_TOKEN", tok)
+    except Exception as e:                                            # noqa: BLE001
+        print("could not write %s: %s" % (ENV_FILE, e), file=sys.stderr)
+        return ""
+    os.environ["TINYCMDR_WEB_TOKEN"] = tok
+    if announce:
+        print("minted TINYCMDR_WEB_TOKEN (the page's access token; it is in %s, never "
+              "printed in full here)." % ENV_FILE.name)
+    log.info("minted TINYCMDR_WEB_TOKEN into .env: the page is enabled and had none")
+    return tok
+
+
 def _web_lan_ip():
     """This box's first non-loopback IPv4, or "" - what a LAN visitor would type."""
     try:
@@ -23295,9 +23332,10 @@ def start_web_surface(open_browser=True):
     web = CONFIG.get("web") or {}
     if not web.get("enabled", True):
         return None
-    if not _web_token():
-        print("web UI off: no token. Mint one with `tinycmdr token set "
-              "TINYCMDR_WEB_TOKEN`, or set web.enabled: false.", file=sys.stderr)
+    if not _web_token() and not _web_token_mint():
+        print("web UI off: no token, and one could not be minted (see above). Set "
+              "web.enabled: false to stop this line, or write .env by hand.",
+              file=sys.stderr)
         return None
     port = int(web.get("port") or 8790)
     if _web_answers(port):
@@ -23308,6 +23346,11 @@ def start_web_surface(open_browser=True):
         return None
     srv = run_webui()
     if srv is None:
+        # Say what would work: who holds the port, and that a page already answering
+        # there is usable as-is (the log gets the same, but a person at the terminal
+        # sees this).
+        for line in web_busy_note(web.get("host") or "127.0.0.1", web.get("port") or 8790):
+            print(line, file=sys.stderr)
         return None
     _announce_web(srv.server_address[1], open_browser=open_browser)
     return srv
@@ -23318,7 +23361,7 @@ def _verb_web(rest=None):
     is one. Read-only with respect to the running service - a second process must
     NOT bind the port to answer this."""
     web = CONFIG.setdefault("web", {})
-    tok = _web_token()
+    tok = _web_token() or _web_token_mint()
     if not tok:
         print("no token: mint one with `tinycmdr token set TINYCMDR_WEB_TOKEN`.",
               file=sys.stderr)
@@ -23337,32 +23380,6 @@ def _verb_web(rest=None):
             pass
     return 0
 
-
-def run_web_mode():
-    """Foreground page service: the browser is the surface, this process serves it.
-
-    Typing it IS the asking, so web.enabled is forced on for this process. The
-    token is mandatory; without one there is nothing to serve."""
-    web = CONFIG.setdefault("web", {}) or {}
-    web["enabled"] = True
-    log.info("%s", capability_line("web"))
-    if not _web_token():
-        print("no token to gate the page with: mint one with "
-              "`tinycmdr token set TINYCMDR_WEB_TOKEN`.", file=sys.stderr)
-        return 2
-    srv = run_webui()
-    if srv is None:
-        for line in web_busy_note(web.get("host") or "127.0.0.1", web.get("port")):
-            print(line)
-        return 1
-    print("  model: %s at %s" % (CONFIG["llm"].get("model") or "(default)",
-                                 CONFIG["llm"].get("base_url") or "(no base_url set!)"))
-    _announce_web(srv.server_address[1], open_browser="--no-browser" not in sys.argv)
-    try:
-        while True:
-            time.sleep(3600)
-    except KeyboardInterrupt:
-        print("stopping.")
 
 class MattermostDestination(Destination):
     """A Mattermost channel: posts, edits and deletes through the dispatcher.
@@ -26659,7 +26676,7 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
 
 
 def run_setup(rest=None):
-    """Guided interactive setup wizard: model endpoint, chat gateways, web search."""
+    """Guided interactive setup wizard: model endpoint, chat gateways, the page, web search."""
     if _CLI.get("app") is not None:
         # The app owns stdin as well as the screen, and a raw input() competes with its
         # input box for the same bytes - the prompts and the app's frame scribble over each
@@ -26674,7 +26691,7 @@ def run_setup(rest=None):
         return 1
 
     print(_cli_render_box("tinycmdr Setup Wizard", [
-        "Configure model endpoints, Mattermost, Telegram, and web-search consent.",
+        "Configure model endpoints, Mattermost, Telegram, the page, and web-search consent.",
         "Press Enter to keep current values shown in [brackets].",
     ]))
     print()
@@ -26767,7 +26784,49 @@ def run_setup(rest=None):
                 tg["allowed_users"] = [u.strip() for u in tg_users.split(",") if u.strip()]
     print()
 
-    print(bold("4. Web search (optional)"))
+    print(bold("4. The page (browser)"))
+    # The page is the default door, and its token is the one secret this project mints
+    # for you. An install that predates the page has none: setup is where a person is
+    # asked the two things nobody can infer - whether other machines may reach it, and
+    # on which port - and the token is minted here the same way `tinycmdr token set`
+    # mints an empty value, so the answer is a working link, not homework.
+    web = raw.setdefault("web", {})
+    cur_on = bool(web.get("enabled", True))
+    ans_on = input("   Serve the page? [%s]: " % ("y" if cur_on else "n")).strip().lower()
+    web["enabled"] = cur_on if not ans_on else ans_on in ("y", "yes", "true", "1")
+    if web["enabled"]:
+        cur_host = str(web.get("host") or "127.0.0.1")
+        print(dim("   127.0.0.1 keeps it on this machine; 0.0.0.0 lets any machine on "
+                  "your network open it, where the token travels in cleartext."))
+        ans_lan = input("   Reachable from other machines on your network? [%s]: "
+                        % ("y" if cur_host in ("0.0.0.0", "::") else "n")).strip().lower()
+        if ans_lan:
+            web["host"] = "0.0.0.0" if ans_lan in ("y", "yes", "true", "1") else "127.0.0.1"
+        else:
+            web["host"] = cur_host
+        cur_port = web.get("port") or 8790
+        ans_port = input("   Port [%s]: " % cur_port).strip()
+        if ans_port:
+            try:
+                web["port"] = int(ans_port)
+            except ValueError:
+                print(dim("   '%s' is not a port; keeping %s" % (ans_port, cur_port)))
+        web.setdefault("port", 8790)
+        if not _web_token():
+            _web_token_mint(announce=True)
+        tok = _web_token()
+        if tok:
+            urls = _web_base_urls(int(web.get("port") or 8790))
+            print(dim("   page link : %s#token=%s" % (urls[0][0], tok)))
+            if web.get("host") in ("0.0.0.0", "::"):
+                print(dim("   that link works from your network; the token rides in "
+                          "cleartext there, so use a network you trust"))
+    else:
+        print(dim("   the page will not start; `tinycmdr --web` can still serve it for "
+                  "one run."))
+    print()
+
+    print(bold("5. Web search (optional)"))
     search = raw.setdefault("search", {})
     cur_egress = bool(search.get("allow_cloud_egress"))
     print(dim("   A provider off this LAN sees the words of the model's query. A provider"))
@@ -26802,6 +26861,9 @@ def run_setup(rest=None):
         "Telegram     : %s" % ("configured" if tg.get("allowed_users") else "(disabled)"),
         "TG Users     : %s" % (", ".join(str(x) for x in (tg.get("allowed_users") or [])) or "(none)"),
         "---",
+        "Page         : %s" % ("http://%s:%s (token in .env)"
+                               % (web.get("host") or "127.0.0.1", web.get("port") or 8790)
+                               if web.get("enabled", True) else "(disabled)"),
         "Web search   : %s" % ("off-LAN providers allowed"
                                if search.get("allow_cloud_egress")
                                else "this LAN only (searxng never needs consent)"),
@@ -28520,7 +28582,7 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      may automatic failover send to an off-LAN endpoint? (off by
                      default: off-LAN endpoints are reached only when you switch)
   model remove <x>   drop a fallback entry (by model name, alias or url)
-  setup              interactive wizard: model, Mattermost, Telegram, web search
+  setup              interactive wizard: model, Mattermost, Telegram, the page, web search
   config get|set|unset <dotted.key> [value]
                      read or edit config.json (a read-back is printed; secrets refused)
   health             one line + exit code: up, lane, model (no network, for scripts)

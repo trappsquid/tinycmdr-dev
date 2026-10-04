@@ -124,9 +124,10 @@ tinycmdr --no-web     # the session alone, no page for this run
 `Ctrl-C` stop run / quit idle · `Ctrl-D`/`Ctrl-Q`/`Esc` quit · `Ctrl-Y` copy newest item (again:
 walk back) · `Ctrl-B` copy transcript. Wheel scroll: `TINYCMDR_APP_MOUSE=1`.
 
-**Page:** token-gated always (`TINYCMDR_WEB_TOKEN` in `.env`, minted at install; a bare `tinycmdr`
-serves it). Loopback by default; the installer can set `0.0.0.0` for LAN access — token in
-cleartext there, so trust the network. Rotate/reprint:
+**Page:** token-gated always (`TINYCMDR_WEB_TOKEN` in `.env`; the installer mints one, and so does
+the first start of a host that has none — an install that upgraded into the page). `tinycmdr setup`
+asks the two things nobody can infer: loopback or LAN, and the port. Loopback by default; `0.0.0.0`
+puts it on your network — token in cleartext there, so trust the network. Rotate/reprint:
 
 ```bash
 tinycmdr token set TINYCMDR_WEB_TOKEN   # empty value mints a fresh one, prints the link
