@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.72] - 2026-10-04
 
+Fixed
+- **The setup questions follow the answers.** `_ask_model_target` asks the endpoint
+  LINK before the key it needs (cloud only) - a key belongs to a link, and the old order
+  was kind -> key -> url. A hosted endpoint that reports no context window is now ASKED
+  for it at that moment (`llm.max_context_tokens`, "128k" or a number) instead of
+  leaving the config entry as homework. Both apply to `setup` and `model add` (operator's
+  order report, 2026-10-04; `tests/test_setup.py`).
+- **The page stops prompting for its token when the cookie already authenticates.** The
+  handover (POST `/api/login` -> HttpOnly cookie) already existed on both sides, but the
+  boot prompted on every visit because a script cannot read the cookie. It now probes
+  `GET /api/login` first - 200 means the cookie is good, 401 means a fresh browser - and
+  asks only then (`tests/test_webui_page.py`, `tests/test_webui.py`). The page suite's
+  `/api/log` branch had been swallowing `/api/login`, which is why it never caught this.
+
 Changed
 - **The stage's backdrop is the operator's photo.** `assets/roman-temple-spring.jpg`
   (the operator's own, 2048x1152) replaces the drawn colonnade everywhere it appeared:

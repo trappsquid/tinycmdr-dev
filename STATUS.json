@@ -1403,6 +1403,16 @@
       },
       "detail": "Operator, 2026-10-04: a new photo, 'the permanent background replacement for the dark pillars background of the webUI'. The drawn colonnade (assets/roman-colonnade.svg, themed gold and bronze) is gone - SVG, route and substitution deleted; the photo is served at /temple.jpg (image/jpeg, cached a day, read per request so a host can swap it at the same path) and the backdrop element is emitted only when the file exists. The CSS was tuned by LOOKING at the rendered page: cover/bottom anchoring, a vertical feather mask, opacity .6 in the hero and .28 with a chat open, plus a left scrim in .stage-vignette so the copy stays legible over the bright marble. tests/test_webui.py pins the no-photo absence, the element's aria-hidden, and the route's bytes and JPEG signature; the asset-set derivation covers the file with no list, so the manifest, install and archive checks do too.",
       "gate": "done - landed as f3835b5; verified live in the hero and mid-run states"
+    },
+    {
+      "id": "setup-order-and-token-prompt",
+      "title": "the wizard asks the link before its key, the window at the endpoint, and the page stops prompting when the cookie authenticates",
+      "state": "open",
+      "anchor": {
+        "commit": "ac2bd17"
+      },
+      "detail": "Operator, 2026-10-04, on a fresh install: 'the api key is asked for first instead of the endpoint link... it asked me about one thing and then later on it asked for a config entry for it when it should have asked at that time', and 'how we are requiring a web-ui token to be re-entered so often for no reason'. Fixed (ac2bd17): _ask_model_target asks the endpoint LINK before the key (cloud only; the 401 re-ask stays where its reason is visible) and a hosted endpoint that reports no context window is ASKED for llm.max_context_tokens at that moment (128k or a number; the 2048 reply floor is refused) instead of leaving it as homework - both in `setup` and `model add`. And the page no longer prompts for its token when the handover cookie already authenticates: the boot probes GET /api/login (200 = cookie good, 401 = fresh browser) and asks only then. The page suite never saw the prompt bug because its /api/log prefix branch swallowed /api/login; the branch order is fixed and the probe is graded in both suites.",
+      "gate": "done - landed as ac2bd17; tests/test_setup.py + tests/test_webui.py + tests/test_webui_page.py"
     }
   ]
 }
