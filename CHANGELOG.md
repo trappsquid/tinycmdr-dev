@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.77] - 2026-10-04
+
+Fixed
+- **Memory promotion is event-driven, and nothing enters as permanently true.** Operator's
+  self-audit, 2026-10-04: the save decision was made at WRITE TIME - the moment a fact is
+  freshest, which tracks the effort just spent, not future value - so a box's `memory/`
+  held the publishable (a VMAF measurement) while the load-bearing facts ("verbs need
+  `venv/bin/python`", "macOS has no `timeout`") lived only in legacy `notes.md`, and
+  nothing anywhere said so. `remember_offer` now fires on the run's own hand-call count
+  (snapshotted at run start; the counters are session-cumulative), once per session, and
+  asks **save or dismiss**; `offer_after_run` keeps one offer per run in priority order
+  (lookup-memory → mint → event-memory), so the event ask can never shadow the mint
+  offer; and a bare "dismiss" is a control order recorded for that shape and answered
+  without a model call. (`tests/test_memory_prompts.py`.)
+- **A restatement is refused; a replacement is stated.** `add` refuses a near-duplicate
+  body (Jaccard over content words, at least 10 shared - containment scores two different
+  facts about one subsystem as one) with the id to update and the `supersedes` escape
+  hatch; `supersedes: "<id>"` records what the new concept replaces and deprecates the old
+  one with the reason, in the same call. (`tests/test_memory_okf.py`.)
+- **The index line carries the operative token, and states its tier.** The derived
+  description is the first complete unit that names a flag or identifier from the title,
+  with any cut marked by an ellipsis - measured 2026-10-04: an index line ended
+  "…ffmpeg 8.1.1 at" while `-lmin`, the whole point, never reached the prompt. Every index
+  line now states its verification tier, `unverified` included. Schema rent was decided by
+  the gates: the first cut declared all six new fields and tripped the 1200-char per-tool
+  cap (memory 1426) and the 5400-token static ceiling (5662), so `description` alone is
+  declared; `supersedes` is taught by the refusal that needs it, and `stale_after` by a
+  once-per-session hint on the model's own first add.
+
 ## [1.0.76] - 2026-10-04
 
 Fixed
