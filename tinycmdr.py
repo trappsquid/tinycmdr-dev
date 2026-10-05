@@ -32287,6 +32287,34 @@ def _apply_package(root):
     return written, skipped
 
 
+def _package_differs(root):
+    """True when applying this package would write anything - content, not the label.
+
+    `update` used to trust the VERSION string alone, so a half-applied release (a write
+    loop killed by disk-full, an indexer holding a file open) was told "already up to
+    date" for ever, and the one command that repairs it refused to run (A-2026-10-05-10).
+    Same skip rules as _apply_package: an existing host-owned destination is the
+    operator's own file and never counts as a difference.
+    """
+    for src in sorted(root.rglob("*")):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(root)
+        if rel.parts and rel.parts[0] in ("dist", ".git"):
+            continue
+        dest = BASE_DIR / rel
+        try:
+            new = src.read_bytes()
+        except OSError:
+            continue
+        if _host_owned(rel) and dest.exists():
+            continue
+        old = dest.read_bytes() if dest.exists() else None
+        if old != new:
+            return True
+    return False
+
+
 def _verb_update(rest):
     """`update [--full]` or `update <file.py|zip|folder>` — put a newer build in place.
 
@@ -32358,12 +32386,15 @@ def _verb_update(rest):
                 return 1
             new_version = m.group(1)
             this_version = _disk_version()
-            if new_version == this_version:
+            if new_version == this_version and not _package_differs(root):
+                # A TRUE no-op: change NOTHING. This branch used to prune the dev kit,
+                # so "already up to date" deleted tests/docs while refusing the repair
+                # a half-applied update needed (A-2026-10-05-10).
                 print("already up to date: VERSION %s" % this_version)
-                note = _prune_dev_kit(keep_dev)
-                if note:
-                    print(note)
                 return 0
+            if new_version == this_version:
+                print("VERSION %s is already here, but this package's files differ - "
+                      "applying it to repair the install" % this_version)
             stamp = time.strftime("%Y%m%d-%H%M%S")
             _kept = preserve_edited_soul(stamp)
             if _kept:
@@ -32386,7 +32417,11 @@ def _verb_update(rest):
             note = _prune_dev_kit(keep_dev)
             if note:
                 print(note)
-            print("VERSION %s -> %s" % (this_version, new_version))
+            if new_version != this_version:
+                print("VERSION %s -> %s" % (this_version, new_version))
+            else:
+                print("repaired: %d file(s) restored from the %s package"
+                      % (len(written), new_version))
             print("Restart tinycmdr to run new build: `tinycmdr restart`")
             return 0
         finally:

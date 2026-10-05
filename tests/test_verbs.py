@@ -201,6 +201,36 @@ def main():
             shutil.rmtree(_atmp, ignore_errors=True)
             shutil.rmtree(_pkg, ignore_errors=True)
 
+        # The equal-VERSION short-circuit must compare CONTENT, not the label: a
+        # half-applied update carries the new VERSION while some files are still old, and
+        # "already up to date" used to refuse to repair it - while pruning the dev kit on
+        # the way out (A-2026-10-05-10).
+        _dtmp = Path(tempfile.mkdtemp(prefix="fbtest-differs-"))
+        _dpkg = Path(tempfile.mkdtemp(prefix="fbtest-differs-pkg-"))
+        try:
+            fb.BASE_DIR = _dtmp
+            (_dtmp / "tinycmdr.py").write_text("same", encoding="utf-8")
+            (_dpkg / "tinycmdr.py").write_text("same", encoding="utf-8")
+            check("an identical package is a true no-op",
+                  fb._package_differs(_dpkg) is False)
+            (_dpkg / "tinycmdr.py").write_text("TWO", encoding="utf-8")
+            check("a same-VERSION package with different bytes is NOT 'up to date'",
+                  fb._package_differs(_dpkg) is True)
+            (_dtmp / "tinycmdr.py").write_text("TWO", encoding="utf-8")
+            (_dtmp / "tools").mkdir()
+            (_dpkg / "tools").mkdir()
+            (_dtmp / "tools" / "mine.py").write_text("MINE", encoding="utf-8")
+            (_dpkg / "tools" / "mine.py").write_text("SHIPPED", encoding="utf-8")
+            check("...and a host-owned difference is not a repair (never overwritten)",
+                  fb._package_differs(_dpkg) is False)
+            (_dpkg / "install").mkdir()
+            (_dpkg / "install" / "x.sh").write_text("new", encoding="utf-8")
+            check("...while a MISSING package file is", fb._package_differs(_dpkg) is True)
+        finally:
+            fb.BASE_DIR = _ab
+            shutil.rmtree(_dtmp, ignore_errors=True)
+            shutil.rmtree(_dpkg, ignore_errors=True)
+
         # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,
         # while a "same_as live" (or unreadable) declaration must hold it off - the
