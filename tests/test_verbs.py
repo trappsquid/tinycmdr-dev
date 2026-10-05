@@ -245,6 +245,17 @@ def main():
             shutil.rmtree(_dtmp, ignore_errors=True)
             shutil.rmtree(_dpkg, ignore_errors=True)
 
+        # A release can raise a dependency bound. Nothing installs from the file on
+        # its own, so the update verb must SAY the exact command when it writes
+        # requirements.txt, and the import guard must point at the file instead of a
+        # hand-maintained module list (A-2026-10-05-12).
+        _tsrc = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
+        check("the update verb names the pip command when requirements.txt changes",
+              "dependencies changed in this release" in _tsrc
+              and "pip install -r %s" in _tsrc)
+        check("...and the mmpy_bot guard points at requirements.txt, not a module list",
+              "pip install requests mmpy_bot croniter" not in _tsrc)
+
         # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,
         # while a "same_as live" (or unreadable) declaration must hold it off - the

@@ -8,7 +8,7 @@ process. It connects to your Mattermost server as a bot, listens for DMs and
 log reading, web search, and self-created custom tools — until the task is
 done, and reports back in the thread.
 
-Dependencies:  pip install requests mmpy_bot croniter
+Dependencies:  pip install -r requirements.txt
 Config:        config.json next to this file (see config.example.json)
 Custom tools:  drop .py files into ./tools/ (the agent also writes its own
                here via the create_tool tool)
@@ -27527,10 +27527,11 @@ def run_bot():
         # Without this, a host missing mmpy_bot started, wrote two warnings, then
         # died on a traceback that pythonw discards -- "running but never connects"
         # with nothing in the log (live 2026-09-10 on a fresh install).
-        log.critical("the Mattermost layer needs mmpy_bot (%s). For this "
-                     "interpreter install the declared dependencies:\n"
-                     "  %s -m pip install requests mmpy_bot croniter", exc,
-                     sys.executable)
+        log.critical("the Mattermost layer needs mmpy_bot (%s). Install this "
+                     "install's DECLARED dependencies - the file is the authority, "
+                     "not a hand-picked module list:\n"
+                     "  %s -m pip install -r %s", exc, sys.executable,
+                     BASE_DIR / "requirements.txt")
         sys.exit(2)
 
     dispatcher = MattermostDispatcher()
@@ -32421,6 +32422,17 @@ def _verb_update(rest):
                   % (len(written),
                      (": " + ", ".join(written[:5]) + ("..." if len(written) > 5 else ""))
                      if written else ""))
+            if "requirements.txt" in written:
+                # The bounds in that file are load-bearing and nothing installs from
+                # it here, so the operator gets the exact command instead of a new
+                # build meeting an old venv (A-2026-10-05-12). Deliberately NOT
+                # automatic: an update should not reach the network beyond the
+                # release package itself.
+                _venv_py = BASE_DIR / "venv" / ("Scripts/python.exe" if IS_WINDOWS
+                                                else "bin/python")
+                print("dependencies changed in this release - reconcile the venv:")
+                print("    %s -m pip install -r %s"
+                      % (_venv_py, BASE_DIR / "requirements.txt"))
             note = _prune_dev_kit(keep_dev)
             if note:
                 print(note)
@@ -33867,13 +33879,15 @@ def validate_startup_config():
         except ImportError:
             return (f"{mod} is not installed for {sys.executable}, and it is "
                     f"needed for {why}.\n"
-                    "Install the declared dependencies:  "
-                    f"{sys.executable} -m pip install requests mmpy_bot croniter")
+                    "Install the DECLARED dependencies (the file is the authority):"
+                    "  "
+                    f"{sys.executable} -m pip install -r "
+                    f"{BASE_DIR / 'requirements.txt'}")
     try:
         __import__("croniter")
     except ImportError:
         log.warning("croniter is not installed: the schedule tool will be "
-                    "disabled (pip install croniter)")
+                    "disabled (pip install -r requirements.txt)")
     # A missing Mattermost token is a MISTAKE only when this box intends to run that
     # lane; "no chat token at all" already returned above.
     if not _mm_token:
