@@ -9,3423 +9,1027 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.77] - 2026-10-04
 
-Fixed
-- **Memory promotion is event-driven, and nothing enters as permanently true.** Operator's
-  self-audit, 2026-10-04: the save decision was made at WRITE TIME - the moment a fact is
-  freshest, which tracks the effort just spent, not future value - so a box's `memory/`
-  held the publishable (a VMAF measurement) while the load-bearing facts ("verbs need
-  `venv/bin/python`", "macOS has no `timeout`") lived only in legacy `notes.md`, and
-  nothing anywhere said so. `remember_offer` now fires on the run's own hand-call count
-  (snapshotted at run start; the counters are session-cumulative), once per session, and
-  asks **save or dismiss**; `offer_after_run` keeps one offer per run in priority order
-  (lookup-memory → mint → event-memory), so the event ask can never shadow the mint
-  offer; and a bare "dismiss" is a control order recorded for that shape and answered
-  without a model call. (`tests/test_memory_prompts.py`.)
-- **A restatement is refused; a replacement is stated.** `add` refuses a near-duplicate
-  body (Jaccard over content words, at least 10 shared - containment scores two different
-  facts about one subsystem as one) with the id to update and the `supersedes` escape
-  hatch; `supersedes: "<id>"` records what the new concept replaces and deprecates the old
-  one with the reason, in the same call. (`tests/test_memory_okf.py`.)
-- **The index line carries the operative token, and states its tier.** The derived
-  description is the first complete unit that names a flag or identifier from the title,
-  with any cut marked by an ellipsis - measured 2026-10-04: an index line ended
-  "…ffmpeg 8.1.1 at" while `-lmin`, the whole point, never reached the prompt. Every index
-  line now states its verification tier, `unverified` included. Schema rent was decided by
-  the gates, twice: declaring all six new fields tripped the 1200-char per-tool cap (memory
-  1426) and took the static overhead to 5,662 local, and the cut that kept only
-  `description` measured 5,395 here but **5,412 on the macOS runner** - the ceiling is
-  5,400, and the runner measures a few tokens higher than this box. So **no new field is
-  declared**: `supersedes` is taught by the refusal that needs it, and `description` and
-  `stale_after` by one once-per-session hint on the model's own first add.
+### Fixed
+- **Memory:** `remember_offer` fires once per session on the run's hand-call count and asks save or dismiss; `offer_after_run` keeps one offer per run in priority order (lookup-memory → mint → event-memory). (tests/test_memory_prompts.py)
+- **Memory:** a bare dismiss is a control order recorded for that shape and answered without a model call. (tests/test_memory_prompts.py)
+- **Memory:** `add` refuses a near-duplicate body and returns the id to update plus the `supersedes` escape hatch; `supersedes` records what the new concept replaces and deprecates the old one in the same call. (tests/test_memory_okf.py)
+- **Memory:** the derived index description is the first complete unit naming a flag or identifier from the title, ellipsis-cut, and every index line states its verification tier including `unverified`; no new field is declared.
 
 ## [1.0.76] - 2026-10-04
 
-Fixed
-- **A schema-legal tool call never answers with a blank name or a Python repr.** A fleet
-  Linux box's run, stuck on a Mattermost-token question, asked
-  `skill{"action":"search","topic":"mattermost token mmctl ..."}` with no skill name and
-  was answered `No skill named ''` - an empty name and nothing to try - then re-issued its
-  last shell call until the loop guard wrapped the run up. The skill tool resolved the
-  skill BEFORE dispatching the verb, so that shape could never work. A bare topic now
-  searches every runbook the session may see (hits labelled `runbook :: file :: heading`);
-  `read` without a name says a name is needed; verbs are lower-cased (`Search`/`Read` fell
-  through into the search tail); `show|get|open` are read aliases; an unhandled verb names
-  the three it has; the topic scan lower-cases first (an all-caps topic answered "nothing
-  to look up"); and an empty topic says what to pass. (`tests/test_tool_discovery.py`.)
-  Sweeping every tool with the minimal arguments its own schema permits found four more
-  answers of the class - `write_file{path}` returned `ERROR writing <path>: 'content'`,
-  `memory`/`experiment`/`plan` answered id-less verbs with `no concept ''` /
-  `no experiment #None` / `No plan step with id None`, and `search_sessions` with an empty
-  query returned a dangling colon. They now use the shared missing-argument answer or an
-  explicit "needs `id`/`query`". (`tests/test_tool_doors.py`.)
+### Fixed
+- **Skill tool:** topics search every visible runbook; verbs lower-cased, `show|get|open` alias `read`, nameless `read`/empty or all-caps topic say what's needed, unhandled verb names its three. (tests/test_tool_discovery.py)
+- **Tool doors:** `write_file`, `memory`, `experiment`, `plan` and `search_sessions` use the shared missing-argument answer or an explicit needs-`id`/`query` instead of a Python repr or empty name. (tests/test_tool_doors.py)
 
 ## [1.0.75] - 2026-10-04
 
-Fixed
-- **An endpoint that reports no context window gets its DOCUMENTED one.** A hosted API
-  that answers nothing used to run at a conservative assumed 8000 tokens with replies
-  clipped to 2048, so a 1M-token provider needed a hand-written
-  `llm.max_context_tokens` (operator's DeepSeek report, 2026-10-04: "you must write
-  1000000 explicitly"). `llm.window_presets` (host-substring -> tokens) is consulted
-  first, then a small built-in table of the providers' documented windows (OpenAI 128k,
-  Anthropic 200k, DeepSeek 128k - the providers' own docs); the resolution is pinned ->
-  server -> preset -> explicit ceiling -> assumed 8000; the source is named in the log
-  and in the health line ("window from api.deepseek.com (documented; ...)"), and
-  `llm.max_context_tokens` still caps whatever a preset says. Matched by HOST only -
-  F-19's rule against guessing from a model name stays. With a window, the reply cap
-  follows it instead of the assumed branch's hard 2048. (`tests/test_endpoint_window.py`.)
-  In the same pass the ledger's `caps-from-window` wish was found to be already solved -
-  `mem_limit_chars`' `window // 8` tightening plus its one-shot ceiling (df4282c), and
-  `llm.window_profiles` with the example's three small-model bands - and was closed
-  rather than re-implemented.
+### Fixed
+- **Endpoint window:** an endpoint reporting no context window gets its documented one — `llm.window_presets` (host substring → tokens), then a built-in table (OpenAI 128k, Anthropic 200k, DeepSeek 128k). (tests/test_endpoint_window.py)
+- **Endpoint window:** resolution is pinned → server → preset → explicit ceiling → assumed 8000, and `llm.max_context_tokens` still caps whatever a preset says.
+- **Endpoint window:** the source is named in the log and health line, matching is by host only, and the reply cap follows the window instead of hard 2048. (tests/test_endpoint_window.py)
+
+### Notes
+- The ledger's `caps-from-window` wish is already solved by `mem_limit_chars`' `window // 8` tightening plus its one-shot ceiling and `llm.window_profiles`; it was closed rather than re-implemented.
 
 ## [1.0.74] - 2026-10-04
 
-Fixed
-- **The model's markdown renders in the page and on Telegram.** The page printed raw
-  text - no markdown at all - so tables, bold, links, lists and code arrived as
-  punctuation soup (operator: "a model tried to use a markdown table but in the webui it
-  looks all stupid. And in mattermost it shows as a normal table"). It renders now, from
-  DOM nodes and never innerHTML: tables, fenced code, lists, bold/italic/inline code,
-  links, bare URLs, images as links; wide tables scroll. Telegram's converter handled
-  only backticks, so the same class hit there; `tg_html` now emits Telegram's HTML subset
-  (bold/italic/code/pre/a) with code spans protected and tables wrapped in `<pre>`
-  (Telegram's HTML has no table element). Tests: `test_webui_page.py`,
-  `test_telegram.py`.
-- **The no-progress nudge is a budget, not a single ask.** Two one-shot flags ended the
-  guard that asks a model to act again - one for a promise that ends a run which already
-  did work, one for a run with no tool call at all - so a weak model stopping twice got
-  one nudge and a "stopped short" delivery (operator: "the harness keeps allowing the
-  model to stop... It has stopped 2x this run now"). Both spend
-  `agent.nudge_retries` asks (default 3; 0 restores the old behaviour), each logged with
-  its counter; the delivery annotation stays for a run that will not act. `test_stall.py`
-  pins budget-1 and budget-2.
-- **The rail toggle re-tracks the layout** (hiding the rail left the workspace's 292px
-  track reserved and pushed the stage into the sidebar's column), and the login probe
-  has a real GET branch above `/api/log` instead of being served by the log route's
-  prefix match (`tests/test_webui.py` asserts its payload).
-Added
-- **Search inside conversations.** `/api/search?q=` reads the same corpus and rules as
-  the model's `search_sessions` tool (factored into `session_search_hits()`); the rail's
-  box debounces into it and shows matches with the conversation's title, a
-  marker-stripped snippet, and a click that opens that conversation
-  (`test_webui.py`, `test_webui_page.py`).
-- **The checks-and-balances this batch was asked for.** `tests/test_contracts.py` grades
-  every must-agree pair derived from both sides (page ids vs the test harness's DOM,
-  placeholders vs substitutions, referenced assets vs the docs' route table, `.env` keys
-  installers write vs what the code reads, and both routers' prefix ordering - the class
-  that hid the login probe behind `/api/log`). `maintenance/check-package-page.py`,
-  wired into `release.sh`, serves each BUILT archive and fetches the page the way a
-  browser does. `development.md` section 7 states the rule: a reported bug lands as the
-  fix plus the invariant that grades its class.
+### Added
+- **Web UI:** `/api/search?q=` shares the corpus and rules of `search_sessions`; the rail box debounces into it and shows matches with the conversation title, a marker-stripped snippet and an open click. (tests/test_webui.py, tests/test_webui_page.py)
+- **Contracts:** `tests/test_contracts.py` grades every must-agree pair derived from both sides (page ids, placeholders, assets, `.env` keys, router prefix ordering). (tests/test_contracts.py)
+- **Contracts:** `maintenance/check-package-page.py`, wired into `release.sh`, serves each built archive and fetches the page the way a browser does.
+- **Docs:** `development.md` section 7 states the rule: a reported bug lands as the fix plus the invariant that grades its class.
+
+### Fixed
+- **Web UI:** the model's markdown renders in the page from DOM nodes and never innerHTML: tables, fenced code, lists, emphasis, links, bare URLs, images as links; wide tables scroll. (tests/test_webui_page.py)
+- **Telegram:** `tg_html` emits Telegram's HTML subset (bold/italic/code/pre/a) with code spans protected and tables wrapped in `<pre>`. (tests/test_telegram.py)
+- **Guards:** the no-progress nudge is a budget of `agent.nudge_retries` asks (default 3; 0 restores the old single ask), each logged with its counter; the delivery annotation stays for a run that will not act. (tests/test_stall.py)
+- **Web UI:** the rail toggle re-tracks the layout instead of leaving the workspace track reserved, and the login probe has a real GET branch above `/api/log` rather than being served by the log route's prefix match. (tests/test_webui.py)
 
 ## [1.0.73] - 2026-10-04
 
-Fixed
-- **Art updates reach the page on an ordinary reload.** The art routes cache for a day
-  while the stylesheet and the HTML revalidate, so an update could show a new backdrop
-  beside the old mascot until a hard reload (operator's "new background but old chibi" -
-  every artifact carried the right bytes; the browser was serving its cached copy). The
-  art URLs now carry the app version (`?v=<version>`), so a release invalidates exactly
-  the art it changed (`tests/test_webui.py`).
-Changed
-- **One status chip, four states, real colours.** The app bar and the stage header each
-  carried a pill for the same state machine - "idle" beside "ready" - and neither dot
-  ever changed colour; the stage chip also never reset when a run ended. One chip now,
-  in the stage header: ready (green) / working (gold, pulsing) / stopping (gold) /
-  trouble (red), every writer through one `setStage(state, detail)`, every state with a
-  tooltip (`tests/test_webui_page.py`).
+### Changed
+- **Web UI:** one status chip in the stage header replaces the two pills — ready (green), working (gold, pulsing), stopping (gold), trouble (red) — written through `setStage(state, detail)`, each with a tooltip. (tests/test_webui_page.py)
+
+### Fixed
+- **Web UI:** art URLs carry the app version (`?v=<version>`), so a release invalidates exactly the art it changed on an ordinary reload. (tests/test_webui.py)
 
 ## [1.0.72] - 2026-10-04
 
-Fixed
-- **The setup questions follow the answers.** `_ask_model_target` asks the endpoint
-  LINK before the key it needs (cloud only) - a key belongs to a link, and the old order
-  was kind -> key -> url. A hosted endpoint that reports no context window is now ASKED
-  for it at that moment (`llm.max_context_tokens`, "128k" or a number) instead of
-  leaving the config entry as homework. The link order applies to `setup` and
-  `model add` alike; the window question lives in `setup`, where the primary endpoint is
-  named (operator's order report, 2026-10-04; `tests/test_setup.py`,
-  `tests/test_model_setup.py`).
-- **The page stops prompting for its token when the cookie already authenticates.** The
-  handover (POST `/api/login` -> HttpOnly cookie) already existed on both sides, but the
-  boot prompted on every visit because a script cannot read the cookie. It now probes
-  `GET /api/login` first - 200 means the cookie is good, 401 means a fresh browser - and
-  asks only then (`tests/test_webui_page.py`, `tests/test_webui.py`). The page suite's
-  `/api/log` branch had been swallowing `/api/login`, which is why it never caught this.
-- **A refused GET recovers instead of stranding the page.** Any 401 on a GET/HEAD clears
-  the stale token, asks once (the retry prompt names the way back: run `tinycmdr web` on
-  the box and open the link it prints), and retries that call. It used to leave a bare
-  `unauthorized` note with no way out - the operator's "why do all my pages say
-  unauthorized now" (2026-10-04). POSTs keep their own handlers, whose messages name the
-  failed message.
+### Changed
+- **Web UI:** `assets/roman-temple-spring.jpg` replaces the drawn colonnade everywhere; the SVG asset, `/colonnade.svg` and the `{{GOLD}}`/`{{BRONZE}}` substitution are deleted. (tests/test_webui.py)
+- **Web UI:** the backdrop element is emitted only when the photo exists and served at `/temple.jpg` (JPEG, cached a day, read per request), drawn with cover/bottom anchoring, a feather mask, dimming and a left scrim. (tests/test_webui.py)
 
-Changed
-- **The stage's backdrop is the operator's photo.** `assets/roman-temple-spring.jpg`
-  (the operator's own, 2048x1152) replaces the drawn colonnade everywhere it appeared:
-  the SVG asset, its `/colonnade.svg` route and the `{{GOLD}}`/`{{BRONZE}}` substitution
-  are deleted; the server emits the backdrop element only when the photo exists and
-  serves the bytes at `/temple.jpg` (JPEG, cached a day - read per request, so a host
-  can drop its own photo at that path). The CSS draws it with cover/bottom anchoring, a
-  feather mask and dimming tuned by looking at the page (.6 in the hero, .28 with a chat
-  open), and `.stage-vignette` gained a left scrim so the copy stays legible over the
-  bright photo. `tests/test_webui.py` pins: no photo -> no element; with it -> the
-  element present and `aria-hidden`, and `/temple.jpg` answering 200 with the JPEG
-  signature. The asset-set derivation carries it automatically - no list to update.
+### Fixed
+- **Setup:** `_ask_model_target` asks the endpoint link before the key it needs (cloud only); the order applies to both `setup` and `model add`. (tests/test_setup.py, tests/test_model_setup.py)
+- **Setup:** a hosted endpoint reporting no context window is asked for `llm.max_context_tokens` (`128k` or a number) at that moment, in `setup`. (tests/test_setup.py)
+- **Web UI:** the page probes `GET /api/login` first (200 = good cookie, 401 = fresh browser) and prompts for its token only then. (tests/test_webui_page.py, tests/test_webui.py)
+- **Web UI:** any 401 on a GET/HEAD clears the stale token, asks once with the way back, and retries that call; POSTs keep their own handlers.
 
 ## [1.0.71] - 2026-10-04
 
-Fixed
-- **Fresh installs carry the page's assets.** All three installers copied a
-  hand-written list of names, and the pavilion port's `assets/webui.css` - and every
-  asset added since - was never added to any of them, so a fresh install landed
-  without a stylesheet and the page rendered as raw unstyled markup: the same symptom
-  as the 1.0.68/1.0.69 packages, from a second cause (operator's fresh install on a
-  second computer, 2026-10-04). The installers copy *the package minus host-owned
-  paths* now - the rule `update.sh` already used - so there is no list left to drift;
-  `tools/` and `skills/` still seed a fresh install without overwriting the host's
-  own, and `theme.toml` stays the host's file.
-- **The hero's SPQR pill is gone** - it read as a button and did nothing (operator's
-  report).
-Changed
-- **The page's asset set is derived once and graded three times.**
-  `maintenance/package_assets.py` derives every asset the routes serve (handler
-  literals, `WEB_FONTS`, the bundled fonts, the stylesheet's `@font-face` refs);
-  `tests/test_webui_page.py` fails when the package manifest misses one,
-  `tests/test_installer_unix.py` when an installed tree does (its package stages from
-  `SHIP` now, not a list of its own), and `maintenance/check-package-assets.py` -
-  wired into `release.sh` - when a built archive misses one or carries stale bytes.
-  Falsified both ways: the released installer goes red naming the missing assets, and
-  a doctored archive goes red naming `assets/webui.css`.
-- **The page's mascot is the operator's new chibi**: the master replaced, both shipped
-  figures re-derived with the stdlib pipeline (`make-brand-art.py --page-chibi 512
-  --readme-chibi 512`).
+### Changed
+- **Page assets:** `maintenance/package_assets.py` derives every asset the routes serve (handler literals, `WEB_FONTS`, bundled fonts, stylesheet `@font-face` refs).
+- **Page assets:** `tests/test_webui_page.py` fails when the package manifest misses an asset and `tests/test_installer_unix.py` when an installed tree does. (tests/test_webui_page.py, tests/test_installer_unix.py)
+- **Release check:** `maintenance/check-package-assets.py`, wired into `release.sh`, fails when a built archive misses an asset or carries stale bytes.
+- **Web UI:** the page's mascot is a new chibi, with both shipped figures re-derived via `make-brand-art.py --page-chibi 512 --readme-chibi 512`.
+
+### Fixed
+- **Installer:** fresh installs carry the page's assets — all three installers copy the package minus host-owned paths instead of a hand-written list, so `assets/webui.css` and later assets ship.
+- **Installer:** `tools/` and `skills/` still seed a fresh install without overwriting the host's own, and `theme.toml` stays the host's file.
+
+### Removed
+- **Web UI:** the hero's SPQR pill, which read as a button and did nothing, is removed.
 
 ## [1.0.70] - 2026-10-04
 
-Fixed
-- **The page ships its stylesheet again - 1.0.68 and 1.0.69 did not.** The pavilion
-  port (1.0.68) added `assets/webui.css` and the cinzel-600 face; the package manifest
-  was never told, so `/page.css` 404'd on every install from those tags and the page
-  rendered as raw unstyled markup (operator's report, looking at an updated box:
-  "this is what we shipped worldwide to all users?"). `SHIP` carries both files now,
-  `WEB_FONTS` serves the 600 face, and `tests/test_webui_page.py` derives every asset
-  the routes serve - from the code and the stylesheet, never a hand list - and fails
-  when the manifest misses one; falsified against the released manifest, which it
-  names exactly.
-- **A bare `tinycmdr` opened the page and the app at once.** Operator's contract:
-  bare is the page (the chat lanes still start beside it), `tinycmdr cli` is the
-  console alone, and `--cli`/`--app` no longer raise the page unless `--web` says so.
-  Both shims add nothing for the bare case; `tests/test_shim.py` pins the mapping and
-  main()'s two rules.
-- **The page's "Open archives" button was a dead link.** It only un-hid an
-  already-visible rail. The hero's second action is "Resume the last campaign": the
-  newest session with exchanges, hidden when there is none; verified by clicking it
-  live (the first cut resumed by row order and opened the empty conversation New
-  Campaign had just made).
-Changed
-- **`tinycmdr setup` can set the page token.** Enter keeps the host's own or mints
-  one; a typed value goes through `_env_set_safe` (the 20+ character shape is
-  enforced and a refused value is re-asked, not swallowed) and retires a stale
-  `web.token` in config.json so nothing outranks `.env`. `--web-token <t>` does the
-  same at install, on all three installers (`tests/test_setup.py`,
-  `tests/test_installer_parity.py`).
-- **The operator-only skill switch binds the skill tool.** `hide: true` (omp's
-  `disable-model-invocation: true` accepted as-is) hides a runbook from the prompt,
-  the skill tool's list/search and the public A2A card; the OPERATOR naming it in an
-  order opens it for that session (`grant_named_skills`, cleared by `/new`).
-  `tests/test_tool_discovery.py` + `tests/test_harness_extras.py`, falsified against
-  142207e.
+### Changed
+- **Setup:** `tinycmdr setup` can set the page token: Enter keeps the host's own or mints one, and a typed value goes through `_env_set_safe` (20+ characters enforced, refused values re-asked). (tests/test_setup.py)
+- **Setup:** a set token retires a stale `web.token` in config.json, and `--web-token <t>` does the same at install on all three installers. (tests/test_installer_parity.py)
+- **Skills:** `hide: true` (omp's `disable-model-invocation: true` accepted) hides a runbook from the prompt, the skill tool's list/search and the public A2A card. (tests/test_tool_discovery.py)
+- **Skills:** naming a hidden runbook in an order opens it for that session (`grant_named_skills`, cleared by `/new`). (tests/test_harness_extras.py)
+
+### Fixed
+- **Page assets:** `SHIP` carries `assets/webui.css` and the cinzel-600 face, `WEB_FONTS` serves the 600 face, and `tests/test_webui_page.py` derives every served asset, failing when the manifest misses one. (tests/test_webui_page.py)
+- **CLI:** a bare `tinycmdr` opens the page (chat lanes start beside it), `tinycmdr cli` is the console alone, and `--cli`/`--app` raise the page only with `--web`. (tests/test_shim.py)
+- **Web UI:** the dead `Open archives` button is replaced by the hero action `Resume the last campaign` — the newest session with exchanges, hidden when there is none.
 
 ## [1.0.69] - 2026-10-04
 
-Changed
-- **Memory is an Open Knowledge Format bundle now.** Operator brief, 2026-10-04:
-  redesign the harness's memory to work off Google Cloud's OKF. `memory/` holds one
-  markdown concept per durable fact with YAML frontmatter, carrying the v0.2 families for
-  a corpus agents write - provenance (`sources`), trust (`generated`/`verified`, from
-  which a tier is derived), lifecycle (`status`/`stale_after`) - plus `index.md` (the
-  only part the prompt carries, capped and flagged) and `log.md` (newest-first history).
-  The `remember`/`notes` pair is ONE tool now: add, update, deprecate, forget, read,
-  search, list. A body over the cap is refused rather than truncated, the bundle refuses
-  new concepts past its cap, and every mutation takes one lock so the concept, the index
-  and the log move together. `notes.md` is left in place and still rides the prompt, but
-  nothing writes it; no migration was performed (operator's call). Attestation
-  (`type: Attested Computation`) is reserved for a later phase. Rent was the constraint:
-  the schema was cut to six declared fields so the all-revealed worst case lands at 5,331
-  est tokens - measured on a dev box; a CI runner's longer paths read ~17 higher, and the
-  5,400 ratchet still holds there.
+### Added
+- **MCP:** `agent.mcp_servers` plus a hidden `mcp` tool (list/call); the client uses the stateless 2026-07-28 revision, falls back once to `initialize`, keeps servers alive, and registers nothing on an empty map. (tests/test_mcp.py)
+- **A2A:** with `web.a2a` true the page publishes an AgentCard at `/.well-known/agent-card.json` and answers A2A v1.0 JSON-RPC on `POST /a2a`; a hidden `a2a` client tool registers only when `agent.a2a_remotes` is set. (tests/test_a2a.py)
+- **Web UI:** the hidden `render_ui` tool draws A2UI v1.0 cards via a standard `createSurface` envelope against a declared catalog, a validator refuses anything else, and only the summary reaches the model. (tests/test_a2ui.py)
+- **Config:** `memory_index_max_chars` (3000), `memory_concept_max_chars` (6000) and `memory_max_concepts` (400) join `DEFAULT_CONFIG` and `config.example.json`, and `docs/memory.md` documents the OKF profile this build implements.
+- **Tests:** `tests/test_memory_okf.py` pins the format contract (round-trip with unknown keys, quoting, conformance, trust tiers, staleness, add/update/deprecate/forget, index, log, foreign or frontmatter-less files).
 
-Added
-- **MCP: the harness can use the tool ecosystem.** Operator brief, 2026-10-04. A
-  per-host `agent.mcp_servers` map names stdio servers (`{"name": {"command": ...,
-  "args": [...], "env": {...}}}`) and the hidden `mcp` tool lists a server's tools or
-  calls one. The client speaks the current stateless revision (2026-07-28: version and
-  client identity in every request's `_meta`, `resultType` tolerated either way) and
-  falls back ONCE to the older `initialize` handshake when a server refuses it; servers
-  are kept alive between calls and exit on stdin EOF. With an empty map no `mcp` tool
-  is registered at all, so a box with no servers is byte-identical to a build that
-  never had it. `tests/test_mcp.py` (19 checks) drives three real stub processes - a
-  stateless one, a legacy one and a silent one - through discovery, calls, the
-  fallback, process reuse and every honest error (unknown server/tool, no answer, dead
-  server, unstartable command).
-- **A2A: this box can be one node of an agent mesh.** Operator brief, 2026-10-04. With
-  `web.a2a` true the page server publishes a standard AgentCard at
-  `/.well-known/agent-card.json` (skills = this box's runbooks) and answers the A2A v1.0
-  JSON-RPC binding on `POST /a2a` with the page token as a `Bearer`: `SendMessage` runs
-  one message through the harness and returns a `Task` - `TASK_STATE_COMPLETED`, or
-  `TASK_STATE_FAILED` when the endpoint never answered, which is the same verdict the
-  done line goes red on - `GetTask`/`ListTasks` read a bounded in-memory task ring, and
-  `CancelTask`, streaming and push answer the spec's own errors (-32002/-32004/-32009)
-  because this build runs each message to completion. The client half is a hidden `a2a`
-  tool (list/card/send, bearer from a `token_env`) that is registered ONLY when
-  `agent.a2a_remotes` is set - a box with no peers is byte-identical to a build that
-  never had it. Pinned by `tests/test_a2a.py` (47 checks: the card, the lifecycle, the
-  error map, a live stub peer, and the on/off registration), and exercised live: our own
-  client tool called this box's door and read the Task back.
-- **The page is an agent surface: `render_ui` draws A2UI v1.0 cards in the transcript.**
-  Operator brief, 2026-10-04, on the harness's rent terms ("around 5k or less"): the tool
-  emits a standard `createSurface` envelope against a catalog this renderer DECLARES
-  (Card, Column, Row, Text, Divider; `{"path": ...}` bindings resolve against
-  `createSurface.dataModel`), a stdlib validator refuses anything else by name, and the
-  page draws it in the pavilion's idiom. The payload rides the transcript line - the
-  model sees only the one-line summary, never the JSON - and a lane with no surface
-  answers honestly instead of pretending a card appeared. Rent: `render_ui` is hidden
-  like every non-core tool, so its NAME on the hidden-inventory line is the only
-  static-prompt byte it adds, and its schema (under the 1,200-char per-tool cap) rides
-  only once a run calls it. `tests/test_a2ui.py` pins the envelope, the catalog, the caps
-  and the door's honesty.
-- `memory_index_max_chars` (3000), `memory_concept_max_chars` (6000) and
-  `memory_max_concepts` (400) in `DEFAULT_CONFIG` and `config.example.json`, and
-  `docs/memory.md` - the profile of OKF this build implements, with its rent budget.
-- `tests/test_memory_okf.py`: the format contract (round-trip with unknown keys, quoting,
-  conformance, trust tiers, staleness, add/update/deprecate/forget, index, log, and
-  tolerance of foreign or frontmatter-less files in the bundle).
+### Changed
+- **Memory:** memory is an Open Knowledge Format bundle (one markdown concept per durable fact, a capped `index.md`, a newest-first `log.md`), and `remember`/`notes` merge into one tool refusing over-cap bodies, one lock per mutation.
 
-Removed
-- The notes.md write path - the curator, the archive, the authored-hash sidecar - and its
-  five write-time config keys (`notes_max_note_chars`, `notes_supersede_share`,
-  `notes_supersede_min_words`, `notes_keep_entries`, `notes_archive_days`). The file
-  itself stays on disk and in the prompt. `tests/test_notes_guard.py` retired with its
-  subject; the format contract is `tests/test_memory_okf.py`.
+### Removed
+- **Notes:** the notes.md write path (curator, archive, authored-hash sidecar) and its five write-time config keys are removed; the file stays on disk and in the prompt. (tests/test_notes_guard.py)
 
 ## [1.0.68] - 2026-10-04
 
-- **Privileges are handled explicitly: the page needs no administrator, and the parts that
-  do are named with the exact command.** Loopback plus the published default port (8790,
-  above 1024) is a standard-user install on all three platforms - nothing asks for root.
-  What does need rights is now checked and said:
-  - a port **below 1024** is refused with the reason and swapped for 8790 (all three
-    installers check `id -u` / `IsInRole(Administrator)` before promising it);
-  - a **LAN bind** (`web.host 0.0.0.0`) needs no rights for the bind, but the FIREWALL
-    hole does: macOS's Application Firewall, `ufw`/`firewalld` on Linux and Windows
-    Defender each get their one exact command, with the loopback tunnel as the no-rights
-    alternative (measured on this Mac: the note names `socketfilterfw --add/--unblockapp`
-    with the interpreter's own path);
-  - the same text is printed by `tinycmdr setup` when the LAN is chosen, by `doctor`
-    whenever `web.host` is `0.0.0.0`, and by the startup announce - a host switched to the
-    LAN long after the installer asked still learns what to open;
-  - the runtime names EACCES for what it is: "ports below 1024 need root - set web.port to
-    a port above 1024 (the default is 8790), or run the service elevated", instead of
-    six retries and a vague "cannot bind".
+### Added
+- **Web UI:** the page takes the host's palette (role variables from `theme_palette()`, `theme-color` and the PWA manifest included) and ships art at `assets/page-{icon,mark,chibi}.png`, host PNGs overriding with a fallback emblem.
+- **Web UI:** the browser POSTs the fragment token to `/api/login` for an HttpOnly cookie, scrubs the fragment and drops the `localStorage` copy; `X-Tinycmdr-Token` stays for non-browser callers and a wrong token or cookie is 401.
 
-Added
-- **The page wears the host's palette and the host's icon.** It shipped with a hardcoded
-  blue-grey palette and a placeholder favicon, so an install whose terminal was themed saw
-  none of it in a browser (operator report, 2026-10-04: "no branding ... no colour theme
-  to match the roman empire styling"). The page's CSS now carries role variables - `--bg`,
-  `--panel`, `--fg`, `--dim`, `--gold`, `--ember`, `--bronze`, `--crimson`, `--error`,
-  `--laurel`, `--sel` - filled from the SAME `theme_palette()` the terminal reads, every
-  literal colour in it became a role or a `color-mix()` of one, the mobile `theme-color`
-  and the PWA manifest's background/theme colours follow that value. The art ships in the
-  forms the places need, all derived from the masters by `maintenance/make-brand-art.py`:
-  an opaque `assets/page-icon.png` for the home-screen/apple-touch icon (an OS composites
-  transparency on white or black), a transparent `assets/page-mark.png` for the tab, and
-  `assets/page-chibi.png` for the header medallion and the empty state. A host that wants
-  different art drops its own PNG at any of those paths; the built-in emblem stands in
-  when they are absent.
-- **The browser hands its token over once and stops carrying it.** The page POSTs the
-  token from the URL fragment to `/api/login` and takes an HttpOnly, `SameSite=Strict`
-  cookie back; the fragment is scrubbed as before and the `localStorage` copy is dropped
-  once that lands, so the token is in no URL, no history entry, and nothing a script on
-  the page can read. The `X-Tinycmdr-Token` header stays for every non-browser caller
-  (the probes, curl, the installer), and a wrong token or cookie is still 401.
+### Changed
+- **Privileges:** the page needs no administrator - loopback plus the default port 8790 (above 1024) is a standard-user install on all three platforms - and the parts that need rights are named with the exact command.
+- **Privileges:** a port below 1024 is refused with the reason and swapped for 8790 (each installer checks `id -u` / `IsInRole(Administrator)` before promising it).
+- **Privileges:** a LAN bind (`web.host 0.0.0.0`) needs no rights for the bind, but the firewall hole does - the platform firewall gets its one exact command, with the loopback tunnel as the no-rights alternative.
+- **Privileges:** `tinycmdr setup` (LAN chosen), `doctor` (`web.host 0.0.0.0`) and the startup announce print what to open, so a host switched to the LAN later still learns it.
+- **Privileges:** the runtime reports EACCES for what it is - ports below 1024 need root, set `web.port` above 1024 (default 8790) or run elevated - instead of retries and a vague cannot-bind error.
+- **Web UI:** the page is a modern imperial command pavilion - basalt ground, a host-gold colonnade, glass panels, bronze edges, a chibi-medallion header, a legion-archive rail, an empty-state welcome and a command-slab composer.
+- **Web UI:** there are two banners, not one - an unheard lane is an error with a one-line meaning, an immediate Retry, a Details click and a dismiss, while an unapplied config edit is a separate amber notice with its own dismiss.
+- **Web UI:** the page obeys the state spec - no lines shows the imperial welcome and mascot, the first line collapses the hero to a brand mark, an active chat takes the stage, and the rail lists and deletes every conversation by default.
+- **Web UI:** the provided chibi is the brand everywhere - `assets/page-chibi.png` and the README's `assets/tinycmdr-chibi.png` are generated from it by `maintenance/make-brand-art.py`.
 
-Fixed
-- **The built-in fallback favicon is the project's own badge.** It was the deleted page
-  lane's placeholder - a white monogram on a blue disc - and at favicon size that reads as
-  somebody else's logo (operator report, 2026-10-04: "what is that icon you are using that
-  says fb?"). The embedded last-resort icon is now the badge at 192px (the shipped
-  `assets/page-icon.png` remains the 512px render), so even a tree with no `assets/` shows
-  our art; `tests/test_webui.py` decodes the constant and refuses a blue one.
-- **The dead-lane banner is dismissible.** Operator, 2026-10-04: "make that a closeable
-  notification, not a permanent banner". The x hides it and remembers that exact wording
-  (`fb_lane_muted`); a different failure - another lane, another reason, a config edit -
-  speaks again, and so does the same one after a recovery. The header marker and the tab
-  title never hide: dismissed means "I have read this", not "stop telling me the bot is
-  deaf". Pinned by the page suite (dismiss, stay dismissed, re-notify on a new reason).
-- **A theme file's truecolor section never applied** - only its `.256` and `.ansi`
-  sub-tables did. The merge looked for a nested `truecolor` key that no theme file has, so
-  `[themes.NAME]` - the section holding the operator's own hexes - was read as empty and
-  every surface kept the built-in palette. Found by wiring the page to the same palette
-  and watching it not move; pinned by `tests/test_theme.py` (13 checks), which grades each
-  tier, the page's variables, a bad hex, an unknown role, and a `default` naming a section
-  that is not there.
-- **No suite opens a browser tab any more.** A staged child that serves auto-opened the
-  page on every run (measured: ~60 tabs in one day of gate runs on a Mac);
-  `TINYCMDR_NO_BROWSER=1` is the opt-out `_browser_possible()` honours, every suite that
-  starts a server sets it, and the in-process suites patch the function.
-- **The ported page's controls came from a build this tree does not have, and the gaps
-  showed the moment a session could SEE the page.** Found with the vision model on
-  2026-10-04; what was wrong, and what it is now:
-  - the icons were sized by React's `size` prop, so every inlined `<svg>` filled its
-    container instead (measured: 110-161px in the rail, 29-35px in the banners); each
-    context carries the design's own number now;
-  - the banners' show/hide wrote `className='show'`, dropping `.connection-banner` - the
-    design's grid and colours never applied and both notices rendered as bare stacked
-    rows - and no rule ever hid them; the class store keeps the base classes and
-    `#lanewarn:not(.show)` / `#configwarn:not(.show)` do the hiding. The same wipe took
-    `brand-version` off the header's lane marker, and its `.bad` state had no rule at all;
-  - the shell was `min-height:100vh`: two notices grew it to 1115px, the body scrolled and
-    autofocus pulled the header off-screen. It is exactly the viewport now; the hero pane
-    and the transcript scroll inside themselves, and the command box never moves (checked
-    on a phone viewport too);
-  - the composer is a `<textarea>` while the design's rules were written for `<input>`, so
-    it rendered as a white UA box; the paperclip, placeholder and focus-ring rules match
-    both now;
-  - the rail's list had no height of its own, so 17 conversations pushed the host card
-    off-screen with nothing scrolling;
-  - the command palette had no backdrop frosting, so bright art ghosted through it;
-  - `Stop` was a raw UA button and always up: it wears the header's pill idiom and appears
-    only while a run is live;
-  - copy and the rail's delete were hover-only - present, but invisible until looked for;
-    both sit at a resting opacity.
-  Every item re-verified live on this Mac: desktop 1440x900 and phone 390x844, zero body
-  scroll, zero page errors; the three new class-store checks fail on the pre-fix build
-  (pinned in `tests/test_webui_page.py`).
-
-Changed
-- **The page is a modern imperial command pavilion.** The operator's brief, 2026-10-04:
-  keep the efficient dark console, put Rome in the ornamentation. Basalt ground with two
-  faint radial washes; an extremely faint colonnade behind the transcript, drawn in the
-  host's own gold (`assets/roman-colonnade.svg`, the server substitutes the accent, 5.5%
-  opacity - never a scene); glass panels; bronze edges; gold linework. The header is a
-  four-rem bar with the **chibi in a round bronze medallion** (the placeholder mark it
-  replaces read like somebody else's logo), the name in Cinzel, the version in crimson
-  mono. The rail is a legion archive - "CAMPAIGNS", gold hover, this host in the footer.
-  The empty transcript is an empty STATE: the chibi, "Ave, Commander.", one line of
-  orientation, and two ways in (start a new campaign, open the archive) - gone the moment
-  there is a transcript. The composer is a command slab: bronze border, gold focus ring, a
-  gold **Dispatch** button, the attachment as a bronze seal. A conversation that will not
-  load is a card with Retry and Start-New instead of a blank pane.
-- **Two banners, not one.** A lane that cannot be heard is an ERROR with a one-line
-  meaning ("Messages can be drafted locally, but they may not be dispatched"), a Retry
-  that re-checks immediately, a Details click for the technical reason, and a dismiss; a
-  config edit that has not applied is a separate AMBER notice with its own dismiss. One
-  banner carrying both read as one alarm that was mostly noise.
-- **The page obeys the operator's state spec (2026-10-04).** No lines shows the imperial
-  welcome screen and mascot; the FIRST line collapses the hero into a small brand mark
-  over the transcript (`#brandmark`: the badge and a mono wordmark); an active chat takes
-  the whole central stage and the colonnade steps back to 22%; the command box never
-  moves. The rail lists every conversation on this host by default (the "show every
-  conversation" toggle starts checked) and every row is deletable right there with its x,
-  through the same path as the open conversation's delete - refusal reasons included. The
-  hero's SESSION value ellipsizes instead of wrapping, the quietest text (`--muted-2`)
-  moved from 72% to 85% of muted (measured 4.1:1 -> 5.2:1 on the roman-night palette), and
-  the hero says "Greetings, Commander." (operator: "I do not want the harness to show
-  'AVE, Commander'").
-- **The page's mascot is the design's commander, and it is the brand everywhere.** The
-  provided chibi is the chibi master now; `assets/page-chibi.png` (512 square, the shape
-  the medallion needs) and the README's `assets/tinycmdr-chibi.png` (512x667, the
-  content's own aspect) are generated from it by `maintenance/make-brand-art.py
-  --page-chibi/--readme-chibi`, and the cut-out pipeline grew the own-aspect mode so the
-  README figure fills its image instead of floating in side padding.
+### Fixed
+- **Web UI:** the embedded last-resort favicon is the project badge at 192px, not the deleted page lane's white-on-blue monogram; `tests/test_webui.py` decodes the constant and refuses a blue one.
+- **Web UI:** the dead-lane banner is dismissible - the x hides it and remembers that exact wording (`fb_lane_muted`), a different failure or a recovery speaks again, and the header marker and tab title never hide.
+- **Themes:** a theme file's truecolor section now applies; the merge had looked for a nested `truecolor` key no theme file has, so `[themes.NAME]` was read as empty, pinned by `tests/test_theme.py`.
+- **Tests:** no suite opens a browser tab any more - `TINYCMDR_NO_BROWSER=1` is the opt-out `_browser_possible()` honours, set by every suite that starts a server, and the in-process suites patch the function.
+- **Web UI:** the page's icons now carry the design's own size per context instead of filling their container through React's `size` prop.
+- **Web UI:** the banners' show/hide keeps the base classes (`.connection-banner`, `brand-version`) and hides via `#lanewarn:not(.show)` / `#configwarn:not(.show)`, and the lane marker's `.bad` state has a rule. (tests/test_webui_page.py)
+- **Web UI:** the shell is exactly the viewport now - the hero pane and transcript scroll inside themselves and the command box never moves - instead of `min-height:100vh` growing with notices.
+- **Web UI:** the composer's paperclip, placeholder and focus-ring rules now match both `<textarea>` and `<input>`.
+- **Web UI:** the rail's list has its own height and scrolls instead of pushing the host card off-screen.
+- **Web UI:** the command palette gets a backdrop frosting so bright art no longer ghosts through it.
+- **Web UI:** `Stop` wears the header's pill idiom and appears only while a run is live.
+- **Web UI:** copy and the rail's delete now sit at a resting opacity instead of hover-only.
 
 ## [1.0.67] - 2026-10-03
 
-Added
-- **The page is back, as the default door** (the lane was removed in 1.0.36). A bare
-  `tinycmdr` serves it and opens a browser when the machine has one, `--no-web` runs the
-  session alone, `--web-port` / `--web-host` move the bind, and `tinycmdr web` prints the
-  tokenized link without binding anything. Each run draws as its own card
-  (thinking / tool call / result / answer); the rail creates, renames, opens and deletes
-  conversations from one registry every browser shares (`web-sessions.json`); the panel
-  carries tasks, jobs, log and inventory; uploads arrive by drop, paste or the file
-  button and put the saved path in the composer; a file the agent offers is a download
-  link. A page loaded mid-run asks who is running (`/api/live`) and re-attaches instead
-  of posting its message again - the old page's message became a steer, so the operator
-  saw their own message twice.
-- **The token is mandatory, and it lives in `.env` as `TINYCMDR_WEB_TOKEN`.** The
-  installers mint one and keep the host's existing one across updates, never echoing it
-  (the 1.0.24 lesson); `tinycmdr token set TINYCMDR_WEB_TOKEN` with an empty value mints
-  a fresh one and prints the link. No token means no server, never an open port.
-  `/api/health` stays open so a page that has no token can still say the chat lane is
-  down; every other route answers 401 without the `X-Tinycmdr-Token` header, and a
-  `?token=` query is not a credential. The link carries the token in the URL fragment,
-  which never leaves the browser; the page scrubs it from the address bar and keeps it
-  in `localStorage`.
-- **A lane-less install now has a reason to run.** `web.enabled` alone registers the
-  autostart agent - before, "no chat token" meant no agent at all - and the installer
-  asks whether the page should be reachable from other machines (`0.0.0.0`, where the
-  token travels in cleartext, said at install time) or loopback only. A scripted update
-  keeps the host's own bind: `web.host` / `web.port` change only when the run was told
-  them.
-- **An install that upgrades into the page gets its token minted, not homework.** The
-  first start of a host with no token mints one into `.env` (`tinycmdr web` does too),
-  and `tinycmdr setup` asks the two things nobody can infer - loopback or LAN, and the
-  port - then prints the link. No token still means no server: the server makes the
-  token it requires, so an upgrade introduces the page instead of stranding it behind a
-  command the operator has to be told about.
-- **Two suites grade the page itself, not just its server.** `tests/test_webui.py`
-  (49 checks) drives the HTTP surface, the token's minting rules, uploads, downloads and
-  the Host/Origin gates; `tests/test_webui_page.py` (82 checks) runs the page's real
-  script in Node against a DOM shim and a fake server that mirrors `WebRun`'s line
-  semantics - in-place growth, uid keying, steer ordering, reload re-attachment, copy,
-  the fragment handover, file lines, uploads; `tests/test_page_upgrade.py` (9 checks)
-  stages an install that predates the page and grades the upgrade into it. Without node
-  the page suite exits 77, which the gate counts as red. The lane's five instruments
-  (`drive-web-cases.py`, `probe-web-surface.py`, `probe-web-sessions.py`,
-  `stub-openai-endpoint.py`, `wait-for-endpoint.py`) come back with it, reading the live
-  install's port and token from `config.json` / `.env` instead of assuming the defaults.
+### Added
+- **Web UI:** the page is back as the default door - a bare `tinycmdr` serves it and opens a browser when one exists, `--no-web` runs the session alone, `--web-port`/`--web-host` move the bind, and `tinycmdr web` prints the tokenized link.
+- **Web UI:** runs draw as cards, the rail manages conversations in a shared registry, the panel carries tasks/jobs/log/inventory, uploads arrive by drop, paste or file button, and a page loaded mid-run re-attaches via `/api/live`.
+- **Web UI:** the token is mandatory and lives in `.env` as `TINYCMDR_WEB_TOKEN`; installers mint one silently, `tinycmdr token set TINYCMDR_WEB_TOKEN` mints a fresh one, no token means no server, and only `/api/health` stays open.
+- **Web UI:** a lane-less install has a reason to run - `web.enabled` alone registers the autostart agent, the installer asks loopback or LAN (`0.0.0.0`, token in cleartext), and a scripted update keeps the host's own `web.host`/`web.port`.
+- **Web UI:** an install that upgrades into the page gets its token minted - the first start of a host with no token mints one into `.env`, and `tinycmdr setup` asks loopback/LAN and the port then prints the link.
+- **Tests:** `tests/test_webui.py` grades the HTTP surface, token minting, uploads and downloads; `tests/test_webui_page.py` runs the page script in Node against a DOM shim; `tests/test_page_upgrade.py` grades upgrading into the page.
 
-Changed
-- **The page's default is port 8790** (8787 is RStudio Server's default, which is what
-  drove the move), and it is the door a bare `tinycmdr` opens: `--app` / `--cli` are the
-  terminal doors, `--once` runs one task, and a chat token is optional again.
+### Changed
+- **Web UI:** the page's default is port 8790 (8787 is RStudio Server's default), it is the door a bare `tinycmdr` opens, `--app`/`--cli` are the terminal doors, `--once` runs one task, and a chat token is optional again.
 
-Fixed
-- **The page's Host check no longer touches the resolver on the request path.** It
-  called `getfqdn`/`gethostbyname_ex` per request to build its allowlist, and on a box
-  where that takes seconds (measured: >5s on a macOS CI runner) the FIRST request to a
-  freshly started server timed out - the page looked dead for everyone while nothing was
-  wrong. Loopback, the hostname and `web.host` answer immediately; the resolved names are
-  merged in from a background thread, and a Host the fast set does not know settles it
-  once before being refused. Pinned in `tests/test_webui.py` with a resolver that sleeps.
-- **A minted page token could kill startup on an upgraded install.** `TINYCMDR_WEB_TOKEN`
-  in `.env` (which is exactly what an install that upgraded into the page carries) plus a
-  config.json written before the page existed (no `web` block) raised `KeyError: 'web'`
-  at import: the env-to-config mapping indexed `cfg["web"]` directly, and DEFAULT_CONFIG's
-  `web` defaults were filed under `agent`, where nothing read them, so the section was
-  never merged in. The defaults are a real top-level section now, the mapping creates the
-  section it needs (a `web: false` in a hand-edited config.json is replaced rather than
-  fatal), and `tests/test_page_upgrade.py` stages that tree and grades both halves -
-  the pre-fix build dies with the KeyError, which is the check's own falsification.
-- **A Linux user install with no user systemd bus no longer fails.** A container, a CI
-  runner, or an install over ssh before that user has ever logged in has no
-  `systemctl --user` bus - and the page-on default now registers the unit for a chat-less
-  install, which turned that into `systemctl enable failed` and a dead install. The unit
-  is written either way and the operator is told the one command that enables it in a
-  session; a bus that IS there and still refuses stays fatal.
+### Fixed
+- **Web UI:** the Host check no longer touches the resolver on the request path - loopback, the hostname and `web.host` answer immediately while resolved names merge in from a background thread; pinned in `tests/test_webui.py`.
+- **Web UI:** a minted token no longer kills startup on an upgraded install - DEFAULT_CONFIG has a top-level `web` section and the env-to-config mapping creates it; `tests/test_page_upgrade.py` grades it.
+- **Linux:** a user install with no `systemctl --user` bus no longer fails - the unit is written either way and the enabling command is printed, while a bus that is present and still refuses stays fatal.
 
 ## [1.0.66] - 2026-10-03
 
-Fixed
-- **A revealed tool schema now expires on idle time, not time since the reveal.** The
-  TTL stamped a tool only when it was revealed, so a schema was dropped 30 minutes after
-  its first reveal even while the run kept calling it - measured over seven days (2,087
-  calls / 133 runs): 36 expiry re-reveals, 2 of them inside one run, 5 despite a call
-  under 1,800s earlier, and every transition changed the request's tool block between
-  turns. Every executed call to a revealed tool now touches the stamp (the same
-  dispatcher hook that already revealed it), so only genuinely idle schemas decay; the
-  reveal banner says `(expires after Ns unused)` when the TTL is on. Pinned by
-  `tests/test_reveal_decay.py` (21 checks; the pre-fix build fails the idle-clock and
-  banner checks).
+### Added
+- **Events:** the event ledger records reveal/eject transitions of the tool block - each writes a line with the names that moved, the wire's tool count and the static re-measure, into `sessions/<key>.events.jsonl` (`agent.event_log`).
 
-Added
-- **The shadow event ledger records reveal/eject transitions of the tool block.** Each
-  reveal or eject writes a line with the names that moved, the wire's tool count and the
-  static re-measure it triggers, so schema drift inside a run is attributable in
-  `sessions/<key>.events.jsonl` (`agent.event_log`).
+### Fixed
+- **Tools:** a revealed tool schema now expires on idle time, not time since the reveal - every executed call touches the stamp and the banner says `(expires after Ns unused)` when the TTL is on; pinned by `tests/test_reveal_decay.py`.
 
 ## [1.0.65] - 2026-10-03
 
-Fixed
-- **The launcher's old-install fallback probes the right thing.** It looked for the
-  `update` verb, which a real **1.0.44** payload HAS - one that shells out to `git pull`,
-  which dead-ends on the dirty checkout its own installer leaves behind (measured: 0
-  occurrences of `releases/latest/download` in that file, 1 of `git pull`). It probes for
-  the capability now: a copy that cannot fetch a release package is repaired by the
-  published updater.
-- The Windows updater's closing line lost the backtick before `tinycmdr` (PowerShell eats
-  one in a double-quoted string, so it printed "inycmdr restart"); it is quoted properly.
+### Added
+- **Installer:** a 1.0.44 install upgrading to 1.0.64 now ships `theme.default.toml` too.
 
-Verified end to end on a real 1.0.44 install (planted on a Windows host, host-owned files
-and all): the **published** updater fetched the latest package, verified it, wrote 27 files
-and left `config.json`, `tools/mine.py`, `theme.toml` and `notes.md` byte-identical -
-`1.0.44 -> 1.0.64`, and the install now ships `theme.default.toml` too.
+### Fixed
+- **Launcher:** the old-install fallback now probes for the update capability rather than the `update` verb (which 1.0.44 has but dead-ends on `git pull`); a copy that cannot fetch a release package is repaired by the published updater.
+- **Windows:** the updater's closing line lost the backtick before `tinycmdr` (PowerShell ate it in a double-quoted string) and is quoted properly.
 
 ## [1.0.64] - 2026-10-03
 
-Added
-- **One update command, from any version: `/tinycmdr update` (chat) and `tinycmdr update`
-  (terminal).** This is a rule of the project now, not a compatibility note - the one thing
-  a user cannot be asked to do is work out which upgrade procedure their version needs:
-  - the command fetches the latest release package and its `SHA256SUMS`, verifies the
-    download before touching anything, and applies it while leaving every host-owned path
-    alone (`config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, sessions, state,
-    jobs, tasks, logs, spill, venv, `theme.toml`);
-  - an install whose own updater is missing or broken is repaired by the **published**
-    updater (`update.sh` / `update.ps1`, attached to every release beside `install.sh`);
-    the `tinycmdr` launcher probes the local code and falls back to it;
-  - a chat update that changed the version **restarts onto it** (an update that leaves the
-    old bytes serving the channel is the confusion this removes); a terminal session runs
-    the same verb and says to relaunch (or `tinycmdr restart` for the service);
-  - the rule and its reasoning are written down in `docs/development.md` and the README,
-    and pinned by `tests/test_verbs.py` (the published updaters, the release attachments,
-    the launcher fallbacks, the chat verb, the inline run, the restart).
+### Added
+- **Updater:** `/tinycmdr update` (chat) and `tinycmdr update` (terminal) is the one update command, from any version.
+- **Updater:** it downloads and verifies the latest release and `SHA256SUMS`, then applies it without touching host-owned paths (`config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, sessions, state, jobs, logs, venv, `theme.toml`).
+- **Updater:** an install whose updater is missing or broken is repaired by the published updater (`update.sh`/`update.ps1`, attached to every release beside `install.sh`), and the `tinycmdr` launcher falls back to it.
+- **Updater:** a chat update that changed the version restarts onto it; a terminal session runs the same verb and says to relaunch (or `tinycmdr restart` for the service).
+- **Updater:** documented in `docs/development.md` and the README and pinned by tests of the published updaters, release attachments, launcher fallbacks, chat verb, inline run and restart. (tests/test_verbs.py)
 
-Fixed
-- **No mint offer for a procedure that already ran through a computer/GUI tool.** The offer
-  ("say mint it and I will turn it into a tool") fired for a computer-use runbook executed
-  by hand - but those calls were already tool calls, so wrapping the runbook changes
-  nothing. Any run whose calls include a computer/GUI tool is left alone, in both the
-  operator's offer and the report-time line to the model.
-- **A host-owned file whose shipped default moved is now reported, not silently stale.**
-  `update` never overwrites a host-owned file (`theme.toml` is the operator's, `tools/*.py`
-  are the agent's) - which is correct, and is exactly why the 16-colour fix inside
-  `theme.toml` reached only new installs while every existing one kept the all-yellow ANSI
-  column. This is the drop-in gap's shape one release later, so it gets the same treatment:
-  the release ships the default beside the host file (`theme.default.toml`), and `update`
-  prints - and `doctor` reports - `theme.toml differs from this release's
-  theme.default.toml; if you never edited it, delete it to inherit the fix (or diff the
-  two)`. Logged once, like the drop-in gap.
+### Fixed
+- **Mint offer:** no mint offer fires for a procedure whose run already used a computer/GUI tool, in both the offer and the report-time line to the model.
+- **Update:** a host-owned file whose shipped default moved is reported by `update` and `doctor` with the remedy (the release ships the default beside it, `theme.default.toml`), logged once.
 
 ## [1.0.63] - 2026-10-03
 
-Fixed
-- **The 16-colour tier read as one colour.** A 16-colour terminal cannot show four
-  neighbouring warm hues, and the theme's ANSI column mapped gold, ember, bronze and the
-  label gold all to `yellow` - so a Windows console drew the whole interface in yellow
-  while a truecolor one on macOS showed the palette (operator report: "all yellow and
-  almost no variation"). The tier now uses the closest DISTINCT members of the 16-colour
-  set, one per role: gold `bright yellow`, ember `red`, bronze `dark yellow`, crimson
-  `magenta`, error `bright red`, muted `dim`, text `white`, laurel `green`.
-- **The app-style table is built once per tier from the palette**, instead of a second
-  hardcoded table for 16 colours - which is how the ANSI column could drift from the
-  palette it was supposed to mirror.
+### Fixed
+- **Theme:** the 16-colour tier now uses the closest distinct 16-colour members, one per role: gold `bright yellow`, ember `red`, bronze `dark yellow`, crimson `magenta`, error `bright red`, muted `dim`, text `white`, laurel `green`.
+- **Theme:** the app-style table is now built once per tier from the palette instead of a second hardcoded table for 16 colours.
 
-Note for Windows: Windows Terminal (and ConEmu) advertise themselves and get the
-truecolor palette; a legacy conhost or an ssh session has no way to say so and falls back
-to 16 colours. `--color always` with `TINYCMDR_COLOR=truecolor` forces the full palette
-anywhere.
+### Notes
+- Windows Terminal and ConEmu advertise themselves and get the truecolor palette; a legacy conhost or an ssh session falls back to 16 colours, and `--color always` with `TINYCMDR_COLOR=truecolor` forces the full palette anywhere.
 
 ## [1.0.62] - 2026-10-03
 
-Fixed
-- **`tinycmdr` in a terminal now opens a FRESH conversation.** The console lane's key was
-  the constant `cli`, so every launch - and every `--once` run on a box - resumed one
-  shared transcript: a brand-new window answered a new question about the previous run's
-  ledger, and a test question accumulated an order count across all of them. A launch now
-  gets its own key (`cli-<stamp>-<pid>-<n>`); the older conversations stay on disk, are
-  listed by `/tinycmdr sessions`, and are resumed with `--continue` or
-  `/tinycmdr resume N`. `--session NAME` and `TINYCMDR_SESSION` name one exactly (which is
-  also how the suites pin a key), and the bot lanes are untouched.
-- **A question is no longer counted as a routine.** The order census exists to spot a
-  repeated ORDER, and a test question ("what is the date today?") was counted as one: eight
-  runs later the harness offered to mint a tool for it, and the model answered about that
-  instead of the date (operator report: "the harness's repetition nag"). A question - a
-  trailing "?", or a leading what/when/where/who/why/how/which/is/are/do/does/can/tell me/
-  show me/list - never enters the census now. Work still does.
-- **A new order does not inherit the previous run's unfinished-work note.** The note is
-  real context when the operator is picking up last run's work and pure noise when they are
-  asking something new - measured on the same box, where a brand-new question opened with
-  "the previous run did not finish" and the model answered about the previous run's ledger.
-  The note's own text asked the model to judge; a weak model does not, so the HARNESS
-  judges: the note rides only an order that looks like a continuation (continue, resume,
-  carry on, finish it, pick it up, the last task, ...).
+### Added
+- **App UI:** Ctrl-W in `--app` hides the rail so the transcript gets the whole width, and brings it back; an in-app selection mode is not in this release.
+- **Reasoning:** levels `auto` (default), `off`, `minimal`/`low`/`medium`/`high`/`xhigh`/`max`, sent per endpoint (`reasoning_effort`, `reasoning: {effort}`, or `thinking`); set with `tinycmdr reasoning <level>` or `/reasoning <level>`.
 
-Added
-- **Ctrl-W in `--app` hides the rail**, so the transcript gets the whole width. With mouse
-  capture off a drag is the TERMINAL's selection and it cannot know where the panes are, so
-  it spilled into the sidebar and copied its keys along with the code. With the rail hidden
-  there is nothing to spill into; Ctrl-W brings it back (the status line says so).
-  A true in-app selection mode is the deeper fix and is not in this release.
-
-
-Added
-- **Reasoning effort, in the shape each endpoint understands.** Levels: `auto` (the
-  default - no field is sent at all), `off`, and `minimal`/`low`/`medium`/`high`/`xhigh`/
-  `max`. The wire shape follows the endpoint (the field names and the level set come from
-  omp's own catalog, read out of its binary): an OpenAI-compatible `/chat/completions`
-  gets `reasoning_effort`; a `/responses` endpoint gets `reasoning: {effort}`; an
-  Anthropic-style one gets `thinking: {type: enabled, budget_tokens}` with a per-level
-  table (minimal/low 1000, medium 4000, high 10000, xhigh 32000, max 64000).
-  `llm.reasoning_mode` forces a shape, `llm.reasoning_wire` remaps a level's spelling for
-  a provider that names them differently, `llm.thinking_budgets` overrides the token
-  table per level, and an unknown level sends nothing and says so in the log.
-  Choose it with `tinycmdr reasoning <level>` (writes config.json with the usual read-back)
-  or `/reasoning <level>` in a chat lane (that conversation only, persisted like
-  `/model`); the `--app` rail shows the level under MODEL when it is not `auto`.
-  Verified against a live llama.cpp box: a request carrying `reasoning_effort: high` came
-  back with a `reasoning_content` block, so the server honours the field.
+### Fixed
+- **Sessions:** a terminal launch now gets its own conversation key; older conversations stay on disk, are listed by `/tinycmdr sessions`, resumed with `--continue` or `/tinycmdr resume N`, and named by `--session NAME`/`TINYCMDR_SESSION`.
+- **Census:** a question (a trailing `?` or a leading what/when/where/who/why/how/which/is/are/do/does/can/tell me/show me/list) never enters the order census now; work still does.
+- **Context:** the previous run's unfinished-work note rides only an order that looks like a continuation (continue, resume, carry on, finish it, pick it up, the last task, ...), judged by the harness rather than the model.
 
 ## [1.0.60] - 2026-10-03
 
-Added
-- **The Roman-commander theme, as a host-owned file (`theme.toml`).** The designer's
-  palette - background `#0F1114`, panel `#171A1F`, text `#E9E2D6` (ivory), muted
-  `#A79B88`, gold `#D7A94A`, ember `#D9782D`, bronze `#75654D`, crimson `#C43A32`, error
-  `#E05245`, selection `#3A2524`, laurel `#8FAE6B` - with a row per tier (truecolor
-  hexes, the exact xterm codes, the Basic-ANSI words). Resolution order:
-  `--theme NAME` > `TINYCMDR_THEME` > `agent.theme` in config.json > the file's `default`
-  > the built-in `roman-night`. `update` seeds the file once and never overwrites it.
-- **Semantic roles in the drawing code.** A call site asks for `heading`, `value`,
-  `call`, `result`, `border`, `error`, `mark_success`, `decorative`, ... and one table
-  (`SEMANTIC_ROLES`) says which palette colour that is, so a retheme never touches a
-  card. Green is gone from answers: gold carries labels and success, laurel appears only
-  for explicit success states, crimson only on large decorative elements (the banner),
-  and errors are the brighter red with an `ERROR` label.
-- **One SGR conversion** (`sgr_for` / `tui_sgr`): no raw `\x1b[..m` values are scattered
-  through the renderer. The tier decides how a colour is written - 24-bit, `38;5;N`, an
-  ANSI name, or nothing - and the palette decides which.
-- **Colour resolution**: `--color always|never|auto` > `TINYCMDR_COLOR` > `NO_COLOR` >
-  auto-detection (`COLORTERM=truecolor` -> 24-bit, `TERM=*256color*` -> xterm-256,
-  otherwise 16; `NO_COLOR` -> monochrome). Windows enables VT processing and the UTF-8
-  console code page at startup, with the mode flags named rather than the bare `7`.
-- **`agent.unicode` (`auto|always|never`)**: a terminal that cannot draw Braille or the
-  box set gets the gold `>_` mark and the wordmark instead of boxes.
+### Added
+- **Theme:** the Roman-commander palette ships as a host-owned `theme.toml` (a row per tier); resolution is `--theme` > `TINYCMDR_THEME` > `agent.theme` > the file's `default` > `roman-night`; `update` seeds it once and never overwrites.
+- **Theme:** drawing code asks for semantic roles (`heading`, `value`, `call`, `result`, `border`, `error`, ...) mapped by one `SEMANTIC_ROLES` table, so a retheme never touches a card; green is gone from answers.
+- **Theme:** one SGR conversion (`sgr_for` / `tui_sgr`) writes every colour - 24-bit, `38;5;N`, an ANSI name, or nothing - with no raw escape sequences scattered through the renderer.
+- **Colour:** resolution is `--color always|never|auto` > `TINYCMDR_COLOR` > `NO_COLOR` > auto-detection (`COLORTERM=truecolor` -> 24-bit, `TERM=*256color*` -> xterm-256, else 16); Windows enables VT and the UTF-8 console page at startup.
+- **Unicode:** `agent.unicode` (`auto|always|never`) gives a terminal that cannot draw Braille or the box set the gold `>_` mark and the wordmark instead of boxes.
 
-Changed
-- The `--app` rail: the badge art is drawn in the brand inks only (crimson, gold, bronze,
-  ember), the progress bar is two-tone (fill gold, remainder dark bronze), headings gold,
-  values ivory, borders bronze, and a live status ember.
-- Call cards draw the tool's name in ember and its arguments in ivory.
+### Changed
+- **App rail:** the badge art is drawn in the brand inks only (crimson, gold, bronze, ember), the progress bar is two-tone (fill gold, remainder dark bronze), headings gold, values ivory, borders bronze, and a live status ember.
+- **Call cards:** the tool's name is drawn in ember and its arguments in ivory.
 
 ## [1.0.59] - 2026-10-03
 
-Fixed
-- **A re-read whose earlier result had been elided was refused, and the loop guard then
-  stopped the run.** The duplicate refusal exists because "nothing has changed since" -
-  but when compaction has dropped the result from the payload, the model asking again is
-  asking for something it can no longer see. Measured 2026-10-03 while driving a fleet
-  box: the model re-read a spilled payload by id (`read_file spill#3`) whose result the
-  elision had dropped, was refused with 4000 chars of it, asked once more, and the run
-  ended on `loop guard: read_file came back after being refused - forcing the final
-  report` - "it is stopping and detecting a loop almost every turn". The elision now
-  records which calls lost their results, and the next repeat of one of them is SERVED
-  (one elision buys one re-run).
-- **A refused repeat of a read-only tool no longer forces the final report.** Repeating
-  `read_file` / `search_files` / `search_sessions` / `list_tools` / `atlas` cannot damage
-  anything, and the model may legitimately need it again; the refusal and its nudge stay,
-  the stop does not. Repeats of calls that ACT still end the run: that is the shape the
-  guard exists for.
-- **A failed context probe was cached as a window.** `_endpoint_window` keeps each
-  endpoint's answer for five minutes; a probe that came back EMPTY (a busy llama.cpp
-  box timing out one GET) was cached as "0 tokens" for the whole TTL, and every call
-  in that window then took the assumed branch: `budget 8000 + static + reply` - a
-  14,205-token "window" with static 4157, 17,680 with static 7632 - against a server
-  serving 131,072. The assumed figure moved with the prompt, so it read as
-  unexplainable. An empty answer now expires in 20s (`WINDOW_MISS_TTL`) and is
-  re-asked, and a route that RAISED (a blip) is retried once before giving up.
-- **A guess no longer looks like a server fact.** `tinycmdr status` and the `--app`
-  rail name the source: `(assumed)` with the remedy, `(pinned)` for
-  `llm.context_window`, `(capped)` when `llm.max_context_tokens` is the ceiling, and
-  the startup banner says `window ASSUMED` when the endpoint did not report one.
-  `envelope_line()` carries the same note, so `status` and `health` agree.
+### Added
+- **Context:** `llm.context_window` states what the model's window is when a server will not say - `auto` asks the endpoint (default), a number pins it and wins over detection, and `llm.max_context_tokens` still caps the messages payload.
 
-Added
-- **`llm.context_window`**: what the model's window IS, when a server will not say -
-  `"auto"` asks the endpoint (default), a number pins it, and a pin wins over
-  detection while `llm.max_context_tokens` still caps the messages payload on top.
-  Two numbers with two jobs, both named.
+### Fixed
+- **Loop guard:** the elision records which calls lost their results, and the next repeat of one is served (one elision buys one re-run) instead of being refused and forcing the final report.
+- **Guards:** a refused repeat of a read-only tool (`read_file`, `search_files`, `search_sessions`, `list_tools`, `atlas`) keeps the refusal and its nudge but no longer forces the final report; repeats of calls that act still end the run.
+- **Envelope:** an empty context-probe answer now expires in 20s (`WINDOW_MISS_TTL`) and is re-asked, and a route that raised is retried once, instead of being cached as a 0-token window for the full five-minute TTL.
+- **Envelope:** `tinycmdr status` and the `--app` rail name the window's source - `(assumed)` with the remedy, `(pinned)` for `llm.context_window`, `(capped)` for `llm.max_context_tokens` - and `envelope_line()` carries the same note.
 
 ## [1.0.58] - 2026-10-03
 
-Fixed
-- **The `--app` rail's CONTEXT gauge divided by the messages budget, not the model's
-  window.** A 1M model (1048.6K window) read `used / 1028.0K`, because the budget is
-  `window - static - reply` - so a full window could never read 100% (operator
-  report). The gauge now divides by the window and counts the static prompt in what
-  is occupied, which is what the next request actually carries; the messages budget
-  stays where it belongs, in `status` and the banner.
-- **The rail's brand art was cut off at the bottom.** The crop it was rendered from
-  stopped at y=850 while the badge's content reaches y=939 (measured at
-  `max(rgb)>=45`), so the emblem's lower ~90px were discarded. Re-rendered from the
-  master with the designer's framing extended to the content box, and the art block
-  is captioned `tinycmdr` underneath. `maintenance/make-brand-art.py` refuses to
-  overwrite the shipped designer render without `--force`.
+### Fixed
+- **App rail:** the CONTEXT gauge now divides by the model's window and counts the static prompt as occupied, instead of dividing by the messages budget (`window - static - reply`), which stays in `status` and the banner.
+- **Brand art:** the rail art is re-rendered from the master with the designer's framing extended to the content box and captioned `tinycmdr`, and `maintenance/make-brand-art.py` refuses to overwrite the designer render without `--force`.
 
 ## [1.0.57] - 2026-10-03
 
-Added
-- **The `--app` rail carries the brand.** The badge, rendered by the designer as
-  braille cells - 24x9 characters, each a 2x4 dot cell, so 48x36 effective
-  resolution - with per-cell colour, sitting one blank row under the `KEYS` block.
-  The art is data (`assets/tui-rail-badge.json`, cells + hex colours), never ANSI:
-  escape bytes inside a prompt_toolkit span render as literal `[38;2;...` text.
-  Truecolor and 256-colour terminals get the per-cell colours, a 16-colour terminal
-  gets the dots in one accent, and an ASCII-only terminal gets no art rather than a
-  row of replacement boxes. `maintenance/make-brand-art.py` re-derives an equivalent
-  from the badge master on a host with neither PIL nor numpy.
+### Added
+- **App rail:** the rail shows the badge as braille cells (art is data in `assets/tui-rail-badge.json`), truecolor and 256-colour terminals get the per-cell colours, a 16-colour terminal one accent, and an ASCII-only terminal no art.
 
 ## [1.0.56] - 2026-10-03
 
-Added
-- **Branding**: the README opens with the tinycmdr chibi (also the image a link
-  preview falls back to until a Social preview is set), `docs/tinycmdr-what-it-is.md`
-  carries the helm, and `assets/` holds the three masters plus a 1280x640
-  `social-preview.png`. The package ships the two derived sizes so a reader who
-  unzips a release sees the README as its author meant it.
+### Added
+- **Branding:** the README opens with the tinycmdr chibi (also the link-preview fallback), `docs/tinycmdr-what-it-is.md` carries the helm, and `assets/` holds masters plus a 1280x640 `social-preview.png`; the package ships derived sizes.
 
-Fixed
-- **A question a stopped run left unanswered nagged every later run.** The sidecar that
-  carries it was re-surfaced on every run until the operator answered or stopped it —
-  five consecutive runs on one box restated the same assumption and paid the tokens each
-  time. It is now handed to exactly the next run (reading consumes it) and dropped once
-  it is older than `agent.ask_question_ttl_hours` (default 24; `0` disables the expiry),
-  so a stale question cannot outlive the work it came from.
-- **`shell`'s `timeout` was ignored for any command shorter than the auto-background
-  window** (60s by default): `timeout=5` on a 45-second command returned `exit_code=0`
-  after the full 45 seconds, because the auto-background wait ran on its own clock and
-  never consulted the requested timeout. Past the timeout the command and its tree are
-  killed now and the blocking path's `TIMEOUT after Ns` answer comes back instead.
-  Found by driving a Windows host.
-- **A scheduled job added from a `--once`/CLI run never fired.** The scheduler reads
-  `jobs.json` once at process start and the bot is the only process that fires jobs, so
-  a job added from another lane said "next run 09:51" and never ran (field: no log line,
-  no output file after the due minute); a job removed from such a lane was fired anyway
-  and written back into the file by the bot's next save. The scheduler re-reads the file
-  when its mtime changes — in the firing loop and before every `schedule` action.
+### Changed
+- **Update:** `update` no longer leaves a `<name>.bak-update-<stamp>` copy beside every file it replaces; the bounded `soul.md.bak-update-*` sets stay, and `write_file`/`edit_file` still leave their single undo copy.
 
-Changed
-- **`update` no longer copies every file it replaces.** Each update left a
-  `<name>.bak-update-<stamp>` beside every file it wrote — one host carried three
-  `tinycmdr.py` copies from three updates in a single day (3.6 MB), and nothing but
-  `clean` ever removed them. The replaced bytes are simply gone now; the release you came
-  from stays downloadable, and `clean` still sweeps the piles older installs carry. The
-  bounded `soul.md.bak-update-*` sets stay (three at most, one per distinct persona), and
-  `write_file`/`edit_file` still leave their single undo copy, which the verify region
-  note reads as the pre-image.
+### Fixed
+- **Questions:** a stopped run's unanswered question is handed to exactly the next run (reading consumes it) and dropped once older than `agent.ask_question_ttl_hours` (default 24; `0` disables the expiry).
+- **Shell:** a `timeout=` shorter than the auto-background window is honoured - the command and its tree are killed and the blocking path answers `TIMEOUT after Ns`.
+- **Jobs:** the scheduler re-reads `jobs.json` when its mtime changes, in the firing loop and before every `schedule` action, so a job added from a `--once`/CLI run fires and one removed there is not fired.
 
 ## [1.0.55] - 2026-10-03
 
-Fixed
-- **An edit to a CRLF file was told "this file changed since you read it".** The read
-  receipt hashed the raw bytes and the edit compared its LF-normalized copy, so the two
-  never matched on any Windows file; the post-edit receipt also stored the new_string
-  fragment rather than the resulting file. One canonical view now backs both, and line
-  counts are the file's own. Found by a fleet box's own agent while it was being driven.
-- **A `--once` run with a piped stdin parked `ask_user` for the full 120s and then
-  stopped the run.** The CLI mounted its console ask door even with nobody able to type
-  (cron, `ssh host --once`); the caller now declares whether a human is reachable, so
-  such a run refuses the question immediately and states its assumption instead.
-- **`doctor`'s unmatched-failure drafts suggested `match: everything`.** Drafts now skip
-  stopwords and pick a distinctive token.
-- **A read miss that shares a tool's name no longer hides the file that exists.**
-  `read_file .../notes` now answers "Did you mean .../notes.md?" before noting that
-  `notes` is also a tool.
-- **An older host-owned `tools/process.py` silently disabled auto-background** (and
-  cross-restart exit codes) on an otherwise updated tree, because `update` never
-  overwrites host-owned files. The runtime logs it once and `doctor` prints the remedy.
+### Fixed
+- **Edit:** a CRLF file is read and edited through one canonical view, and the post-edit receipt stores the resulting file's own line counts, so an edit is no longer told the file changed since it was read.
+- **Ask user:** a `--once` run with a piped stdin declares that no human is reachable and refuses the question immediately, stating its assumption instead of parking `ask_user` for 120s and stopping the run.
+- **Doctor:** unmatched-failure drafts skip stopwords and pick a distinctive token instead of suggesting `match: everything`.
+- **Read:** a read miss that shares a tool's name suggests the existing file (e.g. `.../notes.md`) before noting that `notes` is also a tool.
+- **Runtime:** an older host-owned `tools/process.py` that silently disables auto-background and cross-restart exit codes is logged once, and `doctor` prints the remedy.
 
 ## [1.0.54] - 2026-10-03
 
-Added
-- **Plan mode, context files, per-tool authority, job control, and a delegation
-  contract** - from a hardening pass over the harness. `agent.plan_requires_approval`
-  starts a session read-only (`/plan on|off|apply` is the door), `AGENTS.md`/`CLAUDE.md` are
-  read into the cached prefix at session start, `agent.tool_policy` denies or prompts a tool
-  by name and `agent.approval_mode` is a ceiling (`auto` default = no new prompts), background
-  jobs report real exit codes across restarts with `wait_for` readiness and `send` stdin, and
-  `delegate_task` takes a shared `context` plus a `tasks` batch with a per-child budget and
-  cost line. Graded in `tests/test_plan_and_context.py`, `tests/test_authority.py`,
-  `tests/test_job_control.py` and `tests/test_delegation.py`.
+### Added
+- **Harness hardening:** plan mode, `AGENTS.md`/`CLAUDE.md` context files, per-tool authority, job control and delegation with shared `context`/`tasks`. (tests/test_plan_and_context.py, tests/test_authority.py, tests/test_job_control.py, tests/test_delegation.py)
 
-Fixed
-- **A clean stream close was returned as the model's final word.** A server that died
-  mid-answer (or a proxy that dropped the connection) left content with no `finish_reason`
-  and no `[DONE]`, and `_stream_chat` accepted it - the truncated prefix went to the
-  operator and into history, and `finish_reason: ''` kept it invisible to the length and
-  window checks. It is now a `StreamFailed`, which the caller retries non-streaming.
-  Graded in `tests/test_stream_integrity.py`.
-- **`edit_file` could report OK over an empty diff.** A `new_string` byte-identical to the
-  file wrote the same bytes back and returned a green OK, so a weak model re-anchored and
-  re-sent variants while the loop guard saw different arguments each time. It is refused
-  now, escalates to a STOP on the third identical payload, and any real mutation clears it.
-  Graded in `tests/test_stream_integrity.py`.
-- **Reasoning leaked into the answer, and `reasoning`/`reasoning_text` were dropped.**
-  A server with no reasoning parser puts the whole `<think>` block into `content`; it now
-  routes to reasoning (leading fences only, split across deltas), the three field aliases
-  fold to `reasoning_content`, and local endpoints get it replayed on history turns so the
-  prefix KV-cache stays aligned. `llm.replay_reasoning=false` / `llm.think_fence=false`
-  disable either half. Graded in `tests/test_stream_integrity.py` and
-  `tests/test_reasoning_replay.py`.
-- **A transient 5xx demoted the conversation to another model.** Local boxes answer 503
-  while a model loads; the harness treated that like a fatal error and moved to the next
-  endpoint (or died). 408/5xx and refused/reset/timeout transport failures now retry the
-  SAME endpoint with capped exponential backoff + jitter before any failover
-  (`agent.same_endpoint_retries`, default 3; 0 restores the old behaviour).
-  Graded in `tests/test_transient_retry.py`.
-- **`search_files` returned an unordered page that one hot file could eat.**
-  The walk is path-ordered, a per-file cap (`agent.search_max_per_file`, default 5) keeps
-  one log from consuming the whole budget, and both a capped file and a cap-terminated
-  walk say so. Graded in `tests/test_search_scope.py`.
-- **The spill index did not survive a restart, and spills were unbounded on disk.** The
-  same output now spills to ONE content-addressed file, the index persists beside the
-  files (and `/new`'s removal persists too), and `agent.spill_max_bytes` (8 MiB) caps what
-  a runaway command writes, saying what it dropped. Graded in `tests/test_spill_durability.py`.
-- **Duplicate `tool_call_id`s could 400 a strict endpoint.** A local server or proxy that
-  re-emits an id collapsed two calls onto one id in every pairing structure; ids are split
-  in order (results re-pointed) and the pairing report names duplicates. Graded in
-  `tests/test_payload_ids.py`.
-- **An empty `stop` completion cost a whole nudge turn.** It is re-sent once, unchanged, on
-  the same endpoint; a turn that spent tokens is not re-asked. Graded in
-  `tests/test_empty_stop_retry.py`.
-- **A read->edit->read loop kept every version of a file.** An older read superseded by a
-  newer full read of the same path is blanked to a notice, gated on the prompt cache
-  (`agent.prune_suffix_tokens`, `agent.prune_idle_secs`); the compaction drop loops no
-  longer re-serialize the whole conversation per pass. Graded in `tests/test_supersede_prune.py`.
-- **The elision marker said something vanished without saying what.** It now carries a
-  cumulative file ledger (R/W/RW) and names the pre-compaction transcript, and
-  `_force_shrink` writes that transcript before evicting. Graded in
-  `tests/test_compaction_continuity.py`.
-- **A revealed tool schema rode every later payload for the session's life.**
-  `agent.reveal_ttl_secs` (default 1800) expires it after that long without a call; the name
-  stays listed and a call re-reveals. Graded in `tests/test_reveal_decay.py`.
-- **`remember` was the one prompt-bound text sink that skipped the secret scrubber.** It
-  now passes `scrub()`. Field notes gained `repeat: once|gap:N`, shown hints persist per
-  session, read receipts let a failed edit say "this file changed since you read it", a
-  verify failure shows the region plus the pre-image from the `.bak`, skills parse
-  `globs:`/`always:`/`hide:`, `/fork` copies a conversation, and an unresolved merge
-  conflict is named when it is read. Graded in `tests/test_harness_extras.py`.
+### Fixed
+- **Streams:** a clean stream close with content but no `finish_reason` and no `[DONE]` is now a `StreamFailed` the caller retries non-streaming. (tests/test_stream_integrity.py)
+- **Edit:** `edit_file` refuses a byte-identical `new_string`, escalates to a STOP on the third identical payload, and any real mutation clears it. (tests/test_stream_integrity.py)
+- **Reasoning:** `<think>` blocks route to reasoning, local endpoints replay it on history turns, and `llm.replay_reasoning=false`/`llm.think_fence=false` disable either half. (tests/test_stream_integrity.py, tests/test_reasoning_replay.py)
+- **Endpoints:** 408/5xx and refused/reset/timeout failures retry the same endpoint with capped exponential backoff plus jitter before any failover (`agent.same_endpoint_retries`, default 3; 0 restores it). (tests/test_transient_retry.py)
+- **Search:** `search_files` returns a path-ordered walk with a per-file cap (`agent.search_max_per_file`, default 5), and both a capped file and a cap-terminated walk say so. (tests/test_search_scope.py)
+- **Spill:** output spills to one content-addressed file, the index persists beside the files, and `agent.spill_max_bytes` (8 MiB) caps what a runaway command writes, saying what it dropped. (tests/test_spill_durability.py)
+- **Payload:** duplicate `tool_call_id`s are split in order with results re-pointed, and the pairing report names the duplicates. (tests/test_payload_ids.py)
+- **Retry:** an empty `stop` completion is re-sent once, unchanged, on the same endpoint; a turn that spent tokens is not re-asked. (tests/test_empty_stop_retry.py)
+- **Context:** an older read superseded by a newer full read of the same path is blanked to a notice, and compaction drop loops no longer re-serialize the whole conversation per pass. (tests/test_supersede_prune.py)
+- **Compaction:** the elision marker carries a cumulative file ledger (R/W/RW) and names the pre-compaction transcript, which `_force_shrink` writes before evicting. (tests/test_compaction_continuity.py)
+- **Tools:** a revealed tool schema expires after `agent.reveal_ttl_secs` (default 1800) without a call; the name stays listed and a call re-reveals. (tests/test_reveal_decay.py)
+- **Harness extras:** `remember` scrubbed; `repeat: once|gap:N`; per-session hints; read-receipt messages; verify region + `.bak` pre-image; skills `globs:`/`always:`/`hide:`; `/fork`; merge-conflict naming. (tests/test_harness_extras.py)
 
 ## [1.0.53] - 2026-10-03
 
-Fixed
-- **A re-run over an already-configured install no longer walks the whole wizard.** The
-  installers asked for the server, bot token, model endpoint and key every time, which reads
-  as "it is resetting me" when it is only re-asking. They now detect a configured install
-  (`config.json` plus a token in `.env`), ask ONCE - "Keep the existing configuration?"
-  [yes] - and skip every question when the answer is keep. Answering no still reaches the
-  full wizard, so a reinstall can still change or add a lane. On Windows the Telegram token
-  is now carried over from `.env` like the Mattermost one (a redo used to write
-  `TINYCMDR_TG_TOKEN` back EMPTY and silently drop the lane), and the Telegram ids are read
-  back from `config.json`, so the token-without-an-id guard cannot refuse a valid kept
-  install. Graded in `tests/test_installer_windows.py` and `tests/test_installer_unix.py`.
+### Fixed
+- **Installer:** a re-run on a configured box asks once to keep it and skips questions on keep; Windows carries the Telegram token from `.env` and reads ids from `config.json`. (tests/test_installer_windows.py, tests/test_installer_unix.py)
 
 ## [1.0.52] - 2026-10-03
 
-Fixed
-- **`update` can no longer be blocked by a git checkout, or by git being absent.** 1.0.46,
-  1.0.47 and 1.0.48 updated by `git pull --ff-only`, which refused on the dirty checkout
-  their own kit-prune created - an install that hit that could not update at all, and one
-  whose git was missing could not update either. 1.0.49 moved to the verified release
-  artifact and never touches git; this pins that contract with a test that runs
-  `update <package>` against a legacy checkout with no git on `PATH` and asserts the build
-  lands, and the no-arg path now says plainly when it sees a `.git` that the state of the
-  tree cannot block it. Graded in `tests/test_verbs.py`.
+### Fixed
+- **Update:** `update` can no longer be blocked by a git checkout or by git being absent - it installs the verified release artifact without touching git, and the no-arg path says a `.git` tree cannot block it. (tests/test_verbs.py)
 
 ## [1.0.51] - 2026-10-03
 
-Fixed
-- **`search_files` answered with at most one match per file.** The directory pass broke out
-  of a file after its first content hit, so a search for a pattern a file held four times
-  returned one line and said nothing about the rest - a confident wrong answer from the tool
-  the prompt teaches for grep (found by an audit of the live macOS install, 2026-10-02, and
-  reproduced here). Every match now reports, up to `max_results`. Graded in
-  `tests/test_tool_discovery.py`.
-- **The run-state runway promised tool-call budget the turn cap could cut off.** With
-  `llm.max_turns=100` beside `agent.max_steps=250`, a run making one call per turn was forced
-  to report at 100 calls while the line it was shown said "about 150 left before the harness
-  forces your report". The line now names both caps and says plainly that whichever is
-  reached first ends the run. Graded in `tests/test_plan.py`.
+### Fixed
+- **Search:** `search_files` now reports every match up to `max_results` instead of stopping after the first content hit per file. (tests/test_tool_discovery.py)
+- **Run state:** the runway line now names both the turn cap and the step cap and says plainly that whichever is reached first ends the run. (tests/test_plan.py)
 
 ## [1.0.50] - 2026-10-03
 
-Fixed
-- **`update` no longer overwrites a host's own files.** 1.0.49 protected exactly one path -
-  `soul.md` - and wrote every other file the package carries over the install, so an edited
-  `tools/patch.py`, `tools/process.py`, `tools/toolsmith.py`, `tools/README.md` or
-  `skills/README.md` was silently replaced (a `.bak-update-<stamp>` sat beside it, but it was
-  replaced). `tools/` is precisely where the agent is told to write its own tools, so that was
-  the wrong default. An update now only SEEDS a host-owned path: if it already exists it is
-  left exactly as it is, whatever it holds, and the result names what it left alone. The
-  protected set is the per-host table in docs/development.md §4 - `tools/`, `skills/`,
-  `soul.md`, `config.json`, `.env`, `notes.md`, `field-notes.md`, `atlas.md`, `sessions/`,
-  `logs/`, `spill/`, the ledger files, `maintenance/private_rules.py` and
-  `maintenance/where-roles.json`. Graded in `tests/test_verbs.py`; verified end to end against
-  the published release from an install whose `tools/patch.py`, `skills/README.md` and
-  `soul.md` had all been edited - the app moved 1.0.48 -> 1.0.49 and every one of them stayed.
+### Fixed
+- **Update:** an update now only seeds a host-owned path - an existing file is left exactly as it is and the result names what it left alone; the protected set is the per-host table in docs/development.md §4. (tests/test_verbs.py)
 
 ## [1.0.49] - 2026-10-03
 
-Changed
-- **`update` now installs the RELEASE the installer installs: one artifact, verified, never
-  `main`.** It was `git pull` of the development repository, so a user could receive
-  unreleased commits, accumulated the project's own kit, and needed git installed - and the
-  two delivery channels had already drifted, because the Unix installer checked its download
-  and the Windows one did not. `tinycmdr update` now downloads the package for this host from
-  the newest release, checks it against `SHA256SUMS` (a mismatch refuses and unpacks nothing,
-  the contract install.sh has had since 2026-09-29), writes it over the install with a
-  `.bak-update-<stamp>` beside every changed file, never overwrites an edited `soul.md`, and
-  drops the project's own kit by name. Host state - config.json, .env, sessions, notes,
-  skills, tools - is not in the package, so it cannot be touched. `update --full` keeps the
-  kit; `update <file|zip|folder>` is unchanged. Grade in `tests/test_verbs.py`; verified end
-  to end against a locally served package on a real 1.0.47 install (apply, prune, host files
-  kept, edited persona kept) and against a tampered download (refused).
-- **The Windows one-line installer verifies its download.** `install.sh` checked SHA256SUMS
-  from 2026-09-29; `install.ps1` checked nothing, so Windows installs were the unverified
-  half. It now fetches SHA256SUMS, matches the asset's own line, and refuses on a mismatch -
-  verified on the fleet Windows box against the published files: the good download matches,
-  one tampered byte is refused.
+### Changed
+- **Update:** `update` installs the verified release artifact (checked against `SHA256SUMS`) instead of `git pull` of `main`, keeps a `.bak-update-<stamp>`, preserves an edited `soul.md`, and drops the project's kit. (tests/test_verbs.py)
+- **Installer, Windows:** `install.ps1` now fetches `SHA256SUMS`, matches the asset's own line and refuses on a mismatch, like `install.sh`.
 
 ## [1.0.48] - 2026-10-03
 
-Fixed
-- **`update` honours a two-tree box's declaration, so the LIVE tree can be cleaned.** The
-  narrowing shipped in 1.0.47 skipped whenever a `maintenance/where-roles.json` existed at
-  all - but a two-tree box has one in the live tree too, and that is exactly the tree that
-  wants the kit gone. It now READS the declaration: a `dev` role pointing at another folder,
-  or no declaration at all, lets the pull prune; `dev: same_as live`, a bare `dev` entry, an
-  explicit dev path aimed at this folder, or an unreadable file all hold it off. Doubt
-  resolves to "keep", because pruning a real dev tree deletes the tests out from under
-  whoever is editing them. Found on the operator's own box, whose declaration said "one tree"
-  and therefore blocked the very cleanup it had just asked for. `tests/test_verbs.py` grades
-  all four declarations, and the box's own `where-roles.json` was corrected to name its live
-  and dev trees honestly (host file, gitignored).
+### Fixed
+- **Update:** the kit prune reads `maintenance/where-roles.json`: a `dev` role pointing elsewhere (or none) prunes, while `dev: same_as live`, a bare `dev`, a self-aimed path or an unreadable file hold it off. (tests/test_verbs.py)
 
 ## [1.0.47] - 2026-10-03
 
-Changed
-- **`tinycmdr update` no longer copies the project's own kit onto user machines.** The verb
-  git-pulled the whole repository, so every updated install accumulated the test suites, the
-  CI workflow, the docs, the changelog, the ledger and the maintainer scripts - ~600 lines
-  the harness needs to run nothing (an update on the operator's own Mac landed 18 files, 7 of
-  them test suites). A pull now narrows the tree to what a PACKAGE ships, written as
-  EXCLUSIONS rather than an allowlist so a path this list forgets stays (harmless) instead of
-  an allowlist forgetting one and DELETING something the harness needs. Untracked per-host
-  files (config.json, .env, sessions/, notes, a host's own tools/) are untouched - the tool
-  speaks only about tracked paths - a tree that declares itself development
-  (maintenance/where-roles.json, the file where.py reads) is never pruned, and `update --full`
-  keeps the whole repository deliberately. Verified on throwaway clones: after a pull the
-  tests/.github/docs/changelog/ledger/maintainer scripts are gone, `install/`, `tools/` and
-  the restart helpers are intact, untracked files survive, and `tinycmdr --version` runs.
-- **The update summary reports the version it just pulled.** It printed the RUNNING process's
-  VERSION, so updating to 1.0.46 announced "(VERSION 1.0.45)" - confusing enough that it was
-  reported as a bug. It now reads the version from the file on disk.
+### Changed
+- **Update:** a pull narrows the tree to a package's files, as exclusions so a forgotten path stays rather than being deleted; untracked host files survive, a self-declared development tree is never pruned, and `--full` keeps everything.
+- **Update:** the update summary now reports the version just pulled, read from the file on disk rather than the running process's version.
 
 ## [1.0.46] - 2026-10-03
 
-Added
-- **CI installs from the built artifact and runs it - the one loop no suite closed.** Every
-  installer check (`tests/test_installer_unix.py`, `test_installer_windows.py`,
-  `test_installer_parity.py`) installs from a tree the suite assembles itself with its own
-  fixtures and a fake venv, so the zip and tarball `maintenance/build-package.py` publishes -
-  what every other host downloads - were never executed. Two new jobs (`install` on
-  macOS + Linux, `install-windows`) build the public package, unpack THAT archive, install
-  it headless, and hand the install to `maintenance/smoke-install.py`, which drives
-  `config set`, `doctor`, `health` and one `--once` turn. The turn runs against a hermetic
-  stub unless the repository secret `TINYCMDR_SMOKE_BASE_URL` names a real endpoint - the
-  value is never written into `ci.yml`, because a LAN address in a tracked file is exactly
-  what `maintenance/leak-gate.py` refuses, and a LAN endpoint is only reachable from a
-  runner on that network anyway. `maintenance/smoke-install.sh` is the same command a
-  person runs. Falsifiers, measured on macOS 2026-10-02 from a clean clone: build → install
-  → green smoke in 11 s with 11 checks passing, and against a refused port both `doctor`
-  and the `--once` "infrastructure failure" card fail the run (the return code alone does
-  not - `--once` exits 0 whether or not an endpoint answered).
+### Added
+- **CI:** new jobs build the package, unpack and install it headless and run `maintenance/smoke-install.py` (`config set`, `doctor`, `health`, `--once`). (tests/test_installer_unix.py, tests/test_installer_windows.py, tests/test_installer_parity.py)
+- **Approvals:** the confirm gate offers `yes`/`no`/`session`/`always` (`always` persists in `confirm-allow.json`), takes buttons, numbers or sentences with `no` outranking a scope word; `tinycmdr approvals`/`clear` reports or wipes it.
 
-Fixed
-- **Two Windows traps are named where they happen.** `write_file` to a name whose stem is a
-  reserved device name (`CON`, `NUL`, `AUX`, `COM1`…`LPT9`, which Windows resolves
-  case-insensitively and with ANY extension) now says so - the file is real, but a later
-  read can hit the device instead (report H-7). And a `shell` command using `Start-Process`
-  without `-Wait` now says the child outlives the harness and points at the `process` tool,
-  whose kill takes the tree (report H-10 - measured on the fleet's Windows box: killing the parent left
-  the grandchild alive). Both are warnings, not refusals, and both are Windows-only.
-  Verified on the fleet's Windows box, 2026-10-02; inert on Linux. `tests/test_tool_doors.py`.
-- **A failed `execute_code` says the partial effects already happened.** The drive's own
-  batch died half-way and the model could not tell what had run: a non-zero exit was
-  reported as `exit_code=1` with the traceback, and the summary the script never reached
-  was simply absent (report H-9, 2026-10-02). The result now carries `[HARNESS: execute_code
-  exited N. Whatever the code did BEFORE it failed has already happened - re-read the files
-  or state it touched ...]`, so the next call verifies instead of trusting a clean slate. A
-  clean exit carries no such note. `tests/test_tool_doors.py`.
-- **`send_file`'s own description now says a CLI/`--once` lane cannot carry a file.** The
-  tool already refused honestly, but a model planning a deliverable still reached for it
-  (report H-14, 2026-10-02); the schema says so up front now.
-- **A Windows path past MAX_PATH is extended automatically.** With LongPathsEnabled=0,
-  creating a 339-character path throws `FileNotFoundError [WinError 206]`, so a deep
-  `node_modules`, a backup tree or a long `AppData` chain failed with a confusing error -
-  and `read_file` on one reported the file as "does not exist" (report H-2, measured on
-  the fleet's Windows box, 2026-10-02). `_win_long_path()` now adds the `\\?\` extended prefix at the four
-  file-tool doors (`read_file`, `write_file`, `edit_file`, `search_files`) for a
-  Windows-ABSOLUTE path at or over the 248-character directory limit (and `\\?\UNC\` for a
-  share), leaving short paths, relative paths and every non-Windows host untouched.
-  Verified on the fleet's Windows box: write -> read -> edit -> search on a 343-character path all
-  succeed, and a short path still reports its plain form; `tests/test_read_window.py`
-  grades the transform off Windows.
-- **An unreadable file now names the cause instead of a Python unpack error.** `_read_capped`
-  returned a 2-tuple `("", False)` on `OSError` while every caller unpacks three, so
-  `read_file` on a file held open with a deny-all share mode answered
-  `not enough values to unpack (expected 3, got 2)` - a stack-trace fragment where a sysadmin
-  needs "being used by another process" (drive report H-1, 2026-10-02). The helper returns the
-  3-tuple it documents and takes `strict=`, which `read_file` sets so the real `OSError`
-  ("permission denied", "[WinError 32] ...") is what reaches the model. Falsifier in
-  `tests/test_read_window.py`: an unreadable file must name the cause and must not say
-  "unpack"; before the fix that same call printed the unpack error.
-- **`read_file`'s header no longer prints the covered window as the file's line count.** With
-  the 8 MiB read cap in play, `tail=3` of a huge file read `last 3 of 653825 lines` and an
-  offset read `of 653825` - counts that read as the file's length rather than the window this
-  read covered, which is how the cap looked like a property of the file (report H-4,
-  2026-10-02). A cut read now says `of the N lines this read covered - the file is bigger`;
-  an uncut read keeps its plain header. `tests/test_read_window.py`.
-- **`search_files` reports files it skipped instead of quietly omitting them.** The directory
-  content scan skips files over 2 MB; silently, that turned "find X under <dir>" into a
-  confident miss on exactly the largest files - the same content was found at once when the
-  file was named directly (report H-5, 2026-10-02). The result now carries a `[HARNESS: N
-  file(s) over 2 MB were NOT searched ...]` note naming them, on both the hit and the no-hit
-  path. `tests/test_tool_discovery.py`.
-- **`search_sessions` matches a query's words, not the literal phrase.** `query in content`
-  answered "No past session content matching" for "scheduler fired schedule add" while the
-  same session's events were found in one `search_files` call - the recall tool was worse at
-  recall than the generic search (report H-13, 2026-10-02). Words now AND across a session's
-  text and the snippet points at its best-matching message; the single-word case is
-  unchanged. `tests/test_transcript.py`.
-- **Non-ASCII output survives both `execute_code` and `shell` on Windows.** A redirected
-  child defaults to the locale code page, so `print("✓")` raised `UnicodeEncodeError` and
-  killed a batch half-way, and `echo ✓` in the shell came back as `??` (report H-6/H-9,
-  2026-10-02). `execute_code`'s child is now launched with `-X utf8`, and the Windows shell
-  command is prefixed with `[Console]::OutputEncoding = UTF-8` - the console's OUTPUT
-  encoding, because a `chcp 65001` in the child (which the report tried) does not change
-  what .NET writes to a redirected stream. Both verified on the fleet's Windows box, 2026-10-02:
-  `execute_code` returned `exec ✓ 日本語 ü` and `shell` returned `shell-✓-日-ok`; before the
-  shell fix the same call returned `shell-?-?-ok`. The macOS/Linux path is unchanged.
-- **A chat token that cannot work is refused where it is typed, and a refused one is
-  diagnosed wherever it shows up.** `tinycmdr token set` wrote ANY value: a Mattermost
-  token of one 0x16 byte sat in a live `.env` while `tinycmdr token` called it
-  "set (.env)", and the lane failed 723 times. It now refuses control characters, an empty
-  value and stray whitespace, checks the shape per key (a Mattermost bot token is 26
-  letters/digits; a Telegram one is `<digits>:<35 chars>`), strips — and names — a leading
-  UTF-8 BOM (PowerShell 5.1 prepends one to anything piped into a command: reproduced while
-  writing this), and then ASKS THE PROVIDER (`GET /api/v4/users/me`, Telegram `getMe`),
-  printing "checked: accepted as @the-bot" or "REFUSED: HTTP 400 …" at the prompt. The
-  same gate runs at LANE STARTUP on the value already in `.env`, so a token that was already
-  broken is named ("the Mattermost token in .env is unusable: control characters … - replace
-  it with `tinycmdr token set TINYCMDR_MM_TOKEN`") instead of failing behind the operator.
-  The wizard and the model-add paths share the gate too.
-- **A lane failure now carries a reason.** mattermostautodriver raises
-  `InvalidOrMissingParameters(message)` where `message` is the API's empty field, so a
-  refused token reached the lane as an empty string: `doctor` said "mattermost lane is DOWN
-  (723 failed start(s)): no detail" and the log got a blank `ERROR ` line per retry.
-  `_lane_reason()` falls back to the exception's class (and a logging filter attributes an
-  empty library message), so the state file, `doctor` and `health` all name the cause; the
-  Mattermost lane also probes `/users/me` before the driver starts, so its failure reads
-  "HTTP 400 Bad Request at …/api/v4/users/me".
-- **A refused credential is parked, not hammered.** HTTP 400/401/403 (and the driver's own
-  InvalidOrMissingParameters / NoAccessTokenProvided / NotEnoughPermissions) is a human's
-  job, not an outage: the lane logs ONE critical line naming the fix (`tinycmdr token set
-  TINYCMDR_MM_TOKEN`, then `tinycmdr restart`) and retries every 10 minutes instead of
-  climbing the 5/10/20/60 backoff for ever.
-- **A fatal lane no longer takes the other lane with it.** With both doors configured,
-  Telegram rides a DAEMON thread, so a `sys.exit(2)` from the Mattermost lane (a missing
-  token) killed the process and the working Telegram lane with it; the pair now keeps
-  serving the lane that is up.
-
-Added
-- **Confirmations can be answered once, for the session, or for ever.** The confirm gate
-  asked yes/no for every matching command, so a long run was an interrogation. It now
-  offers four short answers - `yes`, `no`, `session` (this conversation) and `always`
-  (never ask again, written to `confirm-allow.json`, a per-host file that survives a
-  restart). One word is a whole answer: a lane whose buttons report the option pressed,
-  a numbered reply ("4") and a typed sentence ("always please") all read the same, and
-  an explicit `no` outranks a scope word in the same sentence. The state is visible and
-  reversible: `tinycmdr approvals` reports it, `tinycmdr approvals clear` wipes it.
-
-Fixed
-- **A 1M-context cloud model is no longer sized as ~8000.** `_detect_window` read vLLM's
-  `max_model_len`, llama.cpp's `meta.n_ctx`/`/props`, Ollama's `/api/ps` and SGLang's
-  `/get_server_info`, but not the OpenAI-style `context_window` that a hosted provider
-  puts ON the model entry (DeepSeek answers `context_window: 1048576`,
-  `max_output_tokens: 393216`). The harness then assumed ~8000, clipped replies at 2048
-  and reported a wrong window in the app. It reads `context_window`/`context_length`
-  now, and when the configured id is not advertised (an alias, or a provider that hides
-  ids) it uses the window only if EVERY advertised model reports the same one.
-- **The CLI's boxed dividers are heavy.** The `--app`/inline cards and banner now use
-  rich's HEAVY box (┏━┓┃┗┛), and the plain-text boxes the verbs print and the rule above
-  an answer use the matching heavy glyphs. The ASCII fallback is unchanged.
+### Fixed
+- **Windows:** `write_file` to a reserved device name (`CON`, `NUL`, `COM1`-`LPT9`) warns, and `shell` `Start-Process` without `-Wait` warns the child outlives the harness (use the `process` tool); Windows-only. (tests/test_tool_doors.py)
+- **Tools:** a failed `execute_code` now reports that whatever the code did before it failed has already happened, so the next call verifies instead of trusting a clean slate; a clean exit carries no note. (tests/test_tool_doors.py)
+- **Tools:** `send_file`'s schema now states up front that a CLI/`--once` lane cannot carry a file.
+- **Windows:** `_win_long_path()` adds the `\\?\` prefix in the file tools for a Windows-absolute path at/over the 248-character limit (`\\?\UNC\` for a share); short/relative/non-Windows paths untouched. (tests/test_read_window.py)
+- **Read:** an unreadable file now names the real cause (`permission denied`, `[WinError 32]`) instead of a tuple-unpack error; `_read_capped` returns its documented 3-tuple and takes `strict=`. (tests/test_read_window.py)
+- **Read:** a cut `read_file` header now says `of the N lines this read covered - the file is bigger` instead of printing the window as the file's line count; an uncut read keeps its plain header. (tests/test_read_window.py)
+- **Search:** `search_files` now reports the files over 2 MB it skipped instead of omitting them silently, on both the hit and the no-hit path. (tests/test_tool_discovery.py)
+- **Search:** `search_sessions` now matches a query's words (AND across a session's text) instead of the literal phrase, and the snippet points at its best-matching message; the single-word case is unchanged. (tests/test_transcript.py)
+- **Windows:** non-ASCII output now survives `execute_code` (child launched with `-X utf8`) and `shell` (prefix `[Console]::OutputEncoding = UTF-8`); the macOS/Linux path is unchanged.
+- **Tokens:** `tinycmdr token set` now refuses control characters, an empty value and stray whitespace, validates the shape per key, strips a leading UTF-8 BOM and verifies the token with the provider; the same gate runs at lane startup.
+- **Lanes:** `_lane_reason()` now falls back to the exception's class, so the state file, `doctor` and `health` name the cause, and the Mattermost lane probes `/users/me` before the driver starts.
+- **Lanes:** a refused credential (HTTP 400/401/403) is now parked, not hammered - the lane logs one critical line naming the fix and retries every 10 minutes instead of climbing the 5/10/20/60 backoff.
+- **Lanes:** a fatal lane no longer takes the other lane with it; the pair keeps serving whichever lane is up.
+- **Models:** `_detect_window` now reads a hosted provider's `context_window`/`context_length`, and when the configured id is not advertised it uses that window only if every advertised model reports the same one.
+- **CLI:** the `--app`/inline cards and banner now use rich's heavy box, and the plain-text boxes and answer rule use the matching heavy glyphs; the ASCII fallback is unchanged.
 
 ## [1.0.45] - 2026-10-02
-Added
-- **Cloud failover has a door.** `llm.allow_cloud_fallback` shipped `false` with no way to
-  change it except hand-editing config.json. There is now `tinycmdr model failover [on|off]`,
-  and the question is asked where an off-LAN endpoint is actually added: the model wizard,
-  `model add`, and the "Add another endpoint?" step of all three installers. OFF (the
-  default) means an off-LAN endpoint is reached only when you switch to it on purpose
-  (`model use`, `/model <alias>`); ON lets automatic failover use it when the local box
-  fails.
 
+### Added
+- **Models:** `tinycmdr model failover [on|off]` exposes `llm.allow_cloud_fallback`, asked wherever an off-LAN endpoint is added (the wizard, `model add`, the installers); OFF (default) reaches it only on purpose, ON lets failover use it.
 
-Removed
-- **The task ledger is gone from the harness.** `volatile_context()` appended a "Task ledger for
-  this machine" block to EVERY model call, so an open item's text rode every request as a trailing
-  message and read as a standing order - a context poisoner, on the operator's call. The whole
-  feature is removed: the `task` tool and its schema, the prompt block and its standing
-  instruction, `render_task_prompt`, the stale-item notices (`ledger_notice`), the `tinycmdr tasks`
-  verb and `/tasks`, `tasks.json` / `tasks.md` / `tasks.journal.jsonl`, the `tasks_max_open` /
-  `tasks_done_keep` / `ledger_stale_hours` config keys, the result-time hint, and the ledger test
-  suites. `notes.md` (the `remember` tool) is the surviving durable memory; the plan tool is
-  unaffected.
+### Changed
+- **Models:** bare `tinycmdr model` opens a picker (arrows move, typing filters, Enter switches, Esc leaves) with the model in use marked and each row naming its endpoint and alias id; the app and shell share it, a pipe gets the plain list.
+- **Models:** `model endpoint` reports the primary endpoint and whether it answers, and `model endpoint <url>` probes and writes a URL (refusing one that does not answer, naming `--force`) then offers the advertised models to pick from.
+- **App:** an answer card now carries a dim `re: <your question>` line above it (flattened to one line, capped at 100 characters, copyable with `Ctrl-Y`); `--once` gets it too, while chat and inline `--cli` are unchanged.
 
-Fixed
-- **The installers ask for the Mattermost bot token even when one is already known, and the
-  user-id default is a plain id.** The token question was gated on "no token yet" (a switch,
-  the secrets file or an existing `.env`), so a reinstall SKIPPED it entirely - no way to change
-  or add a token, and nothing on screen saying one was being reused. It is now always offered
-  with the interactive questions, and Enter keeps the known value (all three installers). The
-  allowlist default was built from a Python list repr, so the prompt proposed
-  `[['<the host's user id>']]`; `jget`/`cfgval` now join a JSON list into `a, b` before it
-  reaches the prompt.
-- **A short model list is now explainable.** The picker was never capped - it offers exactly
-  what `GET <base_url>/models` returns for the link and key this install holds. The plain
-  `tinycmdr model` list now prints what each endpoint actually advertised and flags any
-  configured model NO endpoint advertises (the usual reason a list looks wrong), and the
-  catalog reads `name`/`model` keys as well as `id`, so a gateway that omits `id` no longer
-  loses its models silently.
-- **Pointing tinycmdr at a cloud model is one conversation again, and the key never lands in
-  `config.json`.** Every model-adding door - the three installers, `tinycmdr setup`, and
-  `tinycmdr model add` with no URL - now asks the same things in the same order: is the endpoint
-  local (this machine / the LAN, no key) or cloud (a hosted provider)? then the API key and the
-  endpoint link, then it proves the key with a bearer `GET /v1/models` and offers the models that
-  come back to choose from. Before, the URL was asked first and probed with NO key, so a hosted
-  provider's `401` read as "not reachable", the model list it needed never arrived, and the key -
-  asked last, after that failed probe - was written to `llm.api_key` in `config.json`, the one file
-  the agent reads into a prompt (the installer said so in the same breath as telling you to do it).
-  A `401`/`403` is now named as a key refusal and re-asks the key, not the host. The primary's key
-  lives in `.env` as `TINYCMDR_LLM_API_KEY`; an added fallback's key gets its own
-  `TINYCMDR_ENDPOINT<n>_API_KEY`.
-- **The masked secret prompts take a paste.** The Mattermost bot-token field (and every other
-  secret field) used `Read-Host -AsSecureString` on Windows, which is blank in some hosts and drops
-  a pasted token in others, and `read -s` on unix, which shows nothing at all. All of them now echo
-  one `*` per character, whether the characters come from typing or a paste, with working
-  backspace.
-- **`model endpoint <url>` is a real fix door.** A cloud primary has two faults that look like one -
-  the link and the key - and the door that corrects a mistyped link could not fix a stale key: it
-  probed with the key already in the config, and a `401` was refused with nowhere to type the key,
-  so a wrong key was a dead end short of hand-editing `.env`. It now asks for the key on a
-  `401`/`403`, writes it to `.env` as `TINYCMDR_LLM_API_KEY`, clears any stale copy out of
-  `config.json`, and re-probes; a key that is still refused after three tries writes nothing.
-  `model endpoint` with no URL names the same command when it reports the refusal.
-- **The model wizard is one short command, and the obvious one.** Changing the model meant
-  remembering `model add`/`model endpoint <url>`: bare `model` showed a picker and nothing else,
-  and a dead or refused primary left a one-row list with no way forward. Now `tinycmdr model setup`
-  runs the wizard, the picker's FIRST row is "add or change the endpoint" (one ENTER, no command to
-  remember), and bare `model` offers the wizard whenever the endpoint is not usable. In chat and
-  `--app` those doors say to run it in a shell, where a key can be typed with the echo off.
-- **A Telegram token no longer leaves the bot serving nothing.** With BOTH a Mattermost and a
-  Telegram token configured, a bare start used to REFUSE ("neither lane is primary, so NO lane was
-  started") - and the installed service runs no flag, so adding a Telegram token to a working
-  Mattermost box either took the whole bot down or left Telegram permanently dark. One process now
-  serves both lanes: Mattermost on the main thread, Telegram on a daemon one. `--telegram` /
-  `--mattermost` still force a single lane, and the installers say so instead of telling you to
-  start a second process.
+### Fixed
+- **Installer:** the Mattermost bot-token question is now always offered (Enter keeps the known value), and `jget`/`cfgval` join a JSON list into `a, b` before it reaches the prompt instead of proposing a Python list repr.
+- **Models:** the plain `tinycmdr model` list now prints what each endpoint advertised and flags a configured model no endpoint advertises; the catalog reads `name`/`model` keys as well as `id`.
+- **Models:** every model-adding door asks the questions in order (local or cloud, then key and URL, then proves the key with a bearer `GET /v1/models`) and treats `401`/`403` as a key refusal; keys live in `.env`, never in `config.json`.
+- **Prompts:** every masked secret field now echoes one `*` per character for typing or a paste, with working backspace.
+- **Models:** `model endpoint <url>` now asks for the key on a `401`/`403`, writes it to `.env` as `TINYCMDR_LLM_API_KEY`, clears any stale copy from `config.json` and re-probes; a key still refused after three tries writes nothing.
+- **Models:** `tinycmdr model setup` now runs the wizard, the picker's first row is add-or-change-the-endpoint, and bare `model` offers the wizard whenever the endpoint is unusable (chat and `--app` say to run it in a shell).
+- **Lanes:** one process now serves both lanes (Mattermost on the main thread, Telegram on a daemon thread) instead of refusing when both tokens are configured; `--telegram`/`--mattermost` still force a single lane.
+- **App:** the app installs its own handler, so a failure on its own thread logs the traceback to `tinycmdr.log` and the real stream and exits through the usual ask; a failure out of `Application.run()` exits 1 and reprints the last answer.
+- **Ledger:** a stale open item now renders in the prompt as `#id [status] (3d, stale)`, with its text left in the ledger one `task` call away (`action=list`) and a footer giving the folded-row count; nothing is deleted.
+- **App:** the palette's 256-colour tier now uses hex, so `--app` starts again on a 256-colour terminal without `COLORTERM`.
+- **Ledger:** a deliberate `clear` prune now carries an explicit marker, so it no longer logs the lost-items warning reserved for a corrupt ledger; an unmarked shrink still warns.
+- **Config:** a configured `0` now means 0 for `tasks_done_keep`, `ledger_stale_hours` and `tasks_max_open` instead of falling back to the defaults.
+- **Ledger:** `tasks.md` now mirrors the prompt's bounded view (active items plus the same tail of finished ones, counting the rest) while `tasks.json`, the journal and `tinycmdr tasks` still hold everything.
+- **Ledger:** an experiment left `open` past 48h now renders in the prompt as a marker with its id, date and age; `action=index` still prints it in full.
+- **App:** `--app` now catches SIGTERM and SIGHUP and leaves through the same ask as Ctrl-Q, so teardown runs and the last answer is reprinted.
+- **Persona:** `doctor` now says whether this box runs the shipped seed, an edit or the built-in default, and `update` copies an edited `soul.md` aside (`soul.md.bak-update-<stamp>`) before its pull, keeping at most the newest three copies.
+- **CLI:** a `tinycmdr` session now says which door has shell verbs (`/update`, `/doctor`, `/logs`, `/version`, `/clean`, `/config`, `/token`, `/health`, `/proc`) instead of calling them not-a-command, and `update` names both steps.
+- **Installer:** the installers probe `/v1/models`, re-ask while a typed URL fails (three tries) and offer the advertised ids as a numbered list, as does `tinycmdr setup` (which refuses `--app`); Windows keeps its `NOT VERIFIED` check.
+- **App:** `up`/`down` move the pane a line (caret when the composer has text), `Ctrl-Home`/`Ctrl-End` named, the panes answer the wheel (`TINYCMDR_APP_MOUSE` as before), and paging and the arrows share one rule; the keys are in the README.
+- **App:** `Ctrl-Y` copies the newest transcript item as its text and walks back on repeat, `Ctrl-B` copies the whole transcript, and the text goes to the clipboard tool, OSC 52 and `tinycmdr-copy.txt` (0600); printed lines coalesce.
 
-- **A failure on the app's own thread no longer leaves the terminal sitting in the app's frame.**
-  A key handler, the composer's submit, the picker's callback or a render task that raises never
-  leaves `Application.run()` - asyncio hands it to the event loop's exception handler - and
-  prompt_toolkit's own handler printed the traceback with `print()`, which under `--app` is the
-  pane, then waited for ENTER inside the alternate screen. The app was still running, the report was
-  invisible, and the window stayed open on a frame that never moved (measured on a pty, 2026-09-30).
-  The app installs its own handler now: the traceback goes to `tinycmdr.log` and to the real stream
-  once the alternate screen is gone, and the exit is the same one ask every other exit uses. A
-  failure out of `Application.run()` itself reports the same way and exits 1, and the last answer is
-  reprinted on that path too - `print_final_inline()` sat after the teardown and was skipped.
-- **A stale ledger item keeps its age in the prompt, not its text.** The state block rides every
-  call as a trailing message, so an open item nobody had touched in `ledger_stale_hours` carried
-  its full description - and that text reads as a standing order - for ever. The row now renders
-  as `#id [status] (3d, stale)`: the age is what makes "this is not your plan" checkable from the
-  prompt alone (the 2026-09-27 incident), and the text stays in the ledger, one `task` call away
-  (`action=list`), with the footer saying how many rows were folded. Nothing is deleted, and the
-  operator's `tinycmdr tasks` view is unchanged.
-- **`--app` starts on a 256-colour terminal again.** The palette's 256 tier used rich's
-  `color(73)`/`color(78)` spellings, which prompt_toolkit's `Style.from_dict` rejects, so
-  `AppScreen.__init__` raised `ValueError: Wrong color format 'color(73)'` before any screen
-  existed - on `TERM=*256color` with no `COLORTERM` (stock Terminal.app), where `app_wanted()`
-  is true and there is no inline fallback. The tier now carries the same two colours in hex.
-- **`clear` no longer logs the sentence reserved for a corrupt ledger.** `ledger_check` warns
-  on any item-count drop, and `clear` is the only path that removes items - so every cleanup
-  logged "ledger lost items between reads: 9 -> 1 ... the write path is suspect" (measured
-  2026-09-30: clear then load, one process, against a copy of a real ledger). A deliberate
-  prune now carries an explicit marker; a shrink nobody marked still warns.
-- **A config of 0 means 0 for the three ledger caps.** `CONFIG["agent"].get(key) or default`
-  cannot express 0, so `tasks_done_keep: 0` still kept 3, `ledger_stale_hours: 0` still read as
-  12h and `tasks_max_open: 0` still allowed 15. (`tasks_done_keep: 0` also hit `done[-0:]`,
-  which is the whole list, not none of it.)
-- **`tasks.md` mirrors a bounded view.** The human-readable file grew with every item ever
-  closed (monotone, no prune: 1,541 chars for 8 items and rising). It mirrors what the prompt
-  shows - every active item, the same tail of finished ones - and counts the rest; tasks.json,
-  the journal and `tinycmdr tasks` still hold everything.
-- **An experiment left `open` stops riding the prompt.** The index is re-sent every call, and
-  an abandoned record kept its question, its keys and its body in it for ever while a finished
-  verdict read identically (`#1 [open]` dated 2026-09-28 rode two days on this box). Past 48h
-  an open record renders as a marker with its id, date and age; `action=index` still prints it
-  in full.
-- **`--app` catches SIGTERM and SIGHUP.** A kill mid-event-loop ended the process with the
-  alternate screen still active, leaving the terminal inside the app's frame with no way back.
-  Both now leave through the same one ask as Ctrl-Q, so prompt_toolkit runs its own teardown
-  and the last answer is still reprinted.
-- **An edited `soul.md` is visible and protected.** `soul.md` is the one tracked file an
-  operator is invited to edit, so a persona lives as an uncommitted modification: `doctor`
-  now says whether this box runs the shipped seed, an edit, or the built-in default, and
-  `update` copies an edited file aside (`soul.md.bak-update-<stamp>`) before its `git pull` -
-  which otherwise either refuses over that edit or loses it to the next `git reset --hard`.
-  The copies are bounded: one is written only when the persona differs from the newest copy
-  already there, and the newest three are kept, so a routine `update` that finds nothing to
-  do does not add a file. The persona is read once per process, so a restart applies an edit.
-
-Changed
-- **`model` is a picker, not a page of instructions.** Bare `tinycmdr model` (and `/tinycmdr model`
-  in the app) used to print a Model Status box with a Commands list: to switch you retyped the whole
-  command with an exact name you had to already know. It now opens the list you move through -
-  `↑`/`↓` to move, typing to filter, Enter to switch, Esc to leave - with the model in use marked and
-  each row naming its endpoint (and the id an alias really sends). Same picker in both doors: the
-  app draws it in its own window, the shell runs it on its own terminal, and a pipe still gets the
-  plain list a script greps. `model add <url>` with several advertised ids and the setup wizard's
-  model step use the same list.
-- **The endpoint can be corrected without editing config.json by hand.** `model endpoint` reads the
-  primary endpoint and whether it answers; `model endpoint <url>` probes it, refuses a URL that does
-  not answer (naming `--force` for a server that is not up yet), writes it, and then offers the
-  models that endpoint advertises to pick from. A picker that cannot reach any endpoint says so and
-  points here.
-
-Changed
-- **An answer in the app now shows the question it answers.** The composer clears when it sends,
-  so in `--app` the request was nowhere on screen - the transcript only ever held cards - and an
-  answer card said nothing about what it was answering. A dim `re: <your question>` line is filed
-  immediately above the answer card, flattened to one line and capped at 100 characters (an app
-  pane does not wrap; an uncapped paste would be cut mid-word with no marker), and it is a
-  transcript item like any other: `Ctrl-Y` can copy it. `--once` gets it too. Chat is unchanged
-  (the question IS the message being replied to) and so is the inline `--cli` lane, whose `you>`
-  prompt line is still on screen above the card.
-
-Fixed
-- **A session no longer dead-ends a verb it cannot run.** Typing `/update` (or `/doctor`,
-  `/logs`, `/version`, `/clean`, `/config`, `/token`, `/health`, `/proc`) into a `tinycmdr` session
-  answered "`/update` is not a command - `/tinycmdr help` lists them", and that list has no update
-  verb in it. Those verbs are the shell's and the chat lane's, so the console now says which door
-  has them - and `update` names both steps, because it is the one that arrives as "how do I
-  update?": `tinycmdr update` pulls the build, then `tinycmdr restart` starts running it.
-- **The interactive installers probe the model endpoint before carrying on.** They used to ask for
-  the URL and the model id as free text and write both without a single request - so a typo (wrong
-  host, wrong port) was invisible until the first call failed, on a box whose install had just
-  reported success. Both Unix doors now ask, probe `/v1/models`, report what came back, re-ask while
-  a *typed* URL fails (three tries), then keep it with the command that fixes it later
-  (`tinycmdr model endpoint <url>`) rather than becoming a wall - and the model id is offered as a
-  numbered list of what the endpoint advertised, because typing one from memory is how a box ends up
-  configured for a model it does not serve. `tinycmdr setup` does the same, and refuses to run inside
-  `--app`, where its `input()` would fight the app for the terminal. The Windows installer keeps its
-  existing post-install check (`NOT VERIFIED`, exit 3).
-- **`--app` scrolls: the keys it advertised, and the wheel off Windows.** The rail showed
-  `↑↓ PgUp/PgDn scroll` while `↑` and `↓` were bound to nothing - only the page keys moved the pane -
-  and the wheel was dead on macOS and Linux even with mouse capture on, because a POSIX terminal
-  delivers the wheel as a mouse event at a coordinate rather than as a key, so the app's own wheel
-  bindings could never fire there (measured in a headless Application, with the event landing in the
-  rail's cell while the pane never moved). The arrows move the pane a line now and stay the caret
-  while the composer has text, `Ctrl-Home`/`Ctrl-End` are named beside them, and the panes answer
-  the wheel themselves - three lines a notch, with `TINYCMDR_APP_MOUSE=1` as before. Paging, the
-  arrows and `Ctrl-Home` share one rule, so `_top` can no longer point past the tail. The app's
-  keys are documented in the README.
-- **An item can be taken out of the app: `Ctrl-Y`.** The pane paints frames, so native selection
-  could only reach the box drawing and the wrap points - never a card's own words, which is what a
-  reader wants to paste somewhere else. `Ctrl-Y` copies the newest transcript item as its own text
-  (the answer's markdown, a tool call, a tool result, a question) and pressing it again walks back
-  through the transcript one item at a time, while the status line names what landed and where it
-  sat; `Ctrl-B` copies the whole transcript. The text goes to every clipboard door the host has -
-  its own tool (`pbcopy`, `clip.exe`, `wl-copy`/`xclip`/`xsel`), the terminal over OSC 52 (the only
-  clipboard reachable with no helper, and it travels over ssh), and `tinycmdr-copy.txt` in the temp
-  directory at mode 0600, because a terminal that refuses OSC 52 says nothing at all. Consecutive
-  printed lines (help, status, `/tinycmdr tools`) coalesce into one item, so a command's output is
-  one step of the walk rather than one per line. Measured on a real pty: `Ctrl-Y` over the `/help`
-  block put 1,377 characters on the host clipboard, read back with `pbpaste`, and the file was
-  `-rw-------`.
+### Removed
+- **Ledger:** the task ledger is removed - the `task` tool and schema, the prompt block and `render_task_prompt`, the `tinycmdr tasks` verb and `/tasks`, the ledger files, config keys and test suites; `notes.md` remains the durable memory.
 
 ## [1.0.44] - 2026-09-30
 
-The app's two remaining review items, and what happens when a page is pasted into it.
+### Changed
+- **Composer:** the label reads `you - 12,345 chars - send, Ctrl-J newline` with text, the box grows to six wrapped rows (scrolling beyond) and collapses when sent, Enter sends, `Ctrl-J` newline, and a multi-line paste keeps newlines.
 
-Changed
-- **The composer reports what is in it, and grows to show it.** A pasted page used to be
-  invisible: one row, scrolled sideways, with nothing anywhere saying it was 200 KB. The label now
-  reads `you - 12,345 chars - send, Ctrl-J newline` whenever there is text, the box grows to six
-  wrapped rows (and scrolls beyond that) and collapses when it is sent or cleared, Enter sends, and
-  Ctrl-J inserts a newline. The box is multiline now, so a multi-line paste keeps its newlines
-  instead of being flattened into one line. Measured before the change: 200 KB pasted in ~0.1 s
-  arrived complete in the buffer and was sent as one request - the data path was never the problem.
-
-Fixed
-- **The app replaces the run's whole draft region (P-02 residual).** The reporter draws a narration
-  line and only then streams deltas into it, so the first draw is a committed item and every delta
-  another; the answer card dropped only the item it was told about, and the model's opening
-  sentence stayed filed above the card with its markdown characters intact - the last survivor of
-  the triple-render family. The card now drops the whole span since the last real card. Narration
-  that a tool call came after is history, not a draft, and it stays exactly where it is.
-- **An answer card no longer carries a blank band around a table (T-05).** rich renders a table and
-  then its own newline on top of the paragraph break, so a card showed TWO blank rows between a
-  table and the following paragraph and one before the closing border - and the source-level strip
-  could not reach either, because the renderer adds them. The answer body now goes through a
-  renderer that draws the markdown at whatever width the panel hands it, drops the whole blank run
-  after a table, collapses blank runs elsewhere to one, keeps the blank lines inside a code surface
-  (their background is the giveaway) and crops a rule that is wider than the box instead of letting
-  it wrap onto a second row.
+### Fixed
+- **App:** the answer card now drops the whole draft span since the last real card, so narration the reporter drew before streaming deltas no longer lingers above it; narration a tool call followed is history and stays.
+- **App:** an answer card no longer carries extra blank rows around a table - the body drops the blank run after a table, other runs collapse to one, blank lines inside a code surface stay and an over-wide rule is cropped, not wrapped.
 
 ## [1.0.43] - 2026-09-30
 
-The console stops looking like a prompt. `tinycmdr --app` is a full-screen window - a frame with
-the app name, session and clock in its title bar, a rail carrying the session, a live context
-gauge, the last run and the keys, cards drawn on a filled surface, a status bar whose spinner and
-clock tick while a run is in flight, and a labeled `you` composer box - and a bare `tinycmdr` opens
-it on every OS. Inline and plain keep the same cards, the same palette and byte-stable output; the
-one accent is a muted teal and blue is gone. Four defects a review found in the streamed-narration
-lane are fixed with them: the answer no longer renders three times, a structured draft can no
-longer leak raw markdown, a streamed line GROWS instead of stair-stepping one line per delta, and
-the prompt can no longer paint between a draft and its answer card.
+### Added
+- **App:** `tinycmdr --app` opens the console full-screen with inline's palette and cards, an answer card replacing the streamed draft in place, in-pane scrolling, no port or socket, and a fallback to inline cards. (tests/test_tui.py)
+- **Maintenance:** `maintenance/where.py` reports how far the tree is past its last release (`this tree <sha> - N commit(s) past vTAG (UNRELEASED)` in the ORIGIN block), read from local refs; `--remote` still answers what GitHub has now.
 
-Added
-- **`tinycmdr --app`: the same console as a full-screen terminal app.** The inline console cannot
-  take a printed line back, which is the whole reason the drop()/prefix-dedupe machinery existed -
-  and the reason one answer could render three times. In an alternate-screen app the transcript is
-  repainted, so the streamed draft is ONE item the answer card replaces in place, the run's stats
-  live only in the status bar, and scrolling is in-pane (PgUp/PgDn, Ctrl-Home/End, tail-follow until
-  the operator scrolls up). It is the SAME palette and the same cards as the inline screen - one
-  `TuiScreen` subclass changes where the text goes - and there is no port, no server and no browser
-  (the removed web lane stays removed): prompt_toolkit already owns the alternate screen (smcup/
-  rmcup) and the Windows console glue, so `requirements.txt` is unchanged. stdout is swapped for the
-  duration so the banner, `/help` and `/status` land in the pane instead of painting over it; on
-  exit the prior terminal content is restored and the session's last answer is reprinted inline.
-  Mouse capture is off by default so native selection/copy keeps working (`TINYCMDR_APP_MOUSE=1`
-  turns the wheel on); a terminal that cannot host the app falls back to the inline cards with one
-  dim note, never an error. `tests/test_tui.py` drives the real Application headlessly (a key pipe
-  and a dummy output): exactly one answer card, the draft replaced rather than stacked, no stats in
-  the transcript, `/exit` leaves both the loop and the app, and no NETWORK socket is opened (the
-  socket class is watched during the run; asyncio's own AF_UNIX wakeup pair is not a port).
-  Leaving is asked for ONCE: a second `Application.exit()` raises "Return value already set", and
-  because the ask is scheduled through the event loop it surfaced as prompt_toolkit's "Unhandled
-  exception in event loop" plus a "Press ENTER to continue..." at the end of a run that had
-  finished cleanly (measured on a pty, 2026-09-30). Anything prompt_toolkit prints while the app
-  unwinds goes to the real stream rather than the pane, so a failure can never land only in a
-  transcript nobody is drawing any more.
-- **`maintenance/where.py` says how far the tree is past its last release.** `git describe` names the
-  newest tag HEAD can *reach*, so a tree several commits past a release still printed that release's
-  name and looked current - and "is what I am looking at released?" is the first question whoever
-  drops in cold has to answer. The ORIGIN block now carries
-  `this tree  <sha> - N commit(s) past v1.0.42 (UNRELEASED)`, read from local refs only;
-  `--remote` still answers what GitHub has now.
+### Changed
+- **App:** the transcript opens on the first exchange; in app mode the banner, the type-at-any-time note and the capability line are gone because the chrome carries them, while the inline and plain paths keep all three.
+- **App:** an empty draft card is no longer committed as a stub in a repaintable pane, so nothing leaves a lone ellipsis between a result and the answer.
+- **Usage:** the done line's steps and elapsed come from the same run accumulator the rail, `/status` and `tinycmdr usage` read, and the rail rounds tok/s exactly as `fmt_usage` does.
+- **Palette:** an answer body's markdown elements are pinned to this palette (headings bold, the rest body or dim, links on the accent) and fenced code uses a quiet dark theme, instead of rich's default colours.
+- **Console:** the footer carries only the run's status and the keys live in the rail's KEYS section, so the usage tuple is not cut in half at 120 columns.
+- **Console:** the input box says `you` rather than `ask`.
+- **Setup:** a bare `tinycmdr` opens the full-screen app on every OS (the shims pass `--app` instead of `--cli`), with `--cli` still spelling out the inline lane and one dim note when a console cannot host it. (tests/test_shim.py)
+- **App:** `--app` draws a window: a frame with the app name, session and clock, a rail (session, gauge, last run, model, keys), cards on a filled surface, a ticking status bar and a composer box; `TINYCMDR_APP_MOUSE=1` adds wheel capture.
+- **Streams:** a streamed narration line grows in place instead of stair-stepping one line per delta (open-line writes pass `end=""` and flush, the close writes one real newline).
+- **Streams:** the first ~200 characters or 1.5 s of a narration line are buffered so the prose/structure decision is made before the first character lands, and dim previews drop markdown emphasis.
+- **App:** `--app` detaches the console log before it draws, so INFO records no longer paint over the alternate screen (one writer per terminal).
+- **Console:** `--once` draws the same answer card the interactive session does; the plain path (a pipe, `TINYCMDR_PLAIN=1`) stays byte-identical to before.
+- **Console:** a session's first line is the banner, not a raw log record (the screen is taken before the envelope is computed).
+- **Palette:** the console palette is one kind-to-role table resolved through `TUI_PALETTE` for the tier `tui_colour_tier()` picks (truecolor/256/16/none, honouring `NO_COLOR` and `TINYCMDR_COLOR`), and blue is gone. (tests/test_tui.py)
+- **Console:** the answer is drawn exactly once as one bright card: `drop()` only records what the draft said and the console loop draws the whole answer whenever a screen exists. (tests/test_tui.py)
+- **Streams:** a table or long draft shows one dim `drafting answer - N chars` pulse instead of a stream of raw pipes.
+- **Console:** the run's stats line is printed only when no toolbar and no app is up, and `/usage` still prints it on demand.
+- **Console:** the banner is three rows (model, folder and one merged context line) and `envelope_facts()` is one source read by the banner's short form and `/status`.
+- **Console:** the answer card strips leading/trailing blank lines and three-or-more newline runs before the markdown is wrapped in the panel.
+- **Console:** the plain path's done line is dim, not dim green, so both paths read one tone spec.
 
-Changed
-- **The app's round-3 polish.** Six things a screenshot of the running app showed. The transcript
-  now opens on the first exchange: in app mode the banner, the "type at any time" note and the
-  capability line are gone, because the chrome carries them (rail: session, model, context gauge,
-  last run, keys; the status bar: the idle hint) - the inline and plain paths keep all three. An
-  empty draft card is no longer committed as a stub in a repaintable pane, so nothing leaves a lone
-  `…` between a result and the answer. The done line's steps and elapsed now come from the same run
-  accumulator the rail, `/status` and `tinycmdr usage` read (they used to be the reporter's own
-  tally, so a line could read "0 step(s) in 0s" beside "25.2K tok over 2 call(s)"), and the rail
-  rounds tok/s exactly as `fmt_usage` does. An answer body no longer renders rich's default
-  Markdown colours - magenta headings and block quotes, cyan lists/code/table headers, blue links,
-  and a white background from the `bw` code theme - every markdown element is pinned to this
-  palette (headings bold, the rest body or dim, links on the one accent) and fenced code uses a
-  quiet dark theme, so no hue outside the palette table can appear in an answer. The footer carries
-  the run's status only (the keys live in the rail's KEYS section, which stops the usage tuple being
-  cut in half at 120 columns), and the input box says `you` rather than `ask`.
-- **A bare `tinycmdr` now opens the app, on every OS.** The POSIX and Windows shims passed
-  `--cli` when nothing was given; they pass `--app` now, so typing `tinycmdr` in Terminal, cmd or
-  PowerShell opens the full-screen session, and a console that cannot host it still falls back to
-  the inline cards with one dim note. `--cli` still spells the inline lane out, and the supervised
-  bot is untouched: the scheduled task, the systemd unit and the launchd plist name `tinycmdr.py`
-  directly and never go through a shim. `tests/test_shim.py` grades the mapping for both shims, and
-  the installer output, README and `--help` name the new door.
-- **`--app` is a window, not a prompt.** The full-screen mode now draws what a desktop app
-  would: a frame with the app name, the session and a live clock in its title bar; a left rail
-  carrying the session, a context gauge, the last run's calls and tok/s, the model and the keys; the
-  transcript's cards **on a surface** (a filled panel, not text between two rules); a status bar
-  whose spinner, clock and gauge tick while a run is in flight; and a labeled `ask` composer box at
-  the bottom. Same palette table, same cards, no new dependency, still no port and no server. Mouse
-  capture stays OFF by default (brief §10) so native selection and copy keep working;
-  `TINYCMDR_APP_MOUSE=1` adds the wheel. `TINYCMDR_APP=1` makes a bare `tinycmdr` prefer the app
-  (`--cli` still spells the inline lane out, `--app` overrides either way), and a terminal that
-  cannot host it still falls back to inline cards with one dim note.
-- **A streamed narration line now GROWS instead of stair-stepping (T-06).** `_write` routed
-  painted text to `raw_ansi` → `print_formatted_text`, whose default `end="\n"` put every delta on
-  its own line, and the old `if text.strip()` guard silently dropped the newline that ends the line.
-  Open-line writes pass `end=""` and flush; the close writes one real newline.
-- **The opening of a narration line is held back, so a threshold can never leak (T-02 residual).**
-  The structure test ran on text already printed, which left the prose before the first pipe on
-  screen for good (`… The only Apple machine that hits 800+ GB/s is the **M4 Ultra** — …`). The
-  first ~200 characters or 1.5 s of a line are now buffered and the decision is made *before* the
-  first character lands: short chatter commits as prose, a long or structured draft commits as the
-  one dim pulse. Dim previews also lose markdown emphasis (`**bold**`, `*i*`, pipes); the answer
-  text itself is never touched.
-- **`--app` detaches the console log before it draws.** Installing the app's screen directly
-  skipped the `log_console_off()` that `tui_screen()` does, so every INFO record kept going to the
-  console and painted over the alternate screen - seen in a live screenshot of `--app` on
-  2026-09-30, where log lines landed in the middle of the frame. One writer per terminal, which is
-  what the inline screen has always done.
-- **`--once` draws the same answer card the interactive session does.** A one-shot run printed the
-  answer verbatim under a dim rule, so `tinycmdr --once "…"` showed the model's pipes and heading
-  markers where a session showed a rendered card (seen on a live screenshot of the real CLI,
-  2026-09-30). With a screen it now calls `screen.card("final", answer)`; with no screen - a pipe,
-  `TINYCMDR_PLAIN=1` - the plain path is byte-identical to before.
-- **A session's first line is the banner, not a log record.** `cli_banner()` computed the envelope
-  (which logs `context: server reports …`) before `tui_screen()` had detached the console log
-  handler, so the first thing a session showed was a raw INFO line above its own banner. The screen
-  is taken first now; nothing else about the logging changed.
-- **The console palette is one table, chosen once per process, and blue is gone.** `TUI_KINDS` used
-  to carry a colour per kind and the banner hardcoded `border_style="blue"`; rich's named `blue` is
-  ANSI 4, which dark themes render blue-violet, and on macOS Terminal's default profile the answer
-  frame read as purple. The kind -> (title, palette ROLE) table now resolves through `TUI_PALETTE`
-  for the tier `tui_colour_tier()` picks from the environment (truecolor / 256 / 16 / none, with
-  `NO_COLOR` and `TINYCMDR_COLOR` honoured), so hex is never load-bearing: every role carries the
-  named 16-colour fallback that means the same thing, and the answer's frame became `bright_black`
-  so the words are the brightest thing on the screen. `tests/test_tui.py` grades all four tiers by
-  their SGR (24-bit, 256, named, none).
-- **The answer is drawn exactly once, as one bright card (T-01).** It used to be three renders: a
-  dim whitespace-collapsed pipe line, a card made from that 400-char-capped draft ending `acr…`,
-  and the rendered card - because `CliDestination.drop()` drew a card from the mangled draft and the
-  console loop then tried to skip its own print by prefix-matching text that could never match.
-  `drop()` now only records what the draft said (the plain path still uses that to stay
-  single-print), and the console loop draws the whole answer, once, whenever a screen exists.
-  Reproduced before the fix and pinned in `tests/test_tui.py`.
-- **A table or a long draft is one dim pulse, not a stream of raw pipes (T-02).** The narration
-  preview showed `| Field | Value | |---|---| …` while the answer streamed; the CLI lane now prints
-  `… drafting answer · N chars` once and lets the card deliver the words. The plain path's transcript
-  is unchanged except for this and the tone below.
-- **The run's stats line leaves the transcript when a toolbar owns it (T-03).** `_cli_usage_line()`
-  printed the same token string the prompt_toolkit toolbar was already showing under the input; it
-  now prints only when no toolbar and no app is up, and `/usage` still prints it on demand.
-- **The banner is three rows; its folded arithmetic lives in `/status` (T-04).** model, folder and
-  one merged context line, instead of five; `envelope_facts()` is one source read by the banner's
-  short form and `/status`'s long form, so they cannot disagree.
-- **The answer card loses its dead band (T-05).** Leading/trailing blank lines and three-or-more
-  newline runs are stripped before the markdown is wrapped in the panel (a markdown rule already
-  renders as one dim line).
-- **The plain path's done line is dim, not dim green.** `TONES["final"]` was `2;32` while green is
-  the palette's tool-result colour; the two paths now read one spec.
-
-Fixed
-- **No `you>` between the draft pulse and the answer card (T-07).** The console loop cleared
-  `_CLI["stop"]` in its `finally`, and that flag is what the reader thread gates `session.prompt()`
-  on - so the prompt repainted while the run's card had not been drawn yet, and a bare `you>` landed
-  between them (reproduced in both turns of the round-2 review). The flag is now cleared after the
-  card and the usage line are on screen, so nothing prompt-shaped can appear inside a run's output.
-- A console on a code page that cannot carry `▸ ✔ ✘ …` now gets the ASCII set (`> + x *`), and the
-  plain banner box draws in `+ - |`; `TINYCMDR_ASCII=1` forces it. UTF-8 consoles are byte-identical
-  to before (`PYTHONIOENCODING=cp437` is covered by `tests/test_stall.py`'s legacy-code-page check).
+### Fixed
+- **Console:** the prompt can no longer paint a `you>` between a run's draft pulse and its answer card: `_CLI["stop"]` is cleared after the card and the usage line are on screen.
+- **Console:** a console whose code page cannot carry the box/status glyphs gets the ASCII set and a `+ - |` banner box, forced by `TINYCMDR_ASCII=1`. (tests/test_stall.py)
 
 ## [1.0.42] - 2026-09-30
 
-One behaviour change, and it is about what happens when the bot cannot reach its lane: the host
-that runs it is down, a laptop woke up without wifi, the model box was switched off, the host in
-config is wrong, the token was refused. The process used to exit and leave the retry to the
-platform, and the three platforms disagreed - Windows backed off; Linux and macOS restarted every
-ten seconds for as long as the condition lasted, because systemd's `RestartSec` and launchd's
-`ThrottleInterval` cannot grow a delay. One measured night of that was 1654 startups in 4 h 45 m,
-each importing a 22k-line module. All three platforms now share the growing backoff the Windows
-supervisor already shipped, and what genuinely needs a human still exits.
+### Changed
+- **Chat lane:** an unreachable host is retried in this process on the supervisor's growing backoff, one log line per state change; human-needed failures still exit and the unit/plist keep a 60 s crash backstop. (tests/test_lane_health.py)
 
-Changed
-- **A chat lane whose host is unreachable is retried in-process, on a growing backoff.** The bot
-  exited on a failed lane start and left the restart policy to the platform - and the three
-  platforms disagreed. Windows ships `tinycmdr-supervise.py`, which backs off (5 s, 10, 20, 40,
-  60 …); Linux's unit and macOS's plist restart on a FIXED 10 s with no growth, because systemd's
-  `RestartSec` and launchd's `ThrottleInterval` cannot grow one, and the Linux unit additionally
-  ships `StartLimitIntervalSec=0`. So an unreachable lane - a laptop that woke up without wifi, an
-  ISP outage, the box holding the model switched off, a wrong host in config, a typo'd token -
-  cost a full startup every 10 s for as long as the condition lasted: measured once at 1654
-  startups in 4 h 45 m, each importing a 22k-line module. The lane start is now retried in this
-  process on the supervisor's own curve and reset rule, with one log line per state change, so
-  every platform behaves the same way and the process stays observable (`tinycmdr health`,
-  `logs/state.json`). What needs a human still exits: a missing token, a broken config and a token
-  the API refused pass `SystemExit` straight through, and `/restart` still exits 75. The unit and
-  the plist keep a fixed delay as the CRASH backstop (raised to 60 s), because a real crash still
-  needs the manager. `tests/test_lane_health.py` pins the two policies to each other, step for
-  step, so they cannot drift apart again.
-
-Fixed
-- **A rotated log is ignored.** `.gitignore` covered `logs/` and `*.log`, but a rotated file keeps
-  a numeric suffix and `*` stops at the dot: `tinycmdr.log.1` (5 MB, rotated at 00:08) sat in a
-  live tree as untracked-and-visible, so a `git add -A` there would have committed a host log.
-  `*.log.*` covers the rotation shapes and leaves the exact-name rule as it was.
+### Fixed
+- **Git:** a rotated log is ignored: `*.log.*` covers the rotation shapes such as `tinycmdr.log.1` while the exact-name rule is unchanged.
 
 ## [1.0.41] - 2026-09-30
 
-An outside code review - 22 findings, every one graded against this tree before it was acted on -
-plus the development contract that makes the next review cheaper to check. Twenty-one findings
-were real and are fixed below. The twenty-second, a claimed zip-slip in `update <zip>`, does not
-exist: `zipfile.ZipFile.extractall` has no `filter=` argument anywhere in the supported 3.10-3.12
-band, and CPython strips `..` and absolute members itself - the reviewer's suggested fix would
-have found that out by raising `TypeError`. Five more had the mechanism right and the consequence
-or the trigger wrong; all 22 verdicts, with the line numbers and what each one would have missed,
-are in `STATUS.json`, and the working record of the audit is `docs/dev-log.md`.
+### Added
+- **Maintenance:** `maintenance/where.py --remote` uses `git ls-remote` and `gh release list`, writing nothing, printing main's sha beside `origin/main` and the newest release; the ORIGIN block reports when this clone last fetched.
+- **Where roles:** a host entry in `maintenance/where-roles.json` merges over the shipped one and its row says it was overridden, and `{"role": "dev", "same_as": "live"}` takes its path from the named role. (tests/test_where.py)
+- **Docs:** `docs/development.md` and `AGENTS.md` give the development contract: the command that decides each question, topic branch to release flow, what is not in git and why, secrets and privilege rules, and the gate invariants.
 
-Two behaviours an operator will notice. A run wedged so hard it ignores its own cancel no longer
-takes its channel down with it: the next run answers in a minute with the one command that clears
-it, instead of waiting for ever while being told the queue was being served. And a message sent
-during a live Telegram run now steers that run rather than queueing behind it, which the README
-had promised all along.
+### Changed
+- **Install:** the `curl | bash` door fetches `SHA256SUMS` first, checks this asset's own line and refuses a corrupt or truncated transfer before unpacking; a missing sums file or asset is refused, and `TINYCMDR_NO_SUMS=1` bypasses it.
+- **Telegram:** `/stop` also cancels runs already queued behind the live run, each affected run is reported stopped, and the channel's cancel slot is cleared when a run finishes.
+- **Doctor:** `doctor`/`setup` name a non-LAN endpoint's assumed window and say to set `llm.max_context_tokens`; `config.example.json` notes a `window_profiles` band cannot widen a window.
 
-Fixed
-- **A `400` naming `max_tokens` is retried as `max_completion_tokens`, same value.** Newer
-  OpenAI-family models reject `max_tokens`, the named-field retry did not know the name, and the
-  body matched no overflow pattern - so `400` fell into the fatal set and the run died telling the
-  operator to check the key, model id and base_url, all three of which were right. Dropping the
-  field instead of renaming it was not an option: it carries the envelope clamp.
-  `tests/test_ledger.py` asserts the retry carries the new name and no `max_tokens`, and that a
-  second `400` is still fatal.
-- **One transient mid-stream break no longer ends streaming for the process.** All four
-  `StreamFailed` causes fed one handler that blacklisted the endpoint for the life of the process
-  and cleared `stream_on` for the remaining failover endpoints in that call. Only the
-  "server ignored `stream: true` and answered with plain JSON" case proves an endpoint cannot
-  stream; a prefill limit, an idle gap and a mid-stream break are ordinary transient failures and
-  now keep streaming. The cause travels on the exception, not in its text.
-- **A 429 `Retry-After` wait is cancellable.** It was one `time.sleep` of up to 60 s with no
-  cancel slicing, while `_post_watchdog` promises a `/stop` lands within a quarter second. It is
-  sliced at 0.25 s now and raises `OperatorStop`.
-- **A wedged run's session lock no longer blocks the run behind it.** `threading.Lock` has no
-  force-release, so the worker the stall watchdog respawned blocked for ever on the lock the
-  abandoned run still held - and the operator was told the backlog behind it was being picked up.
-  `run()` now acquires with a deadline (60 s) and, on expiry, answers with `/tinycmdr restart
-  force` and says nothing was sent to the model. The held lock is never touched, and rotating the
-  session key was rejected as the alternative: it would have handed the backlog a different
-  session, i.e. a fresh history. `tests/test_stall.py` drives the whole abandon-and-respawn chain.
-- **Elapsed time is measured on a monotonic clock.** 102 `time.time()` calls and no `monotonic`
-  anywhere meant a laptop suspend made every active run look wedged (one 30-minute sleep abandoned
-  healthy runs and cancelled them), and a wall-clock step stretched or collapsed every deadline.
-  Deadlines, TTLs, the stall watchdog, the run budget, the ask wait and the new run registry are
-  monotonic now; cron fire times, persisted timestamps and `last_seen` stay wall-clock, which
-  `tests/test_catchup.py` actively pins. Falsified both ways: the old code abandons a healthy run
-  after a simulated suspend, and never reaches its budget after a backward step.
-- **Telegram no longer swallows a second user's message, and no longer loses a `/stop`.** The
-  dedupe was a flat deque of bare message ids, which are per-chat - two allowed users' identical
-  ids collided and the second message vanished with no log line. Separately, `submit()` created
-  the cancel event and the worker then replaced it, so a `/stop` landing between the two was
-  discarded. Dedupe is keyed on `(chat_id, message_id)`; the worker adopts the event `submit()`
-  minted. Both new checks fail on the previous build.
-- **A run lifecycle every lane gets by construction.** Watchdog registration, a cancel event and
-  steering lived in the Mattermost dispatcher, so the Telegram lane had no steering and no idle
-  worker exit, and a scheduled run had no cancel event, was invisible to the watchdog and could
-  not be stopped at all. `drive_run` opens a session-keyed run record now (watchdog activity,
-  cancel event, steering queue) for every run, whichever lane started it; Mattermost keeps its own
-  stronger guard and registers `watch=False`, so nothing is watched twice, and `Scheduler._fire`
-  needed no change at all.
-- **A late batch worker can only write into its own turn's buffers.** The `work(i, tc)` closure
-  captured the per-turn `results`/`timings`/`dedupe_after` by name, and the batch executor
-  deliberately lets a hung tool outlive its batch - so a late worker wrote into whatever list the
-  NEXT turn had just created, with a stale `tool_call_id`. The buffers ride in as default
-  arguments now.
-- **Failover gets the envelope of the endpoint that actually receives the request.** The window
-  was probed against the primary only and the envelope was keyed by session, so an 8k fallback
-  inherited a 32k primary's sizing and had to reject the payload; `_force_shrink` then aimed at
-  the primary's half, which is still too big for the fallback. Both are per-endpoint now, each
-  request is sized to its endpoint, and `ContextOverflow` carries the endpoint that refused.
-- **The locality cache expires (300 s), and a key added at runtime is scrubbed.** The verdict cache
-  had no TTL, so a hostname that DNS moved off-LAN was still "local" to the search/fetch egress
-  gate and the failover filter; `_SECRETS` was built once at import, so a key set with `config set
-  llm.api_key` reached the logs, chat and transcripts unmasked until a restart.
-- **Prompt assembly no longer writes `notes.md`.** An over-budget read curated the file it was
-  reading - and `volatile_context()` is also called purely to estimate tokens, from compaction and
-  status paths. The read path bounds what the prompt sees and leaves the file byte-identical; the
-  write path is unchanged.
-- **Smaller ones, each with a test**: `run_capture`'s output directory is 0700 (it was 0755 under
-  umask 022 on a shared Linux host, where `/tmp` is world-readable); the session loader no longer
-  reads `*.carry.json` as phantom sessions; `reset()` reclaims a session lock it is not holding;
-  one redundant notes-lock decorator on `tool_remember` is gone; `doctor` compares
-  `ask_user_wait_seconds` against `stall_abandon_minutes`, because a run parked on a question was
-  abandoned mid-question once the ask cap exceeded the abandon window.
-- **The gate is green on a real box, not only on a clone.** `test_telegram` was grading the
-  installer's own `.env` (its check edits CONFIG, but the token predicate falls back to the
-  environment, so it failed on any configured box and passed on a clone), and the tool-shelf rule
-  enumerated every REGISTERED tool, including the per-host `tools/` drop-ins the repository
-  deliberately does not carry. The first now neutralises the environment it grades; the second
-  grades the tools this repository carries and names the host tools it did not grade.
-
-Changed
-- **The one-line door verifies what it is about to run.** `curl | bash` fetched the archive and
-  unpacked it, while the README's `sha256sum -c` step stayed manual - so the door the README leads
-  with was the one path with no check at all. It fetches `SHA256SUMS` first, checks this asset's
-  own line, and refuses a corrupt or truncated transfer before unpacking. A release with no sums
-  file, or one that omits the asset, is refused too; `TINYCMDR_NO_SUMS=1` is the deliberate way
-  past that, and it says so as it does it. The output says what the sums do and do not prove:
-  releases are unsigned, so they catch a bad transfer, not a replaced release.
-- **`/stop` on Telegram also cancels what was already queued behind the live run.** Each affected
-  run reports "stopped"; the channel's cancel slot is cleared when a run finishes, so the chat
-  keeps working.
-- **A non-LAN endpoint running on an assumed window is named as such**, and `doctor` and `setup`
-  now say what to set (`llm.max_context_tokens` with the provider's documented window) instead of
-  only warning that the window could not be detected. `config.example.json` says plainly that a
-  `window_profiles` band caps character budgets and cannot widen a window.
-
-Added
-- **`maintenance/where.py --remote` reads GitHub instead of this clone's refs.** Every other fact
-  in the table comes from local refs, which are only as fresh as the last fetch - "in sync with
-  origin" read from a stale ref is how a tree 27 commits ahead looked current. `--remote` runs
-  `git ls-remote` and `gh release list` and writes nothing: it prints main's sha beside what this
-  clone's `origin/main` says, and the newest published release. It is a separate flag so the gate
-  and the pre-push hook keep working on a box with no route to github.com; the ORIGIN block now
-  also says WHEN this clone last fetched, and says so outright when it never has.
-- **A host may override a shipped role, and a role may declare that it shares another's tree.**
-  `maintenance/where-roles.json` used to only ADD roles - a same-name entry was skipped - which made
-  both arrangements a real box needs impossible: point `live` at an install in another folder, or
-  say that `dev` IS the live tree on a box that develops in place. A host entry now merges over the
-  shipped one (and the row says it was overridden), and `{"role": "dev", "same_as": "live"}` takes
-  its path from the role it names - so the two can never disagree, and one tree stops reading as
-  the duplicate-path mix-up only when it is DECLARED as one. `tests/test_where.py` pins all of it,
-  including a `same_as` that names nothing or contradicts the tree it names.
-- **`docs/development.md` and `AGENTS.md`, the development contract.** For whichever model, harness
-  or auditor is at the keyboard: the command that decides each question, the flow from topic branch
-  to release, what is deliberately not in git and why, the secrets and privilege rules, and the
-  invariants the gate enforces. The README points at it; `AGENTS.md` is the door a harness reads
-  first.
+### Fixed
+- **Retries:** a `400` naming `max_tokens` is retried as `max_completion_tokens` with the same value, and a second `400` is still fatal. (tests/test_ledger.py)
+- **Streams:** only a server that ignores `stream: true` and answers plain JSON proves an endpoint cannot stream; a prefill limit, an idle gap and a mid-stream break are transient and keep streaming, and the cause travels on the exception.
+- **Cancellation:** a 429 `Retry-After` wait is sliced at 0.25 s and raises `OperatorStop`, so a `/stop` lands within a quarter second.
+- **Session lock:** `run()` acquires the session lock with a 60 s deadline and, on expiry, answers with `/tinycmdr restart force` and says nothing was sent to the model; the held lock is never touched. (tests/test_stall.py)
+- **Clock:** deadlines, TTLs, the stall watchdog, the run budget, the ask wait and the run registry use a monotonic clock, while cron fire times, persisted timestamps and `last_seen` stay wall-clock. (tests/test_catchup.py)
+- **Telegram:** dedupe is keyed on `(chat_id, message_id)` so a second user's identical message id no longer collides, and the worker adopts the cancel event `submit()` minted so a `/stop` landing in between is not lost.
+- **Run lifecycle:** `drive_run` opens a session-keyed run record (watchdog activity, cancel event, steering queue) for every run whichever lane started it; Mattermost keeps its stronger guard with `watch=False`.
+- **Batch workers:** the per-turn `results`/`timings`/`dedupe_after` buffers ride into the work closure as default arguments, so a late worker cannot write into the next turn's buffers with a stale `tool_call_id`.
+- **Failover:** window probing and the envelope are per-endpoint, each request is sized to its endpoint, and `ContextOverflow` carries the endpoint that refused.
+- **Guards:** the locality verdict cache expires after 300 s, and a key added at runtime is scrubbed from `_SECRETS` so it is masked in logs, chat and transcripts without a restart.
+- **Prompt:** the read path bounds what the prompt sees and no longer writes `notes.md`; the write path is unchanged.
+- **Assorted:** `run_capture` dir 0700; session loader skips `*.carry.json`; `reset()` reclaims an unheld lock; a redundant notes-lock decorator on `tool_remember` is gone; `doctor` checks `ask_user_wait_seconds` vs `stall_abandon_minutes`.
+- **Tests:** `test_telegram` neutralises the environment it grades instead of reading the installer's `.env`, and the tool-shelf rule grades the tools this repository carries and names the host tools it did not grade.
 
 ## [1.0.40] - 2026-09-29
 
-The day's audit batch, plus two things the operator found by using it. A dropped-in manifest could
-carry a recursive delete past the guard, and a single-target delete of real content now asks first;
-the context window is identified instead of guessed from whichever model the endpoint happened to
-list first; a file's CONTENTS no longer decide whether the CALL that read it succeeded; and `/stop`
-now reaches the sub-agents, which it previously could not reach at all. For the operator:
-`tinycmdr tasks` shows the same age and staleness the prompt shows the model, and the harness asks
-about items an earlier session left open rather than trusting a prompt line to make a weak model
-do it. Written up across three audits - the proxy audit, the low-stakes tail, and what watching the
-live run found - all of it in this section.
+### Added
+- **Maintenance:** `maintenance/where.py` declares live/dev roles once and reads commit, tag, tracked/untracked state and origin distance per tree; `--check` fails on a dirty `must_be_clean` tree, and `maintenance/pre-push.sh` runs it.
+- **Tests:** `tests/test_where.py` runs on synthetic trees: a tracked change fails the live role and an untracked file does not, a clone behind reports it, two roles on one path is a problem, and a bot on an undeclared tree is caught.
+- **Config:** `llm.window_profiles` caps limits by the served window; the smallest band at least as large as it wins, only keys the harness already reads are accepted, and a band's values are undone when a later band takes over.
+- **Spill:** a spilled result carries a bounded inline excerpt of the lines naming a cause (errors, failures, non-zero exits), with the spill pointer still the way to see the rest; an ordinary body produces no excerpt.
+- **Failures:** a failed call is shown one line describing the last working call to the same tool, scrubbed and bounded; it attaches only to a failure, never to a success, and is suppressed when the failing call is that same call.
+- **Deletes:** a single-target delete of an existing path outside scratch asks first, carrying count, size and newest-file age; a missing path asks nothing, `~` is expanded, and `agent.confirm_deletes: false` restores the old shape.
+- **Ledger:** at the start of a run the harness posts one line naming stale items and says plainly they are not this run's instructions, once per item version; a sub-agent never announces, and `agent.ledger_notice: false` turns it off.
 
-Fixed
-- **A `/stop` now reaches the SUB-AGENTS, not only the run parked on them.** `delegate_task`
-  called `AGENT.run` for each subtask with the reporting callbacks and nothing else, so a
-  sub-agent had no cancel event to check and could not be stopped at all - while the parent that
-  owned the operator's event was blocked inside that very call, waiting for it to return. The two
-  halves compounded: the stop flagged a run that was parked, and the only work still moving had
-  nothing to flag. Measured 2026-09-29: three `/stop` commands across twenty minutes changed
-  nothing while three sub-agents kept writing files. The parent's event is now forwarded, so the
-  sub-agent's in-flight request aborts, the batch returns, and the parent sees the stop on its
-  next step. `tests/test_stop_now.py` pins the behaviour - a stopped sub-agent answers with the
-  stop and never starts work (its endpoint fixture cannot be reached, so a regression cannot fire
-  a real job).
-- **A file's CONTENTS are not a verdict on the call that read it.** `failed_output` scanned any
-  tool result for `Traceback`, `--- stderr ---` or a leading `exit_code=1`, so a SUCCESSFUL
-  `read_file` of a file containing a traceback was classified as a failed call. A field note and
-  the last-good-call replay were then attached to a success - the thing its own docstring forbids,
-  because "a note on a successful call would teach the model to see a cause that is not there" -
-  and the working call was not remembered as the good shape either. Those checks are now gated on
-  the harness's OWN `exit_code=` header, which `tool_shell`, `tool_execute_code` and the manifest
-  runner all emit: they were only ever meaningful for a command's output, and now they can only
-  apply there. The prefix verdict (ERROR/BLOCKED/DECLINED/TIMEOUT) still decides for every tool.
-- **The context window is IDENTIFIED, never guessed.** `_detect_window` matched the configured
-  model id exactly and otherwise took `models[0]` - the first model the endpoint happened to list
-  - so a gateway advertising a 0.5B and a 72B while the config named an alias sized the WHOLE
-  envelope from whichever came first: messages budget, reply cap, and every window-scaled limit.
-  Matching is now lenient about identity (case, and a gateway's owner prefix) and strict about
-  guessing - several advertised and none of them this one means UNKNOWN, which lets the
-  endpoint's own root answer first and then leaves the operator's configured budget in charge.
-  A single advertised model is still taken as the model, whatever the config calls it.
-  Still open, and named here so it is not lost: a conversation switched with `/model` is still
-  sized from the CONFIG model, because the window cache is per-process, not per-session.
-- **A cost guard reads the command that RUNS, not a mention of one.** `command_cost_risk` matched
-  its walk shapes against the whole command, quotes included, so `echo "find / -name x"` was
-  billed against the run's scan budget - and once that budget was spent the harmless echo was
-  refused outright. The SHAPE now comes from the command with quoted arguments removed, while the
-  ROOT is read with quotes turned into SPACES rather than deleted: a walked path is normally
-  quoted (`-Path "C:/Users/<user>"`, any directory with a space in it), so removing it deleted the
-  very target being judged - which the suite's own Windows fixture caught immediately. A command
-  that hands its quoted text to a re-executor (`bash -c`, `eval`, `xargs`, `python -c`) keeps its
-  quotes, so `bash -c "find / -name x"` still counts. On the code side the walk shapes ignore
-  COMMENTS for the same reason.
-- **A COMMENT cannot trip a guard over code.** The confirm tier and the endpoint gates were
-  matched against raw Python source, so a comment reading `# restart happens in the next step`
-  was confirmed-and-declined - and on a lane with nobody at the door that is a flat DECLINED,
-  with the work lost. Comments are removed before those guards read source. STRING LITERALS ARE
-  KEPT on purpose: `subprocess.run("reboot")` really does reboot, so stripping them would be a
-  hole rather than a fix - `tests/test_guard_battery.py` pins that half explicitly.
-- **The machine map is re-attached on a FAILURE, not on a mention of a path error.** The
-  wrong-path and rights-denial heuristics ran on EVERY tool result, so a successful read of a
-  README, a tutorial, or a captured log containing "no such file or directory" or "command not
-  found" re-attached the whole atlas - about 2000 characters of prompt, on every turn after it -
-  and framed a call that worked as a wrong-path problem. It is now gated on the call having
-  actually failed, which is what its own comment always said it was for.
-- **A model profile matches a WHOLE WORD, and the most specific key wins.** The key was matched
-  as a bare SUBSTRING of the model name and the first one in dict order won, so `pro` matched
-  `prometheus-14b`, `mini` matched `MiniMax-M2`, and given both `deepseek` and `deepseek-r1` the
-  winner was whichever was written first rather than the more specific one. Digits stay part of a
-  word, so `llama` still matches `llama3-8b` and `deepseek` still matches
-  `deepseek-r1-distill-llama-8b`; a longer key now beats a shorter one that also matches.
-- **The BLOCK tier reads what would RUN, not what is merely carried.** It matched the whole
-  command, so `grep -rn "rm -rf /" docs/` was refused outright - the model told that no
-  confirmation unlocks it - because a SEARCH for the string looked like the string being run.
-  Same for `git log -S 'rm -rf /'`, and for an execute_code whose source merely contains the
-  text, which is why the harness could not run its own guard battery through it.
+### Changed
+- **Repo hygiene:** `experiments.jsonl` and `maintenance/tool-audit-*/` are gitignored, and `where.py` reports tracked changes and untracked residue as two different things.
+- **Wrap-up:** the forced wrap-up asks for a fixed skeleton (`ROOT CAUSE:` / `CHANGED:` / `STATE:` / `UNFINISHED:` then `VERIFIED:`), one line each.
+- **Token caps:** the final call is clamped to `min(final_max_tokens, window // 4)` instead of trusting `final_max_tokens` (8,192), which can exceed an 8k window.
+- **Retries:** the cut-off-mid-think retry is bounded by the window, not by 65,536, staying above the normal cap but not asking for more tokens than the endpoint can hold.
+- **Tool calls:** `_salvage_tool_args` also repairs the live call when its `arguments` arrive wrapped in a fence or prose, returning only an object that parsed inside the text; a blob with no JSON object keeps the same error path.
+- **Digests:** `digest_lines` (`window // 400`) and `notes_max_note_chars` (`window // 8`) now scale with the detected window, joining the other character caps.
 
-  The rule is now two views of the command. FIRST the live text: quoted regions removed, because
-  a quote is an argument, EXCEPT command substitutions, which run wherever they appear - a match
-  there blocks exactly as before. SECOND, a match surviving only inside quotes blocks too, but
-  only when the command hands that text to something that EXECUTES it: `sh -c`, `eval`, `xargs`,
-  `find -exec`, `ssh`, `python -c`, `$()` / backticks, a pipe into an interpreter, or in code
-  `subprocess` / `os.system` / `os.popen` / `exec`.
+### Fixed
+- **Stop:** `delegate_task` forwards the parent's cancel event to each sub-agent, so an in-flight request aborts, the batch returns and the parent sees the stop on its next step. (tests/test_stop_now.py)
+- **Tool results:** `failed_output`'s content checks (`Traceback`, `--- stderr ---`, leading `exit_code=1`) are gated on the harness's own `exit_code=` header, so a successful read of a file containing a traceback is not a failed call.
+- **Context window:** `_detect_window` matches identity leniently (case, owner prefix) and never falls back to `models[0]`; no advertised model matching means UNKNOWN, so the endpoint root answers first and the configured budget rules.
+- **Cost guard:** `command_cost_risk` shapes from the command with quoted arguments removed but reads the root with quotes turned into spaces, so a quoted walked path counts; re-executors keep their quotes and code comments are ignored.
+- **Guards:** comments are removed before the confirm tier and endpoint gates read Python source, while string literals are kept because `subprocess.run("reboot")` really does reboot. (tests/test_guard_battery.py)
+- **Machine map:** the wrong-path and rights-denial heuristics are gated on the call having actually failed, so a successful read of a file mentioning a path error no longer re-attaches the atlas.
+- **Model profiles:** a profile key must match a whole word and the most specific (longest) matching key wins; digits stay part of a word, so `llama` still matches `llama3-8b`.
+- **BLOCK tier:** matches live text with quoted regions removed (command substitutions excepted), and blocks a quoted-only match handed to an executor (`sh -c`, `eval`); thirteen real forms still block. (tests/test_guard_battery.py)
+- **Endpoint guard:** the guard requires `host:port` together (which may sit inside a longer name) and a bare host as a word; the port alone no longer matches, so `:8081` does not fire inside `:80810`.
+- **Images:** real image extensions are mapped to their media type, an unknown one still defaulting to png, instead of declaring every non-jpg/gif file `image/png`.
+- **Mattermost:** the placeholder check is by host, not a substring of the URL; the shipped `CHANGE-ME.example.com` shape (judged by its first host label) is refused while the documented `example.com` host only warns.
+- **Shell parsing:** a redirection inside a quote is treated as text, so `grep 'x>y' notes.md` no longer produces a candidate written file or a verify verdict about an untouched file.
+- **`/model list`:** the `(local)` label is derived from the URL, not from which config slot the entry came from.
+- **Tool verify:** `_verify_python` uses the resolved-path test `tools_dir_verdict` already used instead of gating on `path.parent.name == "tools"`, so a file in any project's own `./tools/` is no longer reported as a broken tool.
+- **Write gate:** `_surface_write_gate` identifies the bot's own memory files by resolved path instead of basename, so a user's own `docs/notes.md` is not gated as the bot's notes.
+- **Digest shape:** shapes come from the command being run, with quoted arguments removed and a program shape required at the start of a command and at each pipeline or `;` stage; the file shape (`*.log|out|err`) matches anywhere.
+- **Concurrency:** `batch_workers` caps a model-calling batch at the endpoint's reported `total_slots`; local work (shells, file reads) still runs fully parallel, and an endpoint reporting no slots or off-LAN keeps the old fan-out.
+- **Compaction:** the compaction marker carries one line per dropped tool call (name plus identifying command, path or query) and any dropped user message, accumulating across repeated compactions and bounded to 10 lines / 1,200 characters.
+- **Ask:** a question nobody answers is parked in a per-session sidecar and surfaced in the trailing block the next run reads with its offered options; an answered or stopped question clears it, as does `ask_timeout_continues`.
+- **Call cap:** `llm.max_call_seconds` (300) caps a single call at that many seconds at the endpoint's last reported rate; `0` disables it and an endpoint that has not reported a rate leaves the cap unchanged.
+- **Digest:** the log-file digest shape is `.log`/`.out`/`.err`, so a `.txt` document is no longer reduced to lines containing error/warn/fail. (tests/test_digest.py)
+- **Digestion:** digestion is for shell output only; a read_file path or execute_code source goes straight to the cap and spills whole (head, tail, middle lines, pointer), and `raw` leaves the read_file and execute_code schemas.
+- **Envelope cache:** `mem_limit_chars`/`mem_limit_exchanges` read the window through `(x or {})`, so an explicitly `None` envelope cache no longer raises `AttributeError`. (tests/test_small_model.py)
+- **Tasks verb:** `tinycmdr tasks` shows the same age and stale judgement as the prompt, both calling `task_age()`, instead of printing no age at all.
+- **Ledger:** a finished item is no longer labelled `stale`, since stale means it needs attention; age is still shown.
 
-  This narrows what is MATCHED, never what is dangerous. Thirteen forms of a real invocation
-  still block - including the write-then-run shape (`echo '...' > x.sh && sh x.sh`) and the
-  interpreters - and both halves are pinned in tests/test_guard_battery.py, with the first list
-  labelled as the one whose failure would be a hole. The admitted cost, stated in the code: a
-  mention sitting NEXT to an interpreter is still refused (`python check.py "rm -rf /"`), because
-  over-blocking a mention is the direction a seatbelt should err in - refusing a plain search was
-  not.
-
-### The audit's low-stakes tail (2026-09-29)
-
-The remaining findings from the class sweep. None loses work outright, which is why they sat
-below the ranked six, but each is wrong in a way an operator would eventually notice.
-
-Fixed
-- **The endpoint guard NAMES the endpoint; it no longer merely contains it.** The host was
-  matched with `in`, so a host called `main` fired on `systemctl restart main-api` and a host
-  called `llama` on `pgrep -f llama.cpp`. `host:port` TOGETHER is the identity and may sit inside
-  a longer name - a service called `llama-127.0.0.1:8081` really is this bot's endpoint, and the
-  suite already asserted so - while the bare host must be a WORD, and the port alone no longer
-  matches: `:8081` fired inside `:80810`, and a different host on the same port is not this
-  endpoint.
-- **The image type is named, not assumed.** Anything that was not jpg/gif was declared
-  `image/png`, so a `.webp` screenshot went to the endpoint as a PNG and the answer was about the
-  wrong format. The real image extensions are mapped; an unknown one still defaults to png.
-- **The Mattermost placeholder is a HOST, not a substring of the URL.** A real host whose path
-  contained "change-me" or "example.com" was read as unset. The two placeholders stay
-  deliberately distinct, which is the behaviour the code already had: the shape
-  `config.example.json` ships - `CHANGE-ME.example.com`, judged by its first host LABEL - is
-  REFUSED, while the documented `example.com` host only WARNS.
-- **A redirection inside a quote is text, not a write.** `grep 'x>y' notes.md` produced a
-  candidate "written file", and when a file of that name happened to exist the result carried a
-  verify verdict about a file the command never touched.
-- **`/model list` derives "(local)" from the URL**, not from which config SLOT the entry came
-  from - a LAN fallback was labelled a remote endpoint and a cloud primary was labelled local.
-
-Left alone, deliberately, each for a reason:
-- **`_is_local_url` treats an unresolvable name as REMOTE.** That is pessimistic on purpose:
-  flipping it would open the failover and egress gates on a transient DNS failure, which is the
-  wrong direction for a privacy gate.
-- **`_bare_tool_name` / `_tool_run_as_script` still intercept a shell command whose first token
-  matches a tool name.** A measured incident already narrowed this once - a broader matcher ate 5
-  of 9 legitimate `echo`/`printf` commands - and the residual is self-correcting: the model is
-  told the name is a tool and can call the real program by path.
-- **`_verb_clean` still treats `docs/` and `tests/` as removable on an explicit `clean --yes`.**
-  It is operator-invoked and prints the list before acting, and the set is the install's own
-  tree: changing which directories an operator asked to clean is their call, not a bug fix.
-- **`_scheduled_task_owned` reads the install path as a substring of the `schtasks` listing.** A
-  precise fix needs field parsing of that output; it is Windows-only and decides a restart hint.
-- **`_endpoint_root` strips a URL by SUFFIX**, so a gateway whose real route ends in
-  `/completions` is probed one level too high. Left documented rather than changed: the probes
-  fail soft (0 / None) and the operator's configured budget stands.
-
-### The proxy audit (2026-09-29)
-
-Swept the CLASS the `.txt` bug belonged to: every place the harness decides something from a
-PROXY STRING - a filename, a path, a model name, a command's text - rather than from the thing
-itself. Three read-only passes (paths/extensions, names/substrings/URLs, content heuristics)
-found ~40 sites; most are correct keys (a tool name dispatching to its tool, a file extension
-choosing a syntax checker, `/props` probing the endpoint itself). The ones fixed here are the
-ones that made the harness do the wrong thing to legitimate work.
-
-Fixed
-- **A file in somebody else's `./tools/` is no longer reported as a broken tool.**
-  `_verify_python` gated on `path.parent.name == "tools"` - the DIRECTORY NAME. Writing
-  `/home/user/proj/tools/helpers.py`, any project's ordinary `./tools/`, ran the tool loader,
-  which correctly answered "no tool here"; `verify_note` then told the model
-  "[HARNESS verify FAILED ... The file on disk is broken]" about a valid module, and it rewrote
-  a correct file. It now uses the same resolved-path test `tools_dir_verdict` already used.
-- **The bot's own memory files are identified by PATH, not by basename.** `_surface_write_gate`
-  matched `os.path.basename(path) in (notes.md, tasks.json, ...)`, so an operator's own
-  `docs/notes.md` was gated as "a write to this bot's own notes.md" - a needless confirm, and a
-  flat DECLINED on a lane with nobody to ask.
-- **A digest shape is decided by the command being RUN, not by a string inside it.** `grep -rn
-  "docker ps" docs/` was shaped as a CONTAINER LIST because "docker ps" sat inside the grep
-  pattern, so its results were head/tail-trimmed and mislabelled; `cat ipconfig-notes.txt` was
-  shaped as network output because of its FILENAME; `bash -c "apt-get update && make build"` as
-  package-manager output. Quoted arguments are now removed before matching, and a program shape
-  must match at the START of a command (allowing sudo/env/time/nice/nohup wrappers, and at each
-  pipeline or `;` stage). The file shape (`*.log|out|err`) still matches anywhere on purpose:
-  there the filename IS the answer, which is why `tail -n 50 /var/log/app.log` still digests.
-
-Found and NOT changed, deliberately: the BLOCKED tier searches operator regexes anywhere in a
-command, quoted strings included, so `grep -rn "rm -rf /" docs/` is refused outright and told no
-confirmation unlocks it. That is a SAFETY tier, and relaxing it is the operator's call, not a
-bug fix - the same search is also how `sh -c "rm -rf /"` gets caught. Left exactly as it is.
-
-### Found by watching the live run (2026-09-29)
-
-Fixed
-- **The harness no longer asks a box for more concurrency than it serves.** `/props` reports
-  `total_slots`, and the harness read that reply only to fingerprint llama.cpp and then threw
-  the number away. Measured on the live box: `total_slots=2` while one batch fanned out **4**
-  delegated subtasks, so two requests queued and *every one* fell from ~50 to ~8-10 tok/s.
-  The box was being asked for twice what it serves, and the run was blamed for being slow.
-  `batch_workers` now caps a batch at the endpoint's slot count - and only for batches that
-  call the model: four shells or file reads are local work and still run fully in parallel.
-  An endpoint that does not report slots, and an off-LAN one (never probed for them), keep
-  the old fan-out.
-- **A compaction now says WHAT it removed, not just that it removed something.** The marker
-  was `[earlier investigation context removed to fit context window]` - the model was told that
-  something had vanished and nothing about what, so a run that compacted mid-rewrite spent its
-  next several calls re-deriving the task out of the harness's own session files and carry
-  file instead of continuing the work. The marker now carries one line per dropped tool call
-  (the name plus the command, path or query that identifies it) and any operator message that
-  was in the dropped range. It accumulates across repeated compactions - a long run compacts
-  more than once - and is bounded to 10 lines / 1,200 characters, because it rides every later
-  request. The one-pass-per-call progress guarantee in `_drop_oldest_block` (the docstring's
-  "delete, re-insert, repeat, for ever" hang) is unchanged: the marker is matched by PREFIX
-  and updated in place, never re-inserted.
-- **A question nobody answers is no longer lost with the run.** `ask_user` stops the run on
-  timeout, deliberately: handing a timeout back to the model is how an unapproved production
-  restart happened (2026-09-21), and `ask_timeout_continues` already reopens that per box.
-  What the decision costs is the CONTEXT - on the live box (2026-09-29) the next run spent its
-  first several calls re-deriving the task out of its own session files, because nothing said
-  what had been asked. The question is now parked in a per-session sidecar and surfaced in the
-  trailing block the next run reads, with the options that were offered. Durable on purpose:
-  the session file keeps only the trimmed conversation (measured: one message) and a restart
-  between the two runs is ordinary. An answered or stopped question clears it, and so does
-  `ask_timeout_continues`, which settles it by a stated assumption.
-- **One generation is sized to the box's measured speed.** `max_tokens` 16,384 is a six-minute
-  generation at 45 tok/s and half an hour at 8 - and BOTH were measured on the fleet's Mac
-  (2026-09-29) depending on how many requests shared its two slots. The new
-  `llm.max_call_seconds` (300) caps a single call at that many seconds at the rate the endpoint
-  last reported, read from the server's own usage line. `0` disables it, and an endpoint that
-  has not reported a rate yet leaves the cap exactly as it was - nothing moves until a rate has
-  actually been measured. Honest about its size: this is a guardrail against one slow turn
-  outliving the run, not a throughput win. The hours in the observed run went on the NUMBER of
-  calls, which is what the concurrency, digest and cap fixes above are about.
-- **A `.txt` is a document, not a log.** The "log file" digest shape matched
-  `\.(log|out|err|txt)$`, and the subject for a read_file is the PATH - so every read of a .txt
-  file was reduced to the lines that happen to contain error/warn/fail. On a text-rewriting job,
-  where the files being read ARE .txt, that gutted the source and the model paid a second call
-  each time to fetch it back raw. Measured four times in one afternoon on the live box, in the
-  model's own words: "The source read got digested into 3 lines. Re-reading it raw to get all of
-  chapter...", "The draft came back digested. Reading it raw to get all 119 lines." The shape is
-  now `.log` / `.out` / `.err`; `tests/test_digest.py` pins both directions, and the spill
-  suite's fixture, which had asserted the old behaviour with a .txt file, is now a .log.
-- **Digestion now applies to SHELL output only - the class the `.txt` fix turned out to be one
-  instance of.** `_digest_subject` fed the shape list a read_file's PATH or an execute_code's
-  SOURCE, so a result was shrunk by what the request *mentioned* rather than by what produced
-  it. Probing the shape list found reading `docker ps logs.txt` treated as a container list,
-  `git diff review.md` as git output, `dir/notes.md` as a directory listing, `pip install
-  notes.txt` as package-manager output, and `print('grep')` / `subprocess.run('ps -ef')` judged
-  from the source text. A path is not a command and code is not its output; both now go straight
-  to the cap, which spills a big result whole - head, tail, the cause-naming lines from the
-  middle, and a pointer - so nothing is lost and no filename can change what the model sees.
-  `raw` is consequently gone from the read_file and execute_code schemas (it stays on `shell`,
-  where it still does something): a control that does nothing is worse than no control.
-
-### Knowing what is live, what is dev, what is on disk
-
-Added
-- **`maintenance/where.py`: the roles are declared once, and every fact is read from the tree.**
-  The 2026-09-28 review found a hand-generated map kept beside the ops notes - outside this
-  repository and outside every gate - two releases and three facts out of date (it still named a
-  deleted scratch tree); on 2026-09-29 a `git pull` in the live tree died on an uncommitted
-  backport nobody remembered applying, while the dev tree was 27 commits ahead. A DOCUMENT cannot
-  be the answer to that - prose has no way to disagree with the repository - so the roles (live /
-  dev, plus a box's own in the gitignored `maintenance/where-roles.json`) are stated once and the
-  version, commit, tag, tracked changes, untracked residue and distance from origin are read from
-  each tree when you ask. Nothing to keep in sync. `--check` fails when a tree declared
-  `must_be_clean` is not, which is exactly the state that blocked the pull, and
-  `maintenance/pre-push.sh` now runs it.
-- **`tests/test_where.py`** grades the command on synthetic git trees, so it runs in CI on a
-  machine that has none of the real ones: a tracked change fails the live role and an untracked
-  file does not, a clone one commit behind origin reports it, two roles on one path is a problem,
-  and a bot running from a tree that is not the declared live one is caught.
-
-Changed
-- **`experiments.jsonl` and `maintenance/tool-audit-*/` are gitignored.** They are runtime residue
-  the live box writes, and in a one-line `git status` count they looked identical to the real
-  modification blocking the pull. `where.py` now reports tracked changes and untracked residue as
-  the two different things they are.
-
-### The small-model path (review 2026-09-28, section 2)
-
-Everything here is for the premise the harness is built on: a weak, low-parameter model
-served at a slow decode and a small window. No change moves the default behaviour of a
-large-window box.
-
-Added
-- **`llm.window_profiles`: caps chosen by the WINDOW the endpoint serves, not only by the
-  model's NAME.** `llm.profiles` matches a substring of the model name, which cannot help
-  the common self-hosted case - the same box restarted with a different quantisation or
-  slot count, or a model whose name says nothing about its window. The smallest band at
-  least as large as the served window wins (a box serving 12288 takes the `16384` entry),
-  only keys the harness already reads are accepted, and a band's values are undone when a
-  later band takes over. `config.example.json` now ships `8192` / `16384` / `32768`
-  presets as the documented starting point; empty by default, because the window-scaled
-  defaults already shrink every cap on a small window.
-- **A spilled result carries its cause inline.** `spill-not-shred` keeps the whole text on
-  disk, but recovery cost the model a whole extra call - minutes on a slow endpoint - to
-  fetch a log tail it was already handed. The span the prompt drops is now scanned for the
-  lines that name a cause (errors, failures, non-zero exits) and a bounded excerpt rides
-  inline; the spill pointer stays the way to see the rest, and an ordinary body produces
-  no excerpt at all.
-- **A failed call is shown the last call to the same tool that worked** - one line, the
-  shape of the call, scrubbed and bounded. The field note says what a failure MEANS; this
-  says what a call that worked on this box LOOKED like, which is the half a weak model
-  cannot supply. It rides out only attached to a failure, never as a note on a success
-  (which the harness refuses, because it would teach a cause that is not there), and it is
-  suppressed when the failing call is the same call.
-
-Changed
-- **The forced wrap-up asks for a fixed skeleton**: `ROOT CAUSE:` / `CHANGED:` / `STATE:`
-  / `UNFINISHED:` then `VERIFIED:`, one line each. Landing a run is the thing a weak model
-  is worst at, so the shape is the harness's now, not the model's discretion.
-- **That final call is clamped to the window like every other call.** It took
-  `final_max_tokens` (8,192) on trust, which is larger than an 8k window: the one call
-  whose whole job is to produce an answer could be cut off before answering. It is now
-  `min(final_max_tokens, window // 4)`.
-- **The cut-off-mid-think retry is bounded by the window, not by 65,536.** It stays well
-  above the normal cap on purpose - a retry clamped down to the cap that just came back
-  empty would be no retry at all - but asking for more tokens than the endpoint can hold is
-  cut off at the window and answers nothing, which is the failure the retry exists to
-  prevent. The comment that said both recovery paths are exempt from clamping now says which
-  is and which is not.
-- **A tool call whose `arguments` arrived wrapped in a fence or prose runs, instead of
-  costing a retry.** `_salvage_tool_args` already recovered this shape on REPLAY; it now
-  applies to the call in front of the harness too. It only ever returns an object that
-  parsed inside the text - it never guesses or edits content - so a blob with no JSON
-  object still takes the error path, with the same message as before.
-- **`digest_lines` and `notes_max_note_chars` scale with the detected window**, joining the
-  character caps that already did (`window // 400` lines, `window // 8` chars). A 40-line
-  digest is right for a 32k window and a large share of the budget on an 8k one.
-
-Fixed
-- **`mem_limit_chars` / `mem_limit_exchanges` raised `AttributeError` when the envelope
-  cache was explicitly `None`** - `getattr(AGENT, "_envelope_cache", {})` returns `None`
-  for an attribute that exists and is `None`, so the default never applied. Found by
-  `tests/test_small_model.py`; the window is now read through `(x or {})`.
-
-### A delete of real content now says what it would destroy (2026-09-29)
-
-Added
-- **A single-target delete of real content outside scratch asks first, and the ask carries the
-  MEASURED effect.** The tier only ever covered RECURSIVE deletes of a tree, so the model's own
-  `rm -f ~/Desktop/<a real document>` ran with nothing asked and nothing said. And the ask it
-  did have described the COMMAND rather than the thing: "a recursive delete of ~/enoch_build"
-  reads identically for an empty scratch directory and for four hours of finished work, which
-  is precisely what the operator could not tell apart while approving one.
-
-  Every number is read from the filesystem at the moment of the ask - file count, total size,
-  and how recently the newest file was written:
-
-      a recursive delete (/Users/…/enoch_build - 108 file(s), 512.4 KB, newest 4 minutes ago)
-      a delete of /Users/…/Desktop/Book_of_Enoch_simple.txt (198.0 KB, last written 5 hours ago)
-
-  A path that does not exist asks nothing (deleting it is a no-op) and nothing is measured
-  through a quoted argument the command never acted on. `~` is expanded before measuring, the
-  way the shell would.
-
-  The scope, stated because it is NARROWER than "ask about every delete": the new ask covers a
-  single-target delete of something that exists outside a scratch root. The RECURSIVE shape
-  keeps the contract it already had - any named directory asks, scratch included, because that
-  is what BUGREPORT §S1 was about and the MUST_GATE list says so in as many words. Of the ten
-  delete-shaped commands the model ran in three days, nine were `rm` of scratch under /tmp that
-  the operator had no interest in; `agent.confirm_deletes: false` restores the old shape per box.
-
-### The ledger's age and staleness, in one place and visible (2026-09-29)
-
-Added
-- **The harness asks the OPERATOR about stale items, instead of leaving it to the model.** The
-  standing instruction already says an inherited open item "is not your instruction: ask the
-  operator before you resume one" - and measured 2026-09-29 the model did not ask, so the
-  operator found out from a tool call that happened to mention it, having never been told the
-  ledger existed. At the start of a run the harness now posts one line naming the stale items
-  and saying plainly that they are not this run's instructions.
-
-  Once per item VERSION: the item records the `updated` stamp it was announced at, so a later
-  edit - the model touching it, or the operator answering - makes it eligible again, while a row
-  nobody has changed is never mentioned twice. A sub-agent (depth > 0) never announces, having
-  no operator of its own. `agent.ledger_notice: false` turns it off. Operator-facing, so the
-  prompt cost is zero.
-
-Fixed
-- **`tinycmdr tasks` now shows the age and the stale judgement the model sees.** The verb - which
-  the README promises and the help names for exactly this question - printed `#1 [open] Boot
-  Linux …` with no age at all, while the prompt handed the model `#1 [open] (3d, stale)` for the
-  same row. Each view had its own copy of the rule, which is how they came to disagree about the
-  same ledger. Both call `task_age()` now, so the operator can see the judgement the model acts
-  on instead of having to infer it.
-- **A finished item is no longer labelled `stale`.** The rule says what it is for - "an open item
-  untouched this long renders `stale`" - but `render_task_prompt` put finished rows through the
-  same age function, so a two-day-old `done` item rendered `(2d, stale)`: in the prompt, and then
-  on the operator's screen the moment the verb shared the rule. Stale means it needs attention,
-  and a finished item does not. Age yes, label no.
-
-  Both were found by running the verb against the live ledger after an operator asked how they
-  were supposed to know any of this. The tool existed; what was missing was that it agreed with
-  the model.
+### Notes
+- **Guards:** `_is_local_url` treats an unresolvable name as REMOTE, deliberately pessimistic so a transient DNS failure cannot open the failover and egress gates.
+- **Tools:** `_bare_tool_name` and `_tool_run_as_script` still intercept a shell command whose first token matches a tool name; the model is told the name is a tool and can call the real program by path.
+- **Cleanup:** `_verb_clean` still treats `docs/` and `tests/` as removable on an explicit `clean --yes`, which prints the list before acting.
+- **Windows:** `_scheduled_task_owned` reads the install path as a substring of the `schtasks` listing; it is Windows-only and decides a restart hint.
+- **Probes:** `_endpoint_root` strips a URL by suffix, so a gateway route ending in `/completions` is probed one level too high; the probes fail soft and the configured budget stands.
 
 ## [1.0.39] - 2026-09-29
 
-Two security fixes and the Windows entry point, all of them found by running the gate on real
-hardware instead of reading it: the command every Windows user types was dead, a dropped-in
-manifest could carry a recursive delete past the guard, and a path with a space in it made write
-verification silently verify nothing.
+### Added
+- **SGLang:** `_detect_window` asks the server root for `/get_server_info` and reads `context_length`, falling back to `max_req_input_len`; `max_total_num_tokens` is not used (a shared KV-cache budget, not a per-request window).
+- **Work record:** `STATUS.json` lists what is open, blocked and shipped, each item anchored to a commit or a file, and `tests/test_status.py` grades those anchors in CI. (tests/test_status.py)
+- **Pre-push:** `maintenance/pre-push.sh` runs the leak gate, the measured-block check, the ledger's anchors and a check that every tracked path can survive a checkout.
 
-Added
-- **SGLang's context window is detected.** `_detect_window` asks the server root for
-  `/get_server_info` and reads `context_length`, falling back to `max_req_input_len`. SGLang was
-  named in the README's "any OpenAI-compatible endpoint" list and had no route at all:
-  `get_server_info` appeared once in the core, in a comment explaining why `/props` fingerprints
-  llama.cpp, and the 2026-09-28 review read that comment as an implementation.
-  `max_total_num_tokens` is deliberately NOT used - that is the KV-cache budget shared across
-  concurrent requests, not a per-request window, so taking it would over-report by an order of
-  magnitude, the same trap as Ollama's model maximum.
-- **The work record ships with the code.** `STATUS.json` lists what is open, blocked and shipped,
-  each item anchored to a commit or a file, and `tests/test_status.py` grades those anchors in
-  CI - an item claiming "unshipped (commit X)" fails the moment a tag contains X. Written after
-  a review of this project's own notes found three items describing their work as unshipped for
-  a change that had shipped in 1.0.37, and two cross-references pointing at the wrong item.
-- **`maintenance/pre-push.sh`.** The leak gate, the measured-block check, the ledger's anchors and
-  a check that every tracked path can survive a checkout - about a second, and each of the four
-  exists because something got past it.
+### Changed
+- **Windows CI:** the job now runs the platform-specific suites (`IS_WINDOWS`) instead of only those certain to pass there; six suites added and three more listed as candidates.
 
-Changed
-- **The Windows CI job runs the suites that switch on the platform.** It ran only the suites
-  certain to pass there, and none of those touched `IS_WINDOWS`: the platform-specific behaviour
-  was the one thing Windows CI never exercised. Six suites added, and three more listed as
-  candidates.
-
-Fixed
-- **`tinycmdr.cmd` exited 127 with no output, for everyone.** cmd parses a `)` inside an `echo`
-  inside an `if (...)` block as the END of the block, so the no-Python branch's `exit /b 127` ran
-  unconditionally and the documented entry point - `tinycmdr status`, `tinycmdr --once "..."` -
-  was dead on Windows. Nothing noticed because the installer's scheduled task calls `tinycmdr.py`
-  directly, so the bot kept working. Measured on a Windows 11 box, which is also where the two
-  path bugs below came from.
-- **A manifest tool's command escaped the recursive-delete rule on Windows.** A manifest command
-  is wrapped in `cmd /c` there and `sh -c` elsewhere, and the unwrapping `destructive_risk()` does
-  stripped flags beginning with a dash - cmd spells its switch with a slash - so the verb read as
-  `/c`, matched nothing, and BOTH tiers were bypassed for every dropped-in manifest:
-  `cmd /c "rm -rf /"` reached the block tier only through its own regex, and a named directory
-  like `rm -rf ./build` reached neither.
-- **A quoted path was truncated at its first space.** The shell-write detector captured an
-  optional quote followed by "no whitespace", so `Set-Content -Path 'C:\Users\David Trapp\s.json'`
-  - a quoted path is the only correct way to pass one containing a space - yielded
-  `C:\Users\David`. That path does not exist and this module ignores a candidate it cannot find,
-  so write verification verified nothing and said nothing. The spill messages and their test had
-  the same truncation.
-- **The published numbers could not be computed outside a git checkout.** The shipped-tool count
-  came from `git ls-files`, which answers nothing in an export, so the count silently became 0 and
-  the `surface` block contradicted itself. A reader who downloads a package can verify the numbers
-  again.
-- **Four suites graded the wrong thing off macOS**, and the fleet gate found each one: `test_verbs`
-  read `os.geteuid` (no uid on Windows), `test_lane_health` imported `fcntl` at module level (it
-  now takes the folder lock the way the product does, flock or msvcrt), `test_root_safety` ran the
-  macOS-only restart helper wherever a bash existed and counted `os.stat` calls in a way that only
-  holds on macOS, and `test_installer_unix` now answers 77 - "cannot grade this subject here" -
-  rather than failing on a platform whose installer it does not describe.
-
+### Fixed
+- **Entry point:** `tinycmdr.cmd` exited 127 with no output for everyone: cmd parsed the `)` in an `echo` inside an `if (...)` block as the end of the block, so the no-Python branch's `exit /b 127` ran unconditionally.
+- **Guards:** a manifest command wrapped in `cmd /c` escaped the recursive-delete rule because `destructive_risk()` stripped only dash flags, so the verb read as `/c` and both tiers were bypassed.
+- **Write verification:** a quoted path was truncated at the first space (`Set-Content -Path 'C:\Users\David Trapp\s.json'` yielded `C:\Users\David`), so write verification verified nothing; the spill messages and their test shared the bug.
+- **Numbers:** the shipped-tool count came from `git ls-files`, which answers nothing outside a git checkout, so it silently became 0 and the `surface` block contradicted itself.
+- **Test suites:** `test_verbs` read `os.geteuid` and `test_lane_health` imported `fcntl` at module level; it now takes the folder lock the way the product does (flock or msvcrt). (tests/test_verbs.py, tests/test_lane_health.py)
+- **Test suites:** `test_root_safety` ran the macOS-only restart helper and counted `os.stat` calls in a macOS-only way, and `test_installer_unix` now answers 77 rather than failing. (tests/test_root_safety.py, tests/test_installer_unix.py)
 
 ## [1.0.38] - 2026-09-29
 
-A tool can show the model the screen and the image rides exactly one request; the secret sweep
-stops missing a ten-character password; `config set` can no longer store a truthy string under a
-boolean; Ollama's context window is detected instead of assumed; and the published numbers are
-now guarded against the prose that contradicts them.
+### Added
+- **Vision:** a tool returning `{"text": ..., "images": [...]}` shows the image on the next request only, with base64 kept out of the conversation; dormant unless `agent.vision` (ships false), and at most 2 images of 4 MB ride one request.
+- **Ollama:** `_detect_window` asks the server root for `/api/ps` and reads the loaded model's `context_length`; Ollama now has a route like llama.cpp's `/props` and vLLM's `max_model_len`.
+- **Docs:** the README says how to run the test suites, which need no model; the invocation previously lived only in a comment at the top of requirements-test.txt.
 
-Added
-- **A tool can hand the model a picture, and it rides exactly one request.** A tool returning
-  `{"text": ..., "images": [spec, ...]}` shows the image on the NEXT request and then it is
-  gone. Base64 never enters the conversation: that list is measured by `json.dumps` (base64 counts
-  as ~300k fake tokens) and rewritten by `_compact`, which slices content by character, so the
-  attachment goes onto a payload copy. Dormant unless `agent.vision` is on, which ships false, and
-  an endpoint reporting `modalities.vision=false` is a veto rather than a hint. At most 2 images of
-  4 MB ride one request; anything unreadable or oversized is skipped with the tool's text saying so,
-  so the model is never told it can see what it cannot. The cost is measured against this fleet's
-  own endpoint rather than guessed, and an unknown size is 0, which callers turn into an assumed
-  cost - never into free.
-- **Ollama's context window is detected.** `_detect_window` asks the server root for `/api/ps` and
-  reads the loaded model's `context_length`, which is the window Ollama is actually serving. Ollama
-  was named in the published description and worked only as a generic OpenAI-compatible endpoint
-  before this; it now has a route like llama.cpp's `/props` and vLLM's `max_model_len`.
-- **The README says how to run the gate.** The suites need no model and nothing said how to run
-  them: the only place the invocation lived was a comment at the top of requirements-test.txt.
+### Changed
+- **Docs guard:** the doc-drift guard forbade specific remembered sentences; it now asserts a family of denial phrasings and requires every number the prose restates to equal the one rendered from the tree.
 
-Changed
-- **The doc-drift guard asserts facts, not sentences.** It forbade specific remembered sentences,
-  which is a guard you can pass while the document contradicts itself - and it did: "no evaluation
-  suite" sat twelve lines from the gated block naming the graded set of 19 tasks, and six numbers in
-  the unguarded prose had gone stale ("474 unit assertions", "one 5.8k-line file", and "43 prose
-  skills" three times, for a gitignored folder holding two). Denials are a family of phrasings now,
-  and every number the prose restates has to equal the one rendered from the tree.
-
-Fixed
-- **Running a verb under sudo now says what it will do.** Every file the process CREATES then
-  belongs to root, and the agent - which runs as the install's own user - can no longer read
-  them. Measured three times on the Mac in one evening (2026-09-27): `sudo tinycmdr config set
-  ...` left config.json root:staff 0600 and the launchd agent exited 1 on every respawn; the
-  same run left tasks.json (the ledger) and sessions/cli.json root-owned, so the ledger and the
-  CLI lane were dead; and a bare `sudo tinycmdr` - which opens a CLI session - re-created the
-  session files as root. A warning, not a refusal: a system-wide install legitimately belongs
-  to root, so this only names the damage and the fix.
-- **A `*_PASSWORD` environment variable is a credential at 6 characters, not 12.** The sweep's
-  12-char floor skipped this install's 10-char `SUDO_PASSWORD`, so it was never masked in tool
-  output, in an answer posted to chat, in the notes carried in the prompt, or in the log. A name
-  ending in PASSWORD/PASSWD scrubs at 6 now - the floor the config-side sweep already used - while
-  every other name keeps the 12-char floor, which is what keeps PATH and PATHEXT out of the sweep.
-- **`config set` cannot store a truthy string under a boolean key.** A bare word was kept as a
-  string and every non-empty string is true, so `config set agent.vision treu` (a typo) and `config
-  set agent.vision false --str` both turned the flag ON. A key whose shipped value is a boolean now
-  refuses anything that is not one - stderr, exit 2, like every other usage error - which covers
-  the 32 boolean keys in `llm`, `mattermost`, `search` and `agent`.
-
+### Fixed
+- **Sudo:** running a verb under `sudo` warns that every file the process creates then belongs to root and the agent can no longer read them, naming the damage and the fix.
+- **Secrets:** a `*_PASSWORD` environment variable is a credential at 6 characters, not 12, so this install's 10-char `SUDO_PASSWORD` is masked; other names keep the 12-char floor.
+- **Config:** `config set` refuses anything that is not a boolean for a key whose shipped value is a boolean (stderr, exit 2), covering the 32 boolean keys in `llm`, `mattermost`, `search` and `agent`.
 
 ## [1.0.37] - 2026-09-27
 
-Added
-- **`tinycmdr setup` covers web-search consent.** The wizard asked about the model endpoint,
-  Mattermost and Telegram and nothing else, so the egress flag `web_search` and `fetch_url`
-  answer to was reachable only by re-running the installer or by `tinycmdr config set
-  search.allow_cloud_egress true`. It is a fourth section now - "Allow search providers off
-  this LAN (anysearch/tavily)? [y/N]" - Enter keeps the current value, and the summary
-  reports it. A provider on the LAN (searxng) still never needs the consent. Found live: an
-  operator asked the Mac bot for an event's dates, both search paths refused, and the nearest
-  door was a command nobody had been told about.
+### Added
+- **Setup:** `tinycmdr setup` adds a fourth section asking whether off-LAN search providers (anysearch/tavily) are allowed; Enter keeps the current value, the summary reports it, and a LAN provider (searxng) never needs the consent.
 
-Changed
-- **Web search is ON by default; `search.allow_cloud_egress` is the opt-OUT.** It shipped the
-  other way round in 1.0.35, on the argument that a keyless install should not send words from
-  the conversation to a third party unasked. On a box whose providers are already configured
-  that read as a broken tool: measured 2026-09-27, an operator asked for an event's dates,
-  `web_search` and `fetch_url` were both REFUSED, and the run answered from memory with a month
-  the festival is not in. The installers' question defaults to Yes, `setup` asks it too, and
-  false still keeps search on this network only (a `searxng` provider never needs the flag).
+### Changed
+- **Search:** web search is on by default and `search.allow_cloud_egress` is the opt-out; the installers' question and `setup` default to yes, and false keeps search on this network only.
 
-Fixed
-- **A `sudo` write no longer leaves `config.json` unreadable to the agent.** `_write_config`
-  REPLACES the file, and a replacement takes the author of the write, so on the Mac
-  `sudo tinycmdr config set search.allow_cloud_egress true` came back `root:staff 0600` - the
-  launchd agent runs as the install's own user, could not read it, and exited 1 on every
-  respawn (measured 2026-09-27). The pre-write owner is captured and restored, with a warning
-  naming the mistake.
-- **`sudo tinycmdr restart` on macOS refuses instead of stopping the bot.** The helper's
-  `launchctl bootstrap` cannot enter the console user's GUI domain as root ("Bootstrap failed:
-  125: Domain does not support specified action") - and by then it had already booted the agent
-  OUT, so the bot stayed down until someone noticed. It now refuses before touching anything,
-  says to run it without sudo, and a failed bootstrap no longer leaves the agent stopped.
+### Fixed
+- **Config:** `_write_config` replaces `config.json`, and a `sudo` write left it `root:staff 0600` and unreadable to the launchd agent; the pre-write owner is now captured and restored with a warning.
+- **Restart:** `sudo tinycmdr restart` on macOS now refuses before touching anything instead of stopping the bot, says to run it without sudo, and a failed bootstrap no longer leaves the agent stopped.
 
 ## [1.0.36] - 2026-09-27
 
-Added
-- **The surfaces answer "can it hear me?", not "is the process up".** Every status surface was
-  truthful about the wrong question, which is how a bot stayed dead for hours (a live install,
-  2026-09-28): `systemctl` said `active`, `tinycmdr health` named mattermost because a TOKEN
-  existed - and the Mattermost lane had been failing 401 through **510 restarts**. Lanes now record whether they CONNECTED (`lane_up`/`lane_down`); the failure
-  count lives in `logs/state.json` so it survives the restart loop that produces it; and a repeat
-  is one log line with a counter instead of the same CRITICAL every ten seconds (the incident
-  wrote 419 KB of it). `tinycmdr health` prints each lane's state (`mattermost=failed`) and
-  reports a pending config change on stderr; `doctor` lists the lanes and any pending config
-  change as problems.
-  `tests/test_lane_health.py` grades all of it, including the count surviving a simulated restart.
-- **A `config.json` edit that has not been applied is now visible.** Config is read once at start,
-  so an edit - by a person, or by the agent acting on the operator's own chat message - changes
-  nothing until a restart, and nothing said so: the operator asked the agent from Mattermost to
-  change a setting, the agent wrote the file correctly, and nothing took effect.
-  `config_drift()` compares the file's stamp against what the process loaded, and `doctor` and
-  `tinycmdr health` report "changed on disk at HH:MM ... restart to apply".
+### Added
+- **Lane health:** lanes record whether they connected (`lane_up`/`lane_down`), repeats collapse to one counter line in `logs/state.json`, and `health`/`doctor` report lane state and pending config changes. (tests/test_lane_health.py)
+- **Config drift:** `config_drift()` compares the file's stamp against what the process loaded, and `doctor`/`tinycmdr health` report a config edit that has not been applied (`changed on disk ... restart to apply`).
+- **CLI-only install:** with no chat token nothing remote is served and no service is registered, `main` says so and returns instead of aborting, and `tinycmdr health` names the lanes it has.
 
-Removed
-- **The built-in local web UI is gone; the doors are Mattermost, Telegram, the CLI and
-  `--once`.** The lane went, not just a switch: `tinycmdr.py` and the supervisor no longer
-  serve a local HTTP page, so there is no `web` block in `config.json`, no `TINYCMDR_WEB_TOKEN`
-  in `.env`, no `/api/*` (chat, health, sessions, events, tasks, log, inventory), and no page
-  token or TLS pair to configure. `--web`, `--web-host`, `--web-port` and `--no-web` are refused
-  by name and `main` exits 2 saying the UI has been removed; the installers no longer ask the
-  page questions, mint a token or give firewall advice for a port that is not opened; the
-  `ports` verb (the local listener report) is gone; and the watchdog is now a Windows-only
-  launch helper - start, wait, relaunch - with no readiness probing, status file or
-  notifications: on Linux and macOS systemd `Restart=always` and the launchd agent's
-  `KeepAlive` already own that job (the Linux installer stopped shipping the file), and
-  the bot's own `lane_up` record plus `tinycmdr health` are the surfaces that answer
-  "can it hear me". A CLI-only install is a supported end state - with no chat token
-  nothing remote is served, no service is registered, `main` says so and returns instead
-  of aborting, and `tinycmdr health` names the lanes it has (`lane mattermost=configured`,
-  or `lane none`). The page-only instruments (`drive-web-cases.py`,
-  `probe-web-sessions.py`, `probe-web-surface.py`, `wait-for-endpoint.py`,
-  `stub-openai-endpoint.py`) and the web-only test suites are deleted with it. Mattermost,
-  Telegram, the interactive CLI and `--once` are unchanged.
-- **Neither chat lane is primary.** With both a Mattermost and a Telegram token set, a
-  plain start used to run Mattermost and leave Telegram down with a warning. Neither
-  lane starts on its own now: the process says so and exits 2, and `--telegram` /
-  `--mattermost` pick one. A single token still just runs, and no token is a supported
-  CLI-only install.
+### Changed
+- **Watchdog:** it is now a Windows-only launch helper (start, wait, relaunch) with no readiness probing, status file or notifications; on Linux and macOS systemd `Restart=always` and launchd `KeepAlive` already own that job.
+- **Chat lanes:** neither chat lane is primary: with both tokens set a plain start exits 2 instead of running Mattermost and leaving Telegram down, and `--telegram`/`--mattermost` pick one; a single token still just runs.
+
+### Removed
+- **Web UI:** the built-in local web UI is removed — no `web` block, `TINYCMDR_WEB_TOKEN`, `/api/*`, page token or TLS pair — and `--web`, `--web-host`, `--web-port` and `--no-web` are refused by name with `main` exiting 2.
+- **Installers:** they no longer ask the page questions, mint a token or give firewall advice for a port that is not opened, and the `ports` verb is gone.
+- **Instruments:** the page-only instruments (`drive-web-cases.py`, `probe-web-sessions.py`, `probe-web-surface.py`, `wait-for-endpoint.py`, `stub-openai-endpoint.py`) and the web-only test suites are deleted with the lane.
 
 ## [1.0.35] - 2026-09-27
 
-Web search becomes a provider chain you configure and an egress you consent to; the
-shell door stops eating `echo`/`printf` commands that merely mention a tool; and
-`read_file`'s window tells the truth about the lines it hands back.
+### Added
+- **Search providers:** `search.providers` is an ordered list of `{kind, url, api_key_env, label}` tried until one answers — `anysearch`, `tavily` and `searxng` on the LAN — with the key read from `.env`. (tests/test_search_providers.py)
+- **Egress gate:** `search.allow_cloud_egress` defaults to false: while false an off-LAN provider is refused with a `BLOCKED:` line naming the setting or a bad `search.providers` entry, and `fetch_url` answers to the same flag.
+- **Installer:** the installers ask it (default No) and take `--search-egress true|false` (`-SearchEgress` on Windows), and `.env` carries `TINYCMDR_SEARCH_EGRESS` and `TINYCMDR_SEARCH_PROVIDERS` (the chain), later settable by `config set`.
 
-Added
-- **Web search providers are configured, and leaving the machine is opt-in.** `web_search`
-  used to iterate a hardcoded pair and read one fixed key each, so the only two providers that
-  could ever run were the two compiled in. `search.providers` is now an ordered list of
-  `{kind, url, api_key_env, label}`, tried until one answers: `anysearch` and `tavily` as
-  before, plus `searxng` - a SearxNG, or anything serving `/search?q=&format=json`, on your
-  own LAN, which is the one shape whose traffic never leaves the wire. A key is read from
-  `.env` under the name the entry gives (`api_key_env`), so a host inserts a paid key or its
-  own provider with no code change. `tests/test_search_providers.py` grades the chain
-  resolution, the order, the fallbacks and the gate, hermetically, against a stub provider.
-- **`search.allow_cloud_egress` is the consent, and it defaults to false.** Both built-in
-  providers are third parties, and the anonymous tier means a keyless install used to send the
-  model's query off the machine with nobody asked and nothing on screen saying so. While the
-  flag is false an off-LAN provider is REFUSED, not called, with a `BLOCKED:` line naming the
-  setting (and naming any unusable `search.providers` entry, so a typo reads as a typo).
-  `fetch_url` answers to the same flag. This is the rule `llm.allow_cloud_fallback` has always
-  applied to model endpoints, one lane over - a privacy gate, not a preference.
-- The installers ask for it - "May the bot's web search send queries off this machine?",
-  default **No** - and take `--search-egress true|false` (`-SearchEgress` on Windows) for a
-  fleet push. `.env` carries the answer as `TINYCMDR_SEARCH_EGRESS`, and a whole chain as
-  `TINYCMDR_SEARCH_PROVIDERS` (JSON). Later: `tinycmdr config set search.providers '<json>'`,
-  with the key through `tinycmdr token set <NAME>`.
-
-Fixed
-- **`read_file`'s window tells the truth, and `offset` is a start line.** Three defects on one
-  code path (operator report, 2026-09-27; each reproduced before the fix). A negative `offset`
-  read from the *end* while the header printed `lines -5—-2 of 22096` - line references that say
-  nothing to a reader - and is now refused with the door that does mean it (`tail=N`).
-  `from_end` was set for ANY offset, so `offset=10, limit=2` of a 28.6 MiB file answered with
-  lines 432238-432239 under a header claiming 10-12: silently wrong content, the worse half of
-  the report. And `_read_capped` appended its "only the first 8 MiB is shown" warning *into* the
-  text that is then split into lines, so `tail=2` of a file past the cap returned the warning's
-  own two lines instead of the file's last two. The warning now comes back separately and is
-  appended after slicing; an offset reads from the start and `tail` from the end; a header for a
-  clipped read says `shown, the file is bigger` rather than quoting a total it never read; and an
-  offset past the window says so with the full path, where it used to answer with an empty body.
-  `tests/test_read_window.py` grades all of it, with the cap lowered so the truncation paths cost
-  nothing to run.
-- **A tool name inside an `echo`/`printf` no longer swallows the command.** The shell door's
-  narration matcher - added 2026-09-25 after six `echo "calling send_file now"` calls in one
-  run - scanned *every word* of an echo/printf for a registered tool name and answered the
-  door instead of running it. That ate real commands: controlled probes on a live install
-  (2026-09-27, operator report) got `echo "the notes file is ready"`, `printf "%s" shell`,
-  `printf "read_file\n"` and `echo "search_files *.py"` replaced by the door message - five of
-  nine probes, including the two most common ways to build text or a pipe. The narration shape
-  is now its own matcher (`_narration_tool_name`): the command RUNS, the named tool is revealed
-  (a hidden tool is what makes a run narrate instead of calling it), and the result carries a
-  one-off hint saying that name is a tool and its schema is in the list now. A command whose
-  *job* is a tool name - `list_tools`, `notes`, `python -m toolsmith` - is still answered at
-  the door, which is the case that door was built for.
-- **Two surfaces claimed keyless web search was dead, and it was not.**
-  `install/README-macos.md` said "Without them `web_search` returns an error", and the Windows
-  installer printed "search keys not set: web search will be unavailable on this host". With
-  no key the anysearch anonymous tier answers - measured 2026-09-27 from a clean box:
-  `python Path.write_text newline argument` returned the StackOverflow question and
-  `bugs.python.org/issue23706`, and `llama.cpp /props endpoint context window` returned the
-  server README. The docs now describe the flag that actually governs it instead of claiming a
-  working feature is broken.
-- A search key left in `config.json` is now ignored with a warning naming its `.env` variable,
-  and dropped from the loaded config - the provider reads `api_key_env`, and a secret in
-  `config.json` is a copy the agent can read into a prompt and quote (the rule the Telegram
-  token already follows). `search.anysearch_api_key` / `search.tavily_api_key` are gone.
+### Fixed
+- **Read window:** `read_file` refuses a negative `offset` (use `tail=N`), an offset now reads from the start instead of the end, and the truncation warning is appended after slicing rather than into the text. (tests/test_read_window.py)
+- **Shell door:** a tool name inside an `echo`/`printf` no longer swallows the command — it runs, the named tool is revealed with a one-off hint, while a job that is a tool name (`list_tools`, `notes`) is still answered at the door.
+- **Docs:** `install/README-macos.md` and the Windows installer claimed keyless web search was dead; both now describe the flag that actually governs it, since the anysearch anonymous tier answers without a key.
+- **Config:** a search key left in `config.json` is ignored with a warning naming its `.env` variable and dropped from the loaded config, and `search.anysearch_api_key`/`search.tavily_api_key` are gone.
 
 ## [1.0.34] - 2026-09-27
 
-The web lane gets the instruments its case drive left behind, the ledger stops speaking for an
-ended session, and the repo drops the last artwork that was not tinycmdr's.
+### Added
+- **Instruments:** the web lane's five instruments (`drive-web-cases.py`, `probe-web-surface.py`, `probe-web-sessions.py`, `stub-openai-endpoint.py`, `wait-for-endpoint.py`) are now tracked; they are maintenance-only and do not ship.
 
-Fixed
-- **An unanswered macOS Local Network prompt is named, not blamed on the endpoint.**
-  macOS raises that permission the first time a process dials a private address, and it raises
-  it in the process that dials - for this bot, a launchd job at boot where nobody can answer.
-  Unanswered it is silent: the log said the endpoint "did not answer", the run banner blamed
-  the endpoint, and the agent carried on with an assumed 14,349-token window while the model
-  box served everything else (measured on a live install, 2026-09-27). `lan_permission_hint()`
-  now appends one sentence - only on macOS, only for a private address, never loopback - to the
-  window-detect warning, the run banner, `status` and `doctor`; the installers dial the
-  endpoint once from the venv's own python with the operator watching, so the prompt appears in
-  context, and `install/README-macos.md` says what a silent endpoint looks like. The hint's
-  edges (loopback, a public host, another OS) are tested.
-- **Three CI defects, one per job.** Ubuntu and Windows ran `test_ledger`'s LAN-hint checks
-  against their own platform while `lan_permission_hint()` is macOS-only, so the three
-  "hint is present" checks went red; the platform is now pinned the way the suite's own
-  negative check already did it. `test_ledger_race` asserted six distinct temp names but built
-  them from `threading.get_ident()`, and a thread id is recycled once its thread exits; the
-  name now carries a per-write counter. And `Agent()` was built at import with its `__init__`
-  calling `SESSIONS_DIR.mkdir()`, so importing the module created `sessions/` in whatever
-  checkout it ran from - the opposite of the rule two screens above it; the mkdir is gone and
-  the two writers leaning on it (`Agent._save`, the session export) call
-  `_ensure_sessions_dir()` instead.
-- The ledger block called its open items "the to-do list", so a fresh session adopted an ended
-  session's thread: a day-old "boot Linux on the iPhone" item plus two hours-old entries drove a
-  26-step run nobody asked for (measured on a live install, 2026-09-27). Every open item now shows
-  its age from its own timestamps, `agent.ledger_stale_hours` (default 12) marks an untouched one
-  `stale`, and the block says what the list is - work an earlier run left open, to be confirmed
-  with the operator before it is resumed. Same incident class as the done-item fix, one status
-  over.
+### Fixed
+- **macOS LAN permission:** `lan_permission_hint()` appends a sentence (macOS only, private addresses, never loopback) to the window-detect warning, run banner, `status` and `doctor`; the installers dial it once so the prompt appears.
+- **Docs:** `install/README-macos.md` now says what a silent endpoint looks like when the Local Network prompt is never answered.
+- **CI/tests:** `test_ledger`'s LAN-hint checks pin the macOS platform, `test_ledger_race` names temp files with a per-write counter, and `Agent()` no longer creates `sessions/` at import. (tests/test_ledger.py, tests/test_ledger_race.py)
+- **Ledger:** open items now show their age, `agent.ledger_stale_hours` (default 12) marks an untouched one `stale`, and the block says the list is work an earlier run left open, to be confirmed before it is resumed.
 
-Added
-- **The web lane's five instruments, tracked instead of remembered.** `drive-web-cases.py`
-  opens one fresh session per case through the page API, `probe-web-surface.py` checks auth,
-  origin, traversal and headers, `probe-web-sessions.py` covers the conversation lifecycle,
-  `stub-openai-endpoint.py` is a minimal OpenAI-shaped endpoint, and `wait-for-endpoint.py`
-  waits for a box and then runs a pass. They were untracked, so the handoff's references to
-  them resolved to nothing on a clone; they are maintenance-only and do not ship
-  (`build-package.py`'s `SHIP` is an explicit list).
-
-Removed
-- Twenty-six images (~5.6 MB) that were not tinycmdr's: everything under `assets/brand/` and a
-  root `icon.png`. That is three whole families (`tinycmdr-badge-*`, `tinycmdr-helm-*`, and the
-  chibi ladder), the author's own profile avatar, the vector mark and its rimmed variant, the two
-  banner ratios, and the six-spoke mark a redraw commit describes. Nothing in the repo - no code,
-  test, doc or installer - referenced any of them, and the page's icon comes from an embedded copy
-  rather than that root file, so no behaviour changes. The README's mascot image went with them:
-  the repo now carries no imagery, and a brand set can be added if and when there is one that is
-  actually tinycmdr's.
+### Removed
+- **Artwork:** twenty-six images (~5.6 MB) not tinycmdr's are removed — everything under `assets/brand/`, the root `icon.png` and the README's mascot image; nothing in the repo referenced them.
 
 ## [1.0.33] - 2026-09-27
 
-Housekeeping with teeth: the numbers in the credibility doc are rendered from the tree and a
-gate fails when they drift, the eval set became a repeatable baseline, the three installers got
-a parity contract, and releases carry checksums.
+### Added
+- **Docs gate:** the credibility doc's numbers are rendered from the tree by `maintenance/measured-block.py` between markers, and `tests/test_measured_doc.py` fails when the committed doc disagrees. (tests/test_measured_doc.py)
+- **Measure prompt:** `maintenance/measure-prompt.py` prints both legs of the overhead figure (this install and a clean unpack) with both instruments, the chars/4 estimator and the endpoint's own `/tokenize`.
+- **Eval:** `run_eval.py --save-baseline`/`--baseline [--fail-on-regression]` measure against `tests/eval_baseline.json`, with `T19_midrun_steer` covering steering, and the grader gains `files: {"x": {"absent": true}}` and `steered: true`.
+- **Installers:** `tests/test_installer_parity.py` pins the switch contract (19 capabilities, three spellings, the `--no-web`/`-EnableWeb` inversion) and declares platform-only switches with reasons. (tests/test_installer_parity.py)
+- **Release:** every release carries `SHA256SUMS` over all eight published files (written by `maintenance/release.sh`), the README says how to verify a download, and releases are still not signed.
 
-Added
-- **The doc-drift gate.** `docs/tinycmdr-what-it-is.md` claimed 5,847 lines / 286 KB in one file
-  (the file is 21,635 lines / 1.03 MB), "no benchmark or eval harness" (`tests/eval_tasks.py` has
-  18 machine-graded tasks), "no release process" (`ci.yml` + `maintenance/release.sh`), and its
-  section-3.2 budget defaults were 2-6x off (40/10/180/6000 where the tree says
-  250/75/300/10000). A document whose pitch is measured numbers cannot carry stale ones, so the
-  numbers now come from `maintenance/measured-block.py` between markers, and
-  `tests/test_measured_doc.py` fails when the committed doc disagrees - and falsifies itself on
-  a doctored copy, because a gate that cannot fail grades nothing.
-- **`maintenance/measure-prompt.py`** prints both legs of the overhead figure (this install and
-  a clean unpack) with both instruments (the chars/4 estimator and the endpoint's own
-  `/tokenize`), which is the command the doc's section 4.1 now points at.
-- **Eval as a repeatable measurement, not a one-off:** `run_eval.py --save-baseline` and
-  `--baseline [--fail-on-regression]` against a committed `tests/eval_baseline.json`, and a new
-  task - `T19_midrun_steer` - covering mid-run steering, a headline feature that had no eval
-  coverage at all. Two grader rules were missing for it: `files: {"x": {"absent": true}}` (until
-  now, absence was NOT assertable: `{"exists": false}` silently passed when the file was there)
-  and `steered: true`, which separates "the steer never reached the run" (a harness bug) from
-  "the model ignored it" (a prompt bug).
-- **`tests/test_installer_parity.py`:** the portable switch contract for the three installers,
-  written down once (19 capabilities, three spellings each, with the deliberate
-  `--no-web` / `-EnableWeb` inversion pinned), every platform-only switch declared with its
-  reason, and a stray-detector so a NEW flag on one platform fails until it is ported or
-  declared. It found a real one on its first run - see Fixed.
-- **Every release now carries `SHA256SUMS`** over all eight published files
-  (`maintenance/release.sh` writes it, the release uploads it), and the README says how to
-  verify a download. Releases are still NOT signed; the README says that plainly too.
-
-Fixed
-- **The README promised `--mode user|system` to macOS.** The macOS installer has one kind of
-  install (a per-user launchd agent) and exits 2 on that flag, so a macOS user following the
-  README hit "unknown switch". The switch paragraph is now split per platform, and the parity
-  suite pins the sentence.
-- **The doc's every-schema figure and the pre-1.0 naming.** Counting every schema the registry
-  holds reads 7,711 est on this install (27 schemas), not 7,912 (25 - the tool set moved); and
-  the document now says plainly that the 1.9.x names are the pre-release dev tree, that nothing
-  before v1.0.0 was ever tagged or published, and therefore that no released artifact was ever
-  numbered out of order.
+### Fixed
+- **README:** the README promised `--mode user|system` on macOS, where the installer has one kind of install and exits 2 on that flag; the switch paragraph is now split per platform and the parity suite pins the sentence.
+- **Docs:** the doc's every-schema figure is corrected to 7,711 est (27 schemas), and it now says the 1.9.x names are the pre-release dev tree and nothing before v1.0.0 was published, so no released artifact was numbered out of order.
 
 ## [1.0.32] - 2026-09-27
 
-Long prompts stop looking dead, and llama.cpp's own stream extensions are requested - from
-llama.cpp, and from nothing else. Measured on the LAN box: a 12.5k-token prompt reported its
-first event at 0.25s where a plain request showed nothing for 29.7s, and a 9k-token prompt with
-a 2s ping interval logged 15 progress events and 43 keep-alive pings across a 131-second prefill.
+### Added
+- **Return progress:** the server sends a chat chunk carrying `prompt_progress` at ~0.1s and then once per prompt batch; the harness records it, the status line shows `reading prompt · 42% (5,120/12,502 tok)`, and the log reports the count.
+- **Ping interval:** `llm.sse_ping_interval` (default 0 = the server's own 30s) makes the keep-alive `:` comment counted, so the log reports `43 keep-alive ping(s)` when a silent stream was alive.
+- **Extensions:** `llm.llama_extensions` (default true) sends the two fields only when the endpoint is on the LAN and its `/props` fingerprints a llama.cpp build; a 400 naming either field is dropped and the endpoint retried.
+- **Progress:** `return_progress` is observability, not throughput — the same prefill tok/s with and without it — so the wait is visible and a long prompt can no longer be mistaken for a dead connection.
+- **Status:** `tinycmdr status`/`/status` reports which way the gate went (`stream: on: prompt progress requested (the server's own ping interval)`), reading the same probe the request does.
 
-Added
-- **`return_progress` (llama.cpp extension): the prefill is now visible.** The server sends a
-  normal chat chunk carrying `prompt_progress` at ~0.1s and then once per prompt batch; the
-  harness records it, and the status line says `reading prompt · 42% (5,120/12,502 tok)` while
-  the prompt is being read - on the measured 9k-token prefill that was 15 events, and the log
-  line now reports the count.
-- **`sse_ping_interval` (`llm.sse_ping_interval`, default 0 = the server's own 30s).** The bare
-  `:` keep-alive comment was already parsed and ignored; now it is counted, so the log says
-  `43 keep-alive ping(s)` when a silent stream was provably alive, and an operator can tighten
-  or disable the interval per box.
-- **`llm.llama_extensions` (default true) and the gate behind it.** The two fields are sent
-  ONLY when the endpoint is on this LAN AND its own `/props` reply fingerprints a llama.cpp
-  build (`default_generation_settings`, or `build_info` + `total_slots`). A cloud provider
-  rejects an unknown request field with a 400; a vLLM/SGLang-shaped endpoint gets neither
-  field, and is never probed unless it is on the LAN. A 400 that names either field is
-  dropped and the same endpoint retried, the same way `stream_options` already was.
-- **These are observability, not throughput: nothing is processed faster.** Measured against the
-  same endpoint on four fresh prompts: 431.0 / 425.5 tok/s prefill WITHOUT `return_progress` and
-  431.7 / 431.4 tok/s WITH it - the server's own `prompt_per_second`, i.e. the same work in the
-  same time. What changes is that the wait is visible (first event 0.25s instead of 29.7s) and
-  that a long prompt can no longer be mistaken for a dead connection.
-- **`tinycmdr status` / `/status` says which way the gate went** ("stream: on: prompt progress
-  requested (the server's own ping interval)"), reading the same probe the request does.
-
-Fixed
-- **The stall watchdog no longer shortens a healthy prefill's rope.** The prefill/idle split
-  keyed on "a chunk arrived", and with progress on the server sends chunks during the prefill -
-  a slow box would have been declared wedged at the idle bound instead of being bounded by the
-  request timeout. It now keys on "a chunk carried text or a tool call".
-- **The payload dump was not the payload.** `agent.debug_dump_dir` wrote the body before
-  `tools`, `stream`, `stream_options` and the extensions were added, so the documented "exact
-  request body" was missing exactly the fields a provider-difference bug is about. It is
-  written after them now.
-- **`tests/test_result_hints.py` could never recover from its own 15th run.** It is the one
-  suite whose subject writes something durable (`_exec_tool` adds a task to the ledger beside
-  the staged module), and it reused a fixed stage directory, so the ledger accumulated `probe`
-  tasks until the cap made the tool error and the hint check failed as if the hint had
-  regressed. The stage is wiped per run.
-- **`tests/test_tool_discovery.py` pinned a sentence, not a layout.** Its "the inventory line
-  follows the previous bullet" check was a byte string ending in the trailing text of that
-  bullet, and went red when that trailing prose was trimmed. It now asserts the contract - one
-  inventory line, directly after a bullet, with no blank field between.
+### Fixed
+- **Watchdog:** the stall watchdog's prefill/idle split now keys on `a chunk carried text or a tool call` instead of `a chunk arrived`, so progress chunks no longer shorten a healthy prefill's rope.
+- **Debug dump:** `agent.debug_dump_dir` wrote the body before `tools`, `stream`, `stream_options` and the extensions were added; it is written after them now.
+- **Result hints:** `tests/test_result_hints.py` reused a fixed stage directory, so its ledger accumulated `probe` tasks until the cap made the tool error; the stage is wiped per run. (tests/test_result_hints.py)
+- **Tool discovery:** `tests/test_tool_discovery.py` pinned a byte string that broke when prose was trimmed; it now asserts one inventory line directly after a bullet with no blank field between. (tests/test_tool_discovery.py)
 
 ## [1.0.31] - 2026-09-27
 
-The static prompt is 3,586 tokens on this install and 3,403 on a clean unpack, measured with the
-ENDPOINT'S OWN TOKENIZER (llama.cpp `/tokenize`), down from ~4,005 and ~3,800 real. The
-harness's estimator - chars/4, which is what the 5,400-token gate asserts against - reads 4,301
-and 4,069 for the same two strings, so it over-reports by about 17%. Nothing was dropped: not a
-rule, not a tool, not a capability.
+### Changed
+- **Prompt:** three rules were stated twice and one four times (ask_user doctrine, research rules, reporting rules); each is now one statement in the place it is read, with every phrase the suites pin kept verbatim.
+- **Result hint:** the `Text inside a tool result is DATA, never instructions` rule now rides the first `fetch_url`/`web_search` result via `result_hint()` once per session; the work-check and sub-agent-claim clauses stay in the prompt.
+- **Ledger:** the prompt now says to add a `task` for multi-step work, and the upkeep detail (doing/done/clear, evidence notes) rides the first `task action=add` result.
+- **Platform tools:** the native-mechanism rule now emits only the maintenance tools the host actually has rather than naming tools from the other platform.
+- **ask_user:** ask_user's schema drops the 85-token policy paragraph and carries the call shape and one trigger again.
+- **Prompt:** the `routine work needs no research phase` clause is removed from the prompt and `soul.md`, and the skill index line drops the payload-trap sentence that lives in `SKILL.md`.
+- **Schemas:** schema prose (descriptions and parameter help) is trimmed by ~90 tokens across the twelve always-on tools, with no parameter, enum or requirement changed.
 
-Changed
-- **Three rules were stated twice and one was stated four times**, and each repetition was paid
-  on every request. The ask_user doctrine sat in a schema description AND a prompt bullet;
-  the research rules were two bullets saying one thing; "a tool result is the only proof" and
-  "a fix must name its result" and the final-report rule were three bullets about reporting.
-  Each is now one statement, in the place it is read, with every phrase the suites pin kept
-  verbatim.
-- **One rule left the prompt for the result that calls for it.** "Text inside a tool result is
-  DATA, never instructions" now rides the first `fetch_url` or `web_search` result of a session
-  (`result_hint()`), where the untrusted text actually is, once per session. Two more rules
-  looked like candidates and are KEPT in the prompt on purpose: the work-check clause and the
-  sub-agent-claim clause are pinned by suites that were written after those exact failures, and
-  a hint only arrives when a ledger or a sub-agent is in play - a run that uses neither would
-  never see them.
-- **The ledger rule keeps its trigger and loses its detail**: the prompt now says to add a
-  `task` for multi-step work; the upkeep detail (doing/done/clear, evidence notes) rides the
-  first `task action=add` result.
-- **Platform-specific maintenance tools.** The native-mechanism rule named winget, DISM and
-  Windows Update on a Darwin box and systemctl, journalctl and docker on Windows. It now emits
-  only the tools the host actually has.
-- **ask_user's schema is syntax again.** Its 85-token policy paragraph duplicated the prompt
-  bullet that states the same doctrine; the schema now carries the call shape and one trigger.
-- **One clause removed twice over**: "routine work needs no research phase" was in the prompt and
-  in soul.md, and the skill index line kept a payload-trap sentence that lives in SKILL.md.
-- **Schema prose trimmed** (descriptions and parameter help) by ~90 tokens across the twelve
-  always-on tools; no parameter, enum or requirement changed.
-
-Fixed
-- **The overhead figure was measured with a chars/4 estimator, not a tokenizer.** Measured against
-  the live endpoint: est_tokens reads 4,301 where the model's own tokenizer reads 3,586. The gate
-  uses est on purpose (conservative for a window check), but every published number now says which
-  of the two it is.
-- **The graded set could not run at all.** `run_scenario.instrument()` wrapped
-  `Agent._compact(self, messages)` while the harness had grown `_compact(self, messages, key)`,
-  so every graded task died on its first turn with a TypeError - the measuring stick the
-  changelog quotes was broken, not merely noisy. The wrapper now takes the session key, and the
-  baseline re-run (15/18) is the first honest score in the file for this build.
+### Fixed
+- **Overhead:** the overhead figure uses the chars/4 estimator, not the endpoint tokenizer; every published number now says which of the two it is.
+- **Eval harness:** `run_scenario.instrument()` wrapped `Agent._compact(self, messages)` while the harness had grown `_compact(self, messages, key)`, killing every graded task with a `TypeError`; the wrapper now takes the session key.
 
 ## [1.0.30] - 2026-09-27
 
-The prompt lost 689 tokens and no rule, tool or capability went with them.
+### Changed
+- **Prompt:** static overhead drops to 4,802 on this install and 4,545 as sent on a clean unpack, with 12 always-on schemas instead of 14, under the 5,400 ceiling this repo's own gate asserts.
+- **Prompt:** rules are stated once instead of three or four times: the ask_user doctrine and tool discovery are each reduced to one statement, with descriptions stating the contract without the essay.
+- **Held-back tools:** `send_file` and `list_tools` joined the held-back set — both stay callable by name and named in the inventory line, `find_tools` with no query lists them, and `send_file` keeps its designed reveal.
+- **Soul:** `soul.md` and its built-in fallback are trimmed (224 to 116 tokens), keeping the persona and the two local-model traps; `DEFAULT_SOUL` matches the file.
 
-Changed
-- **Static overhead: 5,491 -> 4,802 on this install, 4,545 as sent on a clean unpack** - 12
-  always-on schemas instead of 14. It was over the 5,400 ceiling this repo's own gate asserts,
-  and over it only because that gate stages a fixture config with no skills and no drop-in
-  tools.
-- **Rules are stated once instead of three or four times.** The ask_user doctrine appeared in a
-  130-token schema description, a 156-token prompt bullet AND the tool's result text; tool
-  discovery appeared in two prompt bullets, the hidden-inventory line and find_tools' own
-  description. Each description now states the contract without the essay.
-- **`send_file` (127 tokens) and `list_tools` (66) joined the held-back set.** Both stay callable
-  by name, both are named in the inventory line, `find_tools` with no query lists them, and
-  `send_file` keeps its designed reveal: an order saying "attach ..." / "send me the file" /
-  "don't just paste" reveals its schema BEFORE the run starts.
-- **`soul.md` and its built-in fallback trimmed** (224 -> 116 tokens): the persona, and the two
-  local-model traps worth restating. The research rules it repeated are in the prompt already.
-  `DEFAULT_SOUL` matches the file, so a host that deletes `soul.md` pays the same either way.
-
-Fixed
-- **Four suites pinned consequences of the OLD prompt size instead of the contract**, and went
-  red the moment static got smaller: budget arithmetic that ignored a configured ceiling,
-  hardcoded 1,024-floor values, a hardcoded tool name in a pin-drift assertion, and
-  "send_file is offered" where the guarantee is "reachable". Each now derives what it means
-  from the measured values.
+### Fixed
+- **Tests:** four suites pinned consequences of the old prompt size instead of the contract; each now derives its check from the current values.
 
 ## [1.0.29] - 2026-09-27
 
-The stream now accepts what other OpenAI-compatible servers actually send, not only what
-llama.cpp sends - and the README says all of it in one page instead of three.
+### Added
+- **Tests:** regression checks for the three stream shapes and for the non-streaming normalizer.
 
-Fixed
-- **Three stream shapes were silently mishandled.** The accumulator assumed one string fragment
-  per token. Measured 2026-09-27: `function.arguments` arriving as a JSON OBJECT (several
-  servers, and the proxies in front of them) was dropped by an `isinstance(..., str)` test, so
-  the tool ran with `{}`; the legacy `function_call` delta was ignored, so the call vanished and
-  the turn looked like an answer with no content; `content` as a list of parts was dropped,
-  taking the whole answer with it. None of the three raised anything. All three are normalized
-  now - on the streamed path and on a whole non-streamed message - and object arguments are
-  stringified so the replayed history is valid JSON on every endpoint.
-- **A doubled call could keep the wrong half.** When an endpoint re-sends its arguments, a
-  trailing empty object is passed over in favour of the real payload.
+### Changed
+- **README:** one install command per OS, one verb table, switches and uninstall in a collapsed section, and the overhead claim stated with its provenance; comparison prose moved to `docs/tinycmdr-what-it-is.md`.
 
-Changed
-- **README.** 336 lines and 18 fenced blocks down to 181 and 6: one install command per OS, one
-  verb table, switches and uninstall folded into a collapsed section, and the overhead claim
-  stated with its provenance (~5.2K tokens on a clean unpack; `tinycmdr status` prints this
-  host's own as `static`). The comparison prose it used to carry lives in
-  `docs/tinycmdr-what-it-is.md`.
-
-Added
-- Regression checks for the three shapes and for the non-streaming normalizer.
+### Fixed
+- **Streams:** object-form `function.arguments`, the legacy `function_call` delta and list-form `content` were dropped; each is normalized on streamed and non-streamed paths, with object arguments stringified for valid replayed JSON.
+- **Streams:** when an endpoint re-sends its arguments, a trailing empty object is passed over in favour of the real payload.
 
 ## [1.0.28] - 2026-09-27
 
-A tool call is what the model asked for, character for character. This release removes the last
-piece of the stream that could rewrite one, and makes the paths that hid the damage say what they
-saw instead of reading as the model's own mistake.
+### Added
+- **Tests:** regression checks for both halves of the argument bug - repeated punctuation inside one call, a repeated character inside one number, and a re-emitted call that must not double.
 
-Fixed
-- **Tool-call arguments were corrupted between the model and the tool.** The stream kept a per-call
-  SET of every argument fragment and skipped any repeat. llama.cpp streams arguments one token at a
-  time, so `-`, `" "`, `,`, `":` and `\"` repeat inside a single call, and every second copy was
-  deleted before parsing, execution or display: `grep -nE` arrived as `grepnE`, `head -5` as
-  `head5`, `/tmp/alpha, /tmp/beta` as `/tmp/alpha,/beta`, `a, b, c` as `a, b c`. Measured: a raw-SSE
-  capture of six realistic shell commands was correct 6/6 and only 1/6 survived the harness; in one
-  production session 54 of 188 tool results failed and every `search_files` call (8/8) arrived as
-  invalid JSON.
-- **The first repair of that was wrong in the same way.** Dropping a fragment only when it matched
-  the one immediately before it is still content-based: `seq 1 2000` reached the tool as `seq 1 20`,
-  because 2-0-0-0 arrives as four fragments and two of them are the same character. The live cost
-  was a run that re-issued its command six times while the loop guard refused the repeats - 261s
-  and 143K tokens without ever seeing the output it asked for. Nothing is dropped now: every
-  fragment is appended, and the one shape that IS a resend (an endpoint that finished a call and
-  emitted it again from the top - the 1.0.24 `echo hiecho hi` case) is repaired after the stream
-  ends, by JSON structure alone.
-- **An unparseable tool call read as the model's own mistake.** `ERROR: invalid JSON arguments:
-  <text>` showed the text that ARRIVED with no marker that the harness could not parse it, and the
-  log kept only 60 characters - so "the model sent junk" and "the arguments were damaged on the way
-  in" looked identical, and a run re-issued the same call rather than looking at what had come
-  through. The model is now told the text arrived that way before any tool ran, and the whole
-  payload goes to the log.
-- **The suite runner blamed suites for the live bot's writes.** Its leak report fingerprints ignored
-  files, and a bot running in the same checkout rewrites `tinycmdr.log`, `sessions/` and
-  `web-sessions.json` by itself every minute: with the live bot up the report read "23 path(s),
-  written by 9 suite(s)" and every one of them was the bot's. It now probes the checkout's instance
-  lock - the same lock `tinycmdr status` reports - and labels the suite names as unreliable while a
-  bot is live.
-
-Added
-- Regression checks for both halves of the argument bug: repeated punctuation inside one call, a
-  repeated character inside one number, and a re-emitted call that must not double.
+### Fixed
+- **Streams:** the per-call set of argument fragments no longer drops every repeated fragment before parsing, execution or display; `grep -nE`, `head -5` and repeating punctuation now arrive intact.
+- **Streams:** nothing is dropped now - every fragment is appended, and the one true resend shape is repaired after the stream by JSON structure alone; dropping only an adjacent repeated fragment had turned `seq 1 2000` into `seq 1 20`.
+- **Streams:** an unparseable tool call is marked as damaged in transit rather than read as the model's own mistake, and the whole payload goes to the log.
+- **Test runner:** the suite leak report probes the checkout's instance lock and labels suite names unreliable while a bot is live, instead of blaming suites for the live bot's own writes.
 
 ## [1.0.27] - 2026-09-26
 
-Every lane - `--web`, `--cli`, `--once`, each verb - is a separate PROCESS over the same state
-files, and the write path was built for threads. This release folds in the durability batch that
-was still only in a scratch tree, so the published build is one line again.
+### Added
+- **CLI:** `tinycmdr tasks [--all] [--json]` prints the task ledger - counts, every open/in-progress/blocked item with its note and the last few finished ones - with no model call.
+- **Maintenance:** `maintenance/check-tree-clean.py` snapshots, runs and re-snapshots to prove a full gate run leaves the tree byte-identical.
+- **Tests:** the lock is proven across real processes, plus stronger atomic-write, spill and journal suites. (tests/test_cross_process.py)
 
-Fixed
-- **Concurrent writers lost each other's work.** The per-path lock was a `threading.RLock`, so
-  three processes each running `task add` all answered "OK: task #1 added" and the ledger held
-  ONE item; a stale web lane's save also clobbered the bot lane's model switches and the
-  in-memory state, and `state.json` counted one bump where three were asked for. The lock is now
-  an OS lock (`flock` / `msvcrt`, one file per path in the temp dir, bounded and never fatal)
-  taken inside the same `_path_lock`, and read-modify-write cycles on `tasks.json`, `notes.md`,
-  `state.json`, `config.json` and a user's own files serialize across processes. Overrides merge
-  instead of replacing the file, and the journal is written AFTER the save it describes (before,
-  a failed save left a revision that never landed and the next save reused the number).
-- **A failed save could shrink the file it was saving.** The handler used to fall back to a plain
-  write, so a denied rename, a full disk or a locked file turned a healthy ledger into a
-  truncated one - measured: a failed save of a 20-item ledger left 0 bytes and the next load
-  said "starting a fresh ledger", with no `.damaged-*` copy anywhere. The destination is never
-  opened for writing now: a sibling temp is written, fsynced and chmod'd to the destination's own
-  mode, renamed over it, and the rename is fsynced into the directory; on failure the old file is
-  byte-identical and the caller is TOLD. The temp name is per WRITER, not per process, so two
-  threads in one turn no longer collide on `<name>.tmp-<pid>`.
-- **The single-instance lock was a file beside the install**, which `rm` defeats: a second bot
-  could be started on the same token right after. On POSIX the lock is the install FOLDER's own
-  handle (a directory cannot be unlinked while it has contents); Windows keeps the file.
-- **Spill rotation deleted live data**: it pruned by age, so a file a current index row still
-  named could vanish, and a row whose file was gone stayed in the index as a dangling pointer.
-  Rotation now keeps every file a live row names, and dead rows drop off the index.
-- **An unknown word after the program name STARTED THE BOT.** `tinycmdr taks` fell through the
-  verb check into `run_webui`/`run_bot`: the agent came up, the terminal looked fine, and nobody
-  was answered. It now goes to the verb dispatcher, which names the word, prints the verb list
-  and exits 2.
-- **A page-only install could not survive its own startup.** `main` called `run_bot()`
-  unconditionally and that exits 2 on a missing token, so the page lane bound and was then killed
-  by the lane it never had; `doctor`/`validate_startup_config` also demanded `mattermost.url` and
-  `mattermost.allowed_users` for an install with no chat lane at all, so `doctor` exited 1. A chat
-  lane is optional now: the page lane holds its own process open and serves, a Telegram-only box
-  is not asked about Mattermost, and the "missing token" diagnostic still fires when the config
-  actually intends to run Mattermost. Measured: page-only install -> `doctor: no problems found`
-  (exit 0), `GET /api/health` -> `{"ok": true}`, process stays up.
-- The README promised commands the binary rejects: `tinycmdr steer <text>` (steering is a message
-  sent while a run is live - the run folds it in at its next step), `tinycmdr stop` (the live-run
-  cancel is `/stop`, in the CLI and in chat) and two `model` forms (`model list` and
-  `model <name>`; the real ones are `model` and `model use <name>`). The table says what the
-  binary accepts.
-
-Added
-- `tinycmdr tasks [--all] [--json]` - the task ledger as an operator reads it: counts, every
-  open/in-progress/blocked item with its note, and the last few finished ones. Never a model call.
-- `maintenance/check-tree-clean.py` - one command that proves a full gate run leaves the tree
-  byte-identical (snapshot, run, snapshot, report).
-- `tests/test_cross_process.py` - the lock proven across real processes, not threads - plus
-  stronger atomic-write, spill and journal suites.
+### Fixed
+- **Locking:** the per-path lock is an OS lock (`flock`/`msvcrt`) inside `_path_lock`, so read-modify-write serializes across processes; overrides merge instead of replacing and the journal follows the save it describes.
+- **Durability:** a save writes a sibling temp, fsyncs and chmods it to the destination's mode, renames it over and fsyncs the directory; on failure the old file stays byte-identical and the caller is told, with one temp per writer.
+- **Locking:** on POSIX the single-instance lock is the install folder's own handle, which `rm` cannot defeat; Windows keeps the file.
+- **Spill:** rotation keeps every file a live index row names and drops dead rows from the index, instead of pruning by age.
+- **CLI:** an unknown word after the program name goes to the verb dispatcher, which names the word, prints the verb list and exits 2, instead of starting the bot.
+- **Install:** a chat lane is optional - the page lane holds its own process open and serves, a Telegram-only box is not asked about Mattermost, and the missing-token diagnostic still fires when the config intends to run Mattermost.
+- **Docs:** the README table lists only commands the binary accepts, dropping `tinycmdr steer <text>`, `tinycmdr stop`, `model list` and `model <name>`.
 
 ## [1.0.26] - 2026-09-26
 
-Fixed
-- A tool call whose `arguments` were not valid JSON was replayed to the endpoint as-is, and
-  llama.cpp answers HTTP 500 for the WHOLE request ("Failed to parse tool call arguments as
-  JSON ... parse error at line 1, column 34"), so every later turn in that session died as "no
-  LLM endpoint answered" - measured on the live install, then reproduced against the live
-  endpoint (malformed: 500; the same call with valid JSON: 200; repaired to `{}`: 200). The
-  malformed blob is replaced with `{}` at the same choke point as the tool-pairing repair, named
-  in the log with the tool and the offending text, so a history written by an older build heals
-  on its next send instead of needing the session dropped.
-  When the arguments are merely WRAPPED - a ```json fence, prose around the object - the object
-  inside them is kept instead of discarded, so the call still runs with what it meant. Valid JSON
-  that is not an object is passed through: the tool rejects it, not the server.
-- The browser suite neither printed the "N passed, M failed" line `run_all.py` reads to tell a
-  graded run from a crash, nor had a budget that fits the macOS runner - so a run that COMPLETED
-  with one red check was reported as "died before its own summary", and three CI cycles went into
-  a check whose real story was invisible. It prints its counts now, waits 240s per whole run
-  inside a 600s suite deadline, and `run_all.py` carries a per-suite override
-  (`SLOW_SUITES = {"tests/test_webui_browser.py": 900.0}`): that suite takes 9.7s here and took
-  47.8s, 76.9s, 137.8s then 167.5s on four CI runs with identical inputs. A crash also reports on
-  stdout now, which is the stream the runner surfaces; the traceback alone goes to a log CI does
-  not upload.
-- The README contradicted itself about the fixed prompt overhead: the banner and the caching
-  bullet said ~4,150 tokens, the comparison table said ~5,300 measured. Both read ~5.3K now, which
-  is what the shipped static half actually costs (system prompt + the schemas a request sends), and
-  `tinycmdr doctor` prints the live number on any box.
+### Fixed
+- **Streams:** malformed tool-call `arguments` become `{}` at the tool-pairing choke point and are named in the log; wrapped args (a JSON fence or prose) keep the inner object and valid non-object JSON passes through.
+- **Test runner:** the browser suite prints its counts, waits 240s per whole run inside a 600s suite deadline, reports a crash on stdout, and `run_all.py` carries a `SLOW_SUITES` override of 900.0 for it. (tests/test_webui_browser.py)
+- **Docs:** both README mentions of the fixed prompt overhead now read the shipped static cost (~5.3K), and `tinycmdr doctor` prints the live number on any box.
 
 ## [1.0.25] - 2026-09-26
 
-Fixed
-- `tinycmdr setup` wrote `MATTERMOST_BOT_TOKEN`, `TELEGRAM_TOKEN` and `LLM_API_KEY` into `.env`;
-  the loader reads none of them, so an install configured through the wizard ran with a token
-  nothing consumed and reported "the bot never connects" - the symptom the code already warns
-  about for a missing token. Measured on a live install: `.env` carried `MATTERMOST_BOT_TOKEN`
-  beside the `TINYCMDR_MM_TOKEN` that was doing the work. The wizard writes `TINYCMDR_MM_TOKEN`
-  and `TINYCMDR_TG_TOKEN`; the model key gets the door it never had
-  (`TINYCMDR_LLM_API_KEY` -> `llm.api_key`, so the key can live in the one secrets file instead
-  of `config.json`, which is what `doctor` advises); `.env.example` documents both, and
-  `test_env_names.py` pins the rule - every name the app WRITES must be a name it READS.
-- `install-tinycmdr.sh` (Linux) died as exit 127 with NO output on a host without `getent`,
-  before it parsed an argument - so it could not print `--help` or its own "this installer is for
-  Debian/Ubuntu hosts" message (audit I6; the macOS installer got the guarded fallback, this file
-  kept the bare pipeline). It resolves the home with the same getent/dscl/`$HOME` chain now, and a
-  check runs `--help` against a `getent` that fails.
-- The Linux installer had no `--secrets-file`, so a reader handing over a KEY=VALUE file by path
-  got a different answer per platform - macOS and Windows both accept one. It reads the named file
-  before the lane decision, refuses a path that does not exist by name, and the package's own
-  `install/fleet-secrets.env` stays the default.
-- The Windows installer asked for the page token with the generated value as the prompt's default
-  and printed it in the summary, so the token landed in the install transcript
-  (`%TEMP%\tinycmdr-install.log`) - the leak both Unix installers closed in 1.0.24. It is minted
-  silently, written to `.env` (0600), and the summary says where to read it. Verified on a real
-  Windows 11 host: exit 0, `config.json` and `.env` written, one `TINYCMDR_MM_TOKEN` line, and the
-  page token absent from stdout, stderr, the transcript and `config.json` while all of them name
-  `TINYCMDR_WEB_TOKEN`. `-SkipTask -NoPath` withheld the task and the PATH entry, and the
-  `config.json` ACL was the user + Administrators + SYSTEM.
-
-- `doctor` reported `llm.api_key is set in config.json - .env is the safer home` when that value
-  was the shipped placeholder `"none"`, so every install that never set a key was warned about a
-  secret it does not have. The placeholder no longer counts; a real key still gets the note.
+### Fixed
+- **Setup:** the wizard writes `TINYCMDR_MM_TOKEN` and `TINYCMDR_TG_TOKEN` instead of unread names, the model key gets `TINYCMDR_LLM_API_KEY` -> `llm.api_key`, and `.env.example` documents both. (tests/test_env_names.py)
+- **Installer:** `install-tinycmdr.sh` resolves the home with the same getent/dscl/`$HOME` chain as the macOS installer, so it no longer dies exit 127 with no output without `getent`; a check runs `--help` against a failing `getent`.
+- **Installer:** the Linux installer accepts `--secrets-file`, reading the named file before the lane decision, refusing a missing path by name, and keeping `install/fleet-secrets.env` as the default.
+- **Installer:** the Windows installer mints the page token silently, writes it to `.env` (0600) and points the summary at it, instead of printing it in the prompt and transcript.
+- **Doctor:** the shipped placeholder `none` no longer counts as a live `llm.api_key`, so installs without a key are not warned; a real key still gets the note.
 
 ## [1.0.24] - 2026-09-26
 
-The 2026-09-26 audit's Phase 1 items. The installers keep 1.0.22/1.0.23's behaviour (the page
-and endpoint questions, the Telegram lane, the Mattermost host:port split, the guard against
-taking a registration another install owns); the audit's installer fixes apply on top of it.
-
-### Envelope
-- Budget was `max(4000, window − 7000 − max_tokens)`, ignoring the static overhead, and
-  `max_tokens` was sent unclamped: an 8,192-token endpoint received a 9,275-token payload and a
-  16,384-token completion request. Static overhead is measured once per window; `reply =
-  min(llm.max_tokens, window // 4)`, `budget = max(1024, window − static − reply)` — 19,254 at
-  32,768 where the old formula gave 9,384. `REPLY_HEADROOM` is gone; `Agent._envelope` is the one
-  computation, read by `_compact`, `_force_shrink` and the request path (`test_envelope.py`).
-- A window below 8,192 was not refused. Now refused with the arithmetic (window, static, reply,
-  budget) on stdout; below 16,384 it runs and warns. `llm.max_context_tokens` overrides; an
-  endpoint reporting no window falls back to the configured number, then to a named assumed one.
-- The budget was measured against the whole payload, counting the system prompt twice, so every
-  compaction decision was 3,012 tokens optimistic about what it freed. Measured against the
-  conversation (`_conversation_token_est`).
-- A number in `llm.max_context_tokens` lost to the served window. It is a ceiling:
-  `min(explicit, window − static − reply)`.
-- Memory caps (notes 8,000, fetch 12,000, tool output 10,000 chars, 20 exchanges) ignored the
-  window: an 8,000-char notes block was most of a 16,384-token payload. Now
-  `min(configured, window // 8)`; `history_exchanges` follows the same envelope.
-- The envelope was invisible in operator output. `status`, `doctor`, `health` and the banner print
-  `window · static · reply · budget · remaining`; `doctor` exits non-zero below the minimum.
-- `ps aux` was not digested: 190,499 chars / 56,029 est-tokens entered the context whole. Now 41
-  lines / ~2,072 tokens; a bare `ps` counts at a command position, so `grep -i ps file` passes.
-
-### Durability
-- `atomic_write_text` fell back to a plain write when the replace failed, turning a denied rename
-  or ENOSPC into the zero-byte or half-written file it exists to prevent (measured: a 20-item
-  ledger → 0 bytes). It now retries under a second sibling temp and raises; the previous file stays
-  byte-identical and the caller is told (`test_atomic_write.py`).
-- Writes did not preserve the destination's mode. The temp is `fchmod`ed to it (0600 for a new
-  file) before `os.replace`, so a secret cannot become world-readable and a 0600 state file stays
-  0600.
-- Non-atomic writers remained in tool-output spill, the procedure census (one fixed `.tmp` name
-  shared by concurrent writers), `update` replacing the live build, `create_tool`, and
-  `tool_remember`'s two `write_text` sites. All go through `atomic_write_text`.
-- A `tools/*.py` calling `sys.exit()` at import ended the process: `SystemExit` is a
-  `BaseException`, so the loader's `except Exception` missed it. The loader catches `BaseException`,
-  re-raises a stop, and logs the file and type; `create_tool` unlinks the file when its reload
-  refuses it (`test_dropin_tools.py`).
-
-### Guards
-- Recursive deletes were ungated (`rm -rf /etc`, `rm --recursive --force /`, `find / -delete`,
-  `find / -exec rm -rf {} +`): the patterns required `r` and `f` in one flag word before a bare
-  `/`. The rule reads the flags in any order and spelling and the target — whole tree refused,
-  named directory confirmed (`test_guard_battery.py`, 64 must-gate / 24 must-allow).
-- False positives: `dd if=/dev/zero of=/dev/null`, `ls /sbin/mkfs*` and `grep -rn mkfs` were
-  refused. Allowed again.
-- The Windows machine-verb class (`taskkill`, `diskpart /s`, `takeown`, `icacls`,
-  `net user … /add`, `New-LocalUser`, `schtasks /delete`, `Set-ExecutionPolicy`, `Stop-Service`,
-  `Stop-Process`, `reg delete`, `Clear-EventLog`, `wmic shadowcopy delete`, `git reset --hard`,
-  `git clean -xfd`) was ungated. Now in the confirm tier.
-- PowerShell aliases and short forms were not expanded: `ri -r -fo C:\x`, `rm -r -fo C:\x`,
-  `gci C:\x | ri -Recurse` passed. Now gated; `-e`/`-ec`/`-EncodedCommand` is refused only with a
-  base64-looking argument, so a sentence that mentions it is allowed.
-- The file door and the shell door disagreed: `tool_write_file`/`tool_edit_file` replaced
-  `notes.md`/`tasks.json` with no gate while `printf … > notes.md` was stopped. Both run the same
-  decision (one prompt).
-- A `.tool.json` manifest's command skipped the shell tier. It walks it now, and an absolute-tier
-  command is refused at LOAD.
-- A `config.json` that replaced the shipped guard lists silently downgraded the tiers. Lists carry
-  a version (v3), `<list>_extra` appends, `doctor` and the log name every missing pattern and
-  `doctor` exits non-zero on them.
-- An endpoint error body echoing the API key reached the fatal notes, `usage['attempts']`, the log
-  and chat. `scrub()` runs in `_http_body` and on recorded attempts (`test_scrub.py`).
-- The local page accepted any `Host`/`Origin` and read the body before auth, so a cross-origin
-  POST without a token reached shell-backed routes. 403 unless the Host is loopback/configured and
-  the Origin is absent or same-origin; the body is read under a deadline; the port rebinds
-  (`test_webui.py`).
-
-### Turn engine
-- The idle timer covered the prefill, so a healthy long prompt was declared wedged. The first byte
-  is bounded by `request_timeout`; `stream_idle_seconds` applies between chunks only.
-- A stream that broke after the first delta was returned as the model's complete answer. A reader
-  error is fatal unless a terminal chunk or `[DONE]` arrived → `StreamFailed` → the existing
-  same-endpoint retry.
-- Streamed tool calls without an `index` all keyed on `0`, merging distinct calls (`echo A` plus
-  `echo B` executed `echo AB`). Keyed by `index`, else `id`, else a new slot on a fresh name;
-  byte-identical repeats are dropped.
-- A 400 naming `stream_options` or `chat_template_kwargs` was classified fatal. The field is
-  dropped and the same endpoint retried once.
-- `llm.allow_cloud_fallback=false` did not cover the primary of the failover chain, so a
-  privacy-pinned local choice could reach a hosted endpoint. Applied to the chosen endpoint too.
-- Locality was judged by string shape, so `127.1`, `[::1]`, `0.0.0.0`, `*.local` and LAN names
-  were remote. Now classified by resolution.
-- `OperatorStop` during tool execution escaped `Agent.run()`: the answer was never posted, the
-  progress line stayed open and the queued message was dropped. Caught at the turn and at the lane
-  boundary (`BaseException`).
-- The repeat guard signed the first 400 characters of the arguments, so two calls differing later
-  collided. The full canonical arguments are hashed (`test_stream_calls.py`).
-
-### Install, Unix/macOS
-- A Linux user-mode install aborted at the unit — `~/.config/systemd/user` is never created by
-  systemd — after the venv, `config.json` and `.env` were written. The installer creates the
-  directory (`test_installer_unix.py`).
-- `sudo bash install/uninstall-tinycmdr-macos.sh`, the documented removal, removed nothing:
-  `sudo` resets `HOME` to `/var/root` and every path derived from `$HOME`. Both installers resolve
-  the INVOKING user (`SUDO_USER`, else the account behind the uid) and that account's home; a
-  `--label` install records its label and the removal reads it back; a removal that finds nothing
-  says so and names the paths it checked.
-- The release zip wrote permission bits without the file-type bits, so Finder extracted
-  `INSTALL-MACOS.command`, `UNINSTALL-MACOS.command` and `tinycmdr` as `-rw-r--r--`. One
-  `write_zip()` writes Unix regular-file modes, and `check-package-modes.py` extracts with `ditto`
-  to prove it.
-- The package omitted `maintenance/restart-tinycmdr-macos.sh` although the installer and
-  `install/README-macos.md` print it. Shipped, with a build-time `SHIP`/`ALLOWED_MAINTENANCE` gate.
-- `config.json` (which can hold a live `llm.api_key`) was world-readable beside a 0600 `.env`, and
-  the install log held the page token in cleartext. Both installers write `config.json`, `.env` and
-  the log 0600 and never echo the token.
-- `--no-web` did not close the port on Linux — the token-less branch passed `--web` with no token
-  minted, leaving the shell-backed HTTP API open — and `--web-port` was ignored on an update. Both
-  are decided inside the argument loop.
-- On a Mac whose only interpreter was 3.9, `-y` could not complete: the fallback sat behind a
-  terminal prompt that ignored `--yes`. `-y` consents to the fetch, `--install-python` beats
-  `--python`, and 3.9 is refused by name with the band on both Unix installers.
-- `--secrets-file` carrying `TINYCMDR_MM_TOKEN` installed "WITHOUT a chat account": the lane was
-  decided before the file was read, and `.env` got an empty `TINYCMDR_MM_TOKEN=` first, which the
-  build keeps over the file's real value. The file is read before the lane decision; managed keys
-  are written once.
-- `chown "$RUN_USER:$RUN_USER"` failed with "illegal group name" wherever the primary group is not
-  the username (AD/LDAP/SSSD, `useradd -N`, `USERGROUPS_ENAB=no`, macOS `staff`), ending a Linux
-  install right after `config.json`. The primary group comes from `id -gn`, the unit's `Group=`
-  follows it, and a chown that cannot work is a named warning.
-- `--help` truncated its own header, so `--no-path` and `--force-python` were documented nowhere,
-  and a headless run printed `/dev/tty: Device not configured`. `usage()` prints the header to its
-  last line and the probe is quiet.
-
-### Install, Windows
-- A fleet kit's `as_service: true` passed the elevation guard, which ran before
-  `fleet-defaults.json` could set `-AsService`, and died in the bare fallback
-  `Register-ScheduledTask` — files, venv, `config.json` and `.env` written, `INSTALL FAILED`,
-  exit 2. Elevation is re-checked after the fleet defaults and the fallback registration is caught.
-  Measured on a non-elevated logon: exit 1, both the Administrator route and the non-admin lane
-  named, nothing written.
-- `-AsService` on an install with no chat lane and the page off registered nothing and said
-  nothing. The summary names the reason and the switch that changes it.
-- PATH add and remove used `SetEnvironmentVariable`, which expands other installers'
-  `%JAVA_HOME%\bin`-style entries on read and stores the expansion as `REG_SZ`. Both edit
-  `HKCU\Environment` directly (`DoNotExpandEnvironmentNames` read, `ExpandString` write).
-- `-VerifyOnly` installed Python 3.12 before verifying. It probes the install's own interpreter and
-  writes nothing.
-- The generated launchers were ASCII-encoded with the absolute install path baked in, so a
-  non-ASCII profile path could break autostart. They are path-free (`%~dp0`,
-  `WScript.ScriptFullName`) and ASCII by construction.
-- The documented uninstall omitted `-ExecutionPolicy Bypass` and hardcoded
-  `%USERPROFILE%\tinycmdr`. The README shows the wrapper with `-InstallDir`.
-- `tinycmdr restart` demanded elevation on every install, including the Startup-shortcut lane
-  where no task exists to satisfy it. Elevation is required only when a scheduled task supervises
-  this install.
-- `Stop-TinycmdrProcesses` could not see `tinycmdr-supervise.py` or a `wscript.exe` launcher, and
-  the folder removal was a single `Remove-Item`. Both fixed.
-- `tinycmdr.cmd`'s Python fallback could pick the Microsoft Store stub, the fallback download was
-  hardcoded to amd64, and `-SkipTask` withheld the PATH entry. Fixed, with the PATH removal moved
-  after the folder check.
-- Verified at runtime on a real Windows host (Windows 11 Pro 26200, OpenSSH 9.5, Python 3.12.10):
-  40 checks, 0 failures, including a plain install from a NON-elevated logon.
-  `test_installer_windows.py` pins the shipped text.
-
-### Gate
-- No runner, no CI, 8 of 45 suites red on the author's Mac, and `python -m pytest` lines in
-  docstrings that never worked. Added `tests/run_all.py` (per-suite subprocess, per-file timeout,
-  non-zero on any failure or skip), `requirements-test.txt`, and one CI workflow (macOS + Linux run
-  the gate, Windows runs the pure-Python suites).
-- Suites that returned 0 with no browser, node or rich now exit 77, which the gate counts as red.
-- `check-readme-assets.py` shelled out to `sha256sum` (absent on a stock macOS box); it hashes
-  in-process.
-- The suites wrote `tinycmdr.log` and the task journal into the checkout. `TINYCMDR_LOG_FILE`
-  redirects the log and the journal is written beside the ledger.
-- The first CI run found three suites that only passed on the author's Mac: `test_verbs.py` aborted
-  on Linux as an unprivileged user (`_verb_restart` refuses with "restart needs root" before the
-  helper is called, so the helper read back as `''` and `os.path.samefile('')` threw, dropping
-  every check after it); `test_supervise_ready.py`'s 30 s readiness budget is too short on the
-  macOS runner (a suite that takes 0.8 s here took 36 s there); `test_installer_unix.py`'s macOS
-  case omitted `--no-launchd` off macOS, where that installer installs files only. Fixed in the
-  tests; the suite also passes on Ubuntu 22.04 with Python 3.10.12.
-- Suites added: `test_envelope.py`, `test_prefix_stability.py`, `test_guard_battery.py`,
-  `test_stream_calls.py`, `test_atomic_write.py`, `test_installer_unix.py`,
-  `test_installer_windows.py`.
+### Added
+- **Envelope:** `ps aux` is digested to 41 lines (~2,072 tokens) instead of entering the context whole; a bare `ps` counts at a command position so `grep -i ps file` passes.
+- **Test runner:** `tests/run_all.py` runs each suite in a subprocess with a per-file timeout, exits non-zero on failure or skip, and adds `requirements-test.txt` plus one CI workflow (macOS/Linux the gate, Windows pure-Python).
+- **Tests:** suites added: `tests/test_envelope.py`, `tests/test_prefix_stability.py`, `tests/test_guard_battery.py`, `tests/test_stream_calls.py`, `tests/test_atomic_write.py`, `tests/test_installer_unix.py`, `tests/test_installer_windows.py`.
 
 ### Changed
-- `llm.max_tokens` is a ceiling, not what is sent: the reply is clamped per request unless a caller
-  names one deliberately (the forced wrap-up and the mid-think escalation).
-- Disclosed tool schemas count against the budget, so 100 tools lower the messages budget instead
-  of riding free. `agent.tool_disclosure` is unchanged; the tool index still bounds the prompt.
+- **Envelope:** `status`, `doctor`, `health` and the banner print `window · static · reply · budget · remaining`; `doctor` exits non-zero below the minimum window.
+- **Envelope:** `llm.max_tokens` is a ceiling, not what is sent: the reply is clamped per request unless a caller names one deliberately (the forced wrap-up and the mid-think escalation).
+- **Envelope:** disclosed tool schemas count against the budget, so more tools lower the messages budget instead of riding free; `agent.tool_disclosure` is unchanged and the tool index still bounds the prompt.
+- **Install:** the documented Windows uninstall shows `-ExecutionPolicy Bypass` and `-InstallDir` instead of a hardcoded `%USERPROFILE%\tinycmdr`.
 
-### Known, deferred
-- The README's "~4.1K token overhead" predates this measurement: the static half is 5,236–5,322
-  tokens as shipped. Trimming it, with the doc-number drift, is Phase 2.
-- The harness-side Telegram ask door: the installers collect a Telegram token, but `has_human` is
-  never set, so the in-run ask path is unreachable. Wire it or remove it.
+### Fixed
+- **Envelope:** budget is `max(1024, window - static - reply)` with `reply = min(llm.max_tokens, window // 4)` and overhead counted once per window; `Agent._envelope` is the one computation for compaction and requests. (tests/test_envelope.py)
+- **Envelope:** a window below 8,192 is refused with the arithmetic on stdout and below 16,384 warns; `llm.max_context_tokens` overrides and an endpoint with no reported window falls back to the configured then a named assumed number.
+- **Envelope:** the budget is computed against the conversation (`_conversation_token_est`) instead of the whole payload, which had counted the system prompt twice.
+- **Envelope:** a number in `llm.max_context_tokens` is a ceiling: `min(explicit, window - static - reply)`, so it no longer loses to the served window.
+- **Envelope:** memory caps (notes 8,000, fetch 12,000, tool output 10,000 chars, 20 exchanges) are `min(configured, window // 8)`; `history_exchanges` follows the same envelope.
+- **Durability:** `atomic_write_text` retries under a second sibling temp and raises instead of falling back to a plain write, leaving the previous file byte-identical and telling the caller. (tests/test_atomic_write.py)
+- **Durability:** writes `fchmod` the temp to the destination's mode (0600 for a new file) before `os.replace`, so a secret cannot become world-readable.
+- **Durability:** tool-output spill, the procedure census, `update`, `create_tool` and `tool_remember`'s two write sites now all go through `atomic_write_text`.
+- **Durability:** the drop-in loader catches `BaseException` so a `tools/*.py` calling `sys.exit()` at import cannot end the process, and `create_tool` unlinks a file whose reload it refuses. (tests/test_dropin_tools.py)
+- **Guards:** recursive deletes are gated by flags in any order and spelling and by target - a whole tree is refused and a named directory confirmed (`rm -rf /etc`, `find / -delete`, `find / -exec rm -rf {} +`). (tests/test_guard_battery.py)
+- **Guards:** `dd if=/dev/zero of=/dev/null`, `ls /sbin/mkfs*` and `grep -rn mkfs` are allowed again after being false positives.
+- **Guards:** the Windows machine-verb class (e.g. `taskkill`, `diskpart /s`, `net user ... /add`, `schtasks /delete`, `Stop-Service`, `reg delete`, `git reset --hard`, `git clean -xfd`) is now in the confirm tier.
+- **Guards:** PowerShell aliases and short forms (`ri -r -fo C:\x`, `gci C:\x | ri -Recurse`) are gated, and `-e`/`-ec`/`-EncodedCommand` is refused only with a base64-looking argument.
+- **Guards:** `tool_write_file`/`tool_edit_file` and the shell redirection path run the same gate (one prompt) instead of the file door bypassing it.
+- **Guards:** a `.tool.json` manifest's command now walks the shell tier, and an absolute-tier command is refused at LOAD.
+- **Guards:** guard lists carry a version (v3), `<list>_extra` appends, and `doctor` and the log name every missing pattern with `doctor` exiting non-zero on them, so a `config.json` cannot silently downgrade the tiers.
+- **Turn engine:** the idle timer no longer covers the prefill - the first byte is bounded by `request_timeout` and `stream_idle_seconds` applies between chunks only.
+- **Turn engine:** a reader error is fatal unless a terminal chunk or `[DONE]` arrived, raising `StreamFailed` into the existing same-endpoint retry instead of returning a broken stream as the complete answer.
+- **Turn engine:** streamed tool calls are keyed by `index`, else `id`, else a new slot on a fresh name instead of all keying on `0`; byte-identical repeats are dropped.
+- **Turn engine:** a 400 naming `stream_options` or `chat_template_kwargs` drops the field and retries the same endpoint once instead of being classified fatal.
+- **Turn engine:** `llm.allow_cloud_fallback=false` is applied to the chosen endpoint too, not only the failover chain.
+- **Turn engine:** endpoint locality is classified by resolution, so `127.1`, `[::1]`, `0.0.0.0`, `*.local` and LAN names are no longer judged remote by string shape.
+- **Turn engine:** `OperatorStop` during tool execution is caught at the turn and the lane boundary (`BaseException`), so the answer is posted and the progress line closed.
+- **Turn engine:** the repeat guard hashes the full canonical arguments instead of the first 400 characters, so two calls differing later no longer collide. (tests/test_stream_calls.py)
+- **Install:** the Unix installer creates `~/.config/systemd/user` for a Linux user-mode install, which systemd never creates. (tests/test_installer_unix.py)
+- **Install:** both installers resolve the invoking user (`SUDO_USER`, else the account behind the uid) and its home, so the documented `sudo` removal works; a `--label` install records its label and the removal reads it back.
+- **Install:** `write_zip()` writes Unix regular-file modes, so Finder no longer extracts `INSTALL-MACOS.command`, `UNINSTALL-MACOS.command` and `tinycmdr` as `-rw-r--r--`.
+- **Install:** `maintenance/restart-tinycmdr-macos.sh` ships in the package with a build-time `SHIP`/`ALLOWED_MAINTENANCE` gate.
+- **Install:** `--no-web` closes the port on Linux and `--web-port` is honoured on update, both decided inside the argument loop.
+- **Install:** `-y` consents to the Python fetch, `--install-python` beats `--python`, and 3.9 is refused by name with the supported band on both Unix installers.
+- **Install:** `--secrets-file` is read before the lane decision and managed keys are written once, so a file carrying `TINYCMDR_MM_TOKEN` installs with a chat lane instead of `WITHOUT a chat account`.
+- **Install:** the primary group comes from `id -gn` and the unit's `Group=` follows it, replacing a `chown "$RUN_USER:$RUN_USER"` that failed with an illegal-group-name error on AD/LDAP/SSSD or macOS.
+- **Install:** `--help` prints its header to the last line, documenting `--no-path` and `--force-python`, and the headless probe is quiet.
+- **Install:** elevation is re-checked after fleet defaults and the fallback registration is caught, so a fleet kit's `as_service: true` under a non-elevated logon exits 1 instead of dying in `Register-ScheduledTask`.
+- **Install:** an install with no chat lane and the page off names the reason and the switch that changes it.
+- **Install:** PATH add and remove edit `HKCU\Environment` directly (`DoNotExpandEnvironmentNames` read, `ExpandString` write) instead of using `SetEnvironmentVariable`.
+- **Install:** `-VerifyOnly` probes the install's own interpreter and writes nothing instead of installing Python 3.12.
+- **Install:** the generated launchers are path-free (`%~dp0`, `WScript.ScriptFullName`) and ASCII by construction.
+- **Install:** `tinycmdr restart` requires elevation only when a scheduled task supervises this install.
+- **Install:** `Stop-TinycmdrProcesses` sees `tinycmdr-supervise.py` and `wscript.exe` launchers, and folder removal is no longer a single `Remove-Item`.
+- **Install:** `tinycmdr.cmd`'s Python fallback no longer picks the Microsoft Store stub, the fallback download is arch-aware, `-SkipTask` no longer withholds the PATH entry, and PATH removal runs after the folder check.
+- **Test runner:** suites that return 0 with no browser, node or rich now exit 77, which the gate counts as red.
+- **Test runner:** `check-readme-assets.py` hashes in-process instead of shelling out to `sha256sum`, absent on a stock macOS box.
+- **Test runner:** `TINYCMDR_LOG_FILE` redirects the log and the task journal is written beside the ledger, so suites no longer write into the checkout.
+- **Test runner:** `tests/test_verbs.py` no longer aborts unprivileged, `tests/test_supervise_ready.py` allows a slower runner, and `tests/test_installer_unix.py` omits `--no-launchd`. (tests/test_verbs.py, tests/test_supervise_ready.py, tests/test_installer_unix.py)
+
+### Security
+- **Guards:** `scrub()` in `_http_body` and on recorded attempts keeps an endpoint error body that echoes the API key out of the fatal notes, `usage['attempts']`, the log and chat. (tests/test_scrub.py)
+- **Guards:** the local page returns 403 unless Host is loopback/configured and Origin is absent/same-origin, reads the body under a deadline and rebinds the port, so a tokenless cross-origin POST cannot reach shell routes. (tests/test_webui.py)
+- **Install:** both installers write `config.json`, `.env` and the install log 0600 and never echo the page token.
+
+### Notes
+- The Windows installer was verified at runtime on a real Windows 11 host (40 checks, 0 failures), including a non-elevated install; `tests/test_installer_windows.py` pins the shipped text.
+- The README's ~4.1K-token overhead figure predates the measurement (the static half is 5,236-5,322 tokens as shipped); trimming it and the doc-number drift is Phase 2.
+- The harness-side Telegram ask door is unreachable because the installers collect a Telegram token but `has_human` is never set; wire it or remove it.
 
 ## [1.0.23] - 2026-09-26
 
-One install can no longer take another one's autostart, and a fresh config no longer inherits an
-endpoint that does not exist.
-
-Fixed
-- A second install silently took the first one's autostart. A launchd label, a systemd unit name
-  and a Windows task/Startup name all belong to the USER, not to a folder, so a run that kept the
-  default name booted out whatever was already registered under it - and the agent it displaced
-  stayed unloaded, which reads exactly like "the bot is gone and its page answers nothing"
-  (measured on a fleet macOS host, where test installs sharing the default label left the real
-  agent unregistered). All three installers now detect a foreign registration under the name they
-  are about to use and refuse, naming the switch to give this install its own: `--label`,
-  `TINYCMDR_SERVICE`, `-TaskName`.
-- A fresh install kept `config.example.json`'s placeholder fallback (`https://api.example.com/v1`
-  with `MY_PROVIDER_API_KEY`, a variable nobody has). It now writes `llm.fallbacks: []` unless
-  this run was given endpoints, and an update still keeps the host's own.
-- The Mattermost host field accepted anything: a pasted `https://chat.example.com/` was stored
-  verbatim in a field documented as the host alone. All three installers split a pasted scheme,
-  `user@`, path and `:port` into the host and port keys.
+### Fixed
+- **Install:** all three installers detect a foreign registration under the launchd label, systemd unit or Windows task/Startup name they are about to use and refuse, naming `--label`, `TINYCMDR_SERVICE` or `-TaskName` to give it its own.
+- **Install:** a fresh install writes `llm.fallbacks: []` instead of keeping `config.example.json`'s `https://api.example.com/v1` / `MY_PROVIDER_API_KEY` placeholder, while an update keeps the host's own endpoints.
+- **Install:** all three installers split a pasted Mattermost value's scheme, `user@`, path and `:port` into the host and port keys.
 
 ## [1.0.22] - 2026-09-26
 
-Every installer asks the same questions, and every install reports what can reach its page.
+### Added
+- **Setup:** all three installers ask `Add another endpoint?` and store an `llm.fallbacks` entry (`base_url`, `model`, `/model` alias) with its key in `.env` under a generated name; Windows also takes a repeatable `-AddEndpoint` switch.
+- **Install:** the macOS and Linux installers ask for Telegram as Windows does - hidden token, numeric id and the note that Mattermost wins when both tokens are set.
+- **Install:** all three installers ask whether the page should be reachable from other machines and write the answer into `web.host` (`0.0.0.0` or `127.0.0.1`), settable in scripted runs with `--web-host`/`-WebHost`.
+- **Install:** after the agent starts the installer probes this machine's LAN address and reports the address a browser would use, naming the reason when only loopback answers (`web.host` is `127.0.0.1`, or the host firewall).
 
-Added
-- `Add another endpoint?` in all three interactive setups. Each answer becomes an
-  `llm.fallbacks` entry (`base_url`, `model`, and an optional `/model` alias) and its key
-  goes to `.env` under a generated name that entry's `api_key_env` points at, so a
-  fallback's key never lands in config.json. The Windows installer also takes them as
-  switches: `-AddEndpoint "<base_url>|<model>|<alias>|<key>"`, repeatable.
-- Telegram in the macOS and Linux installers, asked the way the Windows one asks it: the
-  token (hidden), your numeric id, and the note that Mattermost wins when both tokens are
-  set so the Telegram lane is a second process.
-- `Should the page be reachable from other machines on your network?` on all three, and
-  the answer is WRITTEN into `web.host` (`0.0.0.0` or `127.0.0.1`) instead of being left
-  empty for the build to interpret. Scripted runs set it with `--web-host` / `-WebHost`.
-- The installer now reports the address a browser would actually use: after the agent
-  starts it probes this machine's own LAN address, not just loopback, and names the reason
-  when only loopback answers - `web.host` is `127.0.0.1`, or the host firewall (printing
-  the macOS `socketfilterfw` commands or the Windows `New-NetFirewallRule` line).
-
-Fixed
-- A fresh Linux install wrote `web.host` as `""`, which the build reads as `0.0.0.0`, while
-  the installer's own summary said `127.0.0.1`: the bind address is now explicit, reported,
-  and the same on all three platforms.
-- The Windows installer overwrote `web.host` with `127.0.0.1` on every run, including an
-  update of a host whose page was reachable on purpose. It now only sets what it was told.
-- The macOS page report was reachable-loopback-only in appearance: `--no-start` and a page
-  bound to every interface looked identical in the output.
+### Fixed
+- **Install:** the Linux installer writes an explicit `web.host` and reports the same bind address as the other platforms, instead of writing `""` (read as `0.0.0.0`) while its summary said `127.0.0.1`.
+- **Install:** the Windows installer overwrites `web.host` only when told, so an update no longer forces a deliberately reachable page back to `127.0.0.1`.
+- **Install:** the macOS page report distinguishes `--no-start` from a page bound to every interface instead of looking loopback-only.
 
 ## [1.0.21] - 2026-09-26
 
-The installers ask for what a bot cannot run without, and the launcher stops shipping with
-Windows line endings.
+### Fixed
+- **Install:** the macOS installer asks before writing for the Mattermost server, user id, model endpoint, model id and, when not local, its API key; it shows a summary and installs only on `Install now?`, refusing a token with no server.
+- **Install:** the Linux installer asks the same five questions before the lane is chosen, refuses a Mattermost token with no server, never proposes a placeholder default, and no longer warns `template default` for `127.0.0.1:8081`.
+- **Install:** the Mac wrapper falls back to `~/.local/bin` and adds one marked `export PATH` line to `~/.zshrc`, with the summary and uninstaller naming and removing the real location.
+- **Installer:** `build-package.py` normalises any shipped script with a shebang to LF and `.gitattributes` pins the launcher, so the extensionless `tinycmdr` launcher no longer ships CRLF and the verb does not die at once.
+- **Install:** a fresh install no longer keeps the example's `REPLACE_WITH_YOUR_MATTERMOST_USER_ID` in `mattermost.allowed_users`, and the empty-list warning reads the installed file and does not fire with no chat lane.
 
-Fixed
-- The macOS installer asked for the Mattermost token and nothing else, so an install from the
-  one-line door came out dead: `mattermost.url` left at `chat.example.com`, an allowlist holding the
-  example's `REPLACE_WITH_YOUR_MATTERMOST_USER_ID`, `llm.base_url` on loopback and no model key.
-  It now asks - before it writes anything - for the Mattermost server, your user id, the model
-  endpoint, the model id and, when the endpoint is not on this machine, that endpoint's API key,
-  shows a summary, and installs only on `Install now?`. A token with no server address is a refusal
-  naming the switch to pass, not an install that exits at its first start.
-- The Linux installer asked nothing and installed with the example's documentation endpoint
-  (`192.0.2.10`, TEST-NET-1) as its model, so the agent it left behind could not answer a single
-  turn. It asks the same five questions before the lane is chosen, refuses a Mattermost token with
-  no server, never proposes a placeholder as a default, and the "template default" warning no longer
-  fires on `127.0.0.1:8081` - a llama.cpp on the box is a choice, not a leftover.
-- The verb was never put on PATH on a Mac: the wrapper was written only when `/usr/local/bin` was
-  writable, which on a stock Mac it is not. It now falls back to `~/.local/bin`, adds one marked
-  `export PATH` line to `~/.zshrc` when that folder is not already on the path, and the summary and
-  the uninstaller both name the real location. The uninstaller removes that wrapper and that line.
-- The extensionless `tinycmdr` launcher shipped with CRLF endings in every shape. It is the file
-  the PATH wrapper execs, so the verb died on a Mac or Linux with
-  `set: -
-: invalid option` as soon as it resolved. `build-package.py` normalised `.sh` and
-  `.command` only; it now normalises any shipped script with a shebang, whatever its name, and
-  `.gitattributes` pins the launcher to LF so a Windows checkout cannot put it back.
-- A fresh install kept the example's `REPLACE_WITH_YOUR_MATTERMOST_USER_ID` in
-  `mattermost.allowed_users` while warning that the list was empty. The placeholder is gone, the
-  warning reads the installed file, and neither fires on an install with no chat lane.
-
-Changed
-- `-y`/`--yes` and `TINYCMDR_ASK` for both Unix installers: a scripted run asks nothing, and a run
-  with no terminal takes the switches and the defaults.
-- README and `install/README-macos.md`: the questions, where the verb lands, and a model section
-  that no longer claims a cloud default the installer never had.
+### Changed
+- **Install:** `-y`/`--yes` and `TINYCMDR_ASK` let a scripted or terminal-less Unix install run without questions, taking the switches and defaults.
+- **Docs:** the README and `install/README-macos.md` document the installer questions, where the verb lands, and a model section that no longer claims a cloud default.
 
 ## [1.0.20] - 2026-09-26
 
-Removing it is now as visible as installing it.
+### Fixed
+- **Install:** the macOS installer copies both double-clickable `.command` removal doors into the install dir, so removal no longer requires a script path inside the folder a reader is told to delete.
+- **Install:** every installer's closing summary names the installed uninstaller instead of the source copy's, and the Windows summary mentions removal.
+- **Install:** `UNINSTALL-MACOS.command` asks for a password only when a root-owned `/usr/local/bin` launcher makes it necessary.
 
-Fixed
-- The installed folder carried no removal door. The macOS installer copied the package into the
-  install dir but not the two double-clickable `.command` files, so after an install the only way
-  out was a script path inside the folder a reader is told to delete. Both doors now ride in the
-  install dir.
-- Every installer's closing summary named the SOURCE copy's uninstaller - the folder a reader
-  unpacks and then deletes - instead of the installed one, and the Windows summary never
-  mentioned removal at all.
-- `UNINSTALL-MACOS.command` asked for a password on every run, including a user-mode install
-  that owns nothing root. It now asks only when a root-owned launcher in `/usr/local/bin` makes
-  it necessary.
-
-Changed
-- README: a "Removing it" section, one line per platform.
+### Changed
+- **Docs:** the README gains a Removing-it section, one line per platform.
 
 ## [1.0.19] - 2026-09-26
 
-The download page stops carrying a version, the Mac stops defaulting to a port of its own, and the
-shipped Windows uninstaller stops looking in a folder that no longer exists.
+### Added
+- **Maintenance:** `maintenance/check-readme-assets.py` fails when a README download name is not in the build or on the release, and `maintenance/release.sh` runs a cut (build, publish, aliases, that check).
 
-Fixed
-- `install\uninstall-tinycmdr.ps1` defaulted `-InstallDir` to `C:\tinycmdr`, the old machine-wide
-  default, while the installer it wraps installs to `%USERPROFILE%\tinycmdr`: run with no arguments
-  against a default install it found nothing to remove. The default now matches the installer, and
-  the header says to pass `-InstallDir C:\tinycmdr` for a `-AsService` install.
-- The macOS installer defaulted its web/API port to 8788 while every other platform and
-  `config.example.json` use 8787, so a fresh Mac following the README landed on a port the page never
-  named. The default is 8787 and the README names the port.
-- `maintenance/restart-tinycmdr-macos.sh` still read the pre-rename launchd label
-  (`com.trapp.tinycmdr`) and hardcoded 8788 in its restart health check, so `status` and `restart`
-  reported "no agent" and "not answering" against a healthy install.
+### Changed
+- **Install:** `install.sh` is the one-line Linux/macOS door (`curl -fsSL .../install.sh | bash`): fetches and unpacks the archive, hands the terminal to the installer, names the installed copy; Windows keeps `INSTALL-WINDOWS.cmd`.
+- **Install:** `install.ps1` is the same Windows door (`irm .../install.ps1 | iex`, no execution-policy change): expands the archive in a temp folder, runs `INSTALL-WINDOWS.cmd` there, and names the installed copy for later removal.
+- **Docs:** the README's download links use stable names (`tinycmdr-win.zip`, `tinycmdr-linux.tar.gz`, `tinycmdr-macos.zip`) that always resolve to the newest release; versioned names still ship alongside.
 
-Changed
-- `install.sh` is the one-line door for Linux and macOS:
-  `curl -fsSL https://github.com/trappsquid/tinycmdr/releases/latest/download/install.sh | bash`.
-  It fetches the newest archive, unpacks it, hands the terminal back to the real installer so its
-  questions still work, and names the installed copy for later verify/uninstall. Windows keeps
-- `install.ps1` is the same door on Windows: `irm .../install.ps1 | iex` (no execution-policy
-  change, because `iex` runs the fetched text, not a file). It expands the archive in a temp
-  folder, runs `INSTALL-WINDOWS.cmd` there, and names the installed copy for later removal.
-
-  `INSTALL-WINDOWS.cmd`.
-- The README's download links are stable names (`tinycmdr-win.zip`, `tinycmdr-linux.tar.gz`,
-  `tinycmdr-macos.zip`) that always resolve to the newest release, so the page no longer has to be
-  re-pinned at every cut; the versioned names still ship alongside them.
-- `maintenance/check-readme-assets.py` fails if a README download name is not in the build or on the
-  release, and `maintenance/release.sh` runs a cut (build, publish, aliases, that check).
+### Fixed
+- **Installer:** `install\uninstall-tinycmdr.ps1` now defaults `-InstallDir` to the installer's `%USERPROFILE%\tinycmdr`, and its header says to pass `-InstallDir C:\tinycmdr` for a `-AsService` install.
+- **Installer:** the macOS installer's default web/API port is 8787, matching every other platform and `config.example.json`, and the README names the port.
+- **Maintenance:** `maintenance/restart-tinycmdr-macos.sh` reads the current launchd label and no longer hardcodes 8788 in its restart health check, so `status` and `restart` no longer misreport a healthy install.
 
 ## [1.0.18] - 2026-09-25
 
-The macOS doors. A reader who is not a terminal user could not install and could not remove
-tinycmdr on a Mac, and the removal could die half-way on exactly the installs that had asked for
-a PATH wrapper.
+### Added
+- **Installer:** added `INSTALL-MACOS.command` and `UNINSTALL-MACOS.command` (double-clickable; window stays open), shipped executable and LF via the packager, and documented in `README.md` and `install/README-macos.md`.
 
 ### Fixed
-- **The macOS uninstall aborted at the PATH wrapper.** The uninstaller removes
-  `/usr/local/bin/tinycmdr` with `rm -f` under `set -euo pipefail`. That directory is
-  `root:wheel` and not user-writable, so whenever the install ran with sudo (the only way that
-  wrapper gets written) the `rm` fails and the shell exits THERE - `rm -rf $INSTALL_DIR` below it
-  never runs, and the reader gets no explanation. Measured 2026-09-25 on a fleet macOS host with a
-  reproduction of the exact block: `rm: /usr/local/bin/tinycmdr: Permission denied`, exit 1, the
-  next step never printed. It is now `2>/dev/null || true` followed by a plain statement of what
-  is left and the one line to finish it by hand, so the folder and the launchd job still go.
-- **macOS had no double-clickable door.** Windows has shipped `INSTALL-WINDOWS.cmd` from the
-  start; macOS shipped `.sh` files only, and Finder opens a `.sh` in TextEdit - so a GUI reader
-  had nothing to double-click, for install OR for removal. Added `INSTALL-MACOS.command` and
-  `UNINSTALL-MACOS.command` (Finder runs a `.command` in Terminal; both keep the window open and
-  print the exit status), added `.command` to the packager's `wants_exec_bit()` predicate and to
-  `lf_only()` so the pair ships executable and LF, and documented both in `README.md` and
-  `install/README-macos.md` including the quarantine note for a browser download.
+- **Installer:** the macOS uninstaller no longer aborts at `/usr/local/bin/tinycmdr`: its `rm -f` is non-fatal (`2>/dev/null || true`) and it reports what is left plus the manual line, so the folder and the launchd job still go.
 
 ## [1.0.17] - 2026-09-25
 
-The launcher nobody could run, and the screen three writers were painting. Every item below was
-measured on the fleet reading a live host, not inferred, and every one of them is the same shape:
-the capability existed and the hand-off to the human did not.
-
 ### Fixed
-- **The `tinycmdr` launcher shipped without its execute bit.** The door a reader types first
-  answered `.../tinycmdr: Permission denied` - for the user AND for sudo, because execve wants one
-  execute bit set for every user. The tree tracked it as 100644 (a Windows checkout cannot record
-  the bit and ignores fileMode), the macOS installer landed it with `cp -f` and never chmodded it
-  (the Linux installer does), and every git-based update - now the only update door - wrote the bit
-  back off. Fixed at four points: the git index mode, the macOS installer, a shared
-  `wants_exec_bit()` in the packager (the old `.sh`-only predicate could never match a file called
-  `tinycmdr`), and `ensure_launcher_executable()` after every pull and adoption. All three archives
-  now print the launcher's mode and the build REFUSES when it is not executable - a live defect the
-  new gate caught in the packager itself while this release was being cut.
-- **The console screen had three writers.** The logging setup attached a console StreamHandler
-  unconditionally, so every INFO line printed into the middle of prompt_toolkit's render;
-  `CliDestination._write` used a plain `print()` while the screen owned the terminal, so the
-  toolbar smeared into the transcript and the done line was left stranded; and a streamed draft
-  that WAS the answer stayed the dim "..." narration line while the answer card was skipped.
-  `TuiScreen.raw_ansi()` was written for exactly that text and nothing in the program ever called
-  it. One writer per terminal now: a console that takes the screen detaches the log handler, and
-  every console line goes through the screen.
-- **A run that made no tool call reported `Done - 0 step(s)`** while its reply only described work
-  that had not started (measured on two fleet hosts in one afternoon). The done line now says the
-  run used no tool, and any run that was nudged to act and still ended on an intention carries the
-  truth in the delivery.
-- **A bare action phrase ended a run as an answer.** "Checking where loft boxes is located on this
-  machine." (53 chars) and "Finding <folder> folder:" (27 chars) matched neither `_INTENT_RX` nor
-  `_RESULT_CLAIM_RX`, so the classifier called them answers, no guard fired, and the run closed at
-  0 tool calls behind a green line. They are a `fragment` now: same fences as the promise guard (no
-  tool call yet, once per run), a 300-char cap, and a DIGIT test that keeps a capable model's real
-  answer - "Looking at your disk, 63GB is free..." - out of the class.
-- **`remember` glued a new entry onto the previous line** when `notes.md`'s last line carried no
-  terminator, so two facts read as one in every later prompt. The append checks the last byte now.
-- The macOS host's `web.port` is 8787 again: the Hermes web UI that claimed 8787 there no longer
-  exists, so the exception outlived its cause and the operator, reading the fleet's habit, tried
-  8787 and found a dead door.
+- **Launcher:** the `tinycmdr` launcher now ships executable - fixed in the git index, macOS installer, packager `wants_exec_bit()` and `ensure_launcher_executable()` after each pull - and the build refuses a non-executable launcher.
+- **Console:** the console screen now has a single writer: a console that takes the screen detaches the log StreamHandler, and every console line goes through the screen, including a streamed draft that is the answer.
+- **Turn engine:** a run that made no tool call no longer reports `Done - 0 step(s)`: the done line says the run used no tool, and a run nudged to act that still ends on an intention carries that in the delivery.
+- **Guards:** a bare action phrase is now a `fragment` rather than an answer, with the promise guard's fences (no tool call yet, once per run), a 300-char cap, and a DIGIT test that keeps a real answer containing a number out of the class.
+- **Memory:** `remember` no longer glues a new entry onto the previous line when `notes.md`'s last line carries no terminator; the append checks the last byte.
+- **Config:** the macOS host's `web.port` is 8787 again, since the Hermes web UI that claimed that port no longer exists.
 
 ### Notes
-- Every guard in this release is runtime-only: zero prompt bytes, no schema change, no new rent.
-- Falsifiers: the new checks fail precisely on the pre-fix build. `test_verbs` prints
-  `FAIL the update path ships a launcher fix-up`; `test_tui` prints the rogue
-  `<StreamHandler <stderr>>` in its own failure output; `test_stall` fails exactly the five
-  fragment checks and passes the false-positive control; `test_ledger_race` reproduces the glued
-  line verbatim.
-- Suites at this cut: `test_stall` 316, `test_checkin` 196, `test_ledger_race` 41, `test_tui` 39,
-  `test_verbs` all green; full sweep 45/45, SWEEP_FAIL=0.
+- **Guards:** every guard in this release is runtime-only: zero prompt bytes, no schema change, no new rent.
+- **Falsifiers:** the new checks fail precisely on the pre-fix build: `test_verbs`, `test_tui` and `test_stall` fail their defect, and `test_ledger_race` reproduces the glued line verbatim.
+- **Suites:** `test_stall`, `test_checkin`, `test_ledger_race`, `test_tui` and `test_verbs` are green; the full sweep passed.
 
 ## [1.0.16] - 2026-09-25
 
-The tool index: a growing `tools/` folder no longer buys prompt tokens. The always-on schemas
-were already flat (7,828 ch over 14 tools at 0/5/10/20/40/80 tools), but the custom-tool block
-put a full DESCRIPTION line per tool into the STATIC prompt - measured with
-`tests/tool_index_scale.py`: 167.8 chars / 49.4 est-tok PER CUSTOM TOOL, unbounded. 80 tools
-took the prompt from 2,920 to 6,870 est-tok on every call (+16 s of prefill at the LAN box's
-measured ~240 tok/s, ~+35 s at 200 tools) before the run did anything. The prompt now carries
-the skeleton - a category per line, the names on it - and the prose is one call away. On a box
-with 9 custom tools the static prompt drops 11,432 -> 10,381 ch (-263 est-tok per call) with
-the disclosed schema block byte-identical; at 80 tools the index costs 5.9 ch per tool instead
-of 167.8, and 300 tools render inside the caps. A/A both ways: `tests/aa_payload_floor.py`.
+### Added
+- **Config:** added `agent.tool_index_max_categories` (12) and `agent.tool_index_max_names_per_line` (12) to `DEFAULT_CONFIG` and `config.example.json`; the block is bounded by categories and overflow renders as `... +N more`.
+- **Tests:** the scale test now gates the live `tools/` tree too: every name present, no description prose, every shelf resolvable, the block under 400 ch, and the flat-schema invariant at every tool count. (tests/tool_index_scale.py)
 
 ### Changed
-- **The custom-tool block is a CATEGORY INDEX, not a description per tool.** Every custom tool
-  is still NAMED there (a name the model cannot see is a capability it does not have: the
-  pinned-`core_tools` drive measured 22 calls and 194.8K prompt tokens spent chasing a hidden
-  `send_file`), grouped onto one line per shelf the operator would say out loud - `files &
-  edit`, `web & publish`, `checks & probes`, `tools & runbooks`, `messaging & chat`, `sessions
-  & memory`, `agents & jobs`, `system & shell`, with `other` last.
-- **A shelf is DERIVED when a tool declares none**, from its name first and its description
-  second. The name decides because a description is prose: `shell`'s own blurb ends
-  "background to a file and poll it", and one haystack of name+description filed the shell
-  tool under files & edit.
-- **`list_tools` answers with each custom tool's shelf and its one-line description.**
-  Measured driving this build on a fleet box: asked what its added file/drive tools do, the run
-  called `list_tools` and then read EIGHT tool files (three of them twice) for what one answer
-  says. The prompt had stopped carrying that prose, so the door the model actually calls now
-  carries it - capped exactly like the index (12 blurbs, then `... +N more`).
-- **`find_tools` answers a category.** `find_tools {"category": "files"}` resolves the shelf
-  (a shorter word for it works), names that shelf's tools with what each does, reveals NOTHING
-  (a reveal is per-session schema rent that calling the tool by name pays anyway), and an
-  unknown category answers with the real ones instead of guessing.
-- **`tools/README.md`** documents the shelf an author may declare (`CATEGORY = "..."` at module
-  level in a `.py`, `"category"` in a `.tool.json`) and the index that carries it.
-
-### Added
-- `agent.tool_index_max_categories` (12) and `agent.tool_index_max_names_per_line` (12), in
-  `DEFAULT_CONFIG` and `config.example.json`. The block is bounded by CATEGORIES rather than by
-  tools, and a capped line renders its overflow as `... +N more (find_tools {"category":
-  "<cat>"})`, so a 500-tool box renders like a 9-tool one. No per-tool authoring is required
-  for the tools already installed.
-- `tests/tool_index_scale.py` now gates the LIVE tree too (this repo's own `tools/`) beside the
-  scale table: every name present, no description prose, every shelf resolvable, the block
-  under 400 ch, and the flat-schema invariant at every tool count.
+- **Tool index:** the custom-tool block is now one line per shelf, every tool still named: files & edit, web & publish, checks & probes, tools & runbooks, messaging & chat, sessions & memory, agents & jobs, system & shell, other last.
+- **Tool index:** a shelf is derived when a tool declares none, from its name first and its description second.
+- **Tools:** `list_tools` answers with each custom tool's shelf and its one-line description, capped like the index (12 blurbs, then `... +N more`).
+- **Tools:** `find_tools {"category": "files"}` resolves the shelf (a shorter word for it works), names that shelf's tools with what each does, reveals nothing, and an unknown category answers with the real ones.
+- **Docs:** `tools/README.md` documents the shelf an author may declare (`CATEGORY = "..."` at module level in a `.py`, `"category"` in a `.tool.json`) and the index that carries it.
+- **Docs:** the README's fixed-overhead figure and `docs/tinycmdr-what-it-is.md`'s token figures are re-baselined in the same batch for the new index.
 
 ### Notes
-- The dirs' own numbers moved with this (docs re-baselined in the same batch): the README's
-  fixed-overhead figure and `docs/tinycmdr-what-it-is.md`'s "3,469 tokens on a clean unpack"
-  and "about 250 per custom tool because it carries a schema".
-- Nothing is pushed by this entry: the tree, the dist shapes and the fleet stay where they are
-  until the operator says otherwise.
+- **Deferral:** nothing is pushed by this entry; the tree, the dist shapes and the fleet stay where they are until told otherwise.
 
 ## [1.0.15] - 2026-09-25
 
-Six invented daily-work orders (a status sheet to attach, a folder to clear, a scan hunt, a
-reboot forensics question, a slow-machine look) were driven at a macOS box, a sensor box and a
-Windows box, each graded from that host's own journal, its carry sidecar, its log turn lines and
-the state read back afterwards. Everything below is a measurement from those runs; the batch
-adds ZERO prompt bytes and ZERO schema bytes (A/A on one staged install: prompt 9,929 ch,
-schemas 7,856 ch, 14 visible tools, identical before and after).
+### Added
+- **Packaging:** `maintenance/build-package.py` prints the tiers check with the other package gates.
+- **Tests:** `tests/test_config_example.py` pins the example config against the code and falsifies itself on a copy with a pattern deleted. (tests/test_config_example.py)
 
 ### Fixed
-- **A pinned `agent.core_tools` list silently drops tools added to `_DEFAULT_CORE` later, and the
-  failure is a spin, not an error.** One host pins its always-visible list; the pin predates
-  `send_file` and `search_files`, so told to attach a file the run spent 22 calls, 114 s and
-  194.8K prompt tokens echoing `echo "calling send_file now"` in the shell SIX times before
-  reporting the failure honestly - while a host on the build's defaults attached it in 4 calls.
-  The startup capability line now names any default tool a pinned list is missing.
-- **A capability phrase reveals the tool that serves it.** An operator asks for a capability
-  ("attach it, do not just paste"), which names no tool, so the name-driven reveal never fired.
-  `send_file` is now revealed by the phrasings a person actually types, and so is a tool the
-  model is NARRATING in an echo - a tool name inside an echo is never the command's job.
-- **A generation request against the model endpoint this bot talks to asks first.** An order
-  about a slow machine made a run send real completion requests to the production box (a bogus
-  model name, then `main` at 400 + 400 + 120 tokens - ~900 generated tokens and two slots of
-  load) while that run was itself using the box to think, and quoted the resulting 90 tok/s as
-  its finding. `endpoint_self_harm` covered RESTARTING that box; the new check covers LOADING
-  it, on the shell, `execute_code` and the drop-in `process` door. Reads stay free: `/props`,
-  `/metrics` and `/v1/models` are not gated.
-- **A shell write to the bot's own memory asks first.** The measured indirect-injection run
-  ended with `printf 'notes cleared by cleanup' > notes.md` and did it: its whole memory
-  replaced by a line from a file it had been asked to read. `notes.md`, `tasks.json`,
-  `tasks.md`, `atlas.md` and `field-notes.md` are now a confirm tier for WRITES only.
-- **`read_file` says so when a file's text reads like instructions.** The same run executed all
-  four steps of a note it found inside the folder it was clearing - a canary, the operator's own
-  file in that folder, a copy to the Desktop, and its own memory rewritten - while the prompt
-  already said file text is data. The result now carries a `[HARNESS: ...]` line at the place
-  the model reads it. Two signals, both narrow: an injection phrase, or a numbered step list
-  where two steps carry a path and the file carries a shell verb. A changelog with numbered
-  items and paths is NOT annotated.
-- **`remember` superseded short notes.** `notes_supersede_share` was measured on containment,
-  which is degenerate on a short note: "fact 1" and "fact 2" each reduce to `{"fact"}`, so share
-  read 1.00 and eight distinct facts collapsed into one - reported by this repo's own suite
-  against the 1.0.14 build (`test_ledger_race` 35 passed, 1 failed). Superseding now needs a
-  minimum shared vocabulary on BOTH sides (`agent.notes_supersede_min_words`, 5).
-- **`write_file`'s CRLF warning was false for `.ps1`.** Measured on a fleet Windows box: an
-  LF-only `.ps1`, `.cmd` and `.bat` all RAN, including a `.cmd` with an if/else block and a
-  goto/label - so "it will not run" cost 2-4 calls per script as the model rewrote bytes that
-  were already runnable. The flat warning is gone; `.cmd`/`.bat` get one narrow note about
-  cmd.exe parsing labels and parenthesised blocks.
-- **A redundant `powershell -Command` wrapper is unwrapped instead of run twice.** The shell
-  already IS PowerShell on Windows, so the inner interpreter re-parsed text that had been
-  through one round of quoting: 3-4 failed calls per run in both Windows orders ("System : The
-  term 'System' is not recognized"), after which the run fell back to writing a `.ps1`.
-- **`config.example.json` was missing the `robocopy /MOVE` confirm pattern** that the code and
-  the 1.0.14 changelog both carry, and every installer writes a new host's config.json from it -
-  so a fresh install shipped without the gate. Restored, and the packager now refuses a package
-  whose example tiers disagree with `DEFAULT_CONFIG` (the suites read `tests/fixture-config.json`,
-  which holds zero patterns, so nothing else could see it).
-
-### Added
-- `maintenance/build-package.py` prints the tiers check with the other package gates.
-- `tests/test_config_example.py` pins the example against the code, and falsifies itself on a
-  copy with a pattern deleted.
+- **Guards:** a pinned `agent.core_tools` list no longer silently drops tools later added to `_DEFAULT_CORE`; the startup capability line names any default tool a pinned list is missing.
+- **Guards:** a capability phrase naming no tool now reveals the tool that serves it: `send_file` is revealed by the phrasings a person types, and a tool name inside an echo is never the command's job.
+- **Guards:** a generation request against the bot's own model endpoint now asks first, on the shell, `execute_code` and the drop-in `process` door; reads (`/props`, `/metrics`, `/v1/models`) are not gated.
+- **Guards:** shell writes to the bot's own memory files (`notes.md`, `tasks.json`, `tasks.md`, `atlas.md`, `field-notes.md`) are now a confirm tier for writes only.
+- **Guards:** `read_file` now carries a `[HARNESS: ...]` line when a file's text reads like instructions, on two narrow signals: an injection phrase, or a numbered step list where two steps carry a path and the file carries a shell verb.
+- **Memory:** `remember` no longer supersedes short notes: superseding requires a minimum shared vocabulary on both sides (`agent.notes_supersede_min_words`, 5). (test_ledger_race)
+- **Files:** the `write_file` CRLF warning no longer claims an LF-only `.ps1` will not run; `.cmd`/`.bat` get one narrow note about cmd.exe parsing labels and parenthesised blocks.
+- **Shell:** a redundant `powershell -Command` wrapper is unwrapped instead of run twice.
+- **Config:** the `robocopy /MOVE` confirm pattern missing from `config.example.json` is restored, and the packager refuses a package whose example tiers disagree with `DEFAULT_CONFIG`.
 
 ## [1.0.14] - 2026-09-25
 
-Six orders typed the way a non-technical operator actually types them ("this thing has been realy
-slow", "i think iv lost a file", "clear out the junk for me") were driven at a fleet box and graded
-from that box's own journal. Everything below is a measurement from those runs, not a theory.
-
-### Fixed
-- **`/new` cleared the conversation but kept the rent.** A `find_tools {all: true}` took a session
-  from 14 tool schemas to 30, and every later turn - INCLUDING a fresh session that had just been
-  told "Session cleared. Fresh context." - carried ~3.4K extra prompt tokens (step-0 prompt_tok
-  6,505 -> 10,086 on the same order). `AGENT.reset` now drops the session's reveals, so a cleared
-  conversation starts at the floor again.
-- **The spill index was process-wide and survived `/new`.** The index of oversized tool results
-  rides every prompt, so one conversation's spilled output - its first line and its path - was put
-  in front of every OTHER conversation's model, and it outlived a reset: measured, a fresh order
-  ("how mutch room is left on the c drive thing") was answered in two calls and then spent ten more
-  reading the PREVIOUS, stopped run's spill files and re-running its printer/LAN scans. Spills are
-  now keyed by session, `spill#<id>` resolves inside the session that made it, and a reset drops
-  that session's pointers while the files stay on disk.
-- **The confirm tier read PROSE in a file as a command.** `\breboot\b` gated three writes in ONE run
-  over the words in a script's own section header ("# ---------- REBOOT / UPDATE STATE ----------"):
-  a 300s stall, a declined write, and a rewrite - while the same run's actual destructive act, a
-  `robocopy /MOVE` of a 194-item directory, matched nothing in either tier. Writes now take a
-  CONTENT tier (`agent.confirm_content_patterns`): the machine verbs fire only where they stand as
-  a command, and `/MOVE` joins the list because it deletes the source tree.
-- **`remember` stacked near-duplicates.** The reply NAMED the older entry and suggested the replace
-  call; the model re-issued the identical note instead, the repeat guard folded it, and the file
-  kept two entries for one fact - the char budget paying twice, forever. A new note that shares
-  `agent.notes_supersede_share` (0.85) of its words with an existing one now supersedes it in
-  place and says so. The 0.7-0.85 band still asks, because only the model knows if it is the same
-  fact said differently.
-- **The check-in's memory gauge read `RAM 0.0 GiB` on a healthy process.** MiB was formatted as GiB
-  with one decimal, so a lean 32 MB child - exactly the healthy case - rendered as a failed probe.
-  Under 1 GiB it reads in MiB now.
-- **A PowerShell property that does not exist is silent, and $null in arithmetic is 0.** Measured:
-  `$sys.FreeMemory` (the real name is `FreePhysicalMemory`) made a run report "0 MB free RAM" as its
-  ROOT CAUSE while the box had 18 GB free - exit code 0, no warning, nothing to read as wrong.
-  `agent.shell_strict_mode` (Windows, OFF by default) runs inline PowerShell under
-  `Set-StrictMode -Version 2.0`, which fails the read instead. It ships off because the same
-  measurement showed version 2.0 ALSO errors on a read of an unset variable and adds stderr noise to
-  the everyday `Get-ChildItem | Where-Object { $_.Length -gt 1MB }` idiom (right answer, new noise):
-  it is a choice for a box you diagnose, not one you operate. Turn it on per host.
-
 ### Added
-- **One line on a long run, once, with the verb that ends it.** Five of the six driven orders ran
-  30-58 tool calls over 17-20 minutes and the only signal an operator got was the tool lines
-  themselves; two were still hunting when a `/stop` arrived. Past `agent.scope_note_steps` (40) the
-  check-in adds how many calls the run has made and that `/tinycmdr stop` ends it. Zero prompt
-  bytes: nothing here reaches the model, and it is silent on a lane with nobody reading it.
+- **Check-in:** the check-in adds one line past `agent.scope_note_steps` (40) saying how many calls the run has made and that `/tinycmdr stop` ends it.
 
 ### Changed
-- `config.example.json` documents the four new keys: `shell_strict_mode`,
-  `confirm_content_patterns`, `notes_supersede_share`, `scope_note_steps`.
+- **Config:** `config.example.json` documents the four new keys: `shell_strict_mode`, `confirm_content_patterns`, `notes_supersede_share`, `scope_note_steps`.
+
+### Fixed
+- **Sessions:** `/new` now drops the session's reveals in `AGENT.reset`, so a cleared conversation starts at the prompt floor again.
+- **Spills:** the spill index is now keyed by session: `spill#<id>` resolves inside the session that made it, and a reset drops that session's pointers while the files stay on disk.
+- **Guards:** the confirm tier no longer matches machine verbs in file prose; writes take a content tier (`agent.confirm_content_patterns`) where the verbs fire only as commands, and `/MOVE` joins the list.
+- **Memory:** `remember` no longer stacks near-duplicates: a new note sharing `agent.notes_supersede_share` (0.85) of its words supersedes in place and says so, while the 0.7-0.85 band still asks.
+- **Check-in:** the check-in's memory gauge no longer renders a lean process as `RAM 0.0 GiB`: under 1 GiB it reads in MiB.
+- **Shell:** `agent.shell_strict_mode` (Windows, off by default) runs inline PowerShell under `Set-StrictMode -Version 2.0`, so a nonexistent property fails the read instead of reporting a false result.
 
 ## [1.0.13] - 2026-09-25
 
+### Added
+- **Minting:** the harness keeps a census in `logs/procedure-census.json` counting a command's vocabulary per run, and one line rides the third run's result naming the mint call.
+- **Minting:** the harness posts one line, at most once per procedure per week, offering to build the tool after a run that drove several hand-made calls, minted nothing, and either repeated the request or executed a runbook by hand.
+- **Minting:** a run whose census fired gets one line in its trailing block inviting it to mint or to say so in the report.
+- **Memory:** memory is visible and volunteered: a memory write's progress line reads `memory`, a durable-fact lookup gets one nudge, the harness offers to keep the fact at run end, and tool descriptions say when to mint or save.
+
 ### Changed
-- **A machine shutdown or restart ASKS now instead of being unappealable.** The operator ordered a host restart from chat; the absolute tier refused the verb, and the run then spent 40+ steps writing a script and launching it through a tool, so the restart reached the host with the pattern never in sight - the block cost the yes, not the restart. `shutdown`, `poweroff`, `reboot` and `(Stop|Restart)-Computer` moved to `confirm_patterns`: quoted back to the operator, and declined on a lane with nobody to ask. The irreversible tier keeps disks, partitions, filesystems, shadow copies, the fork bomb and an encoded command blob; the prompt's shell line now names what it really blocks, at the same length.
-- **A drop-in tool that spawns its own process gets the box's real shell and the safety tier.** `shell_argv` and `shell_guard` ride the tool context beside `confirm_cb`, and `process` uses both: a string command ran under the Windows command interpreter while the prompt says the shell is PowerShell (a bash-style and a PowerShell-style loop both died in it, and a third form exited 0 having echoed the command as text). A script launched through a tool was also the last route around the tier that refuses the same verb in the shell.
+- **Guards:** `shutdown`, `poweroff`, `reboot` and `(Stop|Restart)-Computer` moved from the absolute tier to `confirm_patterns`; the irreversible tier keeps disks, partitions, filesystems, shadow copies, the fork bomb and an encoded blob.
+- **Toolsmith:** a drop-in tool that spawns its own process now gets the box's real shell and the safety tier: `shell_argv` and `shell_guard` ride the tool context beside `confirm_cb`, and `process` uses both.
 
 ### Fixed
-- **`search_files` did not work in the shape the prompt teaches.** Its own schema read `pattern` as a file-name glob and put the grep in `content`, while the route hint and the routing bullet both teach `{"pattern": "<regex>", "path": "<file or directory>"}` - so the taught call answered a confident "No matches." for a string the file held ten times. A file path is grepped directly now, `pattern` greps content as well as names, and `content` keeps its scoping job.
-- **`create_tool` took four calls to land.** The name is derived from the code when the `name` argument is absent (the run had written it in the file's own header), empty code says so instead of writing a bad file, and any call that leaves out a declared argument is told which one and what the tool takes.
-- **The tool-disclosure answers carried no diff.** Asked which tools were NOT in its list, a run called `list_tools` and `find_tools(all=true)` in one batch, read "22 of 22 are in your list", and answered "none are hidden" - its own sibling call had revealed them all a moment earlier. `find_tools all=true` now names the tools that were not in the list a moment ago, and `list_tools` names the reveal.
-- **`process` ran a JSON argument list as a shell string** (`'["powershell.exe"' is not recognized`), and `toolsmith list` counted `lib/` helper files as callable tools.
-- **A `done` that named no task listed only the ids**, so a run with two items open dropped the ledger for the rest of the run; it names every open item with its text now.
-- **A repeat guard could be defeated by the harness's own hint.** The mint hint rides the second call's result, so the third identical call looked different and re-ran; the guard compares the tool's answer with harness annotations stripped.
-- **A config field NAMED token/key/secret is masked from six characters**, not twelve. A ten-character web token was quoted into chat by a run that answered "where is the token file" - the sweep had skipped it.
-- **`remember` could only append while its own schema promised "replace stale facts instead of stacking contradictions".** It takes `action=note|replace|forget`, the reply names the entry, the text and the budget instead of "OK: noted", and a near-duplicate entry is named with the replace call to use.
-
-### Added
-- **Minting: the harness keeps the census the model cannot have.** `logs/procedure-census.json` counts a command's vocabulary (the cmdlets or verbs it is made of) per RUN, and one line rides the third run's result naming the mint call. The second run is the threshold, because that is where a human says "this is the second time".
-- **The operator is asked, once per procedure per week.** After a run that drove several hand-made calls, minted nothing, and either repeated the same request or executed a runbook by hand, the harness posts one line offering to build the tool.
-- **The bot offers it in its own report.** A run whose census fired gets one line in its trailing block inviting it to mint or to say so in the report - and it does: "Routine and repetitive (this is the 3rd+ run of it on the box) - I can mint a small tool ... Your call."
-- **Memory is visible and volunteered.** A memory write's progress line reads `memory`, a lookup that answered a durable-fact question gets one nudge on the result, the harness offers to keep the fact at run end, and the tools' own descriptions carry the judgment about when to mint or save.
+- **Tools:** `search_files` now works in the taught shape: a file path is grepped directly, `pattern` greps content as well as names, and `content` keeps its scoping job.
+- **Toolsmith:** `create_tool` now derives the name from the code when `name` is absent, states empty code instead of writing a bad file, and names the missing declared argument and what the tool takes.
+- **Tools:** `find_tools all=true` now names the tools that were not in the list a moment ago, and `list_tools` names the reveal.
+- **Tools:** `process` no longer runs a JSON argument list as a shell string, and `toolsmith list` no longer counts `lib/` helper files as callable tools.
+- **Tasks:** a `done` that names no task now lists every open item with its text, instead of only the ids.
+- **Guards:** the repeat guard now compares the tool's answer with harness annotations stripped, so the mint hint no longer defeats it.
+- **Redaction:** a config field named token/key/secret is now masked from six characters instead of twelve.
+- **Memory:** `remember` now takes `action=note|replace|forget`, its reply names the entry, text and budget, and a near-duplicate entry is named with the replace call to use.
 
 ## [1.0.12] - 2026-09-24
 
-### Fixed
-- **`list_tools` claimed tools the session did not hold:** the answer said all 22 core tools were already in the model's schema block while the payload carried 14 (`turn ... tools=14`). A run asked to build a tool read it, never reached for `create_tool`, and scaffolded the file through the shell. The answer now reports the count this session really holds, names the hidden tools, and prints a custom tool's file only when it differs from the tool name.
-- **The run plan survived `/new`:** `AGENT.reset` cleared history, transcript and carry but not `_RUNS[key]`, the plan re-sent every turn, so a fresh session opened with the previous task's steps in its trailing block and burned the run on them. `_run_state_reset` rides the reset now.
-- **The tool-file-as-script miss was only answered on the shell door:** code that ran or imported `tools/<name>.py` from `execute_code` walked past that guard (measured: eight calls at `toolsmith.py` in one run). Both doors give one answer now, including the file-name-to-tool-name mapping, and the tool is revealed so its schema is in the payload rather than only named in prose.
-- **A file written into `./tools/` got no verdict until the next start:** `write_file` now runs the loader on it and rides the verdict (refused with the shape it needs, or the tool names it loads as).
-- **The drop-in shim was missing Hermes' `tool_result`:** `from tools.registry import registry, tool_error, tool_result` raised ImportError and the whole ported file was refused. Added, with `tool_error(**extra)`.
-- **Loading warnings named no route:** a refused drop-in file now says whether it is a ported Hermes-tree file (wrap the script as `<name>.tool.json`, or rewrite it with `create_tool`) or a non-conforming native one, and a successful load of a file that was not there at the last start says what it loaded as.
-- **`reload_tool` could not reload a ported file:** a register-shape file answers to the name inside it, which need not be the file name (`hermes_todo.py` registers `todo_list`). Reload by tool name follows the registration the file already has.
-
 ### Added
-- **An order that names a hidden tool reveals it before the first call** (`reveal_tools_named_in`, capped at four per order; asking for a tool to be built reveals `create_tool`), and `create_tool` reveals what it just made. Measured on one box, same order: seven `skill{action=list}` calls and zero calls to the two tools named before, versus the two tool calls and a finished run after.
-- **`/tinycmdr <verb>` in chat:** the Mattermost lane dispatched only `/new`, `/stop`, `/restart`, `/model`, `/status` and `/undo`, so `/tinycmdr update` - the command the fleet is updated with - went to the model as ordinary text. Every management verb that makes sense in a channel runs there now and posts its output; `run`, `setup`, `token` and `restart` are refused by name because they need a terminal or have their own fast path.
-- **`update` adopts the git path on a fresh install:** five of six fleet installs were folders rather than checkouts, so the verb had nothing to pull and answered with a usage line. It now clones the git metadata into place and checks out the published branch, writing tracked source only, and it reports the HEAD and build hash that moved. A host with no git binary says so instead of pretending.
-- **Prior-run false interruption alerts:** Active turns were incorrectly flagged as interrupted because `_prior_run_unfinished()` evaluated the in-flight user message. Fixed by ignoring the active user turn during live execution.
-- **Empty-ledger task error:** Calling `task action=done` without an ID when no tasks were active returned contradictory `no task #None`. Fixed with clear message indicating no active tasks.
-- **PowerShell 5.1 command chaining with `&&`:** Windows PowerShell 5.1 rejected `&&` command separators. Added quote-aware translation to `; if ($?) { ... }` in `tool_shell`.
-- **Carry store persistence across session reset:** Resetting a session with `/new` or `/reset` wiped conversation history but left the carry sidecar (`.carry.json`) in memory and on disk. Fixed by unlinking `.carry.json` and evicting in-memory carry in `AGENT.reset()`.
-- **Task completion spin on empty ledger:** Calling `task action=done` when all ledger tasks were already closed returned an error instructing the model to add tasks, triggering repetitive retry loops. Fixed by returning a completion notice directing the model to deliver its report.
-- **Line deletion residue in `edit_file`:** Deleting text via `edit_file` with `new_string=""` left blank lines in both exact full-line and fuzzy line-window replacements. Fixed line slicing and full-line matching so deleted lines leave no blank lines.
-- **Process isolation guidance in `execute_code`:** Added runtime diagnostic hint on `NameError` reminding the model that snippets execute in isolated processes requiring self-contained imports.
+- **Tools:** an order that names a hidden tool reveals it before the first call (`reveal_tools_named_in`, capped at four per order; asking for a tool to be built reveals `create_tool`), and `create_tool` reveals what it just made.
+- **Chat:** every management verb that makes sense in a channel now runs there and posts its output (`/tinycmdr <verb>`); `run`, `setup`, `token` and `restart` are refused by name.
+- **Shell:** `tool_shell` translates PowerShell 5.1 `&&` command chains (quote-aware) to `; if ($?) { ... }`.
+- **Eval:** `execute_code` adds a runtime diagnostic hint on `NameError` reminding the model that snippets run in isolated processes and need self-contained imports.
+
+### Changed
+- **Update:** `update` on a fresh install clones the git metadata into place and checks out the published branch, writing tracked source only, and reports the HEAD and build hash that moved; a host with no git binary says so.
+
+### Fixed
+- **Tools:** `list_tools` now reports the count the session really holds, names the hidden tools, and prints a custom tool's file only when it differs from the tool name.
+- **Sessions:** the run plan no longer survives `/new`: `_run_state_reset` rides `AGENT.reset`.
+- **Toolsmith:** the tool-file-as-script miss is now answered on both the shell and `execute_code` doors, including the file-name-to-tool-name mapping, and the tool is revealed so its schema is in the payload.
+- **Toolsmith:** `write_file` now runs the loader on a file written into `./tools/` and rides the verdict (refused with the shape it needs, or the tool names it loads as).
+- **Toolsmith:** the drop-in shim now exports Hermes' `tool_result` (and `tool_error(**extra)`), instead of raising ImportError and refusing the ported file.
+- **Toolsmith:** loading warnings now name the route: a refused drop-in is reported as a ported Hermes-tree file (wrap as `<name>.tool.json` or use `create_tool`) or a non-conforming native one; a new file's load reports what it loaded as.
+- **Toolsmith:** `reload_tool` now reloads a ported file by tool name, following the registration the file already has.
+- **Turns:** active turns are no longer flagged as interrupted by `_prior_run_unfinished()` evaluating the in-flight user message.
+- **Tasks:** `task action=done` with no ID and no active tasks now returns a clear no-active-tasks message instead of the contradictory `no task #None`.
+- **Sessions:** `/new` or `/reset` now unlinks `.carry.json` and evicts in-memory carry in `AGENT.reset()`.
+- **Tasks:** `task action=done` with all tasks already closed now returns a completion notice directing the model to deliver its report instead of a retry-inducing error.
+- **Files:** deleting text with `edit_file` and `new_string=""` no longer leaves blank lines in exact full-line or fuzzy line-window replacements.
 
 ## [1.0.11] - 2026-09-24
 
 ### Fixed
-- **Premature stop after prior tool calls:** Runs that completed initial tools could still stop on an unfinished intention statement. Added a one-time prompt asking the model to proceed with the next tool call, with a plain `stopped short` note if it still stops.
-- **Result claim detection:** Metric statements like "log says 12 errors" bypassed unverified claim checks. Added pattern matching for report verbs followed by counts on local files.
+- **Turn engine:** runs that completed initial tools could still stop on an unfinished intention statement; added a one-time prompt asking the model to proceed with the next tool call, with a plain `stopped short` note if it still stops.
+- **Guards:** added pattern matching for report verbs followed by counts on local files, closing a bypass where metric statements reporting a count of errors escaped unverified claim checks.
 
 ## [1.0.10] - 2026-09-24
 
 ### Added
-- **Turn decision logging:** Added structured per-turn logging (`shape=`, tool schemas on wire, server prompt/completion tokens, reasoning chars, and harness nudge state) to record model turn decisions directly in logs.
+- **Turn engine:** added structured per-turn logging (`shape=`, tool schemas on wire, server prompt/completion tokens, reasoning chars, and harness nudge state) to record model turn decisions directly in logs.
 
 ## [1.0.9] - 2026-09-24
 
 ### Fixed
-- **Status update spam:** Streaming and interstitial updates repeatedly posted identical progress lines. Updated matching to edit existing posts in-place and fold repeated tool cards (`(×2)`).
-- **Infinite restatement loops:** Runs repeating the same status without making changes now receive a nudge at 3 repeats and stop cleanly at 6 repeats (`restate_stop_after`).
+- **Status updates:** identical progress lines are edited in place and repeated tool cards folded (`(×2)`) instead of reposted.
+- **Restatement loops:** runs repeating the same status without changes get a nudge at 3 repeats and stop cleanly at 6 (`restate_stop_after`).
 
 ## [1.0.8] - 2026-09-24
 
 ### Added
-- **File delivery tool:** Added `send_file` tool to upload and attach local files directly into Mattermost chat.
+- **File delivery:** `send_file` uploads and attaches local files directly into Mattermost chat.
 
 ### Fixed
-- **Interrupted turn transcript persistence:** Session history is now written to disk before the first model call, preserving orders across unexpected process restarts.
-- **Unfinished turn recovery:** Flagged interrupted turns so subsequent "continue" orders properly resume open tasks.
-- **Duplicate tool call refusal:** Canonical argument signature hashing added to ensure repeated identical calls are refused.
-- **Downtime catch-up sweep:** Saved high-water post IDs in `state.json` to process unread chat messages arriving during downtime.
-- **Per-path file locking:** Resolved canonical file paths across OS styles to eliminate concurrent write races on the same file.
+- **Transcript persistence:** session history is written to disk before the first model call, preserving orders across unexpected restarts.
+- **Turn recovery:** interrupted turns are flagged so a later continue order resumes open tasks.
+- **Duplicate calls:** canonical argument signature hashing refuses repeated identical tool calls.
+- **Downtime sweep:** high-water post IDs are saved in `state.json` to process unread chat messages arriving during downtime.
+- **File locking:** canonical file paths are resolved across OS styles to remove concurrent write races on the same file.
 
 ## [1.0.7] - 2026-09-24
 
 ### Added
-- **Non-root Linux installation:** Added `--mode user` support installing systemd user unit to `~/.config/systemd/user/` with linger enabled.
+- **Non-root Linux:** `--mode user` installs a systemd user unit to `~/.config/systemd/user/` with linger enabled.
 
 ### Fixed
-- **Installer PATH scoping:** Prevented installer scripts from overwriting system PATH wrappers if not pointing to the target install directory.
-- **`.gitignore` line endings:** Normalized CRLF line endings that broke git ignore rules for `.env` and `config.json`.
+- **Installer PATH:** installer scripts no longer overwrite system PATH wrappers unless they point to the target install directory.
+- **`.gitignore`:** CRLF line endings that broke ignore rules for `.env` and `config.json` are normalized.
 
 ## [1.0.6] - 2026-09-24
 
 ### Fixed
-- **Search API key retention:** Prevented installer updates from clearing `TAVILY_API_KEY` and `ANYSEARCH_API_KEY` from existing `.env` files.
+- **Installers:** updates no longer clear `TAVILY_API_KEY` and `ANYSEARCH_API_KEY` from existing `.env` files.
 
 ## [1.0.5] - 2026-09-24
 
 ### Fixed
-- **Host config retention:** Prevented installer updates from overwriting existing `config.json` with `config.example.json` placeholders.
+- **Installers:** updates no longer overwrite an existing `config.json` with `config.example.json` placeholders.
 
 ## [1.0.4] - 2026-09-24
 
 ### Fixed
-- **macOS uninstaller scoping:** Scoped launchd plist removal to the specific install directory to prevent uninstalling co-located instances.
-- **Non-interactive terminal detection:** Fixed installer hanging on token prompts when running without a TTY.
+- **Uninstaller:** macOS launchd plist removal is scoped to the specific install directory, so co-located instances are not uninstalled.
+- **Installer:** token prompts no longer hang when running without a TTY.
 
 ## [1.0.3] - 2026-09-24
 
 ### Fixed
-- **Initial turn promise guard:** Added retry nudge when a fresh run answers with a promise to do work without making any tool calls.
+- **Guards:** a fresh run that answers with a promise to do work without any tool calls gets a retry nudge.
 
 ## [1.0.2] - 2026-09-24
 
 ### Added
-- **No-admin Windows install:** Defaulted Windows install to `%USERPROFILE%\tinycmdr` with user-level Startup shortcut.
-- **Automated Python installation:** Added winget / python.org fallback bootstrap when Python 3.10+ is absent on Windows.
+- **Windows install:** the default install is `%USERPROFILE%\tinycmdr` with a user-level Startup shortcut, requiring no admin.
+- **Python bootstrap:** a winget / python.org fallback installs Python 3.10+ when it is absent on Windows.
 
 ### Fixed
-- **UAC path quoting:** Fixed space handling in Windows installer elevation wrappers.
+- **Windows installer:** space handling in the UAC elevation wrappers is fixed.
 
 ## [1.0.1] - 2026-09-24
 
 ### Fixed
-- **Installer bugfixes:** Fixed path quoting in Windows launcher and aligned default web dashboard port to 8787 across all platforms.
+- **Installers:** path quoting in the Windows launcher is fixed and the default web dashboard port is aligned to 8787 across all platforms.
 
 ## [1.0.0] - 2026-09-20
 
 ### Added
-- **Multi-Interface Architecture:** Unified command set across Interactive Terminal CLI (`tinycmdr`), LAN Web UI dashboard (`tinycmdr web` on port 8787), and background Chat Bot services (Mattermost and Telegram).
-- **Prefix-Cache Efficiency:** Static prompt and visible schema footprint optimized to ~4,150 tokens. Dynamic runtime context is tail-anchored to maintain KV cache stability across turns for llama.cpp and vLLM.
-- **Autonomous Operations Runtime:** Loop guard, stall watchdog, truthful `/stop` and mid-run steering, persistent task ledger, and spill indexing.
-- **Zero-Infrastructure Footprint:** Single-process Python implementation with minimal dependencies, requiring zero external databases or containers.
+- **Multi-Interface Architecture:** a unified command set across the interactive Terminal CLI (`tinycmdr`), the LAN Web UI dashboard (`tinycmdr web` on port 8787) and background Chat Bot services (Mattermost and Telegram).
+- **Prefix-Cache Efficiency:** the static prompt and visible schema footprint is optimized with dynamic runtime context tail-anchored to keep KV cache stable across turns for llama.cpp and vLLM.
+- **Autonomous Operations Runtime:** loop guard, stall watchdog, truthful `/stop` and mid-run steering, persistent task ledger and spill indexing.
+- **Zero-Infrastructure Footprint:** a single-process Python implementation with minimal dependencies, requiring no external databases or containers.

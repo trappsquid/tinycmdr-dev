@@ -83,6 +83,9 @@ git commit && git push -u origin <topic>  # 5. push; CI grades macOS + Linux (Wi
   printf '#!/bin/sh\nexec bash "$(git rev-parse --show-toplevel)/maintenance/pre-push.sh"\n' \
       > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
   ```
+- **Commit subjects state the change, they do not tell the story.** `<area>: <what changed>` - no
+  anecdotes, no "and the ledger says so", no version story. The body carries the reason when it is
+  not obvious.
 - **A release** is cut from a clean, gated `main`: `bash maintenance/release.sh <notes-file>`.
   It needs `gh` authenticated and `maintenance/private_rules.py` present, bumps nothing itself
   (version, CHANGELOG and README are part of the change), pushes, tags, attaches the assets and
@@ -156,9 +159,10 @@ of it - the two most recent releases were cut exactly this way.
 
 1. **`tinycmdr.py`** - `VERSION = "1.0.4N"`. Byte-exact replacement: the working tree is CRLF, so a
    `sed` anchored with `$` silently misses.
-2. **`CHANGELOG.md`** - fold `## [Unreleased]` into `## [1.0.4N] - <date>`: a summary paragraph, then
-   `Changed`/`Added`/`Fixed` below it, each entry carrying the mechanism and the test. Leave an empty
-   `## [Unreleased]` heading at the top.
+2. **`CHANGELOG.md`** - fold `## [Unreleased]` into `## [1.0.4N] - <date>`: one physical line per
+   entry under `Added`/`Changed`/`Fixed`, each carrying the mechanism and the test - no summary
+   paragraph, no operator quotes, no dates or measurement stories. Leave an empty `## [Unreleased]`
+   heading at the top.
 3. **`STATUS.json`** - re-anchor every item this release carries to `{"commit": "<sha>"}` with **no**
    `expect`. That is the "merged, nobody is claiming a release yet" state, and `release.sh` promotes
    it to `expect: tagged` + `shipped` once the tag exists (`maintenance/ledger-tag.py`). Do **not**

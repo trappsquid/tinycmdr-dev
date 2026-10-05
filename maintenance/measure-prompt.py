@@ -12,10 +12,15 @@ Two trees are worth measuring, and this prints both:
     python maintenance/measure-prompt.py --tokenize -    # no endpoint: est_tokens only
     python maintenance/measure-prompt.py --tokenize http://box:8081/v1
 
-est_tokens is chars/4 - deliberately conservative, and what the 5,400-token gate in
-tests/test_envelope.py asserts against. The endpoint's /tokenize is what the model
-really sees; it reads about 17% lower on this material. Both are printed because a
-number without its origin is how this figure went wrong for four releases.
+est_tokens is content-aware (4.0 chars/token on prose, 3.0 on dense code) - deliberately
+conservative, and what the 5,400-token gate in tests/test_envelope.py asserts against. The
+endpoint's /tokenize is what the model really sees; when it answers (it read about 17%
+lower on this material on 2026-09-27) both numbers print, because a number without its
+origin is how this figure went wrong for four releases.
+
+Each leg is measured with its own tree as the working directory: the static prompt carries
+the AGENTS.md/CLAUDE.md context files found from there, so the live leg includes the
+install's workspace content while the clean leg, staged in a temp dir, includes none.
 
 NOTE: the live leg prints the System prompt with this box's own facts in it (notes
 excerpts, host names). Do not paste its output into a public issue.
@@ -23,6 +28,7 @@ excerpts, host names). Do not paste its output into a public issue.
 import argparse
 import importlib.util
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -65,8 +71,15 @@ def real_tokens(url, text):
 
 def measure(label, app_dir, tokenize):
     T = load(app_dir, "tc_measure_" + label)
-    prompt = T.build_system_prompt()
-    wire = json.dumps(T.select_tool_schemas(None))
+    cwd = os.getcwd()
+    try:
+        # Context files are read from cwd: each leg pays its own tree's workspace.
+        os.chdir(app_dir)
+        prompt = T.build_system_prompt()
+        wire = json.dumps(T.select_tool_schemas(None))
+        ctx = T.context_files_block()
+    finally:
+        os.chdir(cwd)
     est_p, est_s = T.est_tokens(prompt), T.est_tokens(wire)
     rp = rs = None
     if tokenize:
@@ -82,6 +95,9 @@ def measure(label, app_dir, tokenize):
     print("       %d tool schemas sent, %d chars of prompt, %d paragraphs"
           % (len(T.select_tool_schemas(None)), len(prompt),
              len([p for p in prompt.split("\n\n") if p.strip()])))
+    if ctx:
+        print("       context files: %d chars / %d est (AGENTS.md/CLAUDE.md found near %s)"
+              % (len(ctx), T.est_tokens(ctx), app_dir))
     try:
         held = T.REGISTRY.openai_schemas()
         print("       every schema the registry holds: %d (%d est with the prompt)"

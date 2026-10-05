@@ -222,17 +222,16 @@ def render(name, f):
             % (a["max_steps"], a["max_minutes"], a["shell_timeout"],
                a["tool_output_max_chars"]))
     if name == "readability":
-        # This one line is a CONSTANT, not rendered from the tree, and that is the one
-        # figure in a generated block that can rot silently: a tokenizer is not in the
-        # tree, so nothing here can re-measure it. It is the clean-unpack leg of section
-        # 4.1's table (the public number - the doc says why), measured 2026-09-27 with
-        # `maintenance/measure-prompt.py --tokenize <endpoint>`. Re-run that after any
-        # prompt change and update this string; tests/test_measured_doc.py asserts the
-        # token figures carry provenance, not that they are current.
+        # NO number for the fixed-prompt line, on purpose: the prompt embeds per-host
+        # facts (hostname, OS, Python version) and the context files found from the
+        # working directory, so a token figure rendered here would differ across the CI
+        # platforms and rot the first time the prompt changed. It is hand-written in
+        # section 4.1 with its date and command instead; tests/test_measured_doc.py
+        # asserts that provenance is present.
         return (
-            "fixed prompt overhead     ~3.5K real tokens as sent on a clean unpack, measured with\n"
-            "                          the endpoint's own tokenizer - section 4.1 has both legs and\n"
-            "                          the command\n"
+            "fixed prompt overhead     measured by hand in section 4.1 - est_tokens as sent on\n"
+            "                          a clean unpack, plus the endpoint's own count when it\n"
+            "                          answers /tokenize; the command and both legs are there\n"
             "readability               %s lines, one file, no dependency tree to audit\n"
             "ops runtime               stall watchdog, periodic check-ins, live steering, and a\n"
             "                          /tinycmdr stop that reports the truth about three different states\n"

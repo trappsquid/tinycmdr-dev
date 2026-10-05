@@ -384,14 +384,14 @@ DEFAULT_CONFIG = {
         # next thing to read that file fails somewhere else entirely.
         "verify_after_write": True,
         "verify_max_bytes": 2000000,
-        # Tool disclosure: the payload carries a small always-visible tool set and the
-        # rest is revealed on demand with find_tools (or by simply calling one, which the
-        # harness honours). Re-measured 2026-10-03 (2,087 calls / 133 runs):
-        # the visible schemas are 1,702 of the 5,709 static tokens, and 79.5% of calls hit
-        # the five primitives (89.2% hit the 11 visible tools). One ops+dev box's workload,
-        # so re-run the census before pinning core_tools elsewhere - rent is a bigger share
-        # of the envelope under the 16K warn window. core_tools overrides the visible list;
-        # tool_disclosure=false sends the whole registry again.
+        # Tool disclosure: the payload carries a small always-visible tool set; the rest is
+        # revealed on demand with find_tools, or by simply calling one. Re-measured
+        # 2026-10-05: the visible schemas are 1,758 of the 4,116 static est tokens on a
+        # clean unpack (5,860 as this install sends it). The 2026-10-03 census (2,087 calls /
+        # 133 runs) put 79.5% of calls on the five primitives, 89.2% on the 11 visible
+        # tools. One ops+dev box's workload, so re-run the census before pinning core_tools
+        # elsewhere - rent is a bigger share of the envelope under the 16K warn window.
+        # core_tools overrides the visible list; tool_disclosure=false sends the whole registry.
         "tool_disclosure": True,
         "core_tools": [],
         # A revealed schema rides every later payload. This TTL lets one expire after
@@ -13547,9 +13547,9 @@ def annotate_repeat_read(name, args, out, ctx):
 # Tool disclosure (Phase 2a)
 # --------------------------------------------------------------------------
 #
-# Re-measured 2026-10-03 on this box: the VISIBLE schemas are 1,702 of the 5,709 static
-# tokens per call, and 79.5% of 2,087 real calls were five primitives (89.2% hit the 11
-# visible tools), so the model reaches for a handful of them. The payload therefore
+# Re-measured 2026-10-05: the VISIBLE schemas are 1,758 of the 4,116 static est tokens
+# on a clean unpack (5,860 as this install sends it); the 2026-10-03 census put 79.5%
+# of 2,087 real calls on five primitives (89.2% on the 11 visible tools). The payload therefore
 # carries a small always-visible set and everything else is revealed on demand: by
 # asking (find_tools), or by simply calling it, which the harness honours and keeps in
 # the list WHILE IT STAYS IN USE (agent.reveal_ttl_secs; the clock is idle time).
