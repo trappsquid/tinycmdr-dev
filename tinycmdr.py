@@ -38,6 +38,7 @@ import random
 import re
 import unicodedata
 import signal
+import shutil
 import socket
 import subprocess
 import sys
@@ -14649,13 +14650,41 @@ GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 _STATE_LOCK = threading.RLock()
 
 
+def _load_json_state(path, what):
+    """The parsed document, or {} with the damaged file KEPT and named.
+
+    Every reader used to turn a corrupt or truncated state file into {} in silence, and
+    the next save took the only evidence with it (A-2026-10-05-17). The write path's
+    docstring already promises a `.damaged-*` copy; this helper is where the promise is
+    kept. A missing file is not damage: {} and no noise.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:                                 # noqa: BLE001
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = path.with_name(path.name + ".damaged-" + stamp)
+        try:
+            shutil.copy2(path, dest)
+            kept = "a copy is kept at %s" % dest.name
+        except OSError as copy_exc:
+            kept = "and the copy could not be written (%s)" % copy_exc
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = -1
+        log.warning("%s is unreadable JSON (%s, %dB): %s; %s starts empty",
+                    path.name, type(exc).__name__, size, kept, what or "it")
+        return {}
+
+
 def _state(mutate=None):
     """Tiny persisted state file: durable model choices (and the config
     default remembered by '/model default --global')."""
     with _path_lock(str(GLOBAL_STATE_FILE)):
-        try:
-            st = json.loads(GLOBAL_STATE_FILE.read_text(encoding="utf-8"))
-        except Exception:
+        st = _load_json_state(GLOBAL_STATE_FILE, "state")
+        if not isinstance(st, dict):
             st = {}
         if mutate:
             mutate(st)
@@ -22164,11 +22193,8 @@ def _web_state(mutate=None):
     _web_state - a plain Lock taken twice in one thread is a deadlock, which is
     exactly how the notes guard froze a bot once."""
     with WEB_STATE_LOCK:
-        try:
-            st = json.loads(WEB_STATE_FILE.read_text(encoding="utf-8"))
-            if not isinstance(st, dict):
-                st = {}
-        except Exception:
+        st = _load_json_state(WEB_STATE_FILE, "the conversation registry")
+        if not isinstance(st, dict):
             st = {}
         if not isinstance(st.get("sessions"), list):
             st["sessions"] = []
@@ -27270,11 +27296,8 @@ def status_text(key, paused=None):
 #   * the log gets one line per STATE CHANGE, not one per attempt. The incident wrote 419 KB
 #     of the same CRITICAL every ten seconds, which is noise, not a signal.
 def _lane_state_read():
-    try:
-        data = json.loads(LANE_STATE_FILE.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:                                        # noqa: BLE001
-        return {}
+    data = _load_json_state(LANE_STATE_FILE, "the lane failure record")
+    return data if isinstance(data, dict) else {}
 
 
 def _lane_state_write():
