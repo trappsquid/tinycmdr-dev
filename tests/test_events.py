@@ -215,16 +215,57 @@ def test_retention_keeps_the_newest_and_touches_nothing_else():
         bystander.write_text("{}", encoding="utf-8")
         other = keep_dir / "s00.transcript.jsonl"
         other.write_text("{}\n", encoding="utf-8")
+        # A rolled predecessor belongs to its session: it must age out WITH the base and
+        # survive with it (A-2026-10-05-22).
+        old_roll = keep_dir / "s00.events.1.jsonl"
+        old_roll.write_text("{}\n", encoding="utf-8")
+        os.utime(old_roll, (time.time() - 35 * 60, time.time() - 35 * 60))
+        kept_roll = keep_dir / "s34.events.1.jsonl"
+        kept_roll.write_text("{}\n", encoding="utf-8")
         removed = fb.prune_events()
         left = sorted(p.name for p in keep_dir.glob("*.events.jsonl"))
         check("retention keeps exactly the newest 30", len(left) == 30, len(left))
         check("and removes the oldest, not the newest",
               "s05.events.jsonl" in left and "s04.events.jsonl" not in left, left[:3])
-        check("it reports what it removed", len(removed) == 5, removed)
+        check("it reports what it removed", len(removed) == 6, removed)
+        check("a rolled predecessor of a pruned session goes with it",
+              not old_roll.exists(), old_roll)
+        check("...and the newest session's predecessor survives",
+              kept_roll.exists(), kept_roll)
         check("it never touches a session file or a transcript",
               bystander.exists() and other.exists())
     finally:
         fb.SESSIONS_DIR = real_dir
+
+
+def test_a_size_ceiling_rolls_one_predecessor():
+    """A-2026-10-05-22: retention bounded the file COUNT, so the one file a live session
+    appends to for ever - always the newest, never in the pruned tail - grew without
+    limit. The writer rolls it to .1 at the ceiling."""
+    with_log(True)
+    real_dir, real_max = fb.SESSIONS_DIR, fb._EVENT_MAX_BYTES
+    roll_dir = TMP / "rolling"
+    shutil.rmtree(roll_dir, ignore_errors=True)
+    roll_dir.mkdir(parents=True)
+    try:
+        fb.SESSIONS_DIR = roll_dir
+        fb._EVENT_MAX_BYTES = 500
+        clear("roller")
+        for n in range(20):
+            fb.event("step", session_key="roller", n=n, pad="x" * 80)
+        path, rolled = fb._event_path("roller"), fb._event_rolled_path("roller")
+        check("the rolled predecessor exists", rolled.exists(), rolled)
+        check("the live file is back under the ceiling",
+              path.stat().st_size < 500, path.stat().st_size)
+        check("the newest event is in the live file",
+              any(r.get("n") == 19 for r in rows("roller")), rows("roller")[-1:])
+        check("the predecessor holds older events, parsed as JSONL",
+              all(isinstance(r, dict) for r in
+                  [json.loads(l) for l in rolled.read_text(encoding="utf-8").splitlines()
+                   if l.strip()]), "unparsed line")
+    finally:
+        fb.SESSIONS_DIR = real_dir
+        fb._EVENT_MAX_BYTES = real_max
 
 
 # --------------------------------------------------------------------------

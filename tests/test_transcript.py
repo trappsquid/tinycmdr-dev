@@ -52,7 +52,14 @@ def main():
         body = tp.read_text(encoding="utf-8") if tp.exists() else ""
         check(needle in body, "the evicted middle is in the transcript, byte for byte")
         rows = [json.loads(l) for l in body.splitlines() if l.strip()]
-        check(len(rows) == before - 1, f"one line per non-system message ({len(rows)})")
+        # A-2026-10-05-21: the file carries the DROPPED span, not a copy of the whole live
+        # conversation (which grew the model's own pointer by the transcript each firing).
+        check(len(rows) < before - 1,
+              f"only the dropped span is written, not the whole conversation ({len(rows)})")
+        check(any(needle in (r.get("content") or "") for r in rows),
+              "the evicted needle is among them")
+        check(not any("answer 399" in (r.get("content") or "") for r in rows),
+              "the newest exchange (still live) is NOT duplicated into the transcript")
         check(all(r.get("why") == "compact" for r in rows), "each line says why it was written")
         # -- search_sessions reads BOTH shapes that live in sessions/ -----------
         # A carry sidecar (*.carry.json) has a dict root and sorted() puts it BEFORE the
@@ -104,6 +111,26 @@ def main():
         check("compaction(s)" in line, f"and the usage line shows it: {line}")
 
         # nothing over budget: nothing written
+        # A-2026-10-05-21: the file is bounded - at the cap it rotates to `.transcript.1`
+        # (one predecessor, replaced on the next rotation) instead of growing for ever.
+        # Deterministic: one `_save_transcript` call = one write, so the rotation is the
+        # call's own, not a compaction loop's.
+        needle2 = "SECOND-BLOCK-77 the next eviction"
+        fb.AGENT._TRANSCRIPT_MAX_BYTES = 500
+        tp.write_text("PREVIOUS-" * 80, encoding="utf-8")          # over the cap
+        fb.AGENT._save_transcript(key, [{"role": "user", "content": needle2}], "compact")
+        rolled = fb.SESSIONS_DIR / f"{key}.transcript.1.jsonl"
+        check(rolled.exists(), "a full transcript rotates to .1")
+        check("PREVIOUS-" in rolled.read_text(encoding="utf-8"),
+              "the predecessor holds the file that was over the cap")
+        check(needle2 in tp.read_text(encoding="utf-8"),
+              "the new block lands in the fresh file")
+        tp.write_text("SECOND-OVER-" * 60, encoding="utf-8")       # over the cap again
+        fb.AGENT._save_transcript(key, [{"role": "user", "content": "THIRD-BLOCK"}], "compact")
+        check("PREVIOUS-" not in rolled.read_text(encoding="utf-8")
+              and "SECOND-OVER-" in rolled.read_text(encoding="utf-8"),
+              "the next rotation replaces the one predecessor, never grows a chain")
+
         tp.unlink()
         small = [{"role": "system", "content": "sys"},
                  {"role": "user", "content": "hi"},

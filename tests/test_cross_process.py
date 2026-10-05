@@ -20,6 +20,7 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -301,10 +302,29 @@ def test_the_instance_lock_is_not_a_deletable_file():
     if os.name == "nt":
         (STAGE / "tinycmdr.lock").unlink(missing_ok=True)
         fb._instance_lock_free()
-        check("the lock probe does not create tinycmdr.lock",
-              not (STAGE / "tinycmdr.lock").exists())
+        check(not (STAGE / "tinycmdr.lock").exists(),
+              "the lock probe does not create tinycmdr.lock")
     else:
-        print("  (POSIX: the probe locks the folder, so there is no file to create)")
+        print(" (POSIX: the probe locks the folder, so there is no file to create)")
+    # A-2026-10-05-19: the inter-process lock namespace is keyed on the INSTALL, not the
+    # caller's uid (root's cron and the User= service used to take different files), and
+    # the shared dir/files carry the modes that let a second uid use them at all.
+    if os.name != "nt":
+        old_name = "tinycmdr-locks-%s" % getattr(os, "getuid", lambda: "w")()
+        check(fb.LOCK_DIR.name != old_name,
+              "the lock namespace is not keyed on the caller's uid", fb.LOCK_DIR.name)
+        probe_key = str(fb.BASE_DIR / "audit19.state")
+        fb._ip_take(probe_key)
+        try:
+            lock_file = fb._ip_lock_file(probe_key)
+            check(stat.S_IMODE(fb.LOCK_DIR.stat().st_mode) == 0o1777,
+                  "the shared lock dir is 1777 (sticky: create/enter, delete own)",
+                  oct(stat.S_IMODE(fb.LOCK_DIR.stat().st_mode)))
+            check(stat.S_IMODE(lock_file.stat().st_mode) == 0o666,
+                  "and a lock file is 0666, so the second uid can open it",
+                  oct(stat.S_IMODE(lock_file.stat().st_mode)))
+        finally:
+            fb._ip_drop(probe_key)
     _rc, out = _try_lock()
     check(out == "ACQUIRED", "and the next instance takes the lock", out)
     note = fb.instance_busy_note()

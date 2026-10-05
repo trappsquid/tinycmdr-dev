@@ -4191,6 +4191,22 @@ def _field_notes_record(fired, text):
         # in the history of the box.
         stats.setdefault("since", now)
         entries = stats.get("entries") if isinstance(stats.get("entries"), dict) else {}
+        # A tally is a claim about the LIVE library: a renamed or deleted entry used to
+        # leave its `entries` counter behind for ever, and doctor's "never fired" list then
+        # reported ghosts (A-2026-10-05-25 - the library is hand-edited by design, so
+        # renames are expected). Reconcile before recording, but NEVER wipe history on an
+        # absent or switched-off library: `field_notes()` answers [] for those, so the
+        # file's existence is the gate.
+        try:
+            if (CONFIG["agent"].get("field_notes_enabled", True)
+                    and _field_notes_path().exists()):
+                live = {e["title"] for e in field_notes()}
+                for gone in [t for t in entries if t not in live]:
+                    log.info("field note tally retired: %s (no longer in the library)",
+                             gone)
+                    del entries[gone]
+        except Exception:
+            pass
         for e in fired:
             slot = entries.setdefault(e["title"], {"fired": 0, "last": ""})
             slot["fired"] = int(slot.get("fired") or 0) + 1
@@ -7752,8 +7768,18 @@ def _lock_key(path):
         return text
 
 
-LOCK_DIR = Path(tempfile.gettempdir()) / ("tinycmdr-locks-%s"
-                                          % getattr(os, "getuid", lambda: "w")())
+# The lock namespace is keyed on the INSTALL FOLDER, not the caller. It used to be
+# "...-<getuid()>", so two processes at different uids writing one install - the Linux
+# system-install shape: the service runs as User=$RUN_USER, install/update run under sudo -
+# took different files and never serialized (A-2026-10-05-19: a lost read-modify-write,
+# invisible because each write is atomic on its own). One digest of BASE_DIR puts every
+# process pointed at this install in one namespace; the dir is 1777 (sticky: the usual
+# shared-lock answer - anyone may create/enter, only the owner may delete) and the lock
+# files are 0666 so the second uid can open them at all. The tradeoff is stated in
+# _ip_lock_file: a local user who knows a path can take its lock; O_NOFOLLOW keeps a
+# pre-created symlink from redirecting the open.
+LOCK_DIR = Path(tempfile.gettempdir()) / ("tinycmdr-locks-%s" % hashlib.sha1(
+    str(BASE_DIR).encode("utf-8", "replace")).hexdigest()[:12])
 _IP_TIMEOUT = 20.0        # bounded, and never fatal (see _ip_take)
 _IP_POLL = 0.05
 _IP_FDS = {}              # key -> fd we hold the OS lock on
@@ -7761,11 +7787,16 @@ _IP_FDS_GUARD = threading.Lock()
 
 
 def _ip_lock_file(key):
-    """The lock file for one path: one per (user, realpath), in the temp dir.
+    """The lock file for one path: one per (install, realpath), in the temp dir.
 
     Not a sibling of the target on purpose: _path_lock() also guards a user's own files
     (edit_file, write_file), and dotfile litter beside somebody's source is not ours to
     leave. The temp dir is also the one place no `clean` glob and no uninstaller touches.
+    The namespace is the install (LOCK_DIR), so every uid pointed at this install takes
+    the same file; the dir's sticky mode plus O_NOFOLLOW in _ip_take is what makes a
+    shared dir safe to use, and the one cost of sharing is that a local user who knows a
+    path can hold its lock (denial of one write, never a lost one - _ip_take times out and
+    proceeds, and the destination is still replaced atomically).
     """
     digest = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()[:16]
     return LOCK_DIR / ("%s.lock" % digest)
@@ -7798,8 +7829,25 @@ def _ip_take(key):
     if not key:
         return
     try:
-        LOCK_DIR.mkdir(mode=0o700, exist_ok=True)
-        fd = os.open(str(_ip_lock_file(key)), os.O_RDWR | os.O_CREAT, 0o600)
+        LOCK_DIR.mkdir(mode=0o1777, exist_ok=True)
+        if os.name != "nt":
+            # An existing dir keeps the mode it was made with (0o700, before A-19), so
+            # every take re-asserts 1777: without it the second uid cannot even enter.
+            try:
+                if stat.S_IMODE(LOCK_DIR.stat().st_mode) != 0o1777:
+                    os.chmod(str(LOCK_DIR), 0o1777)
+            except OSError:
+                pass
+        fd = os.open(str(_ip_lock_file(key)),
+                     os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
+        if os.name != "nt":
+            try:
+                # os.open's mode is filtered through the umask; another uid needs the
+                # file writable (flock does not, but the next open with O_RDWR does).
+                if stat.S_IMODE(os.fstat(fd).st_mode) != 0o666:
+                    os.fchmod(fd, 0o666)
+            except OSError:
+                pass
     except OSError as e:
         log.debug("inter-process lock unavailable for %s: %s", key, e)
         return
@@ -7846,6 +7894,10 @@ def _ip_drop(key):
 
 class _FileLock:
     """The lock _path_lock() hands out: threads here, every process on the box there.
+
+    "Every process" means every process pointed at this INSTALL, whichever uid it runs
+    as: the namespace is a digest of BASE_DIR, not of the caller (A-2026-10-05-19 - a
+    root cron and the User= service used to take different files and never serialize).
 
     Reentrant per THREAD, and that is load-bearing twice over. The decorator was
     stacked twice on one tool and a non-reentrant lock froze the run for 20 minutes
@@ -13151,6 +13203,12 @@ _EVENT_RUN = {}
 _EVENT_WARNED = False
 _EVENT_ARGS_MAX = 600      # scrubbed argument text kept per call
 _EVENT_KEEP = 30           # session event files kept per host (the operator's answer, 30)
+# A per-FILE ceiling beside the count, because retention bounded file COUNT and the busiest
+# session - always the newest, never in the pruned tail - could grow without limit
+# (A-2026-10-05-22; measured on this box 2026-10-05: one Mattermost session's log at
+# 246,744 bytes after days of use). The writer rolls to `<key>.events.1.jsonl` at this size,
+# replacing any previous predecessor, so a session costs at most two files and 2x this.
+_EVENT_MAX_BYTES = 8_000_000
 
 
 def event_log_on():
@@ -13161,6 +13219,12 @@ def event_log_on():
 def _event_path(session_key):
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
     return SESSIONS_DIR / f"{safe}.events.jsonl"
+
+
+def _event_rolled_path(session_key):
+    """The one-predecessor roll target for a session's event log (A-2026-10-05-22)."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
+    return SESSIONS_DIR / f"{safe}.events.1.jsonl"
 
 
 def event(kind, session_key=None, run_id=None, **fields):
@@ -13182,7 +13246,18 @@ def event(kind, session_key=None, run_id=None, **fields):
             rec.update(safe)
             line = json.dumps(rec, ensure_ascii=False, default=str)
             _ensure_sessions_dir()
-            with _event_path(key).open("a", encoding="utf-8") as fh:
+            path = _event_path(key)
+            try:
+                # One stat per event: the roll check must live where the appending
+                # happens, or a long-lived session (the one file prune_events can never
+                # reach) grows past any ceiling set elsewhere.
+                if path.exists() and path.stat().st_size >= _EVENT_MAX_BYTES:
+                    path.replace(_event_rolled_path(key))
+                    log.info("event log rolled at %d bytes: %s -> %s",
+                             _EVENT_MAX_BYTES, path.name, _event_rolled_path(key).name)
+            except OSError as e:
+                log.debug("event roll skipped: %s", e)
+            with path.open("a", encoding="utf-8") as fh:
                 fh.write(line + "\n")
         return rid
     except Exception as e:                     # a log is never worth a run
@@ -13263,18 +13338,35 @@ class _RunSpan:
 
 
 def prune_events(keep=None):
-    """Keep the newest N session event files. Touches nothing else in sessions/."""
+    """Keep the newest N SESSIONS' event files. Touches nothing else in sessions/.
+
+    Counts sessions, not files: a session's rolled predecessor (`*.events.1.jsonl`,
+    A-2026-10-05-22) belongs to the same session and is deleted with it, so the
+    directory stays bounded on both axes. Bases are stripped by SUFFIX, never split on
+    ".events": a session key may itself contain that string.
+    """
     keep = _EVENT_KEEP if keep is None else keep
     removed = []
     try:
-        files = sorted(SESSIONS_DIR.glob("*.events.jsonl"),
-                       key=lambda q: q.stat().st_mtime, reverse=True)
-        for old in files[keep:]:
-            try:
-                old.unlink()
-                removed.append(old.name)
-            except OSError:
-                pass
+        by_base = {}
+        for q in SESSIONS_DIR.glob("*.events*.jsonl"):
+            if q.name.endswith(".events.jsonl"):
+                base = q.name[:-len(".events.jsonl")]
+            elif q.name.endswith(".events.1.jsonl"):
+                base = q.name[:-len(".events.1.jsonl")]
+            else:
+                continue
+            by_base.setdefault(base, []).append(q)
+        newest = sorted(by_base,
+                        key=lambda b: max(q.stat().st_mtime for q in by_base[b]),
+                        reverse=True)
+        for base in newest[keep:]:
+            for old in by_base[base]:
+                try:
+                    old.unlink()
+                    removed.append(old.name)
+                except OSError:
+                    pass
     except Exception as e:
         log.warning("event retention skipped: %s", e)
     return removed
@@ -16182,7 +16274,8 @@ class Agent:
             note = note[-ELISION_NOTES_CHARS:]
         return base + "\n" + note
 
-    def _drop_oldest_block(self, messages, marker, key=None):
+    def _drop_oldest_block(self, messages, marker, key=None, reason="compact",
+                           save=True):
         """Delete the oldest whole exchange, leaving `marker` (plus what it covered) behind.
 
         Returns None when there is no whole exchange left to drop; otherwise the NET
@@ -16219,6 +16312,12 @@ class Agent:
         if cut is None:
             return None               # only the newest exchange is left
         dropped = messages[start:cut]
+        # The copy precedes the cut, and it is exactly this span: the transcript must not
+        # duplicate what stays live (A-2026-10-05-21). `save=False` is for a caller that
+        # cut a COPY for one request (_fit_payload): those blocks are not lost, and the
+        # real compaction that eventually evicts them writes them then.
+        if save:
+            self._save_transcript(key, dropped, reason)
         dropped_tokens = sum(est_tokens(json.dumps(m)) for m in dropped)
         # Remember WHICH calls lost their results: a later repeat of one of them is not the
         # "nothing has changed" case the refusal is for (see _elided_note).
@@ -16240,33 +16339,52 @@ class Agent:
         # re-serializing the whole conversation on every pass (that was O(N^2)).
         return dropped_tokens - (est_tokens(note) - est_tokens(prev))
 
-    def _save_transcript(self, key, messages, reason):
-        """Keep what compaction is about to destroy.
+    # The transcript rotates to `.transcript.1.jsonl` at this size, replacing the older
+    # predecessor (A-2026-10-05-21): the file is written per dropped block and is READ by
+    # the model through the elision note's pointer, so leaving it unbounded meant the
+    # pointer grew by the whole conversation each time compaction fired. One predecessor
+    # keeps it bounded while the current file always carries the newest dropped blocks.
+    _TRANSCRIPT_MAX_BYTES = 4_000_000
 
-        Compaction shrinks and deletes, and the session file holds the compacted version only,
-        so the evicted middle was unrecoverable - the gap ranked second in the harness's own
-        analysis on the Windows test box. One JSONL line per message, appended BEFORE the cut, so "what did
-        it actually see an hour ago" is answerable later without re-running anything. Lines can
-        repeat when compaction fires twice; it fires rarely by design (0 times in 14,269 log
-        lines on the test box). Off with session_transcript=false. Never raises.
+    def _save_transcript(self, key, dropped, reason):
+        """Keep exactly what compaction is about to destroy: the DROPPED block.
+
+        Compaction shrinks and deletes, and the session file holds the compacted version
+        only, so the evicted middle was unrecoverable - the gap ranked second in the
+        harness's own analysis on the Windows test box. One JSONL line per dropped
+        message, appended BEFORE the cut, so "what did it actually see an hour ago" is
+        answerable later without re-running anything.
+
+        It used to append the WHOLE live conversation on every compaction - lines repeated
+        when compaction fired twice, and nothing bounded the file (A-2026-10-05-21); the
+        callers now pass the span the cut removes (`_drop_oldest_block` is the one place
+        that knows it), so no live message is ever duplicated here. Off with
+        session_transcript=false. Never raises.
         """
-        if not key or not CONFIG["agent"].get("session_transcript", True):
+        if not key or not dropped or not CONFIG["agent"].get("session_transcript", True):
             return
         try:
             _ensure_sessions_dir()
             safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
             path = SESSIONS_DIR / f"{safe}.transcript.jsonl"
+            try:
+                if path.exists() and path.stat().st_size >= self._TRANSCRIPT_MAX_BYTES:
+                    path.replace(SESSIONS_DIR / f"{safe}.transcript.1.jsonl")
+                    log.info("[%s] transcript rotated at %d bytes; the predecessor is "
+                             "%s.1.jsonl", key, self._TRANSCRIPT_MAX_BYTES, safe)
+            except OSError as e:
+                log.debug("transcript rotation skipped: %s", e)
             stamp = time.strftime("%Y-%m-%d %H:%M:%S")
             with path.open("a", encoding="utf-8") as fh:
-                for m in messages:
+                for m in dropped:
                     if m.get("role") == "system":
                         continue
                     fh.write(json.dumps({"t": stamp, "why": reason, "role": m.get("role"),
                                          "content": m.get("content"),
                                          "tool_calls": m.get("tool_calls")},
                                         ensure_ascii=False) + "\n")
-            log.info("[%s] transcript: %d message(s) written to %s before %s",
-                     key, len(messages), path.name, reason)
+            log.info("[%s] transcript: %d dropped message(s) written to %s before %s",
+                     key, len(dropped), path.name, reason)
         except Exception as e:
             log.warning("transcript not written: %s", e)
 
@@ -16380,8 +16498,9 @@ class Agent:
         self._supersede_prune(messages, key)
         if self._conversation_token_est(messages) <= budget:
             return messages
-        # Before anything is shrunk or dropped: the full text goes to the transcript.
-        self._save_transcript(key, messages, "compact")
+        # The transcript copy is written per dropped block, inside _drop_oldest_block,
+        # where the cut's span is known (A-2026-10-05-21: this used to write the whole
+        # live conversation before the shrink, whether or not anything was dropped).
         if key:
             _st = run_state(key, create=True)
             _st["compactions"] = int(_st.get("compactions") or 0) + 1
@@ -16398,7 +16517,8 @@ class Agent:
         # the newest exchange is left.
         total = self._conversation_token_est(messages)
         while total > low:
-            removed = self._drop_oldest_block(messages, MARK_COMPACT, key)
+            removed = self._drop_oldest_block(messages, MARK_COMPACT, key,
+                                              reason="compact")
             if removed is None:
                 break
             total -= removed
@@ -16417,12 +16537,12 @@ class Agent:
         clip any remaining tool output. Never leaves an orphan tool message: the
         cut always lands on a user-message boundary."""
         target = max(2000, int(self._context_budget(key, endpoint) * 0.5))
-        # The overflow path drops the most context of all, and it used to be the one path
-        # that kept no copy: what it evicted was gone for good.
-        self._save_transcript(key, messages, "force_shrink")
+        # The overflow path drops the most context of all, so the per-block copy inside
+        # _drop_oldest_block matters most here; this path used to keep no copy at all.
         total = self._conversation_token_est(messages)
         while len(messages) > 4 and total > target:
-            removed = self._drop_oldest_block(messages, MARK_SHRINK, key)
+            removed = self._drop_oldest_block(messages, MARK_SHRINK, key,
+                                              reason="force_shrink")
             if removed is None:
                 break
             total -= removed
@@ -16458,7 +16578,8 @@ class Agent:
         low = max(2000, int(budget * 0.6))
         total = self._conversation_token_est(messages)
         while total > low:
-            removed = self._drop_oldest_block(messages, MARK_SHRINK, key)
+            removed = self._drop_oldest_block(messages, MARK_SHRINK, key,
+                                              reason="force_shrink", save=False)
             if removed is None:
                 break
             total -= removed

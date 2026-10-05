@@ -103,6 +103,36 @@ def main():
         check(fb.match_field_notes("ERROR: no such host: dns.lan") == [],
               "`repeat: once` stays quiet after it has fired")
 
+        # A-2026-10-05-25: a renamed or deleted entry must not leave a ghost tally - the
+        # counters are keyed by title, and doctor's "never fired" list is a claim about the
+        # LIVE library.
+        notes.write_text("## renamed DNS\nmatch: no such host, name resolution\n"
+                         "scope: any\nnote: x.\nrepeat: once\n", encoding="utf-8")
+        fb._FIELD_NOTES_CACHE["mtime"] = None
+        stats({"flaky DNS": {"fired": 7, "last": "2026-10-01 10:00:00"},
+               "renamed DNS": {"fired": 1, "last": "2026-10-02 10:00:00"}})
+        fb._field_notes_record([{"title": "renamed DNS"}], "")
+        data = json.loads(hits.read_text(encoding="utf-8"))
+        check("flaky DNS" not in (data.get("entries") or {}),
+              "a renamed entry's ghost tally is retired", data.get("entries"))
+        check((data.get("entries") or {}).get("renamed DNS", {}).get("fired") == 2,
+              "...while the live entry's tally survives and counts", data.get("entries"))
+        # ...and an absent library (temporarily unmounted, path typo) must never wipe it.
+        fb.CONFIG["agent"]["field_notes_file"] = str(workdir / "not-there.md")
+        fb._FIELD_NOTES_CACHE["mtime"] = None
+        stats({"renamed DNS": {"fired": 5, "last": "x"}})
+        fb._field_notes_record([], "")
+        data = json.loads(hits.read_text(encoding="utf-8"))
+        check("renamed DNS" in (data.get("entries") or {}),
+              "a missing library never wipes the tallies", data.get("entries"))
+        # ...and leave the suite's library where the next checks expect it (the stats path
+        # is derived from it: a config left pointing at a missing file moves the counters).
+        notes.write_text("## flaky DNS\nmatch: no such host, name resolution\n"
+                         "scope: any\nnote: the LAN resolver blipped; retry once.\n"
+                         "repeat: once\n", encoding="utf-8")
+        fb.CONFIG["agent"]["field_notes_file"] = str(notes)
+        fb._FIELD_NOTES_CACHE["mtime"] = None
+
         stats(unmatched={"ValueError: unknown field frobnicate": {
                    "fails": 9, "first": "2026-10-01", "last": "2026-10-02",
                    "sample": "unknown field frobnicate"}})
