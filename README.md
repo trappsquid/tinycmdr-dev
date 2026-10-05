@@ -196,6 +196,10 @@ venv/bin/python tests/run_all.py     # the gate; non-zero if any suite fails
 bash maintenance/pre-push.sh         # cheap pre-push: leak gate, regenerated numbers, ledger anchors
 ```
 
+This section is for a **git checkout**. An installed host ships the runtime only — no
+`tests/`, `docs/`, `CHANGELOG.md` or maintenance scripts — so those commands do not exist
+there; `tinycmdr doctor` is the installed tree's own check.
+
 Release flow, tree roles (`maintenance/where.py`), and what is deliberately not in git:
 [`docs/development.md`](docs/development.md). Longer version — measured surface, budgets, failure
 handling, comparisons: [`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md).
