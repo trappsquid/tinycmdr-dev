@@ -136,10 +136,11 @@ SHIP = [
     "skills",
     # The starter drop-in tools, the shapes doc and the toolsmith. tools/ is
     # otherwise per-host payload and stays banned from directory walks below
-    # (FORBIDDEN_DIRS); these four files are shipped source, like soul.md.
+    # (FORBIDDEN_DIRS); these five files are shipped source, like soul.md.
     "tools/patch.py",
     "tools/process.py",
     "tools/toolsmith.py",
+    "tools/computer_use.py",
     "tools/README.md",
     # The brand, at the two sizes a reader meets: the chibi heads the README and is the
     # image a link preview falls back to, the helm marks the "what it actually is" doc.
@@ -252,7 +253,7 @@ APP_FILES = ("INSTALL-WINDOWS.cmd", "INSTALL-MACOS.command", "UNINSTALL-MACOS.co
              "install/install-tinycmdr-macos.sh", "install/com.tinycmdr.agent.plist",
              "maintenance/restart-tinycmdr-macos.sh",
              "tools/patch.py", "tools/process.py", "tools/toolsmith.py",
-             "tools/README.md")
+             "tools/computer_use.py", "tools/README.md")
 
 # --------------------------------------------------------------- public build ---
 # Skills that belong to ONE box and must not ride along in a fleet build. They document a
