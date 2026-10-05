@@ -2167,13 +2167,28 @@ def _one_json_object(text):
 def _repair_doubled_calls(calls):
     """Collapse a tool call the endpoint emitted twice, after the stream has ended.
 
-    Structure only: the accumulated arguments must parse as one JSON object followed by
-    another before anything is rewritten, and a doubled tool name is halved only in that
-    same case. Everything else is left exactly as the endpoint sent it - which is the
-    point, after five releases of a fragment guard that could not tell a resend from a
-    repeated character."""
+    Two independent repairs, each with its own evidence:
+
+      * a doubled NAME (`shellshell`) is halved only when the halved name resolves in
+        the registry and the doubled one does not - that resolution is what makes the
+        guess safe, and it now works for a call with no arguments and for one whose
+        arguments arrived clean: exactly the cases the old arguments-gate skipped, and
+        exactly the no-argument doors (`memory`, `list_tools`) a doubled name breaks
+        (A-2026-10-04-04);
+      * doubled ARGUMENTS (one JSON object followed by another) collapse to the first,
+        structure only, unchanged.
+
+    Everything else is left exactly as the endpoint sent it - which is the point, after
+    five releases of a fragment guard that could not tell a resend from a repeated
+    character."""
     for slot in calls:
         fn = slot.get("function") or {}
+        name = fn.get("name") or ""
+        half = name[:len(name) // 2]
+        if (half and name == half + half
+                and _registered_tool(half) and not _registered_tool(name)):
+            fn["name"] = half
+            log.info("stream: tool name arrived doubled - kept %s", half)
         raw = fn.get("arguments") or ""
         if not raw:
             continue
@@ -2187,10 +2202,6 @@ def _repair_doubled_calls(calls):
             continue
         log.info("stream: tool call arguments arrived as a re-emitted copy - kept one")
         fn["arguments"] = one
-        name = fn.get("name") or ""
-        half = name[:len(name) // 2]
-        if half and name == half + half:
-            fn["name"] = half
 
 
 def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,

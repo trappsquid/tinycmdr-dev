@@ -114,6 +114,37 @@ def main():
     twice = fb._repair_tool_arguments(once)
     check("the repair is idempotent", args_of(twice[0]) == "{}", args_of(twice[0]))
 
+    # ---- doubled tool names, with and without arguments ------------------------
+    def dbl(name, args=""):
+        return [{"id": "c", "type": "function",
+                 "function": {"name": name, "arguments": args}}]
+
+    slots = dbl("shellshell", "{}")            # clean arguments: the old gate skipped it
+    fb._repair_doubled_calls(slots)
+    check("a doubled name with clean arguments is halved (A-2026-10-04-04)",
+          slots[0]["function"]["name"] == "shell", slots[0])
+
+    slots = dbl("memorymemory")                # no arguments at all: the old gate skipped it
+    fb._repair_doubled_calls(slots)
+    check("a doubled name with NO arguments is halved (A-2026-10-04-04)",
+          slots[0]["function"]["name"] == "memory", slots[0])
+
+    slots = dbl("shellshell", '{"a":1}{"a":1}')
+    fb._repair_doubled_calls(slots)
+    check("...and a doubled argument blob still collapses to the first object",
+          slots[0]["function"]["name"] == "shell"
+          and slots[0]["function"]["arguments"] == '{"a":1}', slots[0])
+
+    slots = dbl("witwit")
+    fb._repair_doubled_calls(slots)
+    check("a doubled name that resolves to nothing is left alone",
+          slots[0]["function"]["name"] == "witwit", slots[0])
+
+    stored = [call(MALFORMED)]
+    fb._repair_tool_arguments(stored)
+    check("the repair does not rewrite the caller's stored history (A-2026-10-04-06)",
+          args_of(stored[0]) == MALFORMED, args_of(stored[0]))
+
     # ---- the choke point: what the request actually carries --------------------
     agent = fb.Agent()
     history = [
