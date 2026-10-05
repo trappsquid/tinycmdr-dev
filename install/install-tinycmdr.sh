@@ -1156,6 +1156,9 @@ mkdir -p "$INSTALL_DIR"
 # was never told, and every fresh install served /page.css as a 404 - the page rendered
 # as raw unstyled markup (operator's fresh-install report, 2026-10-04). One rule now.
 HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
+# The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
+# the other two installers - they are four copies, and they already drifted once
+# (snapshots/, tmp/), so tests/test_verbs.py now grades the coverage (A-2026-10-05-15).
 HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
 host_owned() {
     case "$1" in

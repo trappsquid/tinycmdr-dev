@@ -13,6 +13,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -255,6 +256,27 @@ def main():
               and "pip install -r %s" in _tsrc)
         check("...and the mmpy_bot guard points at requirements.txt, not a module list",
               "pip install requests mmpy_bot croniter" not in _tsrc)
+
+        # The host-owned rule is written out four times (three installers + the update
+        # path) and they ALREADY disagreed once: snapshots/ and tmp/ were the
+        # installers' and not the updater's (A-2026-10-05-15). Grade that every
+        # installer dir is covered by _HOST_OWNED_PREFIXES or the by-name skips.
+        _hostdirs = set()
+        for _name in ("install-tinycmdr.sh", "install-tinycmdr-macos.sh"):
+            _m = re.search(r'HOST_DIRS="([^"]+)"',
+                           (BASE / "install" / _name).read_text(encoding="utf-8"))
+            if _m:
+                _hostdirs |= set(_m.group(1).split())
+        _m = re.search(r"\$hostDirs\s*=\s*@\(([^)]*)\)",
+                       (BASE / "install" / "install-tinycmdr.ps1")
+                       .read_text(encoding="utf-8"), re.S)
+        if _m:
+            _hostdirs |= set(re.findall(r'"([^"]+)"', _m.group(1)))
+        _covered = {p.rstrip("/") for p in fb._HOST_OWNED_PREFIXES}
+        _covered |= {"dist", ".git"}          # skipped by name in _apply_package
+        _missing = sorted(d for d in _hostdirs if d not in _covered)
+        check("the update path's host-owned set covers every installer dir",
+              bool(_hostdirs) and not _missing, (_missing, sorted(_hostdirs)))
 
         # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,

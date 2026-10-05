@@ -32056,8 +32056,15 @@ _HOST_OWNED_EXACT = frozenset((
     "tasks.journal.jsonl", "tasks.md", "confirm-allow.json", "notes-authored.json",
     "tools-provenance.json", "tinycmdr.log", "tinycmdr.lock",
 ))
-_HOST_OWNED_PREFIXES = ("tools/", "skills/", "sessions/", "logs/", "spill/", "venv/",
-                        "dist/", "maintenance/private_rules.py",
+# Four copies of ONE rule live in this tree - this set and the three installers'
+# HOST_DIRS/hostDirs lists (install-tinycmdr.sh:1159, install-tinycmdr-macos.sh:1014,
+# install-tinycmdr.ps1:1237). They already disagreed once: snapshots/ and tmp/ were
+# the installers' and not the updater's, so a re-install left state an update would
+# overwrite (A-2026-10-05-15). tests/test_verbs.py now grades that every installer
+# dir is covered here.
+_HOST_OWNED_PREFIXES = ("tools/", "skills/", "sessions/", "snapshots/", "logs/",
+                        "spill/", "venv/", "dist/", "tmp/",
+                        "maintenance/private_rules.py",
                         "maintenance/where-roles.json")
 
 
