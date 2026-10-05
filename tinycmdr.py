@@ -16519,8 +16519,11 @@ class Agent:
                         payload.pop(k, None)
                     _record_attempt(usage, url, "error", f"stream: {e}",
                                     time.time() - t0)
-                    log.warning("streaming failed on %s (%s) - retrying the same "
-                                "endpoint without streaming", url, e)
+                    log.warning("streaming failed on %s (%s) - retrying this call without "
+                                "streaming, and keeping this endpoint off streaming for the "
+                                "rest of THIS process: prompt progress, pings and the "
+                                "close-on-cancel all ride the streaming path "
+                                "(A-2026-10-04-07)", url, e)
                     continue
                 except requests.HTTPError as e:
                     status = _http_status(e)
