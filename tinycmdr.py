@@ -5781,10 +5781,11 @@ def code_cost_risk(code):
             break
     if not shape:
         return None
-    # Quotes become SPACES rather than disappearing, so a path inside a string is still a
-    # token: `subprocess.run("rglob('/')")` otherwise reads as one opaque token and a real
-    # sweep is missed.
-    for tok in _path_tokens(_QUOTE_CHARS.sub(" ", code)):
+    # Same quote policy as the shell rule: a quoted path stays whole, while a re-executor
+    # (`exec("os.walk('/')")`) has its quoted text flattened so the root inside is seen
+    # (A-2026-10-05-07).
+    text = _QUOTE_CHARS.sub(" ", code) if _REEXECUTOR.search(code) else code
+    for tok in _path_tokens(text):
         if _broad_root(tok):
             return {"shape": shape, "root": tok}
     return None
@@ -5802,14 +5803,22 @@ def command_cost_risk(command):
     in it, or the payload of `bash -c "..."` - so deleting it deleted the very thing being
     judged, and every quoted walk slipped the ceiling this guard exists to hold.
     """
+    subject = _cost_subject(command)
     shape = None
     for rx, name in _RECURSIVE_WALK:
-        if rx.search(_cost_subject(command)):
+        if rx.search(subject):
             shape = name
             break
     if not shape:
         return None
-    for tok in _path_tokens(_QUOTE_CHARS.sub(" ", str(command or ""))):
+    # Quote-aware when the quotes wrap a bare path argument - `"...\David Trapp\..."` must
+    # stay whole - and quote-FLATTENED when a re-executor runs the quoted text, because
+    # there the path lives INSIDE the quotes (`bash -c "find / -name x"`) and the shape
+    # above matched it for exactly that reason (A-2026-10-05-07).
+    text = str(command or "")
+    if _REEXECUTOR.search(text):
+        text = _QUOTE_CHARS.sub(" ", text)
+    for tok in _path_tokens(text):
         if _broad_root(tok):
             return {"shape": shape, "root": tok}
     return None
