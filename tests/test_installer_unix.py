@@ -379,8 +379,16 @@ def case_linux_uninstall(sb, pkg, bindir, user, py, inst):
     wrapper.parent.mkdir(parents=True, exist_ok=True)
     wrapper.write_text(f'#!/bin/sh\nexec "{inst}/tinycmdr" "$@"\n', encoding="utf-8")
     env = sandbox_home_env(sb, bindir, sb / "logs" / "lin-uninstall.log", user)
+    # A-2026-10-05-16: with no terminal and no --yes, the removal refuses and leaves
+    # everything where it is; --yes is the documented consent.
+    refusal = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--uninstall",
+                   "--mode", "user", "--install-dir", inst], env, pkg)
+    check("D2 an unconfirmed non-tty uninstall refuses instead of deleting",
+          refusal.returncode != 0 and inst.exists()
+          and "refusing to delete" in refusal.stdout + refusal.stderr,
+          f"rc={refusal.returncode}; {refusal.stdout[-200:]}{refusal.stderr[-200:]}")
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--uninstall",
-               "--mode", "user", "--install-dir", inst], env, pkg)
+               "--yes", "--mode", "user", "--install-dir", inst], env, pkg)
     check("D2 a user-mode uninstall exits 0", got.returncode == 0,
           f"rc={got.returncode}; {got.stdout[-300:]}")
     check("D2 the install folder is gone", not inst.exists(), f"{inst} survives")
@@ -389,7 +397,7 @@ def case_linux_uninstall(sb, pkg, bindir, user, py, inst):
           "the unit survived")
     check("D2 the PATH wrapper is gone", not wrapper.exists(), f"{wrapper} survives")
     again = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--uninstall",
-                 "--mode", "user", "--install-dir", inst], env, pkg)
+                 "--yes", "--mode", "user", "--install-dir", inst], env, pkg)
     check("D2 a removal that finds nothing says so",
           "nothing to remove" in again.stdout + again.stderr,
           f"second uninstall printed: {again.stdout.strip()[-200:]}")
@@ -530,8 +538,15 @@ def case_macos_uninstall(sb, pkg, bindir, user, py, inst):
     env = stub_env(bindir, sb / "logs" / "mac-uninstall.log",
                    {"HOME": str(rootish), "SUDO_USER": user,
                     "XDG_RUNTIME_DIR": str(sb / "run")})
+    # A-2026-10-05-16: no terminal and no --yes -> refuse, folder intact.
+    refusal = run(["bash", pkg / "install" / "uninstall-tinycmdr-macos.sh",
+                   "--install-dir", inst], env, pkg)
+    check("D2 an unconfirmed non-tty macOS uninstall refuses instead of deleting",
+          refusal.returncode != 0 and inst.exists()
+          and "refusing to delete" in refusal.stdout + refusal.stderr,
+          f"rc={refusal.returncode}; {refusal.stdout[-200:]}{refusal.stderr[-200:]}")
     got = run(["bash", pkg / "install" / "uninstall-tinycmdr-macos.sh",
-               "--install-dir", inst], env, pkg)
+               "--yes", "--install-dir", inst], env, pkg)
     check("D2 the documented removal exits 0", got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
     check("D2 the install folder is gone under the sudo-shaped environment",

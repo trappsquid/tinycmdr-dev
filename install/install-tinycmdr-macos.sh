@@ -443,10 +443,31 @@ if [ "$UNINSTALL" = 1 ]; then
             warn "could not edit $_pf - remove the '# tinycmdr' line from it by hand"
         fi
     done
-    if [ -d "$INSTALL_DIR" ]; then
-        info "removing $INSTALL_DIR"
-        rm -rf "$INSTALL_DIR"
-        _removed=1
+    # Ask before deleting an install - config, sessions and the token go with it - and
+    # refuse a folder with no tinycmdr.py in it, or a dangerous path. macOS had no
+    # guard at all here (not even Linux's "/" check) and deleted without a word
+    # (A-2026-10-05-16).
+    if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] \
+            && [ "$INSTALL_DIR" != "$RUN_HOME" ] && [ -d "$INSTALL_DIR" ]; then
+        if [ ! -f "$INSTALL_DIR/tinycmdr.py" ]; then
+            warn "not removing $INSTALL_DIR: no tinycmdr.py in it (wrong --install-dir?)"
+        else
+            if [ "$YES" != 1 ] && [ "$FORCE" != 1 ]; then
+                if [ -t 0 ]; then
+                    printf 'Delete %s and everything in it - config, sessions, the token? [y/N] ' "$INSTALL_DIR"
+                    read -r _ans
+                    case "$_ans" in
+                        [yY]|[yY][eE][sS]) ;;
+                        *) die "uninstall cancelled: nothing was removed (--yes skips this prompt)" ;;
+                    esac
+                else
+                    die "refusing to delete $INSTALL_DIR without --yes (no terminal to confirm on)"
+                fi
+            fi
+            info "removing $INSTALL_DIR"
+            rm -rf "$INSTALL_DIR"
+            _removed=1
+        fi
     fi
     if [ "$_removed" != 1 ]; then
         # Silence here is how a wrong-directory removal looked like success: under sudo the

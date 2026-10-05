@@ -513,10 +513,31 @@ if [ "$UNINSTALL" = 1 ]; then
               "/etc/sudoers.d/${RUN_USER}-hermes"
         info "sudo grant removed (both file names)"
     fi
-    if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] && [ -d "$INSTALL_DIR" ]; then
-        rm -rf "$INSTALL_DIR"
-        _removed=1
-        info "removed $INSTALL_DIR (token, notes and history went with it)"
+    # Deleting an install takes config.json, .env, sessions/, tools/ and notes with
+    # it, so this asks - and requires --yes/--force when there is no terminal - and
+    # refuses a folder with no tinycmdr.py in it, so a mistyped --install-dir is a
+    # message instead of a data loss (A-2026-10-05-16).
+    if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] && [ "$INSTALL_DIR" != "$HOME" ] \
+            && [ -d "$INSTALL_DIR" ]; then
+        if [ ! -f "$INSTALL_DIR/tinycmdr.py" ]; then
+            warn "not removing $INSTALL_DIR: no tinycmdr.py in it (wrong --install-dir?)"
+        else
+            if [ "$YES" != 1 ] && [ "$FORCE" != 1 ]; then
+                if [ -t 0 ]; then
+                    printf 'Delete %s and everything in it - config, sessions, the token? [y/N] ' "$INSTALL_DIR"
+                    read -r _ans
+                    case "$_ans" in
+                        [yY]|[yY][eE][sS]) ;;
+                        *) die "uninstall cancelled: nothing was removed (--yes skips this prompt)" ;;
+                    esac
+                else
+                    die "refusing to delete $INSTALL_DIR without --yes (no terminal to confirm on)"
+                fi
+            fi
+            rm -rf "$INSTALL_DIR"
+            _removed=1
+            info "removed $INSTALL_DIR (token, notes and history went with it)"
+        fi
     fi
     if [ "$_removed" = 0 ]; then
         # A removal that finds nothing must SAY so. Under `sudo` the installer used to
