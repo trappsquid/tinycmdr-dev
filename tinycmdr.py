@@ -562,8 +562,8 @@ DEFAULT_CONFIG = {
         # and four hitting 35-40 minutes. The symptom is the expensive one: the bot stops
         # mid-job and the operator has to type "continue". The caps only bind when work is
         # unfinished, so they are runway, not a target.
-        "max_steps": 250,        # hard cap on tool calls per task
-        "max_minutes": 75,      # wall-clock cap per task
+        "max_steps": 250,        # tool calls per SEGMENT (auto_continue adds segments)
+        "max_minutes": 75,      # wall-clock per segment; llm.max_turns bounds the run
         # auto_continue: a cap is a CHECKPOINT, not the end of the job. When the step or
         # wall-clock budget runs out with plan steps still open, the run starts a fresh
         # segment on the same task - plan and carried results intact - instead of
@@ -12950,6 +12950,8 @@ def run_block(key):
         # 2026-10-02: llm.max_turns=100 next to agent.max_steps=250, and the run-state line
         # reported only the 250).
         line = (f"Run so far: {st['calls']} of {max_steps} tool calls used ({pct}%)")
+        if int(st.get("segment") or 1) > 1:
+            line += f", segment {int(st['segment'])}"
         if max_turns:
             line += (f", turn {int(st.get('turn') or 0)} of {max_turns}")
         line += (" - the harness forces your report at whichever cap is reached first, so "
@@ -18202,6 +18204,13 @@ class Agent:
                                 and CONFIG["agent"].get("auto_continue", True)
                                 and (_open or not _st.get("plan"))):
                             _segments += 1
+                            # The checkpoint counters reset with the segment - that is the
+                            # fresh budget the notice promises - and progress_at must reset
+                            # WITH them: left stale it makes the plan-drift delta negative,
+                            # so the guard cannot fire again in the new segment, which is
+                            # the one most likely to wander (A-2026-10-05-02).
+                            _st["progress_at"] = 0
+                            _st["segment"] = _segments + 1
                             _elapsed = int(now_mono() - t0)
                             _notice = (
                                 f"{why} reached at {steps} steps, {_elapsed}s — continuing "

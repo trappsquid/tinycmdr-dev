@@ -2408,6 +2408,59 @@ def test_a_cap_with_work_left_continues_the_task_instead_of_ending_it():
           "Budget reached" in out, out[:120])
 
 
+def test_progress_at_resets_with_the_segment():
+    """A-2026-10-05-02: the segment reset resets `steps`; `progress_at` must reset with
+    it. Left stale it made the plan-drift delta negative, so the guard that catches a
+    wandering run could not fire again - dead exactly in the segment most likely to
+    wander, and the runway line re-advertised a nearly spent budget as nearly untouched."""
+    probes = []
+    for i in range(30):
+        p = TMP / f"drift_probe_{i}.txt"
+        p.write_text(f"stable {i}\n", encoding="utf-8")
+        probes.append(p)
+    calls = [{"role": "assistant", "content": "",
+              "tool_calls": [{"id": str(i), "function": {
+                  "name": "read_file",
+                  "arguments": json.dumps({"path": str(p)})}}]}
+             for i, p in enumerate(probes)]
+    seq = calls + [{"role": "assistant", "content": "Final: done."}]
+
+    saved_chat = fb.AGENT._chat
+    saved = dict(fb.CONFIG["agent"])
+    seen, used = [], {"n": 0}
+
+    def fake_chat(messages, model=None, use_tools=True, usage=None, max_tokens=None,
+                  cancel_event=None, on_delta=None, session_key=None, **kw):
+        seen.append(sum(1 for m in messages
+                        if "tool calls have run since any plan step moved"
+                        in str(m.get("content") or "")))
+        r = seq[min(used["n"], len(seq) - 1)]
+        used["n"] += 1
+        return r
+
+    key = "drift-segment-session"
+    fb.AGENT._chat = fake_chat
+    fb.reset_read_counts(key)
+    fb.run_state(key, create=True)["plan"] = [{"id": 1, "text": "stay stuck",
+                                               "status": "doing", "note": ""}]
+    fb.CONFIG["agent"].update(max_steps=10, max_minutes=30, auto_continue=True,
+                              auto_continue_max=1, plan_from_request=False,
+                              progress_updates=False, plan_drift_after=8)
+    try:
+        fb.AGENT.run(key, "read the probes, one per step", say_cb=lambda s: None)
+    finally:
+        fb.AGENT._chat = saved_chat
+        fb.CONFIG["agent"].clear()
+        fb.CONFIG["agent"].update(saved)
+        st = fb.run_state(key, create=True)
+        st["plan"] = []
+        st["progress_at"] = 0
+        st["calls"] = 0
+
+    check("drift across segments: the guard fires in BOTH segments",
+          seen and max(seen) >= 2, seen)
+
+
 def test_a_finished_plan_ends_the_run_at_the_cap_without_continuing():
     """The other half of the rule: when every plan step is done there is nothing to
     continue, so the cap must end the run (a continuation there would burn a budget on
