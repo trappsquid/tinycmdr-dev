@@ -297,6 +297,14 @@ def test_the_instance_lock_is_not_a_deletable_file():
         except subprocess.TimeoutExpired:
             holder.kill()
     check(fb._verb_running() is False, "with the holder gone the folder is free")
+    # A-2026-10-05-28: a read-only probe must not CREATE tinycmdr.lock.
+    if os.name == "nt":
+        (STAGE / "tinycmdr.lock").unlink(missing_ok=True)
+        fb._instance_lock_free()
+        check("the lock probe does not create tinycmdr.lock",
+              not (STAGE / "tinycmdr.lock").exists())
+    else:
+        print("  (POSIX: the probe locks the folder, so there is no file to create)")
     _rc, out = _try_lock()
     check(out == "ACQUIRED", "and the next instance takes the lock", out)
     note = fb.instance_busy_note()

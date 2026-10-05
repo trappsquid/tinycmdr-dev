@@ -31220,7 +31220,7 @@ def ensure_launcher_executable():
 _LOCK_FH = None
 
 
-def _lock_target():
+def _lock_target(for_probe=False):
     """(kind, handle) for this folder's single-instance lock.
 
     POSIX locks the INSTALL FOLDER itself, not a file beside it. flock lives on the
@@ -31230,9 +31230,15 @@ def _lock_target():
     contents, so that foot-gun is gone - and so is the abort message that used to tell
     the operator to delete the file. Windows has no directory handle msvcrt can lock, so
     it keeps the file.
+
+    `for_probe` opens that file for reading and NEVER creates it: a read-only probe
+    (status, doctor) used to write tinycmdr.lock into the install folder
+    (A-2026-10-05-28). A missing file comes back as OSError, which the caller turns into
+    "unknown" - safe, because a missing file means nothing holds the lock.
     """
     if os.name == "nt":
-        return "file", open(BASE_DIR / "tinycmdr.lock", "a+b")
+        return "file", open(BASE_DIR / "tinycmdr.lock",
+                            "r+b" if for_probe else "a+b")
     try:
         return "dir", os.open(str(BASE_DIR), os.O_RDONLY)
     except OSError:
@@ -31312,7 +31318,7 @@ def _instance_lock_free():
     the fix now locks the FOLDER on POSIX). Raises OSError when the target cannot be
     opened; callers turn that into "unknown".
     """
-    _kind, fh = _lock_target()
+    _kind, fh = _lock_target(for_probe=True)
     try:
         if os.name == "nt":
             import msvcrt
