@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.78] - 2026-10-05
+
+### Changed
+- **Caps:** `agent.max_steps`/`agent.max_minutes` are per-SEGMENT caps (`auto_continue` can add segments; `llm.max_turns` bounds the run), and the runway line names the segment in play. (tests/test_stall.py)
+- **Watchdog:** doctor reports a warn window that is not below the abandon window and a request budget longer than it; the streaming-failure warning says the endpoint stays off streaming for the rest of the process.
+- **Doctor:** the python floor is 3.10, matching the installers.
+- **Docs:** prompt-size claims are measured from the tree again (4,116 est on a clean unpack; 5,860 est as this install sends it), the dependency line says one import at startup (six installable), and the Develop section says it is a checkout-only recipe. (tests/test_measured_doc.py)
+
+### Fixed
+- **Payload fitting:** a failover request copies the message dicts it trims, so it can no longer shorten the live session's tool results. (tests/test_envelope.py)
+- **Tool-call repair:** a doubled tool name is halved on registry evidence (no-argument calls included); a repeated id with more results than calls clamps instead of raising IndexError; the replay repair rewrites copies, leaving the stored history's arguments intact. (tests/test_tool_args_repair.py, tests/test_payload_ids.py)
+- **Scan budget:** a backgrounded walk is charged for the time it held the turn; a quoted path with a space keeps its whole root (only a re-executor's quoted text is flattened); `tree`/`du`/`rg`/`ag`/`ack`/`rsync` and `ls -R` are walks without a flag, and `Path.walk()` joins the code shapes. (tests/test_cost_guard.py)
+- **Stall watchdog:** the warning post no longer counts as run progress, so it cannot reset the clock it watches, and the continuation segment resets `progress_at` with the counters it resets, so the plan-drift guard survives the boundary. (tests/test_stall.py)
+- **Supervisor:** ten rapid failed starts in a row stop the retry ladder with the bot's last words in the log and exit 4, instead of retrying a config error for ever. (tests/test_supervise.py)
+
 ## [1.0.77] - 2026-10-04
 
 ### Fixed
