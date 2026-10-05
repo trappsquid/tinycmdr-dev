@@ -120,6 +120,14 @@ def test_trust_tiers_and_staleness():
           fb._okf_stale({"stale_after": "2000-01-01T00:00:00Z"}) is True)
     check("a future stale_after is fresh",
           fb._okf_stale({"stale_after": "2999-01-01T00:00:00Z"}) is False)
+    # A-2026-10-05-27: the compare used to be lexical, so a non-zero-padded date read
+    # as the FUTURE ('2026-9-1' < '2026-10-05') and the concept silently never aged.
+    check("a non-zero-padded past date still compares as a date",
+          fb._okf_stale({"stale_after": "2000-1-1"}) is True)
+    check("a date-only past value is stale",
+          fb._okf_stale({"stale_after": "2000-01-01"}) is True)
+    check("an unreadable value fails open, named not silent",
+          fb._okf_stale({"stale_after": "soon-ish"}) is False)
 
 
 def test_new_concept_writes_a_conformant_file_and_slugs_it():

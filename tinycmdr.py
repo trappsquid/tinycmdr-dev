@@ -9142,9 +9142,40 @@ def _okf_tier(fm):
     return "machine-confirmed"
 
 
+_OKF_DATE_RX = re.compile(
+    r"^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2})(?::(\d{2}))?)?Z?$")
+_OKF_BAD_WHEN_WARNED = set()
+
+
+def _okf_when(text):
+    """`stale_after` as a zero-padded comparable instant, or None when unreadable.
+
+    Both sides of the staleness compare must be in one shape: `2026-9-1` compared
+    lexically BELOW `2026-10-05` ('1' < '9'), so the concept was never flagged stale and
+    nothing said the date was unreadable (A-2026-10-05-27). Date-only values normalize to
+    midnight; anything unreadable warns once and fails open, stated rather than silent.
+    """
+    m = _OKF_DATE_RX.match(str(text or "").strip())
+    if not m:
+        return None
+    y, mo, d, hh, mm, ss = m.groups()
+    return "%04d-%02d-%02dT%02d:%02d:%02dZ" % (int(y), int(mo), int(d),
+                                               int(hh or 0), int(mm or 0), int(ss or 0))
+
+
 def _okf_stale(fm):
     when = str(fm.get("stale_after") or "")
-    return bool(when) and _memory_now() >= when
+    if not when:
+        return False
+    cmp = _okf_when(when)
+    if cmp is None:
+        key = when[:60]
+        if key not in _OKF_BAD_WHEN_WARNED:
+            _OKF_BAD_WHEN_WARNED.add(key)
+            log.warning("memory stale_after %r is not an ISO instant - this concept "
+                        "cannot be flagged stale until the value is fixed", key)
+        return False
+    return _memory_now() >= cmp
 
 
 def memory_index_render(concepts=None):
