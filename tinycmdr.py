@@ -9406,17 +9406,19 @@ def tool_memory(args, ctx):
                               actor=actor)
             note = " | supersedes memory/%s (now deprecated)" % sup
         out = _memory_report("wrote", made, len(body)) + note
-        # stale_after is reachable WITHOUT schema rent (the always-on block is at its
-        # measured ceiling): taught once per session, on the model's own first add, where
-        # it is about to be needed - not on every call of every run.
+        # TWO fields the read path already used, taught WITHOUT schema rent - the always-on
+        # block sits under its measured ceiling (test_envelope; the macOS runner measures
+        # ~17 tokens higher than this box, so the margin is not one to spend): once per
+        # session, on the model's own first add, where they are about to be needed.
+        # `supersedes` needs no line here - the duplicate refusal teaches it at the moment
+        # it is the way out.
         st = run_state((ctx or {}).get("session_key"))
-        if st is not None and not st.get("memory_aging_hint") \
-                and not args.get("stale_after"):
-            st["memory_aging_hint"] = 1
-            out += ("\n[HARNESS: nothing about this concept expires. If a fact ages (a "
-                    "version, a path that moves, a token), pass "
-                    "stale_after: \"<ISO instant>\" - the index then flags it stale and "
-                    "the next reader knows to re-check.]")
+        if st is not None and not st.get("memory_fields_hint"):
+            st["memory_fields_hint"] = 1
+            out += ("\n[HARNESS: two optional fields add/update take - description: \"<the "
+                    "index line, one complete sentence carrying the point>\" (the index is "
+                    "all a future prompt sees) and stale_after: \"<ISO instant>\" (the "
+                    "index flags the concept stale after it). Pass them when they apply.]")
         return out
     if action == "update":
         c = _memory_find(args.get("id"))
@@ -12218,13 +12220,6 @@ CORE_TOOLS = {
              "id": {"type": "string"},
              "title": {"type": "string"},
              "body": {"type": "string"},
-             # ONE new field, and only this one: the always-on schema block sits ~30 tokens
-             # under its measured ceiling (tests/test_envelope.py, tests/test_disclosure.py),
-             # so everything else the memory path needs is taught where it is USED -
-             # `supersedes` by the duplicate refusal, `stale_after` by the one-line hint on
-             # the first add of a session - instead of every call of every run paying rent.
-             "description": {"type": "string",
-                             "description": "the index line; one complete sentence"},
              "reason": {"type": "string"},
              "query": {"type": "string"}},
             ["action"]),

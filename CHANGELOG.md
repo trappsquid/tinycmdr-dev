@@ -31,10 +31,12 @@ Fixed
   with any cut marked by an ellipsis - measured 2026-10-04: an index line ended
   "…ffmpeg 8.1.1 at" while `-lmin`, the whole point, never reached the prompt. Every index
   line now states its verification tier, `unverified` included. Schema rent was decided by
-  the gates: the first cut declared all six new fields and tripped the 1200-char per-tool
-  cap (memory 1426) and the 5400-token static ceiling (5662), so `description` alone is
-  declared; `supersedes` is taught by the refusal that needs it, and `stale_after` by a
-  once-per-session hint on the model's own first add.
+  the gates, twice: declaring all six new fields tripped the 1200-char per-tool cap (memory
+  1426) and took the static overhead to 5,662 local, and the cut that kept only
+  `description` measured 5,395 here but **5,412 on the macOS runner** - the ceiling is
+  5,400, and the runner measures a few tokens higher than this box. So **no new field is
+  declared**: `supersedes` is taught by the refusal that needs it, and `description` and
+  `stale_after` by one once-per-session hint on the model's own first add.
 
 ## [1.0.76] - 2026-10-04
 
