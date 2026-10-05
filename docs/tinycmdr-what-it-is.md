@@ -31,7 +31,7 @@ interfaces          Mattermost bot (DMs + @mentions), Telegram DM, `--once "task
                     inline cards, `--app` full-screen); a host with no chat
                     token is CLI-only
 core tools          21, of which 11 are always-on; the rest answer by name (section 2)
-custom tools        3 example tools ship in ./tools/ (native .py, register-style .py,
+custom tools        4 example tools ship in ./tools/ (native .py, register-style .py,
                     <name>.tool.json); a working box's own drop-ins load from the same
                     folder, and the agent writes its own with create_tool
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)

@@ -36,7 +36,7 @@ PLATFORM
       - Windows: a PowerShell engine over UI Automation / Win32 (measured
         2026-09-28 in a VM, 200% display scaling included);
       - Linux: an X11 engine (xdotool/xwininfo/ffmpeg); Wayland is open work -
-        see ISSUES.md.
+        see docs/computer-use.md.
 
     No cliclick, no pyobjc, no cua-driver, no daemon: every action is a call to
     the OS the machine already has. An unsupported platform is greeted with one
@@ -54,6 +54,15 @@ PERMISSIONS (the thing to know before blaming the tool)
     `doctor` reports both, plus the screen geometry and the scale, and prints the
     path to grant. A grant does not apply to an already-running process: the bot
     must be restarted after granting.
+
+    A recorded grant can still stop applying - the STALE case. It is what an entry
+    becomes when the binary it named was replaced (an update, a new venv), and
+    `doctor` diagnoses it by the disagreement between the OS flag and a real AX
+    read rather than by the checkbox; the Screen Recording grant is voided outright
+    when the binary changes. Remove the entry, re-add the path `doctor` prints,
+    restart. The host-facing story - both grants, the stale case with measured
+    examples, the Windows and Linux equivalents, and where screenshots go - is
+    docs/computer-use.md.
 
 WHAT A CAPTURE GIVES THE MODEL
     `capture` returns numbered elements for the targeted app, e.g.
@@ -2744,6 +2753,37 @@ def _wait(args, ctx):
                        "summary": "waited %.2fs" % seconds}, ensure_ascii=False)
 
 
+def ax_grant_lines(ax_flag, ax_read, ax_error, target):
+    """The Accessibility verdict as plain lines, stale grant included.
+
+    Two probes answer different questions: `ax_flag` is what the OS believes about
+    the process that ASKED (the `osascript` child, not the bot), `ax_read` is a real
+    AX read - what the tool actually needs. When they disagree the read wins, and
+    the disagreement is the diagnosis: a grant the settings list but the process
+    cannot use is the STALE case - what a recorded entry becomes after the binary
+    it names was replaced (an update, a rebuilt venv) or entered for a different
+    copy. Pure on purpose: every branch is graded without a Mac, a screen or a
+    permission (see `_selftest`).
+    """
+    lines = ["  Accessibility (AX tree, click, type): %s"
+             % ("granted" if (ax_flag or ax_read) else "NOT GRANTED")]
+    if not ax_read and ax_error:
+        lines.append("    (a real AX read failed: error %s)" % ax_error)
+    if ax_flag != ax_read:
+        lines.append("    (the OS flag says %s while a real AX read says %s - trust "
+                     "the read; the flag answers for the process that asks)"
+                     % ("granted" if ax_flag else "not granted",
+                        "granted" if ax_read else "not granted"))
+        if ax_flag and not ax_read:
+            lines.append("    -> a STALE grant: System Settings lists %s as allowed, "
+                         "but that entry no longer applies to this process. That is "
+                         "what a grant becomes after the binary it names was "
+                         "replaced (an update, a new venv) or when it was entered "
+                         "for a different copy: REMOVE the entry, re-add %s, then "
+                         "restart the bot." % (target, target))
+    return lines
+
+
 def _doctor(args, ctx):
     info, err = _info()
     lines = ["computer_use doctor", "  platform: %s" % sys.platform]
@@ -2756,14 +2796,8 @@ def _doctor(args, ctx):
     lines.append("  macOS: %s" % info.get("macos"))
     ax_flag = bool(info.get("accessibility"))
     ax_read = bool(info.get("ax_read"))
-    lines.append("  Accessibility (AX tree, click, type): %s"
-                 % ("granted" if (ax_flag or ax_read) else "NOT GRANTED"))
-    if ax_flag != ax_read:
-        lines.append("    (the OS flag says %s while a real AX read says %s%s - "
-                     "trust the read; the flag answers for the process that asks)"
-                     % (ax_flag, ax_read,
-                        (", AX error %s" % info.get("ax_error"))
-                        if info.get("ax_error") else ""))
+    lines.extend(ax_grant_lines(ax_flag, ax_read, info.get("ax_error"),
+                                sys.executable))
     display = info.get("display") or {}
     dpts = (display.get("w"), display.get("h"))
     lines.append("  display: main %sx%s points, origin (%s,%s); CG reports "
@@ -2785,12 +2819,17 @@ def _doctor(args, ctx):
         lines.append("  screencapture: FAILED - %s" % serr)
         lines.append("    -> grant Screen Recording to %s and restart"
                      % sys.executable)
+        lines.append("       (a grant that worked before an update and stopped "
+                     "after it is the stale case: macOS voids Screen Recording "
+                     "when the binary it named changes - remove the entry in "
+                     "System Settings and re-add it.)")
     lines.append("  grant target: %s" % sys.executable)
     lines.append("  grant in: System Settings > Privacy & Security > "
                  "Accessibility / Screen Recording > + ; the bot must be "
                  "restarted after a grant.")
     payload.update({"macos": info.get("macos"), "accessibility": ax_flag or ax_read,
                     "accessibility_flag": ax_flag, "ax_read": ax_read,
+                    "stale_grant": bool(ax_flag and not ax_read),
                     "screen_recording": bool(shot_px), "display": display,
                     "screenshot_pixels": list(shot_px) if shot_px else None,
                     "grant_target": sys.executable,
@@ -2953,13 +2992,13 @@ def run(args, ctx):
 # only; tools/* is gitignored except the three starters). A per-host file in
 # tests/test_*.py moves the SHIPPED doc's generated suite count -
 # maintenance/measured-block.py globs tests/test_*.py, while it counts tools via
-# `git ls-files` - which would leave a clean clone disagreeing with the numbers
-# committed in docs/tinycmdr-what-it-is.md. Measured 2026-09-28: adding
-# tests/test_computer_use.py turned that gate red (62 suites -> 63). Keeping the
-# checks beside the tool keeps the gate honest on both trees. When a Windows and
-# a Linux backend land and this becomes a starter tool, these checks move to
-# tests/test_computer_use.py and the doc is regenerated - that promotion is the
-# step that makes them clone-visible, and it is worked in ISSUES.md item 15.
+# `git ls-files` - a clean clone would disagree with the numbers committed in
+# docs/tinycmdr-what-it-is.md. Measured 2026-09-28: adding tests/test_computer_use.py
+# turned that gate red (62 suites -> 63; the suite count is globbed while the tool
+# count is tracked). The checks therefore stay beside the tool, and the suite stages
+# a byte-copy of this file and runs this function against it, so both numbers stay
+# honest on a clean clone. The promotion itself happened 2026-10-05: this file and
+# the suite both ship.
 # ===========================================================================
 def _selftest():
     fails = []
@@ -3023,6 +3062,26 @@ def _selftest():
     for text in ("hello world", "rm -rf build/", "curl https://x -o f",
                  "sudo rm build/thing.txt", "def rm_rf(): pass"):
         check("allowed text: %s" % text[:24], not blocked_text(text), text)
+
+    # -- the grant diagnosis, pure (the stale branch is what a replaced binary
+    #    leaves behind: the flag answers for osascript, the read for the tool) --------
+    both_ok = ax_grant_lines(True, True, "", "/x/python")
+    check("granted: one line, no stale talk",
+          len(both_ok) == 1 and "granted" in both_ok[0], both_ok)
+    both_no = ax_grant_lines(False, False, "-25204", "/x/python")
+    check("not granted: the AX error is named",
+          "NOT GRANTED" in both_no[0]
+          and any("-25204" in ln for ln in both_no), both_no)
+    check("not granted: no stale accusation without a flag",
+          not any("STALE" in ln for ln in both_no), both_no)
+    stale = ax_grant_lines(True, False, "-25204", "/x/python")
+    check("stale: the flag/read disagreement is diagnosed",
+          any("STALE" in ln and "/x/python" in ln and "REMOVE" in ln
+              for ln in stale), stale)
+    read_only = ax_grant_lines(False, True, "", "/x/python")
+    check("the flag answering for osascript is not called stale",
+          "granted" in read_only[0] and not any("STALE" in ln for ln in read_only),
+          read_only)
 
     # -- the screenshot dedup ----------------------------------------------
     _SHOT_DEDUP.clear()

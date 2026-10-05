@@ -203,6 +203,8 @@ there; `tinycmdr doctor` is the installed tree's own check.
 Release flow, tree roles (`maintenance/where.py`), and what is deliberately not in git:
 [`docs/development.md`](docs/development.md). Longer version — measured surface, budgets, failure
 handling, comparisons: [`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md).
+The GUI tool's host notes — TCC grants and the stale case, Windows/Linux pitfalls, image
+routing: [`docs/computer-use.md`](docs/computer-use.md).
 
 ## License
 
