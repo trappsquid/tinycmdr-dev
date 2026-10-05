@@ -14722,11 +14722,9 @@ Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restar
 GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 
 
-# One writer at a time for the state file. It is a read-modify-write over a shared
-# document with several callers on different threads (a restart note, the model
-# choice, the carried last_seen below), so two of them can lose one update. RLock:
-# a guard that protects state must never be able to wedge the caller that holds it.
-_STATE_LOCK = threading.RLock()
+# Serialization for the state file lives in _state() itself: one _path_lock around the
+# whole read-modify-write. A module-level threading.RLock used to sit here, declared as
+# that guard and acquired nowhere (A-2026-10-05-18).
 
 
 def _load_json_state(path, what):
