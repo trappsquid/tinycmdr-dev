@@ -208,17 +208,20 @@ check("the invitation rides the trailing block, not the system prompt",
           state_marker=False, session_key="mintline-3")
       or fb.mint_offer_line("mintline-3") == "")
 _st7 = fb.run_state("offer-7", create=True)
-_st7["calls_by"] = {"shell": 3, "read_file": 1}
+_st7["calls_by"] = {"shell": 3}
 _st7["order_is_lookup"] = 1
-_line7 = fb.mint_offer("offer-7", _rep2, source="main")
+_st7["order_words"] = ["which", "port", "the", "web", "ui", "listens"]
+_line7 = fb.remember_offer("offer-7", _rep2, source="main")
 check("a lookup answered with nothing saved offers to keep the fact",
       _line7 and "save it" in _line7, _line7)
-check("...once per session", fb.mint_offer("offer-7", _rep2) == "")
+check("...once per session", fb.remember_offer("offer-7", _rep2, source="main") == "")
 _st8 = fb.run_state("offer-8", create=True)
 _st8["calls_by"] = {"shell": 3}
 _st8["order_is_lookup"] = 1
+_st8["order_words"] = ["where", "is", "the", "token", "file", "now"]
 _st8["remembered"] = 1
-check("no offer when the run already saved it", fb.mint_offer("offer-8", _rep2) == "")
+check("no offer when the run already saved it",
+      fb.remember_offer("offer-8", _rep2, source="main") == "")
 check("a repeated ORDER offers the mint without any command census",
       _line5 and "run #3" in _line5 and "mint it" in _line5, _line5)
 _CMD = "Get-PSDrive C | Select-Object Used,Free"

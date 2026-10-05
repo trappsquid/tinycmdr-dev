@@ -581,6 +581,9 @@ DEFAULT_CONFIG = {
         "mint_offer_steps": 4,      # ... with at least this many hand-driven calls
         "order_repeat_overlap": 0.6,  # shared-word share that reads as "the same request"
         "remember_nudge": True,     # one line when a lookup answers a durable-fact question
+        "remember_offer": True,     # ask save-or-dismiss after a run that re-derived facts
+        "remember_offer_steps": 4,  # ... with at least this many hand-driven calls
+        "memory_dup_overlap": 0.6,  # Jaccard body overlap at which add refuses a restatement
         "auto_continue": True,
         "auto_continue_max": 2,
         # No-progress nudges: a reply that ends the turn with an intention instead of a
@@ -6106,31 +6109,13 @@ def mint_offer(session_key, reporter, source="main"):
     st = run_state(session_key) or {}
     by = st.get("calls_by") or {}
     hand = sum(int(by.get(t) or 0) for t in MINT_HINT_TOOLS)
-    # A lookup that produced a durable fact needs no threshold of its own: two calls that
-    # answered "where is X" are enough to offer keeping it (see the remember offer below).
-    _lookup_offer = bool(st.get("order_is_lookup")) and hand >= 2
-    if hand < int(CONFIG["agent"].get("mint_offer_steps") or 4) and not _lookup_offer:
+    if hand < int(CONFIG["agent"].get("mint_offer_steps") or 4):
         return ""
     if int(by.get("create_tool") or 0) or int(by.get("toolsmith") or 0):
         return ""
-    if st.get("order_is_lookup") and not st.get("remembered") \
-            and hand >= 2 and not st.get("remember_offer_done"):
-        # The other half of the memory gap (measured 2026-09-25: asked which port the UI
-        # listens on and where its token lives, the run answered both and saved nothing).
-        # The harness asks, because the operator is the one who knows whether the fact will
-        # be needed again - same shape as the mint offer, and only once per session.
-        st["remember_offer_done"] = 1
-        line = ("💡 Nothing about this was saved to memory. If that fact is one you will "
-                "need again, say **save it** and I will keep it in memory - the index "
-                "then rides in my prompt every run, so I stop looking it up.")
-        try:
-            if reporter is not None:
-                reporter.say(line)
-            log.info("[%s] remember offer posted (lookup order, %d hand calls)",
-                     session_key, hand)
-        except Exception:
-            log.debug("remember offer failed", exc_info=True)
-        return line
+    # The memory half of this pair belongs to remember_offer() now, and it is event-driven
+    # (2026-10-04): it fires on the run's own hand-call count instead of only for an order
+    # that reads as a "where is X" question, and a dismissal is remembered for the shape.
     repeats = int(st.get("order_repeats") or 0)
     if repeats >= 2:
         line = (f"💡 That was run #{repeats} of nearly this same request, and it took {hand} "
@@ -6203,6 +6188,133 @@ def mint_offer(session_key, reporter, source="main"):
     except Exception:
         log.debug("mint offer failed", exc_info=True)
     return line
+
+
+def remember_offer(session_key, reporter, source="main", trigger="lookup"):
+    """Ask the operator to SAVE OR DISMISS after a run that re-derived facts by hand.
+
+    The write-time nudge (remember_nudge) fires while a fact is freshest, and only for an
+    order that reads as a "where is X" question. That is judgment-driven at the one moment
+    a model cannot tell a durable fact from a fresh one - and measured 2026-10-04 (a
+    self-audit of this harness's memory prompting): the publishable gets saved, the
+    load-bearing does not. The evidence that a fact IS durable is that it cost a lookup
+    AGAIN, so the offer is event-driven instead: a run that spent `remember_offer_steps`
+    hand-driven calls and saved nothing is asked once per session, and **dismiss** is
+    remembered for that shape so it cannot nag.
+
+    trigger="lookup"  the order asked where a durable fact lives and the run answered it
+                      with at least two hand calls - the behaviour this replaces (2026-09-25),
+                      kept, and offered ahead of the mint offer as it always was.
+    trigger="event"   the run spent remember_offer_steps hand calls, whoever asked for
+                      what - the new half, offered only when the mint had nothing to say
+                      (see offer_after_run: one offer per run).
+    """
+    if not CONFIG["agent"].get("remember_offer", True) or source != "main":
+        return ""
+    st = run_state(session_key) or {}
+    if st.get("remembered") or st.get("remember_offer_done"):
+        return ""
+    by = st.get("calls_by") or {}
+    hand_total = sum(int(by.get(t) or 0) for t in MINT_HINT_TOOLS)
+    hand = hand_total - int(st.get("hand_at_start") or 0)
+    if trigger == "lookup":
+        if not (st.get("order_is_lookup") and hand >= 2):
+            return ""
+    elif hand < int(CONFIG["agent"].get("remember_offer_steps") or 4):
+        return ""
+    words = sorted({str(w) for w in (st.get("order_words") or []) if w})
+    if not words:
+        return ""            # no shape to key a dismissal on: the mint offer has this run
+    key = set(words)
+    overlap = float(CONFIG["agent"].get("order_repeat_overlap") or 0.6)
+    with _PROC_LOCK:
+        data = _census_load()
+        for d in (data.get("__remember_dismissed__") or []):
+            w = set(d.get("words") or [])
+            if w and len(key & w) / float(min(len(key), len(w))) >= overlap:
+                log.info("[%s] remember offer suppressed: this shape was dismissed",
+                         session_key)
+                return ""
+        offers = [o for o in (data.get("__remember_offers__") or [])
+                  if o.get("session") != session_key]
+        offers.append({"words": words[:60], "sample": st.get("order_sample") or "",
+                       "session": session_key, "at": time.strftime("%Y-%m-%d %H:%M")})
+        data["__remember_offers__"] = offers[-40:]
+        _census_save(data)
+    st["remember_offer_done"] = 1
+    line = (f"💡 That run spent {hand} hand-driven calls, and nothing it learned went to "
+            f"memory - so the next run of this re-derives it. Say **save it** and I will "
+            f"keep the durable facts, or **dismiss** and I will not ask about this one "
+            f"again.")
+    try:
+        if reporter is not None:
+            reporter.say(line)
+        log.info("[%s] remember offer posted (event-driven: %d hand calls this run, "
+                 "nothing saved)", session_key, hand)
+    except Exception:
+        log.debug("remember offer failed", exc_info=True)
+    return line
+
+
+def offer_after_run(session_key, reporter, source="main"):
+    """ONE offer per run, in priority order.
+
+    1. remember_offer(trigger="lookup") - the order asked where a durable fact lives and the
+       run answered it: the pre-2026-10-04 rule, unchanged, and it keeps the front seat it
+       has always had.
+    2. mint_offer - a routine that repeats is the rarer, bigger ask; the event-driven memory
+       offer must never shadow it (a long run that saved nothing would otherwise take this
+       offer's turn every single time).
+    3. remember_offer(trigger="event") - the run spent remember_offer_steps hand calls and
+       saved nothing: the new half, offered only when nothing else had a turn.
+    """
+    for fn in (lambda: remember_offer(session_key, reporter, source=source,
+                                      trigger="lookup"),
+               lambda: mint_offer(session_key, reporter, source=source),
+               lambda: remember_offer(session_key, reporter, source=source,
+                                      trigger="event")):
+        try:
+            line = fn()
+        except Exception:
+            log.debug("offer failed", exc_info=True)
+            line = ""
+        if line:
+            return line
+    return ""
+
+
+_REMEMBER_DISMISS_RX = re.compile(
+    r"(?i)^\s*(?:/)?(?:tinycmdr\s+)?(?:dismiss|don'?t save(?: it)?|skip it|"
+    r"no thanks|not this one|forget it)[.!]?\s*$")
+
+
+def remember_dismiss_order(session_key, text):
+    """A bare "dismiss" answering the last remember offer: record it, answer it here.
+
+    The dismissal is the operator's own durability judgment - the one party who knows
+    what will be needed again - so it is remembered for that shape (the order's words,
+    the same overlap rule the census uses) and the offer never names it again. Answered
+    without a model call: there is nothing for the model to do with the word.
+    """
+    if not _REMEMBER_DISMISS_RX.match(str(text or "")):
+        return ""
+    with _PROC_LOCK:
+        data = _census_load()
+        offers = data.get("__remember_offers__") or []
+        mine = [o for o in offers if o.get("session") == session_key]
+        if not mine:
+            return ""
+        last = mine[-1]
+        data["__remember_offers__"] = [o for o in offers if o is not last]
+        dismissed = data.setdefault("__remember_dismissed__", [])
+        dismissed.append({"words": last.get("words") or [],
+                          "sample": last.get("sample") or "",
+                          "at": time.strftime("%Y-%m-%d %H:%M")})
+        data["__remember_dismissed__"] = dismissed[-60:]
+        _census_save(data)
+    log.info("[%s] remember offer dismissed for this shape", session_key)
+    return ("Noted - I won't offer to save that one again. If you change your mind, say "
+            "**save it** and I will keep it.")
 
 
 def route_hint(command, ctx):
@@ -8941,8 +9053,10 @@ def memory_index_render(concepts=None):
             if _okf_stale(c["fm"]):
                 flags.append("stale")
             tier = _okf_tier(c["fm"])
-            if tier != "unverified":
-                flags.append(tier)
+            # NOTHING RIDES AS PERMANENTLY TRUE: the tier is stated even when it is
+            # "unverified" - the default - because an unstated stance reads as authority
+            # in the one place the model actually sees (the index is the whole prompt).
+            flags.append(tier)
             tail = ("  (%s)" % ", ".join(flags)) if flags else ""
             desc = (" - " + c["description"]) if c["description"] else ""
             lines.append("* [%s](%s.md)%s%s" % (c["title"], c["id"], desc, tail))
@@ -8972,8 +9086,93 @@ def _memory_log_append(kind, text):
     atomic_write_text(MEMORY_LOG, head + "\n" + "\n".join(lines).strip("\n") + "\n")
 
 
+def _memory_terms(text):
+    """The content words of a title or body, for the duplicate and title-token tests."""
+    return set(re.findall(r"[a-z0-9][a-z0-9_.:-]{2,}", str(text or "").lower()))
+
+
+_MEMORY_STOP = frozenset((
+    "the", "and", "for", "not", "with", "that", "this", "from", "into", "when", "then",
+    "than", "was", "were", "are", "has", "have", "had", "but", "you", "your", "per",
+    "use", "used", "using", "one", "two", "any", "all", "can", "will", "now", "its",
+    "default", "output", "value", "new", "old", "fixed",
+))
+
+
+def _memory_dup_overlap(body, concepts, ignore=()):
+    """(concept, share) when an existing concept already SAYS this, else None.
+
+    Jaccard over the bodies' content words. Containment (shared / smaller) is the rule the
+    order census uses and it is wrong here: two facts about one subsystem of very different
+    lengths score high on containment while genuinely saying different things. A restatement
+    keeps the length AND the words - the pile this must catch (measured 2026-10-04: the
+    legacy notes carried the drive-detection fact twice, near-verbatim) - so Jaccard with a
+    floor on the shared words catches the pile and leaves a new fact alone. Deprecated
+    concepts are history and are not compared.
+    """
+    words = _memory_terms(body)
+    if len(words) < 12:
+        return None
+    best, hit = 0.0, None
+    for c in concepts:
+        if c["id"] in ignore or c["status"] == "deprecated":
+            continue
+        w = _memory_terms(c["body"])
+        if len(w) < 12:
+            continue
+        shared = len(words & w)
+        if shared < 10:
+            continue
+        share = shared / float(len(words | w))
+        if share > best:
+            best, hit = share, c
+    if hit is not None and best >= float(CONFIG["agent"].get("memory_dup_overlap") or 0.6):
+        return hit, best
+    return None
+
+
+def _memory_description(title, body, bound=160):
+    """The index line's tail: the first COMPLETE unit that carries the point.
+
+    The prompt carries index.md and nothing else, so a description cut mid-sentence is worse
+    than a short one - it reads as complete while the operative token is gone (measured
+    2026-10-04: a concept's index line ended "…ffmpeg 8.1.1 at" and the operative `-lmin`
+    never reached the prompt). Units are lines and sentences; the first that fits and names
+    a word from the title wins, then the first that names one at all, and only a unit that
+    cannot fit is cut - at a word boundary, with an ellipsis saying so.
+    """
+    units = []
+    for raw in re.split(r"(?:\r?\n+|(?<=[.!?])\s+)", str(body or "")):
+        u = re.sub(r"^[\s>*+-]+", "", raw).strip()
+        if u:
+            units.append(u)
+    if not units:
+        return ""
+    named = [t for t in re.findall(r"-?[A-Za-z0-9][\w.:/-]{1,}", str(title or ""))
+             if t.lower() not in _MEMORY_STOP and len(t) > 2]
+    # The OPERATIVE token is the one the title's claim turns on: a flag or identifier
+    # (`-lmin`, `-b:v`, `dvd_work`) rather than an ordinary word, and the first such one
+    # the title names. The unit that states it is what the index line carries - a
+    # first-sentence fallback put "…ffmpeg 8.1.1 at" (the whole point gone) in front of a
+    # model that never sees the body (measured 2026-10-04).
+    operative = [t for t in named if re.search(r"[^A-Za-z0-9]", t)]
+
+    def cut(u):
+        if len(u) <= bound:
+            return u
+        return u[:bound].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+
+    for token in operative + named:
+        low = token.lower()
+        for u in units:
+            if low in u.lower():
+                return cut(u)
+    return cut(units[0])
+
+
 def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
-                       stale_after=None, sources=None, status=None, actor=None):
+                       stale_after=None, sources=None, status=None, actor=None,
+                       supersedes=None):
     """One new concept. Raises FileExistsError when the title already stands."""
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
     title = " ".join(str(title or "").split())
@@ -8995,10 +9194,10 @@ def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
         slug = "%s-%d" % (slug, n)
     fm = {"type": str(ctype or "Fact").strip() or "Fact", "title": title}
     if not description:
-        # The index line is what the prompt carries; a caller that gave only a body
-        # gets its first sentence (the schema asks for six fields, not a style guide).
-        first = " ".join(str(body or "").strip().split())
-        description = first[:160].rsplit(" ", 1)[0] if len(first) > 160 else first
+        # The index line is what the prompt carries; a caller that gave only a body gets
+        # the first COMPLETE unit of it - never a silent mid-sentence cut (see
+        # _memory_description for the measurement that bought this).
+        description = _memory_description(title, body)
     if description:
         fm["description"] = " ".join(str(description).split())
     if tags:
@@ -9007,6 +9206,11 @@ def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
         fm["status"] = status
     if stale_after:
         fm["stale_after"] = str(stale_after)
+    if supersedes:
+        # Replacement is stated, not piled: the field names what this concept replaces,
+        # the caller deprecates the old one in the same call (the ledger's `supersedes`,
+        # one screen away, is the same machine-enforced shape).
+        fm["supersedes"] = str(supersedes).strip()
     fm["generated"] = {"by": actor or _memory_actor(), "at": _memory_now()}
     if sources:
         fm["sources"] = sources
@@ -9155,6 +9359,30 @@ def tool_memory(args, ctx):
                     "Truncating would leave half a fact in memory - split it into "
                     "concepts, or keep the long form in a file and store the path "
                     "and the conclusion here." % (len(body), cap))
+        # Nothing piles up: an add that restates a concept already in the bundle is
+        # refused with the id to update, and a genuine replacement says so with
+        # `supersedes` (the ledger's rule, one screen away, applied to memory).
+        sup = " ".join(str(args.get("supersedes") or "").split())
+        concepts = memory_scan()
+        if sup:
+            old = _memory_find(sup)
+            if old is None:
+                return ("ERROR: supersedes names %r, and memory/ has no such concept. "
+                        "Ids: %s"
+                        % (sup, ", ".join(c["id"] for c in concepts[:12]) or "(none)"))
+            sup = old["id"]
+        else:
+            dup = _memory_dup_overlap(body, concepts)
+            if dup:
+                c, share = dup
+                return ('REFUSED: memory/%s already says this - "%s" (%s; %.0f%% of the '
+                        'same words). Update it (memory {"action": "update", "id": "%s", '
+                        '"body": "..."}), or, if this REPLACES it, say so: '
+                        'supersedes: "%s". If it is a genuinely different fact, make the '
+                        'body say what is new.'
+                        % (c["id"], c["title"],
+                           str((c["fm"].get("generated") or {}).get("at") or "?"),
+                           share * 100.0, c["id"], c["id"]))
         sources = [{"resource": str(s).strip()}
                    for s in (args.get("sources") or []) if str(s).strip()]
         try:
@@ -9162,7 +9390,7 @@ def tool_memory(args, ctx):
                 title, body, ctype=args.get("type") or "Fact",
                 tags=args.get("tags"), description=args.get("description"),
                 stale_after=args.get("stale_after"), sources=sources or None,
-                actor=actor)
+                actor=actor, supersedes=sup or None)
         except FileExistsError as e:
             return ("ERROR: memory already holds a concept titled %r (id %s) - update "
                     "it instead (memory {action: \"update\", id: %s, body: \"...\"}), "
@@ -9171,7 +9399,25 @@ def tool_memory(args, ctx):
             return "ERROR: %s" % e
         memory_index_update()
         _memory_log_append("Creation", "[%s](%s.md)" % (title, made["id"]))
-        return _memory_report("wrote", made, len(body))
+        note = ""
+        if sup:
+            memory_set_status(sup, "deprecated",
+                              reason="superseded by %s (%s)" % (made["id"], title),
+                              actor=actor)
+            note = " | supersedes memory/%s (now deprecated)" % sup
+        out = _memory_report("wrote", made, len(body)) + note
+        # stale_after is reachable WITHOUT schema rent (the always-on block is at its
+        # measured ceiling): taught once per session, on the model's own first add, where
+        # it is about to be needed - not on every call of every run.
+        st = run_state((ctx or {}).get("session_key"))
+        if st is not None and not st.get("memory_aging_hint") \
+                and not args.get("stale_after"):
+            st["memory_aging_hint"] = 1
+            out += ("\n[HARNESS: nothing about this concept expires. If a fact ages (a "
+                    "version, a path that moves, a token), pass "
+                    "stale_after: \"<ISO instant>\" - the index then flags it stale and "
+                    "the next reader knows to re-check.]")
+        return out
     if action == "update":
         c = _memory_find(args.get("id"))
         if c is None:
@@ -11972,6 +12218,13 @@ CORE_TOOLS = {
              "id": {"type": "string"},
              "title": {"type": "string"},
              "body": {"type": "string"},
+             # ONE new field, and only this one: the always-on schema block sits ~30 tokens
+             # under its measured ceiling (tests/test_envelope.py, tests/test_disclosure.py),
+             # so everything else the memory path needs is taught where it is USED -
+             # `supersedes` by the duplicate refusal, `stale_after` by the one-line hint on
+             # the first add of a session - instead of every call of every run paying rent.
+             "description": {"type": "string",
+                             "description": "the index line; one complete sentence"},
              "reason": {"type": "string"},
              "query": {"type": "string"}},
             ["action"]),
@@ -16779,10 +17032,24 @@ class Agent:
             reset_scan_spend(session_key)   # a run starts with a fresh scan budget
             hist = self._history(session_key)
             hist.append({"role": "user", "content": user_text})
+            # A bare "dismiss" answering the last remember offer is a control order: the
+            # dismissal is recorded (for that shape, for good) and answered here, because
+            # there is nothing for the model to do with the word.
+            _dismissed = remember_dismiss_order(session_key, user_text)
+            if _dismissed:
+                hist.append({"role": "assistant", "content": _dismissed})
+                self._save(session_key)
+                return _dismissed
             _ord = order_census_note(session_key, user_text)
             _st0 = run_state(session_key, create=True)
             if _ord:
                 _st0["order_repeats"] = _ord["count"]
+                _st0["order_words"] = list(_ord.get("words") or [])
+                _st0["order_sample"] = _ord.get("sample") or ""
+            # The hand-driven call count AT THE START of this run: the remember offer asks
+            # about what THIS run re-derived, and the counters live per session.
+            _by0 = _st0.get("calls_by") or {}
+            _st0["hand_at_start"] = sum(int(_by0.get(t) or 0) for t in MINT_HINT_TOOLS)
             if lookup_question(user_text):
                 _st0["order_is_lookup"] = 1
                 log.info("[%s] order reads as a durable-fact lookup", session_key)
@@ -19439,11 +19706,13 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
             log.exception("[%s] run failed at the lane", session_key)
             answer = f"⚠️ Something broke on my side: {e}"
         # One offer per run, after the answer, from the harness: the operator is the only party
-        # who knows whether a by-hand routine recurs (see mint_offer).
+        # who knows whether a fact will be needed again (remember_offer - event-driven, and
+        # dismissible) or whether a by-hand routine recurs (mint_offer). offer_after_run keeps
+        # the order and the one-per-run rule in ONE place.
         try:
-            mint_offer(session_key, reporter, source=source)
+            offer_after_run(session_key, reporter, source=source)
         except Exception:
-            log.debug("mint offer failed", exc_info=True)
+            log.debug("offer failed", exc_info=True)
         return answer
     finally:
         RUNS.close(ctrl)

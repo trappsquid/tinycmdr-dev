@@ -8,6 +8,7 @@ and the index and log a consumer browses.
 """
 import importlib.util
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -160,7 +161,11 @@ def test_lifecycle_deprecate_and_forget():
     fm, _ = fb.okf_parse(made["path"].read_text(encoding="utf-8"))
     check("deprecate writes status: deprecated", fm.get("status") == "deprecated", repr(fm))
     index = fb.memory_index_render()
-    check("the index flags a deprecated concept", "(deprecated)" in index, index)
+    # The flag itself, not the exact parenthesisation: every index line carries its
+    # verification tier beside the lifecycle flags now, so "(deprecated)" alone would
+    # grade punctuation instead of the claim.
+    check("the index flags a deprecated concept",
+          re.search(r"\([^)]*\bdeprecated\b[^)]*\)", index) is not None, index)
     again = fb.memory_set_status(made["id"], "stable")
     fm2, _ = fb.okf_parse(made["path"].read_text(encoding="utf-8"))
     check("returning to stable drops the key", "status" not in fm2, repr(fm2))
@@ -184,8 +189,10 @@ def test_index_is_progressive_disclosure():
     check("sections are per type", "# Fact" in index and "# Host" in index, index)
     check("an entry links its concept with the description",
           "* [Alpha fact](alpha-fact.md) - first" in index, index)
-    check("a stale concept is flagged", "(stale)" in index, index)
-    check("a fresh one is not", "(stale)" not in index.split("# Host")[0], index)
+    check("a stale concept is flagged",
+          re.search(r"\([^)]*\bstale\b[^)]*\)", index) is not None, index)
+    check("a fresh one is not",
+          re.search(r"\bstale\b", index.split("# Host")[0]) is None, index)
     check("an empty bundle renders an empty index", "No concepts yet" in
           fb.memory_index_render([]), "no empty marker")
 
@@ -231,6 +238,100 @@ def test_a_foreign_or_broken_file_never_breaks_the_bundle():
     check("the index renders with both present",
           "Good one" in index and "No type" in index, index)
     check("...filing the typeless one under Concept", "# Concept" in index, index)
+
+
+def test_the_index_line_carries_the_operative_token():
+    """The index is the WHOLE prompt side of memory: it must not read as complete while
+    the operative token was trimmed away (measured 2026-10-04: an index line ended
+    "…ffmpeg 8.1.1 at" and `-lmin`, the point, never reached the prompt)."""
+    _fresh()
+    # getattr so a build WITHOUT the derivation fails these checks instead of crashing the
+    # suite: falsification is a FAIL summary, not a traceback (test_route_hint's rule).
+    derive = getattr(fb, "_memory_description", lambda *a, **k: "")
+    title = "DVD mpeg2 quality is capped by -lmin, not -b:v (~/dvd_work)"
+    body = ("Measured 2026-10-04 on the real source (30s slice at t=2700, libvmaf ADM/VIF "
+            "vs a lossless reference of the same slice), ffmpeg 8.1.1 at /opt/homebrew/bin:"
+            "\n\n- `-b:v 5000k`, `7000k` and `9000k` produced **byte-identical** files. "
+            "The encoder is not budget-limited; it is limited by `-lmin`, default **236**.\n")
+    desc = derive(title, body)
+    check("the derived index line carries the OPERATIVE token, not the first sentence",
+          "-lmin" in desc, desc)
+    check("...and it is a complete unit (no silent mid-clause cut)",
+          desc.endswith(".") or desc.endswith("…"), desc)
+    desc2 = derive("A title", "- " + "x" * 400)
+    check("a unit that cannot fit is cut WITH the ellipsis saying so",
+          desc2.endswith("…") and len(desc2) < 200, desc2[-40:])
+
+    made = fb.memory_new_concept(title, body)
+    check("a concept born with no description gets that line in its frontmatter",
+          "-lmin" in str(made["fm"].get("description") or ""),
+          made["fm"].get("description"))
+    check("an explicit description is kept verbatim",
+          fb.memory_new_concept("Another", "body", description="the point -lmin")["fm"]
+          .get("description") == "the point -lmin")
+
+
+def test_add_refuses_a_restatement_and_supersedes_replaces():
+    """Nothing piles up: a restatement of a concept already in the bundle is refused with
+    the id to update, and a replacement says so with `supersedes` - the ledger's rule
+    (keys+exact_config refused, supersedes named) applied to memory."""
+    _fresh()
+    body = ("The optical drive test is a non-empty `drutil status` output; system_profiler "
+            "intermittently prints nothing even with the drive attached. macOS has no "
+            "setsid. The ONLY env var is reset by the script; use --only NAME.\n")
+    first = fb.tool_memory({"action": "add", "title": "DVD drive detection", "body": body},
+                           {"session_key": "memdup"})
+    check("the first add lands", first.startswith("OK"), first[:120])
+    again = fb.tool_memory({"action": "add", "title": "Drive detection notes", "body": body},
+                           {"session_key": "memdup"})
+    check("a restatement under a new title is REFUSED with the id to update",
+          again.startswith("REFUSED") and "dvd-drive-detection" in again, again[:200])
+    check("...and the refusal names both ways out",
+          "supersedes" in again and "update" in again, again[:200])
+    nearby = fb.tool_memory({"action": "add", "title": "Mail queue depth",
+                             "body": "The mail queue depth is checked with mailq and the "
+                                     "spool drains every five minutes on the relay.\n"},
+                            {"session_key": "memdup"})
+    check("a genuinely different fact is not caught by the duplicate rule",
+          nearby.startswith("OK"), nearby[:120])
+    new = ("The optical drive test is a non-empty `drutil status` output; system_profiler "
+           "intermittently prints nothing even with the drive attached, so use drutil "
+           "first. macOS has no setsid; use --only NAME, the ONLY env var is reset.\n")
+    sup = fb.tool_memory({"action": "add", "title": "DVD drive detection (drutil)",
+                          "body": new, "supersedes": "dvd-drive-detection"},
+                         {"session_key": "memdup"})
+    check("a superseding add lands and says what it replaced",
+          sup.startswith("OK") and "supersedes memory/dvd-drive-detection" in sup, sup[:240])
+    old = fb._memory_find("dvd-drive-detection")
+    check("the replaced concept is deprecated, not piled up",
+          old["fm"].get("status") == "deprecated", old["fm"].get("status"))
+    made = fb._memory_find("dvd-drive-detection-drutil")
+    check("...and the new one names it",
+          made["fm"].get("supersedes") == "dvd-drive-detection",
+          made["fm"].get("supersedes"))
+    check("an unknown supersedes id names the miss",
+          "no such concept" in fb.tool_memory(
+              {"action": "add", "title": "Zed fact", "body": "a zed fact about zed",
+               "supersedes": "nope"}, {"session_key": "memdup"}))
+    index = fb.memory_index_render()
+    check("the index shows the replacement story",
+          "(deprecated, unverified)" in index, index)
+
+
+def test_nothing_rides_as_permanently_true():
+    """The tier is stated even when it is the default: an unstated stance reads as
+    authority, and the index is the only part of memory the model actually sees."""
+    _fresh()
+    fb.memory_new_concept("A plain fact", "something plain about this box")
+    index = fb.memory_index_render()
+    check("an unverified concept SAYS so in the index",
+          "unverified" in index, index)
+    fm = {"type": "Fact", "title": "Checked", "verified": [{"by": "human:operator"}]}
+    fb.MEMORY_DIR.joinpath("checked.md").write_text(
+        fb.okf_dump(fm, "a body"), encoding="utf-8")
+    index = fb.memory_index_render()
+    check("a human-reviewed one says that instead",
+          "human-reviewed" in index and "checked.md" in index, index)
 
 
 def main():
