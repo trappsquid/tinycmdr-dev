@@ -68,6 +68,18 @@ def main():
           dup[0]["tool_calls"][1]["id"] == "x"
           and dup[2]["tool_call_id"] == "x", dup)
 
+    more = [
+        {"role": "assistant", "content": "",
+         "tool_calls": [_call("x", "shell"), _call("x", "shell")]},
+        {"role": "tool", "tool_call_id": "x", "content": "a"},
+        {"role": "tool", "tool_call_id": "x", "content": "b"},
+        {"role": "tool", "tool_call_id": "x", "content": "c"},
+    ]
+    out = fb._uniquify_tool_call_ids(more)   # used to raise IndexError (A-2026-10-04-05)
+    check("more results than calls: the extras pair with the last id, no IndexError",
+          [m["tool_call_id"] for m in out[1:]] == ["x", "x_dup1", "x_dup1"],
+          [m["tool_call_id"] for m in out[1:]])
+
     repaired = fb._repair_tool_pairing(dup)
     check("the repaired payload has no pairing problems",
           fb._tool_pairing_problems(repaired) == [],

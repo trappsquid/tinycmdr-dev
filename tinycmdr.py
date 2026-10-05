@@ -15350,7 +15350,11 @@ def _uniquify_tool_call_ids(messages):
             result_seen[tid] = idx + 1
             if idx:                       # the first result keeps the original id
                 m = dict(m)
-                m["tool_call_id"] = rewrites[tid][idx - 1]
+                # Clamp: a payload can carry MORE results for one id than calls (a
+                # replay after a mid-run restart). The extra results pair with the last
+                # replacement id instead of raising IndexError into the generic
+                # "LLM call failed" handler (A-2026-10-04-05).
+                m["tool_call_id"] = rewrites[tid][min(idx, len(rewrites[tid])) - 1]
         fixed.append(m)
     log.warning("tool call ids repaired: %d repeated id(s) split",
                 sum(len(v) for v in rewrites.values()))
