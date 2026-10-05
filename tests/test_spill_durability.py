@@ -95,6 +95,27 @@ def main():
         check(blob.startswith(huge[:200].encode()),
               "the file still starts with the real output")
         fb.CONFIG["agent"]["spill_max_bytes"] = 8 * 1024 * 1024
+
+        # ---- the index MERGES with what another process wrote (A-2026-10-05-20)
+        # A second process on this install never sees this one's rows, and its save
+        # used to replace the whole index; the save re-reads and unions by `path`.
+        fb.cap_output("shell", "first-" + body, "command output", session="sp5")
+        idx = fb._spill_index_path()
+        foreign = spill / "ffffffffffffffff.txt"
+        foreign.write_text("another process's output", encoding="utf-8")
+        with idx.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"id": 4242, "path": "spill/ffffffffffffffff.txt",
+                                 "at": time.time() + 60, "session": "elsewhere",
+                                 "tool": "shell", "kind": "command output"}) + "\n")
+        fb.cap_output("shell", "second-" + body, "command output", session="sp5")
+        lines = [json.loads(l) for l in idx.read_text(encoding="utf-8").splitlines()
+                 if l.strip()]
+        paths = {str(e.get("path")) for e in lines}
+        check("a save merges a foreign row instead of clobbering the index",
+              "spill/ffffffffffffffff.txt" in paths, sorted(paths))
+        check("...and this process's own rows are all there",
+              len([p for p in paths if p != "spill/ffffffffffffffff.txt"]) >= 2,
+              sorted(paths))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

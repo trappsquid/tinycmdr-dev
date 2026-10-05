@@ -3152,12 +3152,42 @@ def _spill_index_save():
         if not rows and not path.exists():
             # Nothing to persist and nothing to erase: do not mkdir spill/ or drop an
             # empty file into a tree that never spilled (run_all's G2 check caught the
-            # mkdir from an idle session reset).
+            # mkdir from an idle session reset). Nothing to protect either, so a
+            # pending tombstone is spent here rather than leaking into a later save.
+            _SPILL_TOMBSTONES.clear()
             return
         _spill_dir()
-        path.write_text(
-            "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in rows),
-            encoding="utf-8")
+        # MERGE, don't replace: a second process on this install (the service plus a
+        # --once run) never saw this process's rows and used to clobber the whole index
+        # on its next save. `path` is content-addressed, so it is a safe union key and
+        # the newer `at` wins; atomic_write_text buys the inter-process lock and never
+        # truncates the destination (A-2026-10-05-20).
+        merged = {}
+        try:
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(e, dict) and e.get("path"):
+                    merged[str(e["path"])] = e
+        except OSError:
+            pass
+        for e in rows:
+            old = merged.get(str(e.get("path")))
+            if old is None or float(e.get("at") or 0) >= float(old.get("at") or 0):
+                merged[str(e.get("path"))] = e
+        # A deliberate removal (a /new reset) wins over the merge for one save, then
+        # the tombstone is spent: the file no longer carries the row, so nothing can
+        # resurrect it (A-2026-10-05-20).
+        for _gone in list(_SPILL_TOMBSTONES):
+            merged.pop(_gone, None)
+        _SPILL_TOMBSTONES.clear()
+        atomic_write_text(path, "".join(
+            json.dumps(e, ensure_ascii=False) + "\n" for e in merged.values()))
     except Exception as e:                  # noqa: BLE001 - an index is never worth a run
         log.debug("spill index save: %s", e)
 
@@ -3266,6 +3296,11 @@ def _remember_elided(session, sig):
 
 
 _SPILLS = []
+# Paths removed ON PURPOSE in this process (a /new reset). The save merges the disk
+# rows back in, so a deliberate removal must be excluded from that merge or it
+# resurrects - the suite caught exactly that when the merge first landed
+# (A-2026-10-05-20). Spent on the save that persists the removal.
+_SPILL_TOMBSTONES = set()
 _SPILLS_LOCK = threading.Lock()
 _SPILLS_MAX = 12
 _SPILL_SEQ = {"n": 0}
@@ -18456,9 +18491,13 @@ class Agent:
         # spill files and re-running its printer/LAN scans. A pointer to abandoned work is how
         # a fresh order becomes a continuation of the old one.
         with _SPILLS_LOCK:
+            for _e in _SPILLS:
+                if _e.get("session") == (session_key or ""):
+                    _SPILL_TOMBSTONES.add(str(_e.get("path") or ""))
             _SPILLS[:] = [e for e in _SPILLS if e.get("session") != (session_key or "")]
             # Persist the removal too: otherwise the pointers /new just dropped come back
-            # on the next restart, which is the same bug one process later.
+            # on the next restart, which is the same bug one process later - and since
+            # the save merges, the removal rides the tombstones above.
             _spill_index_save()
         try:
             self._session_path(session_key).unlink(missing_ok=True)
