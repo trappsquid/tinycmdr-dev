@@ -1460,6 +1460,16 @@
       },
       "detail": "Operator, 2026-10-04: 'tinycmdr pointed at api.deepseek.com right now runs at 8,000 tokens, not 1M - you must write 1000000 explicitly.' Landed (f037120): llm.window_presets (host-substring -> tokens) is consulted before a small built-in table of providers' documented windows (api.openai.com 128k, api.anthropic.com 200k, api.deepseek.com 128k), matched by HOST ONLY (F-19's no-name-guessing rule kept); the envelope resolves pinned -> server -> preset -> explicit ceiling -> assumed 8000, so llm.max_context_tokens still caps a preset, the log names the source and envelope_line reads 'window from api.deepseek.com (documented; ...)'; with a window the reply cap follows it instead of the assumed branch's hard 2048. tests/test_endpoint_window.py pins all four behaviors. In the same pass the ledger's caps-from-window wish was found to be already solved (mem_limit_chars' window//8 tightening plus its one-shot ceiling, df4282c; window_profiles bands with the example's three seeds) and was closed with that record rather than re-implemented.",
       "gate": "done - landed as f037120; tests/test_endpoint_window.py + tests/test_envelope.py (the caps half) + tests/test_config_example.py"
+    },
+    {
+      "id": "tool-answers-no-blanks-1-0-76",
+      "title": "a schema-legal tool call answered `No skill named ''` and stopped a run",
+      "state": "shipped",
+      "anchor": {
+        "commit": "92b3def"
+      },
+      "detail": "Fixed 2026-10-05 (92b3def). A fleet Linux box's run, stuck on a Mattermost-token question, asked `skill{\"action\":\"search\",\"topic\":\"mattermost token mmctl ...\"}` with no skill name, was answered `No skill named ''` - an empty name and nothing to try - and re-issued its last shell call until the loop guard wrapped the run up (14 steps, 310s). The skill tool resolved the skill BEFORE dispatching the verb, so that shape could never work: a bare topic now searches every runbook the session may see (hits labelled `runbook :: file :: heading`), `read` without a name says a name is needed, verbs are lower-cased (Search/Read fell through the dispatch into the search tail), show|get|open are read aliases, an unhandled verb names the three it has, the topic scan lower-cases first (an all-caps topic answered 'nothing to look up'), and an empty topic says what to pass. Sweeping every tool with the minimal arguments its own schema permits found four more answers of the class: write_file without `content` returned `ERROR writing <path>: 'content'`, memory/experiment/plan answered id-less read/update/step verbs with `no concept ''` / `no experiment #None` / `No plan step with id None`, and search_sessions with an empty query returned a dangling colon. All now come back through the shared missing-argument answer or an explicit needs-`id`/`query`. Audited and left alone: schedule's add/remove (name, cron and task are declared, so the KeyError path already answers well), ask_user's timeout (guarded), the drop-in tools in tools/, and find_tools' category (the static prompt teaches that call).",
+      "gate": "done - landed as 92b3def; tests/test_tool_discovery.py (8 new checks) and tests/test_tool_doors.py (5 new checks), each falsified against the pre-fix build with the old answer"
     }
   ]
 }

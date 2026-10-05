@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.76] - 2026-10-04
+
+Fixed
+- **A schema-legal tool call never answers with a blank name or a Python repr.** A fleet
+  Linux box's run, stuck on a Mattermost-token question, asked
+  `skill{"action":"search","topic":"mattermost token mmctl ..."}` with no skill name and
+  was answered `No skill named ''` - an empty name and nothing to try - then re-issued its
+  last shell call until the loop guard wrapped the run up. The skill tool resolved the
+  skill BEFORE dispatching the verb, so that shape could never work. A bare topic now
+  searches every runbook the session may see (hits labelled `runbook :: file :: heading`);
+  `read` without a name says a name is needed; verbs are lower-cased (`Search`/`Read` fell
+  through into the search tail); `show|get|open` are read aliases; an unhandled verb names
+  the three it has; the topic scan lower-cases first (an all-caps topic answered "nothing
+  to look up"); and an empty topic says what to pass. (`tests/test_tool_discovery.py`.)
+  Sweeping every tool with the minimal arguments its own schema permits found four more
+  answers of the class - `write_file{path}` returned `ERROR writing <path>: 'content'`,
+  `memory`/`experiment`/`plan` answered id-less verbs with `no concept ''` /
+  `no experiment #None` / `No plan step with id None`, and `search_sessions` with an empty
+  query returned a dangling colon. They now use the shared missing-argument answer or an
+  explicit "needs `id`/`query`". (`tests/test_tool_doors.py`.)
+
 ## [1.0.75] - 2026-10-04
 
 Fixed
