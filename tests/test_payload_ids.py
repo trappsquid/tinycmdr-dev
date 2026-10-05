@@ -75,7 +75,7 @@ def main():
         {"role": "tool", "tool_call_id": "x", "content": "b"},
         {"role": "tool", "tool_call_id": "x", "content": "c"},
     ]
-    out = fb._uniquify_tool_call_ids(more)   # used to raise IndexError (A-2026-10-04-05)
+    out = fb._uniquify_tool_call_ids(more) # used to raise IndexError
     check("more results than calls: the extras pair with the last id, no IndexError",
           [m["tool_call_id"] for m in out[1:]] == ["x", "x_dup1", "x_dup1"],
           [m["tool_call_id"] for m in out[1:]])

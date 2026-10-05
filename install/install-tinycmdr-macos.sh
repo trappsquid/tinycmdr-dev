@@ -446,7 +446,6 @@ if [ "$UNINSTALL" = 1 ]; then
     # Ask before deleting an install - config, sessions and the token go with it - and
     # refuse a folder with no tinycmdr.py in it, or a dangerous path. macOS had no
     # guard at all here (not even Linux's "/" check) and deleted without a word
-    # (A-2026-10-05-16).
     if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] \
             && [ "$INSTALL_DIR" != "$RUN_HOME" ] && [ -d "$INSTALL_DIR" ]; then
         if [ ! -f "$INSTALL_DIR/tinycmdr.py" ]; then
@@ -1034,7 +1033,7 @@ fi
 HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
 # the other two installers - they are four copies, and they already drifted once
-# (snapshots/, tmp/), so tests/test_verbs.py now grades the coverage (A-2026-10-05-15).
+# (snapshots/, tmp/), so tests/test_verbs.py now grades the coverage.
 HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
 host_owned() {
     case "$1" in

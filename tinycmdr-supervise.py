@@ -148,7 +148,7 @@ def respond_to_exit(code, uptime, failures):
         # broken install or an ambiguous config (exit 2 is the config class), and its
         # reason is printed once in bot-stdout.log and never acted on. The old ladder
         # retried it every 60 s for ever - 5,368 times over four days on the fleet box
-        # (A-2026-10-05-04). delay 0 means stop; main() says why and exits.
+        #. delay 0 means stop; main says why and exits.
         return failures, 0
     return failures, next_backoff(failures)
 

@@ -48,7 +48,7 @@ RISKY = [
     r'''Get-ChildItem "$HOME" -Recurse''',
     # Profile-shaped by structure, whatever the user is called.
     r'''Select-String -Path C:/Users/<user> -Pattern todo -Recurse''',
-    # Recursive by default - no flag to gate on (A-2026-10-05-08).
+    # Recursive by default - no flag to gate on.
     r'''tree C:\Users\<user>''',
     r'''du -sh /var''',
     r'''rg TODO /''',
@@ -69,7 +69,7 @@ PLAIN = [
     r'''Get-ChildItem -Recurse''',
     # A named subdirectory is not a whole tree, so this stays unbounded on purpose.
     r'''grep -r ERROR /var/log''',
-    # Recursive by default at a NARROW root: no flag, no budget (A-2026-10-05-08).
+    # Recursive by default at a NARROW root: no flag, no budget.
     r'''rg TODO src''',
     r'''du -sh ./logs''',
     r'''ls -R C:\tinycmdr\logs''',
@@ -141,7 +141,7 @@ def main():
         check(bool(fb.code_cost_risk('exec("os.walk(\'/\')")')),
               "  and a walk assembled in a STRING is still seen")
 
-        # ---- a quoted path with a SPACE keeps its whole root (A-2026-10-05-07) ------
+        # ---- a quoted path with a SPACE keeps its whole root ------
         # The root scan used to read the quote-STRIPPED command, and the bare-path
         # alternative stops at whitespace - so every quoted walk under a profile like
         # "C:\Users\David Trapp" was judged as rooted at C:\Users\David and billed,
@@ -223,7 +223,7 @@ def main():
         fb.CONFIG["agent"]["scan_budget_seconds"] = 120
 
         # ---- a hand-off to the background table still pays its walk ----------
-        # A-2026-10-05-03: the auto-background return skipped the charge, so the SLOWEST
+        # The auto-background return skipped the charge, so the SLOWEST
         # walks - the ones that ran past the window - cost the run's budget nothing.
         fb.reset_scan_spend("s")
         saved_autobg = fb._shell_autobg

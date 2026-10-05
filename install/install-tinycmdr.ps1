@@ -1249,7 +1249,7 @@ $hostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.jso
                "tinycmdr.log", "tinycmdr.lock")
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
 # the other two installers - four copies, already drifted once (snapshots/, tmp/);
-# tests/test_verbs.py grades the coverage (A-2026-10-05-15).
+# Tests/test_verbs.py grades the coverage.
 $hostDirs  = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
                "dist", ".git", "tmp")
 $copied = 0

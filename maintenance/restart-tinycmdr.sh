@@ -17,7 +17,7 @@ log "=== restart run begin (user $(id -un)) ==="
 
 # list-unit-files exits 0 whether or not it matched, so the old guard was dead
 # code: the operator got a systemctl error two lines later, AFTER the pkill had
-# already taken the bot down (A-2026-10-05-14). LoadState is a string, not an
+# Already taken the bot down. LoadState is a string, not an
 # exit code - only "loaded" means this host has the unit.
 _unit_state="$(systemctl show -p LoadState --value "$SERVICE_NAME.service" 2>/dev/null || true)"
 if [ "$_unit_state" != "loaded" ]; then
@@ -35,7 +35,7 @@ fi
 # the unit's cgroup; restarting through systemd is the clean path. The pkill is
 # scoped to THIS install and anchored with [.]: the old bare pattern was an
 # unanchored regex that also hit a second install's bot and anything merely
-# naming the file, like `tail -f tinycmdr.py.log` (A-2026-10-05-14).
+# Naming the file, like `tail -f tinycmdr.py.log`.
 pkill -f "$INSTALL_DIR/tinycmdr[.]py" 2>/dev/null || true
 sleep 1
 systemctl restart "$SERVICE_NAME"

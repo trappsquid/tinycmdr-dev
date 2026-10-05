@@ -2,7 +2,7 @@
 
 state.json, logs/state.json (the lane failure record) and web-sessions.json are the
 host's durable memory. Every reader used to turn a corrupt or truncated file into {}
-in silence, and the next save overwrote the only evidence (A-2026-10-05-17). This
+in silence, and the next save overwrote the only evidence. This
 suite stages the module, points the three paths into a temp dir, and grades the
 quarantine: bytes kept in a `.damaged-*` copy, the document empty, and a healthy file
 untouched.

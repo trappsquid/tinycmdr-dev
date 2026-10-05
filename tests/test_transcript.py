@@ -52,7 +52,7 @@ def main():
         body = tp.read_text(encoding="utf-8") if tp.exists() else ""
         check(needle in body, "the evicted middle is in the transcript, byte for byte")
         rows = [json.loads(l) for l in body.splitlines() if l.strip()]
-        # A-2026-10-05-21: the file carries the DROPPED span, not a copy of the whole live
+        # The file carries the DROPPED span, not a copy of the whole live
         # conversation (which grew the model's own pointer by the transcript each firing).
         check(len(rows) < before - 1,
               f"only the dropped span is written, not the whole conversation ({len(rows)})")
@@ -111,7 +111,7 @@ def main():
         check("compaction(s)" in line, f"and the usage line shows it: {line}")
 
         # nothing over budget: nothing written
-        # A-2026-10-05-21: the file is bounded - at the cap it rotates to `.transcript.1`
+        # The file is bounded - at the cap it rotates to `.transcript.1`
         # (one predecessor, replaced on the next rotation) instead of growing for ever.
         # Deterministic: one `_save_transcript` call = one write, so the rotation is the
         # call's own, not a compaction loop's.

@@ -85,7 +85,7 @@ def test_scalars_that_would_misparse_get_quoted():
              "needs # hash",
              # json.dumps is how the emitter quotes these, so parse must UNDO the
              # escapes rather than only strip the quotes: a Windows path doubled its
-             # backslashes on every rewrite (A-2026-10-05-29).
+             # Backslashes on every rewrite.
              r"C:\Users\David Trapp\tinycmdr", 'say "hi"', r"two\\pairs\\here"]
     for value in risky:
         text = fb.okf_dump({"type": "Fact", "title": value}, "")
@@ -120,7 +120,7 @@ def test_trust_tiers_and_staleness():
           fb._okf_stale({"stale_after": "2000-01-01T00:00:00Z"}) is True)
     check("a future stale_after is fresh",
           fb._okf_stale({"stale_after": "2999-01-01T00:00:00Z"}) is False)
-    # A-2026-10-05-27: the compare used to be lexical, so a non-zero-padded date read
+    # The compare used to be lexical, so a non-zero-padded date read
     # as the FUTURE ('2026-9-1' < '2026-10-05') and the concept silently never aged.
     check("a non-zero-padded past date still compares as a date",
           fb._okf_stale({"stale_after": "2000-1-1"}) is True)
@@ -216,8 +216,8 @@ def test_index_is_progressive_disclosure():
 
 
 def test_index_cut_names_what_it_drops():
-    """An over-budget index is cut on a line boundary and NAMES the sections it lost
-    (A-2026-10-05-26): the index is grouped by type, so a blind head-cut dropped whole
+    """An over-budget index is cut on a line boundary and NAMES the sections it lost.
+    The index is grouped by type, so a blind head-cut dropped whole
     categories from every prompt with nothing said."""
     _fresh()
     for i in range(3):

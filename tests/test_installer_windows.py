@@ -241,7 +241,7 @@ def main():
     check("the shim no longer claims Python 3.9+",
           "3.9+" not in shim and "3.10-3.12" in shim)
 
-    print("\n== W-band: the resolver refuses 3.13+ like the other two (A-2026-10-05-11) ==")
+    print("\n== W-band: the resolver refuses 3.13+ like the other two ==")
     check("the resolver bounds the band, not just the floor",
           '-ge [version]"3.10"' in install and '-le [version]"3.12"' in install)
     check("...with the -ForcePython escape and the mmpy_bot reason",

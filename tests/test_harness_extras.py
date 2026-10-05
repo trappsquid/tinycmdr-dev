@@ -103,7 +103,7 @@ def main():
         check(fb.match_field_notes("ERROR: no such host: dns.lan") == [],
               "`repeat: once` stays quiet after it has fired")
 
-        # A-2026-10-05-25: a renamed or deleted entry must not leave a ghost tally - the
+        # A renamed or deleted entry must not leave a ghost tally - the
         # counters are keyed by title, and doctor's "never fired" list is a claim about the
         # LIVE library.
         notes.write_text("## renamed DNS\nmatch: no such host, name resolution\n"
@@ -153,7 +153,7 @@ def main():
 
         # The signature comes from the line that LOOKS like the failure, not the first
         # line: banners/headers were recorded as "the failure" of any multi-command
-        # result whose last command failed (A-2026-10-05-23).
+        # Result whose last command failed.
         sig = fb._failure_signature("=== tinycmdr status ===\nname source\n"
                                     "git : fatal: not a git repository\n")
         check("a banner is not the signature when a failing line exists",
@@ -165,7 +165,7 @@ def main():
         check("a single failing line is still the signature",
               "cannot find the file" in sig, sig)
 
-        # Windows paths are squeezed like POSIX ones (A-2026-10-05-24), while a
+        # Windows paths are squeezed like POSIX ones, while a
         # domain\user token stays readable.
         a = fb._failure_signature(r"error: C:\Users\One\proj\venv\lib missing")
         b = fb._failure_signature(r"error: C:\Other\place\venv\lib missing")

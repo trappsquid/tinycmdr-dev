@@ -298,7 +298,7 @@ def test_the_instance_lock_is_not_a_deletable_file():
         except subprocess.TimeoutExpired:
             holder.kill()
     check(fb._verb_running() is False, "with the holder gone the folder is free")
-    # A-2026-10-05-28: a read-only probe must not CREATE tinycmdr.lock.
+    # A read-only probe must not CREATE tinycmdr.lock.
     if os.name == "nt":
         (STAGE / "tinycmdr.lock").unlink(missing_ok=True)
         fb._instance_lock_free()
@@ -306,7 +306,7 @@ def test_the_instance_lock_is_not_a_deletable_file():
               "the lock probe does not create tinycmdr.lock")
     else:
         print(" (POSIX: the probe locks the folder, so there is no file to create)")
-    # A-2026-10-05-19: the inter-process lock namespace is keyed on the INSTALL, not the
+    # The inter-process lock namespace is keyed on the INSTALL, not the
     # caller's uid (root's cron and the User= service used to take different files), and
     # the shared dir/files carry the modes that let a second uid use them at all.
     if os.name != "nt":

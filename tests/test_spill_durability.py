@@ -96,7 +96,7 @@ def main():
               "the file still starts with the real output")
         fb.CONFIG["agent"]["spill_max_bytes"] = 8 * 1024 * 1024
 
-        # ---- the index MERGES with what another process wrote (A-2026-10-05-20)
+        # ---- the index MERGES with what another process wrote
         # A second process on this install never sees this one's rows, and its save
         # used to replace the whole index; the save re-reads and unions by `path`.
         fb.cap_output("shell", "first-" + body, "command output", session="sp5")

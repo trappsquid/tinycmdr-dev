@@ -651,7 +651,7 @@ def test_activity_tracking_keeps_a_healthy_run_off_the_watchdog():
 
 
 def test_the_watchdog_warning_does_not_reset_its_own_clock():
-    """A-2026-10-05-05: `_post` counted the warning as run progress, so the warn post
+    """`_post` counted the warning as run progress, so the warn post
     pushed the abandon window out by the warn interval - and with warn >= abandon the
     abandon branch could never fire at all."""
     d = _dispatcher()
@@ -2409,7 +2409,7 @@ def test_a_cap_with_work_left_continues_the_task_instead_of_ending_it():
 
 
 def test_progress_at_resets_with_the_segment():
-    """A-2026-10-05-02: the segment reset resets `steps`; `progress_at` must reset with
+    """The segment reset resets `steps`; `progress_at` must reset with
     it. Left stale it made the plan-drift delta negative, so the guard that catches a
     wandering run could not fire again - dead exactly in the segment most likely to
     wander, and the runway line re-advertised a nearly spent budget as nearly untouched."""

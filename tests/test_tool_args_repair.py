@@ -121,12 +121,12 @@ def main():
 
     slots = dbl("shellshell", "{}")            # clean arguments: the old gate skipped it
     fb._repair_doubled_calls(slots)
-    check("a doubled name with clean arguments is halved (A-2026-10-04-04)",
+    check("a doubled name with clean arguments is halved",
           slots[0]["function"]["name"] == "shell", slots[0])
 
     slots = dbl("memorymemory")                # no arguments at all: the old gate skipped it
     fb._repair_doubled_calls(slots)
-    check("a doubled name with NO arguments is halved (A-2026-10-04-04)",
+    check("a doubled name with NO arguments is halved",
           slots[0]["function"]["name"] == "memory", slots[0])
 
     slots = dbl("shellshell", '{"a":1}{"a":1}')
@@ -142,7 +142,7 @@ def main():
 
     stored = [call(MALFORMED)]
     fb._repair_tool_arguments(stored)
-    check("the repair does not rewrite the caller's stored history (A-2026-10-04-06)",
+    check("the repair does not rewrite the caller's stored history",
           args_of(stored[0]) == MALFORMED, args_of(stored[0]))
 
     # ---- the choke point: what the request actually carries --------------------
@@ -160,7 +160,7 @@ def main():
     check("the payload builder sends at least one tool call", bool(sent), payload)
     check("every replayed arguments field parses as JSON",
           all(parses(a) for a in sent), sent)
-    check("the payload build left the stored blob untouched (A-2026-10-04-06)",
+    check("the payload build left the stored blob untouched",
           args_of(history[1]) == MALFORMED, args_of(history[1]))
 
     print()

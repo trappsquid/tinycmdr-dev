@@ -391,7 +391,7 @@ def main():
                   f"F-16: shrinking for the FAILING endpoint cuts to its own window "
                   f"({est_r} <= {target}), not the primary's ({est_p})")
 
-            # A-2026-10-04-02: that cut must be a real copy. `list(messages)` handed the
+            # That cut must be a real copy. `list(messages)` handed the
             # trim loop the run loop's own dicts, so one failover shortened every
             # >500-char tool result in the LIVE session to 200 chars, with no transcript.
             hist = [{"role": "system", "content": "sys"}]
@@ -405,12 +405,12 @@ def main():
             hist.append({"role": "assistant", "content": "final"})
             before = json.dumps(hist, sort_keys=True)
             check(fb.AGENT._conversation_token_est(hist) > fbk["budget"],
-                  "A-2026-10-04-02: the history is over the fallback's budget")
+                  "the history is over the fallback's budget")
             cut = fb.AGENT._fit_payload(hist, "fochain", fb_chat)
             check(fb.AGENT._conversation_token_est(cut) <= fbk["budget"],
-                  "A-2026-10-04-02: ...so the failover payload was really cut")
+                  "...so the failover payload was really cut")
             check(json.dumps(hist, sort_keys=True) == before,
-                  "A-2026-10-04-02: ...and the caller's live history is byte-identical")
+                  "...and the caller's live history is byte-identical")
         finally:
             fb.CONFIG["llm"]["fallbacks"] = saved_fallbacks
             fb.CONFIG["llm"]["allow_cloud_fallback"] = saved_allow

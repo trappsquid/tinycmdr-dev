@@ -516,7 +516,7 @@ if [ "$UNINSTALL" = 1 ]; then
     # Deleting an install takes config.json, .env, sessions/, tools/ and notes with
     # it, so this asks - and requires --yes/--force when there is no terminal - and
     # refuses a folder with no tinycmdr.py in it, so a mistyped --install-dir is a
-    # message instead of a data loss (A-2026-10-05-16).
+    # Message instead of a data loss.
     if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] && [ "$INSTALL_DIR" != "$HOME" ] \
             && [ -d "$INSTALL_DIR" ]; then
         if [ ! -f "$INSTALL_DIR/tinycmdr.py" ]; then
@@ -1179,7 +1179,7 @@ mkdir -p "$INSTALL_DIR"
 HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
 # the other two installers - they are four copies, and they already drifted once
-# (snapshots/, tmp/), so tests/test_verbs.py now grades the coverage (A-2026-10-05-15).
+# (snapshots/, tmp/), so tests/test_verbs.py now grades the coverage.
 HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
 host_owned() {
     case "$1" in

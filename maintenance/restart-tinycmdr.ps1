@@ -15,7 +15,7 @@ function Log([string]$m) { "$((Get-Date).ToString('s')) $m" | Add-Content -Path 
 # matched tinycmdr-supervise.py, so the surviving supervisor held the lock and
 # relaunched the OLD bot while this script's wscript relaunch exited on that
 # lock - a restart never reloaded the supervisor; and unscoped, it killed a
-# second install's bot on the same box (A-2026-10-05-13). The supervisor clause
+# Second install's bot on the same box. The supervisor clause
 # is deliberately not scoped by dir: in the documented no-venv fallback its
 # command line is "<machine python> tinycmdr-supervise.py" with no install path.
 function Get-TinycmdrProcesses {

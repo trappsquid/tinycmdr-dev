@@ -216,7 +216,7 @@ def test_retention_keeps_the_newest_and_touches_nothing_else():
         other = keep_dir / "s00.transcript.jsonl"
         other.write_text("{}\n", encoding="utf-8")
         # A rolled predecessor belongs to its session: it must age out WITH the base and
-        # survive with it (A-2026-10-05-22).
+        # Survive with it.
         old_roll = keep_dir / "s00.events.1.jsonl"
         old_roll.write_text("{}\n", encoding="utf-8")
         os.utime(old_roll, (time.time() - 35 * 60, time.time() - 35 * 60))
@@ -239,7 +239,7 @@ def test_retention_keeps_the_newest_and_touches_nothing_else():
 
 
 def test_a_size_ceiling_rolls_one_predecessor():
-    """A-2026-10-05-22: retention bounded the file COUNT, so the one file a live session
+    """Retention bounded the file COUNT, so the one file a live session
     appends to for ever - always the newest, never in the pruned tail - grew without
     limit. The writer rolls it to .1 at the ceiling."""
     with_log(True)

@@ -2176,7 +2176,7 @@ def _repair_doubled_calls(calls):
         guess safe, and it now works for a call with no arguments and for one whose
         arguments arrived clean: exactly the cases the old arguments-gate skipped, and
         exactly the no-argument doors (`memory`, `list_tools`) a doubled name breaks
-        (A-2026-10-04-04);
+        ;
       * doubled ARGUMENTS (one JSON object followed by another) collapse to the first,
         structure only, unchanged.
 
@@ -3162,7 +3162,7 @@ def _spill_index_save():
         # --once run) never saw this process's rows and used to clobber the whole index
         # on its next save. `path` is content-addressed, so it is a safe union key and
         # the newer `at` wins; atomic_write_text buys the inter-process lock and never
-        # truncates the destination (A-2026-10-05-20).
+        # Truncates the destination.
         merged = {}
         try:
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -3183,7 +3183,7 @@ def _spill_index_save():
                 merged[str(e.get("path"))] = e
         # A deliberate removal (a /new reset) wins over the merge for one save, then
         # the tombstone is spent: the file no longer carries the row, so nothing can
-        # resurrect it (A-2026-10-05-20).
+        # Resurrect it.
         for _gone in list(_SPILL_TOMBSTONES):
             merged.pop(_gone, None)
         _SPILL_TOMBSTONES.clear()
@@ -3300,7 +3300,7 @@ _SPILLS = []
 # Paths removed ON PURPOSE in this process (a /new reset). The save merges the disk
 # rows back in, so a deliberate removal must be excluded from that merge or it
 # resurrects - the suite caught exactly that when the merge first landed
-# (A-2026-10-05-20). Spent on the save that persists the removal.
+#. Spent on the save that persists the removal.
 _SPILL_TOMBSTONES = set()
 _SPILLS_LOCK = threading.Lock()
 _SPILLS_MAX = 12
@@ -4127,7 +4127,7 @@ def _draft_match(sig):
 # What a FAILING line tends to say, and what a benign line says about failing. The
 # signature used to take the FIRST line whatever it was, so banners, PowerShell table
 # headers and `dir` volume labels became the recorded "failure" of a multi-command
-# result (A-2026-10-05-23).
+# Result.
 _FAILURE_LINE_RX = re.compile(
     r"(?i)\b(?:error|failed|failure|fatal|exception|traceback|denied|refused|"
     r"timeout|timed out|not found|no such|cannot|can't|unable|invalid|unrecognized|"
@@ -4145,7 +4145,7 @@ def _failure_signature(text):
 
     The line is chosen for LOOKING like the failure, not for being first: a banner or a
     PowerShell table header used to become the recorded "failure" of any multi-command
-    result whose last command exited non-zero (A-2026-10-05-23). A benign report of
+    result whose last command exited non-zero. A benign report of
     failing - "0 errors" - does not qualify.
     """
     first = err = ""
@@ -4167,7 +4167,7 @@ def _failure_signature(text):
     line = re.sub(r"(/[\w.\-]+){2,}", "p", line)
     # Windows paths, the half this normalizer was missing: a backslash path survived
     # verbatim, so one failure fragmented per folder on a Windows-first fleet
-    # (A-2026-10-05-24). Drive and UNC forms, plus a bare relative path with two or
+    #. Drive and UNC forms, plus a bare relative path with two or
     # more separators - a single `domain\user` token is not a path and is kept.
     line = re.sub(r"(?:[a-z]:|\\\\)(?:\\[^\\\s\"']+)+", "p", line)
     line = re.sub(r"[\w.\-]+(?:\\[\w.\-]+){2,}", "p", line)
@@ -4193,7 +4193,7 @@ def _field_notes_record(fired, text):
         entries = stats.get("entries") if isinstance(stats.get("entries"), dict) else {}
         # A tally is a claim about the LIVE library: a renamed or deleted entry used to
         # leave its `entries` counter behind for ever, and doctor's "never fired" list then
-        # reported ghosts (A-2026-10-05-25 - the library is hand-edited by design, so
+        # Reported ghosts (- the library is hand-edited by design, so
         # renames are expected). Reconcile before recording, but NEVER wipe history on an
         # absent or switched-off library: `field_notes()` answers [] for those, so the
         # file's existence is the gate.
@@ -5782,7 +5782,7 @@ _RECURSIVE_WALK = (
     # Recursive by DEFAULT, no flag: `tree`, `du`, `rg`/`ag`/`ack`, `rsync`, and `ls -R`
     # walk a whole tree from a root alone, so the flag-gated entries above miss them. The
     # broad-root condition below is what keeps `rg TODO` in the project directory out of
-    # the budget (A-2026-10-05-08).
+    # The budget.
     (re.compile(r"(?i:\b(?:tree|du|rg|ag|ack|rsync)\b)"
                 r"|\bls\b[^\n|&;]*\s-[a-zA-Z]*R\b"),
      "a recursive walk"),
@@ -5872,7 +5872,6 @@ def code_cost_risk(code):
         return None
     # Same quote policy as the shell rule: a quoted path stays whole, while a re-executor
     # (`exec("os.walk('/')")`) has its quoted text flattened so the root inside is seen
-    # (A-2026-10-05-07).
     text = _QUOTE_CHARS.sub(" ", code) if _REEXECUTOR.search(code) else code
     for tok in _path_tokens(text):
         if _broad_root(tok):
@@ -5903,7 +5902,7 @@ def command_cost_risk(command):
     # Quote-aware when the quotes wrap a bare path argument - `"...\David Trapp\..."` must
     # stay whole - and quote-FLATTENED when a re-executor runs the quoted text, because
     # there the path lives INSIDE the quotes (`bash -c "find / -name x"`) and the shape
-    # above matched it for exactly that reason (A-2026-10-05-07).
+    # Above matched it for exactly that reason.
     text = str(command or "")
     if _REEXECUTOR.search(text):
         text = _QUOTE_CHARS.sub(" ", text)
@@ -6914,7 +6913,7 @@ def tool_shell(args, ctx):
             # Charge what the command DID walk before the hand-off: this return skips the
             # charge after run_capture, so without it the slowest walks - the ones that
             # ran past the window - cost the run's scan budget nothing, and the model
-            # could buy another sweep (A-2026-10-05-03).
+            # Could buy another sweep.
             if cost_risk:
                 charge_scan(ctx, time.time() - ab_t0)
             return ab
@@ -7771,7 +7770,7 @@ def _lock_key(path):
 # The lock namespace is keyed on the INSTALL FOLDER, not the caller. It used to be
 # "...-<getuid()>", so two processes at different uids writing one install - the Linux
 # system-install shape: the service runs as User=$RUN_USER, install/update run under sudo -
-# took different files and never serialized (A-2026-10-05-19: a lost read-modify-write,
+# Took different files and never serialized (a lost read-modify-write,
 # invisible because each write is atomic on its own). One digest of BASE_DIR puts every
 # process pointed at this install in one namespace; the dir is 1777 (sticky: the usual
 # shared-lock answer - anyone may create/enter, only the owner may delete) and the lock
@@ -7831,7 +7830,7 @@ def _ip_take(key):
     try:
         LOCK_DIR.mkdir(mode=0o1777, exist_ok=True)
         if os.name != "nt":
-            # An existing dir keeps the mode it was made with (0o700, before A-19), so
+            # An existing dir keeps the mode it was made with (0o700, before), so
             # every take re-asserts 1777: without it the second uid cannot even enter.
             try:
                 if stat.S_IMODE(LOCK_DIR.stat().st_mode) != 0o1777:
@@ -7896,7 +7895,7 @@ class _FileLock:
     """The lock _path_lock() hands out: threads here, every process on the box there.
 
     "Every process" means every process pointed at this INSTALL, whichever uid it runs
-    as: the namespace is a digest of BASE_DIR, not of the caller (A-2026-10-05-19 - a
+    as: the namespace is a digest of BASE_DIR, not of the caller (- a
     root cron and the User= service used to take different files and never serialize).
 
     Reentrant per THREAD, and that is load-bearing twice over. The decorator was
@@ -9025,7 +9024,7 @@ def _okf_scalar(tok):
             # token IS JSON: strip the quotes AND undo the escapes. Stripping alone
             # added a layer per rewrite - a Windows path doubled its backslashes on
             # every memory update, and index.md (which renders the parsed value)
-            # showed the mangled form (A-2026-10-05-29). A hand-written token that
+            # Showed the mangled form. A hand-written token that
             # is not valid JSON falls back to the raw body (spec §11: permissive).
             try:
                 val = json.loads(tok)
@@ -9204,7 +9203,7 @@ def _okf_when(text):
 
     Both sides of the staleness compare must be in one shape: `2026-9-1` compared
     lexically BELOW `2026-10-05` ('1' < '9'), so the concept was never flagged stale and
-    nothing said the date was unreadable (A-2026-10-05-27). Date-only values normalize to
+    nothing said the date was unreadable. Date-only values normalize to
     midnight; anything unreadable warns once and fails open, stated rather than silent.
     """
     m = _OKF_DATE_RX.match(str(text or "").strip())
@@ -13205,7 +13204,7 @@ _EVENT_ARGS_MAX = 600      # scrubbed argument text kept per call
 _EVENT_KEEP = 30           # session event files kept per host (the operator's answer, 30)
 # A per-FILE ceiling beside the count, because retention bounded file COUNT and the busiest
 # session - always the newest, never in the pruned tail - could grow without limit
-# (A-2026-10-05-22; measured on this box 2026-10-05: one Mattermost session's log at
+# (measured on this box 2026-10-05: one Mattermost session's log at
 # 246,744 bytes after days of use). The writer rolls to `<key>.events.1.jsonl` at this size,
 # replacing any previous predecessor, so a session costs at most two files and 2x this.
 _EVENT_MAX_BYTES = 8_000_000
@@ -13222,7 +13221,7 @@ def _event_path(session_key):
 
 
 def _event_rolled_path(session_key):
-    """The one-predecessor roll target for a session's event log (A-2026-10-05-22)."""
+    """The one-predecessor roll target for a session's event log."""
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
     return SESSIONS_DIR / f"{safe}.events.1.jsonl"
 
@@ -13340,8 +13339,8 @@ class _RunSpan:
 def prune_events(keep=None):
     """Keep the newest N SESSIONS' event files. Touches nothing else in sessions/.
 
-    Counts sessions, not files: a session's rolled predecessor (`*.events.1.jsonl`,
-    A-2026-10-05-22) belongs to the same session and is deleted with it, so the
+    Counts sessions, not files: a session's rolled predecessor
+    (`*.events.1.jsonl`) belongs to the same session and is deleted with it, so the
     directory stays bounded on both axes. Bases are stripped by SUFFIX, never split on
     ".events": a session key may itself contain that string.
     """
@@ -14479,7 +14478,7 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
             # the prompt sees - but on a LINE boundary and NAMING what the tail loses.
             # The index is grouped by type in a fixed order, so a blind head-cut
             # silently dropped whole sections (Runbook, Decision, ...) from every
-            # prompt (A-2026-10-05-26); notes.md over budget warns in the log, and so
+            # Prompt; notes.md over budget warns in the log, and so
             # does this.
             head = index[:cap]
             _nl = head.rfind("\n")
@@ -14848,14 +14847,14 @@ GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 
 # Serialization for the state file lives in _state() itself: one _path_lock around the
 # whole read-modify-write. A module-level threading.RLock used to sit here, declared as
-# that guard and acquired nowhere (A-2026-10-05-18).
+# That guard and acquired nowhere.
 
 
 def _load_json_state(path, what):
     """The parsed document, or {} with the damaged file KEPT and named.
 
     Every reader used to turn a corrupt or truncated state file into {} in silence, and
-    the next save took the only evidence with it (A-2026-10-05-17). The write path's
+    the next save took the only evidence with it. The write path's
     docstring already promises a `.damaged-*` copy; this helper is where the promise is
     kept. A missing file is not damage: {} and no noise.
     """
@@ -15623,7 +15622,7 @@ def _uniquify_tool_call_ids(messages):
                 # Clamp: a payload can carry MORE results for one id than calls (a
                 # replay after a mid-run restart). The extra results pair with the last
                 # replacement id instead of raising IndexError into the generic
-                # "LLM call failed" handler (A-2026-10-04-05).
+                #"LLM call failed" handler.
                 m["tool_call_id"] = rewrites[tid][min(idx, len(rewrites[tid])) - 1]
         fixed.append(m)
     log.warning("tool call ids repaired: %d repeated id(s) split",
@@ -15720,7 +15719,7 @@ def _repair_tool_arguments(messages):
     Rewrites COPIES, never the caller's dicts: the payload aliases the live session
     history, and an in-place `{}` made the model read its own past turn as a call with no
     arguments - the self-blame failure the sibling salvage path already documents
-    (A-2026-10-04-06).
+    .
     """
     bad = 0
     out = []
@@ -16313,7 +16312,7 @@ class Agent:
             return None               # only the newest exchange is left
         dropped = messages[start:cut]
         # The copy precedes the cut, and it is exactly this span: the transcript must not
-        # duplicate what stays live (A-2026-10-05-21). `save=False` is for a caller that
+        # Duplicate what stays live. `save=False` is for a caller that
         # cut a COPY for one request (_fit_payload): those blocks are not lost, and the
         # real compaction that eventually evicts them writes them then.
         if save:
@@ -16340,7 +16339,7 @@ class Agent:
         return dropped_tokens - (est_tokens(note) - est_tokens(prev))
 
     # The transcript rotates to `.transcript.1.jsonl` at this size, replacing the older
-    # predecessor (A-2026-10-05-21): the file is written per dropped block and is READ by
+    # Predecessor: the file is written per dropped block and is READ by
     # the model through the elision note's pointer, so leaving it unbounded meant the
     # pointer grew by the whole conversation each time compaction fired. One predecessor
     # keeps it bounded while the current file always carries the newest dropped blocks.
@@ -16356,7 +16355,7 @@ class Agent:
         answerable later without re-running anything.
 
         It used to append the WHOLE live conversation on every compaction - lines repeated
-        when compaction fired twice, and nothing bounded the file (A-2026-10-05-21); the
+        when compaction fired twice, and nothing bounded the file; the
         callers now pass the span the cut removes (`_drop_oldest_block` is the one place
         that knows it), so no live message is ever duplicated here. Off with
         session_transcript=false. Never raises.
@@ -16499,7 +16498,7 @@ class Agent:
         if self._conversation_token_est(messages) <= budget:
             return messages
         # The transcript copy is written per dropped block, inside _drop_oldest_block,
-        # where the cut's span is known (A-2026-10-05-21: this used to write the whole
+        # Where the cut's span is known (this used to write the whole
         # live conversation before the shrink, whether or not anything was dropped).
         if key:
             _st = run_state(key, create=True)
@@ -16573,7 +16572,6 @@ class Agent:
         # dict(m) per message, NOT list(messages): the trim loop below writes through
         # m["content"], and the shallow list copy handed it the caller's own message
         # dicts - one failover truncated the live session's tool results to 200 chars
-        # (A-2026-10-04-02).
         messages = [dict(m) for m in messages]
         low = max(2000, int(budget * 0.6))
         total = self._conversation_token_est(messages)
@@ -16822,7 +16820,7 @@ class Agent:
                                 "streaming, and keeping this endpoint off streaming for the "
                                 "rest of THIS process: prompt progress, pings and the "
                                 "close-on-cancel all ride the streaming path "
-                                "(A-2026-10-04-07)", url, e)
+                                "", url, e)
                     continue
                 except requests.HTTPError as e:
                     status = _http_status(e)
@@ -18505,7 +18503,7 @@ class Agent:
                             # fresh budget the notice promises - and progress_at must reset
                             # WITH them: left stale it makes the plan-drift delta negative,
                             # so the guard cannot fire again in the new segment, which is
-                            # the one most likely to wander (A-2026-10-05-02).
+                            # The one most likely to wander.
                             _st["progress_at"] = 0
                             _st["segment"] = _segments + 1
                             _elapsed = int(now_mono() - t0)
@@ -26522,7 +26520,7 @@ class MattermostDispatcher:
         `touch=False` posts WITHOUT counting as run progress. The stall warning uses it:
         a watchdog observer that reset the clock it watches stretched every abandon by
         the warn interval, and with warn >= abandon it disabled abandonment outright
-        (A-2026-10-05-05).
+        .
 
         Only a genuine root rejection falls back to a top-level post, and only
         that poisons the root for this channel. Transient failures get one
@@ -31384,7 +31382,7 @@ def _lock_target(for_probe=False):
 
     `for_probe` opens that file for reading and NEVER creates it: a read-only probe
     (status, doctor) used to write tinycmdr.lock into the install folder
-    (A-2026-10-05-28). A missing file comes back as OSError, which the caller turns into
+    . A missing file comes back as OSError, which the caller turns into
     "unknown" - safe, because a missing file means nothing holds the lock.
     """
     if os.name == "nt":
@@ -31863,8 +31861,8 @@ def _verb_doctor():
             "above %g minutes or lower agent.ask_user_wait_seconds"
             % (_abandon_m, _ask_cap, _ask_cap / 60))
 
-    # The same coherence, for the watchdog's OTHER inputs (A-2026-10-04-08,
-    # A-2026-10-05-05): the warning must land before the abandon, and a single request
+    # The same coherence, for the watchdog's OTHER inputs:
+    # the warning must land before the abandon, and a single request
     # budget longer than the abandon window means a slow-but-healthy request - or a
     # retry ladder with nothing to post - can be declared a stall.
     try:
@@ -32337,7 +32335,7 @@ _HOST_OWNED_EXACT = frozenset((
 # HOST_DIRS/hostDirs lists (install-tinycmdr.sh:1159, install-tinycmdr-macos.sh:1014,
 # install-tinycmdr.ps1:1237). They already disagreed once: snapshots/ and tmp/ were
 # the installers' and not the updater's, so a re-install left state an update would
-# overwrite (A-2026-10-05-15). tests/test_verbs.py now grades that every installer
+# Overwrite. tests/test_verbs.py now grades that every installer
 # dir is covered here.
 _HOST_OWNED_PREFIXES = ("tools/", "skills/", "sessions/", "snapshots/", "logs/",
                         "spill/", "venv/", "dist/", "tmp/",
@@ -32385,7 +32383,7 @@ def _declared_dev_tree():
         # would destroy - .git/, tests/run_all.py, requirements-test.txt. Without this,
         # a contributor who cloned and never ran where.py lost tests/, docs/ AND
         # where.py - the only tool that could have declared the tree - in one update
-        # (A-2026-10-05-09). Fails safe in the same direction as a corrupt declaration.
+        #. Fails safe in the same direction as a corrupt declaration.
         return ((BASE_DIR / ".git").exists()
                 or (BASE_DIR / "tests" / "run_all.py").exists()
                 or (BASE_DIR / "requirements-test.txt").exists())
@@ -32584,7 +32582,7 @@ def _package_differs(root):
 
     `update` used to trust the VERSION string alone, so a half-applied release (a write
     loop killed by disk-full, an indexer holding a file open) was told "already up to
-    date" for ever, and the one command that repairs it refused to run (A-2026-10-05-10).
+    date" for ever, and the one command that repairs it refused to run.
     Same skip rules as _apply_package: an existing host-owned destination is the
     operator's own file and never counts as a difference.
     """
@@ -32681,7 +32679,7 @@ def _verb_update(rest):
             if new_version == this_version and not _package_differs(root):
                 # A TRUE no-op: change NOTHING. This branch used to prune the dev kit,
                 # so "already up to date" deleted tests/docs while refusing the repair
-                # a half-applied update needed (A-2026-10-05-10).
+                # A half-applied update needed.
                 print("already up to date: VERSION %s" % this_version)
                 return 0
             if new_version == this_version:
@@ -32709,7 +32707,7 @@ def _verb_update(rest):
             if "requirements.txt" in written:
                 # The bounds in that file are load-bearing and nothing installs from
                 # it here, so the operator gets the exact command instead of a new
-                # build meeting an old venv (A-2026-10-05-12). Deliberately NOT
+                # Build meeting an old venv. Deliberately NOT
                 # automatic: an update should not reach the network beyond the
                 # release package itself.
                 _venv_py = BASE_DIR / "venv" / ("Scripts/python.exe" if IS_WINDOWS

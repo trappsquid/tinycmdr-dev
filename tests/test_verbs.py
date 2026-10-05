@@ -159,7 +159,7 @@ def main():
                   (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note2, _note2)
             # No declaration file at all: the tree's own EVIDENCE must hold the prune
             # off, because the prune deletes where.py - the only tool that could have
-            # declared the tree (A-2026-10-05-09).
+            # Declared the tree.
             (_ptmp / "maintenance" / "where-roles.json").unlink()
             (_ptmp / "tests" / "run_all.py").write_text("x", encoding="utf-8")
             _note3 = fb._prune_dev_kit()
@@ -219,7 +219,7 @@ def main():
         # The equal-VERSION short-circuit must compare CONTENT, not the label: a
         # half-applied update carries the new VERSION while some files are still old, and
         # "already up to date" used to refuse to repair it - while pruning the dev kit on
-        # the way out (A-2026-10-05-10).
+        # The way out.
         _dtmp = Path(tempfile.mkdtemp(prefix="fbtest-differs-"))
         _dpkg = Path(tempfile.mkdtemp(prefix="fbtest-differs-pkg-"))
         try:
@@ -249,7 +249,7 @@ def main():
         # A release can raise a dependency bound. Nothing installs from the file on
         # its own, so the update verb must SAY the exact command when it writes
         # requirements.txt, and the import guard must point at the file instead of a
-        # hand-maintained module list (A-2026-10-05-12).
+        # Hand-maintained module list.
         _tsrc = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
         check("the update verb names the pip command when requirements.txt changes",
               "dependencies changed in this release" in _tsrc
@@ -259,7 +259,7 @@ def main():
 
         # The host-owned rule is written out four times (three installers + the update
         # path) and they ALREADY disagreed once: snapshots/ and tmp/ were the
-        # installers' and not the updater's (A-2026-10-05-15). Grade that every
+        # Installers' and not the updater's. Grade that every
         # installer dir is covered by _HOST_OWNED_PREFIXES or the by-name skips.
         _hostdirs = set()
         for _name in ("install-tinycmdr.sh", "install-tinycmdr-macos.sh"):
@@ -1335,7 +1335,7 @@ def main():
         # bot filter to this install. The old filter (pythonw.exe + '*tinycmdr.py*')
         # never matched the supervisor, so the surviving supervisor held the lock and
         # relaunched the OLD bot while the wscript relaunch died on that lock; and
-        # unscoped, it killed a second install's bot on the same box (A-2026-10-05-13).
+        # Unscoped, it killed a second install's bot on the same box.
         _ps = (BASE / "maintenance" / "restart-tinycmdr.ps1").read_text(encoding="utf-8")
         check("the Windows restart helper stops the supervisor and the launcher",
               "tinycmdr-supervise.py" in _ps and "tinycmdr-service.vbs" in _ps)
@@ -1347,7 +1347,7 @@ def main():
 
         # The POSIX twin: its pkill must be scoped+anchored, and its install guard
         # must be able to fail (list-unit-files exits 0 either way, so the friendly
-        # branch was dead code - and the pkill ran BEFORE it) (A-2026-10-05-14).
+        # Branch was dead code - and the pkill ran BEFORE it).
         _rsh = (BASE / "maintenance" / "restart-tinycmdr.sh").read_text(encoding="utf-8")
         check("the POSIX restart helper never pkills by bare file name",
               'pkill -f "tinycmdr.py"' not in _rsh
