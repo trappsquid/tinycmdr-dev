@@ -32096,7 +32096,14 @@ def _declared_dev_tree():
     """
     f = BASE_DIR / "maintenance" / "where-roles.json"
     if not f.exists():
-        return False
+        # No declaration: does this LOOK like a checkout? Use evidence the prune itself
+        # would destroy - .git/, tests/run_all.py, requirements-test.txt. Without this,
+        # a contributor who cloned and never ran where.py lost tests/, docs/ AND
+        # where.py - the only tool that could have declared the tree - in one update
+        # (A-2026-10-05-09). Fails safe in the same direction as a corrupt declaration.
+        return ((BASE_DIR / ".git").exists()
+                or (BASE_DIR / "tests" / "run_all.py").exists()
+                or (BASE_DIR / "requirements-test.txt").exists())
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
     except Exception:                                    # noqa: BLE001

@@ -156,6 +156,20 @@ def main():
             _note2 = fb._prune_dev_kit()
             check("a tree the box declares as its DEV tree is never pruned",
                   (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note2, _note2)
+            # No declaration file at all: the tree's own EVIDENCE must hold the prune
+            # off, because the prune deletes where.py - the only tool that could have
+            # declared the tree (A-2026-10-05-09).
+            (_ptmp / "maintenance" / "where-roles.json").unlink()
+            (_ptmp / "tests" / "run_all.py").write_text("x", encoding="utf-8")
+            _note3 = fb._prune_dev_kit()
+            check("a checkout with no declaration is not pruned (tests/run_all.py is evidence)",
+                  (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note3, _note3)
+            (_ptmp / "tests" / "run_all.py").unlink()
+            (_ptmp / ".git").mkdir()
+            _note4 = fb._prune_dev_kit()
+            check("...and a tree with .git is not pruned either",
+                  (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note4, _note4)
+            (_ptmp / ".git").rmdir()
         finally:
             fb.BASE_DIR = _saved_base
             shutil.rmtree(_ptmp, ignore_errors=True)
