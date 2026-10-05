@@ -95,6 +95,8 @@ PLATFORM_ONLY = {
     "--use-fleet-model": ((MAC,), "reuse the fleet's model config - macOS only"),
     "AddEndpoint": ((PS1,), "repeatable extra model endpoints - PowerShell only"),
     "AsService": ((PS1,), "boot-start scheduled task - Windows only"),
+    "ForcePython": ((PS1,), "accept an interpreter NEWER than 3.12 and hope - the "
+                            "Windows twin of macOS's --force-python"),
     "InstallPython": ((PS1,), "kept for compatibility: installing Python is the default now"),
     "MattermostPort": ((PS1,), "split port argument - PowerShell only"),
     "NoPause": ((PS1,), "do not hold the window open - Windows only; the .cmd passes it"),

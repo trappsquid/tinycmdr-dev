@@ -241,6 +241,18 @@ def main():
     check("the shim no longer claims Python 3.9+",
           "3.9+" not in shim and "3.10-3.12" in shim)
 
+    print("\n== W-band: the resolver refuses 3.13+ like the other two (A-2026-10-05-11) ==")
+    check("the resolver bounds the band, not just the floor",
+          '-ge [version]"3.10"' in install and '-le [version]"3.12"' in install)
+    check("...with the -ForcePython escape and the mmpy_bot reason",
+          "$ForcePython" in install
+          and "mmpy_bot is the last release that connects on 3.13+" in install)
+    check("...and the switch reaches every Resolve-Python call",
+          install.count("Resolve-Python -Explicit $Python -Force:$ForcePython") == 3,
+          install.count("Resolve-Python -Explicit $Python -Force:$ForcePython"))
+    check("the help text states the supported band",
+          "finds Python 3.10-3.12" in install)
+
     print("\n== W9 (E8) -SkipTask no longer withholds the PATH entry ==")
     check("the PATH gate is -NoPath only",
           "if ($NoPath) {" in install and "$NoPath -or $SkipTask" not in install)

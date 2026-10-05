@@ -8,8 +8,8 @@
 
     With no arguments it:
       * installs into %USERPROFILE%\tinycmdr (your own folder, nothing shared)
-      * finds Python 3.10+, and DOWNLOADS AND INSTALLS Python 3.12 if the machine
-        has none (winget, then the python.org installer) - no manual step
+      * finds Python 3.10-3.12, and DOWNLOADS AND INSTALLS Python 3.12 if the
+        machine has none (winget, then the python.org installer) - no manual step
       * builds the install's own virtual environment and installs the
         dependencies into it (requests, mmpy_bot, croniter)
       * uses install\fleet-defaults.json from the package when it is present
@@ -37,6 +37,8 @@
         -WebToken <t>       the page's access token (TINYCMDR_WEB_TOKEN): set your
                             own, or keep the host's own / a minted one
         -NoWeb              install without the page (the chat lane only)
+        -ForcePython       accept an interpreter NEWER than 3.12 and hope: the pinned
+                           mmpy_bot is the last release that connects on 3.13+
         -VerifyOnly        is this install working? (no reinstall)
         -Uninstall [-Force] stop it, remove the folder and the autostart entry
 
@@ -79,6 +81,9 @@ param(
     [string] $Python          = "",              # full path to python.exe if auto-detect fails
     [switch] $InstallPython,                     # kept for compatibility: installing a
                                                  # missing Python is now the DEFAULT
+    [switch] $ForcePython,                       # accept an interpreter NEWER than 3.12
+                                                 # and hope: the pinned mmpy_bot is the
+                                                 # last release that connects on 3.13+
     [switch] $Force,                             # redo: stop what is running, overwrite everything
     [switch] $AsService,                         # register a boot-start scheduled task
                                                  # instead of a logon shortcut (needs admin)
@@ -499,7 +504,7 @@ function Test-UserPathHas {
 }
 
 function Resolve-Python {
-    param([string] $Explicit)
+    param([string] $Explicit, [switch] $Force)
     $cands = @()
     if ($Explicit) { $cands += $Explicit }
     if (Get-Command python -ErrorAction SilentlyContinue) {
@@ -533,7 +538,15 @@ function Resolve-Python {
         try {
             $v = (Invoke-Py $c -c "import sys; print('%d.%d' % sys.version_info[:2])")
             $v = ($v -split "`n" | Where-Object { $_.Trim() -match '^\d+\.\d+$' } | Select-Object -First 1)
-            if ($v -and [version]$v.Trim() -ge [version]"3.10") { return @{ Path = $c; Version = $v.Trim() } }
+            if (-not $v) { continue }
+            $ver = [version]$v.Trim()
+            if ($ver -ge [version]"3.10" -and $ver -le [version]"3.12") {
+                return @{ Path = $c; Version = $v.Trim() }
+            }
+            if ($ver -gt [version]"3.12") {
+                if ($Force) { return @{ Path = $c; Version = $v.Trim() } }
+                Write-Host ("    python {0} at {1} is newer than anything this was tested on: the pinned mmpy_bot is the last release that connects on 3.13+; the supported band is 3.10-3.12 (pass -ForcePython to try anyway)" -f $v.Trim(), $c) -ForegroundColor Yellow
+            }
         } catch { }
     }
     return $null
@@ -673,7 +686,7 @@ if ($VerifyOnly) {
     if (Test-Path $venvProbe) {
         $probePy = $venvProbe
     } else {
-        $found = Resolve-Python -Explicit $Python
+        $found = Resolve-Python -Explicit $Python -Force:$ForcePython
         if ($found) { $probePy = $found.Path }
     }
     if (-not $probePy) {
@@ -696,9 +709,9 @@ if ($VerifyOnly) {
 
 # ------------------------------------------------------------- 1. python 3.12
 Head "finding Python"
-$py = Resolve-Python -Explicit $Python
+$py = Resolve-Python -Explicit $Python -Force:$ForcePython
 if (-not $py) {
-    Say "Python 3.10+ was not found on this machine - installing Python 3.12 automatically..."
+    Say "Python 3.10-3.12 was not found on this machine - installing Python 3.12 automatically..."
     $installed = $false
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Say "installing Python 3.12 via winget..."
@@ -737,7 +750,7 @@ if (-not $py) {
             Write-Host "download failed: $_" -ForegroundColor Red
         }
     }
-    $py = Resolve-Python -Explicit $Python
+    $py = Resolve-Python -Explicit $Python -Force:$ForcePython
 }
 if (-not $py) { Fail "could not automatically install Python 3.12. Please install from https://python.org and re-run." }
 Say "python  : $($py.Path)  (v$($py.Version))"
