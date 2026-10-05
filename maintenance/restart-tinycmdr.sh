@@ -15,8 +15,13 @@ log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 
 log "=== restart run begin (user $(id -un)) ==="
 
-if ! systemctl list-unit-files "$SERVICE_NAME.service" >/dev/null 2>&1; then
-    log "no $SERVICE_NAME.service on this host - is tinycmdr installed here?"
+# list-unit-files exits 0 whether or not it matched, so the old guard was dead
+# code: the operator got a systemctl error two lines later, AFTER the pkill had
+# already taken the bot down (A-2026-10-05-14). LoadState is a string, not an
+# exit code - only "loaded" means this host has the unit.
+_unit_state="$(systemctl show -p LoadState --value "$SERVICE_NAME.service" 2>/dev/null || true)"
+if [ "$_unit_state" != "loaded" ]; then
+    log "no $SERVICE_NAME.service on this host (LoadState=${_unit_state:-unknown}) - is tinycmdr installed here?"
     log "=== restart run end (nothing to do) ==="
     exit 1
 fi
@@ -27,8 +32,11 @@ if [ "$(id -u)" != 0 ]; then
 fi
 
 # The bot's own /restart spawns a detached copy, which systemd then reaps with
-# the unit's cgroup; restarting through systemd is the clean path.
-pkill -f "tinycmdr.py" 2>/dev/null || true
+# the unit's cgroup; restarting through systemd is the clean path. The pkill is
+# scoped to THIS install and anchored with [.]: the old bare pattern was an
+# unanchored regex that also hit a second install's bot and anything merely
+# naming the file, like `tail -f tinycmdr.py.log` (A-2026-10-05-14).
+pkill -f "$INSTALL_DIR/tinycmdr[.]py" 2>/dev/null || true
 sleep 1
 systemctl restart "$SERVICE_NAME"
 

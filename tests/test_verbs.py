@@ -1298,6 +1298,16 @@ def main():
         check("...and verifies the supervisor, not only a bot, came back",
               "supervisor(s) $($sup.Count)" in _ps)
 
+        # The POSIX twin: its pkill must be scoped+anchored, and its install guard
+        # must be able to fail (list-unit-files exits 0 either way, so the friendly
+        # branch was dead code - and the pkill ran BEFORE it) (A-2026-10-05-14).
+        _rsh = (BASE / "maintenance" / "restart-tinycmdr.sh").read_text(encoding="utf-8")
+        check("the POSIX restart helper never pkills by bare file name",
+              'pkill -f "tinycmdr.py"' not in _rsh
+              and 'pkill -f "$INSTALL_DIR/tinycmdr[.]py"' in _rsh)
+        check("...and its install guard reads LoadState instead of an exit code",
+              "if ! systemctl list-unit-files" not in _rsh and "LoadState" in _rsh)
+
         # --- the page lane is BACK, as the default door ---------------------------------
         # `web` is a management verb, the help names it, and the page flags adjust the
         # page per run instead of being refused; the flag path is exercised at the
