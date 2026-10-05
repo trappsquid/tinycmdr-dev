@@ -4,7 +4,7 @@ The harness's durable memory is an **Open Knowledge Format (OKF) v0.2 bundle** u
 `memory/`. This document is the profile of that spec this build implements, why the
 format was chosen, and the rent it pays in the prompt.
 
-Operator brief (2026-10-04): redesign the memory system to work off Google Cloud's OKF.
+The memory system was redesigned (2026-10-04) to work off Google Cloud's OKF.
 Decisions taken then: the bundle is `memory/`; the tool surface is ONE tool named
 `memory` (the old `remember`/`notes` pair is gone); existing `notes.md` is left in place
 (no migration) and is still read; attestation is reserved for a later phase.

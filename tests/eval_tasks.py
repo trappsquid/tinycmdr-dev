@@ -1,4 +1,4 @@
-"""The fixed task set for the harness eval (Phase 0 of the scaffolding plan).
+"""The fixed task set for the harness eval.
 
 Why this exists: every scaffolding idea in the plan has to prove it moves a number,
 and the only honest comparison is the same task set run twice. run_scenario.py
@@ -332,7 +332,7 @@ TASKS = [
     },
     {
         "id": "T13_buried_error", "category": "signal_extraction", "difficulty": "medium",
-        # Targets digestion (Phase 1a). The signal is at line 110 of 220, which the
+        # Targets tool-result digestion. The signal is at line 110 of 220, which the
         # 6000-char cap drops: it keeps head and tail. With digestion the error line
         # is in the first read; without it the model has to page by offset, which
         # costs steps and prompt tokens even when it eventually gets it right.
@@ -343,7 +343,7 @@ TASKS = [
     },
     {
         "id": "T14_field_note", "category": "field_notes", "difficulty": "medium",
-        # Targets field notes (Phase 1d). A command that does not exist is the
+        # Targets field notes. A command that does not exist is the
         # cheapest way to produce a known failure signature on demand. Two things are
         # measured: the note must actually fire (a harness-side counter, not the
         # model's opinion), and the note must NOT derail the answer into chasing a
@@ -360,7 +360,7 @@ TASKS = [
     },
     {
         "id": "T15_verify_ok", "category": "verify", "difficulty": "easy",
-        # Targets post-write verification (Phase 1c). The write is ordinary; what is
+        # Targets post-write verification. The write is ordinary; what is
         # measured is that the harness's own verdict reaches the model instead of the
         # model having to decide whether its file is good.
         "prompt": ("Create a file named config.json in the working directory whose "

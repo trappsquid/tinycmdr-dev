@@ -406,7 +406,7 @@ function Stop-TinycmdrProcesses {
         tinycmdr-supervise.py" - no install dir anywhere - so the old
         "python% AND the install dir" filter killed only the bot child, and the
         surviving supervisor respawned it straight into the folder being overwritten
-        or removed (audit W7; that is what left -Uninstall saying "being used by
+        or removed (that is what left -Uninstall saying "being used by
         another process"). wscript.exe hosts the hidden launcher, so it is in scope too.
     #>
     param([string] $Dir)
@@ -436,7 +436,7 @@ function Remove-TinycmdrFolder {
         Remove $Dir, retrying instead of giving up on the first "being used by another
         process". Windows releases a killed process's file handles asynchronously, and
         the supervisor may not have been visible to the first sweep, so a one-shot
-        Remove-Item leaves the folder - and a half-removed install - behind (audit W7).
+        Remove-Item leaves the folder - and a half-removed install - behind.
     #>
     param([string] $Dir)
     for ($i = 1; $i -le 5; $i++) {
@@ -471,7 +471,7 @@ function Fail ($m) {
 # other installers' entries - many written as "%JAVA_HOME%\bin". Reading it with
 # [Environment]::GetEnvironmentVariable expands those; SetEnvironmentVariable then
 # writes the EXPANDED text back as a plain REG_SZ, so every unrelated %VAR% entry on
-# the machine is frozen at whatever it resolved to that day (audit W2 - and the
+# the machine is frozen at whatever it resolved to that day (and the
 # uninstaller repeated it). Edit the registry value itself instead: read with
 # DoNotExpandEnvironmentNames so the "%VAR%" text survives, write ExpandString, and
 # only ever append or remove OUR one entry.
@@ -582,7 +582,7 @@ if ($fleet) {
 # The guard at the top of this file ran before the defaults above could set
 # $AsService, and the fleet kit exists precisely to ship as_service: true - so an
 # unelevated fleet push sailed past the guard and died inside Register-ScheduledTask,
-# after the files, the venv, config.json and .env had already been written (audit W1).
+# after the files, the venv, config.json and .env had already been written.
 # Re-check now that fleet-defaults.json has had its say.
 if ($AsService -and -not $elevated -and -not $VerifyOnly -and -not $Uninstall) {
     Write-Host "This needs an elevated PowerShell to register the scheduled task." -ForegroundColor Red
@@ -607,7 +607,7 @@ $StartupLink = Join-Path $env:APPDATA ("Microsoft\Windows\Start Menu\Programs\St
 if ($Uninstall) {
     Head "uninstalling $AppName"
     $taskExists = $null -ne (Get-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue)
-    # The user PATH counts too (audit W11): a folder someone deleted by hand still has a
+    # The user PATH counts too: a folder someone deleted by hand still has a
     # dead PATH entry pointing at it, and the old early-exit walked away without saying so.
     $pathHasEntry = Test-UserPathHas $InstallDir
     if (-not $taskExists -and -not (Test-Path $InstallDir) -and -not (Test-Path $StartupLink) -and
@@ -629,7 +629,7 @@ if ($Uninstall) {
     }
     $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n process(es)" }
-    # The PATH entry is removed AFTER the folder question, deliberately (audit W11): it
+    # The PATH entry is removed AFTER the folder question, deliberately: it
     # used to go first, so answering "n" to "Delete ...?" left a working install whose
     # `tinycmdr` verb had been silently cut off its PATH. Keeping the folder keeps the
     # verb. And an entry only goes once its folder is really gone, so a removal that
@@ -647,7 +647,7 @@ if ($Uninstall) {
         }
         if (Remove-TinycmdrFolder -Dir $InstallDir) { Say "removed : $InstallDir" }
     }
-    # undo the user-Path entry the install added (the verb surface, audit F12)
+    # undo the user-Path entry the install added (the verb surface)
     if ((-not (Test-Path $InstallDir)) -and (Test-UserPathHas $InstallDir)) {
         $keep = @(Get-UserPathParts | Where-Object { $_.TrimEnd('\') -ne $InstallDir.TrimEnd('\') })
         Set-UserPathRaw ($keep -join ';')
@@ -670,7 +670,7 @@ if ($fromFleet.Count) { Say "fleet   : $($fromFleet -join ', ') (from fleet-defa
 # BEFORE the interpreter step, deliberately: -VerifyOnly is documented as "report on an
 # existing install, change nothing", yet it used to fall into the Python
 # discovery/auto-install block below - a winget install, then a python.org download -
-# before it verified a single thing (audit W3). A verify run must not fetch a runtime.
+# before it verified a single thing. A verify run must not fetch a runtime.
 if ($VerifyOnly) {
     if (-not (Test-Path (Join-Path $InstallDir "tinycmdr.py"))) {
         Write-Host "no tinycmdr.py in $InstallDir" -ForegroundColor Red
@@ -730,7 +730,7 @@ if (-not $py) {
         Say "downloading official installer from python.org..."
         # python.org publishes one installer per architecture, and the URL used to be
         # amd64 on every host - an ARM64 box downloaded something it could not run while
-        # the winget path right above picked the right one (audit W10).
+        # the winget path right above picked the right one.
         $pyArch = switch ($env:PROCESSOR_ARCHITECTURE) {
             "AMD64" { "amd64" }
             "ARM64" { "arm64" }
@@ -754,7 +754,7 @@ if (-not $py) {
 }
 if (-not $py) { Fail "could not automatically install Python 3.12. Please install from https://python.org and re-run." }
 Say "python  : $($py.Path)  (v$($py.Version))"
-# Prove the interpreter's word size matches the host (audit W10): the fallback download
+# Prove the interpreter's word size matches the host: the fallback download
 # used to be amd64 on every machine, and a 32-bit python on a 64-bit host starts fine,
 # then dies during the dependency install with a DLL error that names nothing useful.
 if ([Environment]::Is64BitOperatingSystem -and
@@ -1071,7 +1071,7 @@ if ($Ask -and -not $KeepConn) {
     # ---- web search: may it leave this machine? ----
     # Off unless asked. Both built-in providers are third parties, and the keyless anonymous
     # tier used to send the model's query with nobody asked and nothing on screen saying so
-    # (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
+    # (2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
     # "no" here still leaves a working search if one is configured. The switch wins: it skips
     # the question entirely, and the answer written to .env is what the build reads.
     if (-not $SearchEgress) {
@@ -1107,7 +1107,7 @@ if ($Ask -and -not $KeepConn) {
         }
         # The page's token: set your own here, or take the host's own (a redo keeps it)
         # or a minted one. This question exists because the wizard used to be
-        # mint-or-nothing (2026-10-04, the operator's own report).
+        # mint-or-nothing (measured 2026-10-04).
         if (-not $WebToken -and $Ask) {
             $WebToken = (Read-Secret "Web UI token (Enter = keep this host's own, or mint one)").Trim()
             if ($WebToken -and $WebToken.Length -lt 12) {
@@ -1239,9 +1239,9 @@ if ($Force) {
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 # Everything the package carries is copied, minus the paths this host owns - the rule
 # update.sh applies. This used to be a hand-written list, and that list is a THIRD mirror
-# of "what ships": the pavilion port added assets/ to the package, the list was never
+# of "what ships": the new page design added assets/ to the package, the list was never
 # told, and every fresh install served /page.css as a 404 - the page rendered as raw
-# unstyled markup (operator's fresh-install report, 2026-10-04). One rule now.
+# unstyled markup (measured on a fresh install, 2026-10-04). One rule now.
 $hostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
                "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
                "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl", "tasks.md",
@@ -1335,12 +1335,12 @@ if ($missing.Count) {
 $py = @{ Path = $venvPy; Version = $py.Version }
 
 # ------------------------------------------------------ the verb surface on PATH
-# audit F12: an install left no command behind, so day-two work meant hand-editing
+# An install left no command behind, so day-two work meant hand-editing
 # .env and config.json. tinycmdr.cmd is the shim; the folder goes on the USER path
 # (never the machine path), written straight into HKCU\Environment so nobody else's
-# %VAR% entries are frozen (W2). Only -NoPath withholds it: -SkipTask is documented as
-# "files only: no autostart, no service", and it used to swallow the PATH entry too
-# (audit W9), leaving an install with no `tinycmdr` verb attached.
+# %VAR% entries are frozen. Only -NoPath withholds it: -SkipTask is documented as
+# "files only: no autostart, no service", and it used to swallow the PATH entry too,
+# leaving an install with no `tinycmdr` verb attached.
 if ($NoPath) {
     Say "path    : left alone (-NoPath)"
 } else {
@@ -1355,7 +1355,7 @@ if ($NoPath) {
 # The host field is the HOST alone: a reader pastes what their browser shows
 # ("https://chat.example.com/"), while the scheme and the port are their own keys. Split
 # what came in rather than writing a url no client can build a request from (measured
-# 2026-09-26 on a fleet macOS host, where the host field came out holding a full URL).
+# 2026-09-26 on macOS, where the host field came out holding a full URL).
 if ($MattermostUrl) {
     $raw = $MattermostUrl
     $h = ($raw -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', '')
@@ -1596,7 +1596,7 @@ foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN
         continue
     }
     # write into the commented template line, or append if there is none. The value is
-    # substituted LITERALLY (audit W11): `-replace` reads its replacement as a regex
+    # substituted LITERALLY: `-replace` reads its replacement as a regex
     # template, so a token containing $$/$&/$'/` mangled itself on the way into .env -
     # and the summary then printed a token the service rejected.
     if ($envText -match "(?m)^#?\s*$key=") {
@@ -1687,7 +1687,7 @@ if (-not (Test-Path $pywPath)) { $pywPath = $py.Path }
 # When that path itself is not ASCII - a python under a profile whose name is not ASCII -
 # the ASCII encoder below would mangle it exactly the way it used to mangle the install
 # folder, so let WSH resolve the bare name through PATH instead: that is where the
-# installer's own python.org install puts it (audit W4).
+# installer's own python.org install puts it.
 $vbsPyFallback = $pywPath
 if ($vbsPyFallback -notmatch '^[\x20-\x7e]+$') {
     $vbsPyFallback = Split-Path -Leaf $pywPath
@@ -1710,8 +1710,8 @@ $vbs = @"
 ' on Linux and macOS systemd's Restart=always and launchd's KeepAlive are the
 ' watchdog, which is why this file ships with the Windows installer only.
 '
-' The folder comes from WScript.ScriptFullName, not from an absolute path pasted in
-' (audit W4): the install folder used to be written through an ASCII encoder, so a
+' The folder comes from WScript.ScriptFullName, not from an absolute path pasted in:
+' the install folder used to be written through an ASCII encoder, so a
 ' folder whose path holds a non-ASCII name came out with that name replaced by ? and
 ' the autostart was dead on the next reboot while the installer still reported success.
 ' Nothing but the interpreter fallback is absolute now, so the file stays ASCII wherever
@@ -1726,7 +1726,7 @@ If Not fso.FileExists(py) Then py = "$vbsPyFallback"
 sh.Run """" & py & """ """ & here & "\tinycmdr-supervise.py""", 0, True
 "@
 # ASCII on purpose: the text above is path-free by construction, so a non-ASCII profile
-# name cannot reach the encoder to be destroyed (audit W4).
+# name cannot reach the encoder to be destroyed.
 Set-Content (Join-Path $InstallDir "tinycmdr-service.vbs") $vbs -Encoding ASCII
 
 $bat = @"
@@ -1738,7 +1738,7 @@ rem
 rem %~dp0 is THIS file's own folder, so no absolute path is baked into the text. The
 rem installer used to interpolate the install folder and write it through an ASCII
 rem encoder, so a folder whose path holds a non-ASCII name came out with that name
-rem replaced by ? - a launcher pointing at a folder that never existed (audit W4).
+rem replaced by ? - a launcher pointing at a folder that never existed.
 setlocal
 cd /d "%~dp0"
 set "PY=%~dp0venv\Scripts\python.exe"
@@ -1868,7 +1868,7 @@ if ($RegisterTask -and $AsService) {
         # The fallback used to be bare, so with $ErrorActionPreference = Stop an
         # unelevated run (a fleet kit's as_service: true, a wrong account) hit the trap
         # and printed "INSTALL FAILED", exit 2 - after the files, the venv, config.json
-        # and .env were already written (audit W1). Catch it and say what to do instead.
+        # and .env were already written. Catch it and say what to do instead.
         try {
             Register-ScheduledTask -TaskName $AppName -Action $action -Trigger @($tLogon, $tBoot) `
                 -Settings $set -Principal $principal -Force `
@@ -1992,7 +1992,7 @@ if ($SearchEgress -eq "true") {
 }
 Say "check  : $InstallDir> python tinycmdr.py --once ""/status""   (a session: --app, or --cli inline)"
 Say "redo   : install-tinycmdr.cmd -Force"
-# The wrapper is the line to give a reader (audit W5): a stock Restricted execution
+# The wrapper is the line to give a reader: a stock Restricted execution
 # policy refuses the -File form, and the -File form used to hardcode the default folder
 # so a -InstallDir install could not be removed with it at all. Both wrappers pass
 # -InstallDir through, and both are in the install folder / the package.

@@ -1,4 +1,4 @@
-"""The experiment ledger: what this box has already TESTED (audit, 2026-09-21).
+"""The experiment ledger: what this box has already TESTED (review, 2026-09-21).
 
 The campaign harness re-ran arms it had already measured, and one verdict ("MTP = wash")
 was retracted silently because nothing recorded that an earlier line had been superseded.

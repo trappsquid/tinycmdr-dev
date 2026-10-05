@@ -1,7 +1,7 @@
 """Token estimation: the shape of it, pinned offline, with an opt-in live check.
 
 est_tokens() sizes every compaction and force-shrink decision, so an estimator that
-is 2-3x low moves the failure to the moment the context is fullest (audit,
+is 2-3x low moves the failure to the moment the context is fullest (review,
 2026-09-22). There is no tokenizer in this repo and no network call in a suite, so
 the checks below are properties a real tokenizer agrees with - prose near 4
 chars/token, source/JSON denser, CJK much denser - measured on the two samples that

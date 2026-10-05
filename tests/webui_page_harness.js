@@ -102,14 +102,14 @@ const IDS = ['log', 'in', 'send', 'stop', 'ver',
              'clip', 'file',
              // the lane banner: its text span and its dismiss button
              'lanetext', 'lanedismiss',
-             // the pavilion: the lane banner's detail/actions, the amber config notice,
+             // the live surfaces: the lane banner's detail/actions, the amber config notice,
              // and the empty state with its two actions
              'lanedetail', 'laneretry', 'lanemore',
              'configwarn', 'configtext', 'configdismiss',
              'empty', 'emptymark',  // freshDom writes its src from the markup
              'emptynew', 'emptylast',
              'stage-status', 'stage-state',
-             // the pavilion shell: the rail's filter, the host card, the hero's stats and
+             // the page shell: the rail's filter, the host card, the hero's stats and
              // the stage header's state
              'filter', 'hits', 'hostver', 'stage-state', 'logwrap',
              'stat-session', 'stat-context', 'stat-model'];

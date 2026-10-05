@@ -1,4 +1,4 @@
-"""Offline checks for post-write verification (Phase 1c).
+"""Offline checks for post-write verification.
 
 No model calls. The verifier is a pure function of the file on disk, so it can be
 pinned exactly: a broken file must be reported broken, a good one reported good, and
@@ -107,7 +107,7 @@ def main():
             fb.sys.executable = real_exe
         check(st == "skip", f"a probe that cannot run is a skip -> {st}/{why}")
 
-        # ...but a file in SOMEBODY ELSE'S ./tools/ is not a drop-in tool. Measured by audit
+        # ...but a file in SOMEBODY ELSE'S ./tools/ is not a drop-in tool. Measured
         # 2026-09-29: the gate was the DIRECTORY NAME, so any .py under any directory called
         # tools ran the tool loader, which correctly said "no tool here" - and the model was
         # handed "[HARNESS verify FAILED ... The file on disk is broken]" about a perfectly
@@ -217,8 +217,7 @@ def main():
 
         # ---- edit recovery and feedback (2026-09-19) ------------------------
         # A near-miss anchor (LF where the file is CRLF, indentation drift) used to fail
-        # outright, and a successful edit said nothing about WHAT changed. On the fleet
-        # manager that reads as a stupid agent; both are capabilities, not intelligence.
+        # outright, and a successful edit said nothing about WHAT changed. On a host that manages other installs, that reads as a stupid agent; both are capabilities, not intelligence.
         CRLF = chr(13) + chr(10)
         LF = chr(10)
         crlf_file = workdir / "crlf_edit.py"
@@ -304,7 +303,7 @@ def main():
         fb.CONFIG["agent"]["verify_after_write"] = True
         check(fb.verify_note(badj) != "", "turning it back on restores the verdict")
 
-        # A redirection INSIDE a quote is text, not a write (audit 2026-09-29): the guesser
+        # A redirection INSIDE a quote is text, not a write (review 2026-09-29): the guesser
         # produced a candidate path from inside `'x>y'`, and when a file of that name happened
         # to exist the result carried a verify verdict about a file the command never touched.
         check(fb.shell_written_files("grep 'x>y' notes.md") == [],

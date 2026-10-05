@@ -107,7 +107,7 @@ def main():
     positive.append((eval_tasks.BY_ID["T12_budget_landing"],
                      metrics_for(BASE, "Partial work. VERIFIED: nothing",
                                  status="budget")))
-    # T13 / T14: the scored artefacts of the two Phase 1 features
+    # T13 / T14: the scored artefacts of tool-result digestion and field notes
     positive.append((eval_tasks.BY_ID["T13_buried_error"],
                      metrics_for(BASE, "vaultsync failed: checksum mismatch",
                                  digests_fired=1)))

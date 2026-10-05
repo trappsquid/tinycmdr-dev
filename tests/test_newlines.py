@@ -56,7 +56,7 @@ def main():
         cmd = workdir / "probe.cmd"
         out = fb.tool_write_file(
             {"path": str(cmd), "content": "@echo off\necho hi\n"}, {})
-        # MEASURED 2026-09-25 on the fleet's Windows box: the old flat warning ("must use
+        # MEASURED 2026-09-25 on Windows: the old flat warning ("must use
         # CRLF ... it will not run") was FALSE - an LF-only .ps1, .cmd and .bat all RAN,
         # including a cmd with an if/else block and a goto/label - and it cost 2-4 calls per
         # script as the model rewrote bytes that were already runnable. What stays is the
@@ -67,7 +67,7 @@ def main():
         out = fb.tool_write_file(
             {"path": str(ps1), "content": "Write-Output 'hi'\n"}, {})
         check("CRLF" not in out and "WARNING" not in out,
-              "an LF-only .ps1 is NOT warned about (it runs; measured on a fleet box)")
+              "an LF-only .ps1 is NOT warned about (it runs; measured on a live install)")
         cmd_ok = workdir / "probe_ok.cmd"
         out_ok = fb.tool_write_file(
             {"path": str(cmd_ok), "content": "@echo off\r\necho hi\r\n"}, {})

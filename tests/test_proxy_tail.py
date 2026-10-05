@@ -1,4 +1,4 @@
-"""The tail of the 2026-09-29 proxy audit: three decisions that keyed on the wrong string.
+"""The tail of the 2026-09-29 proxy review: three decisions that keyed on the wrong string.
 
 Each of these was found by asking the same question of a different guard - is this deciding
 from the thing, or from a string that merely looks like it? None of them loses work outright,

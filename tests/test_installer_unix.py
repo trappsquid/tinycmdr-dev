@@ -3,28 +3,28 @@
 Every item below is a defect that shipped in 1.0.21, and every one of them is invisible
 to a suite that only reads the scripts:
 
-  D1  the Linux installer aborted at `cat > ~/.config/systemd/user/...` because that
+  The Linux installer aborted at `cat > ~/.config/systemd/user/...` because that
       folder is never created (systemd has no tmpfiles entry for it). A fresh
       Debian/Ubuntu user-mode install - THE door the README prints - died after the
       venv, config.json and .env existed and before any unit, enable or start.
-  D6  the token-less install's service story changed twice. It once registered the local
+  The token-less install's service story changed twice. It once registered the local
       web page as its lane; that lane was removed, so a lane-less install registered
       nothing and the run said so. The page is BACK as the default door: a lane-less
       install with the page on registers the unit for the page (token minted into .env,
       no chat token), and only --no-web leaves a files-only install.
-  D5  config.json shipped 0644 (the macOS writer opened it before `umask 077`; Linux
+  config.json shipped 0644 (the macOS writer opened it before `umask 077`; Linux
       hardcoded `chmod 644`) beside a 0600 .env, and the install log was 0644 in /tmp.
-  D2  every documented removal door derived its paths from $HOME, so `sudo bash
+  Every documented removal door derived its paths from $HOME, so `sudo bash
       uninstall-tinycmdr-macos.sh` looked in /var/root, found nothing, printed "done."
       and exited 0 - and a `--label <l>` install could not be removed by any door.
-  D9  `chown $RUN_USER:$RUN_USER` aborted the install on any host where the group is not
+  `chown $RUN_USER:$RUN_USER` aborted the install on any host where the group is not
       named after the user (AD/LDAP, `useradd -N`, USERGROUPS_ENAB=no, macOS `staff`).
-  D3  the release zip carried permission bits without the file-TYPE bits, so Finder's
+  The release zip carried permission bits without the file-TYPE bits, so Finder's
       Archive Utility extracted INSTALL-MACOS.command, UNINSTALL-MACOS.command and the
       launcher 0644 (archive half: maintenance/check-package-modes.py).
-  D4  the package shipped without maintenance/restart-tinycmdr-macos.sh - the day-two
+  The package shipped without maintenance/restart-tinycmdr-macos.sh - the day-two
       command the macOS installer and install/README-macos.md both print.
-  D7  the uv fallback was reachable only through a live terminal and `--install-python`
+  The uv fallback was reachable only through a live terminal and `--install-python`
       could not override `--python`, so an unattended install could not complete.
 
 HOW IT STAYS HERMETIC. Nothing here touches the author's live install (`~/tinycmdr`,
@@ -33,17 +33,17 @@ launchd `com.tinycmdr.agent`):
   * every path is under a mkdtemp folder, and HOME points into it;
   * `getent`, `systemctl`, `loginctl`, `journalctl`, `launchctl` and `plutil` are STUBS
     earlier on PATH. The getent stub is what keeps the installers out of the real home:
-    both now resolve the invoking user's home from the account database (D2), so a real
+    both now resolve the invoking user's home from the account database, so a real
     getent would send RUN_HOME to the real ~ - and the macOS uninstaller would then edit
     the real ~/.zshrc;
   * the launchd label is `com.tinycmdr.insttest`, never the default, and launchctl is a
     stub, so no real job can be booted out;
   * `--no-path` goes to the macOS installer: /usr/local/bin may well be writable on a
     box that already has a real install, and the wrapper is written there
-    unconditionally. The wrapper half of D2 is tested against a hand-made wrapper in the
+    unconditionally. The wrapper half is tested against a hand-made wrapper in the
     sandbox home instead;
   * the installs run from a COPY of the shippable files, so a fleet-secrets.env can be
-    planted for D8 without writing into the repo.
+    planted without writing into the repo.
 
     python tests/test_installer_unix.py
 """
@@ -109,7 +109,7 @@ def write_stubs(bindir, user, home, fake_id=False, curl_fails=False, slim=False)
     stubs = {
         # Only `getent passwd <user>` is read. Answering with the SANDBOX home is what
         # makes a user-mode install hermetic now that the installers resolve the home
-        # from the account database instead of trusting $HOME (D2).
+        # from the account database instead of trusting $HOME.
         "getent": f'echo "{user}:x:501:20::{home}:/bin/sh"',
         "systemctl": 'case "$*" in *is-active*) echo active ;; '
                      '*is-enabled*) echo enabled ;; *show*MainPID*) echo 4242 ;; esac\nexit 0',
@@ -120,7 +120,7 @@ def write_stubs(bindir, user, home, fake_id=False, curl_fails=False, slim=False)
     }
     if fake_id:
         # A host where the installer does NOT run as the service user and the group is
-        # not named after that user - the AD/LDAP shape from I10. `id -un` differs, so
+        # not named after that user - the AD/LDAP shape. `id -un` differs, so
         # the chowns are attempted; `id -gn` answers a group that exists nowhere, so the
         # old `chown user:user` was "illegal group name" and, under `set -e`, the end of
         # the run.
@@ -223,8 +223,8 @@ def package_tree(pkg):
 def check_page_assets(inst, label):
     """Every asset the page's routes serve must LAND in an install.
 
-    1.0.68-1.0.70 copied a hand-written list that never gained assets/ when the pavilion
-    port added it, so every fresh install served /page.css as a 404 and the page rendered
+    1.0.68-1.0.70 copied a hand-written list that never gained assets/ when the page redesign
+    added it, so every fresh install served /page.css as a 404 and the page rendered
     as raw unstyled markup (operator's fresh-install report, 2026-10-04). The package
     staged here comes from SHIP now, and the set checked comes from the code
     (maintenance/package_assets.py) - the INSTALLED tree, what a user meets, is graded.
@@ -276,7 +276,6 @@ def make_bus(sb):
     s.close()
 
 
-# ------------------------------------------------------------------------------ D1 ---
 def case_linux_user_mode(sb, pkg, bindir, user, py):
     inst = sb / "lin-inst"
     fake_venv(inst, py)
@@ -288,32 +287,32 @@ def case_linux_user_mode(sb, pkg, bindir, user, py):
                "--mattermost-url", "chat.invalid", "--token", "0123456789abcdef0123456789abcdef",
                "--install-dir", inst], env, pkg)
     unit = sb / "home" / ".config" / "systemd" / "user" / "tinycmdr.service"
-    check("D1 the Linux user-mode install exits 0", got.returncode == 0,
+    check("the Linux user-mode install exits 0", got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-500:]}{got.stderr[-300:]}")
-    check("D1 the unit's directory is created and the unit written", unit.exists(),
+    check("the unit's directory is created and the unit written", unit.exists(),
           f"{unit} is not there: {got.stdout[-300:]}")
     text = unit.read_text(encoding="utf-8") if unit.exists() else ""
     execs = [l for l in text.splitlines() if l.startswith("ExecStart")]
-    check("D6 the unit starts the chat lane with no extra arguments",
+    check("the unit starts the chat lane with no extra arguments",
           bool(execs) and execs[0].strip().endswith("tinycmdr.py"),
           f"ExecStart: {execs}")
-    check("D5 config.json is 0600",
+    check("config.json is 0600",
           mode_of(inst / "config.json") == 0o600,
           f"mode {oct(mode_of(inst / 'config.json') or 0)}")
-    check("D5 .env is 0600", mode_of(inst / ".env") == 0o600,
+    check(".env is 0600", mode_of(inst / ".env") == 0o600,
           f"mode {oct(mode_of(inst / '.env') or 0)}")
-    check("D5 the install log is created 0600", mode_of(log) == 0o600,
+    check("the install log is created 0600", mode_of(log) == 0o600,
           f"mode {oct(mode_of(log) or 0)}")
     check_page_assets(inst, "fresh-install")
     real_group = subprocess.run(["id", "-gn"], capture_output=True, text=True).stdout.strip()
-    check("D9 the pre-flight names the primary group from id -gn",
+    check("the pre-flight names the primary group from id -gn",
           f"service group: {real_group}" in got.stdout,
           f"expected 'service group: {real_group}' in the output")
     return inst
 
 
 def case_linux_chown_fallback(sb, pkg, bindir, user, py):
-    """D9: the installer is not the service user and the group has another name. The old
+    """The installer is not the service user and the group has another name. The old
     `chown $RUN_USER:$RUN_USER` died right after config.json, leaving no .env and no
     unit."""
     home = sb / "home-chown"
@@ -329,21 +328,21 @@ def case_linux_chown_fallback(sb, pkg, bindir, user, py):
                "--mattermost-url", "chat.invalid", "--token", "0123456789abcdef0123456789abcdef",
                "--install-dir", inst], env, pkg)
     out = got.stdout + got.stderr
-    check("D9 the install completes where chown user:user used to abort",
+    check("the install completes where chown user:user used to abort",
           got.returncode == 0, f"rc={got.returncode}; tail: {got.stdout[-400:]}")
-    check("D9 the resolved group is what id -gn answered",
+    check("the resolved group is what id -gn answered",
           "service group: tinycmdr-testgrp" in out,
           "no 'service group: tinycmdr-testgrp' in the output")
-    check("D9 a failed chown is a named warning, not an exit",
+    check("a failed chown is a named warning, not an exit",
           "could not chown" in out, "no 'could not chown' warning printed")
-    check("D9 the install still wrote .env and the unit",
+    check("the install still wrote .env and the unit",
           (inst / ".env").exists()
           and (home / ".config" / "systemd" / "user" / "tinycmdr.service").exists(),
           "a chown failure still cost the install its .env or unit")
 
 
 def case_linux_no_chat_token(sb, pkg, bindir, user, py):
-    """D6 (Linux half): no Mattermost and no Telegram token. There is NOTHING REMOTE to
+    """Linux half: no Mattermost and no Telegram token. There is NOTHING REMOTE to
     serve, so the install writes the files but registers no unit, and says so - a service
     started with no lane exits at once, and Restart=always would loop it forever."""
     home = sb / "home-nolane"
@@ -357,15 +356,15 @@ def case_linux_no_chat_token(sb, pkg, bindir, user, py):
                "--no-deps", "--no-sudoers", "--install-dir", inst], env, pkg)
     unit = home / ".config" / "systemd" / "user" / "tinycmdr.service"
     out = got.stdout + got.stderr
-    check("D6 no chat token: the install exits 0", got.returncode == 0,
+    check("no chat token: the install exits 0", got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
-    check("D6 no chat token: no unit is written or enabled", not unit.exists(),
+    check("no chat token: no unit is written or enabled", not unit.exists(),
           f"{unit} was written with no lane to run")
-    check("D6 no chat token: the run says nothing is served remotely and names --cli/--once",
+    check("no chat token: the run says nothing is served remotely and names --cli/--once",
           "nothing remote" in out.lower() and "--cli" in out and "--once" in out,
           f"the run did not explain the no-lane install: {got.stdout[-400:]}")
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
-    check("D6 no chat token: the page's token is minted into .env (the page is the door)",
+    check("no chat token: the page's token is minted into .env (the page is the door)",
           "TINYCMDR_MM_TOKEN=\n" in env_text
           and re.search(r"^TINYCMDR_WEB_TOKEN=.{20,}$", env_text, re.M) is not None,
           f"{[l for l in env_text.splitlines() if '_TOKEN' in l]}")
@@ -373,7 +372,7 @@ def case_linux_no_chat_token(sb, pkg, bindir, user, py):
 
 
 def case_linux_uninstall(sb, pkg, bindir, user, py, inst):
-    """D2 (Linux half): the folder, the unit and the PATH wrapper go, and a second run
+    """Linux half: the folder, the unit and the PATH wrapper go, and a second run
     says there was nothing to remove instead of printing 'done.'."""
     wrapper = sb / "home" / ".local" / "bin" / "tinycmdr"
     wrapper.parent.mkdir(parents=True, exist_ok=True)
@@ -383,28 +382,28 @@ def case_linux_uninstall(sb, pkg, bindir, user, py, inst):
     # everything where it is; --yes is the documented consent.
     refusal = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--uninstall",
                    "--mode", "user", "--install-dir", inst], env, pkg)
-    check("D2 an unconfirmed non-tty uninstall refuses instead of deleting",
+    check("an unconfirmed non-tty uninstall refuses instead of deleting",
           refusal.returncode != 0 and inst.exists()
           and "refusing to delete" in refusal.stdout + refusal.stderr,
           f"rc={refusal.returncode}; {refusal.stdout[-200:]}{refusal.stderr[-200:]}")
     got = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--uninstall",
                "--yes", "--mode", "user", "--install-dir", inst], env, pkg)
-    check("D2 a user-mode uninstall exits 0", got.returncode == 0,
+    check("a user-mode uninstall exits 0", got.returncode == 0,
           f"rc={got.returncode}; {got.stdout[-300:]}")
-    check("D2 the install folder is gone", not inst.exists(), f"{inst} survives")
-    check("D2 the unit is gone",
+    check("the install folder is gone", not inst.exists(), f"{inst} survives")
+    check("the unit is gone",
           not (sb / "home" / ".config" / "systemd" / "user" / "tinycmdr.service").exists(),
           "the unit survived")
-    check("D2 the PATH wrapper is gone", not wrapper.exists(), f"{wrapper} survives")
+    check("the PATH wrapper is gone", not wrapper.exists(), f"{wrapper} survives")
     again = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--uninstall",
                  "--yes", "--mode", "user", "--install-dir", inst], env, pkg)
-    check("D2 a removal that finds nothing says so",
+    check("a removal that finds nothing says so",
           "nothing to remove" in again.stdout + again.stderr,
           f"second uninstall printed: {again.stdout.strip()[-200:]}")
 
 
 def case_linux_secrets_lane(sb, pkg, bindir, user, py):
-    """D8 (Linux half): the package's fleet-secrets.env carries TINYCMDR_MM_TOKEN, so the
+    """Linux half: the package's fleet-secrets.env carries TINYCMDR_MM_TOKEN, so the
     lane is Mattermost - and the token is written once, from this run."""
     inst = sb / "lin-lane"
     fake_venv(inst, py)
@@ -415,22 +414,22 @@ def case_linux_secrets_lane(sb, pkg, bindir, user, py):
                "--mattermost-url", "chat.invalid", "--allowed-user", "u1",
                "--install-dir", inst], env, pkg)
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
-    check("D8 the lane is chosen from the secrets file's token",
+    check("the lane is chosen from the secrets file's token",
           "installing WITHOUT a chat account" not in got.stdout
           and "TINYCMDR_MM_TOKEN from" in got.stdout
           and "fleet-secrets.env" in got.stdout,
           f"the run took the no-lane branch, or never read the token: {got.stdout[-300:]}")
-    check("D8 the token is written once, with the file's value",
+    check("the token is written once, with the file's value",
           env_text.count("TINYCMDR_MM_TOKEN=") == 1
           and "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789" in env_text,
           f"lines: {[l for l in env_text.splitlines() if 'MM_TOKEN' in l]}")
-    check("D8 the shared search key rides along",
+    check("the shared search key rides along",
           "TAVILY_API_KEY=tvly-planted-by-the-test" in env_text,
           "the fleet key never reached .env")
 
 
 def case_linux_secrets_file(sb, pkg, bindir, user, py):
-    """D8 (Linux half), the switch: --secrets-file names the file, wherever it lives.
+    """Linux half, the switch: --secrets-file names the file, wherever it lives.
 
     Parity with the macOS installer, which has always taken the path; Linux could only read
     the package's own install/fleet-secrets.env, so a reader feeding a file by path got a
@@ -448,11 +447,11 @@ def case_linux_secrets_file(sb, pkg, bindir, user, py):
                "--install-dir", inst], env, pkg)
     out = got.stdout + got.stderr
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
-    check("D8 --secrets-file chooses the lane from the file it was given",
+    check("--secrets-file chooses the lane from the file it was given",
           "installing WITHOUT a chat account" not in got.stdout
           and str(planted) in got.stdout,
           f"rc={got.returncode}; {out[-300:]}")
-    check("D8 the token is written once, from that file",
+    check("the token is written once, from that file",
           env_text.count("TINYCMDR_MM_TOKEN=") == 1
           and "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789" in env_text,
           f"lines: {[l for l in env_text.splitlines() if 'MM_TOKEN' in l]}")
@@ -464,12 +463,11 @@ def case_linux_secrets_file(sb, pkg, bindir, user, py):
                 "--secrets-file", missing,
                 "--install-dir", sb / "lin-missing"], sandbox_home_env(sb, bindir, log, user),
                pkg)
-    check("D8 a --secrets-file that does not exist is refused by name",
+    check("a --secrets-file that does not exist is refused by name",
           got2.returncode != 0 and "does not exist" in (got2.stdout + got2.stderr),
           f"rc={got2.returncode}; {(got2.stdout + got2.stderr)[-200:]}")
 
 
-# --------------------------------------------------------------------------- D2/D5 ---
 def case_macos_install(sb, pkg, bindir, user, py):
     """A real macOS install: files, config, .env and the plist - no load (--no-start),
     no wrapper (--no-path), and a label of our own so no real job is ever involved."""
@@ -489,11 +487,11 @@ def case_macos_install(sb, pkg, bindir, user, py):
     if not on_mac:
         args.append("--no-launchd")
     got = run([*args, "--install-dir", inst], env, pkg)
-    check("D2 the macOS install exits 0", got.returncode == 0,
+    check("the macOS install exits 0", got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-600:]}{got.stderr[-400:]}")
     label_file = inst / ".tinycmdr-label"
     if on_mac:
-        check("D2 the launchd label is recorded in the install folder",
+        check("the launchd label is recorded in the install folder",
               label_file.exists()
               and label_file.read_text(encoding="utf-8").strip() == "com.tinycmdr.insttest",
               f"{label_file}: {label_file.read_text() if label_file.exists() else 'missing'}")
@@ -501,29 +499,29 @@ def case_macos_install(sb, pkg, bindir, user, py):
         # No launchd, so no job was registered and nothing recorded a label. The check
         # itself runs on the macOS runner (and on any Mac); what is asserted here is that
         # the files landed, below.
-        print("SKIP the label half of D2: this host has no launchd (--no-launchd above)")
-    check("D5 config.json is 0600 on macOS", mode_of(inst / "config.json") == 0o600,
+        print("SKIP the label half: this host has no launchd (--no-launchd above)")
+    check("config.json is 0600 on macOS", mode_of(inst / "config.json") == 0o600,
           f"mode {oct(mode_of(inst / 'config.json') or 0)}")
-    check("D5 .env is 0600 on macOS", mode_of(inst / ".env") == 0o600,
+    check(".env is 0600 on macOS", mode_of(inst / ".env") == 0o600,
           f"mode {oct(mode_of(inst / '.env') or 0)}")
-    check("D5 the install log is created 0600 on macOS", mode_of(log) == 0o600,
+    check("the install log is created 0600 on macOS", mode_of(log) == 0o600,
           f"mode {oct(mode_of(log) or 0)}")
-    check("D4 the day-two helper the installer prints is installed",
+    check("the day-two helper the installer prints is installed",
           (inst / "maintenance" / "restart-tinycmdr-macos.sh").exists(),
           "the install carries no maintenance/restart-tinycmdr-macos.sh")
     check_page_assets(inst, "fresh-install")
     if os.uname().sysname == "Darwin":
         plist = sb / "home" / "Library" / "LaunchAgents" / "com.tinycmdr.insttest.plist"
-        check("D2 the plist lands under the INVOKING user's home", plist.exists(),
+        check("the plist lands under the INVOKING user's home", plist.exists(),
               f"{plist} is not there")
     else:
-        print("SKIP the plist half of D2: launchd is macOS-only")
+        print("SKIP the plist half: launchd is macOS-only")
     return inst
 
 
 def case_macos_uninstall(sb, pkg, bindir, user, py, inst):
-    """D2: the documented `sudo`-form removal really removes. SUDO_USER with a
-    /var/root-shaped HOME is the I6 repro - the old uninstaller derived every path from
+    """The documented `sudo`-form removal really removes. SUDO_USER with a
+    /var/root-shaped HOME is the repro - the old uninstaller derived every path from
     $HOME, so it looked in that fake root home, found nothing and printed 'done.'."""
     home = sb / "home"
     plist = home / "Library" / "LaunchAgents" / "com.tinycmdr.insttest.plist"
@@ -541,35 +539,35 @@ def case_macos_uninstall(sb, pkg, bindir, user, py, inst):
     # No terminal and no --yes -> refuse, folder intact.
     refusal = run(["bash", pkg / "install" / "uninstall-tinycmdr-macos.sh",
                    "--install-dir", inst], env, pkg)
-    check("D2 an unconfirmed non-tty macOS uninstall refuses instead of deleting",
+    check("an unconfirmed non-tty macOS uninstall refuses instead of deleting",
           refusal.returncode != 0 and inst.exists()
           and "refusing to delete" in refusal.stdout + refusal.stderr,
           f"rc={refusal.returncode}; {refusal.stdout[-200:]}{refusal.stderr[-200:]}")
     got = run(["bash", pkg / "install" / "uninstall-tinycmdr-macos.sh",
                "--yes", "--install-dir", inst], env, pkg)
-    check("D2 the documented removal exits 0", got.returncode == 0,
+    check("the documented removal exits 0", got.returncode == 0,
           f"rc={got.returncode}; tail: {got.stdout[-400:]}{got.stderr[-300:]}")
-    check("D2 the install folder is gone under the sudo-shaped environment",
+    check("the install folder is gone under the sudo-shaped environment",
           not inst.exists(), f"{inst} survives")
-    check("D2 the PATH wrapper in the invoking user's home is gone", not wrapper.exists(),
+    check("the PATH wrapper in the invoking user's home is gone", not wrapper.exists(),
           f"{wrapper} survives")
-    check("D2 the '# tinycmdr' PATH line is gone",
+    check("the '# tinycmdr' PATH line is gone",
           "# tinycmdr" not in zshrc.read_text(encoding="utf-8"),
           zshrc.read_text(encoding="utf-8"))
     if os.uname().sysname == "Darwin":
-        check("D2 the --label install's plist is gone (the label was read back)",
+        check("the --label install's plist is gone (the label was read back)",
               not plist.exists(), f"{plist} survived its own install's removal")
     else:
-        print("SKIP the plist half of D2: launchd is macOS-only")
+        print("SKIP the plist half: launchd is macOS-only")
     again = run(["bash", pkg / "install" / "uninstall-tinycmdr-macos.sh",
                  "--install-dir", inst], env, pkg)
-    check("D2 a macOS removal that finds nothing says so",
+    check("a macOS removal that finds nothing says so",
           "nothing to remove" in again.stdout + again.stderr,
           f"second uninstall printed: {again.stdout.strip()[-200:]}")
 
 
 def case_macos_secrets_lane(sb, pkg, bindir, user, py):
-    """D8: --secrets-file carries the bot token, so the lane is Mattermost and the token
+    """--secrets-file carries the bot token, so the lane is Mattermost and the token
     is written once. Before this, the lane branch ran first and wrote an empty
     `TINYCMDR_MM_TOKEN=` ahead of the file's real line - and the build reads the FIRST
     occurrence."""
@@ -584,45 +582,44 @@ def case_macos_secrets_lane(sb, pkg, bindir, user, py):
                "--install-dir", inst], env, pkg)
     env_text = (inst / ".env").read_text(encoding="utf-8") if (inst / ".env").exists() else ""
     cfg = (inst / "config.json").read_text(encoding="utf-8") if (inst / "config.json").exists() else ""
-    check("D8 macOS: the lane comes from the secrets file's token",
+    check("macOS: the lane comes from the secrets file's token",
           "installing WITHOUT a chat account" not in got.stdout
           and "TINYCMDR_MM_TOKEN from" in got.stdout,
           f"rc={got.returncode}; {got.stdout[-400:]}")
-    check("D8 macOS: exactly one TINYCMDR_MM_TOKEN line, with the file's value",
+    check("macOS: exactly one TINYCMDR_MM_TOKEN line, with the file's value",
           env_text.count("TINYCMDR_MM_TOKEN=") == 1
           and "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789" in env_text,
           f"lines: {[l for l in env_text.splitlines() if 'MM_TOKEN' in l]}")
-    check("D8 macOS: the server lands in config.json for the chat lane",
+    check("macOS: the server lands in config.json for the chat lane",
           '"url": "chat.invalid"' in cfg, "mattermost.url was not written")
 
 
-# ----------------------------------------------------------------------------- D10 ---
 def case_help_and_footer(sb, pkg, bindir, user, py):
-    """D10: --help prints the whole header, and a headless install.sh leaks no /dev/tty
+    """--help prints the whole header, and a headless install.sh leaks no /dev/tty
     error and names the platform's installer in its footer."""
     env = sandbox_home_env(sb, bindir, sb / "logs" / "help.log", user)
     mac_help = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "--help"],
                    env, pkg)
     body = mac_help.stdout
-    check("D10 macOS --help lists --no-path and --force-python",
+    check("macOS --help lists --no-path and --force-python",
           "--no-path" in body and "--force-python" in body,
           "one of the two switches is still undocumented")
-    check("D10 macOS --help prints the header to its last line",
+    check("macOS --help prints the header to its last line",
           "secret in a file nobody thinks to delete" in body,
           "the usage range still stops early: " + repr(body[-120:]))
-    check("D10 macOS --help names the 3.10-3.12 band", "3.10-3.12" in body,
+    check("macOS --help names the 3.10-3.12 band", "3.10-3.12" in body,
           "the band is not stated in the installer help")
     lin_help = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--help"], env, pkg)
-    check("D10 Linux --help lists --no-path", "--no-path" in lin_help.stdout,
+    check("Linux --help lists --no-path", "--no-path" in lin_help.stdout,
           "the Linux help does not document --no-path")
-    check("D10 Linux --help prints the header to its last line",
+    check("Linux --help prints the header to its last line",
           "nobody thinks to delete" in lin_help.stdout,
           "the usage range still stops early: " + repr(lin_help.stdout[-120:]))
 
     # The head of this installer used to be `USER_HOME="$(getent passwd ...)"` with no guard:
     # on a host without getent it exited 127 with NO output, before parsing an argument - so
     # --help printed nothing and the script's own "this installer is for Debian/Ubuntu hosts"
-    # never ran (audit I6 for this file). A getent that fails stands in for such a host here,
+    # never ran. A getent that fails stands in for such a host here,
     # on any platform, so the check has teeth on the Linux runner too.
     nogetent = sb / "bin-nogetent"
     nogetent.mkdir(parents=True, exist_ok=True)
@@ -631,7 +628,7 @@ def case_help_and_footer(sb, pkg, bindir, user, py):
     env2 = sandbox_home_env(sb, bindir, sb / "logs" / "help2.log", user)
     env2["PATH"] = f"{nogetent}:{env2['PATH']}"
     bare = run(["bash", pkg / "install" / "install-tinycmdr.sh", "--help"], env2, pkg)
-    check("D10 Linux --help still works where getent fails (no silent exit 127)",
+    check("Linux --help still works where getent fails (no silent exit 127)",
           bare.returncode == 0 and "install-tinycmdr.sh - install tinycmdr" in bare.stdout,
           f"rc={bare.returncode}; out={bare.stdout[:80]!r} err={bare.stderr[:120]!r}")
 
@@ -659,27 +656,26 @@ def case_help_and_footer(sb, pkg, bindir, user, py):
         with tarfile.open(dist / asset, "w:gz") as t:
             t.add(stage, arcname=f"tinycmdr-{ver}")
     # A release directory is the archive PLUS its SHA256SUMS: install.sh checks the
-    # download against it before unpacking anything (F-22), so a fixture without the sums
+    # download against it before unpacking anything, so a fixture without the sums
     # file is not the door under test - it is a broken release, and the run stops there.
     release_sums(dist, asset)
     got = run(["bash", pkg / "install.sh", "--help"],
               stub_env(bindir, sb / "logs" / "installsh.log",
                        {"HOME": str(sb / "home"), "TINYCMDR_URL": f"file://{dist}"}), pkg)
     combined = got.stdout + got.stderr
-    check("D10 a headless install.sh prints no /dev/tty error", "/dev/tty" not in combined,
+    check("a headless install.sh prints no /dev/tty error", "/dev/tty" not in combined,
           "leaked: " + repr([l for l in combined.splitlines() if "/dev/tty" in l]))
-    check("D2 install.sh's footer names the platform's installer",
+    check("install.sh's footer names the platform's installer",
           f"bash ~/tinycmdr/{installer} --uninstall" in got.stdout,
           f"footer:\n{got.stdout[-400:]}")
     if darwin:
-        check("D2 install.sh's footer does not offer the Linux installer on macOS",
+        check("install.sh's footer does not offer the Linux installer on macOS",
               "bash ~/tinycmdr/install/install-tinycmdr.sh " not in got.stdout,
               "the Linux installer is still printed on macOS")
 
 
-# ---------------------------------------------------------------------------- F-22 ---
 def case_download_sums(sb, pkg, bindir, user, py):
-    """F-22: the one-line door checks the download against the SHA256SUMS it ships beside.
+    """The one-line door checks the download against the SHA256SUMS it ships beside.
 
     The README documents this by hand, and the pipe-to-bash path - the door the README
     leads with - had no check at all (measured 2026-09-29: neither install.sh nor
@@ -702,50 +698,49 @@ def case_download_sums(sb, pkg, bindir, user, py):
     (dist / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, asset), encoding="utf-8")
     got = door()
     both = got.stdout + got.stderr
-    check("F-22 a download that does not match SHA256SUMS is refused",
+    check("a download that does not match SHA256SUMS is refused",
           got.returncode != 0 and "does not match SHA256SUMS" in both, both[-300:])
-    check("F-22 ...and nothing is unpacked when it is",
+    check("...and nothing is unpacked when it is",
           "unpacking" not in both, both[-300:])
 
     (dist / "SHA256SUMS").write_text("%s  %s\n" % (real, "tinycmdr-win.zip"), encoding="utf-8")
     got = door()
     both = got.stdout + got.stderr
-    check("F-22 a SHA256SUMS that does not cover this asset is refused",
+    check("a SHA256SUMS that does not cover this asset is refused",
           "does not cover" in both, both[-300:])
 
     (dist / "SHA256SUMS").unlink()
     got = door()
     both = got.stdout + got.stderr
-    check("F-22 a release with no SHA256SUMS at all is refused",
+    check("a release with no SHA256SUMS at all is refused",
           got.returncode != 0 and "cannot be checked" in both, both[-300:])
     got = door({"TINYCMDR_NO_SUMS": "1"})
     both = got.stdout + got.stderr
-    check("F-22 ...and TINYCMDR_NO_SUMS=1 is the deliberate way past that",
+    check("...and TINYCMDR_NO_SUMS=1 is the deliberate way past that",
           "TINYCMDR_NO_SUMS=1 says carry on" in both, both[-300:])
 
     release_sums(dist, asset)
     got = door()
     both = got.stdout + got.stderr
-    check("F-22 a matching download gets past verification",
+    check("a matching download gets past verification",
           "matches SHA256SUMS" in both, both[-300:])
 
 
-# ------------------------------------------------------------------------ D3/D4/D7 ---
 def case_archive_and_python(sb, pkg, bindir, user, py):
-    """D3/D4 in the built archive, and D7's refusals."""
+    """In the built archive, and the refusals."""
     got = subprocess.run([sys.executable, str(BASE / "maintenance" / "check-package-modes.py")],
                          capture_output=True, text=True, cwd=str(BASE), timeout=900)
     if os.uname().sysname == "Darwin":
-        check("D3/D4 ditto extracts every door of the built zip as 0755",
+        check("ditto extracts every door of the built zip as 0755",
               got.returncode == 0,
               f"rc={got.returncode}\n{got.stdout[-700:]}{got.stderr[-300:]}")
     elif got.returncode == 3:
-        print("SKIP D3's extraction half: ditto is macOS-only\n" + got.stdout.strip())
+        print("SKIP the extraction half: ditto is macOS-only\n" + got.stdout.strip())
     else:
-        check("D4 SHIP's maintenance/ entries equal ALLOWED_MAINTENANCE",
+        check("SHIP's maintenance/ entries equal ALLOWED_MAINTENANCE",
               got.returncode == 0, f"rc={got.returncode}\n{got.stdout[-500:]}")
 
-    # D7: a 3.9 interpreter is refused with the band named, even under -y - no amount of
+    # A 3.9 interpreter is refused with the band named, even under -y - no amount of
     # consenting makes Path.write_text(newline=...) work - and the refusal names the
     # switch that does.
     fake39 = sb / "fake39" / "python3.9"
@@ -761,13 +756,13 @@ def case_archive_and_python(sb, pkg, bindir, user, py):
     got = run(["bash", pkg / "install" / "install-tinycmdr-macos.sh", "-y", "--no-launchd",
                "--python", fake39, "--install-dir", sb / "py39-inst"], env, pkg)
     out = got.stdout + got.stderr
-    check("D7 python 3.9 is refused, with the band named",
+    check("python 3.9 is refused, with the band named",
           got.returncode != 0 and "3.10-3.12" in out and "3.9" in out,
           f"rc={got.returncode}; {out[-400:]}")
-    check("D7 the 3.9 refusal names --install-python", "--install-python" in out,
+    check("the 3.9 refusal names --install-python", "--install-python" in out,
           "the refusal does not name the switch that would work")
 
-    # D7: --install-python beats an explicit --python. curl is stubbed to fail, so the
+    # --install-python beats an explicit --python. curl is stubbed to fail, so the
     # fetch is ATTEMPTED and the run ends there - no download, and never the 3.9 refusal.
     offline = write_stubs(sb / "bin-offline", user, sb / "home", curl_fails=True)
     env2 = sandbox_home_env(sb, offline, sb / "logs" / "pyfetch.log", user)
@@ -775,7 +770,7 @@ def case_archive_and_python(sb, pkg, bindir, user, py):
                "--python", fake39, "--install-python",
                "--install-dir", sb / "pyfetch-inst"], env2, pkg)
     out = got.stdout + got.stderr
-    check("D7 --install-python wins over --python (it fetches instead of refusing)",
+    check("--install-python wins over --python (it fetches instead of refusing)",
           got.returncode != 0 and "too old" not in out
           and ("could not download uv" in out or "uv could not fetch python 3.12" in out),
           f"rc={got.returncode}; {out[-400:]}")
@@ -828,7 +823,7 @@ def run_with_stdin(cmd, env, cwd, stdin_text):
 def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
     """The interactive installer asks, PROBES, and offers what it advertised.
 
-    Operator, 2026-09-30: "there should be a point in the interactive installer that checks
+    2026-09-30: "there should be a point in the interactive installer that checks
     if your link is even reachable before it continues on with the rest of the install" - and
     a typo at this one question used to be invisible until the first request failed. Two
     runs: a live stub endpoint (reachable, and the model chosen by NUMBER from its list) and
@@ -853,11 +848,11 @@ def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
              "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst],
             env, pkg, answers)
         written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
-        check("P1 a live endpoint is reported reachable, with what it advertises",
+        check("a live endpoint is reported reachable, with what it advertises",
               "reachable" in got.stdout and "qwen3-14b" in got.stdout
               and "glm-4.6" in got.stdout,
               f"rc={got.returncode}; tail: {got.stdout[-600:]}{got.stderr[-300:]}")
-        check("P1 ...and the model id can be given as a NUMBER in that list",
+        check("...and the model id can be given as a NUMBER in that list",
               written["llm"]["model"] == "glm-4.6" and written["llm"]["base_url"] == url,
               f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
 
@@ -871,13 +866,13 @@ def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
             ["bash", pkg / "install" / "install-tinycmdr.sh", "-y", "--mode", "user",
              "--no-deps", "--no-sudoers", "--no-start", "--install-dir", inst2],
             env2, pkg, answers2)
-        check("P2 an endpoint that does not answer is checked again, three times",
+        check("an endpoint that does not answer is checked again, three times",
               got2.stdout.count("no answer from") == 3, got2.stdout[-600:])
-        check("P2 ...then kept, naming the command that fixes it later",
+        check("...then kept, naming the command that fixes it later",
               "keeping it anyway" in got2.stdout and "tinycmdr model endpoint" in got2.stdout,
               got2.stdout[-400:])
         written2 = json.loads((inst2 / "config.json").read_text(encoding="utf-8"))
-        check("P2 ...and the install still completes rather than becoming a wall",
+        check("...and the install still completes rather than becoming a wall",
               got2.returncode == 0 and written2["llm"]["base_url"] == dead,
               f"rc={got2.returncode}; url={written2['llm'].get('base_url')}")
     finally:
@@ -910,13 +905,13 @@ def case_macos_probes_endpoint(sb, pkg, bindir, user, py):
         url = "http://127.0.0.1:%d/v1" % port
         got = run_with_stdin(args, env, pkg, "\n".join(["", "", "", "n", "", url, "2"] + [""] * 8) + "\n")
         written = json.loads((inst / "config.json").read_text(encoding="utf-8"))
-        check("P3 the macOS installer probes too, and says what it found",
+        check("the macOS installer probes too, and says what it found",
               "reachable" in got.stdout and "qwen3-14b" in got.stdout,
               f"rc={got.returncode}; tail: {got.stdout[-600:]}{got.stderr[-300:]}")
-        check("P3 ...and its model id can come from that list by number",
+        check("...and its model id can come from that list by number",
               written["llm"]["model"] == "glm-4.6" and written["llm"]["base_url"] == url,
               f"model={written['llm'].get('model')} url={written['llm'].get('base_url')}")
-        check("P3 ...and the Mattermost token step is offered even with --token given",
+        check("...and the Mattermost token step is offered even with --token given",
               "Mattermost bot token (input hidden" in (got.stdout + got.stderr),
               (got.stdout + got.stderr)[-500:])
     finally:

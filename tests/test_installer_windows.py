@@ -1,6 +1,6 @@
-"""Structural checks on the Windows installer (Batch E / audit W1-W11).
+"""Structural checks on the Windows installer.
 
-The Phase 1 bed is macOS, so nothing here executes PowerShell or cmd - these checks
+The test bed is macOS, so nothing here executes PowerShell or cmd - these checks
 parse the shipped text and assert the SHAPE of each fix, so a later edit cannot quietly
 revert one. Every claim in this file is [READ]; the runtime proof has to come from a
 Windows host and is listed as outstanding in CHANGELOG/README.
@@ -54,7 +54,7 @@ def function_body(text, signature):
     """A top-level `def` block: the signature line up to the next top-level `def`.
 
     Used on tinycmdr.py, whose functions are long and whose line numbers drift, so the
-    E6 check cannot be anchored on a line number.
+    check cannot be anchored on a line number.
     """
     i = text.find(signature)
     if i == -1:
@@ -71,7 +71,7 @@ def main():
     one_line = source("install.ps1")
     shim = source("tinycmdr.cmd")
 
-    print("== W1 (E1) elevation is re-checked once the fleet defaults have had their say ==")
+    print("== elevation is re-checked once the fleet defaults have had their say ==")
     fleet = install.find("if ($fleet.as_service -eq $true)")
     guards = [m.start() for m in re.finditer(r"\$AsService -and -not \$elevated", install)]
     check("fleet defaults set $AsService from as_service",
@@ -84,7 +84,7 @@ def main():
     check("the late guard prints the re-run-as-Administrator line",
           "Re-run as Administrator" in between(install, "if ($fleet.as_service", "where this install goes"))
 
-    print("\n== W1 (E1) the fallback Register-ScheduledTask is caught, not trapped ==")
+    print("\n== the fallback Register-ScheduledTask is caught, not trapped ==")
     regs = [m.start() for m in re.finditer(r"Register-ScheduledTask -TaskName \$AppName", install)]
     check("both registration attempts are present", len(regs) == 2, "found %d" % len(regs))
     tail = install[regs[-1]:] if regs else ""
@@ -96,7 +96,7 @@ def main():
     check("that catch names the fix: an elevated shell (or drop -AsService)",
           "elevated PowerShell" in tail[:900] and "-AsService" in tail[:900])
 
-    print("\n== W2 (E2) the user PATH is edited in HKCU\\Environment, not via SetEnvironmentVariable ==")
+    print("\n== the user PATH is edited in HKCU\\Environment, not via SetEnvironmentVariable ==")
     check("PATH is read with DoNotExpandEnvironmentNames",
           "DoNotExpandEnvironmentNames" in install)
     check("PATH is written back as an ExpandString",
@@ -111,7 +111,7 @@ def main():
     check("the old expanded-path add is gone",
           '$parts -notcontains $InstallDir' not in install)
 
-    print("\n== W3 (E3) -VerifyOnly runs before the interpreter step ==")
+    print("\n== -VerifyOnly runs before the interpreter step ==")
     checks = [m.start() for m in re.finditer(r"if \(\$VerifyOnly\) \{", install)]
     check("exactly one -VerifyOnly branch", len(checks) == 1, "found %d" % len(checks))
     marker = install.find("BEFORE the interpreter step")
@@ -137,7 +137,7 @@ def main():
           "Resolve-Python -Explicit $Python" in verify_body,
           "verify body: %r" % verify_body[-160:])
 
-    print("\n== W4 (E4) the generated launchers are path-free and stay ASCII ===")
+    print("\n== the generated launchers are path-free and stay ASCII ===")
     vbs = heredoc(install, "vbs")
     bat = heredoc(install, "bat")
     check("the VBS here-string is found", vbs is not None)
@@ -164,7 +164,7 @@ def main():
     check("the interpreter fallback is guarded for the non-ASCII case",
           "$vbsPyFallback" in install and "notmatch '^[\\x20-\\x7e]+$'" in install)
 
-    print("\n== W5 (E5) the uninstall line names the wrapper and a real folder ==")
+    print("\n== the uninstall line names the wrapper and a real folder ==")
     check("the installer summary prints the .cmd -Uninstall wrapper",
           "install-tinycmdr.cmd -Uninstall" in install)
     check("the summary's -File form carries -ExecutionPolicy Bypass",
@@ -188,7 +188,7 @@ def main():
     check("the uninstaller no longer claims a -AsService install lands in C:\\tinycmdr",
           "put it in C:\\tinycmdr" not in uninstall)
 
-    print("\n== W6 (E6) Windows restart elevation is for a task-owned instance only ==")
+    print("\n== Windows restart elevation is for a task-owned instance only ==")
     # The fix itself belongs to tinycmdr.py, which this batch does not own (the parent
     # session does). This check ACTIVATES itself the moment that file stops demanding an
     # elevated shell on `os.name == "nt"` alone: until then it prints a skip naming the
@@ -198,22 +198,22 @@ def main():
     bare = re.search(r'(?m)^\s*if os\.name == "nt" and not _is_elevated\(\)\s*:', verb)
     probe = re.search(r"(Get-ScheduledTask|schtasks|_scheduled_task|_task_owned|task_installed)", verb)
     if bare:
-        skip("E6/W6 'require elevation only for a task-owned instance' - still outstanding",
+        skip("'require elevation only for a task-owned instance' - still outstanding",
              "tinycmdr.py _verb_restart demands elevation on os.name alone; the parent session "
              "owns that file. This check flips to a real assertion when it lands "
              "(predicate: a task probe precedes _is_elevated())")
     elif "_is_elevated()" not in verb:
-        skip("E6/W6 _verb_restart no longer demands elevation on Windows at all",
-             "nothing left to condition - re-read W6 if that was not deliberate")
+        skip("_verb_restart no longer demands elevation on Windows at all",
+             "nothing left to condition - re-read this if that was not deliberate")
     else:
-        check("E6/W6 the Windows elevation demand follows a task-owned-instance probe",
+        check("the Windows elevation demand follows a task-owned-instance probe",
               probe is not None and probe.start() < verb.find("_is_elevated()"),
               "probe=%r at %s, _is_elevated() at %d" %
               (probe and probe.group(0), probe and probe.start(), verb.find("_is_elevated()")))
-        check("E6/W6 the shortcut lane is no longer refused (message names a task-owned run)",
+        check("the shortcut lane is no longer refused (message names a task-owned run)",
               "task" in verb)
 
-    print("\n== W7 (E7) the stop filter sees the supervisor and the folder removal retries ==")
+    print("\n== the stop filter sees the supervisor and the folder removal retries ==")
     stop = between(install, "function Stop-TinycmdrProcesses {", "function Remove-TinycmdrFolder {")
     stop_code = stop[stop.find("param([string] $Dir)"):] if "param([string] $Dir)" in stop else ""
     check("the stop filter matches tinycmdr-supervise.py in its filter code",
@@ -229,7 +229,7 @@ def main():
           "Remove-TinycmdrFolder -Dir $InstallDir" in install and
           "Remove-Item $InstallDir -Recurse -Force\n" not in install)
 
-    print("\n== W8 (E8) tinycmdr.cmd refuses the Microsoft Store python stub ==")
+    print("\n== tinycmdr.cmd refuses the Microsoft Store python stub ==")
     check("the shim looks python up with where + findstr",
           "where %~1" in shim and 'findstr /i /c:"WindowsApps"' in shim)
     check("the shim has the :findpy helper and calls it for python.exe and py.exe",
@@ -241,7 +241,7 @@ def main():
     check("the shim no longer claims Python 3.9+",
           "3.9+" not in shim and "3.10-3.12" in shim)
 
-    print("\n== W-band: the resolver refuses 3.13+ like the other two ==")
+    print("\n== the resolver refuses 3.13+ like the other two ==")
     check("the resolver bounds the band, not just the floor",
           '-ge [version]"3.10"' in install and '-le [version]"3.12"' in install)
     check("...with the -ForcePython escape and the mmpy_bot reason",
@@ -253,12 +253,12 @@ def main():
     check("the help text states the supported band",
           "finds Python 3.10-3.12" in install)
 
-    print("\n== W9 (E8) -SkipTask no longer withholds the PATH entry ==")
+    print("\n== -SkipTask no longer withholds the PATH entry ==")
     check("the PATH gate is -NoPath only",
           "if ($NoPath) {" in install and "$NoPath -or $SkipTask" not in install)
     check("the PATH section says so", "left alone (-NoPath)" in install)
 
-    print("\n== W10 (E8) the python.org fallback download follows the architecture ==")
+    print("\n== the python.org fallback download follows the architecture ==")
     check("the asset is chosen from $env:PROCESSOR_ARCHITECTURE",
           "PROCESSOR_ARCHITECTURE" in install and "$pyArch" in install)
     check("all three architectures are mapped",
@@ -269,7 +269,7 @@ def main():
     check("the resolved interpreter's word size is checked",
           "Is64BitOperatingSystem" in install and "calcsize('P')" in install)
 
-    print("\n== W11 (E8) PATH-vs-delete order, and literal .env substitution ==")
+    print("\n== PATH-vs-delete order, and literal .env substitution ==")
     check("the early exit knows about the user PATH",
           "Test-UserPathHas $InstallDir" in install and "pathHasEntry" in install)
     kept = install.find("kept $InstallDir")
@@ -386,7 +386,7 @@ def main():
                   (r.stdout + r.stderr).strip()[:200])
 
     print("\n== the copy phase carries the page's assets (fresh-install regression) ==")
-    # The installer used to copy a hand-written list of names; the pavilion port added
+    # The installer used to copy a hand-written list of names; the page redesign added
     # assets/ to the package and the list was never told, so every fresh install served
     # /page.css as a 404 (operator's fresh-install report, 2026-10-04). The copy is the
     # package-tree-minus-host-owned rule now - no list to drift.

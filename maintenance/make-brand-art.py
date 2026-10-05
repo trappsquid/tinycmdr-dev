@@ -31,7 +31,7 @@ PAGE_ICON = ROOT / "assets" / "page-icon.png"
 PAGE_MARK = ROOT / "assets" / "page-mark.png"
 # left, upper, right, lower: the designer's framing with the bottom EXTENDED. Their
 # original box stopped at y=850 while the badge's content reaches y=939, so the emblem's
-# bottom was cut off in the rail (operator report, 2026-10-03). Measured content box at
+# bottom was cut off in the rail (2026-10-03). Measured content box at
 # max(rgb)>=45: x 58..912, y 5..939 - the sides and top of their framing are kept, because
 # a box on the whole content box includes the plate's glow and shrinks the emblem.
 CROP = (225, 80, 900, 940)

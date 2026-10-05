@@ -1,4 +1,4 @@
-"""Checks for the machine atlas (item 2b).
+"""Checks for the machine atlas.
 
 Two kinds here. The unit ones pin the format, the bound and the off switch. The last two
 drive a real turn against a stubbed model, because "the atlas is in the first request of a
@@ -155,7 +155,7 @@ def main():
             check(not fb.looks_like_path_failure(text),
                   f"and not invented from: {text[:34]!r}")
 
-        # ---- the re-ask fires on a FAILURE, not on a mention (audit 2026-09-29) ---------
+        # ---- the re-ask fires on a FAILURE, not on a mention (review 2026-09-29) ---------
         # It ran on EVERY result, so a successful read of a tutorial, README or captured log
         # containing "no such file or directory" re-attached the whole machine map - around
         # 2000 characters of prompt, every turn after it - and framed a call that worked as a

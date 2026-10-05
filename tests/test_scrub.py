@@ -1,4 +1,4 @@
-"""Secrets are scrubbed (audit, 2026-09-22).
+"""Secrets are scrubbed (2026-09-22).
 
 The review found the secret sweep covering environment variables only; the real hole was
 that it never scrubbed the primary llm.api_key, which is the key a hosted endpoint keeps in
@@ -88,11 +88,11 @@ finally:
     os.environ.pop("TINYCMDR_TEST_SUDO_PASSWORD", None)
     os.environ.pop("TINYCMDR_TEST_TOO_SHORT_PASSWD", None)
 
-# ---- F-08: a key added after import is swept too -----------------------------
+# ---- a key added after import is swept too -----------------------------
 # _SECRETS was frozen at import, so `config set llm.api_key` (the guard skips the llm
 # section, since llm keys live in config.json) took effect while the sweep still held
 # the import-time set - the new key reached the transcript, the log and the chat
-# (audit, 2026-09-29). Drive the real verb against a temp config.json.
+# (2026-09-29). Drive the real verb against a temp config.json.
 import contextlib
 import io
 import shutil
@@ -123,7 +123,7 @@ finally:
     fb.CONFIG_SOURCE.update(_saved_source)
     shutil.rmtree(_stage, ignore_errors=True)
 
-# ---- BUGREPORT §M4: a 401 body that echoes the key ---------------------------
+# ---- a 401 body that echoes the key ---------------------------
 # Measured: a provider that echoes the request's Authorization header in its error body
 # put the live key into the fatal notes, the run's return value, the log and the chat.
 # (Earlier checks in this suite restore _SECRETS to the import-time set, which does not

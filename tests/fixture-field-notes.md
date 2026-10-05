@@ -17,7 +17,7 @@ asserts — that is what makes the parsing, the scope filter and the cap gradabl
 match: could not get lock /var/lib/dpkg/lock, unable to acquire the dpkg frontend lock, is another process using it
 scope: linux
 note: Another apt/dpkg run (or unattended-upgrades) still holds it. Find the holder with `fuser -v /var/lib/dpkg/lock-frontend`, wait for it, or stop the unit that owns it, then retry. Never delete the lock file.
-source: measured on a fleet Debian box, 2026-09-13
+source: measured on a Debian install, 2026-09-13
 
 ## cp: a path with a space was split into words
 match: cp: .*no such file or directory, cp: target .* is not a directory, cp: .*omitting directory
@@ -47,13 +47,13 @@ source: POSIX door without a tty
 match: cannot connect to the docker daemon, is the docker daemon running, docker: command not found
 scope: any
 note: The client is here and the daemon is not. Start it (`systemctl start docker`, `launchctl kickstart` for Docker Desktop's socket, or start Docker Desktop), or point DOCKER_HOST at the socket that is actually listening.
-source: fleet box whose daemon was disabled after an upgrade
+source: a live install whose daemon was disabled after an upgrade
 
 ## git: the repository is owned by another user
 match: dubious ownership in repository, detected dubious ownership
 scope: any
 note: git refuses a repo whose owner is not this user. Add it once with `git config --global --add safe.directory <path>` rather than chowning the tree.
-source: fleet box, root-owned checkout, git 2.35.2
+source: a live install, root-owned checkout, git 2.35.2
 
 ## the filesystem is full
 match: no space left on device, disk quota exceeded, cannot write: no space
@@ -77,7 +77,7 @@ source: measured on macOS, where "python" is not the service's interpreter
 match: permission denied \(publickey\), could not resolve hostname
 scope: any
 note: The server rejected the key (or the name does not resolve). Check which key the call offers with `ssh -v`, that the key is in the server's authorized_keys, and the real host name before retrying.
-source: fleet jump host after a key rotation
+source: jump host after a key rotation
 
 ## an archive is not the format its name claims
 match: not in gzip format, unzip: cannot find, gzip: stdin: unexpected end of file

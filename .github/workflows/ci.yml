@@ -2,7 +2,7 @@
 #
 # The tree had no CI at all, so every "45/45 green" in the changelog was a hand run
 # with no exit code behind it - and eight suites were quietly red on the author's own
-# Mac (BUGREPORT T1); six of them on this host. Each job below is
+# Mac; six of them on this host. Each job below is
 # `python tests/run_all.py` (or a --select of it) and nothing else: the runner is the
 # gate, CI only gives it a machine.
 #
@@ -12,7 +12,7 @@
 # counts that as red unless a developer passes --allow-skips, which no step below does.
 #
 # What the gate says today: measured on a clean clone on macOS 2026-09-26,
-# `python tests/run_all.py` reports 0 failed, 0 skipped (see the tail in the G2 batch's
+# `python tests/run_all.py` reports 0 failed, 0 skipped (see the tail in the
 # changelog note). Nothing is staged by hand any more: tests/test_config_example.py stages
 # maintenance/private_rules.example.py as private_rules.py on sys.path itself, and
 # tests/test_digest.py stages the field-notes library from tests/fixture-field-notes.md, so
@@ -32,7 +32,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # macOS + Linux: the whole sweep. These are the platforms Phase 1 touches.
+  # macOS + Linux: the whole sweep.
   unix:
     name: ${{ matrix.os }} / python ${{ matrix.python }}
     runs-on: ${{ matrix.os }}
@@ -61,7 +61,7 @@ jobs:
   # Windows: the suites that are known to pass here, plus the ones that branch on the platform.
   #
   # The original selection was the six suites certain to pass on a Windows runner, because this
-  # job was [READ]-verified - Phase 1's Windows fixes were reasoned, not executed. The cost was
+  # job was [READ]-verified - the Windows fixes were reasoned, not executed. The cost was
   # that none of the suites which actually SWITCH on IS_WINDOWS ran here: the platform-specific
   # behaviour was the one thing Windows CI never exercised.
   #

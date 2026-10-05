@@ -163,8 +163,8 @@ gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
 
 # The tag is created by gh, on the remote, so without this the tree that cut the release does
 # not know it exists. That has bitten twice: v1.0.37's tag was missing from this clone until a
-# fetch pulled it (found by the 2026-09-28 cross-audit, which read the local tag list), and
-# v1.0.38's was missing until the status ledger checked an anchor against it on 2026-09-29.
+# fetch pulled it, and v1.0.38's was missing until the status ledger checked an anchor against
+# it on 2026-09-29.
 # Every "has this shipped?" question asked of this clone reads the LOCAL tag list - and the
 # ledger's whole job is to answer that - so leave it correct at the end of the cut.
 say "fetch the tag this cut created, so this tree knows its own release"
@@ -172,9 +172,9 @@ git fetch --tags
 
 # The release commit was pushed BEFORE this tag existed, so its ledger items could not claim
 # `expect: tagged` (no tag yet) and could not claim `untagged` either (this cut falsifies it) -
-# measured on 1.0.39, where the pushed release commit then failed CI in all three jobs with
-# "sglang-window says unreleased, but 5740200 is in v1.0.39". Now that the tag exists, state the
-# claim while it is checkable.
+# the pushed release commit then failed CI in all three jobs because a ledger item still said
+# its commit was unreleased while that commit sat in the new tag. Now that the tag exists, state
+# the claim while it is checkable.
 say "promote the ledger for the tag just cut, so the record and the release agree"
 "$PY" maintenance/ledger-tag.py "$TAG" || echo "  (the ledger was not promoted - fix STATUS.json by hand)" >&2
 if ! git diff --quiet -- STATUS.json; then

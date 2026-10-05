@@ -157,12 +157,12 @@ def main():
     check("the doc says releases are unsigned (the honest half of the claim)",
           "NOT signed" in doc or "not signed" in doc)
 
-    # F-21: the tool table advertised execute_code as running Python "in-process". It runs
+    # The tool table advertised execute_code as running Python "in-process". It runs
     # `[sys.executable, "-X", "utf8", "-c", code]` under a timeout, and the subprocess is the
     # better design - it is what makes a runaway script killable - so the doc was underselling
     # it. Asserted in BOTH directions: the sentence cannot drift back, and the call cannot
     # quietly become an exec without this suite saying so. Matched on the two halves, not the
-    # whole argv: a flag added between them (the "-X utf8" for report H-6, 2026-10-02) is not
+    # whole argv: a flag added between them (the "-X utf8", 2026-10-02) is not
     # the call going away.
     app = (BASE / "tinycmdr.py").read_text(encoding="utf-8", errors="replace")
     check("the doc does not claim execute_code runs Python in-process",

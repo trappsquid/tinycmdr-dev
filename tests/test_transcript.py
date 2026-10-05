@@ -87,7 +87,7 @@ def main():
         # `query in content` made "scheduler fired schedule add" answer "No past session
         # content matching" while the same events were found in one search_files call -
         # the tool built for recall was worse at it than the generic search
-        # (report H-13, 2026-10-02).
+        # (2026-10-02).
         (fb.SESSIONS_DIR / "mm-multi.json").write_text(json.dumps([
             {"role": "user", "content": "why did the scheduler not fire"},
             {"role": "assistant", "content": "the job was added without a schedule"},

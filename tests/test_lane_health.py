@@ -421,7 +421,7 @@ if FAILS:
     sys.exit(1)
 print("lanes, recovery, drift: what the surfaces say is what is true")
 
-# ---- a lane failure must carry a REASON (the fleet Windows box, 2026-10-02) -----------------------
+# ---- a lane failure must carry a REASON (a Windows install, 2026-10-02) -----------------------
 # mattermostautodriver raises InvalidOrMissingParameters(message) where the message is the
 # API's empty field: str(exc) was "", the lane stored "no detail", `doctor` printed "no
 # detail", and the log got a blank ERROR line per retry - 723 failed starts with no cause

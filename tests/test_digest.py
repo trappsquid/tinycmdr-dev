@@ -1,4 +1,4 @@
-"""Offline checks for tool-result digestion (Phase 1a) and field notes (Phase 1d).
+"""Offline checks for tool-result digestion and field notes.
 
 No model calls, no network. Both features are pure functions of the text a tool
 returned, which is exactly why they can be pinned down here: if these pass, a change
@@ -142,7 +142,7 @@ def main():
                   f"an execute_code result is left whole ({code[:28]})")
 
         # ...and the SHAPE is decided by the command actually being run, not by a string that
-        # happens to appear in it. Measured by audit 2026-09-29: `grep -rn "docker ps" docs/`
+        # happens to appear in it. Measured 2026-09-29: `grep -rn "docker ps" docs/`
         # was shaped as a CONTAINER LIST because "docker ps" sat inside the grep PATTERN, so
         # the results were head/tail-trimmed and mislabelled; `cat ipconfig-notes.txt` was
         # shaped as network output because of its FILENAME.
@@ -201,7 +201,7 @@ def main():
               "stderr with a zero exit code is not treated as a failure")
 
         # A CONTENT tool's result is DATA, not a command's output, so its own text is not
-        # evidence about whether the CALL failed. Measured by audit 2026-09-29: a successful
+        # evidence about whether the CALL failed. Measured 2026-09-29: a successful
         # read of a file containing a traceback was called a failure, so a field note and the
         # last-good-call replay were attached to a success - the thing this module's own
         # docstring forbids - and the working call was not remembered as the good shape.

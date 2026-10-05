@@ -118,7 +118,7 @@ def main():
             check(fb.code_cost_risk(code) is None,
                   f"ordinary code is left alone -> {code.splitlines()[0][:46]}")
 
-        # ---- a MENTION is not a walk (audit 2026-09-29) -----------------------
+        # ---- a MENTION is not a walk (review 2026-09-29) -----------------------
         # The shape regexes read the whole command, so a quoted argument DESCRIBING a walk was
         # billed against the run's scan budget - and once the budget was spent, the harmless
         # command was refused outright. A quote is not a command, and a comment cannot walk

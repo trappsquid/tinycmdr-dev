@@ -1,4 +1,4 @@
-"""Caps follow the model, not one global guess (audit finding 8, item 2d).
+"""Caps follow the model, not one global guess.
 
 A local endpoint and a 200k cloud model were paying identical tool-output, fetch and
 note caps, so a capable model was fed clipping it did not need - and the campaign kept
@@ -80,7 +80,7 @@ def main():
           "a profile cannot write keys the harness does not read")
 
     # 5. a key matches a WHOLE WORD, and the LONGEST match wins
-    # Audit 2026-09-29: a bare substring meant `pro` matched `prometheus-14b` and `mini`
+    # 2026-09-29: a bare substring meant `pro` matched `prometheus-14b` and `mini`
     # matched `MiniMax-M2`, and when two keys matched, dict order decided the winner instead
     # of the more specific key.
     fb = load("prometheus-14b", {"pro": {"tool_output_max_chars": 40000}})

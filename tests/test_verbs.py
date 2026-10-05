@@ -1,5 +1,5 @@
 """The management verbs: they answer, they never call the model, they never print a
-secret (audit F12, 2026-09-22).
+secret (2026-09-22).
 
 `tinycmdr status|doctor|model|logs|token` exist because day-two work used to mean
 hand-editing .env and config.json. What has to hold: a verb is a management operation,
@@ -103,7 +103,7 @@ def main():
               (rc, err[:120]))
 
         # ---- the door has to be executable (measured 2026-09-25) -------------
-        # A fleet macOS host answered "/usr/local/bin/tinycmdr: line 2: ... Permission
+        # A macOS host answered "/usr/local/bin/tinycmdr: line 2: ... Permission
         # denied" for the user and for sudo: the shim was right, the file it execs was
         # 0644, because git cannot carry the execute bit out of a Windows checkout and
         # the update path trusted the checkout. A reader meets this door first.
@@ -488,7 +488,7 @@ def main():
         finally:
             fb.SOUL_FILE = saved_soul
 
-        # ---- F-19: a cloud endpoint on an ASSUMED window is told the lever --------
+        # ---- a cloud endpoint on an ASSUMED window is told the lever --------
         # /v1/models on a hosted API carries no max_model_len and there is no /props,
         # /api/ps or /get_server_info, so _detect_window returns 0 and the envelope assumes
         # its 8000-token window with replies clipped at 2048 - a 128k model driven at 8k.
@@ -569,7 +569,7 @@ def main():
         # ---- the model picker: the list you MOVE through ------------------------
         # Operator, 2026-09-30: "the /tinycmdr model 'wizard' ... is fucking terrible".
         # It was a Commands box: to switch you retyped the whole command with an exact name
-        # you had to already know. hermes opens a list you move through; this is that list.
+        # you had to already know. the predecessor harness opens a list you move through; this is that list.
         pick_rows = fb.model_pick_rows(
             [{"name": "main", "send_as": "main", "url": "http://127.0.0.1:8081/v1",
               "local": True},
@@ -1145,7 +1145,7 @@ def main():
             rc, out, err = call(fb, ["token", "set", "TINYCMDR_EMPTY"], stdin="\n")
             check("token set refuses an empty value", rc == 1
                   and "nothing written" in err, (rc, err[:120]))
-            # a value that can never work is REFUSED before it is written (the fleet Windows box,
+            # a value that can never work is REFUSED before it is written (a Windows install,
             # 2026-10-02: a token of one 0x16 byte sat in .env while `token` said "set")
             rc, out, err = call(fb, ["token", "set", "TINYCMDR_TEST_KEY"], stdin="bad\x16value\n")
             check("token set refuses a value with control characters", rc == 1
@@ -1242,7 +1242,7 @@ def main():
         # picked this host's. Only the .ps1 used to be staged here, so on macOS and Linux
         # _verb_restart found nothing, run_capture was never called, the helper read back
         # as '' and os.path.samefile('') raised FileNotFoundError - aborting the suite and
-        # silently dropping every check after it (BUGREPORT T1: "~20 checks").
+        # silently dropping every check after it (~20 checks).
         (workdir / "maintenance").mkdir(exist_ok=True)
         host_helper = ("restart-tinycmdr.ps1" if os.name == "nt"
                        else "restart-tinycmdr-macos.sh" if sys.platform == "darwin"
@@ -1504,7 +1504,7 @@ def main():
 def _tail(aborted=""):
     """The suite's own count line, and the ONE contract run_all.py reads for it.
 
-    Measured 2026-09-26 (BUGREPORT T1): a crash on a helper the suite never staged aborted
+    Measured 2026-09-26: a crash on a helper the suite never staged aborted
     this run mid-file and the checks after it vanished without a word - the runner could
     only print a traceback, so "how much of this suite graded" was unanswerable. `N passed,
     M failed` on the last line is that answer, and it prints on the way out of a crash too.

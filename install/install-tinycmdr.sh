@@ -79,7 +79,7 @@ RUN_USER="${TINYCMDR_USER:-${SUDO_USER:-$(id -un)}}"
 # `getent` does not exist on every host, and with `set -e`+`pipefail` the bare pipeline
 # above died as exit 127 with NO output, before a single argument was parsed - so this
 # installer could not even print --help there, let alone its own "this installer is for
-# Debian/Ubuntu hosts" message (audit I6, measured on macOS 2026-09-26: `bash
+# Debian/Ubuntu hosts" message (measured on macOS 2026-09-26: `bash
 # install/install-tinycmdr.sh --help` printed nothing and exited 127). Never fatal now:
 # try getent, try dscl, then $HOME.
 user_home() {   # user_home <name> -> that user's home directory, or empty
@@ -506,12 +506,11 @@ if [ "$UNINSTALL" = 1 ]; then
         rmdir "$USER_HOME/.local/bin" 2>/dev/null || true
     fi
     # the passwordless-sudo grant is per-USER, not per-install: only the default
-    # install's removal takes it. Both file names - a pre-tinycmdr one can remain.
+    # install's removal takes it.
     if [ "$(id -u)" = 0 ] && [ "$INSTALL_MODE" = system ] \
             && [ "$INSTALL_DIR" = "$DEFAULT_INSTALL_DIR" ]; then
-        rm -f "/etc/sudoers.d/${RUN_USER}-tinycmdr" \
-              "/etc/sudoers.d/${RUN_USER}-hermes"
-        info "sudo grant removed (both file names)"
+        rm -f "/etc/sudoers.d/${RUN_USER}-tinycmdr"
+        info "sudo grant removed"
     fi
     # Deleting an install takes config.json, .env, sessions/, tools/ and notes with
     # it, so this asks - and requires --yes/--force when there is no terminal - and
@@ -993,7 +992,7 @@ fi
 # ---- web search: may it leave this machine? ----
 # Off unless asked. Both built-in providers are third parties, and the keyless anonymous
 # tier used to send the model's query with nobody asked and nothing on screen saying so
-# (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
+# (2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
 # "no" here still leaves a working search if one is configured.
 if [ "$ASK_Q" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
     if ask_yes "May the bot's web search send queries off this machine?" y; then
@@ -1173,9 +1172,9 @@ fi
 mkdir -p "$INSTALL_DIR"
 # Everything the package carries lands FLAT, minus the paths this host owns - the rule
 # update.sh applies. This used to be a hand-written list of names, and that list is a
-# THIRD mirror of "what ships": the pavilion port added assets/ to the package, the list
+# THIRD mirror of "what ships": the new page design added assets/ to the package, the list
 # was never told, and every fresh install served /page.css as a 404 - the page rendered
-# as raw unstyled markup (operator's fresh-install report, 2026-10-04). One rule now.
+# as raw unstyled markup (measured on a fresh install, 2026-10-04). One rule now.
 HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
 # the other two installers - they are four copies, and they already drifted once
@@ -1216,7 +1215,7 @@ fi
 mkdir -p "$INSTALL_DIR/tools" "$INSTALL_DIR/sessions"
 chmod +x "$INSTALL_DIR/tinycmdr.py" 2>/dev/null || true
 chmod +x "$INSTALL_DIR/tinycmdr" 2>/dev/null || true
-# The verb surface on PATH (audit F12). A two-line wrapper, not a symlink: nothing
+# The verb surface on PATH. A two-line wrapper, not a symlink: nothing
 # has to resolve, it names the install dir explicitly, and removing the file IS the
 # uninstall step. --no-path leaves the box untouched.
 if [ "${NO_PATH:-0}" != "1" ] && [ "$INSTALL_MODE" = user ]; then
@@ -1297,7 +1296,7 @@ if [ "$WEB_ON" = 1 ]; then
     # The page's token: set your own here, or take the host's own (a redo keeps it) or
     # a minted one. This question exists because the wizard used to be mint-or-nothing:
     # a LAN operator who wanted a token they chose had to hand-edit .env afterwards
-    # (2026-10-04, the operator's own report).
+    # (measured 2026-10-04).
     if [ -n "${WEB_TOKEN_ARG:-}" ]; then
         if [ "${#WEB_TOKEN_ARG}" -lt 12 ]; then
             warn "the page token you set is only ${#WEB_TOKEN_ARG} characters; the token"
@@ -1342,7 +1341,7 @@ import json, os, sys
 cfg_path = os.path.join(inst, "config.json")
 # The HOST's own config is the base whenever there is one, --force included: an
 # update carries the host's settings forward and changes only what this run was
-# told to change. Measured 2026-09-24 on the macOS bed: --force rebuilt the file from
+# told to change. Measured 2026-09-24 on macOS: --force rebuilt the file from
 # the package example, so a working install came back with a placeholder url,
 # an empty allowlist and the wrong model endpoint, and its bot would not start.
 fresh = not os.path.exists(cfg_path)
@@ -1622,12 +1621,6 @@ if [ "$VERIFY_ONLY" = 0 ] && [ "$UNINSTALL" = 0 ] && [ "$NO_SUDOERS" = 0 ]; then
     else
         SUDOERS_LINE="${RUN_USER} ALL=(ALL) NOPASSWD: ALL"
         SUDOERS_FILE="/etc/sudoers.d/${RUN_USER}-tinycmdr"
-        # rename leftover: an upgrade left the same grant under the pre-tinycmdr
-        # file name - remove it rather than keep two files for one policy
-        OLD_SUDOERS_FILE="/etc/sudoers.d/${RUN_USER}-hermes"
-        if [ -f "$OLD_SUDOERS_FILE" ] && grep -qxF "$SUDOERS_LINE" "$OLD_SUDOERS_FILE" 2>/dev/null; then
-            rm -f "$OLD_SUDOERS_FILE"
-        fi
         if [ -f "$SUDOERS_FILE" ] && grep -qxF "$SUDOERS_LINE" "$SUDOERS_FILE" 2>/dev/null; then
             info "passwordless sudo already configured: $SUDOERS_FILE"
         else

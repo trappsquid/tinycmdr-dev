@@ -14,7 +14,7 @@ set "PY="
 if exist "%HERE%venv\Scripts\python.exe" set "PY=%HERE%venv\Scripts\python.exe"
 REM PATH is a trap on Windows: %LOCALAPPDATA%\Microsoft\WindowsApps sits early on it and
 REM holds the Microsoft Store's python.exe STUB, which opens the Store instead of running
-REM anything. The installer's own Python discovery excludes that path (audit W8); this shim
+REM anything. The installer's own Python discovery excludes that path; this shim
 REM did not, so after a failed venv build or a deleted venv\ `tinycmdr status` opened the
 REM Store. The venv is preferred above; both PATH fallbacks below skip the stub.
 if not defined PY call :findpy python.exe

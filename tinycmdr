@@ -8,7 +8,7 @@
 #     tinycmdr --no-web            the same as bare, without the page for this run
 # No arguments means the page: the page is the default door, and a terminal session is
 # the deliberate choice (`tinycmdr cli`). Until 2026-10-04 this shim added `--app` for the
-# bare case, so the app and the page opened at once (the operator's report). The bot keeps
+# bare case, so the app and the page opened at once. The bot keeps
 # starting the way it always has (systemd/launchd run tinycmdr.py itself, never this shim).
 #
 # A shim, not a second build: it runs tinycmdr.py from the folder it RESOLVES to, so a

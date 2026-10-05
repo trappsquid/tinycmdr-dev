@@ -5,11 +5,11 @@ Run:  python tests/test_cross_process.py, or
 
 Every lane is its own process - --cli, --once and each verb all skip the
 single-instance lock - and the path locks were a dict in ONE interpreter, so two lanes
-that each loaded, mutated and saved lost one of the updates. Measured (audit D2): three
+that each loaded, mutated and saved lost one of the updates. Measured: three
 processes each ran `task add` with a barrier between the read and the save; all three
 answered "OK: task #1 added", all three got id 1, and the file held ONE entry. The same
-shape on the model overrides is D7 (one lane's save dropped the other's choice), and
-D5 is the single-instance lock handing a second bot the same token after `rm`.
+shape on the model overrides (one lane's save dropped the other's choice), and
+the single-instance lock handed a second bot the same token after `rm`.
 
 These checks use REAL subprocesses on purpose: an in-process test cannot see any of it. The
 instance-lock checks are POSIX-complete; on Windows the lock is still a file, but a file another
@@ -90,7 +90,7 @@ print(fb.tool_memory({"action": "add", "title": "worker-" + tag,
 '''
 
 # A lane that sets ONE conversation's model choice and saves it, optionally waiting for
-# another lane to save first. This is the D7 shape: the waiter loaded the file BEFORE the
+# another lane to save first. This is the shape: the waiter loaded the file BEFORE the
 # other lane wrote, so its snapshot is stale by the time it saves.
 WORKER_OVERRIDE = r'''
 import importlib.util, sys, time
@@ -121,7 +121,7 @@ def spawn(code, args, timeout=180):
 
 
 def test_three_processes_writing_one_memory():
-    """audit D2's shape on the memory bundle: three lanes add at once, each asleep inside
+    """The memory bundle's shape: three lanes add at once, each asleep inside
     the write window, and neither a concept nor the shared index loses an entry."""
     reset_state()
     hold = 0.4
@@ -177,7 +177,7 @@ def test_state_bumps_from_three_lanes_are_not_lost():
 
 
 def test_a_lane_keeps_the_other_lanes_overrides():
-    """audit D7: the stale-snapshot save used to drop the other lane's key."""
+    """The stale-snapshot save used to drop the other lane's key."""
     reset_state()
     bot_done = STAGE / "bot.done"
     cli_done = STAGE / "cli.done"
@@ -250,7 +250,7 @@ def _try_lock():
 
 
 def test_the_instance_lock_is_not_a_deletable_file():
-    """audit D5: flock lives on the inode, so `rm tinycmdr.lock` handed a second bot the
+    """Flock lives on the inode, so `rm tinycmdr.lock` handed a second bot the
     same token. POSIX locks the install FOLDER - a directory with contents cannot be
     unlinked - and the abort text no longer tells anyone to delete anything.
 

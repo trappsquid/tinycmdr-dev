@@ -416,8 +416,8 @@ if [ "$UNINSTALL" = 1 ]; then
         grep -qF "$INSTALL_DIR" "$_wrap" 2>/dev/null || continue
         # A wrapper written by a sudo install is root-owned inside a root-owned directory,
         # so a user-mode uninstall cannot unlink it. Under `set -e` the bare `rm -f` that
-        # used to sit here aborted the WHOLE script at this line - measured 2026-09-25 on a
-        # fleet macOS host: the rm printed "Permission denied", the shell exited 1, and the
+        # used to sit here aborted the WHOLE script at this line - measured 2026-09-25 on
+        # macOS: the rm printed "Permission denied", the shell exited 1, and the
         # `rm -rf $INSTALL_DIR` below never ran, so the uninstall left the install folder
         # behind and told the reader nothing. Never fatal now: try, then say what is left.
         rm -f "$_wrap" 2>/dev/null || true
@@ -711,8 +711,8 @@ fi
 # their Mattermost lives on and a bot token. Everything else the bot cannot work
 # without - where the server is, who may command it, which model answers and that
 # model's key - used to be a switch they had to know about, and the installs that
-# came out of the one-line door were dead on arrival (measured 2026-09-26 on a
-# fleet macOS host: no host, no endpoint, no key, and the agent exited at its first
+# came out of the one-line door were dead on arrival (measured 2026-09-26 on macOS:
+# no host, no endpoint, no key, and the agent exited at its first
 # start because chat.example.com does not resolve).
 # So ask, HERE, before a single file is written: answering is then all a reader
 # has to do, and "no" leaves the disk untouched.
@@ -934,7 +934,7 @@ fi
 # ---- web search: may it leave this machine? ----
 # Off unless asked. Both built-in providers are third parties, and the keyless anonymous
 # tier used to send the model's query with nobody asked and nothing on screen saying so
-# (audit, 2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
+# (2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
 # "no" here still leaves a working search if one is configured.
 if [ "$ASK" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
     if ask_yes "May the bot's web search send queries off this machine?" y; then
@@ -983,7 +983,7 @@ fi
 # default label boots out whatever is already registered under it, so a second install
 # (a probe, or a run from another folder) silently takes the first one's autostart,
 # and the agent it displaced stays unloaded, which looks exactly like "the bot is gone
-# and nothing answers" (measured 2026-09-26 on a fleet macOS host: the real install was
+# and nothing answers" (measured 2026-09-26 on macOS: the real install was
 # left unregistered by test installs sharing the default label).
 if [ "$IS_MAC" = 1 ]; then
     _foreign=""
@@ -1026,9 +1026,9 @@ fi
 
 # Everything the package carries lands FLAT in one folder, minus the paths this host
 # owns - the rule update.sh applies. This used to be a hand-written list of names, and
-# that list is a THIRD mirror of "what ships": the pavilion port added assets/ to the
+# that list is a THIRD mirror of "what ships": the new page design added assets/ to the
 # package, the list was never told, and every fresh install served /page.css as a 404 -
-# the page rendered as raw unstyled markup (operator's fresh-install report, 2026-10-04).
+# the page rendered as raw unstyled markup (measured on a fresh install, 2026-10-04).
 # One rule now; update.sh and this installer cannot disagree about the file set again.
 HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
@@ -1064,7 +1064,7 @@ info "files copied (skills: $n)"
 # The launcher needs its execute bit: the shim in /usr/local/bin execs THAT file, and
 # the package carries it as 0644 (git cannot hold the bit out of a Windows checkout),
 # so the `cp -f` above lands a door that answers "Permission denied" for the user and
-# for sudo alike - measured 2026-09-25 on a fleet macOS host. The Linux installer
+# for sudo alike - measured 2026-09-25 on macOS. The Linux installer
 # already chmods it; this one did not.
 chmod +x "$INSTALL_DIR/tinycmdr" 2>/dev/null || true
 
@@ -1115,7 +1115,7 @@ if [ -z "$TOKEN" ] && [ -n "$SECRETS_FILE" ]; then
     # produced "installing WITHOUT a chat account", an empty `TINYCMDR_MM_TOKEN=` as the
     # FIRST line of .env with the file's real one below it - and the build keeps the
     # FIRST occurrence - so the bot answered no DMs while config.json and .env both
-    # looked configured (I9).
+    # looked configured.
     [ -f "$SECRETS_FILE" ] || die "--secrets-file $SECRETS_FILE does not exist"
     TOKEN="$(grep -m1 '^TINYCMDR_MM_TOKEN=' "$SECRETS_FILE" | cut -d= -f2- \
         | tr -d ' \r' || true)"
@@ -1210,7 +1210,7 @@ if [ "$WEB_ON" = 1 ]; then
     # The page's token: set your own here, or take the host's own (a redo keeps it) or
     # a minted one. This question exists because the wizard used to be mint-or-nothing:
     # a LAN operator who wanted a token they chose had to hand-edit .env afterwards
-    # (2026-10-04, the operator's own report).
+    # (measured 2026-10-04).
     if [ -n "${WEB_TOKEN_ARG:-}" ]; then
         if [ "${#WEB_TOKEN_ARG}" -lt 12 ]; then
             warn "the page token you set is only ${#WEB_TOKEN_ARG} characters; the token"
@@ -1245,7 +1245,7 @@ fi
 # hold a live llm.api_key, .env holds the tokens, and the log transcribes both. Owned by
 # one user, readable by one user: umask 077 from here to the end of the writes, plus an
 # explicit chmod on each file, because config.json used to be opened 0644 while .env was
-# written 0600 (I13).
+# written 0600.
 umask 077
 
 TOKEN="$TOKEN" MM_URL_ARG="$MM_URL_ARG" ALLOWED_ARG="$ALLOWED_ARG" BOT_NAME="$BOT_NAME" \
@@ -1278,8 +1278,8 @@ if au:
 elif fresh:
     # The example carries REPLACE_WITH_YOUR_MATTERMOST_USER_ID. Leaving it in place
     # made a fresh install look configured while the bot ignored every DM, and the
-    # warning printed beside it claimed the list was empty (measured 2026-09-26, a
-# fleet macOS host, from the reader's own terminal log).
+    # warning printed beside it claimed the list was empty (measured 2026-09-26
+# on macOS, from the reader's own terminal log).
     mm["allowed_users"] = []
 # The third door: the TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a
 # copy in here is ignored with a warning), so only the numeric allowlist lands here.
@@ -1570,13 +1570,13 @@ if [ "$NO_LAUNCHD" = 1 ]; then
 fi
 
 say "launchd agent"
-# The verb surface on PATH (audit F12): a two-line wrapper with the install dir
+# The verb surface on PATH: a two-line wrapper with the install dir
 # written into it, so nothing has to resolve and uninstalling is one file.
 # /usr/local/bin belongs to the reader only where something (Homebrew, a previous
 # sudo install) made it writable. On a stock Mac it exists and is root-owned, so the
 # old check silently did nothing and the install ended with NO `tinycmdr` command at
 # all - the reader is told to run `tinycmdr status` and their shell has never heard
-# of it (measured 2026-09-26 on a fleet macOS host). Fall back to ~/.local/bin, and
+# of it (measured 2026-09-26 on macOS). Fall back to ~/.local/bin, and
 # a new terminal can see the folder.
 VERB_PATH=""
 if [ "${NO_PATH:-0}" != "1" ]; then

@@ -17,5 +17,5 @@
 
 # No pytest. Three suite docstrings used to advertise `python -m pytest -q <file>`;
 # their check() only ever printed, so pytest collected no test and exited 0 with the
-# failures sitting in the log (BUGREPORT T2). The suites are standalone scripts and
+# failures sitting in the log. The suites are standalone scripts and
 # tests/run_all.py is the runner that reads their exit codes.

@@ -42,7 +42,7 @@ if not hasattr(fb, "ProgressReporter"):
     # The chat lane's reporter factory exists only when this build has a chat
     # layer (one reporter, lane destinations); there is nothing here to grade
     # without it. Declared skip, not a green lie: exit 77 is what run_all.py counts
-    # as "this suite graded nothing", so it can never read as a pass (BUGREPORT T4).
+    # as "this suite graded nothing", so it can never read as a pass.
     print("skip: this suite grades the chat lane (ProgressReporter); "
           "this build has none - run it against tinycmdr.py")
     sys.exit(77)
@@ -221,7 +221,7 @@ def test_checkin_shows_memory():
 
 def test_scope_note_past_the_threshold():
     """A vague order can run 30-58 tool calls with no operator-facing signal but the tool
-    lines themselves (measured driving a fleet box, 2026-09-25). One line, once per run,
+    lines themselves (measured on a live install, 2026-09-25). One line, once per run,
     past scope_note_steps - and nothing at all where nobody reads this lane."""
     d, rep = reporter(scope_note_steps=40)
     check("no scope note under the threshold", rep.scope_note(12, "shell") == "")
@@ -852,7 +852,7 @@ def test_red_is_only_for_failures():
 
 
 def test_capability_line_reports_what_this_process_can_enforce():
-    """Stage 3 of the MiniDSH plan: the honest state, said out loud.
+    """The honest state, said out loud.
 
     A host's posture was implied - blocked_patterns set or empty, a memory ceiling or
     none, a spawn backend or none - and it differs per host and per lane, so a reader of
@@ -961,7 +961,7 @@ def test_a_report_after_real_work_is_never_nudged():
     as written, never re-asked.
 
     2026-09-24, when the promise sibling below was added: this fence stands. What moved
-    is only the PROMISE case after work, and it moved because the fleet's own transcripts
+    is only the PROMISE case after work, and it moved because live installs' own transcripts
     showed it was where runs actually stop ("Let me find where." after real tool work,
     with the operator's next message being "wait why didnt you download anything").
     A report is an outcome; a promise is not, and only the second one is asked again.
@@ -1084,7 +1084,7 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "I ran the command and it printed gamma.",
         "hash 3cdacefd347ee4faaef210d185f3c671ff7bf21d372e5e4bab65e51771627d7a",
         "the tool returned 12 items.",
-        # the audit's own corpus: shapes that must keep matching
+        # the review's own corpus: shapes that must keep matching
         "b1.txt: 19 bytes",
         "12 files in the folder",
         "the log has 240 lines",

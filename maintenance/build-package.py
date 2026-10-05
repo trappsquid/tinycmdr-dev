@@ -34,7 +34,7 @@ DIST = ROOT / "dist"
 # Which files in a package must carry the execute bit on Unix. ONE list, because three
 # places set modes (the fleet zip, the tarball, the macOS zip) and a predicate written out
 # three times is how `tinycmdr` shipped non-executable in the published macOS package
-# (measured 2026-09-25 on the v1.0.16 release asset: the entry is mode 0644, and a reader
+# (measured 2026-09-25: the entry is mode 0644, and a reader
 # who installs it gets "Permission denied" from the door - for the user AND for sudo,
 # because execve wants one execute bit for every user). The launcher has no extension, so
 # a `.sh` test can never catch it; and it is the ONE file the /usr/local/bin shim execs.
@@ -106,7 +106,7 @@ SHIP = [
     "INSTALL-WINDOWS.cmd",
     # The macOS equivalents, and why they exist: Finder RUNS a .command on double-click
     # and opens a .sh in TextEdit, so the Windows door had no Mac counterpart until
-    # 2026-09-25 (the question that produced these two lines came from the operator).
+    # 2026-09-25.
     "INSTALL-MACOS.command",
     "UNINSTALL-MACOS.command",
     "install/install-tinycmdr.ps1",
@@ -120,7 +120,7 @@ SHIP = [
     "install/README-macos.md",
     # The management door: two ~20-line shims that run tinycmdr.py from the folder
     # they sit in, so `tinycmdr status` works from any prompt without a second copy of
-    # anything (audit F12).
+    # anything.
     "tinycmdr.cmd",
     "tinycmdr",
     "maintenance/restart-tinycmdr.ps1",
@@ -163,14 +163,14 @@ SHIP = [
     # transcript shows it, and the built-in emblem stands in when it is absent.
     "assets/page-chibi.png",
     # The page's stylesheet and its fonts. THIS LIST MISSED both the stylesheet and the
-    # 600-weight face until 2026-10-04: the pavilion port (1.0.68) added
+    # 600-weight face until 2026-10-04: the new page design (1.0.68) added
     # assets/webui.css and assets/fonts/cinzel-600.woff2, the manifest was never told,
     # and 1.0.68/1.0.69 packages served /page.css as a 404 - every install rendered
     # the page as raw unstyled markup (found by LOOKING at the published page; no suite
     # fetched an asset). tests/test_webui_page.py freezes this list against every asset
     # the routes serve, so the next asset the page gains cannot ship half-wired.
     "assets/webui.css",
-    # The page's backdrop photo (the operator's own, 2026-10-04 - the permanent
+    # The page's backdrop photo (2026-10-04 - the permanent
     # replacement for the drawn colonnade) plus the bundled OFL fonts - a local page must
     # not need the internet for its own typography.
     "assets/roman-temple-spring.jpg",
@@ -223,7 +223,7 @@ FLEET_WIDE_KEYS = ("TAVILY_API_KEY", "ANYSEARCH_API_KEY")
 FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
 
 # What in maintenance/ is generic enough to ship: the restart helpers an install needs.
-# Everything else in this folder is the manager box-specific - fleet pushes,
+# Everything else in this folder is host-specific operational scripts - fleet pushes,
 # migrations, probes, backups - and stays out.
 #
 # This is the SAME list as SHIP's maintenance/ entries, written twice, and the two drifting
@@ -746,10 +746,9 @@ def syntax_floor(folder):
 
 def payload_floor():
     """What ONE turn of this build rents before any history: the system prompt
-    plus the visible tool schemas, measured with the A/A staging (the shipped
-    fixture config, no skills, no custom tools) so the number compares between
-    builds and boxes. Item C of docs/plan-efficiency-2026-09-24.md: payload
-    growth is visible per cut."""
+    plus the visible tool schemas, measured with the shipped fixture config
+    (no skills, no custom tools) so the number compares between builds and boxes.
+    Payload growth is visible per cut."""
     import hashlib
     import importlib.util
     with tempfile.TemporaryDirectory(prefix="tinycmdr-probe-") as tmp:

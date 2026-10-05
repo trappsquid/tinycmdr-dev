@@ -1,11 +1,11 @@
 """The envelope: window, measured static, clamped reply, leftover messages budget.
 
-Pins the arithmetic that replaces the old guess (audit FEATURE D1/D2/D5, BUGREPORT
-§M9). Measured at HEAD before this change: an 8,192-token endpoint was sent a
+Pins the arithmetic that replaces the old guess.
+Measured at HEAD before this change: an 8,192-token endpoint was sent a
 9,275-token payload and a 16,384-token completion request, because the budget was
 max(4000, window - 7000 - max_tokens) with the 5,322-token static half subtracted
 from nothing. The checks here are the five numbers and the relations between them
-at the windows the audit swept, the refusal below 8,192, and the two things that
+at the windows the review swept, the refusal below 8,192, and the two things that
 must scale with the window rather than with the model name: the memory caps and
 the schemas the payload actually carries.
 
@@ -165,7 +165,7 @@ def main():
         env0 = at_window(fb, 32768)
         static = env0["static"]
         check(static > 1000, f"static is MEASURED from the prompt (got {static} tokens)")
-        # G5's ratchet: the audit measured 5,322 tokens of static overhead on the installed
+        # The ratchet: the review measured 5,322 tokens of static overhead on the installed
         # box and set the ceiling at 5,400 (that + margin). This asserts against the
         # staged fixture, so it fails the moment a change makes the static prompt or the
         # disclosed schema set grow past the ceiling.
@@ -193,7 +193,7 @@ def main():
             check(all(str(n) in raw_line for n in (window, static, reply, budget)),
                   f"w={window}: envelope_line names all five numbers: {line}")
 
-        # 32,768 is the audit's worked example: the old 4,000 floor became 19,254.
+        # 32,768 is the review's worked example: the old 4,000 floor became 19,254.
         env32 = at_window(fb, 32768)
         check(32768 - static - min(reply_cfg, 32768 // 4) > 19000,
               f"w=32768: the budget is a measurement, not the old 4,000 floor "
@@ -297,7 +297,7 @@ def main():
               "  on a small window the ceiling changes nothing (window // 8 still wins)")
 
         # --- a SLOW box gets a shorter generation, sized to its measured rate ----------
-        # Measured 2026-09-29 on the fleet's Mac: the same endpoint served 8-57 tok/s depending
+        # Measured 2026-09-29 on macOS: the same endpoint served 8-57 tok/s depending
         # on how many requests shared its two slots, so one 16,384-token cap meant a six-minute
         # generation at its best and half an hour at its worst.
         _rate_key = fb._endpoint_root(fb.CONFIG["llm"]["base_url"])
@@ -311,12 +311,12 @@ def main():
             fb._DECODE_TPS[_rate_key] = 400.0
             fast = at_window(fb, 131072)
             check(fast["reply"] == min(reply_cfg, 131072 // 4),
-                  f"  and a fast box keeps the ordinary cap ({fast['reply']})")
+                  f"and a fast box keeps the ordinary cap ({fast['reply']})")
         finally:
             fb._DECODE_TPS.clear()
             fb._DECODE_TPS.update(_saved_rate)
 
-        # --- F-16: each endpoint's request is sized to its OWN window ----------
+        # --- each endpoint's request is sized to its OWN window ----------
         # A failover box is a different box. The window/envelope used to be keyed to the
         # SESSION, so a big primary handed a small fallback a payload sized for the
         # primary; the fallback's 400 matched the overflow regex and the run stopped with
@@ -339,11 +339,11 @@ def main():
             fbk = fb.AGENT._envelope("fochain", fb_chat)
             check(prim["window"] == 65536 and fbk["window"] == 16384
                   and prim["endpoint"] != fbk["endpoint"],
-                  f"F-16: the envelope follows the endpoint ({prim['window']} then "
+                  f"the envelope follows the endpoint ({prim['window']} then "
                   f"{fbk['window']})")
             check(fbk["reply"] == min(reply_cfg, 16384 // 4)
                   and prim["reply"] == min(reply_cfg, 65536 // 4),
-                  f"F-16:   and so does the clamped reply "
+                  f"and so does the clamped reply "
                   f"({prim['reply']} vs {fbk['reply']})")
 
             # A conversation sized to fit the primary, and several times the fallback.
@@ -360,22 +360,22 @@ def main():
             urls = [u for u, _ in chain]
             by_url = dict(chain)
             check(len(urls) == 2 and "127.0.0.1:2" in urls[1],
-                  f"F-16: the chain fell over to the fallback {urls}")
+                  f"the chain fell over to the fallback {urls}")
             conv_p = fb.AGENT._conversation_token_est(
                 by_url[primary_chat]["messages"])
             conv_f = fb.AGENT._conversation_token_est(by_url[fb_chat]["messages"])
             check(conv_p > fbk["budget"],
-                  f"F-16: the primary's request was NOT resized for the fallback "
+                  f"the primary's request was NOT resized for the fallback "
                   f"({conv_p} > {fbk['budget']})")
             check(conv_f <= fbk["budget"],
-                  f"F-16: the fallback's request fits the fallback's budget "
+                  f"the fallback's request fits the fallback's budget "
                   f"({conv_f} <= {fbk['budget']})")
             check(fbk["static"] + conv_f <= fbk["window"],
-                  f"F-16:   and the real payload fits the fallback's window "
+                  f"and the real payload fits the fallback's window "
                   f"({fbk['static']} + {conv_f} <= {fbk['window']})")
             check(by_url[fb_chat]["max_tokens"] == fbk["reply"]
                   and by_url[primary_chat]["max_tokens"] == prim["reply"],
-                  f"F-16: each request carried its own endpoint's reply cap "
+                  f"each request carried its own endpoint's reply cap "
                   f"({by_url[primary_chat]['max_tokens']} vs "
                   f"{by_url[fb_chat]['max_tokens']})")
 
@@ -388,7 +388,7 @@ def main():
             est_r = fb.AGENT._conversation_token_est(routed)
             target = max(2000, fb.AGENT._context_budget("fochain", fb_chat) // 2)
             check(est_r <= target and est_r < est_p,
-                  f"F-16: shrinking for the FAILING endpoint cuts to its own window "
+                  f"shrinking for the FAILING endpoint cuts to its own window "
                   f"({est_r} <= {target}), not the primary's ({est_p})")
 
             # That cut must be a real copy. `list(messages)` handed the

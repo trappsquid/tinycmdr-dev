@@ -126,7 +126,7 @@ def main():
               f"a clone one commit behind origin reports it ({f['behind']})")
 
         # ---- is the tree I am looking at RELEASED? ---------------------------
-        # The first question a drop-in reader has (audit, handoff), and one the tag line cannot
+        # The first question a drop-in reader has (review, handoff), and one the tag line cannot
         # answer alone: `git describe` names the nearest tag HEAD can reach, so a tree that is
         # three commits PAST a release still prints that release's name and looks current.
         tagged = make_tree(tmp, "tagged", "1.0.0")

@@ -24,7 +24,7 @@ The per-suite skip convention is exit 77 (see SKIP_EXIT below) - the suite sayin
 could not grade its subject on this host - which this runner prints as SKIP and counts
 as red.
 
-G5 hook: PHASE1-TASKS G5 (static overhead <= budget, payload <= window, prefix reuse
+The envelope hook (static overhead <= budget, payload <= window, prefix reuse
 >= 90 %, every must_gate verb gated) is owned by the envelope change, not by this
 runner. When tests/test_envelope.py lands it is discovered like any other suite and
 its non-zero exit fails the gate; --require-envelope makes its absence a failure too,
@@ -55,7 +55,7 @@ SLOW_SUITES = {}
 # so CI would have called an ungraded run green - and did.
 SKIP_EXIT = 77
 
-# G5 hook (see module docstring): the envelope assertions arrive as their own suite.
+# The envelope hook (see module docstring): the envelope assertions arrive as their own suite.
 ENVELOPE_SUITE = "tests/test_envelope.py"
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
@@ -85,7 +85,7 @@ def _status_path(line):
 def tree_state():
     """Tracked status plus ignored/untracked files, as a set of lines.
 
-    Used to REPORT the leak G2 closes: the suites still write sessions/, tinycmdr.log and
+    Used to REPORT the leak: the suites still write sessions/, tinycmdr.log and
     friends into the checkout. This runner must not fail on that - it is
     a measurement for the batch that makes them hermetic.
 
@@ -126,14 +126,14 @@ def live_instance_here():
     A probe, not a claim: take the lock and give it straight back, exactly as
     `tinycmdr status` answers the question. The target mirrors the harness's own
     _lock_target() contract - on POSIX the INSTALL FOLDER itself is flocked, because a lock
-    FILE is defeated by `rm` (audit D5); on Windows it is tinycmdr.lock beside it - and it
+    FILE is defeated by `rm`; on Windows it is tinycmdr.lock beside it - and it
     is mirrored rather than imported, because this runner imports nothing from the tree it
     grades.
 
     Why the leak report needs it: tree_state() fingerprints ignored files, and a bot
     running in this checkout rewrites tinycmdr.log and sessions/ every minute by
     itself. Measured 2026-09-27: a run with the live bot up reported "6 path(s),
-    written by 3 suite(s)" and every one of them was the bot's own write - the G2 list
+    written by 3 suite(s)" and every one of them was the bot's own write - the leak list
     pointed at innocent suites, and a real leak could hide in that noise.
     """
     try:
@@ -237,7 +237,7 @@ def run_one(path, timeout, logdir, verbose):
     detail = _reason(stdout, stderr)
     if not _check_tail(stdout):
         # The suite never reached its own summary, so the report says what that means rather
-        # than leaving a reader to assume the whole file graded (BUGREPORT T1: test_verbs.py
+        # than leaving a reader to assume the whole file graded (test_verbs.py
         # aborted mid-run and every check after it vanished without a word).
         detail += "  [died before its own summary: no count line]"
     return FAIL, seconds, detail
@@ -340,7 +340,7 @@ def main():
     ap.add_argument("--allow-skips", action="store_true",
                     help="a SKIP suite does not make the run red (developer use)")
     ap.add_argument("--require-envelope", action="store_true",
-                    help="fail if %s is absent (G5 switch)" % ENVELOPE_SUITE)
+                    help="fail if %s is absent (envelope switch)" % ENVELOPE_SUITE)
     ap.add_argument("--verbose", action="store_true",
                     help="stream every suite's output instead of folding it into logs")
     ap.add_argument("--list", action="store_true", help="print what would run, then exit")
@@ -358,7 +358,7 @@ def main():
 
     have_envelope = (REPO / ENVELOPE_SUITE).is_file()
     if args.require_envelope and not have_envelope:
-        sys.exit("--require-envelope: %s is not in the tree (G5 hook not filled in)"
+        sys.exit("--require-envelope: %s is not in the tree (hook not filled in)"
                  % ENVELOPE_SUITE)
 
     logdir = Path(tempfile.mkdtemp(prefix="tinycmdr-runall-"))
@@ -396,7 +396,7 @@ def main():
         for rel, status, _s, detail in reds:
             print("  %-5s %-40s %s" % (status, rel, detail))
 
-    # G2, second half: a suite grades the build, not the checkout it runs from, so anything
+    # Second half: a suite grades the build, not the checkout it runs from, so anything
     # a suite writes into the tree is a defect in the SUITE (its own temp dir, or a staged
     # copy, is where that belongs). Measured here rather than enforced: the list below is
     # what the batch that owns each suite has to close, and this runner still exits 0 on a
@@ -410,7 +410,7 @@ def main():
             for one in paths:
                 by_path.setdefault(one, []).append(rel)
         print("\nrepo-tree writes during the run: %d path(s), written by %d suite(s) "
-              "- each suite must own its own temp dir (G2)"
+              "- each suite must own its own temp dir"
               % (sum(len(v) for v in by_path.values()), len(leaks)))
         if live_instance_here():
             print("  NOTE: a live bot is running in this checkout. It rewrites "
@@ -423,9 +423,9 @@ def main():
                   % (one, len(who), ", ".join(who[:4]) + (", ..." if len(who) > 4 else "")))
     else:
         print("\nrepo-tree writes during the run: none - every suite stayed in its "
-              "own temp dir (G2)")
+              "own temp dir")
 
-    print("\nG5 envelope gate: %s" % (
+    print("\nEnvelope gate: %s" % (
         "%s is in the tree and runs like any other suite" % ENVELOPE_SUITE
         if have_envelope else
         "pending - the hook is here; drop %s in and it gates" % ENVELOPE_SUITE))

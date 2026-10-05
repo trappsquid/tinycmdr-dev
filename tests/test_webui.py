@@ -5,12 +5,12 @@ original suite died with the old lane). Every check below is either a behaviour 
 lane promises or an incident the old one paid for:
 
     * no token -> the start path MINTS one (into .env) rather than serving ungated; the
-      old lane served loopback with no auth at all: CSRF against shell access, BUGREPORT
-      S7. A host that upgrades into the page gets a token and a link, not homework.
+      old lane served loopback with no auth at all: CSRF against shell access.
+      A host that upgrades into the page gets a token and a link, not homework.
       web.enabled false -> no server either.
     * the token is compared in constant time, and it never appears in the log.
     * Host/Origin rules: a cross-origin request is refused, a foreign Host is refused.
-    * the body is capped BEFORE it is read (S8); uploads have their own cap.
+    * the body is capped BEFORE it is read; uploads have their own cap.
     * uploads land under ./uploads with a sanitised name; downloads serve ONLY a file
       the agent offered (a run line of kind 'file'), by run id + uid.
     * /api/health tells the truth and needs no token; the page itself needs none.
@@ -191,14 +191,14 @@ def main():
 
     # ---- the page wears the HOST's theme, and the host's icon ---------------
     # theme.toml is host-owned and the terminal already reads it: the page reads the SAME
-    # file (theme_palette), so a palette cannot apply to one and not the other - operator
-    # report, 2026-10-04: "no colour theme to match the roman empire styling".
+    # file (theme_palette), so a palette cannot apply to one and not the other -
+    # 2026-10-04: "no colour theme to match the roman empire styling".
     builtin = base64.b64decode(fb.WEB_ICON_PNG_B64)
     check(req("GET", "/icon.png", limit=200000)[1] == builtin,
           "with no host art, the built-in icon is served")
 
     # ...and that built-in icon is OUR badge, not the deleted lane's blue placeholder: the
-    # monogram on a blue disc read as somebody else's logo at 16px (operator report,
+    # monogram on a blue disc read as somebody else's logo at 16px (
     # 2026-10-04: "what is that icon you are using that says fb?"). The embedded render is
     # filter-0 RGB, so this decodes without an unfilter pass.
     def _rgb(data):
@@ -384,8 +384,8 @@ def main():
 
     # ---- the browser's one handover: header in, HttpOnly cookie out ----------
     # The token arrives in the URL fragment once; the page POSTs it here and forgets it,
-    # so no URL, no history entry and no localStorage keeps it afterwards (operator
-    # report, 2026-10-04: "the token should not be visible in the browser url").
+    # so no URL, no history entry and no localStorage keeps it afterwards (
+    # 2026-10-04: "the token should not be visible in the browser url").
     code, body, hdr = req("POST", "/api/login", TOK)
     cookie = hdr.get("Set-Cookie") or ""
     check(code == 200, "POST /api/login with the header: 200", code)

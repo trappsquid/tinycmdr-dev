@@ -1,6 +1,6 @@
 """read_file's window: which lines you get, and what the header claims.
 
-Three defects sat behind one operator report (2026-09-27, all reproduced before the fix):
+Three defects (2026-09-27, all reproduced before the fix):
 
   * `offset=-5, limit=3` answered `lines -5—-2 of 22096` - negative line references that
     say nothing to a reader - because a negative slice reads from the END while the header
@@ -114,7 +114,7 @@ finally:
 # ------------------------------------------------- an unreadable file names the cause
 # A file held open with a Windows deny-all share mode made read_file answer with a Python
 # internal exception - "not enough values to unpack (expected 3, got 2)" - because
-# _read_capped returned a 2-tuple on OSError while every caller unpacks 3 (report H-1,
+# _read_capped returned a 2-tuple on OSError while every caller unpacks 3 (
 # 2026-10-02). chmod 000 is the POSIX way to make open() raise where a Windows share lock
 # does; both are an OSError whose args carry no filename.
 if hasattr(os, "geteuid") and os.geteuid() != 0:
@@ -138,7 +138,7 @@ if hasattr(os, "geteuid") and os.geteuid() != 0:
 # ------------------------------------------------- the header never claims a wrong total
 # When a read is cut, `len(lines)` is the window covered - the header printed it as if it
 # were the file's line count, which is how the read cap read as the file's length
-# (report H-4, 2026-10-02).
+# (2026-10-02).
 fb._MAX_CAPTURE_BYTES = 2048
 try:
     CUT = STAGE / "cut.txt"
@@ -158,9 +158,9 @@ try:
 finally:
     fb._MAX_CAPTURE_BYTES = REAL_CAP
 
-# ------------------------------------------------- a Windows path past MAX_PATH (H-2)
+# ------------------------------------------------- a Windows path past MAX_PATH
 # Creating a 339-character path on Windows throws WinError 206 with LongPathsEnabled=0,
-# while the \\?\ extended form works (report H-2, measured on the fleet's Windows box, 2026-10-02). The
+# while the \\?\ extended form works (measured on Windows, 2026-10-02). The
 # transform is a pure function, so it is graded here - off Windows - by forcing the flag.
 _real_win = fb.IS_WINDOWS
 try:

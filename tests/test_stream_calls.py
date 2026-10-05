@@ -1,21 +1,21 @@
 """The turn engine on a slow, flaky box: prefill vs idle, torn streams, tool-call merging.
 
-BUGREPORT §M1, §M2, §M3, §M5, §M7, §M8, §M11, §M13. Every check here failed at HEAD:
+Every check here failed at HEAD:
 
-  * M3 - the idle timer covered the PREFILL, so a healthy long prompt was declared wedged
+  * the idle timer covered the PREFILL, so a healthy long prompt was declared wedged
     (the first byte waits on the model, not on the stream);
-  * M2 - a stream that died after the first delta was handed back as the model's complete
+  * a stream that died after the first delta was handed back as the model's complete
     answer, because the error check only fired when nothing had arrived at all;
-  * M1 - index-less tool-call fragments were all keyed on 0, MERGING two distinct calls
+  * index-less tool-call fragments were all keyed on 0, MERGING two distinct calls
     (a run that asked for `echo A` and `echo B` executed `echo AB`), and a byte-identical
     repeated fragment was appended twice;
-  * M13 - `_call_sig` truncated canonical args at 400 chars, so two calls differing only
+  * `_call_sig` truncated canonical args at 400 chars, so two calls differing only
     after that collapsed onto one signature;
-  * M5 - a 400 naming `stream_options` was classified FATAL, so a cosmetic provider
+  * a 400 naming `stream_options` was classified FATAL, so a cosmetic provider
     difference killed the run;
-  * M7/M8 - the privacy pin missed the primary, and `127.1` / `[::1]` / a LAN hostname
+  * the privacy pin missed the primary, and `127.1` / `[::1]` / a LAN hostname
     were classified as off-LAN;
-  * M11 - an OperatorStop raised during TOOL execution escaped `run()`.
+  * an OperatorStop raised during TOOL execution escaped `run()`.
 
 No network: the SSE bodies are fake responses, and the transport is stubbed the way the
 other suites stub it.
@@ -104,7 +104,7 @@ def run_stream(script, **kw):
     return fb._stream_chat(FakeResp(script), **kw)
 
 
-# ---------------------------------------------------------------- F1 (§M3)
+# ---------------------------------------------------------------- a slow prefill is not an idle gap
 def test_prefill_is_not_an_idle_gap():
     """A first byte that takes longer than the idle gap is a slow PREFILL, not a wedge."""
     script = [(0.6, ": prefill wait")] + sse(delta(content="hello"), delta(finish="stop")) + [SSE_END]
@@ -146,7 +146,7 @@ def test_a_quiet_stream_after_the_first_delta_is_wedged():
               "%s: %s" % (type(e).__name__, e))
 
 
-# ---------------------------------------------------------------- F2 (§M2)
+# ---------------------------------------------------------------- a torn stream is not the answer
 def test_a_torn_stream_is_not_the_answer():
     script = sse(delta(content="partial answer")) + \
         [(0.0, ConnectionError("connection reset by peer"))]
@@ -175,7 +175,7 @@ def test_a_stream_that_finished_before_the_break_is_kept():
               "%s: %s" % (type(e).__name__, e))
 
 
-# ---------------------------------------------------------------- F6 (§M1)
+# ---------------------------------------------------------------- two index-less calls stay two calls
 def test_two_indexless_calls_stay_two_calls():
     script = sse(
         delta(tool_calls=[{"id": "call_a", "type": "function",
@@ -368,7 +368,7 @@ def test_indexed_calls_keep_their_index():
               calls[1])
 
 
-# ---------------------------------------------------------------- F7 (§M13)
+# ---------------------------------------------------------------- `_call_sig` does not collapse long arguments
 def test_call_sig_does_not_collapse_long_arguments():
     a = {"path": "/tmp/x", "blob": "A" * 500 + "TAIL-ONE"}
     b = {"path": "/tmp/x", "blob": "A" * 500 + "TAIL-TWO"}
@@ -379,7 +379,7 @@ def test_call_sig_does_not_collapse_long_arguments():
           fb._call_sig("write_file", a) == fb._call_sig("write_file", json.dumps(a)))
 
 
-# ---------------------------------------------------------------- F5 (§M7/M8)
+# ---------------------------------------------------------------- locality and the privacy pin
 def test_locality_classification():
     for url, want in (("http://127.1:8081/v1", True),
                       ("http://127.0.0.1:8081/v1", True),
@@ -398,7 +398,7 @@ def test_locality_classification():
 
 
 def test_privacy_pin_covers_the_failover_tail():
-    """§M7: with the flag false, a local choice must not fail over to a hosted primary."""
+    """With the flag false, a local choice must not fail over to a hosted primary."""
     saved = json.loads(json.dumps(fb.CONFIG["llm"]))
     try:
         fb.CONFIG["llm"]["base_url"] = "http://127.0.0.1:1/v1"
@@ -437,7 +437,7 @@ def test_privacy_pin_covers_the_failover_tail():
         fb.CONFIG["llm"] = saved
 
 
-# ---------------------------------------------------------------- F4 (§M5)
+# ---------------------------------------------------------------- a 400 naming stream_options is retried
 def test_a_400_naming_stream_options_is_retried_without_it():
     saved = json.loads(json.dumps(fb.CONFIG["llm"]))
     try:
@@ -481,7 +481,7 @@ def test_a_400_naming_stream_options_is_retried_without_it():
         fb.CONFIG["llm"] = saved
 
 
-# ---------------------------------------------------------------- F3 (§M11)
+# ---------------------------------------------------------------- a tool's OperatorStop is an answer
 def test_operator_stop_from_a_tool_is_an_answer():
     """A stop raised while a TOOL runs must come back as run()'s answer, not escape."""
     calls = {"chat": 0}

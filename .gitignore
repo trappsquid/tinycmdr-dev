@@ -1,10 +1,10 @@
 # tinycmdr repo — what is source and what is per-host state.
 #
 # Rule: anything a host writes for itself (logs, sessions, memory files, secrets,
-# backups) never enters git. One folder goes to six boxes, so a committed per-host
-# file would read as canonical and be wrong.
+# backups) never enters git. The same tree is deployed to many hosts, so a committed
+# per-host file would read as canonical and be wrong.
 
-# --- the plan's list (docs/minidsh-hardening-plan.md, stage 1) ---
+# --- per-host state ---
 logs/
 sessions/
 spill/
@@ -26,9 +26,8 @@ atlas.md
 knowledge/
 skills/.imported-unused/
 
-# --- per-host state and junk the first staging pass found (2026-09-19) ---
+# --- more per-host state and scratch artifacts ---
 # Every name here is a file a host writes for itself, or a scratch artifact.
-# Deviations from the plan's list are listed in the stage-1 report.
 field-notes.md
 # the field-note hit counters: per-host state, written on every failure the harness sees
 field-notes-hits.json
@@ -40,7 +39,6 @@ tests/eval-runs/
 snapshots/
 tmp/
 uploads/
-hermes-tmp/
 .archive/
 .pre-*
 *.pre-*
@@ -48,9 +46,8 @@ config.json
 jobs.json
 inbox/
 *.log
-# A rotated log keeps a numeric suffix, and `*` stops at the dot: the bot's own tinycmdr.log.1
-# (5 MB, rotated 2026-09-30 00:08) showed up as untracked, so `git add -A` in a live tree would
-# have committed a host log. Both names belong here for the same reason.
+# A rotated log keeps a numeric suffix, and `*` stops at the dot, so `git add -A` in a
+# live tree would commit a host log. Both names belong here for the same reason.
 *.log.*
 *.lock
 *.tmp
@@ -64,9 +61,9 @@ tools-provenance.json
 a.txt
 lines.txt*
 
-# Internal fleet operational tooling & notes
+# Host-specific operational tooling & notes
 maintenance/atlas-notes/
-# Our own engineering notes: they name hosts, addresses and the operator's
+# Engineering notes: they name hosts, addresses and the operator's
 # decisions, so they are never shipped and never committed.
 docs/dev-log.md
 docs/deferred-corrections.md
@@ -75,16 +72,15 @@ maintenance/fleet-metrics.py
 maintenance/register-boot-recovery.ps1
 maintenance/start-containers.ps1
 maintenance/task-audit.ps1
-maintenance/restart-tinycmdr-the manager box.ps1
 docs/handoff-*.md
 docs/staged-*.md
-# The pre-edit copy of the build the batch is graded against (A/A): it is a whole
-# build, not source, so it is a scratch artifact.
+# A pre-edit copy of a build: a whole build, not source, so it is a scratch
+# artifact.
 probe-pre.py
 launch_tinycmdr.bat
 tinycmdr-service.vbs
 
-# The fleet's private inventory (host names, ids, addresses, secret labels).
+# The private inventory (host names, ids, addresses, secret labels).
 # build-package.py refuses to build a public package without it.
 maintenance/private_rules.py
 
@@ -92,14 +88,14 @@ maintenance/private_rules.py
 # (a backup share, an ops workspace), which are true of one machine and nobody else.
 maintenance/where-roles.json
 
-# --- found by adopting the git path on the fleet (2026-09-24): every host showed these
-# as untracked, which makes `git status` useless for spotting real drift.
+# --- common live-tree clutter: on a real host these show up as untracked, which
+# makes `git status` useless for spotting real drift.
 venv/
 .DS_Store
 .DS_Store?
-# --- found on the live box (2026-09-29) by maintenance/where.py, for the same reason ---
-# experiments.jsonl is written by the run itself; the tool-audit folder is one box's
-# evidence dump. Neither is source, and both made `git status` in the live tree look
-# dirty next to a REAL tracked modification - the two are now told apart.
+# --- more live-tree clutter, found by maintenance/where.py, for the same reason ---
+# experiments.jsonl is written by the run itself; the tool-audit folder is a
+# per-host evidence dump. Neither is source, and both make `git status` in a live
+# tree look dirty next to a REAL tracked modification - the two are told apart.
 experiments.jsonl
 maintenance/tool-audit-*/

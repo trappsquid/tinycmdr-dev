@@ -42,7 +42,7 @@ def check(name, cond, detail=""):
 
 
 def git(*args):
-    # A host with no git at all - the Windows fleet box - raises FileNotFoundError from exec,
+    # A host with no git at all - a Windows install - raises FileNotFoundError from exec,
     # not a non-zero exit. That crashed this suite with WinError 2 before it graded anything.
     try:
         p = subprocess.run(["git", "-C", str(BASE), *args], capture_output=True, text=True)

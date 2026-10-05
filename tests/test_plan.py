@@ -1,4 +1,4 @@
-"""Offline checks for the harness-held plan and the runway (Phase 2c).
+"""Offline checks for the harness-held plan and the runway.
 
 Two kinds of check here. The unit ones poke plan_render/run_block/volatile_context
 directly. The last two drive a real turn against a stubbed model, because "the harness

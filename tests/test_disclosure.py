@@ -1,4 +1,4 @@
-"""Offline checks for tool disclosure (Phase 2a).
+"""Offline checks for tool disclosure.
 
 The claim being tested is narrow and important: the payload carries fewer schemas, and
 NOTHING becomes unreachable. So the checks come in pairs — a hidden tool must be absent
@@ -147,7 +147,7 @@ def main():
 
         # ---- a reset pays the rent again ------------------------------------
         # A reveal is per-SESSION rent, so a cleared conversation must not keep it.
-        # Measured 2026-09-25 driving a fleet Windows box: find_tools{all:true} took the
+        # Measured 2026-09-25 on Windows: find_tools{all:true} took the
         # payload from 14 schemas to 30, and every later turn - THROUGH /new, which says
         # "Session cleared. Fresh context." - carried ~3.4K extra prompt tokens (step-0
         # prompt_tok 6,505 -> 10,086 on identical orders). Falsified against the pre-fix
@@ -240,11 +240,11 @@ def main():
         check(EX in sent2, "the revealed tool rides in the next request")
 
         # ---- the banner and /status report what the REQUEST carries ---------
-        # (audit, 2026-09-22: it counted REGISTRY.openai_schemas(), so a real
+        # (review, 2026-09-22: it counted REGISTRY.openai_schemas(), so a real
         # install read "34 tool schemas" while its requests carried 14 - the
         # number a reader checks the ~4k-token claim against was the wrong one.)
         # The banner now shows three rows and folds the arithmetic into /status
-        # (brief T-04); both read envelope_facts(), so they cannot disagree.
+        # Both read envelope_facts(), so they cannot disagree.
         import contextlib
         import io
         buf = io.StringIO()

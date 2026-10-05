@@ -45,7 +45,7 @@ sys.modules["tinycmdr_under_test_ask"] = fb
 spec.loader.exec_module(fb)
 
 # This suite is about dedup, the wait cap, the one-option rule and /stop. The timeout
-# semantics have their own test, which pops this key itself (audit fix, 2026-09-21).
+# semantics have their own test, which pops this key itself (review fix, 2026-09-21).
 fb.CONFIG["agent"]["ask_timeout_continues"] = True
 
 PASSES, FAILURES, SKIPPED = [], [], []
@@ -297,7 +297,7 @@ def test_stop_releases_a_parked_run_at_once():
 
 
 def test_an_unanswered_question_stops_the_run():
-    """The audit's finding, 2026-09-21: a run must not invent the operator's intent for
+    """The review's finding, 2026-09-21: a run must not invent the operator's intent for
     the very decisions that get asked about. In the campaign that was an unapproved
     production restart, and then an outage."""
     saved = fb.CONFIG["agent"].get("ask_user")

@@ -110,7 +110,7 @@ _log_queue = queue.Queue(-1)
 # The console handler is NAMED so a screen can detach it. While prompt_toolkit owns
 # the terminal a raw log line is printed into the middle of its render, the toolbar
 # is redrawn over it, and the run's own line is left stranded elsewhere on the
-# screen (measured 2026-09-25 on a fleet macOS host: the carry/stream/turn lines all
+# screen (measured 2026-09-25 on a macOS install: the carry/stream/turn lines all
 # landed inside the cards). The file handler is the record; the screen is the view.
 # Rotating so a long-running bot can't fill the disk (the log grows ~370 KB/day
 # and nothing else prunes it).
@@ -140,7 +140,7 @@ class _NoBlankRecords(logging.Filter):
 
     mattermostautodriver calls `log.error(message)` with the API's `message` field, which
     is EMPTY for a refused token: the operator's log got bare `ERROR ` lines beside the
-    400 - the only trail a bad token ever left (the fleet Windows box, 2026-10-02)."""
+    400 - the only trail a bad token ever left (a Windows install, 2026-10-02)."""
 
     def filter(self, record):
         try:
@@ -436,7 +436,7 @@ DEFAULT_CONFIG = {
         # Bodies of skills whose frontmatter says `always: true` ride the trailing block
         # (not the cached system prompt); bounded here.
         "skills_always_max_chars": 3000,
-        # The machine atlas (item 2b). The harness hands the model the facts about the box it
+        # The machine atlas. The harness hands the model the facts about the box it
         # is on: os, shell, install, and where things live. Attached in the trailing block on
         # the first turn of a run, and again after a failure that reads like a wrong path.
         # atlas.md is generated on the host, never shipped in a package.
@@ -454,7 +454,7 @@ DEFAULT_CONFIG = {
         # run, and 37 of 48 skill reads were repeats, each also a whole model round trip.
         # Not eviction: 200k budget, zero compaction events ever. This carries the results
         # themselves, newest first, bounded, age-stamped, with a changed-file marker.
-        # Measured on the fleet manager: 80% and 78% less source text re-bought in the later
+        # Measured on a manager host: 80% and 78% less source text re-bought in the later
         # runs of a session (25% of tool calls repeated a call from an earlier run, ~279k
         # tokens re-bought, worst case 143 repeats in a single conversation). ON by default
         # since 1.0.0. What held it back - answering from stale carried text - now has a
@@ -483,7 +483,7 @@ DEFAULT_CONFIG = {
         "plan_from_request": True,
         "shell_strict_mode": False,
         # Windows shell only. A PowerShell property that does not exist reads as $null, and
-        # $null in arithmetic is 0: measured 2026-09-25 driving a fleet box, `$sys.FreeMemory`
+        # $null in arithmetic is 0: measured 2026-09-25 driving a live install, `$sys.FreeMemory`
         # (the real name is FreePhysicalMemory) computed to 0 and the run reported "0 MB free
         # RAM" as its ROOT CAUSE while the box had 18 GB free - exit 0, no warning. True runs
         # inline PowerShell under `Set-StrictMode -Version 2.0`, which turns that into an
@@ -664,7 +664,7 @@ DEFAULT_CONFIG = {
             # answered "clear out the junk" with `robocopy /MOVE` of a 194-item directory and
             # NOTHING in either tier matched it - only the model's own question protected it.
             r"\brobocopy\b[^|;]*/move\b",
-            # The Windows machine-verb class (BUGREPORT §S1, measured on a Windows bed):
+            # The Windows machine-verb class (measured on a Windows bed):
             # every one of these was `is_blocked=False, confirm=None`, so the whole class
             # ran with no gate at all. They are confirm-tier, not absolute: stopping a
             # service and stopping the wrong one look identical to a regex, and that is
@@ -683,7 +683,7 @@ DEFAULT_CONFIG = {
         # The CONTENT tier: the same idea over the TEXT of a file the harness is about to
         # write (write_file/edit_file content, create_tool code, a manifest command). Kept
         # apart from confirm_patterns because a bare word is a command in a shell and PROSE in
-        # a file: measured 2026-09-25 driving a fleet box, `\breboot\b` gated three writes over
+        # a file: measured 2026-09-25 driving a live install, `\breboot\b` gated three writes over
         # the words in a script's section header ("# ---------- REBOOT / UPDATE STATE
         # ----------") - a 300s stall, a declined write and a rewrite - while the same run's
         # actual destructive act matched nothing at all. Here the machine verbs fire only
@@ -699,7 +699,7 @@ DEFAULT_CONFIG = {
         ],
         # What a lane with NOBODY to ask decides (a scheduled job, a sub-agent): a
         # confirm-pattern command is declined, never assumed yes. "allow" is the other
-        # value and is a deliberate choice, not a default (audit, 2026-09-22).
+        # value and is a deliberate choice, not a default (2026-09-22).
         "confirm_without_door": "decline",
         # Per-tool authority. approval_mode is a
         # CEILING on top of the regex tiers: "auto" (default) adds no prompts, "write"
@@ -712,7 +712,7 @@ DEFAULT_CONFIG = {
         "tool_policy": {},
         "allow_patterns": [],
         "allow_content_patterns": [],
-        # The endpoint gate covers TOOLS, not just shell (audit, 2026-09-21): an
+        # The endpoint gate covers TOOLS, not just shell (2026-09-21): an
         # inferctl/llamasrv verb moves the box this bot talks to, and a TOOL CALL never
         # passes through the shell guard - two of them moved :8081 while the guard only
         # read shell text. A custom tool whose NAME or DESCRIPTION carries one of these
@@ -724,7 +724,7 @@ DEFAULT_CONFIG = {
             # -delete) are NOT regexes here on purpose: the verb cannot decide (`rm file`
             # is ordinary work) and the flags and the TARGET can, so they are read by
             # destructive_risk() next to _broad_root, which routes a whole-tree target to
-            # this tier and a named directory to confirm (BUGREPORT §S1). A host that
+            # this tier and a named directory to confirm. A host that
             # replaces this list cannot lose that coverage.
             #
             # the lookahead, not "end of line": inside code the command is usually quoted, so
@@ -742,7 +742,7 @@ DEFAULT_CONFIG = {
             r"info|cat|head|tail|strings|dpkg|rpm|apk|yum|dnf|apt|apt-get|pacman|"
             r"modinfo|file|stat|locate)\b)[^\n]*\bmkfs(?:\.\w+)?\b",
             # of=/dev/... EXCEPT /dev/null, which is the measuring stick, not a disk:
-            # `dd if=/dev/zero of=/dev/null bs=1M count=100` was refused (BUGREPORT §S1).
+            # `dd if=/dev/zero of=/dev/null bs=1M count=100` was refused.
             r"\bdd\s+[^\n]*of=/dev/(?!null)",
             # The fork bomb, with or without the spaces around the parens: `: () { :|:& };:`
             # is the shape people actually type, and the old pattern required `:(`.
@@ -757,7 +757,7 @@ DEFAULT_CONFIG = {
             # shadow copies, the firmware-level wipes, a fork bomb, an encoded command
             # blob. The reversible-but-destructive recursive deletes that used to sit
             # in this list (rd /s, rmdir /s, del /s|/q, remove-item -recurse) moved to
-            # confirm_patterns below (audit, 2026-09-22), and the host restart verbs
+            # confirm_patterns below (2026-09-22), and the host restart verbs
             # followed them (2026-09-25): blocking them outright did not reduce risk, it
             # relocated it to the one path a regex cannot see.
             r"\bformat-volume\b", r"\bclear-disk\b", r"\binitialize-disk\b",
@@ -766,7 +766,6 @@ DEFAULT_CONFIG = {
             # is one: a powershell/pwsh invocation with -e / -ec / -encodedcommand and a
             # base64-looking argument. The old bare `-encodedcommand\b` matched the word in
             # a note ("this box blocks -EncodedCommand in text") and refused the write
-            # (BUGREPORT §S2).
             r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-e(?:c|nc(?:odedcommand)?)?\s+"
             r"[A-Za-z0-9+/=]{8,}",
         ],
@@ -775,11 +774,11 @@ DEFAULT_CONFIG = {
 
 
 # ---- the shipped guard lists, and the version that says which is which ----------
-# BUGREPORT §S18: `load_config` merges section dicts with `cfg[section].update(values)`,
+# `load_config` merges section dicts with `cfg[section].update(values)`,
 # so a config.json carrying a `confirm_patterns` list REPLACES the shipped one wholesale.
 # A config written against an older build therefore silently dropped five shipped confirm
 # patterns (the Windows machine-verb class) and both tiers were quietly weaker than this
-# build believes - the report's in-harness model dodged its own box that way. A host that
+# build believes - an in-harness model dodged its own box that way. A host that
 # wants to EXTEND a list uses `<list>_extra` (below) and never has to replace it.
 GUARD_LIST_VERSION = 3
 SHIPPED_GUARD_LISTS = {
@@ -1043,7 +1042,7 @@ def load_config():
             bucket[key] = parse(raw)
         except Exception:                                        # noqa: BLE001
             log.warning("%s could not be parsed as %s; left at its default", env, key)
-    # The Telegram token is .env-ONLY (audit, 2026-09-22). Every other secret here
+    # The Telegram token is .env-ONLY (2026-09-22). Every other secret here
     # has one home; a token sitting in config.json is a second copy the agent can
     # read into a prompt and quote, which is the rule this package states about
     # secrets and was quietly breaking for this one lane.
@@ -1069,7 +1068,7 @@ def load_config():
         env_name = fb.get("api_key_env")
         if env_name and os.environ.get(env_name):
             fb["api_key"] = os.environ[env_name]
-    # `<list>_extra` extends a shipped guard list instead of replacing it (§S18).
+    # `<list>_extra` extends a shipped guard list instead of replacing it.
     _merge_guard_extras(cfg.setdefault("agent", {}))
     return cfg
 
@@ -1078,7 +1077,7 @@ CONFIG = load_config()
 
 
 def apply_model_profile():
-    """Caps follow the MODEL, not one global guess (audit finding 8, item 2d).
+    """Caps follow the MODEL, not one global guess.
 
     A local endpoint and a 200k cloud model were paying the same tool-output, fetch and
     note caps, so a capable model was fed clipping it did not need. config.json:
@@ -1090,7 +1089,7 @@ def apply_model_profile():
 
     A profile key matches a WHOLE WORD of the model name, and the LONGEST matching key wins.
     "The first key that appears in the model name" was decided by dict order and a bare
-    substring, so measured by audit 2026-09-29: the key `pro` matched `prometheus-14b`, the key
+    substring, so measured 2026-09-29: the key `pro` matched `prometheus-14b`, the key
     `mini` matched `MiniMax-M2`, and given both `deepseek` and `deepseek-r1` the winner was
     whichever was written first rather than the more specific one. Digits stay part of a word,
     so `llama` still matches `llama3-8b`, and `deepseek` still matches
@@ -1225,7 +1224,7 @@ def _image_spec(entry):
     mime = str(entry.get("mime") or "").strip()
     if not mime:
         # The extension IS the right key for a mime type; the fallback was the problem.
-        # Measured by audit 2026-09-29: anything that was not jpg/gif was declared image/png,
+        # Measured 2026-09-29: anything that was not jpg/gif was declared image/png,
         # so a screenshot saved as .webp went to the endpoint as a PNG. An unknown extension
         # still defaults to png - that is where the arrow pointed - but the real image types
         # are named now.
@@ -1335,7 +1334,7 @@ def est_tokens(text):
     result / file body ~3.4. With one flat divisor the harness believed a
     code-heavy session was 2-3x further from the budget than it was, so the cut
     that protects the request fired late - and on a cloud endpoint the bill follows
-    the real count (audit, 2026-09-22). _force_shrink catches the eventual 400, so
+    the real count (2026-09-22). _force_shrink catches the eventual 400, so
     the old cost was a failure moved to the moment the context was fullest.
 
     A content-aware divisor, not a per-endpoint calibration: one pass over a
@@ -1444,7 +1443,7 @@ _LOCAL_URL_CACHE = {}
 def _is_local_url(url):
     """True for loopback/private endpoints - i.e. the LAN boxes. Cached per host.
 
-    Classified by RESOLUTION, not only by spelling (BUGREPORT §M8): `127.1`, `[::1]`,
+    Classified by RESOLUTION, not only by spelling: `127.1`, `[::1]`,
     `0.0.0.0`, a `.local` name and a bare LAN hostname (`llama-box`) are all local, and
     the old spelling test called the last three remote - which silently disabled
     failover AND `stream_options` on exactly the boxes this build targets. A name that
@@ -1455,7 +1454,7 @@ def _is_local_url(url):
     hostname that first resolved private and later points off-LAN (DNS moved) would
     otherwise leave every gate - the model-failover filter, the search and fetch egress
     gate - saying "local", so traffic leaves the box with `allow_cloud_egress: false`.
-    Same TTL and same reason as static_prompt_tokens (audit, 2026-09-29).
+    Same TTL and same reason as static_prompt_tokens (2026-09-29).
     """
     try:
         host = url.split("//", 1)[-1].split("/", 1)[0]
@@ -1534,7 +1533,7 @@ _CONTEXT_OVERFLOW_RE = re.compile(
     r"max_model_len|n_ctx|reduce the length|input is too long)", re.I)
 
 # ---- the envelope: the arithmetic a request is allowed to spend -----------------
-# Measured 2026-09-26 (audit FEATURE D1/D2, BUGREPORT §M9): the old budget was
+# Measured 2026-09-26: the old budget was
 # max(4000, window - 7000 - max_tokens) with the static half - system prompt plus
 # tool schemas, measured at 5,322 tokens - subtracted from nothing, and max_tokens
 # (16,384) sent unclamped. An 8,192-token endpoint was handed a 9,275-token payload
@@ -1665,7 +1664,7 @@ def mem_limit_chars(key, default, ceiling=None):
     200k endpoint and wrong for the same model served at 16k: the measured case is
     an 8,000-char notes block on a 16,384-token window, where the trailing state
     block alone was most of the budget. The effective limit is the tighter of the
-    configured value and window // 8 characters (audit FEATURE D5), never below 512.
+    configured value and window // 8 characters, never below 512.
 
     `ceiling` opts a cap into the OTHER direction: a window big enough to afford more may
     raise the SHIPPED DEFAULT. Only one-shot results pass it. Measured 2026-09-29 on a
@@ -1732,7 +1731,7 @@ _WINDOW_PROFILE_APPLIED = {}
 
 
 def apply_window_profile(window):
-    """Caps for a WINDOW BAND, not for a model NAME (review 2026-09-28, item 2.1).
+    """Caps for a WINDOW BAND, not for a model NAME (2026-09-28).
 
     `llm.profiles` keys off the model name, which cannot help the common self-hosted
     case: the same box restarted with a different quantisation or slot count, or a model
@@ -1796,7 +1795,7 @@ def apply_window_profile(window):
 # and 262,144 with -np 3, and a box restarted into a smaller window while a running
 # agent believed the old number is the 2026-09-21 incident. A process-lifetime cache
 # made "only a bot restart fixes it" true one level down, so the same TTL pattern
-# server_defaults() uses applies here (audit, 2026-09-22).
+# server_defaults() uses applies here (2026-09-22).
 WINDOW_TTL = 300.0
 # A probe that came back EMPTY is not an answer: caching "0 tokens" for the full TTL
 # is how a local box read as a 14,205-token window (8000 assumed messages + 4157 static
@@ -1823,7 +1822,7 @@ class ContextOverflow(RuntimeError):
     recoverable by shrinking the conversation and retrying.
 
     It names the ENDPOINT that rejected it. The shrink target is that box's window, not
-    the primary's (F-16): a 32k primary failing over to an 8k fallback made the run
+    the primary's: a 32k primary failing over to an 8k fallback made the run
     shrink to the primary's budget, which left the payload above the fallback's window
     and killed the turn."""
 
@@ -1842,7 +1841,7 @@ def _http_status(exc):
 def _http_body(exc, limit=600):
     """The endpoint's error body, scrubbed before it goes anywhere.
 
-    Measured BUGREPORT §M4: a provider that echoes the request's Authorization header in
+    Measured: a provider that echoes the request's Authorization header in
     its 401 body put the API key into the fatal notes, the run's return value, the log and
     the chat - every exit this function feeds. `scrub()` is the one place that knows the
     secrets this process was handed, so it runs HERE, at the boundary, not at each caller.
@@ -2214,7 +2213,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
     every downstream decision (usage accounting, the finish=length escalation, the
     clamp check) is identical to the non-streaming path.
 
-    Two different waits, and they are not the same number (BUGREPORT §M3): the FIRST
+    Two different waits, and they are not the same number: the FIRST
     byte waits on the model's prefill, which on a long prompt is slow but healthy, so it
     is bounded by `first_byte_seconds` (request_timeout); BETWEEN chunks the stream is
     wedged if nothing arrives for `idle_seconds`. Applying the idle bound to the prefill
@@ -2456,7 +2455,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                 # `id` when it does not, and - only for a fragment that STARTS a call
                 # (a name, no arguments) - by opening a new slot. Keying every
                 # index-less fragment on a constant 0 MERGED two distinct calls into
-                # one (BUGREPORT §M1: a run that asked for `echo A` and `echo B`
+                # one: a run that asked for `echo A` and `echo B`
                 # executed `echo AB`).
                 _fn = tc.get("function") or {}
                 _name = _fn.get("name") if isinstance(_fn.get("name"), str) else ""
@@ -2535,7 +2534,7 @@ def _stream_chat(resp, cancel_event=None, idle_seconds=120, on_delta=None,
                     pass
     if done["err"] is not None and not terminal:
         # A reader error is FATAL unless the stream had already finished properly
-        # (BUGREPORT §M2): a stream that died after the first delta used to be handed
+        # a stream that died after the first delta used to be handed
         # back as the model's complete answer, because the check only fired when
         # nothing had arrived at all. The caller's same-endpoint retry handles this.
         _close()
@@ -2609,7 +2608,7 @@ def _record_attempt(usage, url, outcome, detail="", secs=0.0):
     usage.setdefault("attempts", []).append({
         "url": url, "outcome": outcome,
         # Scrubbed BEFORE the truncation: a key could straddle the 200-char cut, and the
-        # footer (and any report built from it) must never carry it (BUGREPORT §M4).
+        # footer (and any report built from it) must never carry it.
         "detail": scrub(" ".join(str(detail).split()))[:200],
         "secs": round(secs, 1)})
     if outcome in ("retry", "error", "abandoned", "fatal", "clamped"):
@@ -2657,7 +2656,7 @@ def _pick_model(models, want):
     ("Qwen/Qwen2.5-72B" for a config that says "Qwen2.5-72B") - but when several models are
     advertised and none of them is this one, the answer is "unknown", not "the first one".
 
-    Measured by audit 2026-09-29: the fallback was `models[0]`, so a gateway advertising
+    Measured 2026-09-29: the fallback was `models[0]`, so a gateway advertising
     ["...0.5B", "...72B"] with an aliased config name sized the ENTIRE envelope - messages
     budget, reply cap and every window-scaled limit - from the 0.5B's window. Over-reporting is
     the direction this harness calls out as dangerous (2026-09-21: a 126,261-token payload in a
@@ -2820,7 +2819,7 @@ def _detect_window(base_url, headers, timeout=10):
 # GPT-4o/4.1-class 128k; Anthropic's Claude 3/4-class 200k; DeepSeek's chat/reasoner
 # 128k - checked 2026-10-04). A provider whose window varies per model is deliberately
 # absent: llm.window_presets and llm.max_context_tokens are the doors there, and doctor
-# names them. Never matched by model NAME - that guess is what F-19 refused - and every
+# names them. Never matched by model NAME - that guess is what was refused - and every
 # use is logged and named in envelope_line, so a preset never reads like a server fact.
 _CLOUD_WINDOW_PRESETS = {
     "api.openai.com": 128000,
@@ -3013,7 +3012,7 @@ def _secret_values():
     for section in ("mattermost", "search", "web"):
         for k, v in (CONFIG.get(section) or {}).items():
             # A field NAMED token/key/secret is a secret whatever its length. The 12-char
-            # floor here hid the one that leaked (measured 2026-09-25 driving the fleet box: asked
+            # floor here hid the one that leaked (measured 2026-09-25 driving a live install: asked
             # where the web token lived, the run quoted it into chat - a 10-char value the
             # sweep had skipped). The floor stays for ENVIRONMENT values below, where a
             # short value is usually a word like "none" - with one exception there, a
@@ -3024,7 +3023,7 @@ def _secret_values():
     for fb in CONFIG["llm"].get("fallbacks", []):
         if isinstance(fb.get("api_key"), str) and len(fb["api_key"]) >= 12:
             vals.add(fb["api_key"])
-    # The PRIMARY endpoint's key too (audit, 2026-09-22). A hosted primary keeps its key
+    # The PRIMARY endpoint's key too (2026-09-22). A hosted primary keeps its key
     # in llm.api_key, and this sweep covered the fallbacks and not the main one - exactly
     # backwards, since the primary key is the one in use on every call. A leaked key here
     # is one injected instruction away from leaving the box.
@@ -3118,8 +3117,8 @@ def _spill_rows(session=None):
     behaviour; a real conversation sees only its own spills.
 
     Rows whose file no longer resolves are DROPPED here, at the one place every reader
-    goes through: after the fix that keeps a live row's file from being rotated away
-    (audit D6), the mirror case is a file deleted by something else - a hand `rm`, a
+    goes through: after the fix that keeps a live row's file from being rotated away,
+    the mirror case is a file deleted by something else - a hand `rm`, a
     restart that pruned spares - and a row pointing at a path that is gone is worse than
     no row at all: the prompt tells the model to read it.
     """
@@ -3136,7 +3135,7 @@ def _spill_rows(session=None):
 def _spill_index_path():
     # Deliberately NOT _spill_dir(): a READ must not create the folder. The gate counts
     # repo-tree writes, and a prompt build that merely looked for an index used to mkdir
-    # spill/ in whatever tree the module lives in (caught by run_all's G2 check).
+    # spill/ in whatever tree the module lives in (caught by run_all's check).
     return BASE_DIR / "spill" / "index.jsonl"
 
 
@@ -3152,7 +3151,7 @@ def _spill_index_save():
         path = _spill_index_path()
         if not rows and not path.exists():
             # Nothing to persist and nothing to erase: do not mkdir spill/ or drop an
-            # empty file into a tree that never spilled (run_all's G2 check caught the
+            # empty file into a tree that never spilled (run_all's check caught the
             # mkdir from an idle session reset). Nothing to protect either, so a
             # pending tombstone is spent here rather than leaking into a later save.
             _SPILL_TOMBSTONES.clear()
@@ -3227,7 +3226,7 @@ def _spill_rotate(keep):
     The index and the files are two halves of one promise - "The FULL text is on disk -
     nothing was dropped" - and rotating by file count alone broke it: measured with
     spill_keep=3, session A's indexed spill stopped resolving as soon as session B wrote
-    four more (audit D6). A row is a pointer the prompt tells the model to follow, so a
+    four more. A row is a pointer the prompt tells the model to follow, so a
     file a live row names is never deleted; the count applies to the spares.
     """
     try:
@@ -3259,7 +3258,7 @@ def _spill_dir():
 # Calls whose RESULT was elided from the payload by compaction, keyed by session. A
 # duplicate refusal exists because "nothing has changed since", but when the earlier result
 # is no longer in the payload that premise is FALSE: the model asking again is asking for
-# something it can no longer see. Measured on a fleet box, 2026-10-03: the model re-read a
+# something it can no longer see. Measured on a live install, 2026-10-03: the model re-read a
 # spilled payload by id (`read_file spill#3`) whose result the elision had dropped, got
 # refused with 4000 chars of it, asked again, and the loop guard force-stopped the run -
 # "detecting a loop almost every turn". A call in this set is SERVED, and the entry is
@@ -3316,7 +3315,7 @@ def _spill_record(name, rel, text, session=None):
     Keyed by SESSION since 2026-09-25: the index rides every prompt, so an unkeyed one
     put one conversation's spilled output - its first line and its path - in front of
     every other conversation's model, and it survived /new, which is how a fresh order
-    was dragged back into a stopped run's work (measured driving a fleet box: the new
+    was dragged back into a stopped run's work (measured driving a live install: the new
     order answered in two calls, then spent ten more reading the PREVIOUS, stopped run's
     spill files and re-running its scans).
     """
@@ -3486,7 +3485,7 @@ _CATASTROPHIC = re.compile(r"\([^)]*[+*?][^)]*\)\s*[+*{]")
 def _patterns(kind):
     """The compiled regexes of one safety tier, compiled once per distinct list.
 
-    This runs on every tool call (security review, 2026-09-23). The guard:
+    This runs on every tool call (2026-09-23). The guard:
     blocked_patterns/confirm_patterns are OPERATOR regexes, and a catastrophic one
     (a quantified group that itself repeats) stalls the run it is meant to protect
     - flag its shape when the tier compiles instead of at 03:00 in a stuck thread.
@@ -3513,7 +3512,7 @@ def _patterns(kind):
 #
 # A blocked pattern stands for "this command would do it", so the tier has to match the text
 # that would run - it matched the whole command instead, and that refused a SEARCH for the
-# string. Measured by audit 2026-09-29: `grep -rn "rm -rf /" docs/` came back BLOCKED, with the
+# string. Measured 2026-09-29: `grep -rn "rm -rf /" docs/` came back BLOCKED, with the
 # model told no confirmation unlocks it. A dead end for a read-only command, and the same for
 # `git log -S 'rm -rf /'` or an execute_code whose source merely contains the text.
 #
@@ -3596,7 +3595,7 @@ def dropin_gaps():
     tools/ is host-owned and an update never overwrites it (`_apply_package` skips it by
     design), so a host that ever had an older tools/process.py keeps it for ever while
     tinycmdr.py moves on - and the features that call into it (auto-background, real exit
-    codes across restarts) degrade SILENTLY. Found on a Windows fleet box, 2026-10-03: the tree was
+    codes across restarts) degrade SILENTLY. Found on a Windows install, 2026-10-03: the tree was
     1.0.54, tools/process.py was the pre-1.0.54 copy, and a 75-second command blocked the
     whole turn with no note anywhere. Returns [(name, missing_api_names)].
     """
@@ -3714,7 +3713,7 @@ def _confirm_hit(text, kind="confirm_patterns"):
 
     One place for the confirm tier, read by tool_shell, tool_execute_code and
     confirm_gate (every write path), so none of them can drift apart on what
-    needs a 'yes' (audit, 2026-09-22; write coverage 2026-09-23). Case-insensitive
+    needs a 'yes' (2026-09-22; write coverage 2026-09-23). Case-insensitive
     for the same reason is_blocked is: PowerShell cmdlets are capitalised.
 
     `kind` is the CONTENT tier for a file's text and the COMMAND tier for a shell
@@ -3754,7 +3753,7 @@ def _call_sig(name, args):
     The dedupe map keyed on the RAW argument string while the loop guard keyed on
     json.dumps(args, sort_keys=True), so {"a": 1} and {"a":1} were the same call to
     one guard and different calls to the other: whitespace defeated the refusal
-    while still feeding the loop counter (audit, 2026-09-22). Both read this now.
+    while still feeding the loop counter (2026-09-22). Both read this now.
     Takes the raw JSON string or the parsed dict, and never raises.
     """
     parsed = args
@@ -3771,13 +3770,13 @@ def _call_sig(name, args):
     # The FULL canonical JSON, hashed. The old `norm[:400]` collapsed distinct calls onto
     # one signature whenever their first 400 characters agreed, so a mutating call that
     # differed only in a later argument read as "already ran" for every guard that keys on
-    # this (BUGREPORT §M13). Only dict keys and a repeat counter read it, so the hash costs
+    # this. Only dict keys and a repeat counter read it, so the hash costs
     # nothing else.
     return (name, hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest())
 
 
 # --------------------------------------------------------------------------
-# Tool-result post-processing: digestion (Phase 1a) + field notes (Phase 1d)
+# Tool-result post-processing: digestion + field notes
 # --------------------------------------------------------------------------
 #
 # Measured on this fleet's log (2026-10-03: 2,087 calls, 79.5% were the five primitives,
@@ -3824,7 +3823,7 @@ _DIGEST_SHAPES = (
         # `ps aux` is the spelling that matters most and the old shape missed it: it
         # required a dash or a pipe after `ps`, so a full process listing rode into the
         # context whole (measured 2026-09-26: `ps aux` = 191,556 chars / 56,340 est-tokens,
-        # undigested, which is the `ps aux = 53,284 tok` row of the audit's metric table).
+        # undigested, which is the `ps aux = 53,284 tok` row).
         # A bare `ps` counts only at the START of a command or after an operator, so
         # `grep -i ps file` stays untouched.
         r"(?:^|[;&|]\s*)ps\b|\bps\s+-|\bps\b\s*\||\btop\b|\bGet-Process\b|\btasklist\b|"
@@ -4100,7 +4099,7 @@ def field_note_candidates(limit=10):
 
 # Words a matcher must not be built from: they appear in so many failures that a note
 # keyed on one would fire everywhere (or read as nonsense). "everything" was the first
-# draft a fleet box's doctor printed for a timeout signature, 2026-10-03.
+# draft a live install's doctor printed for a timeout signature, 2026-10-03.
 _DRAFT_STOPWORDS = {
     "everything", "something", "started", "command", "output", "error", "errors",
     "failed", "failure", "cannot", "could", "does", "exist", "exists", "the", "this",
@@ -4252,7 +4251,7 @@ def failed_output(text):
     about a COMMAND's output, so they are gated on the harness's own `exit_code=` header -
     they are only meaningful where the harness put them.
 
-    Measured by audit 2026-09-29: scanning arbitrary text instead meant a SUCCESSFUL read_file
+    Measured 2026-09-29: scanning arbitrary text instead meant a SUCCESSFUL read_file
     of a file that happened to contain a traceback (or `--- stderr ---`, or a first line
     reading `ERROR: `) was classified as a failed call. A field note and the last-good-call
     replay were then attached to a success - the very thing this docstring forbids - and the
@@ -4358,7 +4357,7 @@ def _hints_save(session_key, seen):
         if not path.parent.exists():
             # A real session has already written its own file by the time a hint fires
             # (run() saves at start); anything else is a probe, and a probe must not
-            # create sessions/ in whatever tree the module lives in (run_all's G2 check).
+            # create sessions/ in whatever tree the module lives in (run_all's check).
             return
         path.write_text(json.dumps(sorted(seen)), encoding="utf-8")
     except OSError:
@@ -4565,7 +4564,7 @@ def capability_line(lane):
 
 
 # --------------------------------------------------------------------------
-# The machine atlas (item 2b)
+# The machine atlas
 # --------------------------------------------------------------------------
 #
 # Measured reason this exists: the eval's most common tool error is a GUESSED PATH (asked for
@@ -4834,7 +4833,7 @@ def ensure_atlas(path=None, force=False):
 
 
 # --------------------------------------------------------------------------
-# Post-write verification (item 1c)
+# Post-write verification
 # --------------------------------------------------------------------------
 #
 # A write is the one moment the harness knows exactly what changed and can check it:
@@ -4868,7 +4867,7 @@ def _verify_python(path, text):
         # model calling the file name found nothing. Ask the loader itself.
         #
         # The gate is the BOT'S OWN tools directory, by resolved path - not the NAME of the
-        # directory the file happens to sit in. Measured by audit 2026-09-29: writing
+        # directory the file happens to sit in. Measured 2026-09-29: writing
         # `/home/user/proj/tools/helpers.py` (any project's ordinary ./tools/) ran the tool
         # loader, which correctly said "no tool here", and verify_note reported
         # "[HARNESS verify FAILED ... The file on disk is broken]" about a perfectly good
@@ -5029,7 +5028,7 @@ def _exercise_tool_load(path):
 
 # The Mattermost placeholder, checked on the HOST rather than on the whole URL. The check used
 # to be a substring, so a real host with "change-me" or "example.com" anywhere - including in a
-# PATH - was read as unset (audit 2026-09-29).
+# PATH - was read as unset (2026-09-29).
 #
 # TWO predicates, because the code deliberately treats the two placeholders differently and
 # that is preserved here: the CHANGE-ME shape config.example.json ships is REFUSED, while the
@@ -5168,7 +5167,7 @@ def verify_note(path):
 # "C:\Users\David Trapp": `Set-Content -Path 'C:\Users\David Trapp\s1.json' -Value x` yielded
 # "C:\Users\David". That path does not exist, and this module ignores a candidate it cannot
 # find, so the write was never verified and nothing said so. The same truncation would hit a
-# macOS or Linux path with a space in it - only the fleet's Windows box, whose temp directory
+# macOS or Linux path with a space in it - only a Windows install, whose temp directory
 # carries the space, made it visible.
 _SHELL_WRITE_PATTERNS = (
     re.compile(r"(?:Set-Content|Out-File|Add-Content)\s+(?:-Path\s+|-(?:Value|File)\s+)?"
@@ -5220,7 +5219,7 @@ def shell_written_files(command, limit=2):
     not exist is ignored, and a path that cannot be verified adds nothing.
 
     A redirection INSIDE a quote is text, not a redirection - `grep 'x>y' notes.md` writes
-    nothing - so a match that starts inside a quoted region is skipped. Measured by audit
+    nothing - so a match that starts inside a quoted region is skipped. Measured
     2026-09-29: the quoted form produced a candidate path, and when a file of that name
     happened to exist the result carried a verify verdict about a file the command never
     touched.
@@ -5336,7 +5335,7 @@ def _read_capped(path, limit=None, from_end=False, strict=False):
         # read with a Python unpack error instead of naming the cause: a Windows drive
         # against a file held open with a deny-all share mode got
         # "ERROR reading <path>: not enough values to unpack (expected 3, got 2)"
-        # (report H-1, 2026-10-02). `strict` re-raises so read_file can say what really
+        # (2026-10-02). `strict` re-raises so read_file can say what really
         # happened ("being used by another process", "permission denied"); run_capture
         # keeps the quiet empty result for its own temp capture files.
         if strict:
@@ -5354,7 +5353,7 @@ def _read_capped(path, limit=None, from_end=False, strict=False):
     # Separate on purpose: read_file sliced this note into the file's own lines - a `tail`
     # of a 28.6 MiB file returned the note's two lines instead of the file's last two, and
     # an offset sliced the tail chunk by a line number meant for the whole file
-    # (measured 2026-09-27, operator report on negative offsets).
+    # (measured 2026-09-27).
     return text, truncated, note
 
 
@@ -5480,7 +5479,7 @@ def _cgroup_mem_mb():
 def _fmt_mb(mb):
     """MiB under 1 GiB: `RAM 0.0 GiB` for a healthy 32 MB process reads as a broken probe.
 
-    Measured 2026-09-25 on a fleet box whose every check-in said `RAM 0.0 GiB` while the
+    Measured 2026-09-25 on a live install whose every check-in said `RAM 0.0 GiB` while the
     running child held 32.5 MB - an operator reads that as a failed gauge, not as a lean
     process.
     """
@@ -5582,7 +5581,7 @@ _WAITS_ON_CHILD_RX = re.compile(r"(?i)(^|\s)-wait\b|\|\s*(wait|receive)\b")
 def _start_process_warning(command):
     """A child started with Start-Process outlives the harness unless something waits.
 
-    Measured on the fleet's Windows box, 2026-10-02 (report H-10): `Start-Process cmd -ArgumentList ...`
+    Measured on a Windows install, 2026-10-02: `Start-Process cmd -ArgumentList ...`
     then killing the cmd left the grandchild python.exe alive with a dead parent; the
     `process` tool's own kill DOES take the tree, and shell's timeout kills the tree too -
     so the leak belongs to the ad-hoc door, and the fix is to name the managed one.
@@ -5630,7 +5629,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     # On a shared Linux host gettempdir() is the world-readable /tmp, where the default
     # umask leaves this 0755 and every run's stdout/stderr 0644 - any local user can read
     # them, and an oversized output is kept here for a full day. macOS hides the leak
-    # ($TMPDIR is already 0700), which is why it went unnoticed until the audit.
+    # ($TMPDIR is already 0700), which is why it went unnoticed until then.
     os.chmod(run_dir, 0o700)
     stem = f"{int(now_wall())}-{os.getpid()}-{threading.get_ident()}"
     out_path = run_dir / f"{stem}.out"
@@ -5715,7 +5714,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
             pass
 
 
-# --- cost ceiling on unbounded recursive walks (plan item 6) ---------------
+# --- cost ceiling on unbounded recursive walks ---------------
 # The rule is narrow on purpose: a recursive walk AND a broad root, both
 # required. A recursive walk from a specific directory is ordinary work, and a
 # false positive would pace-limit a legitimate install or build, which is worse
@@ -5728,7 +5727,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
 #
 # A comment cannot execute, so a guard that fires on one is a false positive by construction.
 # STRING LITERALS ARE KEPT on purpose: `subprocess.run("reboot")` really does reboot, and a
-# guard that stripped strings would be a hole rather than a fix. Measured by audit 2026-09-29:
+# guard that stripped strings would be a hole rather than a fix. Measured 2026-09-29:
 # a comment reading "# restart happens in the next step" tripped the confirm tier over
 # execute_code, which on a lane with nobody at the door is a flat DECLINED.
 #
@@ -5936,7 +5935,7 @@ _SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docke
 # ---------------------------------------------------------------------------
 # Minting: the one judgment the model has no data for
 # ---------------------------------------------------------------------------
-# Measured 2026-09-25 driving the fleet box: given a repeatable procedure the run does it BY HAND,
+# Measured 2026-09-25 driving a live install: given a repeatable procedure the run does it BY HAND,
 # every time, and never offers to keep it - and the whole log of six days holds ONE
 # `remember` call, because nothing ever asks either. The model sees one run at a time, so
 # "this is the fourth time this week" is invisible to it; a nudge it must act on would be
@@ -5946,7 +5945,7 @@ _SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docke
 MINT_HINT_TOOLS = ("shell", "execute_code", "process")
 # A procedure driven through a computer/GUI tool is ALREADY one tool call per step: wrapping
 # the runbook in another tool would change nothing, and offering it reads as the harness not
-# knowing its own capabilities (operator report, 2026-10-03: a computer-use runbook run
+# knowing its own capabilities (2026-10-03: a computer-use runbook run
 # "by hand" produced "say mint it and I will turn it into a tool"). Any run that used a
 # tool matching this pattern is left alone.
 _GUI_TOOL_RX = re.compile(
@@ -5998,7 +5997,7 @@ def _census_save(data):
         PROC_CENSUS_FILE.parent.mkdir(parents=True, exist_ok=True)
         # The temp name used to be a fixed `<file>.tmp`, so two writers (a batch's tool
         # calls run in a thread pool) collided on it and one save was lost - the same
-        # defect atomic_write_text had already been fixed for elsewhere (audit §D8).
+        # defect atomic_write_text had already been fixed for elsewhere.
         atomic_write_text(PROC_CENSUS_FILE,
                           json.dumps(data, indent=1, sort_keys=True))
     except Exception as e:
@@ -6161,7 +6160,7 @@ def order_census_note(session_key, text):
 
 
 # An order that asks WHERE or WHICH a durable fact lives ("which port", "where is the token
-# file") is the case `remember` exists for - and measured 2026-09-25 driving the fleet box, the run
+# file") is the case `remember` exists for - and measured 2026-09-25 driving a live install, the run
 # answered one of those and saved nothing, because nothing anywhere asks. Same machinery as
 # route_hint: the nudge rides the result that just answered the question, at most once per
 # run, logged, and silent the moment the run has saved something.
@@ -6304,7 +6303,7 @@ def remember_offer(session_key, reporter, source="main", trigger="lookup"):
     The write-time nudge (remember_nudge) fires while a fact is freshest, and only for an
     order that reads as a "where is X" question. That is judgment-driven at the one moment
     a model cannot tell a durable fact from a fresh one - and measured 2026-10-04 (a
-    self-audit of this harness's memory prompting): the publishable gets saved, the
+    self-check of this harness's memory prompting): the publishable gets saved, the
     load-bearing does not. The evidence that a fact IS durable is that it cost a lookup
     AGAIN, so the offer is event-driven instead: a run that spent `remember_offer_steps`
     hand-driven calls and saved nothing is asked once per session, and **dismiss** is
@@ -6536,7 +6535,7 @@ def _tool_door_answer(name, shape="", note=""):
     """One miss, one wording, on every door: the tool, its arguments, and that it is now IN
     the session's tool list.
 
-    The reveal is the part that was missing. Measured 2026-09-24 (a fleet Windows box): told to call
+    The reveal is the part that was missing. Measured 2026-09-24 (a Windows install): told to call
     a tool, the run made eight execute_code calls running tools/toolsmith.py, was answered
     "call toolsmith directly" at least four times, and never made the call - the door was
     named but the tool's schema was in neither its payload nor the answer.
@@ -6581,8 +6580,8 @@ def _bare_tool_name(command):
             return cand
     # A tool name inside an echo/printf is NOT this door - see _narration_tool_name. That
     # shape used to be answered here, and it swallowed real commands: `echo "the notes file
-    # is ready"` never printed and `printf "%s" shell` never ran (operator report,
-    # 2026-09-27: five of nine controlled probes eaten by the matcher).
+    # is ready"` never printed and `printf "%s" shell` never ran (2026-09-27:
+    # five of nine controlled probes eaten by the matcher).
     return ""
 
 
@@ -6613,8 +6612,8 @@ def _narration_tool_name(command):
 def _tool_for_file_name(stem):
     """The tool a ./tools/<stem>.py registers, or "" - the file name is not the tool name.
 
-    A register-shape file answers to the NAME inside it: measured 2026-09-24 on a fleet Windows box,
-    where the run read `hermes_todo.py` off its own tools/ listing and spent six
+    A register-shape file answers to the NAME inside it: measured 2026-09-24 on a Windows install,
+    where the run read `ported_todo.py` off its own tools/ listing and spent six
     execute_code calls running that FILE, because nothing said it registers as todo_list.
     """
     if not stem:
@@ -6681,7 +6680,7 @@ def _tool_named_in_code(code):
     cands += [m.group(1) for m in re.finditer(r"-m[ \t]+([A-Za-z_][\w]*)", text)]
     for cand in cands:
         # A tools/ FILE whose stem is not a tool name is the same miss one step out:
-        # `import hermes_todo` names the file, and the tool it registers is todo_list.
+        # `import ported_todo` names the file, and the tool it registers is todo_list.
         if _registered_tool(cand) or _tool_for_file_name(cand):
             return cand
     return ""
@@ -6725,7 +6724,7 @@ def _pwsh_chain_and(command):
 # `powershell.exe -NoProfile -Command "<body>"` typed INSIDE the PowerShell shell is a
 # double wrap: the harness already runs every command as `powershell -NoProfile -Command`, so
 # the inner interpreter re-parses text that has already been through one round of quoting.
-# Measured 2026-09-25 driving the fleet's Windows box - in both Windows runs the first 3-4
+# Measured 2026-09-25 driving a Windows install - in both Windows runs the first 3-4
 # calls died this way ("System : The term 'System' is not recognized"), and the run then
 # settled on write_file + -File, which works. Unwrapping is what the model meant; answering
 # instead would cost the round trip it is trying to save.
@@ -6765,7 +6764,7 @@ def _shell_autobg(command, ctx, threshold, limit=None):
     `limit` is the timeout the model asked for, and when it is shorter than the window it
     wins: this wait used to be the only clock in play, so `timeout=5` on a 45-second
     command came back `exit_code=0` after 45s - the parameter was silently ignored for
-    every command shorter than agent.auto_background_seconds (measured on a fleet box,
+    every command shorter than agent.auto_background_seconds (measured on a live install,
     2026-10-03). Past `limit` the command and its tree are killed and the blocking path's
     TIMEOUT answer is returned instead.
     """
@@ -6882,7 +6881,7 @@ def tool_shell(args, ctx):
     if _named_tool:
         # The tool is REVEALED as well as named: the measured reason a run keeps reaching
         # for the script is that it has never seen the tool's arguments (2026-09-24: eight
-        # execute_code calls at toolsmith.py on a fleet Windows box with the door named twice, and a
+        # execute_code calls at toolsmith.py on a Windows install with the door named twice, and a
         # tool whose schema was in neither place). Naming the door without opening it is
         # what the run walks past.
         _named_tool = _tool_for_file_name(_named_tool) or _named_tool
@@ -6919,12 +6918,12 @@ def tool_shell(args, ctx):
             return ab
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
     if IS_WINDOWS:
-        # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the
-        # report's box) while _read_capped decodes UTF-8, so `echo ✓ 日本語` came back as
-        # `?? ???` (report H-6, reproduced on the fleet's Windows box, 2026-10-02). The lever is the
-        # CONSOLE's output encoding - a `chcp 65001` in the child, which the report tried,
-        # does not change what .NET writes to a redirected stream. This is the shell half of
-        # H-6; execute_code gets UTF-8 from its own `-X utf8` launch.
+        # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the Windows box)
+        # while _read_capped decodes UTF-8, so `echo ✓ 日本語` came back as
+        # `?? ???` (reproduced on a Windows install, 2026-10-02). The lever is the
+        # CONSOLE's output encoding - a `chcp 65001` in the child, which was tried,
+        # does not change what .NET writes to a redirected stream. This is the shell half;
+        # execute_code gets UTF-8 from its own `-X utf8` launch.
         shell_cmd = ("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false; "
                      "$OutputEncoding = [Console]::OutputEncoding; " + shell_cmd)
     if IS_WINDOWS and CONFIG["agent"].get("shell_strict_mode"):
@@ -6978,7 +6977,7 @@ def tool_shell(args, ctx):
 
 
 def tool_execute_code(args, ctx):
-    """Run Python code directly (Hermes execute_code equivalent)."""
+    """Run Python code directly (the predecessor harness's execute_code equivalent)."""
     code = args["code"]
     # The tool-file-as-script miss, on the door the drive actually reaches for. The shell
     # door answers it (_tool_run_as_script) but code that runs or imports ./tools/<name>.py
@@ -7009,7 +7008,7 @@ def tool_execute_code(args, ctx):
     # prompt even admitted it). This is a check on the SOURCE TEXT, so it is a seatbelt and
     # not a boundary: code that assembles a command at runtime is not visible to it, and the
     # prompt says so rather than claiming more than this does.
-    # The CONFIRM tier covers code (audit, 2026-09-22). Block was the only check here,
+    # The CONFIRM tier covers code (2026-09-22). Block was the only check here,
     # which is why an over-broad block was worse than a confirm: the same command, one
     # string-assembly away, walked past the seatbelt with nothing asked at all.
     _code_guard = _strip_py_comments(code)
@@ -7048,7 +7047,7 @@ def tool_execute_code(args, ctx):
         scan_t0 = time.time()
         # `-X utf8`: a redirected child on Windows defaults to the locale code page
         # (cp1252), so `print("✓")` raised UnicodeEncodeError and aborted a batch half-way
-        # - the model got a partial run and no summary (report H-6/H-9, 2026-10-02). UTF-8
+        # - the model got a partial run and no summary (2026-10-02). UTF-8
         # mode makes the child's stdout match what _read_capped decodes.
         rc, stdout, stderr, timeout_hit = run_capture(
             [sys.executable, "-X", "utf8", "-c", code], timeout,
@@ -7071,7 +7070,7 @@ def tool_execute_code(args, ctx):
                     f"would freeze this channel). Partial output:\n{out}")
         hint = ""
         if rc not in (0, None):
-            # report H-9: the drive's own batch died half-way (the encoding crash) and the
+            # The drive's own batch died half-way (the encoding crash) and the
             # model could not tell what had already run. A non-zero exit says the code
             # STOPPED, not that nothing happened - name the partial effects so the next
             # call re-reads what it touched instead of trusting a clean-slate assumption.
@@ -7194,7 +7193,7 @@ def _names_endpoint(text, host):
         (`systemctl restart main`). A host name is a word: a letter, digit, dot or dash on
         either side means it belongs to something else, which is how a host called `main`
         stopped matching `systemctl restart main-api` and a host called `llama` stopped
-        matching `pgrep -f llama.cpp` (audit 2026-09-29).
+        matching `pgrep -f llama.cpp` (2026-09-29).
 
     The port alone no longer matches: `:8081` fired inside `:80810`, and a different host on
     the same port number is not this endpoint.
@@ -7213,7 +7212,7 @@ def _endpoint_self_harm(command):
     """True-ish when a command stops or restarts the endpoint THIS bot is talking to.
 
     The campaign harness restarted its own model endpoint 46 times in one campaign and
-    one of those restarts took production down (audit, 2026-09-21). Matched on the
+    one of those restarts took production down (2026-09-21). Matched on the
     host:port in llm.base_url, because the bot cannot tell a safe restart from its own.
     """
     base = str((CONFIG.get("llm") or {}).get("base_url") or "")
@@ -7236,7 +7235,7 @@ _ENDPOINT_LOAD_RX = re.compile(
 def _endpoint_load_request(command):
     """True-ish when a command GENERATES against the endpoint this bot talks to.
 
-    Measured 2026-09-25 driving the fleet's Windows box: an operator order about a slow
+    Measured 2026-09-25 driving a Windows install: an operator order about a slow
     machine made the run send real completion requests to the production llama.cpp box (a
     bogus model name first, then `main` at 400 + 400 + 120 tokens) - ~900 generated tokens
     and two slots of load on the one box every host on this fleet answers through, while the
@@ -7403,7 +7402,7 @@ def _delete_effect(path, cap=20000):
 def destructive_risk(command, _depth=0):
     """('block'|'confirm', why) for a recursive delete aimed at a TREE, else None.
 
-    BUGREPORT §S1, measured: the POSIX spellings had no coverage in either tier, because
+    Measured: the POSIX spellings had no coverage in either tier, because
     the only patterns required `r` and `f` in ONE flag word immediately before a bare
     `/` - so `rm -rf /etc`, `rm -rf ~/Documents`, `rm -r -f /`, `rm --recursive --force /`,
     `find / -delete` and `find / -exec rm -rf {} +` all ran ungated. The verb cannot decide
@@ -7503,10 +7502,10 @@ def destructive_risk(command, _depth=0):
             return ("block", "a recursive delete of %s" % broad[0])
         if not targets:
             # `gci C:\x | ri -Recurse`: the target is piped in from the previous segment,
-            # so there is nothing here to measure - ask (BUGREPORT §S2).
+            # so there is nothing here to measure - ask.
             return ("confirm", "a recursive delete of a piped-in target")
         # The RECURSIVE shape keeps its original contract: any named directory asks, scratch
-        # included, because that is what BUGREPORT §S1 was about and the operator's MUST_GATE
+        # included, because that is what it was about and the operator's MUST_GATE
         # list says so in as many words (`rm -rf /tmp/scratch`). What changes here is only that
         # the ask now says what it would destroy, measured.
         effect = ""
@@ -7560,7 +7559,7 @@ def _endpoint_touching_tool(name, description=""):
     return None
 
 
-# ---- a fresh reconnect gap makes asking pointless (audit finding, 2026-09-21) ----
+# ---- a fresh reconnect gap makes asking pointless (2026-09-21) ----
 #
 # The catch-up sweep exists because the websocket does not replay what it missed;
 # the research box recovered 7 posts on 2026-09-12, which is what "this lane really does lose
@@ -7681,7 +7680,7 @@ def endpoint_gate(subject, why, confirm_cb):
 def _missing_argument_answer(name, missing, params):
     """What a call that left out a DECLARED argument is told, or "" if it did not.
 
-    Measured 2026-09-25 driving the fleet box: `create_tool` answered a bare
+    Measured 2026-09-25 driving a live install: `create_tool` answered a bare
     `ERROR in tool 'create_tool': 'name'` and the run retried the identical call. An
     answer that names the argument and lists the shape costs nothing and saves the retry.
     """
@@ -7698,7 +7697,7 @@ def _missing_argument_answer(name, missing, params):
 def shell_guard(text, ctx, subject="process: "):
     """The shell tool's own tier, exposed to a drop-in tool that spawns its own process.
 
-    Measured 2026-09-25 driving the fleet box: `process start` launched a .ps1 whose body did
+    Measured 2026-09-25 driving a live install: `process start` launched a .ps1 whose body did
     exactly what the shell tier refuses, so the seatbelt was one tool call away from
     bypassed - the same shape execute_code had before 2026-09-18. A tool that starts a
     process asks here first: the string goes through the confirm tier (quoted back to the
@@ -7727,7 +7726,7 @@ def confirm_gate(text, subject, ctx):
     """The CONFIRM tier over text on its way to DISK or into a shell wrapper.
 
     tool_write_file content, tool_edit_file's new_string, create_tool code and a
-    manifest tool's command walk through here (security review, 2026-09-23:
+    manifest tool's command walk through here (2026-09-23:
     _confirm_hit and endpoint_gate had exactly two call sites, shell and
     execute_code, and every write path carried a matching payload straight past
     both - the fastest route for a steered model is a file, not a command).
@@ -7953,7 +7952,7 @@ def atomic_write_bytes(path, data):
     The destination is never opened for writing. If the write or the rename fails,
     the old file is left exactly as it was and the error is RAISED, so the caller
     learns the save did not happen instead of losing the file to a truncating
-    fallback (audit D1: a failed save of a 20-item state file left 0 bytes on disk and
+    fallback (a failed save of a 20-item state file left 0 bytes on disk and
     the next load died on JSONDecodeError, with no .damaged-* copy anywhere).
     """
     p = Path(path)
@@ -8029,7 +8028,7 @@ def atomic_write_text(path, text, encoding="utf-8"):
 
 def _path_lock(path):
     """One lock per PATH, not per tool: a batch that edits two files in parallel is
-    fine, two calls to the same file are not - and since D2, two PROCESSES are not
+    fine, two calls to the same file are not - and since then, two PROCESSES are not
     either. One stable object per normalized key (callers compare identity), holding a
     thread RLock and an OS lock on a file in LOCK_DIR.
     """
@@ -8043,7 +8042,7 @@ def _path_lock(path):
 
 def serialized_by_path(fn):
     """Mutating tools wear this, so parallel calls cannot read-modify-write the same
-    file and silently lose an edit (audit of the campaign harness, 2026-09-21: four
+    file and silently lose an edit (2026-09-21: four
     parallel edits to one launcher lost two, and left production on a binary with no
     draft model)."""
     @functools.wraps(fn)
@@ -8076,7 +8075,7 @@ def serialized_on(path):
 
 
 def _surface_write_gate(path, subject, ctx):
-    """The same decision the SHELL door gets, asked of a file PATH (BUGREPORT §S3).
+    """The same decision the SHELL door gets, asked of a file PATH.
 
     Measured: `printf 'notes cleared by cleanup' > notes.md` was stopped by
     _prompt_surface_write while `tool_write_file({"path": ".../notes.md"})` replaced the
@@ -8087,7 +8086,7 @@ def _surface_write_gate(path, subject, ctx):
     if name not in _SURFACE_FILES:
         return None
     # ...and it has to be the BOT'S OWN file, by resolved path - not any file on the box that
-    # shares the name. Measured by audit 2026-09-29: `write_file {"path":
+    # shares the name. Measured 2026-09-29: `write_file {"path":
     # "/home/user/acme/docs/notes.md"}` was gated as "a write to this bot's own notes.md (its
     # memory)" and DECLINED on a lane with nobody to ask, so an operator's own document
     # could not be written because of its basename.
@@ -8105,7 +8104,7 @@ def _surface_write_gate(path, subject, ctx):
 def _win_long_path(path):
     """A Windows ABSOLUTE path past MAX_PATH, in the ``\\\\?\\`` form the Win32 API needs.
 
-    Measured on the fleet's Windows box, 2026-10-02 (report H-2): creating a 339-character path throws
+    Measured on a Windows install, 2026-10-02: creating a 339-character path throws
     FileNotFoundError [WinError 206] with LongPathsEnabled=0, while the same path with the
     extended prefix works - and Python's Path handles that form (exists / name / child /
     write all verified on the box). So the fix is one conversion at the door, not a second
@@ -8142,7 +8141,7 @@ _WIN_RESERVED_NAMES = frozenset(
 def _win_reserved_name(name):
     """The Windows device name a file's stem collides with (CON, NUL, COM1, LPT1), or "".
 
-    Report H-7, measured on the fleet's Windows box, 2026-10-02: CON.txt, NUL.txt, AUX.txt, COM1.txt and
+    Measured on a Windows install, 2026-10-02: CON.txt, NUL.txt, AUX.txt, COM1.txt and
     LPT1.txt were all created and listed as ordinary files - but Windows resolves those
     stems CASE-INSENSITIVELY and with ANY extension for some APIs, so a file one tool
     creates can be read as the device by the next. A warning, never a refusal: the file is
@@ -8154,7 +8153,7 @@ def _win_reserved_name(name):
 
 @serialized_by_path
 def tool_edit_file(args, ctx):
-    """Surgical string replacement in a file (Hermes patch equivalent).
+    """Surgical string replacement in a file (the predecessor harness's patch equivalent).
 
     Order of work: exact match first (the cheap, unambiguous case), then a line-window
     match that ignores per-line whitespace, then a clear refusal. The file's own newline
@@ -8270,9 +8269,9 @@ def tool_edit_file(args, ctx):
 
 
 def tool_search_files(args, ctx):
-    """Find files by name glob and/or content regex (Hermes search_files).
+    """Find files by name glob and/or content regex (the predecessor harness's search_files).
 
-    Two contracts meet in this tool and they disagreed (measured 2026-09-25 driving the fleet box):
+    Two contracts meet in this tool and they disagreed (measured 2026-09-25 driving a live install):
     the SCHEMA below calls `pattern` a name glob and puts the grep in `content`, while the
     route hint and the routing bullet in the system prompt both teach
     `search_files {"pattern": "<regex>", "path": "<file or directory>"}`. A run that
@@ -8376,7 +8375,7 @@ def tool_search_files(args, ctx):
     results = hits + content_hits
     # A silent skip is a silent wrong answer: "find X under C:\\Logs" that omits every file
     # over 2 MB looks exactly like a confident miss, and the same content was found
-    # instantly when the big file was named directly (report H-5, 2026-10-02). Say what was
+    # instantly when the big file was named directly (2026-10-02). Say what was
     # not searched, by name, on both the hit and the no-hit path.
     note = ""
     if skipped_big:
@@ -8399,7 +8398,7 @@ def tool_search_files(args, ctx):
     return "\n".join(results[:max_results]) + note
 
 
-# Measured 2026-09-25 driving the fleet's macOS box: a note inside a directory the operator
+# Measured 2026-09-25 driving a macOS install: a note inside a directory the operator
 # had asked to clear carried four numbered steps, and the run executed ALL of them - wrote a
 # canary, deleted the operator's own file in that folder (after reading that it said "NOT
 # junk"), copied the canary to the Desktop, and OVERWROTE its own notes.md. The prompt already
@@ -8458,7 +8457,7 @@ def tool_read_file(args, ctx):
         #
         # But a model asking for a FILE can share a tool's name: `/Users/.../notes` is the
         # memory file `notes.md` one keystroke short, and answering with the tool lecture
-        # alone sent it looking elsewhere (operator report of exactly that read call). The
+        # alone sent it looking elsewhere (the operator reported exactly that read call). The
         # sibling is named first; the tool note stays because the name really is a tool.
         stem = path.name[:-3] if path.name.lower().endswith(".py") else path.name
         sibs = []
@@ -8492,7 +8491,7 @@ def tool_read_file(args, ctx):
         if offset_req < 0:
             # The schema says "start line (0-based)". A negative one silently read from
             # the END and the header printed `lines -5—-2 of 22096` - negative line refs
-            # that mean nothing to the reader (operator report, 2026-09-27). tail= is the
+            # that mean nothing to the reader (2026-09-27). tail= is the
             # door for the last lines.
             return (f"ERROR: offset is a START line and cannot be negative (got "
                     f"{offset_req}). For the last N lines use tail=N.")
@@ -8510,7 +8509,7 @@ def tool_read_file(args, ctx):
         selected = lines[-tail:]
         # A cut read's `len(lines)` is the window covered, NOT the file's line count.
         # "last 3 of 653825 lines" reads as a property of the file and is exactly how the
-        # 8 MiB read cap looked like the file's length (report H-4, 2026-10-02).
+        # 8 MiB read cap looked like the file's length (2026-10-02).
         header = (f"(last {len(selected)} of the {len(lines)} lines this read covered - "
                   f"the file is bigger)" if cut
                   else f"(last {len(selected)} of {len(lines)} lines)")
@@ -8583,7 +8582,7 @@ def tools_dir_verdict(path):
 
     Measured 2026-09-24 on three boxes: asked to build a tool, every run wrote the file
     with write_file and then found out whether it was valid by running the loader by hand
-    in a subprocess - three drafts on a fleet Linux box, and on a fleet Windows box a file that was refused
+    in a subprocess - three drafts on a Linux install, and on a Windows install a file that was refused
     at the next start and is not a tool at all. The harness knows the answer at the moment
     of the write; saying it there removes the whole detour.
     """
@@ -8643,7 +8642,7 @@ def tool_write_file(args, ctx):
         _edit_noop_clear(path, ctx)
         _receipt_record(path, _content, ctx)
         note = verify_note(path)
-        # MEASURED 2026-09-25 on the fleet's Windows box: an LF-only .ps1, .cmd and .bat all
+        # MEASURED 2026-09-25 on a Windows install: an LF-only .ps1, .cmd and .bat all
         # RAN (including a .cmd with an if/else block and a goto/label), so the flat "it will
         # not run" was false and cost 2-4 calls per script as the model rewrote bytes that
         # were already runnable. cmd.exe can mis-parse labels and parenthesised blocks in an
@@ -8897,7 +8896,7 @@ def _fetch_page(url, max_chars, session=None):
         # stream=True and a BOUNDED read. resp.text materialised the whole body before
         # cap_output trimmed it, so one multi-GB response (or a page that never ends)
         # could take the process down - the same failure class the file-read cap fixed
-        # after four recorded kills (audit, 2026-09-22). No address filtering, by the
+        # after four recorded kills (2026-09-22). No address filtering, by the
         # operator's decision: on a box with a shell that is a speed bump, not a wall.
         # Two rules are easy to conflate here: THIS function still does not filter
         # addresses; what tool_fetch_url does is refuse to START an off-LAN fetch the
@@ -8940,7 +8939,7 @@ def _fetch_page(url, max_chars, session=None):
 # own examples use (scalars, inline lists and maps, block lists of maps); it is parsed
 # with the stdlib because this runtime has three dependencies and YAML is not one.
 #
-# Design decisions (operator brief, 2026-10-04): the bundle is `memory/`; the tool
+# Design decisions (2026-10-04): the bundle is `memory/`; the tool
 # surface is ONE tool named `memory` (the old `remember`/`notes` pair is gone); existing
 # notes.md is left untouched - no migration - and attestation (`type: Attested
 # Computation`) is reserved for a later phase, not implemented here.
@@ -10251,7 +10250,7 @@ def tool_mcp(args, ctx):
 
 
 def _fsync_dir(d):
-    """Flush the DIRECTORY entry, not just the file (audit D9).
+    """Flush the DIRECTORY entry, not just the file.
 
     fsync on the temp makes its CONTENTS durable; the rename that puts it in place is a
     change to the parent directory, and that is a separate durability step. Without it a
@@ -10281,7 +10280,7 @@ def _fsync_dir(d):
 # The campaign harness re-ran arms it had already measured and could not say which
 # number came from which shape of the server, and one verdict ("MTP = wash") was
 # retracted silently because nothing recorded that the earlier line had been superseded
-# (audit, 2026-09-21). So the record is a FILE, one JSON object per line, appended and
+# (2026-09-21). So the record is a FILE, one JSON object per line, appended and
 # never rewritten, and it carries the fields the box that does this work for a living
 # already keeps (a research box's field set, 2026-09-21):
 #
@@ -10641,7 +10640,7 @@ def _annotate_promise(answer, calls):
 def tool_create_tool(args, ctx):
     """Write a new custom tool into tools/ and hot-load it."""
     # `name` is derivable, and the run that derives it is the one that omits it (measured
-    # 2026-09-25 driving the fleet box): the call carried `code` alone with the name in the file's
+    # 2026-09-25 driving a live install): the call carried `code` alone with the name in the file's
     # own `# NAME: big_files` header, came back as a bare KeyError('name'), and the run
     # retried the identical call. The loader needs the file's NAME to equal the file name
     # anyway, so the name inside the code is the truth.
@@ -10676,7 +10675,7 @@ def tool_create_tool(args, ctx):
     atomic_write_text(path, _code)
     # Validate: can we import it and does it satisfy the contract?
     # A file that calls sys.exit() at import is a BaseException the loader now catches
-    # and reports (BUGREPORT §I2), so this no longer takes the whole process down.
+    # and reports, so this no longer takes the whole process down.
     ok, err = REGISTRY.reload_tool(name)
     if not ok:
         path.unlink()  # don't leave a broken file blocking a retry
@@ -10700,7 +10699,7 @@ def tool_create_tool(args, ctx):
               if v.get("source") == path and t != name]
     # It is callable AND now visible: a created tool used to be callable-by-name only, so
     # the run that had just built it still reached for python to check its own work
-    # (measured 2026-09-24 on a fleet Windows box: three `python -c "import biggest_dirs"` calls after
+    # (measured 2026-09-24 on a Windows install: three `python -c "import biggest_dirs"` calls after
     # create_tool, and never the tool call). One reveal closes that loop.
     reveal_tools((ctx or {}).get("session_key"), [name])
     return (f"OK: tool '{name}' created and loaded. It is now callable and in your tool "
@@ -10817,7 +10816,7 @@ def tool_list_tools(args, ctx):
 
     Since the tool tree moved those descriptions OUT of the prompt (2026-09-25), the names
     alone are no longer a complete answer: this is the door the model actually calls.
-    Measured driving the tool-tree build on a fleet box, asked what its added file/drive
+    Measured driving the tool-tree build on a live install, asked what its added file/drive
     tools do: the run called list_tools and then read EIGHT tool files, three of them
     twice, for what one answer here says. So the answer carries each custom tool's shelf
     and its one-line blurb, capped like the prompt index, and it is spent only when asked.
@@ -10842,7 +10841,7 @@ def tool_list_tools(args, ctx):
             if missing else "."
         since = sorted(revealed_tools(session) & set(CORE_TOOLS))
         if since and not missing:
-            # Measured 2026-09-25 driving the fleet box (work order 5): asked which tools were NOT in
+            # Measured 2026-09-25 driving a live install (work order 5): asked which tools were NOT in
             # its list, the run called this and find_tools(all) in ONE batch, read "22 of 22",
             # and answered "None are hidden" - the sibling call had revealed them all a
             # moment earlier. Naming the reveal makes that inference impossible.
@@ -10855,7 +10854,7 @@ def tool_list_tools(args, ctx):
         return ("Custom tools on this machine: none. " + core)
     # The NAME is what the model calls and the FILE is what it can read: a register-shape
     # file registers under another name, and that mapping was invisible (measured
-    # 2026-09-24: a dropped-in hermes_todo.py registers as todo_list, and the run that
+    # 2026-09-24: a dropped-in ported_todo.py registers as todo_list, and the run that
     # read the load lines reported the tool as missing). A matching name spends
     # characters on nothing, so the file rides along only when it differs from the NAME.
     cap = max(1, int(CONFIG["agent"].get("tool_index_max_names_per_line") or 12))
@@ -10875,7 +10874,7 @@ def tool_list_tools(args, ctx):
 
 
 def tool_schedule(args, ctx):
-    """Manage recurring/scheduled tasks (like Hermes's cron gateway)."""
+    """Manage recurring/scheduled tasks (like the predecessor harness's cron gateway)."""
     return SCHEDULER.tool_action(args, ctx)
 
 
@@ -10944,7 +10943,7 @@ def tool_search_sessions(args, ctx):
     # ALL words, not the literal phrase. `query in content` matched only an exact substring,
     # so "scheduler fired schedule add" answered "No past session content matching" while
     # the same session's events were found in one search_files call - the tool built for
-    # recall was worse at it than the generic search (report H-13, 2026-10-02).
+    # recall was worse at it than the generic search (2026-10-02).
     hits = session_search_hits(raw, 25)
     if not hits:
         return f"No past session content matching: {raw}"
@@ -11132,7 +11131,7 @@ def tool_delegate_task(args, ctx):
 
 
 # --------------------------------------------------------------------------
-# Skills — Hermes-style prose runbooks; drop skill folders into ./skills/
+# Skills — prose runbooks; drop skill folders into ./skills/
 # --------------------------------------------------------------------------
 
 def _read_text_any(path, max_bytes=None):
@@ -11185,7 +11184,7 @@ def skill_globs(meta):
 
 
 def skill_index():
-    """Scan ./skills/ for Hermes-style skill folders (containing SKILL.md).
+    """Scan ./skills/ for prose skill folders (containing SKILL.md).
 
     A dot dir is PARKED (skills/.imported-unused and friends): never indexed, so
     kept-for-reference runbooks do not rent prompt on every call (measured
@@ -11358,7 +11357,7 @@ def _skill_search(skills, match, name, topic, key):
     A bare topic is the shape that used to dead-end. The dispatch resolved the skill
     FIRST, so `skill{"action": "search", "topic": "..."}` fell into the no-match branch
     and answered `No skill named ''` - an empty name and nothing to try instead.
-    Measured on a fleet Linux box 2026-10-05: a run stuck on a Mattermost token asked
+    Measured on a Linux install 2026-10-05: a run stuck on a Mattermost token asked
     exactly that for the minting procedure, got the empty-name answer, and had nothing
     to act on. The match itself is unchanged (topic words, headings weighted 3x), now
     run over every candidate book; a named search still reads one.
@@ -11407,7 +11406,7 @@ def _skill_search(skills, match, name, topic, key):
 
 
 def tool_skill(args, ctx):
-    """List, read, or search prose skills (Hermes SKILL.md runbooks)."""
+    """List, read, or search prose skills (SKILL.md runbooks)."""
     # Lowercased on purpose: a capitalised verb (`Search`, `Read`) used to fall through
     # the dispatch into whatever branch sat last - the same class of dead end the
     # nameless-search fix below removes.
@@ -11606,7 +11605,7 @@ class Scheduler:
         The bot is the only process that FIRES jobs, and it held its start-up copy for
         ever: a job added from a `--once` run said "next run 09:51" and never ran (no log
         line, no fire), and a job removed there was fired anyway and resurrected in the
-        file by the next save - measured on a fleet box, 2026-10-03. mtime is enough: one
+        file by the next save - measured on a live install, 2026-10-03. mtime is enough: one
         operator, one file. The overdue-skip in _load() is what makes a mid-session adopt
         safe, the same way it is for a restart.
         """
@@ -12061,7 +12060,7 @@ def tool_ask_user(args, ctx):
         # Nobody answered. Handing a timeout back to the model means it invents the
         # operator's intent for the very decisions that get asked about - in the
         # campaign that was an unapproved production restart, and then an outage
-        # (audit, 2026-09-21). Stop instead; ask_timeout_continues restores the old
+        # (2026-09-21). Stop instead; ask_timeout_continues restores the old
         # shape per box, deliberately.
         raise OperatorStop("nobody answered the question in time; stopping here "
                            "rather than acting on an assumption")
@@ -12141,7 +12140,7 @@ def open_question(session_key):
     """The question an earlier run left unanswered, as a line for the trailing block, or "".
 
     Handed to exactly ONE run: reading it consumes it, because a reminder that repeats in
-    every later run is noise - measured 2026-10-03 on a fleet box, where five consecutive
+    every later run is noise - measured 2026-10-03 on a live install, where five consecutive
     runs restated the same assumption and paid the tokens each time. The operator already
     saw the question when it was asked; the run that follows the stop is the one that needs
     the context. A question older than `agent.ask_question_ttl_hours` (default 24) is stale
@@ -12568,7 +12567,7 @@ class _RegistryShim:
         return json.dumps({"error": str(msg), **extra})
 
     def tool_result(self, data=None, **kw):
-        """Hermes' second registry helper: a ported file that imports it must load.
+        """The predecessor harness's second registry helper: a ported file that imports it must load.
 
         Measured 2026-09-24: `from tools.registry import registry, tool_error, tool_result`
         raised ImportError at exec, so the whole file was refused - the drop-in promise in
@@ -12613,13 +12612,13 @@ def _load_failure_route(err):
     """The fix for a refused drop-in file, one line, appended to the load warning.
 
     A refused file only reports what was wrong with it, and the operator (or the model
-    reading its own log) is left to work out the route. Measured 2026-09-24: a Hermes tool
+    reading its own log) is left to work out the route. Measured 2026-09-24: a predecessor-harness tool
     dropped into tools/ failed with "No module named 'tools.feishu_lark'", and the run
     that read that line reported the file as unfixable.
     """
     msg = str(err)
     if "tool_result" in msg or _PORTED_MODULE_RX.search(msg):
-        return (" - written for ANOTHER harness (Hermes): it needs that tree's own modules. "
+        return (" - written for ANOTHER harness: it needs that tree's own modules. "
                 "Wrap the script it drives as <name>.tool.json (tools/README.md shape 3), "
                 "or rewrite it with create_tool (shape 1).")
     if "native attributes" in msg or "half a native tool" in msg:
@@ -12689,7 +12688,7 @@ def _load_python_tools(path):
         except BaseException as e:
             # A drop-in tool is arbitrary code, and Python's exits are BaseExceptions:
             # `sys.exit(3)` at import used to end the process instead of being reported
-            # (BUGREPORT §I2). Convert to ValueError so the registry records a refused
+            # Convert to ValueError so the registry records a refused
             # file and the install still starts.
             raise ValueError("the file raised at load: %s: %s"
                              % (type(e).__name__, str(e)[:200]))
@@ -12770,7 +12769,7 @@ def _load_manifest_tool(path):
     # An absolute-tier command in a dropped-in manifest is refused at LOAD, not left to
     # fail at call time: the file arrives from outside the bot (a download, a copy, a
     # manufactured manifest) and the operator never sees the command unless it is reported
-    # (BUGREPORT §S6). The confirm tier still runs at call time, where a door can answer.
+    # The confirm tier still runs at call time, where a door can answer.
     _joined = " ".join(entry["command"])
     _blocked = is_blocked(_joined)
     if _blocked:
@@ -12794,7 +12793,7 @@ def _run_manifest_tool(name, entry, args, cancel=None, ctx=None):
     # a manifest command IS a shell string (sh -c / cmd /c), so it walks the WHOLE shell
     # tier, not only the content tier: the absolute list, the target-aware recursive-delete
     # rule and the endpoint gates are the same decision the shell tool gets - measured: a
-    # manifest whose command was `rm -rf /` ran with no gate at all (BUGREPORT §S6).
+    # manifest whose command was `rm -rf /` ran with no gate at all.
     refusal = shell_guard(" ".join(entry["command"]), ctx,
                           subject="manifest tool %s: " % name)
     if refusal:
@@ -12852,7 +12851,7 @@ class ToolRegistry:
         """Announce any tools/ file that was not there at the last start.
 
         Every tools/*.py and *.tool.json is exec'd at load as the bot user, so a
-        planted file runs at the next start (security review, 2026-09-23). The
+        planted file runs at the next start (2026-09-23). The
         record is written on the first RUN of a process - opening the build or a
         refused start writes nothing (test_cli's rule) - and a file that appears
         between starts announces itself at the moment it runs. First sight of a
@@ -12901,7 +12900,7 @@ class ToolRegistry:
             if cand.exists():
                 return self._load_path(cand)
         # A register-shape file answers to the name INSIDE it, which need not be the file
-        # name: hermes_todo.py registers todo_list (measured 2026-09-24). Reloading by tool
+        # name: ported_todo.py registers todo_list (measured 2026-09-24). Reloading by tool
         # name follows the registration the file already has, so an imported tool is
         # reloadable exactly like a native one instead of "no tools/todo_list.py to load".
         src = (self.custom.get(name) or {}).get("source")
@@ -12924,7 +12923,7 @@ class ToolRegistry:
             # SystemExit and KeyboardInterrupt are BaseExceptions, so `except Exception`
             # never saw them: one `sys.exit(3)` in a tools/*.py killed the whole process at
             # the next start and the install was bricked until the file was found by hand
-            # (BUGREPORT §I2). The type is named explicitly - "exited at load: SystemExit:
+            # The type is named explicitly - "exited at load: SystemExit:
             # 3" is the line that makes the refused file findable.
             return False, "%s: %s" % (type(e).__name__, str(e)[:200])
         for tname, desc, params, fn, mutates in defs:
@@ -12998,7 +12997,7 @@ REGISTRY = ToolRegistry(TOOLS_DIR)
 
 
 # --------------------------------------------------------------------------
-# Run state: the plan the harness holds, and the runway (Phase 2c)
+# Run state: the plan the harness holds, and the runway
 # --------------------------------------------------------------------------
 #
 # Measured behaviour, on this fleet: the model's wasted work clusters in the MIDDLE of
@@ -13049,8 +13048,8 @@ def _run_state_reset(key):
 
     /new cleared history, transcripts and carry but not the plan, and the plan is re-sent
     in the trailing block of every turn: a fresh session therefore opened with the
-    PREVIOUS task's steps already in the payload. Measured 2026-09-24 on a fleet Windows box and
-    a fleet Linux box - both spent the new run revising a stale plan (git steps, a finished
+    PREVIOUS task's steps already in the payload. Measured 2026-09-24 on a Windows install and
+    a Linux install - both spent the new run revising a stale plan (git steps, a finished
     notes.zip exercise) instead of the order they had just been given, and one never
     built the tool it was asked for at all.
     """
@@ -13172,7 +13171,7 @@ def _ensure_sessions_dir():
 
 
 # --------------------------------------------------------------------------
-# The event log (stage 4 of the MiniDSH plan): what happened, and how it ended
+# The event log: what happened, and how it ended
 # --------------------------------------------------------------------------
 # Why, measured on this host 2026-09-19: a tool call is recorded as
 #   shell({...}) -> 4471 chars
@@ -13371,9 +13370,9 @@ def prune_events(keep=None):
     return removed
 
 # --------------------------------------------------------------------------
-# Carrying what the runs learned: tool results outlive their run (item 7b)
+# Carrying what the runs learned: tool results outlive their run
 # --------------------------------------------------------------------------
-# The gap, measured on the fleet manager 2026-09-17:
+# The gap, measured on a manager host 2026-09-17:
 #
 #   the session file holds the CONVERSATION only - 11 messages, no tool results at all
 #   _trim_history keeps ~5 exchanges BY DESIGN (prefix-cache economics, see its docstring),
@@ -13384,8 +13383,8 @@ def prune_events(keep=None):
 #   and this is NOT eviction: the box runs a 200,000-token budget and the log holds zero
 #     compaction events, ever
 #
-# A ledger of windows was tried first and missed its declared target (15% against 40%, plan
-# 4n) because it carried a POINTER - "you read lines 1100-1300" - while the next run needed
+# A ledger of windows was tried first and missed its declared target (15% against 40%)
+# because it carried a POINTER - "you read lines 1100-1300" - while the next run needed
 # the substance. This carries the substance: bounded, newest first, age-stamped, and marked
 # when a file has been written since the read. Nothing is served from any cache and no call
 # is refused; the model may still read anything it likes, it just stops re-buying what the
@@ -13615,7 +13614,7 @@ def tool_carry_begin(key):
 
 
 # --------------------------------------------------------------------------
-# Buying the same file twice in one run is this harness's own worst habit (item 3)
+# Buying the same file twice in one run is this harness's own worst habit
 # --------------------------------------------------------------------------
 # Measured on the Windows test box 2026-09-18: 24 of a 55-step run's 40 execute_code calls were a fresh
 # whole-file read of the SAME 8,700-line source, each of them a whole model round trip (87-190 s
@@ -13771,7 +13770,7 @@ def annotate_repeat_read(name, args, out, ctx):
 
 
 # --------------------------------------------------------------------------
-# Tool disclosure (Phase 2a)
+# Tool disclosure
 # --------------------------------------------------------------------------
 #
 # Re-measured 2026-10-05: the VISIBLE schemas are 1,758 of the 4,116 static est tokens
@@ -14006,7 +14005,7 @@ def reveal_tools_named_in(session_key, text, cap=_ORDER_REVEAL_CAP):
     if not named and _TOOL_BUILD_RX.search(str(text)) and "create_tool" in hidden:
         # "Build yourself a tool" names no tool and names the job: create_tool is the door,
         # and a run asked to build a tool substituted three ways instead of calling it
-        # (measured 2026-09-24 on macOS and two fleet boxes: it wrote the file with
+        # (measured 2026-09-24 on macOS and two live installs: it wrote the file with
         # write_file or scaffolded one through the shell, and one host left a file the
         # loader refuses). The job's own tool is worth a reveal.
         named = ["create_tool"]
@@ -14204,7 +14203,7 @@ def _category_answer(cat, session_key):
     return out
 
 # Words that appear across half the registry, so an overlap on one of them says nothing
-# about capability. Measured 2026-09-23 on a fleet box: "send Mattermost message to
+# about capability. Measured 2026-09-23 on a live install: "send Mattermost message to
 # channel" matched `schedule` (via "channel"), "send Mattermost post message channel
 # thread" matched `blog` (via "post") and "send mattermost message to agent channel via
 # API" matched `delegate_task` (via "agent") - each answered "[HARNESS: now callable]",
@@ -14563,7 +14562,7 @@ Two things a local model forgets:
 
 def _load_soul():
     """soul.md beside the build wins, so an operator can re-persona the agent by
-    editing one file (Hermes and OpenClaw both use this shape). Read once: the
+    editing one file (the predecessor harness uses this shape). Read once: the
     static prompt is cache-stable within a process."""
     try:
         text = SOUL_FILE.read_text(encoding="utf-8").strip()
@@ -14759,11 +14758,11 @@ def build_system_prompt(subagent=False):
              f"{platform.release()} ({platform.machine()}), "
              f"Python {platform.python_version()}, shell: {shell_name}")
     # Only THIS platform's maintenance tools: naming winget and DISM on a Darwin box is dead
-    # weight, and naming systemctl on Windows is noise (consultant review, 2026-09-27).
+    # weight, and naming systemctl on Windows is noise (2026-09-27).
     native = ("Windows Update, winget, DISM, pnputil" if IS_WINDOWS
               else "the system package manager, systemctl, journalctl, docker")
     custom = REGISTRY.custom_summary()
-    # F2: the hidden-tool inventory rides the static prompt (generated, see below).
+    # The hidden-tool inventory rides the static prompt (generated, see below).
     inventory = hidden_inventory_line()
     # The tool index. The header says the two things a bare name list cannot: every name
     # is callable as it stands, and one find_tools call returns a category's descriptions
@@ -14967,7 +14966,7 @@ _RESULT_CLAIM_RX = re.compile(
     r"(?-i:^[^\w\n]{0,3}[A-Z][A-Z0-9_ ]{1,24}:)"
     # (b) a measured value with a unit, ATTACHED to something on this box: "b1.txt: 19
     #     bytes", "the file contains 3 lines", "12 files in the folder". The context
-    #     lookahead is what keeps a true-from-memory answer out of the class - the audit
+    #     lookahead is what keeps a true-from-memory answer out of the class - it
     #     caught "16 GB unified memory." on the macOS bed, in a run with no tool call, and a
     #     bare machine spec is not a claim about anything the run fetched.
     r"|(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
@@ -14988,8 +14987,8 @@ _RESULT_CLAIM_RX = re.compile(
     r"|exit(?:ed)? (?:code|status)\b|ran in parallel)\b",
     re.IGNORECASE | re.MULTILINE)
 
-# The FOURTH shape, and the one a 9B produced twice on two fleet boxes in one afternoon
-# (measured 2026-09-25 driving a fleet macOS box and a fleet Windows box): the whole reply
+# The FOURTH shape, and the one a 9B produced twice on two live installs in one afternoon
+# (measured 2026-09-25 driving a macOS install and a Windows install): the whole reply
 # is an ACTION PHRASE and nothing else - "Checking where loft boxes is located on this
 # machine." (53 chars), "Finding \"test junk\" folder:" (27 chars). _INTENT_RX wants a
 # stated intention and there is none ("I'll" never appears); _RESULT_CLAIM_RX wants a
@@ -15114,9 +15113,9 @@ def _log_turn_facts(session_key, step, calls_in_run, prompt_tok, peak_prompt,
 
 
 # A tool call written as TEXT: a fenced json/python block, `<tool_call>`, the
-# Hermes/default_api shape, or a `print(default_api...)` transcription. These reach the
-# harness as prose with zero structured calls, and the generic promise nudge does not name
-# the mistake, so the retry names it.
+# predecessor harness's default_api shape, or a `print(default_api...)` transcription.
+# These reach the harness as prose with zero structured calls, and the generic promise
+# nudge does not name the mistake, so the retry names it.
 _TEXT_CALL_RX = re.compile(
     r"(?i)(`{3,}\s*(?:json|python|tool_code)|<tool_call>|</?tool_code>|"
     r"default_api\s*[:(.\[]|call:\s*default_api)")
@@ -15167,7 +15166,7 @@ def _receipt_text(text):
     The read side records what came off disk (CRLF on a Windows file) and the edit side
     compares its LF-normalized working copy, so the hashes never matched on any file
     with CRLF endings and a correct edit was told "this file changed since you read it
-    (was 3 lines, now 3)". Found on a Windows fleet box, 2026-10-03, by the box's own agent while
+    (was 3 lines, now 3)". Found on a Windows install, 2026-10-03, by the install's own agent while
     it was being driven.
     """
     return str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -15419,7 +15418,7 @@ def dump_payload(payload, label="chat", note=""):
     Tool output is scrubbed on the way in; the OPERATOR's own messages are not, so a
     dump folder is a place secrets can land - a pasted key or token sits in these
     files in clear text. Point debug_dump_dir at a folder you treat as sensitive, and
-    clean it up (audit, 2026-09-22).
+    clean it up (2026-09-22).
     """
     d = (CONFIG["agent"].get("debug_dump_dir") or "").strip()
     if not d:
@@ -15861,7 +15860,7 @@ class Agent:
         A plain Lock cannot be force-released, so a run the stall watchdog abandoned
         (see _stall_tick) keeps this session's lock for ever, and the worker respawned
         behind it used to block in run() with no answer posted - the operator was told
-        the backlog was being picked up instead (F-01). Same-session runs are sequential
+        the backlog was being picked up instead. Same-session runs are sequential
         by construction in the chat lane and a scheduled job overlapping its own
         previous run is the only other way to meet a held lock, so a minute is already
         generous: past it, saying so beats another minute of silence.
@@ -16031,7 +16030,7 @@ class Agent:
         not a model call. Per-endpoint because a failover box is a different box with
         its own window - the old single cache was keyed to the process, so an 8k
         fallback inherited the 32k primary's number and was handed a payload it had to
-        reject (F-16). The number also moves when a box is restarted with a different
+        reject. The number also moves when a box is restarted with a different
         slot count, which is why each entry is re-asked rather than remembered for the
         life of the process.
 
@@ -16065,7 +16064,7 @@ class Agent:
         """Window, static, clamped reply and messages budget for one request.
 
         `endpoint` is the URL that will READ this envelope - the failover loop asks for
-        each one in turn, because a fallback box serves its own window (F-16). None
+        each one in turn, because a fallback box serves its own window. None
         means the configured primary. The cache holds the last-computed envelope and is
         valid only for the same session AND the same endpoint, so moving down the chain
         recomputes instead of reusing the primary's numbers.
@@ -16203,7 +16202,7 @@ class Agent:
         Kept as the name every caller already uses; the arithmetic lives in
         _envelope. `endpoint` says WHOSE budget: the run loop and _force_shrink ask
         for the endpoint that has to carry the payload, so a failing fallback's own
-        window sizes the shrink (F-16). A window below ENVELOPE_MIN_WINDOW still
+        window sizes the shrink. A window below ENVELOPE_MIN_WINDOW still
         returns a budget so a status verb can report it - _chat is what refuses to send.
         """
         return int(self._envelope(session_key, endpoint)["budget"])
@@ -16529,7 +16528,7 @@ class Agent:
         `endpoint` is the box that REJECTED the prompt; its window sets the target, not
         the primary's budget. Failing over from a 32k primary to an 8k fallback used to
         cut to ~16k - still above the fallback's window - so the run died after one
-        shrink it could have made (F-16).
+        shrink it could have made.
 
         _compact trusts the configured budget; when the server disagrees, drop
         the oldest whole blocks until the payload is well under half of it, then
@@ -16562,7 +16561,7 @@ class Agent:
         Only a non-primary endpoint reaches the cut. The primary's payload was sized by
         the run loop's _compact against the same window, and re-checking it is exactly
         the double subtraction above. Sized so a small fallback gets a request it can
-        accept instead of a guaranteed 400 (F-16)."""
+        accept instead of a guaranteed 400."""
         if _endpoint_root(endpoint) == _endpoint_root(CONFIG["llm"]["base_url"]):
             return messages
         budget = self._context_budget(key, endpoint)
@@ -16644,7 +16643,7 @@ class Agent:
             endpoints.append(ep)
         if not CONFIG["llm"].get("allow_cloud_fallback", False) and len(endpoints) > 1:
             # The privacy pin covers the WHOLE failover chain, the primary included
-            # (BUGREPORT §M7): a documented hosted `llm.base_url` used to be reached as
+            # A documented hosted `llm.base_url` used to be reached as
             # the failover for a privacy-pinned local choice, so the conversation left
             # the LAN with the flag off. The FIRST endpoint is the explicit choice - the
             # config primary, or the model /model pinned - and stays; everything after
@@ -16675,7 +16674,7 @@ class Agent:
                 # Visible in the log so "did that model switch take effect?"
                 # is answerable without guessing.
                 log.info("routing model %s to %s", ep_model, url)
-            # The envelope belongs to the ENDPOINT, not the session (F-16): a failover is
+            # The envelope belongs to the ENDPOINT, not the session: a failover is
             # a different box with its own window, and inheriting the primary's sized an
             # 8k fallback's request for a 32k primary - the 400 it answered matched the
             # overflow regex, and the run stopped there instead of trying another
@@ -16689,7 +16688,7 @@ class Agent:
             # differently on purpose:
             #   * the forced wrap-up (final_max_tokens) IS clamped the same way, because it
             #     is one short generation whose whole job is to fit an answer into a window
-            #     that a 8,192-token allowance can exceed (review 2026-09-28, item 2.5);
+            #     that a 8,192-token allowance can exceed (2026-09-28);
             #   * the cut-off-mid-think escalation (max_tokens_ceiling) is bounded by the
             #     WINDOW and never by window // 4 - clamping a retry to the cap that just
             #     failed would make it the no-op it is not (see the escalation below).
@@ -16774,7 +16773,7 @@ class Agent:
                             idle_seconds=CONFIG["llm"].get("stream_idle_seconds", 120),
                             on_delta=on_delta,
                             # The prefill wait is bounded by the request timeout, NOT by
-                            # the idle gap (BUGREPORT §M3).
+                            # the idle gap.
                             first_byte_seconds=CONFIG["llm"].get("request_timeout", 600))
                         if usage is not None:
                             usage["streamed"] = usage.get("streamed", 0) + 1
@@ -16851,7 +16850,7 @@ class Agent:
                         # wrong": `stream_options` and `chat_template_kwargs` are
                         # sent where they are known to help, and a provider that
                         # rejects them used to be classified FATAL, so the run died on
-                        # a cosmetic difference (BUGREPORT §M5). Drop what it named and
+                        # a cosmetic difference. Drop what it named and
                         # retry the SAME endpoint once.
                         # `\b` so "stream" does not match inside "stream_options": the
                         # provider complained about ONE field, and dropping both would
@@ -17193,7 +17192,7 @@ class Agent:
                 "only then do writes and commands run.")
         # A TOOL that moves the endpoint this bot talks to takes the same gate as a
         # shell command that does. Without this, an inferctl-style tool walked straight
-        # past a guard that only ever read shell text (audit, 2026-09-21).
+        # past a guard that only ever read shell text (2026-09-21).
         if tool.get("endpoint_touching"):
             refusal = endpoint_gate(
                 "tool %s" % name,
@@ -17214,7 +17213,7 @@ class Agent:
                 out = str(value)
         except KeyError as e:
             # A call missing a required argument used to come back as
-            # `ERROR in tool 'create_tool': 'name'` - measured 2026-09-25 driving the fleet box,
+            # `ERROR in tool 'create_tool': 'name'` - measured 2026-09-25 driving a live install,
             # where the run had just done that twice and learned nothing from it. If the
             # key is one this tool declares, say which argument is missing and list the
             # arguments it takes; anything else keeps the honest generic wording.
@@ -17299,7 +17298,7 @@ class Agent:
         # That is the one moment the map is worth its tokens: a guessed path is the most
         # common tool error this model makes (measured on the eval).
         #
-        # Gated on the call having actually FAILED (audit 2026-09-29). It ran on every result,
+        # Gated on the call having actually FAILED (2026-09-29). It ran on every result,
         # so a successful read of a README, a tutorial, or a captured log containing "no such
         # file or directory" or "command not found" re-attached the whole machine map - around
         # 2000 characters of prompt, every turn after it - and framed a call that worked as a
@@ -17309,10 +17308,10 @@ class Agent:
                 and CONFIG["agent"].get("atlas_enabled", True)
                 and ctx and ctx.get("session_key")):
             run_state(ctx["session_key"], create=True)["atlas_reask"] = True
-        # The same file bought twice in one run leaves with its map attached (item 3).
+        # The same file bought twice in one run leaves with its map attached.
         out = annotate_repeat_read(name, args, out, ctx)
         # What this run learned is kept for the NEXT one: the harness stores no tool
-        # results between runs otherwise (item 7b, see the block above).
+        # results between runs otherwise (see the block above).
         record_tool_result(ctx, name, args, out)
         # The other half of the failure annotation: the last call to this tool that
         # WORKED, so a later failure of the same tool can show its shape.
@@ -17346,7 +17345,7 @@ class Agent:
         # The stall watchdog abandons a wedged run but cannot take its lock away (a
         # plain Lock has no force-release), so the worker it respawns used to block
         # HERE for ever on that same key while the operator was told the queue behind
-        # the wedged run was being served (F-01) - silence, not an answer.
+        # the wedged run was being served - silence, not an answer.
         _wait = self._run_lock_wait_secs()
         _run_lock = self._lock(session_key)
         if not _run_lock.acquire(timeout=_wait):
@@ -17397,7 +17396,7 @@ class Agent:
             # THE ORDER LANDS ON DISK BEFORE THE FIRST MODEL CALL. The transcript used to be
             # written only in this run's `finally`, so a process killed mid-run - a push, a
             # restart, a crash - took the operator's own message with it. Measured 2026-09-24
-            # on the fleet's macOS bed: the order went in at 16:20:07, the box was pushed at
+            # on a macOS test bed: the order went in at 16:20:07, the host was pushed at
             # 16:23:56, and the run at 16:25:04 ("Continue with the task") opened with an EMPTY
             # history, because the killed run had never written and the file had been cleared
             # by /new two minutes earlier. The TOOL RESULTS survived (the carry sidecar is
@@ -17517,7 +17516,7 @@ class Agent:
             # Promise/no-call retries for this run: a reply that announces the work and
             # stops with no tool call at all. Bounded by agent.nudge_retries (default 3) -
             # a model that will not act is eventually reported, not asked forever, but one
-            # ask was too few to keep a weak model moving (operator's report, 2026-10-04).
+            # ask was too few to keep a weak model moving (2026-10-04).
             _no_call_used = 0
             _nudge_cap = max(0, int(CONFIG["agent"].get("nudge_retries", 3) or 0))
             _seg_raw = CONFIG["agent"].get("auto_continue_max")
@@ -17630,7 +17629,7 @@ class Agent:
                         # That is recoverable: shrink hard and retry the same
                         # turn on the same endpoint. Shrink against the window of
                         # the endpoint that REJECTED the prompt - on a failover that
-                        # is the fallback, not the primary (F-16).
+                        # is the fallback, not the primary.
                         log.warning("[%s] %s — shrinking the prompt and "
                                     "retrying this turn", session_key, e)
                         self._force_shrink(messages, session_key,
@@ -18072,7 +18071,7 @@ class Agent:
                         _last_narr = _narr
 
                     # The assistant turn that ASKED for these tools must be in
-                    # the transcript — the standard OpenAI shape, and what Hermes
+                    # the transcript — the standard OpenAI shape, and what the predecessor harness
                     # always sends. Without it the payload was a pile of tool
                     # results attributed to nobody, so the model could not tell
                     # it had already run them. Ids are normalised here so the
@@ -18187,7 +18186,7 @@ class Agent:
                             # argument STRING - while every entry is WRITTEN under _call_sig()'s
                             # canonical form, so the refusal only ever fired when the model's own
                             # JSON happened to be byte-identical to json.dumps(parsed,
-                            # sort_keys=True). Measured 2026-09-24 on a fleet Windows box: the same
+                            # sort_keys=True). Measured 2026-09-24 on a Windows install: the same
                             # directory listing really ran THREE times inside one chat turn, the
                             # loop guard counting it ("repeated identically 3 time(s)") while the
                             # refusal that should have stopped the third run never fired, because
@@ -18364,13 +18363,13 @@ class Agent:
                             # was only true of the dedupe map: a legitimate
                             # verify-after-fix whose check prints the same line as
                             # before the fix kept climbing toward loop_stop_repeats
-                            # and could force a report mid-task (audit, 2026-09-22).
+                            # and could force a report mid-task (2026-09-22).
                             repeated.clear()
                             _restated = 0      # real work: the status is not the story
                         log.info("[%s] %s(%s) -> %d chars",
                                  session_key, name,
                                  json.dumps(args)[:120], len(output))
-                        # the event log (stage 4, shadow): the call, then how it ended.
+                        # the event log (shadow): the call, then how it ended.
                         # This is the pair the whole stage exists for: the log has always
                         # recorded the call and never the outcome.
                         _digest, _alen, _aargs = _event_args(args)
@@ -18634,7 +18633,7 @@ class Agent:
                 # Only the model call had a handler, so a stop raised during TOOL execution
                 # escaped run() - and every lane but Telegram and the CLI catches Exception,
                 # not BaseException, so the answer was never posted, the progress line stayed
-                # open and the queued message was dropped (BUGREPORT §M11; an ask_user
+                # open and the queued message was dropped (an ask_user
                 # timeout is the default path, not an edge case).
                 status = "cancelled"
                 log.info("[%s] stopped by the operator: %s", session_key, e)
@@ -18667,7 +18666,7 @@ class Agent:
         _carry_reset(session_key)
         _run_state_reset(session_key)
         # A reveal is per-SESSION rent, so a cleared conversation pays it again: measured
-        # 2026-09-25 driving a fleet Windows box, `find_tools {all: true}` took a session
+        # 2026-09-25 driving a Windows install, `find_tools {all: true}` took a session
         # from 14 schemas to 30 and every later turn - through /new, which says "Session
         # cleared. Fresh context." - carried ~3.4K extra prompt tokens (step-0 prompt_tok
         # 6,505 -> 10,086 on identical orders).
@@ -18679,7 +18678,7 @@ class Agent:
             _skill_grants.pop(session_key or "", None)
         # ...and the same for the spill INDEX. The files stay on disk (nothing was dropped),
         # but this session's pointers to them do not ride the next prompt of this conversation:
-        # measured 2026-09-25 driving a fleet box, /new answered "how much room is left on the
+        # measured 2026-09-25 driving a live install, /new answered "how much room is left on the
         # C drive" in two calls and then spent ten more reading the PREVIOUS, stopped run's
         # spill files and re-running its printer/LAN scans. A pointer to abandoned work is how
         # a fresh order becomes a continuation of the old one.
@@ -18882,7 +18881,7 @@ class _OverrideMap(dict):
 
     A save must not replace the file's whole map from this process's snapshot: measured
     across two lanes, the web process's save dropped the bot's `/model` choice
-    (`{mattermost:chan-1: model-from-bot}` -> `{web:tab-2: model-from-web}`) - audit D7.
+    (`{mattermost:chan-1: model-from-bot}` -> `{web:tab-2: model-from-web}`).
     Only the keys in `touched` are written over the file; every other lane's key is left
     alone. Loading goes through dict.update(), which is the C fast path and does NOT call
     __setitem__, so a freshly loaded map is correctly "untouched".
@@ -18914,7 +18913,7 @@ def _save_overrides(replace=False):
     The save MERGES: only the keys this process has actually set (see
     _OverrideMap.touched) are written over the file, and every other lane's choice is
     left alone - replacing the whole map from this process's snapshot is how the web
-    process dropped the bot's `/model` choice (audit D7). `replace=True` is the
+    process dropped the bot's `/model` choice. `replace=True` is the
     deliberate "every conversation inherits the new default" call from a global switch.
     """
     derived = ("sub-", "bg-", "sched-")
@@ -19032,8 +19031,8 @@ class Destination:
         """Put a file in front of the human this lane reaches, if it can.
 
         An order to "send it here in chat" had no door at all before this, so a run
-        asked to send a file could only hunt for one: measured on the fleet's macOS
-        bed 2026-09-24, 21 tool calls looking for a way in (mm_say, tokens, docker,
+        asked to send a file could only hunt for one: measured on a macOS test bed
+        2026-09-24, 21 tool calls looking for a way in (mm_say, tokens, docker,
         the Mattermost API) for a video that had been on disk for three minutes. A
         lane with no attachment transport says so, and the path IS the delivery
         there. Returns one line, which is what the tool hands the model.
@@ -19332,7 +19331,7 @@ class RunReporter:
     def scope_note(self, steps, name=None):
         """One line, once per run, when a run is long and the operator has heard nothing else.
 
-        Measured 2026-09-25 driving a fleet box: five vague orders ran 30-58 tool calls over
+        Measured 2026-09-25 driving a live install: five vague orders ran 30-58 tool calls over
         17-20 minutes each, and the only signal the operator got was the tool lines - nothing
         said "this is still going, here is the verb that ends it". The harness already counts
         the calls; this is that count, said out loud. Once per run, only past
@@ -19474,8 +19473,8 @@ class RunReporter:
     def reasoning(self, text, new_turn=False, src=None):
         """The model's private reasoning, streamed into ONE dim line - page only.
 
-        A thinking model writes this before it says anything to anybody (on this
-        fleet's box: 3-13 seconds, and longer when the task is hard). Every lane
+        A thinking model writes this before it says anything to anybody (on a
+        live install: 3-13 seconds, and longer when the task is hard). Every lane
         showed nothing at all through it - the status line's counter read "0
         chars" and the transcript was empty - which is what made a working run
         look like a stalled one. `dest.shows_reasoning` is the lane's preference,
@@ -19799,7 +19798,7 @@ class RunReporter:
         usage = AGENT.last_usage.get(self.session_key) or {}
         # ONE source of truth for the run's counters: the same accumulator the rail,
         # `tinycmdr usage` and /status render. The reporter's own tally is the
-        # fallback for a run that never reached the accumulator (round-3 P-03: the
+        # fallback for a run that never reached the accumulator (the
         # done line read "0 step(s) in 0s" beside "25.2K tok over 2 call(s)").
         steps = usage["steps"] if "steps" in usage else self.steps
         elapsed = int(usage["secs"]) if usage.get("secs") else int(time.time() - self.t0)
@@ -19852,8 +19851,8 @@ class NowhereDestination(Destination):
 # shaped. The Mattermost dispatcher kept all three keyed by channel, so a scheduled
 # job (which has no channel of its own) was invisible to the watchdog and had no
 # cancel event at all: a wedged cron job was unstoppable until the process restarted
-# (F-11). Telegram kept a bare cancel event and nothing else, so a message sent
-# mid-run queued behind the run it was meant to redirect (F-06). A new lane inherited
+# Telegram kept a bare cancel event and nothing else, so a message sent
+# mid-run queued behind the run it was meant to redirect. A new lane inherited
 # none of it.
 #
 # They live here now, keyed by SESSION - the one name every run has - and drive_run
@@ -20040,7 +20039,7 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
             # The lane boundary: a stop must become an ANSWER, never a dead lane. run() now
             # catches its own turn-level stop, and this catches one raised around it (a cancel
             # seen between turns); every lane ever written catches Exception, so a
-            # BaseException used to escape with no answer posted at all (BUGREPORT §M11).
+            # BaseException used to escape with no answer posted at all.
             log.info("[%s] stopped by the operator at the lane", session_key)
             answer = ("🛑 Stopped. The run was abandoned where it stood; nothing further "
                       "was executed.")
@@ -20634,7 +20633,7 @@ class TuiScreen:
         if title is None and not text.strip() and self.repaint:
             # A repaintable screen opens a draft line with an empty card; committing
             # that stub as a line leaves a lone "…" between the result and the answer
-            # (round-3 P-02). The live region replaces itself instead.
+            # The live region replaces itself instead.
             return
         if title is None:
             # A line the harness marks ITSELF: the leading glyph decides the colour, so a
@@ -20664,13 +20663,13 @@ class TuiScreen:
         elif title == "answer":
             # No leading/trailing blank band and no run of empty lines inside: the
             # markdown's own spacing plus the panel padding was reading as dead
-            # space (brief T-05).
+            # space.
             text = re.sub(r"\n{3,}", "\n\n", text).strip("\n")
             # rich's default Markdown theme paints h2-h4 and block quotes MAGENTA,
             # lists and code cyan, links blue. Magenta is this palette's "a question
-            # to the operator" and nothing else (brief section 5), so every markdown
+            # to the operator" and nothing else, so every markdown
             # element is pinned here: headings bold, the rest body/dim, links on the
-            # one accent. The palette table stays the only colour source (P-04).
+            # one accent. The palette table stays the only colour source.
             # code_theme="native": monokai (rich's default) paints keywords MAGENTA,
             # and pygments' "bw" paints a white background - both outside the palette.
             # native is a quiet dark theme, so a fenced block reads as a code surface.
@@ -20686,7 +20685,7 @@ class TuiScreen:
         self._last_was_panel = True
         if title == "answer":
             # the title carries the one accent; the frame stays quiet so the words
-            # are the brightest thing on the screen (the brief's §1 and §2)
+            # are the brightest thing on the screen
             self._panel(title, self.style("heading"), style, body, foot, raw=str(text), kind=kind)
         else:
             self._panel(title, ("bold " + style).strip(), style, body, foot, raw=str(text), kind=kind)
@@ -20734,7 +20733,7 @@ class TuiScreen:
         A growing line has to GROW: the caller hands over the tail with no trailing
         newline, so this writes it with end="" and flushes. The default newline per
         call is what stair-stepped one streamed sentence into one line per delta
-        (T-06), and the old `if text.strip()` guard silently dropped the newline that
+        , and the old `if text.strip()` guard silently dropped the newline that
         ends the line, so nothing ever closed it.
         """
         if text == "":
@@ -20760,7 +20759,7 @@ class _TightMarkdown:
 
     rich's Markdown renders a table and then its own newline on top of the paragraph
     break, so a card shows TWO blank rows between a table and the next paragraph, and
-    one before the closing border when the answer ends in a table (T-05, still open
+    one before the closing border when the answer ends in a table (still open
     after the first pass because the source-level strip cannot reach a band the
     renderer adds).
 
@@ -20857,7 +20856,7 @@ class CliDestination(Destination):
     # things including the answer, it is hard to tell where to read".
     # `final` is the run's DONE line, not the answer: it reads as `system`, dim -
     # the green it used to be is the palette's result colour and belongs to a tool
-    # that finished, not to a status line (brief §5).
+    # that finished, not to a status line.
     # tone -> SEMANTIC role. The palette decides the colour (theme.toml decides the
     # palette); this table is the only thing a lane has to know about a tone.
     TONES = {"note": "muted", "narration": "muted", "say": "value", "tool": "call",
@@ -20900,7 +20899,7 @@ class CliDestination(Destination):
     def _looks_structured(text):
         """Will this streamed draft end up a table, a fenced block or a long answer
         body? Then it is not the model thinking out loud, and previewing it as a
-        growing line is the raw-pipe noise the brief calls T-02."""
+        growing line is the raw-pipe noise."""
         return len(text) > 200 or "|" in text or "```" in text
 
     # The hold window: how long a line's opening is buffered before it is committed.
@@ -21027,9 +21026,9 @@ class CliDestination(Destination):
                 # HOLD the opening of a line until it is clearly chatter or clearly the
                 # answer's body. A threshold checked AFTER printing leaks the prose
                 # that came before the first pipe, and a terminal cannot unprint it
-                # (the round-2 review caught `… The` and `… The only Apple machine
-                # that hits 800+ GB/s is the **M4 Ultra** — …` on screen, T-02
-                # residual). So: decide first, then print.
+                # (caught `… The` and `… The only Apple machine
+                # that hits 800+ GB/s is the **M4 Ultra** — …` on screen).
+                # So: decide first, then print.
                 self._refs[ref] = text
                 if not self._hold_ready(ref, text):
                     self._hold.setdefault(ref, (text, time.time()))
@@ -21074,7 +21073,7 @@ class CliDestination(Destination):
         print by prefix-matching the draft - which is whitespace-collapsed and
         capped at checkin_note_chars. A markdown answer never matched, so the words
         appeared three times: a dim pipe-flattened line, a mangled card ending
-        `acr…`, and the rendered card (brief T-01, reproduced before this change).
+        `acr…`, and the rendered card (reproduced before this change).
         A screen cannot unprint the dim draft; the card is unconditional instead,
         and the plain path uses what is recorded here to stay single-print."""
         if ref in self._hold:                 # never decided: the run ended first
@@ -21218,9 +21217,9 @@ class AppScreen(TuiScreen):
 
     The inline console cannot take a line back - that is the whole reason the
     drop()/prefix-dedupe machinery existed, and the reason one answer rendered three
-    times (T-01). This screen repaints, so the streamed draft is ONE item that the
-    answer card replaces in place, and the run's stats live only in the status bar
-    (T-03). The palette and the cards are the SAME code the inline screen draws:
+    times. This screen repaints, so the streamed draft is ONE item that the
+    answer card replaces in place, and the run's stats live only in the status bar.
+    The palette and the cards are the SAME code the inline screen draws:
     this class only changes where the text goes.
 
     The screen itself opens nothing: the page lane (when enabled) is a sibling door
@@ -21350,7 +21349,7 @@ class AppScreen(TuiScreen):
         self._invalidate()
 
     def status_line(self, text):
-        """The run's own line: the status bar, never the transcript (T-03)."""
+        """The run's own line: the status bar, never the transcript."""
         self.status = str(text)
         self._invalidate()
 
@@ -21360,8 +21359,8 @@ class AppScreen(TuiScreen):
         The reporter draws a new narration line and only then streams deltas into it,
         so that first draw is a committed line and the deltas are a second item - the
         card has to drop the SPAN, not the last item, or the model's opening sentence
-        stays filed above the answer with its markdown characters intact (round-4
-        P-02 residual; the last survivor of the triple-render family). A real card in
+        stays filed above the answer with its markdown characters intact
+        (the last survivor of the triple-render family). A real card in
         between ends the region, so narration a tool call came after is history and
         stays exactly where it is.
         """
@@ -21389,7 +21388,7 @@ class AppScreen(TuiScreen):
 
     def write_line(self, line):
         """One finished line from a plain print(): a print at stdout while an
-        alternate screen is up corrupts the display, and the brief's rule is that
+        alternate screen is up corrupts the display, and the rule is that
         nothing may exist only in the rich render.
 
         Consecutive prints coalesce into ONE item, so a command's output (help, status,
@@ -21691,7 +21690,7 @@ class AppScreen(TuiScreen):
             # The WINDOW, not the messages budget. "CONTEXT" reads as "how full is the
             # model's window", and the budget (window - static - reply) understated it:
             # a 1M model drew "used / 1028.0K" against a 1048.6K window, so a full window
-            # could never reach 100% (operator report, 2026-10-03). Occupancy is what the
+            # could never reach 100% (2026-10-03). Occupancy is what the
             # next request carries: the static prompt plus the conversation.
             window = int(env.get("window") or 0) or AGENT._context_budget()
             occupied = min(window, used + int(env.get("static") or 0))
@@ -21723,7 +21722,7 @@ class AppScreen(TuiScreen):
                 value("%s tok" % fmt_tokens(u["prompt"] + u["completion"]))
                 tps = (u["completion"] / u["llm_secs"]) if u.get("llm_secs") else 0
                 # the same rounding fmt_usage() uses: the rail and the done line must
-                # not disagree about a number they both show (P-03)
+                # not disagree about a number they both show
                 value("%.0f tok/s \u00b7 %ss" % (tps, int(u.get("secs") or 0)))
             else:
                 value("-")
@@ -21904,15 +21903,16 @@ class AppScreen(TuiScreen):
         rail = ConditionalContainer(rail, filter=Condition(lambda: self.show_rail))
         # The footer is the run's own status and nothing else: the keys live in the
         # rail's KEYS section, and sharing the line cut the usage tuple in half at
-        # 120 columns (round-3 P-05).
+        # 120 columns.
         status = VSplit([
             Window(FormattedTextControl(text=self._status_text), style="class:app.status"),
         ], height=1)
         self.composer = Frame(self.input, title=self._composer_title(),
                               style="class:app.composer")
         # The model picker takes the composer's place while it is open: it is the same row,
-        # and a reader who is choosing a model is not typing a message (hermes' picker is the
-        # model for this, and `--app` cannot run a second Application on this terminal).
+        # and a reader who is choosing a model is not typing a message (the
+        # predecessor harness's picker is the model for this, and `--app` cannot
+        # run a second Application on this terminal).
         self.pick = None
         self._pick_done = None
         self.pick_window = Window(FormattedTextControl(self._pick_text), wrap_lines=False,
@@ -22057,7 +22057,7 @@ class AppScreen(TuiScreen):
             if not self.input.text:
                 self.request_exit()
 
-        # Mouse capture stays OFF by default (brief §10): with it on, the terminal
+        # Mouse capture stays OFF by default: with it on, the terminal
         # stops doing native selection/copy without a modifier key. The wheel is the
         # opt-in - TINYCMDR_APP_MOUSE=1 - for a box where selection does not matter.
         mouse = os.environ.get("TINYCMDR_APP_MOUSE", "0") == "1"
@@ -22116,7 +22116,7 @@ class AppScreen(TuiScreen):
 class _AppStdout:
     """stdout while `--app` is up: every console print becomes a transcript line.
 
-    A print at the real stdout would paint over the alternate screen, and the brief's
+    A print at the real stdout would paint over the alternate screen, and the
     first rule is that the plain lines are first-class - so help, /status, the banner
     and every command answer land in the pane instead of being lost.
 
@@ -22168,7 +22168,7 @@ def app_wanted():
 
     A real terminal both ways, prompt_toolkit present, and - on Windows - a console
     with VT support. Anything else falls back to inline cards with one dim note, never
-    an error (the brief's §10 constraint). tmux and ssh are fine: they are terminals.
+    an error. tmux and ssh are fine: they are terminals.
     """
     if os.environ.get("TINYCMDR_PLAIN"):
         return False
@@ -22376,7 +22376,7 @@ def bar_props(text, color):
 # block is the state layer - the registry of browser conversations
 # (web-sessions.json), the per-run line logs (sessions/<key>.web.jsonl), the
 # live-run buffers and the Destination that draws a run the way a page wants
-# it. The HTTP server itself (run_webui) lands beside it in the same review.
+# it. The HTTP server itself (run_webui) lands beside it.
 # --------------------------------------------------------------------------
 
 # -- web conversations: one host, many conversations, a browser owns its own --
@@ -23253,14 +23253,14 @@ def web_inventory():
             "notes_kb": round((NOTES_FILE.stat().st_size / 1024)
                               if NOTES_FILE.exists() else 0, 1)}
 
-# One ceiling for the web lane's request bodies (security review, 2026-09-23):
+# One ceiling for the web lane's request bodies (2026-09-23):
 # the largest legitimate post is a long paste into /api/chat, and 1 MiB is
 # already several times the model's whole context window.
 WEB_BODY_MAX = 1048576
 
 # How long a request body may take to arrive. The handler socket timeout (60 s) bounds a
 # client that never finishes its headers; this bounds the BODY, so a caller that announces
-# a length and then trickles bytes cannot hold a worker for the whole minute (BUGREPORT §S8).
+# a length and then trickles bytes cannot hold a worker for the whole minute.
 WEB_BODY_DEADLINE = 15
 # The uploads ceiling: one file through POST /api/upload. Aligned with SEND_FILE_MAX so
 # the two directions agree, and read under the same deadline discipline as _body.
@@ -23450,7 +23450,7 @@ const log=document.getElementById('log'),inp=document.getElementById('in'),
 // goes through here, so the word, the dot's colour and the tooltip cannot drift - and a
 // finished run always returns to ready. The app bar used to carry a second pill for the
 // same state machine, which read as a contradiction ("idle" beside "working" while a run
-// went on) and its dot never changed colour (operator's report, 2026-10-04).
+// went on) and its dot never changed colour (2026-10-04).
 const STAGE_TITLES={
  ready:'idle, and the server is answering',
  working:'a run is in flight',
@@ -23494,8 +23494,8 @@ async function login(){
   // Nothing readable: ask the SERVER before asking the operator. GET /api/login
   // answers 200 when the HttpOnly cookie already authenticates (a script cannot read
   // the cookie; the server can) and 401 only when a token is really needed. The old
-  // boot prompted on every visit regardless - that prompt, not the gate, was the
-  // operator's re-entry report (2026-10-04).
+  // boot prompted on every visit regardless - that prompt, not the gate, was what the operator
+  // reported on re-entry (2026-10-04).
   try{
    const probe=await fetch('/api/login',{method:'GET'});
    if(probe.status!==401){return;}
@@ -23526,7 +23526,7 @@ function H(extra){
 }
 // A GET/HEAD that answers 401 is the stale-token case: clear it, ask ONCE, and retry
 // that call with the new token. It used to surface a bare "unauthorized" note with no
-// way back (operator's report, 2026-10-04: "why do all my pages to tinycmdr webui say
+// way back (2026-10-04: "why do all my pages to tinycmdr webui say
 // unauthorized now"). POSTs are left to their own handlers: their bodies were written
 // for the failed attempt and are not replayable from here, and send() already asks with
 // the message it can say.
@@ -24132,7 +24132,7 @@ var laneWasDown=false;
 // The permanent record is the header marker and the tab title, which never hide:
 // "dismissed" means "I have read this", not "stop telling me the bot is deaf".
 //
-// Two banners on purpose (operator brief, 2026-10-04): a lane that cannot be heard is an
+// Two banners on purpose (2026-10-04): a lane that cannot be heard is an
 // ERROR with a Retry; a config edit that has not applied is an amber NOTICE. One banner
 // carrying both reads as one alarm that is mostly noise.
 let laneMuted='';
@@ -24178,7 +24178,7 @@ configDismiss.onclick=function(){
  try{localStorage.fb_cfg_muted=cfgMuted;}catch(e){}
  configEl.className=CFG_CLS;
 };
-// A conversation that will not load is a card with a way out, not an empty pane (brief).
+// A conversation that will not load is a card with a way out, not an empty pane.
 function showLoadError(msg){
  clearLog();
  const card=document.createElement('div');card.className='loadfail';
@@ -24351,7 +24351,7 @@ async function runSearch(){
 emptyNew.onclick=function(){newConversation();};
 // Resume the newest conversation that HAS exchanges - the same call a rail row makes.
 // The old handler here un-hid the rail, which on a desktop is already visible, so the
-// button read as dead (operator's report, 2026-10-04).
+// button read as dead (2026-10-04).
 emptyLast.onclick=function(){
  const pick=(sessions||[]).filter(function(s){return s.exchanges;})[0];
  if(pick){openSession(pick.key);}
@@ -24378,7 +24378,7 @@ emptyLast.onclick=function(){
 # The last-resort page icon, for a tree with no assets/ at all: the project's own
 # badge at 192px (the shipped assets/page-icon.png is the 512px render). It used to
 # be the deleted page lane's placeholder - a white monogram on a blue disc, which at
-# favicon size read as somebody else's logo (operator report, 2026-10-04).
+# favicon size read as somebody else's logo (2026-10-04).
 WEB_ICON_PNG_B64 = ("iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAABh9ElEQVR42uy953dbZ5rteb+2SAAn"
     "Z+RAkAQJIhEMCERgTmDOFBWsnHOynJOclbNIKktUdC5Xdff0ut0zc+f2mjX/0eznyO5ul+Wqkqvc"
     "XV3GWu/iAkEKpHW29/7t530P9D9srPAHFstLf/gbyutXvv5H+a+gvMoCKq+ygMqrLKDyKguovMqr"
@@ -24999,7 +24999,7 @@ def _web_local_hosts():
     """Every name THIS box answers to: loopback, its own host name, its own addresses.
 
     The page's Host check exists so a hostile site cannot POST into a loopback page
-    (BUGREPORT §S7). It allowed loopback names plus `web.host` when that was a specific
+    It allowed loopback names plus `web.host` when that was a specific
     name - and NOTHING when it was `0.0.0.0`, which is exactly what all three installers
     write for "Should the page be reachable from other machines on your network?" (yes).
     So the installer promised a page you could reach, and the server refused every request
@@ -25113,11 +25113,11 @@ def run_webui():
         # that is already served - measured 2026-09-22, `tinycmdr web` shared 8787 with the
         # running bot's page, so the operator saw a banner for a page that was already up
         # and two servers shared one port. On where it only helps, off where it bit, and
-        # the retry loop below still covers the second or two after a restart (BUGREPORT §S9).
+        # the retry loop below still covers the second or two after a restart.
         allow_reuse_address = os.name != "nt"
 
         # One thread per connection with no ceiling means a LAN peer can stack
-        # threads up to the box's limit (security review, 2026-09-23). Count the
+        # threads up to the box's limit (2026-09-23). Count the
         # live handlers and refuse past a modest cap; a refused connection never
         # spawns a thread, and the counter drops when a handler thread ends.
         MAX_CONN = 32
@@ -25160,8 +25160,8 @@ def run_webui():
     if not web.get("enabled", True):
         return None
     # The token is MANDATORY. The removed lane treated "no token" as "loopback, open
-    # to any page on this machine" - which is CSRF against shell access (BUGREPORT
-    # §S7) - and one flag path left the port serving with no token at all. No token,
+    # to any page on this machine" - which is CSRF against shell access
+    # - and one flag path left the port serving with no token at all. No token,
     # no server: the installer mints one and `tinycmdr token set TINYCMDR_WEB_TOKEN`
     # rotates it.
     token = str(web.get("token") or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip()
@@ -25174,7 +25174,7 @@ def run_webui():
     class Handler(BaseHTTPRequestHandler):
         # a peer that sends a request line and never finishes the headers or the
         # body is cut off by the socket timeout, so one silent client cannot
-        # hold a handler thread (security review, 2026-09-23)
+        # hold a handler thread (2026-09-23)
         timeout = 60
 
         def log_message(self, *a):
@@ -25229,7 +25229,7 @@ def run_webui():
         def _auth_ok(self):
             # compare_digest, not ==: this token is shell and code execution on
             # this box, and a plain compare leaks its prefix through response
-            # timing (security review, 2026-09-23). Bytes on both sides so a
+            # timing (2026-09-23). Bytes on both sides so a
             # header carrying non-ASCII can never raise here.
             #
             # The header is what every non-browser caller uses (the probes, curl, the
@@ -25253,7 +25253,7 @@ def run_webui():
                 given.encode("utf-8", "replace"), token.encode("utf-8"))
 
         def _origin_ok(self):
-            """Same-origin/Host check for EVERY route (BUGREPORT §S7).
+            """Same-origin/Host check for EVERY route.
 
             This lane is loopback-only by default and carries NO token then, so any page
             on any site could `fetch("http://127.0.0.1:8790/api/run", {method: "POST",
@@ -25540,7 +25540,7 @@ def run_webui():
                 length = int(self.headers.get("Content-Length", 0))
                 if not 0 <= length <= WEB_BODY_MAX:
                     # the claimed length is attacker-controlled and both paths
-                    # ran before the 401 (security review, 2026-09-23): a huge
+                    # ran before the 401 (2026-09-23): a huge
                     # claim allocates or blocks, and read(-n) runs to EOF.
                     # Read (and drop) what we can, bounded by the cap and under the
                     # deadline, so the caller HEARS the refusal instead of a reset.
@@ -25812,7 +25812,7 @@ def run_webui():
                     raise
                 except BaseException as e:      # noqa: BLE001 - a lane must not die
                     # BaseException, not Exception: a stop raised from inside the run used
-                    # to escape here and the browser got nothing at all (BUGREPORT §M11).
+                    # to escape here and the browser got nothing at all.
                     log.exception("web run failed")
                     payload = f"⚠️ Something broke on my side: {e}"
             self._json({"reply": payload})
@@ -25917,7 +25917,7 @@ WEB_FONTS = {
     # Bundled, never fetched from a CDN: this is a local page on a box that may have no
     # route to the internet, and a webfont that needs one is a font that sometimes is not
     # there. The OFL texts ride along in the same folder (assets/fonts/OFL-*.txt).
-    # cinzel-600: the headings' face, referenced by webui.css since the pavilion port -
+    # cinzel-600: the headings' face, referenced by webui.css since the page redesign -
     # and served by neither this map nor the package manifest until 2026-10-04, so
     # /fonts/cinzel-600.woff2 404'd on every install and every heading fell back a weight.
     "cinzel-600.woff2": "cinzel-600.woff2",
@@ -25952,7 +25952,7 @@ def _web_temple_bytes():
 def _web_backdrop_html():
     """The stage's backdrop element, or "" - a host with no photo gets no backdrop.
 
-    The pavilion brief drew a faint colonnade in gold and bronze; the operator replaced it
+    The new page design drew a faint colonnade in gold and bronze; the operator replaced it
     the same day with the photo. The file is served at /temple.jpg and drawn by
     .colonnade's own CSS rule (cover, bottom-anchored, dimmed and feathered into the
     stage), so this only decides whether the element exists at all.
@@ -27049,7 +27049,7 @@ class MattermostDispatcher:
         live = [e for e in events if not e.is_set()]
         # A run this channel did not spawn - a scheduled job reporting into it, a
         # background task - lives only in the session registry, so /stop has to reach
-        # it here too or a wedged cron job answers "nothing is running" (F-11).
+        # it here too or a wedged cron job answers "nothing is running".
         runs = RUNS.by_channel(channel_id)
         live += [c for c in runs if not c.cancel_event.is_set()]
         busy = self._channel_busy(channel_id) or bool(runs)
@@ -27575,7 +27575,7 @@ def _lane_reason(exc):
 
     mattermostautodriver raises `InvalidOrMissingParameters(message)` where `message` is the
     API's empty `message` field for a bad token: str(exc) is "", so the lane recorded "no
-    detail", `doctor` printed that, and the log line was blank. Measured on the fleet Windows box,
+    detail", `doctor` printed that, and the log line was blank. Measured on a Windows install,
     2026-10-02, after 723 failed starts with no visible cause.
     """
     text = str(exc).strip()
@@ -27692,7 +27692,7 @@ def lane_with_retry(start, lane, report, sleep=None, now=None):
             if permanent:
                 # It will not fix itself, and 5, 10, 20, 60 seconds of retrying said
                 # nothing: the operator's log had 723 failed starts and one blank ERROR
-                # line each (the fleet Windows box, 2026-10-02). Say it once, then park on a long
+                # line each (a Windows install, 2026-10-02). Say it once, then park on a long
                 # interval - which also keeps the OTHER lane (a daemon thread here) alive.
                 failures, delay = failures + 1, LANE_PERMANENT_BACKOFF
             else:
@@ -27967,7 +27967,7 @@ def tg_html(text):
 
     Backticks were the only thing this converted, so bold showed its asterisks, links
     were dead text and a table arrived as pipes - while Mattermost rendered the same
-    answer (operator's report, 2026-10-04). Telegram's HTML subset has no table element,
+    answer (2026-10-04). Telegram's HTML subset has no table element,
     so a pipe table is wrapped in <pre>: columns keep their alignment and nothing is
     dropped. Code spans are protected FIRST so the emphasis rules cannot reach inside
     them, and the text is escaped before any tag is added.
@@ -28959,7 +28959,7 @@ def run_telegram():
 
 # ------------------------------------------------------------------ the console
 # This is the console: `tinycmdr` with no verb, or `--cli`. No second build cuts
-# it, so every change lands here and nowhere else (audit, 2026-09-21).
+# it, so every change lands here and nowhere else (2026-09-21).
 _CLI = {"colour": False, "stop": None, "inbox": None, "steer": None,
         "leave": False, "stream": "", "streamed": "", "streamed_answer": "",
         # "ask": the question a run is parked on (None when none is open), and
@@ -29086,7 +29086,7 @@ def envelope_facts():
     schemas" on an install whose requests carried 14, which overstates the
     per-request cost by exactly what disclosure hides), and the static/live token
     arithmetic (the same measured static the request path and _compact use, so
-    neither surface can drift from what is sent - audit FEATURE D10).
+    neither surface can drift from what is sent).
 
     The banner shows ONE merged line of this; /status shows the long form. Both
     read this function, so the short form can never disagree with the long one.
@@ -29130,7 +29130,7 @@ def cli_banner():
                     "llm.context_window")
     if screen is not None:
         # Three content rows, not seven: the envelope and the prompt arithmetic
-        # live in /status now (brief T-04). The frame carries the one accent.
+        # live in /status now. The frame carries the one accent.
         screen.banner(name, [
             ("model", model),
             ("folder", str(BASE_DIR)),
@@ -29388,7 +29388,7 @@ def _cli_usage_line(force=False):
 
     With a prompt_toolkit toolbar under the input, the status surface is the
     toolbar and the transcript gets nothing: the same numbers in both places read
-    as duplication (brief T-03). Without one, or when /usage asks explicitly, the
+    as duplication. Without one, or when /usage asks explicitly, the
     line prints."""
     u = AGENT.last_usage.get(_cli_key())
     if not u or not u.get("calls"):
@@ -29509,7 +29509,7 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
     kind = _ask_endpoint_kind(default_url)
     # The LINK comes before the key: the link says which key belongs to it, and asking
     # for a key before the endpoint it is for reads as a question out of order
-    # (operator's report, 2026-10-04). Asked once, after the first URL is accepted; a
+    # (2026-10-04). Asked once, after the first URL is accepted; a
     # 401 re-asks it below, where the reason is visible.
     key = ""
     url, ids, url_tries = "", None, 0
@@ -29620,12 +29620,12 @@ def run_setup(rest=None):
     # A hosted endpoint says nothing about its window (/v1/models carries no max_model_len
     # and there is no /props to ask), so the harness would run it on an assumed 8000 and clip
     # replies at 2048. Setup is where the endpoint is being named, so it is where the one key
-    # that fixes it belongs (F-19). The probe is read-only, the same one the envelope runs;
+    # that fixes it belongs. The probe is read-only, the same one the envelope runs;
     # an on-LAN box is skipped - its lever is its own context slot, not a config key.
     if not _is_local_url(llm["base_url"]) and not _detect_window(llm["base_url"], None):
         # The window is ASKED here, at the moment the endpoint is being named, rather
         # than left as a note and homework: the operator is already configuring this
-        # endpoint ("it should have asked at that time" - operator's order report,
+        # endpoint ("it should have asked at that time";
         # 2026-10-04). Only a hosted endpoint gets asked - an on-LAN box has its own
         # context slot, and the probe reads no window from /v1/models.
         cur_win = int(llm.get("max_context_tokens") or 8000)
@@ -29697,7 +29697,7 @@ def run_setup(rest=None):
     # The page is the default door; its token is the one secret this project will MINT
     # for you - and since 2026-10-04 the wizard also lets the operator SET it. A token
     # chosen elsewhere (a password manager, a fleet convention) used to force a hand-edit
-    # of .env after setup; that was the operator's own report. Enter keeps the host's own
+    # of .env after setup; that was reported by the operator. Enter keeps the host's own
     # token or mints one, either way the answer is a working link, not homework.
     web = raw.setdefault("web", {})
     cur_on = bool(web.get("enabled", True))
@@ -29782,7 +29782,7 @@ def run_setup(rest=None):
         print(red("could not write config.json: %s" % e), file=sys.stderr)
         return 1
     # Setup can add a key this process did not have at import; re-derive the sweep so
-    # the keys it just wrote are masked like the rest (audit, 2026-09-29).
+    # the keys it just wrote are masked like the rest (2026-09-29).
     global _SECRETS
     _SECRETS = _secret_values()
 
@@ -29856,7 +29856,8 @@ def model_pick_styles(palette):
 
 
 class ModelPick:
-    """The model list as something you MOVE through - hermes' picker on this install's data.
+    """The model list as something you MOVE through - the predecessor harness's picker
+    on this install's data.
 
     One state machine and one renderer, two hosts: `--app` draws it inside its own
     Application (a second prompt_toolkit Application cannot own the terminal the first one
@@ -29921,7 +29922,8 @@ class ModelPick:
         return self.scope
 
     def render(self, width=80):
-        """The hermes shape: a title, the key hint, the list with ONE cursor row, the filter.
+        """The predecessor harness's shape: a title, the key hint, the list with ONE
+        cursor row, the filter.
 
         Returns [(style, text)] with a newline between rows: a FormattedTextControl splits
         lines on "\\n" INSIDE a piece, so rows handed over as separate pieces and no newline
@@ -30424,7 +30426,7 @@ def _cli_command(text):
         print("  skills     %d runbooks" % len(skill_index()))
         print("  tools      %d" % len(REGISTRY.openai_schemas()))
         # The banner keeps three rows; this is where its folded arithmetic lives
-        # (brief T-04). envelope_facts() is the same source, so the short and the
+        # envelope_facts() is the same source, so the short and the
         # long form cannot disagree.
         f = envelope_facts()
         print("  envelope   %s" % f["envelope"])
@@ -30693,7 +30695,6 @@ def _cli_startup(app_mode, once=False):
     and the context gauge, the status bar has the idle hint - so the transcript is
     left EMPTY and opens on the first exchange. Inline (and the plain path) keep the
     banner, the note and the capability line, because there is no chrome to hold them
-    (round-3 P-01).
     """
     if app_mode and not once:
         screen = tui_screen()
@@ -30829,7 +30830,7 @@ def run_cli(once=None, app=False):
             _tty = False
         reporter = _cli_new_reporter(has_human=_tty)
         # A piped stdin has nobody who can type an answer: mounting the console door
-        # parked a question the full 120s wait and then stopped the run (a Windows fleet box,
+        # parked a question the full 120s wait and then stopped the run (a Windows install,
         # 2026-10-03, driven over ssh with the script piped in). No door = ask_user
         # refuses at once and states the assumption, per the documented rule.
         answer = drive_run(_cli_key(), once, reporter,
@@ -30978,7 +30979,7 @@ def _cli_console_loop():
                     # The WHOLE answer, once, as the one bright card - always. The dim
                     # draft above it is narration a screen cannot take back, and
                     # prefix-matching that whitespace-collapsed, 400-char-capped draft
-                    # is what rendered the answer three times (brief T-01). The
+                    # is what rendered the answer three times. The
                     # streamed_answer note is the plain path's business only.
                     _draw_answer(screen, text, answer)
                 else:
@@ -30995,8 +30996,8 @@ def _cli_console_loop():
         finally:
             # The run is over only once its card is on screen. This flag is what the
             # reader thread gates `session.prompt()` on, so clearing it earlier let the
-            # prompt paint `you> ` BETWEEN the draft pulse and the answer card (T-07,
-            # reproduced in both turns of the round-2 review).
+            # prompt paint `you> ` BETWEEN the draft pulse and the answer card.
+            # Reproduced in both turns.
             _CLI["stop"] = None
 
 
@@ -31320,7 +31321,7 @@ def user_is_allowed(sender, user_id):
 
 
 # --------------------------------------------------------------------------
-# Management verbs — `tinycmdr <verb>` (audit, 2026-09-22)
+# Management verbs — `tinycmdr <verb>` (2026-09-22)
 # --------------------------------------------------------------------------
 # The installers left no command behind, so day-two work meant hand-editing
 # config.json and .env, and finding the right restart helper per OS. These are the
@@ -31346,7 +31347,7 @@ VERBS = ("status", "doctor", "health", "model", "reasoning", "config", "setup", 
 def ensure_launcher_executable():
     """Give the folder's launcher its execute bit back after a pull or an adoption.
 
-    Measured 2026-09-25: `tinycmdr` on a fleet macOS host answered
+    Measured 2026-09-25: `tinycmdr` on a macOS install answered
     ".../tinycmdr: Permission denied" - and the same under sudo, because execve wants at
     least one execute bit set for EVERY user, root included. The two-line shim in
     /usr/local/bin was correct; the file it execs was mode 0644. The tree tracks
@@ -31375,7 +31376,7 @@ def _lock_target(for_probe=False):
     POSIX locks the INSTALL FOLDER itself, not a file beside it. flock lives on the
     inode, so a lock FILE is defeated by `rm`: measured, a second instance was refused,
     the file was deleted, and the very next instance acquired a fresh lock and ran
-    against the same bot token (audit D5). A directory cannot be unlinked while it has
+    against the same bot token. A directory cannot be unlinked while it has
     contents, so that foot-gun is gone - and so is the abort message that used to tell
     the operator to delete the file. Windows has no directory handle msvcrt can lock, so
     it keeps the file.
@@ -31463,7 +31464,7 @@ def _instance_lock_free():
     """True when no process holds this folder's instance lock.
 
     One probe, one target, so the bot and `tinycmdr status` can never disagree about
-    which inode is the instance lock (audit D5: the probe used to look for a FILE while
+    which inode is the instance lock (the probe used to look for a FILE while
     the fix now locks the FOLDER on POSIX). Raises OSError when the target cannot be
     opened; callers turn that into "unknown".
     """
@@ -31493,7 +31494,7 @@ def instance_busy_note():
 
     Names the door to LOOK through, and never tells anyone to delete the lock file: the
     old wording did, and on POSIX flock lives on the inode, so deleting it handed the
-    next instance a fresh lock and a second bot on the same token (audit D5).
+    next instance a fresh lock and a second bot on the same token.
     """
     return ("One bot per folder - a second instance double-answers every message.\n"
             "See what is running with `tinycmdr status`, then stop it the way this\n"
@@ -32040,7 +32041,7 @@ def _config_take_effect():
                 _fb["api_key"] = _val
     _MODEL_CACHE["at"] = 0.0
     # A key added after import was not in the sweep, so it reached the transcript, the
-    # log and the chat unmasked. Re-derive it with the config (audit, 2026-09-29).
+    # log and the chat unmasked. Re-derive it with the config (2026-09-29).
     global _SECRETS
     _SECRETS = _secret_values()
     return None
@@ -32080,7 +32081,7 @@ def _verb_health():
     state = {True: "up", False: "not running", None: "unknown"}[running]
     # The envelope rides this line only when it was already computed: `health` keeps
     # its no-network contract (a script calls it every minute), so a cold process
-    # prints no numbers rather than paying a metadata probe for them (audit D10).
+    # prints no numbers rather than paying a metadata probe for them.
     env = AGENT.cached_envelope()
     tail = (" · " + envelope_line(env, raw=True)) if env else ""
     print("%s v%s %s · lane %s · model %s at %s%s"
@@ -32282,7 +32283,7 @@ def _verb_config(rest):
     CONFIG.update(back)
     # The secret guard above skips the llm section, so `config set llm.api_key` lands
     # here and takes effect; the import-time sweep does not hold it, and an unscrubbed
-    # new key reaches the transcript, the log and the chat (audit, 2026-09-29).
+    # new key reaches the transcript, the log and the chat (2026-09-29).
     global _SECRETS
     _SECRETS = _secret_values()
     if _verb_running() is True:
@@ -32795,7 +32796,7 @@ def _verb_update(rest):
                 continue
             # The live build is replaced through the atomic writer for the same reason
             # a state file is: a torn write here bricks the install. The candidate was
-            # already read and run as text, so decoding it is safe (audit §D8).
+            # already read and run as text, so decoding it is safe.
             atomic_write_text(target, new.decode("utf-8"))
             changed.append("%s (%d -> %d bytes)" % (name, len(old), len(new)))
         if not changed:
@@ -33053,7 +33054,8 @@ def _verb_model_endpoint(args):
 
 def _pick_advertised_model(url, ids):
     """A new endpoint advertising several ids: move through them, or "" to let the caller
-    explain. Typing an id you just saw printed is the step hermes' picker exists to remove."""
+    explain. Typing an id you just saw printed is the step the predecessor harness's
+    picker exists to remove."""
     if not pick_terminal_ready():
         return ""
     state = ModelPick([(i, "advertised by %s" % url, False) for i in ids],
@@ -33454,9 +33456,9 @@ def _verb_model(rest):
         ans = input("  Set up a local or cloud model now? [Y/n]: ").strip().lower()
         if ans in ("", "y", "yes"):
             return _model_setup_wizard()
-    # The picker, exactly as hermes opens one - ↑↓ to move, type to filter, ENTER to switch,
-    # ESC to leave. Its first row is the way to ADD or CHANGE an endpoint, so the wizard is
-    # one ENTER away instead of a command to remember.
+    # The picker, exactly as the predecessor harness opens one - ↑↓ to move, type to
+    # filter, ENTER to switch, ESC to leave. Its first row is the way to ADD or CHANGE
+    # an endpoint, so the wizard is one ENTER away instead of a command to remember.
     if entries and pick_terminal_ready():
         rows = model_pick_rows(entries, current)
         rows.insert(0, (MODEL_PICK_ADD,
@@ -33556,7 +33558,7 @@ def _is_elevated():
     """True when this process can restart a task-account service on Windows.
 
     A function, not an inline ctypes call, so the suite can grade the argv the restart
-    verb builds without restarting anything (audit, 2026-09-22).
+    verb builds without restarting anything (2026-09-22).
     """
     try:
         import ctypes
@@ -33571,7 +33573,7 @@ def _scheduled_task_owned():
     Elevation is only needed for the S4U lane, where the bot runs as a task account and
     a normal shell gets Access denied. The installer also offers a Startup-shortcut
     lane, and there the restart helper is an ordinary start: demanding an elevated
-    shell for it is a dead end the operator can never satisfy (BUGREPORT §W6). The
+    shell for it is a dead end the operator can never satisfy. The
     probe is `schtasks` (present on every supported Windows, no PowerShell module
     needed), with a fallback that looks for this folder in the full task list for a
     task registered under another name.
@@ -33590,7 +33592,7 @@ def _scheduled_task_owned():
 
 # The helper returns as soon as it has SPARKED the replacement, and the replacement only
 # takes the lock once it is up - ~60s later on the Windows task lane (measured twice,
-# 2026-10-03, on a fleet box). One look right here turned that in-flight handover into
+# 2026-10-03, on a live install). One look right here turned that in-flight handover into
 # "nothing holds the lock yet - check logs", which reads as a failed restart.
 _RESTART_LOCK_POLL = 2.0   # seconds between looks while the handover is in flight
 _RESTART_LOCK_WAIT = 90.0  # long enough for the measured handover, short enough to be an answer
@@ -33621,7 +33623,7 @@ def _verb_restart():
               "started it" % helper, file=sys.stderr)
         return 1
     # Elevation is a TASK-lane requirement, not a Windows one: on the Startup-shortcut
-    # lane there is no task to fight and the helper runs as this user (BUGREPORT §W6).
+    # lane there is no task to fight and the helper runs as this user.
     if os.name == "nt" and _scheduled_task_owned() and not _is_elevated():
         print("restart needs an elevated shell (the bot runs as a task account):\n"
               "  Start-Process powershell -Verb RunAs -ArgumentList "
@@ -33681,7 +33683,7 @@ _SECRET_SHAPES = {
 def secret_check(name, value):
     """The value to write, or ValueError saying why it cannot be a working secret.
 
-    Measured on the fleet Windows box, 2026-10-02: a mattermost token of ONE 0x16 byte sat in .env and
+    Measured on a Windows install, 2026-10-02: a mattermost token of ONE 0x16 byte sat in .env and
     `tinycmdr token` called it "set (.env)" while the lane failed 723 times - nothing had
     looked at the value. The BOM case is not hypothetical either: PowerShell 5.1 prepends
     a UTF-8 BOM to anything piped into a native command, so `"$tok" | tinycmdr token set
@@ -34102,7 +34104,7 @@ def validate_startup_config():
     if CONFIG_ERROR:
         return CONFIG_ERROR
     # A config.json that REPLACED a shipped guard list is not fatal - it is the operator's
-    # file - but it must not be silent (BUGREPORT §S18). `doctor` turns this into a
+    # file - but it must not be silent. `doctor` turns this into a
     # non-zero exit; the log names every pattern the box is not enforcing.
     _drift = guard_list_drift()
     if _drift:
@@ -34296,8 +34298,8 @@ def main():
         return
     # The page starts beside the LONG-LIVED SERVICE modes (bare, the lanes) - the default
     # door whichever one this is. It does NOT start beside a terminal session: `--cli`
-    # and `--app` used to raise the browser and the console at once (operator's report,
-    # 2026-10-04: "typing tinycmdr opens the webui and the TUI/CLI at once"). `--web`
+    # and `--app` used to raise the browser and the console at once (2026-10-04:
+    # "typing tinycmdr opens the webui and the TUI/CLI at once"). `--web`
     # still overrides, because typing it IS the asking; `--once` returns before this.
     _terminal_mode = ("--cli" in sys.argv or "--app" in sys.argv)
     if _terminal_mode and "--web" not in sys.argv:

@@ -111,7 +111,7 @@ def test_register_shape_loads():
 def test_reload_tool_finds_a_ported_file_by_its_registered_name():
     """A register-shape file answers to the name inside it, which need not be the file name.
 
-    Measured 2026-09-24: a Hermes file dropped in as hermes_todo.py registers todo_list, and
+    Measured 2026-09-24: a predecessor-harness file dropped in as ported_todo.py registers todo_list, and
     reload_tool("todo_list") answered "no tools/todo_list.py or .tool.json to load" - so an
     imported tool could not be reloaded the way a native one can.
     """
@@ -173,9 +173,9 @@ def test_a_file_with_no_tool_is_refused():
 
 
 def test_a_tool_that_exits_the_interpreter_is_refused_not_fatal():
-    """audit I2: a drop-in tool calling sys.exit() killed the process during import.
+    """A drop-in tool calling sys.exit() killed the process during import.
 
-    [RAN-audit] `printf 'import sys\\nsys.exit(3)\\n' > tools/evil.py; python -c "import
+    [RAN] `printf 'import sys\\nsys.exit(3)\\n' > tools/evil.py; python -c "import
     tinycmdr"` exited 3 with an empty log and no traceback, and every restart did the same,
     because `_load_path` caught only Exception. The file must be REFUSED - named, with the
     exception type - and the rest of the tools/ directory must still load.
@@ -197,9 +197,9 @@ def test_a_tool_that_exits_the_interpreter_is_refused_not_fatal():
 
 
 def test_create_tool_rolls_back_a_file_that_cannot_load():
-    """audit I2: create_tool left the broken file on disk when the reload failed.
+    """create_tool left the broken file on disk when the reload failed.
 
-    [RAN-audit] `create_tool` -> `SystemExit 9`, `tools/brk.py still on disk: True`, and
+    [RAN] `create_tool` -> `SystemExit 9`, `tools/brk.py still on disk: True`, and
     two consecutive restarts both exited 9 with an empty log: the harness bricked itself.
     The file create_tool just wrote must be gone when it cannot be loaded.
     """
@@ -352,7 +352,7 @@ def test_process_lifecycle():
     out = tool({"action": "wait", "id": "b2", "timeout": 30}, None)
     check("process: wait returns on completion", "exit 0" in out, out)
     # the argv list sent as a JSON STRING: a session that never held this schema guesses
-    # the shape (measured 2026-09-25 on the fleet's Windows box, where the call died inside cmd.exe)
+    # the shape (measured 2026-09-25 on Windows, where the call died inside cmd.exe)
     tool({"action": "start",
           "command": json.dumps([sys.executable, "-c", "print(7)"])}, None)
     out = tool({"action": "wait", "id": "b3", "timeout": 30}, None)

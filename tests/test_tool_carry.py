@@ -1,6 +1,6 @@
-"""Offline checks for carrying tool results between runs (plan item 7b).
+"""Offline checks for carrying tool results between runs.
 
-What it exists for, measured on the fleet manager 2026-09-17: the session file holds the
+What it exists for, measured on a host that manages other installs 2026-09-17: the session file holds the
 CONVERSATION only (11 messages, no tool results) and `_trim_history` keeps ~5 exchanges by
 design, so nothing a tool returned outlives its run. Of 153 reads of the build's own source,
 70 (46%) re-acquired a window an EARLIER RUN had already read and 22 (14%) re-read one from
@@ -161,7 +161,7 @@ def main():
         # Two bounds now, and both matter: the RESULTS still obey tool_carry_chars, and a
         # call whose text no longer fits is still NAMED in a bounded index below them. The
         # old contract dropped it entirely, so the model could not tell it had already
-        # asked - measured on the fleet's own logs 2026-09-20: 25% of tool calls repeated a
+        # asked - measured on its own logs 2026-09-20: 25% of tool calls repeated a
         # call from an earlier run of the same session (~279k tokens re-bought).
         body, _sep, idx = small.partition(fb._CARRY_INDEX_HEAD)
         check(len(body) <= 3200,

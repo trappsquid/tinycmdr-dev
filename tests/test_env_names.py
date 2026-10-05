@@ -1,6 +1,6 @@
 """The names the app WRITES into .env must be the names it READS out of it.
 
-Audit H3. tinycmdr.py's setup wizard wrote `MATTERMOST_BOT_TOKEN`, `TELEGRAM_TOKEN` and
+Review H3. tinycmdr.py's setup wizard wrote `MATTERMOST_BOT_TOKEN`, `TELEGRAM_TOKEN` and
 `LLM_API_KEY`; the loader's `env_map` reads none of them. A box configured through that
 wizard therefore came up with a token nothing consumed - and because the loader then sees
 no token at all, the symptom is the one the code already warns about for a missing token:

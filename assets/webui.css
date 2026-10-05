@@ -1,7 +1,7 @@
 /* tinycmdr's page stylesheet: the imperial command pavilion.
  *
- * The design is the operator's (2026-10-04, "Kimi_Agent_ASCII Branding for TUI"), ported
- * into this single-file app: no build step, no framework, no CDN. The palette below is
+ * The design is the operator's, ported into this single-file app:
+ * no build step, no framework, no CDN. The palette below is
  * bound to the SAME theme.toml the terminal reads - the server substitutes {{THEME}}, and
  * every derived name (translucent panels, hairlines, brights) is computed FROM those
  * roles, so a host that rethemes gets the page too.
@@ -1203,7 +1203,7 @@ color:var(--fg);padding:.45rem .55rem;font:inherit}
  * The design above is the SHELL; these are the live surfaces it hosts: the transcript
  * cards, the conversation rail rows, the panel drawer, the palette and the notices. They
  * are written in the same idiom (bronze hairlines, gold accents, glass panels) so a run
- * reads as part of the pavilion rather than a widget dropped into it.
+ * reads as part of the shell rather than a widget dropped into it.
  */
 #logwrap{flex:1;display:flex;min-width:0;flex-direction:column;position:relative;min-height:0}
 #log{flex:1;overflow-y:auto;padding:1.1rem 1.25rem;display:flex;flex-direction:column;gap:.5rem;
@@ -1287,7 +1287,7 @@ background:var(--panel-strong);color:var(--muted);cursor:pointer;opacity:.32;tra
 .campaign-item .dot.quiet{background:color-mix(in srgb, var(--dim) 45%, var(--panel))}
 @keyframes pulse{50%{opacity:.35}}
 /* A2UI cards: the agent draws on the page (render_ui). Declarative payloads only, from
-   this page's own catalog - nothing here executes, and the card wears the pavilion's
+   this page's own catalog - nothing here executes, and the card wears the page's
    glass and bronze so a drawn surface reads as part of the transcript. */
 .msg.ui{padding:0;background:transparent;border:0;max-width:none}
 .ui-card{border:1px solid var(--line);border-radius:.5rem;

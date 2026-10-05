@@ -1,6 +1,6 @@
 """Run the graded task set in tests/eval_tasks.py and print a scoreboard.
 
-Phase 0 of the scaffolding plan. This is the measuring stick: the same tasks, the
+This is the measuring stick: the same tasks, the
 same model, the same config, before and after a harness change. Nothing in here
 touches a live bot — it stages a temp install (a byte copy of tinycmdr.py plus a
 generated config.json) and drives AGENT.run() in-process, the way the suites do.

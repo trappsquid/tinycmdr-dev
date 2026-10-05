@@ -10,7 +10,7 @@ most if it broke:
   2. an install with `agent.vision` off (the shipped default) must attach nothing
      and say why, so the path is dormant unless it is switched on;
   3. an endpoint that reports `modalities.vision = false` is a veto, not a hint;
-  4. the token estimate matches what the fleet's server actually charges
+  4. the token estimate matches what the server actually charges
      (measured 2026-09-28: 1470x956 -> 1,404 prompt tokens, 2940x1912 -> 4,053).
 
     python tests/test_tool_images.py
@@ -66,7 +66,7 @@ def main():
     keep_flag = fb.CONFIG["agent"].get("vision")
     img = _png(TMP / "screen.png")
 
-    # ---- 4. the estimate is the fleet's measured cost -----------------------
+    # ---- 4. the estimate is the measured cost -----------------------
     check("a 0.68 MP frame lands within 10% of its measured 696 tokens",
           abs(fb.image_tokens_est(1024, 666) - 696) / 696 < 0.10,
           fb.image_tokens_est(1024, 666))

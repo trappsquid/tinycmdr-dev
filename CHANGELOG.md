@@ -100,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Setup:** `tinycmdr setup` can set the page token: Enter keeps the host's own or mints one, and a typed value goes through `_env_set_safe` (20+ characters enforced, refused values re-asked). (tests/test_setup.py)
 - **Setup:** a set token retires a stale `web.token` in config.json, and `--web-token <t>` does the same at install on all three installers. (tests/test_installer_parity.py)
-- **Skills:** `hide: true` (omp's `disable-model-invocation: true` accepted) hides a runbook from the prompt, the skill tool's list/search and the public A2A card. (tests/test_tool_discovery.py)
+- **Skills:** `hide: true` (`disable-model-invocation: true` accepted) hides a runbook from the prompt, the skill tool's list/search and the public A2A card. (tests/test_tool_discovery.py)
 - **Skills:** naming a hidden runbook in an order opens it for that session (`grant_named_skills`, cleared by `/new`). (tests/test_harness_extras.py)
 
 ### Fixed
@@ -135,7 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Privileges:** a LAN bind (`web.host 0.0.0.0`) needs no rights for the bind, but the firewall hole does - the platform firewall gets its one exact command, with the loopback tunnel as the no-rights alternative.
 - **Privileges:** `tinycmdr setup` (LAN chosen), `doctor` (`web.host 0.0.0.0`) and the startup announce print what to open, so a host switched to the LAN later still learns it.
 - **Privileges:** the runtime reports EACCES for what it is - ports below 1024 need root, set `web.port` above 1024 (default 8790) or run elevated - instead of retries and a vague cannot-bind error.
-- **Web UI:** the page is a modern imperial command pavilion - basalt ground, a host-gold colonnade, glass panels, bronze edges, a chibi-medallion header, a legion-archive rail, an empty-state welcome and a command-slab composer.
+- **Web UI:** the page is a modern imperial command design - basalt ground, a host-gold colonnade, glass panels, bronze edges, a chibi-medallion header, a legion-archive rail, an empty-state welcome and a command-slab composer.
 - **Web UI:** there are two banners, not one - an unheard lane is an error with a one-line meaning, an immediate Retry, a Details click and a dismiss, while an unapplied config edit is a separate amber notice with its own dismiss.
 - **Web UI:** the page obeys the state spec - no lines shows the imperial welcome and mascot, the first line collapses the hero to a brand mark, an active chat takes the stage, and the rail lists and deletes every conversation by default.
 - **Web UI:** the provided chibi is the brand everywhere - `assets/page-chibi.png` and the README's `assets/tinycmdr-chibi.png` are generated from it by `maintenance/make-brand-art.py`.
@@ -536,7 +536,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Entry point:** `tinycmdr.cmd` exited 127 with no output for everyone: cmd parsed the `)` in an `echo` inside an `if (...)` block as the end of the block, so the no-Python branch's `exit /b 127` ran unconditionally.
 - **Guards:** a manifest command wrapped in `cmd /c` escaped the recursive-delete rule because `destructive_risk()` stripped only dash flags, so the verb read as `/c` and both tiers were bypassed.
-- **Write verification:** a quoted path was truncated at the first space (`Set-Content -Path 'C:\Users\David Trapp\s.json'` yielded `C:\Users\David`), so write verification verified nothing; the spill messages and their test shared the bug.
+- **Write verification:** a quoted path was truncated at the first space (`Set-Content -Path 'C:\path with space\s.json'` yielded `C:\path`), so write verification verified nothing; the spill messages and their test shared the bug.
 - **Numbers:** the shipped-tool count came from `git ls-files`, which answers nothing outside a git checkout, so it silently became 0 and the `surface` block contradicted itself.
 - **Test suites:** `test_verbs` read `os.geteuid` and `test_lane_health` imported `fcntl` at module level; it now takes the folder lock the way the product does (flock or msvcrt). (tests/test_verbs.py, tests/test_lane_health.py)
 - **Test suites:** `test_root_safety` ran the macOS-only restart helper and counted `os.stat` calls in a macOS-only way, and `test_installer_unix` now answers 77 rather than failing. (tests/test_root_safety.py, tests/test_installer_unix.py)
@@ -787,7 +787,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 - The Windows installer was verified at runtime on a real Windows 11 host (40 checks, 0 failures), including a non-elevated install; `tests/test_installer_windows.py` pins the shipped text.
-- The README's ~4.1K-token overhead figure predates the measurement (the static half is 5,236-5,322 tokens as shipped); trimming it and the doc-number drift is Phase 2.
+- The README's ~4.1K-token overhead figure predates the measurement (the static half is 5,236-5,322 tokens as shipped); trimming it and the doc-number drift is follow-up work.
 - The harness-side Telegram ask door is unreachable because the installers collect a Telegram token but `has_human` is never set; wire it or remove it.
 
 ## [1.0.23] - 2026-09-26
@@ -864,7 +864,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Turn engine:** a run that made no tool call no longer reports `Done - 0 step(s)`: the done line says the run used no tool, and a run nudged to act that still ends on an intention carries that in the delivery.
 - **Guards:** a bare action phrase is now a `fragment` rather than an answer, with the promise guard's fences (no tool call yet, once per run), a 300-char cap, and a DIGIT test that keeps a real answer containing a number out of the class.
 - **Memory:** `remember` no longer glues a new entry onto the previous line when `notes.md`'s last line carries no terminator; the append checks the last byte.
-- **Config:** the macOS host's `web.port` is 8787 again, since the Hermes web UI that claimed that port no longer exists.
+- **Config:** the macOS host's `web.port` is 8787 again, since the predecessor harness' web UI that claimed that port no longer exists.
 
 ### Notes
 - **Guards:** every guard in this release is runtime-only: zero prompt bytes, no schema change, no new rent.
@@ -884,9 +884,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tools:** `find_tools {"category": "files"}` resolves the shelf (a shorter word for it works), names that shelf's tools with what each does, reveals nothing, and an unknown category answers with the real ones.
 - **Docs:** `tools/README.md` documents the shelf an author may declare (`CATEGORY = "..."` at module level in a `.py`, `"category"` in a `.tool.json`) and the index that carries it.
 - **Docs:** the README's fixed-overhead figure and `docs/tinycmdr-what-it-is.md`'s token figures are re-baselined in the same batch for the new index.
-
-### Notes
-- **Deferral:** nothing is pushed by this entry; the tree, the dist shapes and the fleet stay where they are until told otherwise.
 
 ## [1.0.15] - 2026-09-25
 
@@ -959,8 +956,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Sessions:** the run plan no longer survives `/new`: `_run_state_reset` rides `AGENT.reset`.
 - **Toolsmith:** the tool-file-as-script miss is now answered on both the shell and `execute_code` doors, including the file-name-to-tool-name mapping, and the tool is revealed so its schema is in the payload.
 - **Toolsmith:** `write_file` now runs the loader on a file written into `./tools/` and rides the verdict (refused with the shape it needs, or the tool names it loads as).
-- **Toolsmith:** the drop-in shim now exports Hermes' `tool_result` (and `tool_error(**extra)`), instead of raising ImportError and refusing the ported file.
-- **Toolsmith:** loading warnings now name the route: a refused drop-in is reported as a ported Hermes-tree file (wrap as `<name>.tool.json` or use `create_tool`) or a non-conforming native one; a new file's load reports what it loaded as.
+- **Toolsmith:** the drop-in shim now exports the predecessor harness' `tool_result` (and `tool_error(**extra)`), instead of raising ImportError and refusing the ported file.
+- **Toolsmith:** loading warnings now name the route: a refused drop-in is reported as a file ported from the predecessor harness (wrap as `<name>.tool.json` or use `create_tool`) or a non-conforming native one; a new file's load reports what it loaded as.
 - **Toolsmith:** `reload_tool` now reloads a ported file by tool name, following the registration the file already has.
 - **Turns:** active turns are no longer flagged as interrupted by `_prior_run_unfinished()` evaluating the in-flight user message.
 - **Tasks:** `task action=done` with no ID and no active tasks now returns a clear no-active-tasks message instead of the contradictory `no task #None`.

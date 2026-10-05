@@ -141,7 +141,7 @@ def main():
               "unmatched signatures are ranked for the operator", cands)
         check("draft ->" in cands[0], "with a matcher draft", cands)
 
-        # A stopword is not a matcher: a fleet box's doctor printed `match: everything`
+        # A stopword is not a matcher: a live install's doctor printed `match: everything`
         # for a timeout signature, 2026-10-03.
         stats(unmatched={"timeout after 5s - the command and everything it started "
                          "were killed": {"fails": 3, "sample": "TIMEOUT after 5s"}})
@@ -177,7 +177,7 @@ def main():
         check("a domain\\user token is not a path and survives", "mnq" in d, d)
 
         # ---- a CLI run with nobody who can type (piped stdin) declares no human
-        # A Windows fleet box, 2026-10-03: a `--once` run driven over ssh with the script piped in
+        # A Windows install, 2026-10-03: a `--once` run driven over ssh with the script piped in
         # mounted the console door anyway, so ask_user parked the full 120s and then
         # stopped the run. The caller now says whether a human is reachable.
         class _TTY:
@@ -199,7 +199,7 @@ def main():
               "the --once caller can declare it", None)
 
         # ---- an older host-owned drop-in must be REPORTED, not silently absorbed
-        # A Windows fleet box, 2026-10-03: tree 1.0.54, tools/process.py pre-1.0.54 → a 75s command
+        # A Windows install, 2026-10-03: tree 1.0.54, tools/process.py pre-1.0.54 → a 75s command
         # blocked the turn and nothing anywhere said auto-background was off.
         fb._DROPIN_GAPS.update({"checked": False, "gaps": []})
         fb._AUTOBG_GAP_WARNED = False
@@ -247,7 +247,7 @@ def main():
             shutil.rmtree(_work, ignore_errors=True)
 
         # ---- a timeout shorter than the auto-background window must still kill
-        # A Windows fleet box, 2026-10-03: shell timeout=5 on a 45-second command came back
+        # A Windows install, 2026-10-03: shell timeout=5 on a 45-second command came back
         # exit_code=0 after 45s - the auto-background wait ran on its own clock (60s) and
         # never read the timeout the model asked for.
         _slow = '%s -c "import time; time.sleep(30)"' % sys.executable
@@ -294,7 +294,7 @@ def main():
               "an edit against a moved file says so", out[:220])
 
         # ---- CRLF files: a correct edit must NOT be told the file changed
-        # Found on a Windows fleet box, 2026-10-03, by the box's own agent: the read side recorded
+        # Found on a Windows install, 2026-10-03, by its own agent: the read side recorded
         # the raw CRLF bytes and the edit side compared its LF-normalized copy, so every
         # correct edit to a CRLF file carried "changed since your last read (was 3 lines,
         # now 3)". Both sides now hash the same LF view and count lines the same way.

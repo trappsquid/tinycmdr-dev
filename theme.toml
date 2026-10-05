@@ -34,7 +34,7 @@ selection_bg = "#5f0000"   # 52
 
 # A 16-colour terminal cannot show four neighbouring warm hues: gold, ember, bronze and
 # the label-gold all collapsed to "yellow" and the whole screen read as one colour
-# (operator report, 2026-10-03). These are the closest DISTINCT members of the 16-colour
+# (measured 2026-10-03). These are the closest DISTINCT members of the 16-colour
 # set, one per role, so the layout still reads at the lowest tier.
 [themes.roman-night.ansi]
 background   = "black"

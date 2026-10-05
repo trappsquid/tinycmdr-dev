@@ -61,10 +61,9 @@ The handler receives the args dict and returns text.
 `tool_error`, `tool_result` - and nothing else from the other tree. That is a
 stricter condition than "a tool from another harness" usually meets, and the
 difference is worth knowing before promising anyone a drop-in: measured
-2026-09-28, Hermes' `computer_use` pulls in **11 more modules of its own tree**
-across 26 import statements (`hermes_constants`, `tools.environments`,
-`tools.approval`, `hermes_cli.config`, `hermes_cli.tools_config`,
-`tools.vision_tools`, ...), so it does not load here. It is not a one-file
+2026-09-28, `computer_use` from a predecessor harness pulls in **11 more modules
+of its own tree** across 26 import statements (its own constants, environments,
+approval and config modules), so it does not load here. It is not a one-file
 tool - it is 14 modules and 4,199 lines with a third-party binary behind it.
 The loader refuses such a file and names the reason; when it does, wrap the
 script it drives as a manifest (shape 3) or rewrite it with `create_tool`
@@ -99,7 +98,7 @@ The model sees your tool's NAME in its prompt, on the line of the shelf it files
 under (its `CATEGORY`/`category` if you set one, otherwise derived from the name and
 the description), and calls it by NAME - not by file name. What each tool DOES is one
 `find_tools {category: ...}` call away: the prompt carries the names and the cats, the
-prose is on demand, because a description line per tool grew with the fleet. Tools
+prose is on demand, because a description line per tool grows with the tool count. Tools
 outside the always-on list are named there too (disclosure holds back their argument
 schemas, not their existence), and `list_tools` / `find_tools` name everything on the
 box with what each one does. `create_tool` writes native files for the model and

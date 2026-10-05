@@ -4,7 +4,7 @@
     python maintenance/check-tree-clean.py
     python maintenance/check-tree-clean.py --select 'tests/test_*ledger*.py'
 
-The audit's G2: the gate was green while suites wrote state into the repository - the ledger,
+The gap: the gate was green while suites wrote state into the repository - the ledger,
 its journal and its .md mirror, tinycmdr.log, tools-provenance.json, probe files under
 tests/sessions/ - and nothing measured it. This measures it at the level that matters: ANY
 file created, deleted or changed by a run whose whole job is to report the state of the code.

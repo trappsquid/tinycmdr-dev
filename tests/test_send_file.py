@@ -5,7 +5,7 @@ Run:  python tests/test_send_file.py              (all tests)
 
 Background. The order "download this and send it here in chat" had NO door: the run
 could write a file and had no way to hand it over, so a model asked to do it went
-looking for one. Measured on the fleet's macOS bed 2026-09-24: 21 tool calls in three
+looking for one. Measured on macOS 2026-09-24: 21 tool calls in three
 minutes (mm_say, token files, `docker ps`, `docker info`, curl to 127.0.0.1:8065, "open
 -a Docker") for a video that had been sitting on disk the whole time, and the run ended
 on a promise instead of the file.

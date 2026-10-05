@@ -697,7 +697,7 @@ def test_a_forward_clock_step_does_not_abandon_a_healthy_run():
 
 
 # ------------------------------------------------- scheduled runs are runs too
-# F-11 (audit, 2026-09-29): Scheduler._fire called drive_run with no cancel event and
+# F-11 (review, 2026-09-29): Scheduler._fire called drive_run with no cancel event and
 # registered the run nowhere the watchdog could see it, so a wedged cron job was
 # unstoppable until the process restarted, and a /stop in the channel it reports to
 # found nothing to stop. drive_run now opens the run's lifecycle for every run, so a
@@ -803,7 +803,7 @@ def test_a_jobs_file_written_by_another_process_is_adopted():
     """A `schedule add` from a --once run wrote jobs.json and reported a next run - and the
     bot (the only process that fires jobs) never read the file again, so the job never ran;
     a job removed from such a run was fired anyway and resurrected in the file by the next
-    save. Measured on a fleet box, 2026-10-03: job added 09:50, due 09:51, no fire, no log
+    save. Measured on a live install, 2026-10-03: job added 09:50, due 09:51, no fire, no log
     line, no output file."""
     work = Path(tempfile.mkdtemp(prefix="fbtest-sched-"))
     s = None
@@ -876,7 +876,7 @@ def _scripted_run(scripted):
 
 def test_both_repeat_guards_share_one_signature():
     """One canonical call signature, so whitespace cannot defeat the refusal while
-    still feeding the loop counter (audit, 2026-09-22)."""
+    still feeding the loop counter (review, 2026-09-22)."""
     a = fb._call_sig("shell", '{"command": "ls"}')
     b = fb._call_sig("shell", '{"command":"ls"}')
     check("sig: a whitespace difference is the same call", a == b, (a, b))
@@ -1019,7 +1019,7 @@ def test_a_reformatted_identical_call_is_still_the_same_call():
     """The refusal has to key on the CANONICAL signature, not on the raw string the model
     happened to emit.
 
-    Measured 2026-09-24 on a fleet Windows box: the same directory listing really ran three
+    Measured 2026-09-24 on Windows: the same directory listing really ran three
     times inside one chat turn - three tool results with one identical output digest and one
     byte length - while the loop guard counted it and the refusal that should have stopped
     the third run never fired. The model had re-emitted identical arguments with different
@@ -1060,7 +1060,7 @@ def test_a_refusal_that_comes_back_ends_the_run():
     """One refusal is the guard working as designed. The model issuing the same refused call
     AGAIN is a spin, and the operator should not have to read another card for it.
 
-    Measured 2026-09-24 on a fleet Windows box: identical attempts kept arriving while the
+    Measured 2026-09-24 on Windows: identical attempts kept arriving while the
     guard counted them, and the run ended on a promise of future work instead of a report.
     The hard stop needed `loop_stop_repeats` attempts with the SAME OUTPUT, which a refused
     call never has - it returns the refusal text - so the ladder could not see this shape.
@@ -1096,7 +1096,7 @@ def test_a_re_read_after_elision_is_served_not_refused():
     """The elision is what makes a repeat legitimate: the model asking again is asking for
     something it can no longer SEE.
 
-    Measured 2026-10-03 on a fleet box: the model re-read a spilled payload by id
+    Measured 2026-10-03 on a live install: the model re-read a spilled payload by id
     (`read_file spill#3`) whose result compaction had dropped, got refused with 4000 chars
     of it, asked once more, and the loop guard force-stopped the run - "loop detected
     almost every turn". A dropped call is remembered, and its next repeat is served (the
@@ -2610,7 +2610,7 @@ def test_the_map_cache_stays_bounded():
 
 
 def test_list_tools_is_bounded_and_still_useful():
-    """615 calls and 0.46 MB of context over ten days on the manager box were spent re-reading a
+    """615 calls and 0.46 MB of context over ten days on a live install were spent re-reading a
     list that is already in the model's own schema block. It carries the CUSTOM tools - and,
     since 2026-09-24, an honest count of the core tools THIS session holds: the old wording
     said all 22 were in the block while the payload carried part of them, and a box asked to
@@ -2729,7 +2729,7 @@ def test_the_safety_seatbelt_covers_execute_code_too():
                         {"session_key": "belt-s"}).startswith("BLOCKED:"))
 
     # The host-restart verbs moved from the absolute tier to the CONFIRM tier (measured
-    # 2026-09-25 on the manager box): the operator ordered "Restart the tower computer over
+    # 2026-09-25 on a live install): the operator ordered "Restart the tower computer over
     # ssh", the absolute tier refused it, and the run spent 40+ steps writing a .ps1 and
     # launching it through the process tool - the restart reached the remote box with the
     # pattern never in sight. The block did not stop the restart, it cost the yes.
@@ -3036,7 +3036,7 @@ def test_a_turn_is_classified_the_way_the_operator_reads_it():
           fb._turn_shape({"content": "Port 8065 is open."}, []) == "answer")
     check("a filled-in report with no call is a claim",
           fb._turn_shape({"content": "Done: the file holds ok."}, []) == "claim")
-    # The fourth shape, measured on two fleet boxes in one afternoon (2026-09-25): the whole
+    # The fourth shape, measured on two live installs in one afternoon (2026-09-25): the whole
     # reply is an action phrase and nothing else. Both of these closed a run at 0 tool calls
     # with a green done line, because neither existing class claimed them.
     check("a bare action phrase is a fragment, not an answer",
@@ -3062,7 +3062,7 @@ def test_a_turn_is_classified_the_way_the_operator_reads_it():
 
 
 def test_a_bare_action_phrase_never_ends_a_run_as_an_answer():
-    """Measured 2026-09-25 on two fleet boxes, one afternoon each way: the model's whole
+    """Measured 2026-09-25 on two live installs, one afternoon each way: the model's whole
     reply was an action phrase ("Checking where loft boxes is located on this machine.",
     "Finding <folder> folder:"), the harness read it as an ANSWER, and the run closed at
     0 tool calls behind a green done line. Twice. The fences are the promise guard's own:
@@ -3165,7 +3165,7 @@ def test_the_facts_line_marks_the_harness_as_the_last_speaker_when_it_nudged():
 # --------------------------------------------------------------------------
 # a promise that ends a run which already did work (2026-09-24)
 # --------------------------------------------------------------------------
-# Measured, from the fleet's own transcripts: one fleet bot's conversation ends two runs
+# Measured, from live installs' own transcripts: one install's conversation ends two runs
 # on "Let me find where." / "Let me dig deeper for actual downloadable TAK map
 # files." AFTER real tool work, and the operator's next message is "wait why didnt
 # you download anything". The guard that existed fires only when the run has made

@@ -1,6 +1,6 @@
 """Tool discovery: a capability question must not be answered with a wrong tool.
 
-Measured on a fleet box 2026-09-23 (the Windows bed, 35B-A3B, its own log): three find_tools
+Measured on a live install 2026-09-23 (the Windows bed, 35B-A3B, its own log): three find_tools
 calls, each answered "[HARNESS: now callable]" with a tool that does something else -
 
     "send Mattermost message to channel"            -> `schedule`  (the word "channel")
@@ -33,7 +33,7 @@ def shipped_tool_sources():
     tools/ is per-host by design: .gitignore carries everything but the starter files, and
     what an operator drops in is the operator's (the toolsmith grades those). The shelf rule
     below is a promise about the surface tinycmdr SHIPS, so it must not go red because a box
-    added a tool - measured 2026-09-29 on the fleet Mac: two host tools with no category,
+    added a tool - measured 2026-09-29 on macOS: two host tools with no category,
     130 passed / 1 failed, while the same tree archived to a clean checkout was 129/129.
 
     Asking git, rather than keeping a second list of what ships, is what keeps the answer
@@ -89,10 +89,10 @@ revealed = lambda out: "now callable" in out or "every remaining tool is now" in
 TAIL = "Everything else on this machine"
 
 # ---- the three measured queries are the regression this suite exists for ---------
-# What was measured (a fleet Windows bed, 2026-09-23): these three revealed a WRONG tool -
+# What was measured (a Windows bed, 2026-09-23): these three revealed a WRONG tool -
 # `schedule` (the word "channel"), `blog` ("post"), `delegate_task` ("agent") - and the box then
 # spent 35 minutes rebuilding a capability it already had. The REGRESSION is the wrong answer,
-# not the existence of an answer: on a box that owns a mattermost tool (the fleet manager's own
+# not the existence of an answer: on a box that owns a mattermost tool (a host that manages other installs' own
 # tree grew `tools/mattermost_ops.py` at 18:34 on 2026-09-25) revealing it for "send Mattermost
 # message to channel" is correct, and a suite that called that a failure would be red on the very
 # box the tool was written for.
@@ -190,7 +190,7 @@ _, _, out = fb.Agent._exec_tool(fb.AGENT, {"function": {"name": "browser_navigat
 check("a tool this box never had still reads as absent",
       "exists on this box" in out and "find_tools" not in out, out[:140])
 
-# ---- F2: the hidden tools are NAMED in the static prompt (first operator drive, ---------
+# ---- the hidden tools are NAMED in the static prompt (first operator drive, ---------
 # 2026-09-23). The model would not spend the discovery call: asked which tool edits by a
 # fuzzy anchor it answered edit_file and named 3 of the 7 hidden ones, and across three
 # runs it called find_tools ONCE. The names now ride the static prompt, generated from the
@@ -300,7 +300,7 @@ finally:
 check("the suite left the config as it found it",
       inv_names(fb.build_system_prompt()) == want_inv)
 
-# ---- F3: a "verification" that does not test the claim -------------------------------
+# ---- a "verification" that does not test the claim -------------------------------
 # Found in the same drive: it "proved" write_file wrote a file by reading that the file
 # exists. The clause is on the check bullet, where the mistake is made.
 check("prompt: the check must test the claim itself",
@@ -329,7 +329,7 @@ check("an ordinary skill miss stays an ordinary miss",
 check("and its name list is bounded on a box with many skills",
       len(out) < 1200 or "more (skill action=list" in out, len(out))
 
-# ---- parked skills are parked (efficiency review 2026-09-24) --------------------
+# ---- parked skills are parked (2026-09-24) --------------------
 # skills/.imported-unused kept 76 SKILL.md runbooks for reference and skill_index()
 # rglob'd through them: the static prompt carried all 108 blurbs every call (5,366
 # of its 20,942 chars, measured 2026-09-23). A dot dir must never be indexed.
@@ -474,7 +474,7 @@ for _act in ("list", "search", "read"):
     check("the skill tool answers a TOOL name for action=%s too" % _act,
           "is a TOOL on this box" in out and "Its arguments:" in out, out[:180])
 # ---- no dead ends: every shape the schema permits answers actionably (2026-10-05) ----
-# Measured on a fleet Linux box: a run stuck on a Mattermost token asked
+# Measured on Linux: a run stuck on a Mattermost token asked
 # `skill{"action":"search","topic":"mattermost token mmctl ..."}` with no name, got
 # `No skill named ''` - an empty name and nothing to try - and re-issued its last shell
 # call until the loop guard wrapped the run up. A bare topic searches the whole shelf now,
@@ -566,7 +566,7 @@ check("prompt: and mining files for it is named as the slow way",
       "the slowest way to answer" in sp2)
 
 # ---- search_files: the shape the prompt teaches must actually grep -------------------
-# Measured 2026-09-25 driving the manager box: the route hint and the routing bullet both teach
+# Measured 2026-09-25 on a live install: the route hint and the routing bullet both teach
 # `search_files {"pattern": "<regex>", "path": "<file or directory>"}`, while the tool read
 # `pattern` as a NAME glob and the grep as `content`. The run followed the taught shape and
 # got a confident "No matches." for a string the file holds ten times - a silent wrong
@@ -605,7 +605,7 @@ check("search_files: a missing path still errors", out.startswith("ERROR"), out[
 # ---- a file too big to content-scan is SKIPPED; say so, or the miss is a lie -----------
 # The directory scan skips files over 2 MB. Silently, that turned "find X under <dir>" into
 # a confident wrong answer whenever X lived in the largest file - which was found instantly
-# when the file was named directly (report H-5, 2026-10-02).
+# when the file was named directly (2026-10-02).
 big = srch / "huge.log"
 big.write_text("filler line\n" * 400000 + "NEEDLE-OVER-CAP\n", encoding="utf-8")
 check("the fixture is over the 2 MB content-scan cap", big.stat().st_size > 2_000_000,
@@ -620,7 +620,7 @@ check("search_files: a small hit is returned AND the skip is still disclosed",
       "small-needle.txt" in out and "NOT searched" in out, out[:240])
 
 # ---- the disclosure answer cannot be misread as "nothing is hidden" -------------------
-# Measured 2026-09-25 driving the manager box (work order 5): asked which tools were NOT in its list,
+# Measured 2026-09-25 on a live install: asked which tools were NOT in its list,
 # the run called list_tools and find_tools(all=true) in ONE batch, read "N of N", and
 # answered "None are hidden" - the sibling call had already revealed them all.
 fresh = "wp5-fresh"

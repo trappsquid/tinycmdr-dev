@@ -16,7 +16,7 @@
 # mattermostautodriver 11.x off a fresh install today, a constraint living in
 # someone else's metadata and one loosening away from putting a client three
 # lines ahead of this build's on a reader's box. Name the driver, so the stack
-# a reader installs is the stack the fleet runs (measured 2026-09-22:
+# a reader installs is the stack this project runs (measured 2026-09-22:
 # mmpy_bot 2.2.1 + mattermostautodriver 2.3.0).
 requests>=2.31
 mmpy_bot>=2.2.1,<3

@@ -1,6 +1,6 @@
 # How tinycmdr is developed
 
-For whoever is at the keyboard next: another model, another harness, another person, an auditor
+For whoever is at the keyboard next: another model, another harness, another person, a reviewer
 with a fresh clone. Nothing here asks to be trusted - every claim names the command that decides
 it, and the ones that matter run automatically (the pre-push hook, the gate, CI).
 
@@ -49,8 +49,8 @@ install and is never edited by hand; `~/tinycmdr-dev` is the release line. This 
 survives "I edited production and forgot", and a box that has both keeps them.
 
 Either way the invariant is the same: **the tree the bot runs from must carry no uncommitted change
-to a tracked file when you push or pull** - that is the state that blocked a `git pull` on
-2026-09-29 while the other tree sat 27 commits ahead. `where.py --check` fails on it, and
+to a tracked file when you push or pull** - that is the state that blocks a `git pull` when
+the remote tree is ahead. `where.py --check` fails on it, and
 `maintenance/pre-push.sh` runs that check.
 
 On a one-tree box, `git status` being dirty is normal and expected while you work. `--check`
@@ -100,7 +100,7 @@ git commit && git push -u origin <topic>  # 5. push; CI grades macOS + Linux (Wi
 ## 4. What is deliberately NOT on GitHub
 
 The install keeps its state in plain files beside the code. Those files are **per-host** and
-gitignored; their shipped defaults live in the tree. An auditor should expect them to be missing
+gitignored; their shipped defaults live in the tree. A reviewer should expect them to be missing
 from a clone, and should not "restore" them:
 
 | not in git | what it is | the shipped default |
@@ -109,7 +109,7 @@ from a clone, and should not "restore" them:
 | `sessions/`, `logs/`, `spill/`, `tinycmdr.log`, `state.json`, `jobs.json`, `tinycmdr.lock` | conversation and runtime state | - |
 | `memory/`, `notes.md`, `field-notes.md`, `atlas.md`, `experiments.jsonl`, `web-sessions.json` | this box's working memory (`memory/` is the OKF bundle; `notes.md` is the legacy file it reads and no longer writes) | created on the host (`tests/fixture-field-notes.md` is what the digest suite stages) |
 | `tools/`, `skills/` | drop-in tools and prose skills built on this host | `tools/` starter files, `skills/README.md` |
-| `maintenance/private_rules.py` | this fleet's leak patterns | `private_rules.example.py` |
+| `maintenance/private_rules.py` | private leak patterns | `private_rules.example.py` |
 | `maintenance/where-roles.json` | this box's tree declaration | `ROLES` in `maintenance/where.py` |
 | `venv/`, `dist/` | the private environment, and built archives | built by `maintenance/build-package.py` |
 
@@ -155,7 +155,7 @@ the build as `DEFAULT_SOUL`, so a host with no `soul.md` at all still runs a rea
 ## 7. Cutting a release (the batch)
 
 `release.sh` ships; it does not decide. The batch is four files and a decision, and this is the whole
-of it - the two most recent releases were cut exactly this way.
+of it.
 
 1. **`tinycmdr.py`** - `VERSION = "1.0.4N"`. Byte-exact replacement: the working tree is CRLF, so a
    `sed` anchored with `$` silently misses.
@@ -167,7 +167,7 @@ of it - the two most recent releases were cut exactly this way.
    `expect`. That is the "merged, nobody is claiming a release yet" state, and `release.sh` promotes
    it to `expect: tagged` + `shipped` once the tag exists (`maintenance/ledger-tag.py`). Do **not**
    write `expect: untagged` on a commit the cut is about to tag: CI grades that claim while the tag
-   is being created, and it fails. That is precisely the 1.0.39 incident.
+   is being created, and it fails. That is precisely the failure this rule prevents.
 4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`, plus the prose
    line count the same tool's check complains about.
 5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`), `bash maintenance/pre-push.sh`, and
@@ -183,14 +183,14 @@ of it - the two most recent releases were cut exactly this way.
 and the invariant lives where the class lives: a must-agree pair in `tests/test_contracts.py`, an
 artifact surface in `maintenance/check-package-*.py` (both run by `release.sh`), a page behaviour in
 `tests/test_webui_page.py`. Naming the must-agree a bug violated, and where that agreement is
-checked, is part of calling it fixed. The 2026-10-04 sweep that wrote this rule found: assets that
+checked, is part of calling it fixed. The classes this rule came from: assets that
 never shipped (three hand lists), a router prefix swallowing a newer route, a page harness that
 fabricated ids the page no longer used and missed ids it did, a doc route table naming a deleted
 file, and installers writing `.env` keys nothing read.
 
 Traps this project has actually paid for:
 
-- **Do not edit the tree while a gate run is in progress.** The runner's G2 report attributes your
+- **Do not edit the tree while a gate run is in progress.** The runner's report attributes your
   write to whichever suite was running, and a half-written `STATUS.json` makes `test_status` read
   garbage.
 - **A push is refused if any tracked file is dirty** in the tree declared `live` - including a doc you
@@ -205,7 +205,7 @@ Traps this project has actually paid for:
 ## Looking at the page
 
 The web page is the operator's design (`assets/webui.css`, the backdrop photo
-(`assets/roman-temple-spring.jpg`, the operator's own - the replacement for the drawn
+(`assets/roman-temple-spring.jpg`, the replacement for the drawn
 colonnade), the bundled fonts, the icons inlined into the markup). To look at the tree's own page WITHOUT touching
 the running service, serve a scratch copy - the service on 8790 belongs to the install:
 
@@ -244,7 +244,7 @@ What is served, and where it comes from:
 invisible from the source tree, where all the files exist: 1.0.68-1.0.70 shipped without
 `assets/webui.css` (the page rendered as raw unstyled markup), and the installers copied a hand
 list that had never gained `assets/`, so even a correct package produced a fresh install with no
-stylesheet at all - both found by looking at a real install on a second box (2026-10-04). The
+stylesheet at all - both found by looking at a real install (2026-10-04). The
 installer suite now drives a real install into a temp dir and asserts the installed tree carries
 every asset the routes serve; for the eyes, point the scratch recipe above at an INSTALLED copy
 (then hard-reload: art and CSS are cached).
@@ -274,7 +274,7 @@ the envelope and caps, and the page suite's shim the renderer.
   answered), `GetTask`/`ListTasks` read the in-memory task ring (`A2A_MAX_TASKS`), and
   `CancelTask`/streaming/push answer the spec's own errors (-32002/-32004).
 - The client is a hidden `a2a` tool (list/card/send) that is registered **only** when
-  `agent.a2a_remotes` is non-empty - the A/A check lives in `tests/test_a2a.py`.
+  `agent.a2a_remotes` is non-empty - the A2A check lives in `tests/test_a2a.py`.
 
 Verify by hand: set `web.a2a` true, restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with

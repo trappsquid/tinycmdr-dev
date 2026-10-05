@@ -78,7 +78,7 @@ def main():
         check("truncated" in out3, "a failed spill degrades to truncation, no exception")
 
         # ---- rotation keeps the folder bounded ----------------------------------------
-        # It prunes the files NO live index row names (audit D6): a row is a pointer the
+        # It prunes the files NO live index row names: a row is a pointer the
         # prompt tells the model to follow, so rotating by file count alone is what made
         # session A's spill stop resolving. The bound is therefore the index (12 rows)
         # plus `spill_keep` spares.
@@ -119,7 +119,7 @@ def main():
               f"({spilled2.count('token-')} found)")
 
         # ---- the spill INDEX: what is on disk, without carrying any of it --------------
-        # (audit, 2026-09-21: the pointer worked and was then the only trace, so a run
+        # (2026-09-21: the pointer worked and was then the only trace, so a run
         # that lost it had no way to know a spill existed. One line per spill, with an id
         # that reads it back.)
         block = fb.spill_index_block()
@@ -147,7 +147,7 @@ def main():
               "  and it is the OLDEST lines that drop, never the newest")
 
         # ---- the index belongs to ONE session, and /new drops that session's pointers ----
-        # Measured 2026-09-25 driving a fleet box: process-wide, the index put one
+        # Measured 2026-09-25 on a live install: process-wide, the index put one
         # conversation's spilled output in front of every other conversation's model, and it
         # survived /new - a fresh order ("how much room is left on the C drive") was answered
         # in two calls and then spent ten more reading the PREVIOUS, stopped run's spill files
@@ -172,7 +172,7 @@ def main():
         check(on_disk and (fb.BASE_DIR / mine[-1]["path"]).exists(),
               "  the spilled FILE stays on disk - nothing was dropped")
 
-        # ---- a live row's file survives another session's spills (audit D6) ------------
+        # ---- a live row's file survives another session's spills ------------
         # Measured with spill_keep=3: session A's indexed spill stopped resolving as soon
         # as session B wrote four more, and the block's own promise is "The FULL text is
         # on disk - nothing was dropped".

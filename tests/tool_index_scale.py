@@ -18,7 +18,7 @@ It asserts three things (exit 1 when any breaks):
     BOUNDED   an 80-tool box adds <= 1,200 est-tok to the prompt and <= 20 ch per tool
               (the pre-batch numbers: +3,949 est-tok, 167.8 ch/tool), and 300 tools still
               render inside the two caps, with the overflow line naming the door.
-    LIVE      this repo's own tools/ (the shape every fleet box runs): the index block is
+    LIVE      this repo's own tools/ (the shape every live install runs): the index block is
               <= 400 ch, carries every tool NAME, carries no description prose, files each
               tool on its designed shelf, and every shelf is resolvable by find_tools.
 """
@@ -168,7 +168,7 @@ LIVE_SHELVES = {          # a pin, not a tautology: a description edit that resh
 
 
 def live_leg():
-    """This repo's own tools/ - the shape every fleet box runs, and the leg that must have
+    """This repo's own tools/ - the shape every live install runs, and the leg that must have
     gone DOWN (the stage_install shape has no custom tools, so it can only show zero rent)."""
     wd = Path(tempfile.mkdtemp(prefix="tool-live-"))
     os.environ["TINYCMDR_TEST_APP"] = str(BASE / "tinycmdr.py")

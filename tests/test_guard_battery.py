@@ -1,6 +1,6 @@
 """The guard battery: every destructive spelling is gated, and nothing else is.
 
-BUGREPORT §S1. Measured at HEAD before this change: `rm -rf /etc`, `rm -rf ~/Documents`,
+Measured at HEAD before this change: `rm -rf /etc`, `rm -rf ~/Documents`,
 `rm -r -f /`, `rm --recursive --force /`, `find / -delete`, `find / -exec rm -rf {} +` and
 `: () { :|:& };:` were all `is_blocked=False, confirm=None` - the only POSIX patterns
 required `r` and `f` in one flag word immediately before a bare `/`. The same run's
@@ -77,7 +77,7 @@ MUST_GATE = [
     "cipher /w:C", "vssadmin delete shadows /all", "Initialize-Disk -Number 2",
     # machine verbs
     "shutdown /r /t 0", "poweroff", "reboot", "Stop-Computer", "Restart-Computer",
-    # Windows machine-verb class (BUGREPORT §S1 second battery)
+    # Windows machine-verb class (second battery)
     "taskkill /f /im explorer.exe", "diskpart /s wipe.txt",
     "takeown /f C:\\ /r /d y", "icacls C:\\ /grant Everyone:F",
     "net user evil P@ss /add", "New-LocalUser -Name evil",
@@ -89,7 +89,7 @@ MUST_GATE = [
     "rd /s /q C:\\Windows", "rmdir /s /q C:\\Temp", "del /s /q C:\\x",
     "erase /s /q C:\\x", "Remove-Item -Recurse -Force C:\\Temp",
     "robocopy C:\\a C:\\b /MOVE",
-    # PowerShell aliases and short parameter forms (BUGREPORT §S2)
+    # PowerShell aliases and short parameter forms
     "ri -r -fo C:\\x", "rm -r -fo C:\\x", "ri -Recurse -Force C:\\Temp",
     "gci C:\\x | ri -Recurse",
     # An encoded command, in all three spellings, with a base64 argument
@@ -133,7 +133,7 @@ def test_a_comment_cannot_run():
     """A guard reads the SOURCE, so a COMMENT must not trip it: a comment cannot execute.
 
     STRINGS ARE KEPT - `subprocess.run("reboot")` really does reboot - so this costs nothing
-    that can run, only inert text. Measured by audit 2026-09-29: a comment reading
+    that can run, only inert text. Measured 2026-09-29: a comment reading
     "# restart happens in the next step" tripped the confirm tier over execute_code, which on
     a lane with nobody at the door is a flat DECLINED.
     """
@@ -149,7 +149,7 @@ def test_a_comment_cannot_run():
 
 
 def test_a_mention_is_not_a_command():
-    """The BLOCK tier reads what would RUN, not what is merely carried (audit 2026-09-29).
+    """The BLOCK tier reads what would RUN, not what is merely carried (review 2026-09-29).
 
     It matched the whole command, so `grep -rn "rm -rf /" docs/` was refused outright, with the
     model told no confirmation unlocks it - a dead end for a read-only SEARCH. The rule is now
@@ -176,7 +176,7 @@ def test_a_mention_is_not_a_command():
 def test_a_delete_of_real_content_asks_with_the_measured_effect():
     """Effect-keyed, not spelling-keyed: the ask describes what will actually be lost.
 
-    Two measured reasons (audit 2026-09-29). The tier only covered RECURSIVE tree deletes, so
+    Two measured reasons (review 2026-09-29). The tier only covered RECURSIVE tree deletes, so
     the model's own `rm -f ~/Desktop/<a real document>` ran with nothing asked. And the ask
     itself was about the command, not the thing: "a recursive delete of ~/enoch_build" reads
     identically for an empty scratch directory and for four hours of finished work, which is
@@ -248,10 +248,10 @@ def test_broad_root_escalates():
 
 
 def test_file_door_and_shell_door_agree():
-    """BUGREPORT §S3: a write to this bot's own notes.md is gated through write_file
+    """A write to this bot's own notes.md is gated through write_file
     exactly as it is through the shell, and an ordinary file is not gated at all.
 
-    The bot's OWN file is identified by its RESOLVED PATH. Until the 2026-09-29 audit the
+    The bot's OWN file is identified by its RESOLVED PATH. Until the 2026-09-29 review the
     check was the BASENAME alone, so an operator's own `docs/notes.md` was gated as "this
     bot's own notes.md" and DECLINED on a lane with nobody to ask. The fixture used to write
     to a temp-dir notes.md, which that old rule accepted - it has to be the INSTALL's own file
@@ -308,7 +308,7 @@ def test_file_door_and_shell_door_agree():
 
 
 def test_manifest_command_walks_the_shell_tier():
-    """BUGREPORT §S6: a .tool.json whose command is `rm -rf /` must not load, and a
+    """A .tool.json whose command is `rm -rf /` must not load, and a
     confirm-tier command must be asked at call time - the manifest door is the shell door."""
     d = Path(tempfile.mkdtemp(prefix="tc-manifest-"))
     try:
@@ -343,7 +343,7 @@ def test_manifest_command_walks_the_shell_tier():
 
 
 def test_short_guard_list_is_named_not_silent():
-    """BUGREPORT §S18: a config.json that REPLACED a shipped tier must not silently
+    """A config.json that REPLACED a shipped tier must not silently
     weaken this box - the drift is named, and `doctor` exits non-zero on it."""
     saved = dict(fb.CONFIG["agent"])
     try:

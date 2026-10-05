@@ -30,7 +30,7 @@ def _sha(path):
     This ran `subprocess.run(["sha256sum" ...])` - with the same command in both arms of
     a platform pick - and turned a failed lookup into "", so on a stock macOS box (where
     /usr/bin has no sha256sum and Coreutils is not a given) the dist check died on
-    FileNotFoundError instead of comparing anything (BUGREPORT T5). hashlib is in the
+    FileNotFoundError instead of comparing anything. hashlib is in the
     stdlib everywhere this ships, and a file it cannot read is a loud stop, not a "" that
     would read as "different bytes".
     """

@@ -139,7 +139,7 @@ check("...while a shell-driven runbook still is",
       "mint it" in fb.mint_offer_line("mint-nogui-1"), fb.mint_offer_line("mint-nogui-1")[:120])
 
 # ---- the mint census: one line when a by-hand SHAPE has run in several runs ----------
-# Measured 2026-09-25 driving the manager box: the run does a routine by hand every time and never
+# Measured 2026-09-25 on a live install: the run does a routine by hand every time and never
 # offers to keep it, and the whole six-day log held ONE `remember` call. The model sees one
 # run at a time; the harness keeps the census and asks the operator (see mint_offer).
 import json as _json
@@ -169,7 +169,7 @@ _st5["order_repeats"] = 3
 _line5 = fb.mint_offer("offer-6", _rep2, source="main")
 
 # ---- memory: a lookup that answered a durable-fact question gets ONE nudge ------------
-# Measured 2026-09-25 driving the manager box: asked which port the web UI listens on and where its
+# Measured 2026-09-25 on a live install: asked which port the web UI listens on and where its
 # token file lives, the run found both and saved nothing - the whole six-day log holds ONE
 # `remember` call, because nothing anywhere points at the moment the fact appears.
 check("an order asking WHERE a fact lives is spotted as a lookup",

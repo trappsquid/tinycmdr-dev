@@ -7,7 +7,7 @@ Tool disclosure is the other half of the premise: 80 tools may exist and one ind
 line names them, but their schemas must not ride every request.
 
 Both are asserted here rather than described in a comment, because both are easy to
-break with an innocent-looking edit (audit FEATURE §4.1/§4.2; BUGREPORT §T-adjacent).
+break with an innocent-looking edit.
 Driven by a stub endpoint in this process - no network, no real model, no mock file.
 
     python tests/test_prefix_stability.py

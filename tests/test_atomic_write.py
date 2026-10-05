@@ -5,12 +5,12 @@ Run:  python tests/test_atomic_write.py, or
 Not pytest, deliberately: `check()` records a failure and the suite's exit code is the
 verdict (0 pass / 1 fail), so pytest would report this file green whatever the checks said.
 
-The audit's D1: every failure inside `atomic_write_text` - the temp write, the fsync or the
+Every failure inside `atomic_write_text` - the temp write, the fsync or the
 rename - fell back to `p.open("w", ...)` on the DESTINATION, so a failed save truncated the
 file the function exists to protect (measured: a 20-item state file -> 0 bytes, next load died
 on JSONDecodeError, no .damaged-* copy). These cases pin the replacement's promises: the
 old file survives a failed rename and a failed write, the error reaches the caller, no temp
-is left behind, and the temp carries the destination's own mode (audit D4/B3).
+is left behind, and the temp carries the destination's own mode.
 """
 import importlib.util
 import json

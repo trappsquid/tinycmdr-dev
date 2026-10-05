@@ -2,13 +2,13 @@
 
 The page's files are named in three places that must agree: the route handlers in
 tinycmdr.py (BASE_DIR / "assets" / ...), the WEB_FONTS map, and the stylesheet's
-@font-face urls. They are DERIVED here, never listed. The pavilion port added
+@font-face urls. They are DERIVED here, never listed. The new page design added
 assets/webui.css and the cinzel-600 face to the package, and four separate hand lists
 each missed part of it - build-package.py's SHIP, WEB_FONTS itself, the three installers'
 copy lists, and the suites' staging list - so every 1.0.68/1.0.69 package served
 /page.css as a 404, every fresh install from any installer landed without a stylesheet,
 and the suites could not see either because they graded the source tree, where the file
-exists (operator's fresh-install report, 2026-10-04).
+exists (measured on a fresh install, 2026-10-04).
 
 Callers, so a fifth list never appears:
   * tests/test_webui_page.py        - the package manifest (SHIP) must cover this set

@@ -41,8 +41,8 @@ PASSES = []
 FAILS = []
 
 # rich/prompt_toolkit absent: the screen cannot be graded here, which is a SKIP for the
-# gate and not a green 0. This branch used to sys.exit(0) with two checks run out of 39
-# (BUGREPORT T4); tests/run_all.py counts 77 as red.
+# gate and not a green 0. This branch used to sys.exit(0) with two checks run out of 39.
+# tests/run_all.py counts 77 as red.
 SKIP_EXIT = 77
 
 
@@ -217,7 +217,7 @@ check("export_svg writes the whole screen", "<svg" in body[:400])
 check("...with the answer's text in it", "Heading" in body)
 svg.unlink()
 
-# --- the approved render's rhythm and its thought line (tui-preview) -------
+# --- the exported render's rhythm and its thought line -------
 scr6 = fb.TuiScreen(out=io.StringIO(), width=100)
 scr6.card("tool", "shell  Get-CimInstance Win32_PhysicalMemory")
 scr6.card("tool_done", "capacity 8GB x4", "0.6s")
@@ -243,7 +243,7 @@ scr6.card("narration", "thinking aloud, quietly")
 check("...and so does the drawn one, dim as the render has it",
       "  \u2026  thinking aloud, quietly" in scr6.out.getvalue())
 
-# --- T-06: a streamed line GROWS; it does not stair-step one line per delta ------
+# --- a streamed line GROWS; it does not stair-step one line per delta ------
 # print_formatted_text defaults to end="\n", so every delta used to land on its own
 # line and `_close()`'s newline was dropped by the old `if text.strip()` guard.
 scr6b = fb.TuiScreen(out=io.StringIO(), width=100)
@@ -258,11 +258,11 @@ dest6b.drop(ref6b)
 dest6b._close()
 _out6b = scr6b.out.getvalue()
 _tail6b = _out6b[_out6b.find("Let me confirm"):]
-check("a multi-delta stream renders as ONE line (T-06)",
+check("a multi-delta stream renders as ONE line",
       "Let me confirm the exact numbers for this box." in _tail6b
       and _tail6b.count("\n") == 1 and _tail6b.endswith("\n"), repr(_tail6b[:120]))
 
-# --- T-02 residual: decide BEFORE printing, because a terminal cannot unprint ----
+# --- decide BEFORE printing, because a terminal cannot unprint ----
 scr6c = fb.TuiScreen(out=io.StringIO(), width=100)
 scr6c._plain_fallback = True
 dest6c = fb.CliDestination(colour=False, out=scr6c.out, screen=scr6c)
@@ -289,7 +289,7 @@ check("a held line is committed, never lost, when a card interrupts it",
       "Checking the lock before I touch anything" in scr6d.out.getvalue(),
       repr(scr6d.out.getvalue()[:160]))
 
-# --- T-07: the prompt must not paint between the draft pulse and the answer card --
+# --- the prompt must not paint between the draft pulse and the answer card --
 _final_stop = {}
 
 
@@ -315,7 +315,7 @@ try:
     while time.time() < _deadline and "stop" not in _final_stop:
         time.sleep(0.05)
     _loop.join(2)
-    check("the run flag is still set while the answer card is drawn (T-07)",
+    check("the run flag is still set while the answer card is drawn",
           isinstance(_final_stop.get("stop"), threading.Event), _final_stop)
     check("...and it is cleared once the run's card is on screen",
           fb._CLI.get("stop") is None, fb._CLI.get("stop"))
@@ -342,8 +342,8 @@ def _rail_for(used, budget, window=None, static=0, source=""):
     try:
         fb.AGENT.stats = lambda key: {"exchanges": 2 if used else 0, "est_tokens": used}
         fb.AGENT._context_budget = lambda: budget
-        # The CONTEXT block divides by the WINDOW, not the messages budget (operator
-        # report, 2026-10-03); default keeps the old calls meaning what they did.
+        # The CONTEXT block divides by the WINDOW, not the messages budget (2026-10-03);
+        # default keeps the old calls meaning what they did.
         fb.AGENT.cached_envelope = lambda: {"window": window or budget, "static": static,
                                             "source": source}
         return "".join(part for _, part in
@@ -399,7 +399,7 @@ check("--app's composer is a labeled box, not a bare prompt",
       _app.composer.title)
 
 # --- round-3 polish ---------------------------------------------------------------
-# P-01: in the app the chrome carries the meta, so the transcript opens on content.
+# In the app the chrome carries the meta, so the transcript opens on content.
 _calls = []
 _saved_banner, _saved_caps = fb.cli_banner, fb.capability_line
 _saved_screen = fb._CLI.get("screen")
@@ -414,7 +414,7 @@ try:
     fb.capability_line = lambda lane: (_calls.append("caps"), "caps")[1]
     fb._CLI["screen"] = _FakeScreen()
     fb._cli_startup(app_mode=True)
-    check("app mode seeds no meta text: the chrome carries it (P-01)",
+    check("app mode seeds no meta text: the chrome carries it",
           _calls == [] and "ready" in fb._CLI["screen"].status,
           (_calls, fb._CLI["screen"].status))
     import contextlib
@@ -427,14 +427,14 @@ finally:
     fb.cli_banner, fb.capability_line = _saved_banner, _saved_caps
     fb._CLI["screen"] = _saved_screen
 
-# P-02: an empty draft card is a live region in the app, never a committed stub.
+# An empty draft card is a live region in the app, never a committed stub.
 _app2 = fb.AppScreen(colour=True, tier="truecolor")
 _n_items = len(_app2.items)
 _app2.card("narration", "")
-check("--app commits no empty draft stub (P-02)",
+check("--app commits no empty draft stub",
       len(_app2.items) == _n_items, _app2.items[-1:])
 
-# P-04: an answer body is bold/dim/default - never hue of its own.
+# An answer body is bold/dim/default - never hue of its own.
 _ans = fb.TuiScreen(out=io.StringIO(), width=100, tier="truecolor")
 _ans._plain_fallback = True
 _ans.card("final", "## H\n\n> quote\n\n- item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n"
@@ -444,17 +444,17 @@ _ANS_HUES = ("34", "35", "36")
 _ans_out = _ans.out.getvalue()
 _off = min([_ans_out.find("\x1b[%sm" % h) for h in _ANS_HUES] + [-1])
 _off = _off if _off >= 0 else max(0, len(_ans_out) - 80)
-check("an answer body never renders magenta or cyan (P-04)",
+check("an answer body never renders magenta or cyan",
       not [c for c in _ans_codes
            if c in _ANS_HUES or c.startswith("35;") or "38;5;13" in c],
       repr(_ans_out[max(0, _off - 140):_off + 80]))
 
-# P-05/P-06: the footer is the run's status only; the box the operator types in says "you".
-check("--app's status line carries the run status only; keys live in the rail (P-05)",
+# The footer is the run's status only; the box the operator types in says "you".
+check("--app's status line carries the run status only; keys live in the rail",
       not hasattr(fb.AppScreen, "_hints_text")
       and "KEYS" in "".join(p for _, p in _app._sidebar_text().__pt_formatted_text__()),
       "hints still share the status line")
-check("--app's input box is labeled 'you', not 'ask' (P-06)",
+check("--app's input box is labeled 'you', not 'ask'",
       "".join(p for _, p in _app.composer.title.__pt_formatted_text__()).strip() == "you",
       _app.composer.title)
 
@@ -515,7 +515,7 @@ check("...with the accepted dot counts (the designer's render)",
        for row in _art_cells] == [74, 117, 90, 98, 99, 69, 52, 7, 19],
       [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c) for row in _art_cells])
 
-# P-03: the done line and the rail read ONE counter (the run accumulator).
+# The done line and the rail read ONE counter (the run accumulator).
 _events = []
 
 
@@ -538,7 +538,7 @@ try:
     _rep.t0 = time.time()
     _rep.finish(ok=True)
     _done = _events[-1][1] if _events else ""
-    check("the done line's steps/elapsed come from the run accumulator (P-03)",
+    check("the done line's steps/elapsed come from the run accumulator",
           "7 step(s) in 9s" in _done, _done)
 finally:
     if _saved_usage_3 is None:
@@ -546,7 +546,7 @@ finally:
     else:
         fb.AGENT.last_usage["cli"] = _saved_usage_3
 
-# --- round-4: the pane replaces the run's WHOLE draft region (P-02) ---------------
+# --- round-4: the pane replaces the run's WHOLE draft region ---------------
 # The reporter draws a narration line and only then streams deltas into it, so the
 # first draw is a committed line; dropping just the last item filed the model's
 # opening sentence above the answer card with its markdown characters intact.
@@ -560,14 +560,14 @@ for _extra in (" let me confirm the exact numbers", " since this is newer than m
 _d4.drop(_r4)
 _d4._close()
 _app4.card("final", "| Chip | Bandwidth |\n|---|---|\n| M4 Ultra | 800 GB/s |\n")
-check("--app replaces the run's whole draft region, first draw included (P-02)",
+check("--app replaces the run's whole draft region, first draw included",
       not any(it[0] == "ansi" and "M4 Ultra" in str(it[1]) for it in _app4.items),
       [str(it[1])[:70] for it in _app4.items])
 
 # --- copying out of the app: the rail can get out of the way ----------------------
 # With mouse capture off, a drag is the TERMINAL's selection, and it cannot know where the
-# panes are - so it spilled into the rail and copied its keys with the code (operator
-# report, 2026-10-03). Ctrl-W hides the rail so there is nothing to spill into.
+# panes are - so it spilled into the rail and copied its keys with the code (2026-10-03).
+# Ctrl-W hides the rail so there is nothing to spill into.
 _app_rail = fb.AppScreen(colour=True, tier="truecolor")
 _app_rail._build()
 check("--app starts with the rail shown", _app_rail.show_rail is True, _app_rail.show_rail)
@@ -579,14 +579,14 @@ check("...with the transcript left to take the width",
       _app_rail.RAIL_WIDTH == 26, _app_rail.RAIL_WIDTH)
 _app_rail.show_rail = True
 
-# --- round-4: no blank band around a table, and nothing trailing (T-05) ----------
+# --- round-4: no blank band around a table, and nothing trailing ----------
 _t5 = fb.TuiScreen(out=io.StringIO(), width=90, tier="truecolor")
 _t5._plain_fallback = True
 _t5.card("final", "| Slot | Size |\n|---|---|\n| DIMM 1 | 8 GB |\n| DIMM 2 | 8 GB |\n\n"
                   "After the table.\n")
 _plain5 = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in _t5.out.getvalue().splitlines()]
 _rows5 = [l[1:-1] for l in _plain5 if l.startswith(("\u2503", "\u2502"))]
-check("the answer card carries no blank band around a table (T-05)",
+check("the answer card carries no blank band around a table",
       _rows5 and not any(not r.strip() for r in _rows5), _rows5)
 check("...and a table at the end of an answer adds no trailing row",
       _rows5[-1].strip() == "After the table.", _rows5)
@@ -619,7 +619,7 @@ check("/resume switches the key without destroying the editing surface",
 fb._CLI.pop("prompt", None)
 fb._CLI.pop("session", None)
 
-# --- one writer per terminal (measured 2026-09-25, a live render on a fleet macOS box:
+# --- one writer per terminal (measured 2026-09-25, a live render on macOS:
 # raw INFO lines landed inside the cards, the toolbar was redrawn over them, the run's
 # line was left stranded mid-screen and the answer never got its card) ----------------
 import logging.handlers  # noqa: E402
@@ -667,7 +667,7 @@ check("a dropped draft draws nothing itself (the console prints the card once)",
       [str(getattr(r, "title", "")) for r in scr9.shown])
 check("...and hands the draft text to the caller", seen10 == ["host.lan"], seen10)
 
-# --- T-01: the words of an answer appear once, as the bright card --------------
+# --- the words of an answer appear once, as the bright card --------------
 # Reproduced before the fix: a streamed markdown table produced a dim pipe-flattened
 # line, a mangled card ending "acr…", and the rendered card - the same answer three
 # times over. Now the draft is one dim pulse and the console prints one card.
@@ -694,7 +694,7 @@ check("...no mid-word truncation glyph inside the answer", "acr\u2026" not in ra
 check("...and no flattened copy of the answer is anywhere on the screen",
       "| Field | Value |" not in raw11 and "capacity | 8GB x4" not in raw11)
 
-# --- T-02: a structured draft never streams its own pipes ---------------------
+# --- a structured draft never streams its own pipes ---------------------
 scr12 = fb.TuiScreen(out=io.StringIO(), width=90)
 dest12 = fb.CliDestination(colour=False, out=io.StringIO(), screen=scr12)
 r12 = dest12.line("narration", "")
@@ -706,7 +706,7 @@ check("a second chunk does not re-print the draft",
 check("...and the raw table never reaches the screen",
       "|---|---|" not in pulse, pulse[:200])
 
-# --- T-03: with a toolbar the transcript prints no stats line -----------------
+# --- with a toolbar the transcript prints no stats line -----------------
 _saved_usage = fb.AGENT.last_usage.get("cli")
 _saved_stdout = sys.stdout
 buf3 = io.StringIO()
@@ -730,7 +730,7 @@ finally:
     else:
         fb.AGENT.last_usage["cli"] = _saved_usage
 
-# --- `--app`: the alternate-screen mode (brief §10) ---------------------------
+# --- `--app`: the alternate-screen mode ---------------------------
 # Headless: a pipe for keys, DummyOutput for the screen. The point is the LOGIC -
 # one answer card, status only in the status bar, no socket, a clean exit.
 try:
@@ -981,7 +981,7 @@ if HAVE_APP:
             fb.COPY_FILE, fb.copy_via_host_tool = _saved_copy_file, _saved_helper
             shutil.rmtree(_copy_dir, ignore_errors=True)
 
-        # the model picker: hermes' list-you-move-through, drawn INSIDE this Application
+        # the model picker: the predecessor harness's list-you-move-through, drawn INSIDE this Application
         # (a second prompt_toolkit Application cannot own this terminal). Driven through the
         # app's own key pipe, because the binding is exactly what was missing: bare /model
         # used to print a Commands box and the reader retyped an exact name.

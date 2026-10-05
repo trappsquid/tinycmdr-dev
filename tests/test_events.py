@@ -1,4 +1,4 @@
-"""Tests for the event log (stage 4 of the MiniDSH plan), shadow only.
+"""Tests for the event log, shadow only.
 
     python tests/test_events.py
 

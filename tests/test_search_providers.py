@@ -10,7 +10,7 @@ the code:
     carried this rule since the failover pin (`llm.allow_cloud_fallback`); search shipped
     with a third-party default and no gate at all, so a keyless install sent the model's
     query to api.anysearch.com with nobody asked and nothing on screen saying so
-    (audit, 2026-09-27).
+    (review, 2026-09-27).
 
 Hermetic: the providers are served by a stub on 127.0.0.1, so this grades with no network.
 "Off-LAN" here means a name that resolves nowhere, which `_is_local_url` classifies as

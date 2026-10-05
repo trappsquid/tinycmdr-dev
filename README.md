@@ -160,7 +160,7 @@ tinycmdr web                            # print the tokenized link (opens a brow
 
 | Drop this | Get this |
 | :--- | :--- |
-| `skills/<name>/SKILL.md` (YAML frontmatter: name + description; optional `globs:`, `always: true`, and `hide: true` (omp spelling: `disable-model-invocation: true`) for operator-only, then the runbook) | live next message; one prompt-index line, read in full only when relevant; an operator-only runbook opens only when the operator names it |
+| `skills/<name>/SKILL.md` (YAML frontmatter: name + description; optional `globs:`, `always: true`, and `hide: true` for operator-only, then the runbook) | live next message; one prompt-index line, read in full only when relevant; an operator-only runbook opens only when the operator names it |
 | `tools/<name>.py` or `<name>.tool.json` | callable next call; listed by name and shelf, descriptions one `find_tools` call away |
 | `create_tool` | the agent writes its own |
 

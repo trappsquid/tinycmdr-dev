@@ -1,6 +1,6 @@
 """The endpoint gate covers TOOLS, and a fresh reconnect gap makes it refuse.
 
-Audit of the campaign harness, 2026-09-21. Two holes:
+Review of the campaign harness, 2026-09-21. Two holes:
   * the gate only ever read SHELL text, so a tool that restarts the model box (an
     inferctl/llamasrv verb) moved :8081 with no gate at all;
   * a confirmation asked while the lane is losing messages can be answered by nobody,
@@ -324,7 +324,7 @@ def main():
             check(f"surface write: {shape[:50]!r} -> {want}", got == want, f"got {got}")
 
         # The same question asked of a file PATH was answered from the BASENAME alone, so an
-        # operator's own document was mistaken for the bot's memory. Measured by audit
+        # operator's own document was mistaken for the bot's memory. Measured
         # 2026-09-29: a write to "/home/user/acme/docs/notes.md" was gated as "a write to this
         # bot's own notes.md", and DECLINED on a lane with nobody to ask. The bot's own file is
         # identified by its RESOLVED PATH, like tools_dir_verdict does for tools.

@@ -211,7 +211,7 @@ check("each chat gets its own conversation name",
       fb.tg_session_key(42) == "telegram-42")
 
 # ---- a duplicate id in ANOTHER chat is not the same message ----------------
-# (audit, 2026-09-29: seen held the bare message_id, but Telegram numbers messages
+# (review, 2026-09-29: seen held the bare message_id, but Telegram numbers messages
 # per chat, so with two allowed users the second chat's id-1 was swallowed as a dup
 # of the first chat's and never answered - silently.)
 cross = FakeClient()
@@ -227,7 +227,7 @@ check("...and a true repeat inside one chat is still dropped once",
       str(handed))
 
 # ---- a /stop that lands before the worker picks the task up still bites -----
-# (audit, 2026-09-29: submit() registered the chat's cancel event and /stop set it,
+# (review, 2026-09-29: submit() registered the chat's cancel event and /stop set it,
 # but the worker minted its OWN event and overwrote the slot, so a stop in the gap
 # between the message arriving and the run starting was discarded: the run began
 # un-stoppable. Drive the real run_telegram with the bot API and the run faked.)
@@ -317,7 +317,7 @@ finally:
      fb.lane_up) = _keep
 
 # ---- a message during a LIVE run steers it, and the worker still leaves -----
-# (audit, 2026-09-29, F-06. The Telegram lane handed drive_run a cancel event but no
+# (2026-09-29. The Telegram lane handed drive_run a cancel event but no
 # steering and no watchdog record, so a plain message sent mid-run queued behind the
 # run it was meant to redirect - while README 110/137 promise a mid-run message steers,
 # which was already true of Mattermost and the CLI. And its workers blocked on the
@@ -414,7 +414,7 @@ finally:
      fb.TG_IDLE_SECONDS) = _keep2
 
 # ---- the token has ONE home, and both doors never fight silently -----------
-# (audit, 2026-09-22: telegram.token was read from config.json, which contradicts
+# (review, 2026-09-22: telegram.token was read from config.json, which contradicts
 # the package's own rule that secrets live only in .env; and with both tokens set
 # the Telegram lane simply never started, with nothing said.)
 
@@ -474,7 +474,7 @@ _saved = (dict(fb.CONFIG.get("telegram") or {}), dict(fb.CONFIG["mattermost"]))
 # _mm_token_configured() falls back to os.environ["TINYCMDR_MM_TOKEN"], which a real
 # install's .env supplies and this block cannot clear through CONFIG - so on any
 # configured box "one door is not a warning" failed while a clean clone was green
-# (measured 2026-09-29 on the fleet Mac: 41 passed, 1 failed; the same tree archived to a
+# (measured 2026-09-29 on macOS: 41 passed, 1 failed; the same tree archived to a
 # clean checkout: 42 passed). That is the suite grading the box instead of the rule, which
 # is the class tests/hermetic.py exists for. Neutralise the two names for this block only.
 _env_saved = {k: os.environ.pop(k) for k in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN")

@@ -35,7 +35,7 @@ NODE = shutil.which("node") or shutil.which("node.exe")
 FAILS = []
 
 # No node, nothing graded - and that is not a pass. This suite used to print a SKIP
-# line and return 0 (BUGREPORT T4); tests/run_all.py counts 77 as red.
+# line and return 0; tests/run_all.py counts 77 as red.
 SKIP_EXIT = 77
 
 
@@ -199,7 +199,7 @@ def main():
 
     # the ONE status chip: a finished run must leave it at ready, with the dot's state
     # agreeing - the chip used to stay "working" after a run while a second pill in the
-    # app bar said otherwise (operator's report, 2026-10-04)
+    # app bar said otherwise (2026-10-04)
     check(res.get("stage") == "ready" and res.get("stageS") == "ready",
           f"a finished run leaves the status chip ready "
           f"({res.get('stage')!r}/{res.get('stageS')!r})")
@@ -208,7 +208,7 @@ def main():
     # The page cannot read the HttpOnly cookie, so it probes GET /api/login first: 200
     # means the cookie authenticates and no prompt appears; 401 means a fresh browser
     # that must be asked. The old boot prompted on every visit regardless - the
-    # operator's re-entry report (2026-10-04).
+    # operator's re-entry (2026-10-04).
     sc = {"runs": [[["final", "hi"]]],
           "steps": [{"kind": "message", "text": "hello", "polls": 6}],
           "no_token": True, "login_ok": True}
@@ -223,7 +223,7 @@ def main():
           f"({res['prompts']} prompt(s), token {res.get('token')!r})")
 
     # -- 1c. a stale token on any GET: one prompt, one retry, the page recovers ---
-    # The bare "unauthorized" note with no way back was the operator's report
+    # The bare "unauthorized" note with no way back was reported by the operator
     # (2026-10-04: "why do all my pages to tinycmdr webui say unauthorized now"). The
     # page clears the token, asks once with the way back named, and retries the GET.
     sc = {"runs": [], "steps": [{"kind": "polls", "n": 3}], "auth_401_once": True}
@@ -575,8 +575,8 @@ def main():
           f"a DIFFERENT failure speaks again ({res.get('warn')})")
     check("502" in (res.get("warn") or {}).get("detail", ""), "with the new reason")
 
-    # -- the pavilion: empty state, details, retry, the amber notice, a failed load -----
-    # Operator brief, 2026-10-04 ("modern imperial command pavilion"): the empty area is an
+    # -- the new page: empty state, details, retry, the amber notice, a failed load -----
+    # The "modern imperial command" design (2026-10-04): the empty area is an
     # empty STATE with a way in, the lane banner's technical reason is one click away, a
     # config edit that has not applied is a separate amber notice, and a conversation that
     # will not load is a card with a way out - not a blank pane.

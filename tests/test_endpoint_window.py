@@ -123,7 +123,7 @@ def main():
     want = fb.CONFIG["llm"].get("model") or "main"
 
     # ----------------------------------------- an empty answer is not a window (v1.0.59)
-    # Measured 2026-10-03 on a fleet box: one probe of a busy llama.cpp server timed out,
+    # Measured 2026-10-03 on a live install: one probe of a busy llama.cpp server timed out,
     # and the harness cached "0" as if it were a window for the whole WINDOW_TTL (5 min).
     # Every call in that window took the assumed branch - budget 8000 + static 4157 + reply
     # 2048 = a 14,205-token "window" that MOVED with the static prompt - while the server
@@ -340,7 +340,7 @@ def main():
           window(f) == 32768)
 
     # ------------------------------------------- identified, never guessed
-    # Audit 2026-09-29: the fallback was `models[0]`, so a gateway advertising a 0.5B and a 72B
+    # Review 2026-09-29: the fallback was `models[0]`, so a gateway advertising a 0.5B and a 72B
     # while the config named an alias sized the ENTIRE envelope from the 0.5B - or, worse, from
     # whatever happened to be listed first. Over-reporting a window is the direction this
     # harness treats as dangerous; under-reporting clips every large result for the whole run.
@@ -399,7 +399,7 @@ def main():
         fb._llama_props, fb._is_local_url = real_props, real_local
 
     # ------------------------------------- the cache is per ENDPOINT, with the same TTL
-    # F-16: one process-wide window meant a failover box was measured with the primary's
+    # One process-wide window meant a failover box was measured with the primary's
     # number (a 32k primary "proved" an 8k fallback was big, and the fallback's 400 became
     # a context overflow with no endpoint left to try). Each answer is cached under its own
     # server root instead - and the scalar `_window_cache` a stub sets is still read as the
