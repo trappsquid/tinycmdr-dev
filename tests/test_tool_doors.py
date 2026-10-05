@@ -267,6 +267,27 @@ check("a missing argument names itself and lists the call's arguments",
 check("...and a KeyError over something the tool does not declare keeps the generic answer",
       fb._missing_argument_answer("create_tool", "nonsense", {"properties": {"name": {}}}) == "")
 
+# ---- the same door at the tool, not just in the helper (2026-10-05) -------------------
+# A sweep of the whole surface with the minimal args each schema permits: three calls
+# answered with a Python repr or a blank name instead of the argument to add.
+_miss_dir = Path(tempfile.mkdtemp(prefix="fbtest-doors-miss-"))
+out = fb.tool_write_file({"path": str(_miss_dir / "p.txt")}, {"session_key": "doors-miss"})
+check("write_file: a missing content names the argument and the shape",
+      "missing the argument 'content'" in out and "path, content" in out, out[:200])
+out = fb.tool_memory({"action": "read"}, {"session_key": "doors-miss"})
+check("memory: read with no id says id, not `no concept ''`",
+      out.startswith("ERROR") and "`id`" in out and "''" not in out, out[:160])
+out = fb.tool_experiment({"action": "show"}, {"session_key": "doors-miss"})
+check("experiment: show with no id says id, not `#None`",
+      out.startswith("ERROR") and "`id`" in out and "None" not in out, out[:160])
+out = fb.tool_search_sessions({"query": "  "}, {"session_key": "doors-miss"})
+check("search_sessions: an empty query says what to pass",
+      out.startswith("ERROR") and "`query`" in out, out[:160])
+out = fb.tool_plan({"action": "doing"}, {"session_key": "doors-miss-plan"})
+check("plan: a step verb with no id says id, not `id None`",
+      out.startswith("ERROR") and "`id`" in out and "None" not in out, out[:160])
+shutil.rmtree(_miss_dir, ignore_errors=True)
+
 _tmp_tools = Path(tempfile.mkdtemp(prefix="fbtest-doors-create-"))
 _saved_tools_dir = fb.TOOLS_DIR
 _saved_registry_dir = fb.REGISTRY.tools_dir

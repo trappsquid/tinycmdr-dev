@@ -473,8 +473,49 @@ for _act in ("list", "search", "read"):
     out = fb.tool_skill({"action": _act, "name": "search_sessions", "topic": "x"}, {})
     check("the skill tool answers a TOOL name for action=%s too" % _act,
           "is a TOOL on this box" in out and "Its arguments:" in out, out[:180])
-out = fb.tool_skill({"action": "search", "topic": "poster"}, {})
-check("a real skill search is untouched", "is a TOOL on this box" not in out, out[:140])
+# ---- no dead ends: every shape the schema permits answers actionably (2026-10-05) ----
+# Measured on a fleet Linux box: a run stuck on a Mattermost token asked
+# `skill{"action":"search","topic":"mattermost token mmctl ..."}` with no name, got
+# `No skill named ''` - an empty name and nothing to try - and re-issued its last shell
+# call until the loop guard wrapped the run up. A bare topic searches the whole shelf now,
+# and the other schema-legal shapes say what to pass instead of answering with a blank.
+_tmp_search = Path(tempfile.mkdtemp(prefix="tinycmdr-search-"))
+(_tmp_search / "mm").mkdir()
+(_tmp_search / "mm" / "SKILL.md").write_text(
+    "---\nname: mattermost-ops\ndescription: tokens\n---\n"
+    "# Minting a token\n\nUse mmctl to mint a Mattermost token.\n",
+    encoding="utf-8", newline="\n")
+(_tmp_search / "posters").mkdir()
+(_tmp_search / "posters" / "SKILL.md").write_text(
+    "---\nname: poster-notes\ndescription: posters\n---\n"
+    "# Posters\n\nThe printer takes A2.\n", encoding="utf-8", newline="\n")
+_keep_search = fb.SKILLS_DIR
+try:
+    fb.SKILLS_DIR = _tmp_search
+    out = fb.tool_skill({"action": "search", "topic": "sandwich"}, {})
+    check("a bare topic search never answers with an empty name",
+          "No skill named ''" not in out and "''" not in out, out[:160])
+    out = fb.tool_skill({"action": "search", "topic": "mattermost token mmctl"}, {})
+    check("a bare topic search reads every runbook and labels the hit",
+          "mattermost-ops ::" in out and "Minting a token" in out, out[:160])
+    out = fb.tool_skill({"action": "search", "name": "poster-notes", "topic": "printer"}, {})
+    check("a named search still reads just that runbook, unlabelled",
+          out.startswith("--- SKILL.md ::") and "mattermost" not in out, out[:120])
+    out = fb.tool_skill({"action": "search"}, {})
+    check("a search with no topic says to pass one", "`topic`" in out, out[:160])
+    out = fb.tool_skill({"action": "read"}, {})
+    check("a read with no name says a name is needed",
+          "`name`" in out and "No skill named ''" not in out, out[:160])
+    out = fb.tool_skill({"action": "Search", "topic": "mattermost"}, {})
+    check("a capitalised verb is the same verb", "Minting a token" in out, out[:120])
+    out = fb.tool_skill({"action": "find", "name": "poster-notes"}, {})
+    check("an unhandled verb names the actions it has",
+          "unknown action" in out and "No skill named" not in out, out[:160])
+    out = fb.tool_skill({"action": "search", "topic": "MATTERMOST TOKEN"}, {})
+    check("an uppercase topic still finds its words", "Minting a token" in out, out[:120])
+finally:
+    fb.SKILLS_DIR = _keep_search
+    shutil.rmtree(_tmp_search, ignore_errors=True)
 
 out = fb.tool_shell({"command": 'python -c "print(123)"'}, {"session_key": "s-script-c"})
 check("a plain interpreter one-liner still runs", "123" in out, out[:120])

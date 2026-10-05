@@ -8401,6 +8401,16 @@ def tool_write_file(args, ctx):
                     f"is real - rename it if a later read misbehaves.]"))
                 + tools_dir_verdict(path))
     except Exception as e:
+        # A missing argument used to leave as `ERROR writing <path>: 'content'` - a
+        # Python repr, not an instruction (surfaced by the tool-surface sweep,
+        # 2026-10-05). The shared answer names the argument and lists the shape;
+        # anything else keeps the honest generic wording.
+        if isinstance(e, KeyError):
+            params = (((REGISTRY.get("write_file") or {}).get("schema") or {})
+                      .get("function") or {}).get("parameters") or {}
+            return (_missing_argument_answer(
+                        "write_file", str(e.args[0]) if e.args else "", params)
+                    or f"ERROR writing {path}: {e}")
         return f"ERROR writing {path}: {e}"
 
 
@@ -9102,6 +9112,11 @@ def tool_memory(args, ctx):
         return ("%d concept%s in memory/ | index %d chars\n%s"
                 % (len(concepts), "" if len(concepts) == 1 else "s",
                    len(index), index))
+    if action in ("read", "update", "deprecate", "forget") and not args.get("id"):
+        # The empty-id shape used to answer `no concept ''` - a blank name, then the
+        # id list (swept 2026-10-05). Say what the call is missing instead.
+        return ("ERROR: %s needs `id` - memory action=list shows the index of ids."
+                % action)
     if action == "read":
         c = _memory_find(args.get("id"))
         if c is None:
@@ -10008,6 +10023,10 @@ def tool_experiment(args, ctx):
                 + "\n".join(_experiment_line(r) for r in recs))
 
     if action in ("show", "read"):
+        if not args.get("id"):
+            # Used to answer `no experiment #None in the ledger` (swept 2026-10-05).
+            return ("ERROR: action=%s needs `id`; action=index lists the ids."
+                    % action)
         rec = _experiment_find(recs, args.get("id"))
         if not rec:
             return ("ERROR: no experiment #%s in the ledger. action=index lists the "
@@ -10473,6 +10492,11 @@ def session_search_hits(query, limit=25):
 def tool_search_sessions(args, ctx):
     """Grep past conversation sessions (persisted in ./sessions/)."""
     raw = str(args.get("query") or "")
+    if not raw.strip():
+        # `No past session content matching: ` - a dangling colon - is what an empty
+        # query used to get (swept 2026-10-05). Say what to pass.
+        return ("ERROR: search_sessions needs a `query` - the words to look for across "
+                "past transcripts.")
     # ALL words, not the literal phrase. `query in content` matched only an exact substring,
     # so "scheduler fired schedule add" answered "No past session content matching" while
     # the same session's events were found in one search_files call - the tool built for
@@ -10826,6 +10850,10 @@ def tool_plan(args, ctx):
         return render() if plan else ("No plan for this run yet. Set one with "
                                      "plan action=set when the task has several steps.")
 
+    if not args.get("id"):
+        # Used to answer `No plan step with id None` (swept 2026-10-05).
+        return ("ERROR: action=%s needs the step `id`; plan action=show lists them."
+                % action)
     try:
         sid = int(args.get("id") or 0)
     except (TypeError, ValueError):
@@ -10866,9 +10894,80 @@ def _skill_names_brief(skills, cap=40):
             + f", ... and {len(names) - cap} more (skill action=list names them all)")
 
 
+def _skill_sections(sdir):
+    """[(file, heading, body)] for every markdown section of one runbook."""
+    sections = []
+    for f in sorted(sdir.rglob("*.md")):
+        text = _read_text_any(f)
+        parts = re.split(r"(?m)^(#{1,3} .+)$", text)
+        if parts[0].strip():
+            sections.append((f.name, "(intro)", parts[0].strip()))
+        for i in range(1, len(parts) - 1, 2):
+            sections.append((f.name, parts[i].strip(),
+                             (parts[i] + "\n" + parts[i + 1]).strip()))
+    return sections
+
+
+def _skill_search(skills, match, name, topic, key):
+    """Topic search: inside one named runbook, or across every runbook the session sees.
+
+    A bare topic is the shape that used to dead-end. The dispatch resolved the skill
+    FIRST, so `skill{"action": "search", "topic": "..."}` fell into the no-match branch
+    and answered `No skill named ''` - an empty name and nothing to try instead.
+    Measured on a fleet Linux box 2026-10-05: a run stuck on a Mattermost token asked
+    exactly that for the minting procedure, got the empty-name answer, and had nothing
+    to act on. The match itself is unchanged (topic words, headings weighted 3x), now
+    run over every candidate book; a named search still reads one.
+    """
+    if not topic:
+        return ('ERROR: search needs a `topic`: '
+                'skill {"action": "search", "topic": "<words to look up>"} searches '
+                'every runbook this session can see, or add a `name` to search one.')
+    books = match or [s for s in skills if _skill_granted(s, key)]
+    if not books:
+        return ("No runbooks to search on this box. Drop skill folders (containing "
+                "SKILL.md) into ./skills/ and they work as-is.")
+    # topic.lower() BEFORE the scan: an all-caps topic (a pasted heading, an error string)
+    # used to yield zero words and answer `nothing to look up` - same dead end family.
+    words = [w for w in re.findall(r"[a-z0-9_.-]+", topic.lower()) if len(w) > 2]
+    if not words:
+        return (f"ERROR: nothing to look up in {topic!r} - a search word is three or "
+                f"more characters.")
+    scored = []
+    for book in books:
+        for fn, h, body in _skill_sections(book["dir"]):
+            low = body.lower()
+            score = sum(low.count(w) * (3 if w in h.lower() else 1) for w in words)
+            if score:
+                scored.append((score, book, fn, h, body))
+    if not scored:
+        where = (f"skill {name!r}" if match
+                 else f"the {len(books)} runbook(s) this session can see")
+        return (f"No sections in {where} matched {topic!r}. "
+                f'`skill {{"action": "list"}}` names the shelf.')
+    scored.sort(key=lambda s: -s[0])
+    labelled = len(books) > 1
+    out, total = [], 0
+    for _, book, fn, h, body in scored[:3]:
+        head = (f"--- {book['name']} :: {fn} :: {h} ---" if labelled
+                else f"--- {fn} :: {h} ---")
+        chunk = head + "\n" + body
+        if total + len(chunk) > 3500:
+            chunk = chunk[:max(0, 3500 - total)]
+        if chunk:
+            out.append(chunk)
+            total += len(chunk)
+        if total >= 3500:
+            break
+    return "\n\n".join(out)
+
+
 def tool_skill(args, ctx):
     """List, read, or search prose skills (Hermes SKILL.md runbooks)."""
-    action = args.get("action", "list")
+    # Lowercased on purpose: a capitalised verb (`Search`, `Read`) used to fall through
+    # the dispatch into whatever branch sat last - the same class of dead end the
+    # nameless-search fix below removes.
+    action = str(args.get("action", "list") or "list").strip().lower()
     name = (args.get("name") or "").strip().lower()
     topic = (args.get("topic") or "").strip()
     key = (ctx or {}).get("session_key") or ""
@@ -10911,7 +11010,14 @@ def tool_skill(args, ctx):
                 "OPERATOR names the runbook in an order. After the operator names it, it "
                 "is readable for the session; until then, this refusal is the whole "
                 "answer.")
-    if not match:
+    if action not in ("list", "read", "show", "get", "open", "search"):
+        # An unhandled verb used to fall into the search branch and answer
+        # `No sections ... matched ''` from an empty topic; say the door instead.
+        # Before the name-miss branch on purpose: a typo'd verb with a typo'd name is
+        # answered with the verb, which is the part the call got wrong.
+        return (f"ERROR: unknown action {action!r} - use list, read or search, e.g. "
+                f'skill {{"action": "list"}}.')
+    if name and not match:
         # A TOOL name asked for as a skill is a miss this harness now invites: the prompt
         # names the hidden tools, and the drive answered that by asking the skill tool for
         # one (measured 2026-09-23: skill{read, name: search_files} came back as 1.7 KB of
@@ -10919,6 +11025,11 @@ def tool_skill(args, ctx):
         # list bounded - 105 names is a page of nothing.
         return (f"No skill named {name!r}. Installed: "
                 + _skill_names_brief([s for s in skills if _skill_granted(s, key)]))
+    if action == "search":
+        return _skill_search(skills, match, name, topic, key)
+    if not name:
+        return ('ERROR: read needs a skill `name` - `skill {"action": "list"}` names '
+                'the runbooks this session can see.')
     sdir = match[0]["dir"]
     if action == "read":
         text = _read_text_any(sdir / "SKILL.md")
@@ -10971,39 +11082,6 @@ def tool_skill(args, ctx):
         # The tool surface rides with the first page and with any section read; a
         # continuation page would just repeat it.
         return chunk + (surface if off == 0 else "")
-    # search: section-wise topic match across the skill's markdown files
-    sections = []
-    for f in sorted(sdir.rglob("*.md")):
-        text = _read_text_any(f)
-        parts = re.split(r"(?m)^(#{1,3} .+)$", text)
-        if parts[0].strip():
-            sections.append((f.name, "(intro)", parts[0].strip()))
-        for i in range(1, len(parts) - 1, 2):
-            sections.append((f.name, parts[i].strip(),
-                             (parts[i] + "\n" + parts[i + 1]).strip()))
-    words = [w.lower() for w in re.findall(r"[a-z0-9_.-]+", topic)
-             if len(w) > 2]
-    scored = []
-    for fn, h, body in sections:
-        low = body.lower()
-        score = sum(low.count(w) * (3 if w in h.lower() else 1)
-                    for w in words)
-        if score:
-            scored.append((score, fn, h, body))
-    if not scored:
-        return f"No sections in skill {name!r} matched {topic!r}."
-    scored.sort(key=lambda s: -s[0])
-    out, total = [], 0
-    for _, fn, h, body in scored[:3]:
-        chunk = f"--- {fn} :: {h} ---\n{body}"
-        if total + len(chunk) > 3500:
-            chunk = chunk[:max(0, 3500 - total)]
-        if chunk:
-            out.append(chunk)
-            total += len(chunk)
-        if total >= 3500:
-            break
-    return "\n\n".join(out)
 
 
 # --------------------------------------------------------------------------
@@ -11959,12 +12037,14 @@ CORE_TOOLS = {
     "skill": {
         "fn": tool_skill,
         "schema": _schema(
-            "Prose skills: SKILL.md runbooks in ./skills/. List, read one, or "
-            "search one by topic. Read the relevant skill BEFORE working in its "
-            "domain: it holds local procedures and warnings. Long skills come "
-            "back in chunks.",
+            "Prose skills: SKILL.md runbooks in ./skills/. List them, read one by "
+            "name, or search by topic - every runbook, or just the one you name. "
+            "Read the relevant skill BEFORE working in its domain: it holds local "
+            "procedures and warnings. Long skills come back in chunks.",
             {"action": {"type": "string", "enum": ["list", "read", "search"]},
-             "name": {"type": "string", "description": "Skill name"},
+             "name": {"type": "string",
+                      "description": "Skill name (required for read; optional for "
+                                     "search - omit it to search every runbook)"},
              "topic": {"type": "string",
                        "description": "For search: what to look up"},
              "section": {"type": "string",
