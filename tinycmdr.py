@@ -8,7 +8,8 @@ process. It connects to your Mattermost server as a bot, listens for DMs and
 log reading, web search, and self-created custom tools — until the task is
 done, and reports back in the thread.
 
-Dependencies:  pip install -r requirements.txt
+Dependencies:  pip install requests mmpy_bot mattermostautodriver croniter rich prompt_toolkit
+               (the shipped set is requirements.txt: pip install -r requirements.txt)
 Config:        config.json next to this file (see config.example.json)
 Custom tools:  drop .py files into ./tools/ (the agent also writes its own
                here via the create_tool tool)
