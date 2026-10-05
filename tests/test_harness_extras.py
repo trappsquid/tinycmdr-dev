@@ -135,6 +135,17 @@ def main():
         check("a single failing line is still the signature",
               "cannot find the file" in sig, sig)
 
+        # Windows paths are squeezed like POSIX ones (A-2026-10-05-24), while a
+        # domain\user token stays readable.
+        a = fb._failure_signature(r"error: C:\Users\One\proj\venv\lib missing")
+        b = fb._failure_signature(r"error: C:\Other\place\venv\lib missing")
+        check("a Windows drive path is squeezed out of the key",
+              a == b and "users" not in a, (a, b))
+        u1 = fb._failure_signature(r"get-item : could not find \\10.1.1.1\share\a.tmp")
+        check("a UNC path is squeezed too", "share" not in u1 and "p" in u1, u1)
+        d = fb._failure_signature(r"whoami: mnq\david trapp")
+        check("a domain\\user token is not a path and survives", "mnq" in d, d)
+
         # ---- a CLI run with nobody who can type (piped stdin) declares no human
         # A Windows fleet box, 2026-10-03: a `--once` run driven over ssh with the script piped in
         # mounted the console door anyway, so ask_user parked the full 120s and then

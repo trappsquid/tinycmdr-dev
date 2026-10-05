@@ -4164,6 +4164,12 @@ def _failure_signature(text):
     line = re.sub(r"0x[0-9a-f]+", "x", line)
     line = re.sub(r"\b[0-9a-f]{8,}\b", "x", line)
     line = re.sub(r"(/[\w.\-]+){2,}", "p", line)
+    # Windows paths, the half this normalizer was missing: a backslash path survived
+    # verbatim, so one failure fragmented per folder on a Windows-first fleet
+    # (A-2026-10-05-24). Drive and UNC forms, plus a bare relative path with two or
+    # more separators - a single `domain\user` token is not a path and is kept.
+    line = re.sub(r"(?:[a-z]:|\\\\)(?:\\[^\\\s\"']+)+", "p", line)
+    line = re.sub(r"[\w.\-]+(?:\\[\w.\-]+){2,}", "p", line)
     line = re.sub(r"\d+", "n", line)
     return re.sub(r"\s+", " ", line).strip()[:120]
 
