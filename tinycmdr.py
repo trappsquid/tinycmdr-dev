@@ -16238,7 +16238,11 @@ class Agent:
         if self._conversation_token_est(messages) <= budget:
             return messages
         # Cut a COPY: the run loop's history keeps its blocks, only this request shrinks.
-        messages = list(messages)
+        # dict(m) per message, NOT list(messages): the trim loop below writes through
+        # m["content"], and the shallow list copy handed it the caller's own message
+        # dicts - one failover truncated the live session's tool results to 200 chars
+        # (A-2026-10-04-02).
+        messages = [dict(m) for m in messages]
         low = max(2000, int(budget * 0.6))
         total = self._conversation_token_est(messages)
         while total > low:
