@@ -121,6 +121,20 @@ def main():
         check("match: timeout" in cands[0],
               "...and falls back to a distinctive word", cands)
 
+        # The signature comes from the line that LOOKS like the failure, not the first
+        # line: banners/headers were recorded as "the failure" of any multi-command
+        # result whose last command failed (A-2026-10-05-23).
+        sig = fb._failure_signature("=== tinycmdr status ===\nname source\n"
+                                    "git : fatal: not a git repository\n")
+        check("a banner is not the signature when a failing line exists",
+              "fatal" in sig and "tinycmdr status" not in sig, sig)
+        sig = fb._failure_signature("checking...\n0 errors\n")
+        check("...and a benign '0 errors' line does not win either",
+              sig.startswith("checking"), sig)
+        sig = fb._failure_signature("the system cannot find the file specified.")
+        check("a single failing line is still the signature",
+              "cannot find the file" in sig, sig)
+
         # ---- a CLI run with nobody who can type (piped stdin) declares no human
         # A Windows fleet box, 2026-10-03: a `--once` run driven over ssh with the script piped in
         # mounted the console door anyway, so ask_user parked the full 120s and then

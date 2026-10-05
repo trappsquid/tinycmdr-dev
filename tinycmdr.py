@@ -4123,19 +4123,41 @@ def _draft_match(sig):
     return ("   draft -> `match: %s` + `note: <what this failure means>`" % token)
 
 
+# What a FAILING line tends to say, and what a benign line says about failing. The
+# signature used to take the FIRST line whatever it was, so banners, PowerShell table
+# headers and `dir` volume labels became the recorded "failure" of a multi-command
+# result (A-2026-10-05-23).
+_FAILURE_LINE_RX = re.compile(
+    r"(?i)\b(?:error|failed|failure|fatal|exception|traceback|denied|refused|"
+    r"timeout|timed out|not found|no such|cannot|can't|unable|invalid|unrecognized|"
+    r"unreachable|broken pipe)\b"
+    r"|http/[0-9.]+ [45]\d\d|status[^.\n]{0,12}[45]\d\d")
+_BENIGN_LINE_RX = re.compile(r"(?i)\b(?:0|no|zero) errors?\b|\berror[- ]free\b")
+
+
 def _failure_signature(text):
     """A coarse signature for a failure the library has no entry for.
 
     The parts that differ run to run - paths, numbers, pids, hex - are squeezed out, so the
     same failure on two days lands on one key instead of two. Deliberately dumb: it is a
     grouping hint for a human deciding what to write, never a matcher.
+
+    The line is chosen for LOOKING like the failure, not for being first: a banner or a
+    PowerShell table header used to become the recorded "failure" of any multi-command
+    result whose last command exited non-zero (A-2026-10-05-23). A benign report of
+    failing - "0 errors" - does not qualify.
     """
-    line = ""
+    first = err = ""
     for raw in text.splitlines():
         s = raw.strip()
-        if s and not s.startswith(("[HARNESS", "exit_code=")):
-            line = s
+        if not s or s.startswith(("[HARNESS", "exit_code=")):
+            continue
+        if not first:
+            first = s
+        if _FAILURE_LINE_RX.search(s) and not _BENIGN_LINE_RX.search(s):
+            err = s
             break
+    line = err or first
     if not line:
         return ""
     line = line.lower()
