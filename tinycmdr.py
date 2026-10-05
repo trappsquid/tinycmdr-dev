@@ -31334,7 +31334,7 @@ def _verb_doctor():
         problems.append(err)
 
     print("  python    : %s" % sys.version.split()[0])
-    if sys.version_info < (3, 9):
+    if sys.version_info < (3, 10):
         problems.append("python %s is older than this build supports"
                         % sys.version.split()[0])
 
