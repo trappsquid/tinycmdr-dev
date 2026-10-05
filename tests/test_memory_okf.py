@@ -82,12 +82,22 @@ def test_conformance_type_always_present():
 
 def test_scalars_that_would_misparse_get_quoted():
     risky = ["has: colon", "- leading dash", "trailing space ", "", "true", "42",
-             "needs # hash"]
+             "needs # hash",
+             # json.dumps is how the emitter quotes these, so parse must UNDO the
+             # escapes rather than only strip the quotes: a Windows path doubled its
+             # backslashes on every rewrite (A-2026-10-05-29).
+             r"C:\Users\David Trapp\tinycmdr", 'say "hi"', r"two\\pairs\\here"]
     for value in risky:
         text = fb.okf_dump({"type": "Fact", "title": value}, "")
         got, _ = fb.okf_parse(text)
         check(f"a scalar round-trips: {value!r}", got.get("title") == value,
               repr(got.get("title")))
+    tricky = r"C:\Users\David Trapp"
+    once = fb.okf_dump({"type": "Fact", "title": tricky}, "")
+    again, _ = fb.okf_parse(once)
+    check("a backslash value re-dumps byte-identically (idempotent)",
+          fb.okf_dump({"type": "Fact", "title": again.get("title")}, "") == once,
+          repr(again.get("title")))
     plain = fb.okf_dump({"type": "Fact", "title": "plain-title_1"}, "")
     check("...and an unquotable one stays unquoted", "title: plain-title_1" in plain,
           plain)

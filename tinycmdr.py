@@ -8902,7 +8902,21 @@ def _okf_split(s):
 def _okf_scalar(tok):
     tok = tok.strip()
     if len(tok) >= 2 and tok[0] == tok[-1] and tok[0] in "\"'":
-        return tok[1:-1]
+        body = tok[1:-1]
+        if tok[0] == '"':
+            # _okf_emit writes non-plain strings with json.dumps, so a double-quoted
+            # token IS JSON: strip the quotes AND undo the escapes. Stripping alone
+            # added a layer per rewrite - a Windows path doubled its backslashes on
+            # every memory update, and index.md (which renders the parsed value)
+            # showed the mangled form (A-2026-10-05-29). A hand-written token that
+            # is not valid JSON falls back to the raw body (spec §11: permissive).
+            try:
+                val = json.loads(tok)
+            except Exception:                # noqa: BLE001 - not JSON, keep the body
+                val = None
+            if isinstance(val, str):
+                return val
+        return body
     if tok in ("true", "True"):
         return True
     if tok in ("false", "False"):
