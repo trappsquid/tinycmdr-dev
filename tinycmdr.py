@@ -31371,6 +31371,24 @@ def _verb_doctor():
         problems.append("python %s is older than this build supports"
                         % sys.version.split()[0])
 
+    # The image switch: nothing else in doctor says whether a screenshot-returning
+    # tool's pictures can reach the model at all, and the enable path is otherwise
+    # buried in config.json. When it is on, the endpoint gets the last word (only a
+    # positive modalities.vision=false vetoes; an endpoint that says nothing does not).
+    _vision = bool(CONFIG["agent"].get("vision"))
+    if _vision:
+        _vok, _vwhy = _endpoint_vision()
+        if _vok:
+            print("  vision    : on - tool images (computer_use screenshots) ride one "
+                  "request")
+        else:
+            problems.append("agent.vision is on but %s; a screenshot would be sent to "
+                            "an endpoint that cannot see it" % _vwhy)
+    else:
+        print("  vision    : off - tool screenshots are NOT sent; set agent.vision true "
+              "(`tinycmdr config set agent.vision true` + restart) if the endpoint "
+              "accepts images")
+
     # The persona is invisible state: nothing else in this output says whether the agent is
     # running the shipped identity or one somebody edited here. (`update` copies an edited
     # file aside before pulling; see preserve_edited_soul.)

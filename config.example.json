@@ -330,7 +330,7 @@
     "_comment_ask_user": "ask_user lets a run STOP and ask you a question, then carry on with your answer. Off by default: with it on the model can spend budget parked on a question, so switch it on where a human watches the channel. ask_user_wait_seconds bounds that wait (5..900; the model cannot extend it, and a /stop releases a parked run immediately).",
     "ask_user": true,
     "ask_user_wait_seconds": 120,
-    "_comment_extras": "vision: only set true if the endpoint actually accepts images. subagent_model pins delegate_task sub-agents somewhere specific (empty = inherit the conversation's model). show_usage puts the token/time footer on the Done line. debug_dump_dir writes every request body to that directory when troubleshooting a model that answers nonsense (empty = off). announce_restart controls the 'back up' post after /restart.",
+    "_comment_extras": "vision: only set true if the endpoint actually accepts images - this is what lets a screenshot-returning tool (computer_use) reach the model; `tinycmdr doctor` says whether it is on and whether the endpoint agrees. subagent_model pins delegate_task sub-agents somewhere specific (empty = inherit the conversation's model). show_usage puts the token/time footer on the Done line. debug_dump_dir writes every request body to that directory when troubleshooting a model that answers nonsense (empty = off). announce_restart controls the 'back up' post after /restart.",
     "vision": false,
     "subagent_model": "",
     "subagent_timeout_seconds": 900,
