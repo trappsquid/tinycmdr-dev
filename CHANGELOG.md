@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.79] - 2026-10-05
+
+### Changed
+- **Housekeeping:** private finding/plan/report pointers and process narration are out of the comments, docstrings, docs, tests and the release ledger, and the changelog no longer carries a real user path (the leak gate's patterns are unchanged).
+- **Locks:** the cross-process lock namespace is keyed on the install folder rather than the caller's uid (dir 1777 sticky, lock files 0666, O_NOFOLLOW on the open), so a root cron and the service user over one install serialize. (tests/test_cross_process.py)
+- **Transcripts:** compaction writes only the span it drops, and the file rotates to `.transcript.1` at 4 MB. (tests/test_transcript.py)
+- **Event logs:** a session's event file rolls to `.events.1` at 8 MB, and retention counts sessions, so a rolled predecessor is deleted with its base. (tests/test_events.py)
+- **Field notes:** tallies reconcile against the live library before a record, and an absent or switched-off library never wipes history. (tests/test_harness_extras.py)
+- **Dead code:** `_STATE_LOCK` (declared as the state guard, acquired nowhere) removed.
+
+### Fixed
+- **Update:** a half-applied release is repaired by bytes instead of refused; the pip reconcile command is named when `requirements.txt` changes; the host-owned set matches the installers'; the dev-kit prune recognizes a checkout with no declaration. (tests/test_verbs.py)
+- **Installers:** the Windows installer enforces the Python 3.10-3.12 band; both POSIX uninstallers prompt (or take `--yes` without a tty) and refuse a folder with no `tinycmdr.py`; the POSIX restart helper scopes its pkill to install paths and its unit guard can fail; the Windows restart helper stops the supervisor and launcher, scoped to the install. (tests/test_installer_parity.py, tests/test_installer_unix.py, tests/test_installer_windows.py, tests/test_verbs.py)
+- **State files:** a damaged state file is copied aside as `.damaged-<stamp>` and named by every reader. (tests/test_state_damage.py)
+- **Spill index:** merges across processes and is written atomically, with tombstones so a removal is not resurrected. (tests/test_spill_durability.py)
+- **Failure signatures:** come from the line that looks like the failure, and Windows paths squeeze into one signature like POSIX ones. (tests/test_harness_extras.py)
+- **Memory index:** an over-budget index cuts on a line boundary and names the sections it dropped. (tests/test_memory_okf.py)
+- **OKF scalars:** round-trip through the emitter (escapes undone on parse, no doubling per rewrite). (tests/test_memory_okf.py)
+- **`stale_after`:** validated and normalized before comparing, so an unpadded past date can no longer read as the future; an unreadable value warns once and fails open. (tests/test_memory_okf.py)
+- **Instance lock:** the read-only probe no longer creates `tinycmdr.lock` on Windows. (tests/test_cross_process.py)
+- **Doctor:** reports the vision switch and the endpoint's `/props` veto, so a screenshot that cannot reach the model says why.
+
 ## [1.0.78] - 2026-10-05
 
 ### Changed
