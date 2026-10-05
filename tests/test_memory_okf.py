@@ -207,6 +207,28 @@ def test_index_is_progressive_disclosure():
           fb.memory_index_render([]), "no empty marker")
 
 
+def test_index_cut_names_what_it_drops():
+    """An over-budget index is cut on a line boundary and NAMES the sections it lost
+    (A-2026-10-05-26): the index is grouped by type, so a blind head-cut dropped whole
+    categories from every prompt with nothing said."""
+    _fresh()
+    for i in range(3):
+        fb.memory_new_concept("Fact %d" % i, "body", ctype="Fact",
+                              description="x" * 150)
+    fb.memory_new_concept("Runbook only item", "step", ctype="Runbook",
+                          description="wire the thing")
+    fb.memory_index_update()
+    saved = fb.CONFIG["agent"].get("memory_index_max_chars")
+    fb.CONFIG["agent"]["memory_index_max_chars"] = 400
+    try:
+        block = fb.volatile_context()
+    finally:
+        fb.CONFIG["agent"]["memory_index_max_chars"] = saved
+    check("an over-budget index says it was cut", "index cut at" in block, block[-400:])
+    check("...and names the dropped section", "dropped: Runbook" in block,
+          block[-400:])
+
+
 def test_log_is_newest_first_and_date_grouped():
     _fresh()
     fb.memory_new_concept("One", "1")

@@ -14352,9 +14352,25 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
         index = MEMORY_INDEX.read_text(encoding="utf-8", errors="replace")
         if len(index) > cap:
             # A read path never rewrites the bundle (the notes.md lesson): bound what
-            # the prompt sees and say so. `memory action=list` returns the whole index.
-            index = (index[:cap] + "\n<!-- index cut at %d chars; memory "
-                     "{\"action\": \"list\"} shows all of it -->\n" % cap)
+            # the prompt sees - but on a LINE boundary and NAMING what the tail loses.
+            # The index is grouped by type in a fixed order, so a blind head-cut
+            # silently dropped whole sections (Runbook, Decision, ...) from every
+            # prompt (A-2026-10-05-26); notes.md over budget warns in the log, and so
+            # does this.
+            head = index[:cap]
+            _nl = head.rfind("\n")
+            if _nl > 0:
+                head = head[:_nl]
+            _kept = set(re.findall(r"(?m)^# (\S+)", head))
+            _dropped = [t for t in re.findall(r"(?m)^# (\S+)", index)
+                        if t not in _kept]
+            log.warning("memory/index.md is %d chars, over its %d-char budget - the "
+                        "prompt sees the first %d chars; sections dropped: %s",
+                        len(index), cap, len(head), ", ".join(_dropped) or "none")
+            index = (head + "\n<!-- index cut at %d chars%s; memory "
+                     "{\"action\": \"list\"} shows all of it -->\n"
+                     % (cap, ("; dropped: " + ", ".join(_dropped))
+                        if _dropped else ""))
         if index.strip():
             parts.append("Memory: durable knowledge about this machine, one OKF "
                          "concept per file under memory/ (markdown + YAML "
