@@ -15446,46 +15446,65 @@ def _repair_tool_arguments(messages):
 
     Runs at the same choke point as the pairing repair, so a history written by an older
     build heals on its first send instead of needing the session dropped.
+
+    Rewrites COPIES, never the caller's dicts: the payload aliases the live session
+    history, and an in-place `{}` made the model read its own past turn as a call with no
+    arguments - the self-blame failure the sibling salvage path already documents
+    (A-2026-10-04-06).
     """
     bad = 0
+    out = []
     for m in messages:
         if not isinstance(m, dict) or m.get("role") != "assistant":
+            out.append(m)
             continue
-        for tc in (m.get("tool_calls") or []):
+        tcs = m.get("tool_calls") or []
+        new_m = None
+        for j, tc in enumerate(tcs):
             fn = tc.get("function") if isinstance(tc, dict) else None
             if not isinstance(fn, dict):
                 continue
             args = fn.get("arguments")
+            replacement = None
             if isinstance(args, dict):          # a server that hands back an object
-                fn["arguments"] = json.dumps(args)
-                continue
-            if not isinstance(args, str) or not args.strip():
-                fn["arguments"] = "{}"
+                replacement = json.dumps(args)
+            elif not isinstance(args, str) or not args.strip():
+                replacement = "{}"
                 bad += 1
+            else:
+                try:
+                    json.loads(args)
+                except Exception:
+                    salvaged = _salvage_tool_args(args)
+                    if salvaged is not None:
+                        replacement = json.dumps(salvaged)
+                        log.warning("tool call %s had its arguments wrapped in other text - "
+                                    "kept the JSON object inside them (%s)",
+                                    fn.get("name") or "?", scrub(args[:60]))
+                    else:
+                        # The endpoint 500s the WHOLE request on one unparseable blob, so the
+                        # replayed copy has to become {}. Keep the text that arrived, though:
+                        # without it, "arguments that are not JSON" and "arguments that were
+                        # damaged on the way in" read the same in the log.
+                        log.warning("tool call %s had arguments that are not JSON (%d chars) - "
+                                    "replaying them as {} so the endpoint can parse the request. "
+                                    "Arrived as: %r",
+                                    fn.get("name") or "?", len(args), scrub(args[:2000]))
+                        replacement = "{}"
+                    bad += 1
+            if replacement is None:
                 continue
-            try:
-                json.loads(args)
-            except Exception:
-                salvaged = _salvage_tool_args(args)
-                if salvaged is not None:
-                    fn["arguments"] = json.dumps(salvaged)
-                    log.warning("tool call %s had its arguments wrapped in other text - "
-                                "kept the JSON object inside them (%s)",
-                                fn.get("name") or "?", scrub(args[:60]))
-                else:
-                    # The endpoint 500s the WHOLE request on one unparseable blob, so the
-                    # replayed copy has to become {}. Keep the text that arrived, though:
-                    # without it, "arguments that are not JSON" and "arguments that were
-                    # damaged on the way in" read the same in the log.
-                    log.warning("tool call %s had arguments that are not JSON (%d chars) - "
-                                "replaying them as {} so the endpoint can parse the request. "
-                                "Arrived as: %r",
-                                fn.get("name") or "?", len(args), scrub(args[:2000]))
-                    fn["arguments"] = "{}"
-                bad += 1
+            if new_m is None:
+                new_m = dict(m)
+                new_m["tool_calls"] = [dict(t) if isinstance(t, dict) else t for t in tcs]
+            tc2 = new_m["tool_calls"][j]
+            fn2 = dict(tc2.get("function") or {})
+            fn2["arguments"] = replacement
+            tc2["function"] = fn2
+        out.append(new_m if new_m is not None else m)
     if bad:
         log.warning("repaired %d tool-call argument(s) that were not valid JSON", bad)
-    return messages
+    return out
 
 
 class Agent:

@@ -160,6 +160,8 @@ def main():
     check("the payload builder sends at least one tool call", bool(sent), payload)
     check("every replayed arguments field parses as JSON",
           all(parses(a) for a in sent), sent)
+    check("the payload build left the stored blob untouched (A-2026-10-04-06)",
+          args_of(history[1]) == MALFORMED, args_of(history[1]))
 
     print()
     if FAILS:
