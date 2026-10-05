@@ -198,6 +198,27 @@ def main():
         fb.reset_scan_spend("s")
         fb.CONFIG["agent"]["scan_budget_seconds"] = 120
 
+        # ---- a hand-off to the background table still pays its walk ----------
+        # A-2026-10-05-03: the auto-background return skipped the charge, so the SLOWEST
+        # walks - the ones that ran past the window - cost the run's budget nothing.
+        fb.reset_scan_spend("s")
+        saved_autobg = fb._shell_autobg
+        saved_autobg_s = fb.CONFIG["agent"].get("auto_background_seconds")
+        try:
+            fb._shell_autobg = lambda command, ctx, threshold, timeout: (
+                time.sleep(0.3) or "[HARNESS: handed to the background table]")
+            fb.CONFIG["agent"]["auto_background_seconds"] = 1
+            out = fb.tool_shell({"command": RISKY[0]}, ctx)
+        finally:
+            fb._shell_autobg = saved_autobg
+            fb.CONFIG["agent"]["auto_background_seconds"] = saved_autobg_s
+        check("background table" in out,
+              f"a backgrounded walk returns the hand-off notice -> {out[:40]}")
+        check(fb.scan_spend(ctx) >= 0.25,
+              f"a backgrounded walk still pays for what it walked "
+              f"({fb.scan_spend(ctx):.2f}s)")
+        fb.reset_scan_spend("s")
+
         # ---- what the model is told when the per-call ceiling fires ----------
         try:
             fb.run_capture = lambda argv, timeout, cancel=None: (0, "partial listing", "", True)

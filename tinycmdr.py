@@ -6810,8 +6810,15 @@ def tool_shell(args, ctx):
     if _ab and not args.get("wait"):
         # Past the window, the blocking result would hold the turn hostage; the process
         # table takes over and the settled-jobs block closes the loop.
+        ab_t0 = time.time()
         ab = _shell_autobg(command, ctx, _ab, timeout)
         if ab:
+            # Charge what the command DID walk before the hand-off: this return skips the
+            # charge after run_capture, so without it the slowest walks - the ones that
+            # ran past the window - cost the run's scan budget nothing, and the model
+            # could buy another sweep (A-2026-10-05-03).
+            if cost_risk:
+                charge_scan(ctx, time.time() - ab_t0)
             return ab
     shell_cmd = _pwsh_chain_and(command) if IS_WINDOWS else command
     if IS_WINDOWS:
