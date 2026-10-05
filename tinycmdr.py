@@ -5698,6 +5698,13 @@ _RECURSIVE_WALK = (
     (re.compile(r"(?i)\b(?:grep|rg|findstr|select-string)\b[^\n|&;]*"
                 r"(?:-r\b|-R\b|--recursive\b|-recurse\b)"),
      "a recursive content search"),
+    # Recursive by DEFAULT, no flag: `tree`, `du`, `rg`/`ag`/`ack`, `rsync`, and `ls -R`
+    # walk a whole tree from a root alone, so the flag-gated entries above miss them. The
+    # broad-root condition below is what keeps `rg TODO` in the project directory out of
+    # the budget (A-2026-10-05-08).
+    (re.compile(r"(?i:\b(?:tree|du|rg|ag|ack|rsync)\b)"
+                r"|\bls\b[^\n|&;]*\s-[a-zA-Z]*R\b"),
+     "a recursive walk"),
 )
 
 # Roots that mean "the whole thing". A token one level under a user tree is
@@ -5760,6 +5767,7 @@ def _broad_root(tok):
 _CODE_WALK = (
     (re.compile(r"\bos\.walk\s*\("), "an os.walk sweep"),
     (re.compile(r"\.rglob\s*\("), "a recursive glob"),
+    (re.compile(r"\.walk\s*\("), "a recursive walk"),          # Path.walk (3.12+)
     (re.compile(r"\bos\.scandir\s*\("), "a directory scan"),
     (re.compile(r"glob\.glob\s*\([^)]*\*\*"), "a recursive glob"),
 )

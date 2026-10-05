@@ -48,6 +48,11 @@ RISKY = [
     r'''Get-ChildItem "$HOME" -Recurse''',
     # Profile-shaped by structure, whatever the user is called.
     r'''Select-String -Path C:/Users/<user> -Pattern todo -Recurse''',
+    # Recursive by default - no flag to gate on (A-2026-10-05-08).
+    r'''tree C:\Users\<user>''',
+    r'''du -sh /var''',
+    r'''rg TODO /''',
+    r'''ls -R /''',
 ]
 
 # Ordinary work: narrow roots, non-recursive reads, long jobs that are not walks.
@@ -64,6 +69,10 @@ PLAIN = [
     r'''Get-ChildItem -Recurse''',
     # A named subdirectory is not a whole tree, so this stays unbounded on purpose.
     r'''grep -r ERROR /var/log''',
+    # Recursive by default at a NARROW root: no flag, no budget (A-2026-10-05-08).
+    r'''rg TODO src''',
+    r'''du -sh ./logs''',
+    r'''ls -R C:\tinycmdr\logs''',
 ]
 
 CODE_RISKY = [
