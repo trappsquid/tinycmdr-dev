@@ -313,10 +313,11 @@ class FakeDispatcher(fb.MattermostDispatcher):
         self.edit_colors = []
         self.handled = []          # messages a worker actually picked up
 
-    def _post(self, channel_id, root_id, text, color=None):
+    def _post(self, channel_id, root_id, text, color=None, touch=True):
         self.posted.append((channel_id, text))
         self.colors.append(color)
-        self._touch(channel_id)
+        if touch:
+            self._touch(channel_id)
         return "post-%d" % len(self.posted)
 
     def _edit(self, post_id, channel_id, text, color=None):
@@ -647,6 +648,21 @@ def test_activity_tracking_keeps_a_healthy_run_off_the_watchdog():
     d._stall_tick()
     check("a channel that is posting is never warned about",
           not any("Still on it" in t for _, t in d.posted), d.posted)
+
+
+def test_the_watchdog_warning_does_not_reset_its_own_clock():
+    """A-2026-10-05-05: `_post` counted the warning as run progress, so the warn post
+    pushed the abandon window out by the warn interval - and with warn >= abandon the
+    abandon branch could never fire at all."""
+    d = _dispatcher()
+    ch = "chan-warn-clock"
+    now = fb.now_mono()
+    d.active[ch] = {"started": now - 9 * 60, "last": now - 9 * 60,
+                    "warned": False, "gen": 1}
+    d._stall_tick()
+    check("the warning is posted", any("Still on it" in t for _, t in d.posted), d.posted)
+    check("...and does not reset the stall clock it is measured against",
+          d.active[ch]["last"] == now - 9 * 60, d.active[ch])
 
 
 def test_a_forward_clock_step_does_not_abandon_a_healthy_run():

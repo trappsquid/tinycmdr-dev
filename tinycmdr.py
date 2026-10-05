@@ -26205,19 +26205,25 @@ class MattermostDispatcher:
         msg = str(err).lower()
         return "rootid" in msg or "root id" in msg or "invalid root" in msg
 
-    def _post(self, channel_id, root_id, text, color=None):
+    def _post(self, channel_id, root_id, text, color=None, touch=True):
         """Post text (chunked); returns the new post's id, or None.
 
         `color` (v1.9.30) carries the text inside a colored attachment bar instead of
         the post body. Only the first chunk is barred: one bar marks a message, and a
         long answer split across batches should not sprout one per chunk.
 
+        `touch=False` posts WITHOUT counting as run progress. The stall warning uses it:
+        a watchdog observer that reset the clock it watches stretched every abandon by
+        the warn interval, and with warn >= abandon it disabled abandonment outright
+        (A-2026-10-05-05).
+
         Only a genuine root rejection falls back to a top-level post, and only
         that poisons the root for this channel. Transient failures get one
         retry with the identical payload.
         """
         post_id = None
-        self._touch(channel_id)   # output here counts as run progress
+        if touch:
+            self._touch(channel_id)   # output here counts as run progress
         if root_id and self.dead_roots.get(channel_id) == root_id:
             root_id = None  # already known bad — go straight to top-level
         draft_id = None if color else self.draft_posts.pop(channel_id, None)
@@ -26610,7 +26616,8 @@ class MattermostDispatcher:
                            f"⏳ Still on it — nothing posted here for "
                            f"{int(quiet / 60)} min (run started "
                            f"{int((now - a['started']) / 60)} min ago). "
-                           f"`/tinycmdr stop` cancels it.")
+                           f"`/tinycmdr stop` cancels it.",
+                           touch=False)
 
     # -- catch-up: reconnect gaps and restarts lose messages ----------------
     def _is_dm(self, channel_id):
@@ -31526,6 +31533,29 @@ def _verb_doctor():
             "parked on a question would be abandoned as a stall; raise the abandon window "
             "above %g minutes or lower agent.ask_user_wait_seconds"
             % (_abandon_m, _ask_cap, _ask_cap / 60))
+
+    # The same coherence, for the watchdog's OTHER inputs (A-2026-10-04-08,
+    # A-2026-10-05-05): the warning must land before the abandon, and a single request
+    # budget longer than the abandon window means a slow-but-healthy request - or a
+    # retry ladder with nothing to post - can be declared a stall.
+    try:
+        _warn_m = float(CONFIG["agent"].get("stall_warn_minutes", 8) or 0)
+    except (TypeError, ValueError):
+        _warn_m = 0.0
+    if _abandon_m > 0 and _warn_m >= _abandon_m:
+        problems.append(
+            "agent.stall_warn_minutes (%gm) is not below agent.stall_abandon_minutes "
+            "(%gm): the warning would never precede the abandon" % (_warn_m, _abandon_m))
+    try:
+        _req_s = (float(CONFIG["llm"].get("request_timeout") or 0)
+                  + float(CONFIG["llm"].get("request_grace") or 0))
+    except (TypeError, ValueError):
+        _req_s = 0.0
+    if _abandon_m > 0 and _req_s > _abandon_m * 60:
+        notes.append(
+            "a single request budget (llm.request_timeout + request_grace = %gs) is "
+            "longer than agent.stall_abandon_minutes (%gm): a slow, silent request or "
+            "retry ladder can be abandoned as a stall" % (_req_s, _abandon_m))
 
     for n in notes:
         print("  note      : %s" % n)
