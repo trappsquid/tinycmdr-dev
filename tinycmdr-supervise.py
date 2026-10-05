@@ -42,6 +42,8 @@ LOCKED_EXIT_CODE = 3            # the bot exits with this when another instance 
 BACKOFF_START = 5
 BACKOFF_MAX = 60
 RAPID_EXIT_S = 30               # an exit sooner than this counts as a failed start
+FAILED_STARTS_BEFORE_STOP = 10  # rapid failed starts in a row: stop, make a human look
+STOPPED_EXIT_CODE = 4           # supervisor gave up; nothing will restart the bot
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 CHILD_ARGS = []
@@ -130,7 +132,9 @@ def respond_to_exit(code, uptime, failures):
     A handover (/restart) is not a failure and is relaunched at once. Another instance
     holding the bot's lock is not our failure either - wait and look again. A lifetime
     that ran longer than RAPID_EXIT_S was healthy, so the failure count resets; a
-    shorter one is a failed start and grows the backoff.
+    shorter one is a failed start and grows the backoff, up to
+    FAILED_STARTS_BEFORE_STOP in a row - after that the ladder STOPS (delay 0) rather
+    than retrying a broken install or an ambiguous config every 60 s for ever.
     """
     if code == RESTART_EXIT_CODE:
         return 0, 1
@@ -139,7 +143,30 @@ def respond_to_exit(code, uptime, failures):
     if uptime > RAPID_EXIT_S and code == 0:
         return 0, BACKOFF_START
     failures += 1
+    if uptime <= RAPID_EXIT_S and failures >= FAILED_STARTS_BEFORE_STOP:
+        # A start that dies at once, over and over, is not a crash to retry: it is a
+        # broken install or an ambiguous config (exit 2 is the config class), and its
+        # reason is printed once in bot-stdout.log and never acted on. The old ladder
+        # retried it every 60 s for ever - 5,368 times over four days on the fleet box
+        # (A-2026-10-05-04). delay 0 means stop; main() says why and exits.
+        return failures, 0
     return failures, next_backoff(failures)
+
+
+def _last_start_words(limit=6):
+    """The last lines the bot wrote before it died, for the give-up log."""
+    lines = []
+    try:
+        with BOT_STDOUT.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.rstrip()
+                if line and not line.startswith("===== supervised start"):
+                    lines.append(line)
+                    if len(lines) > limit:
+                        lines.pop(0)
+    except OSError:
+        return []
+    return lines
 
 
 def main(argv):
@@ -164,10 +191,17 @@ def main(argv):
             code, uptime = -1, 0
             log("could not run the bot: %s" % e)
         failures, delay = respond_to_exit(code, uptime, failures)
-        log("bot exited: code=%s uptime=%ds (consecutive failures %d) - relaunching "
-            "in %ds" % (code, uptime, failures, delay))
         if once:
             return code if isinstance(code, int) and code >= 0 else 1
+        if delay <= 0:
+            log("bot failed to start %d times in a row (last code=%s, uptime=%ds) - "
+                "NOT retrying until a human looks. Last words from the bot:"
+                % (failures, code, uptime))
+            for line in _last_start_words():
+                log("  | %s" % line)
+            return STOPPED_EXIT_CODE
+        log("bot exited: code=%s uptime=%ds (consecutive failures %d) - relaunching "
+            "in %ds" % (code, uptime, failures, delay))
         time.sleep(delay)
 
 

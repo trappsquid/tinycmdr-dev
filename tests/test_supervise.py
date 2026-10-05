@@ -74,6 +74,15 @@ def main():
               f"({R(0, d.RAPID_EXIT_S + 1, 4)})")
         check(d.next_backoff(20) == d.BACKOFF_MAX,
               f"the backoff is capped at {d.BACKOFF_MAX}s ({d.next_backoff(20)})")
+        check(R(2, 0, d.FAILED_STARTS_BEFORE_STOP - 2)[1] > 0,
+              f"a rapid failed start retries while under the give-up count "
+              f"({R(2, 0, d.FAILED_STARTS_BEFORE_STOP - 2)})")
+        check(R(2, 0, d.FAILED_STARTS_BEFORE_STOP - 1) == (d.FAILED_STARTS_BEFORE_STOP, 0),
+              f"the {d.FAILED_STARTS_BEFORE_STOP}th rapid failed start gives up instead of "
+              f"retrying for ever ({R(2, 0, d.FAILED_STARTS_BEFORE_STOP - 1)})")
+        check(R(1, 300, 12)[1] > 0,
+              f"a bot that RAN before each crash still retries - no give-up "
+              f"({R(1, 300, 12)})")
 
         # ---- it really does start the bot, pass args, and mark it supervised -----
         d = stage(work / "run")
