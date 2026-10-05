@@ -1488,7 +1488,8 @@
       "title": "a failover request no longer truncates the live session's tool results",
       "state": "shipped",
       "anchor": {
-        "commit": "bd1414f"
+        "commit": "bd1414f",
+        "expect": "tagged"
       },
       "detail": "Night audit A-2026-10-04-02. `_fit_payload` documented 'Cut a COPY' but copied only the list; the trim loop wrote through the caller's message dicts, so one failover to a smaller-window endpoint shortened every >500-char tool result in the LIVE session to 200 chars, with no transcript written. Now `[dict(m) for m in messages]`: the request shrinks, the stored history does not. Regression in tests/test_envelope.py asserts the caller's history is byte-identical and the payload really was cut; falsified against the pre-fix build.",
       "gate": "done - bd1414f; tests/test_envelope.py; falsified (the caller's history changed on the pre-fix build)"
@@ -1498,7 +1499,8 @@
       "title": "tool-call repair: doubled names, id overflow, and copy-on-write",
       "state": "shipped",
       "anchor": {
-        "commit": "db3e41e"
+        "commit": "db3e41e",
+        "expect": "tagged"
       },
       "detail": "Three audit findings, one choke point. A-2026-10-04-04: a doubled tool name (`shellshell`) was halved only when the arguments were also doubled, so the no-argument doors (`memory`, `list_tools`) were skipped entirely; the halving now runs on registry evidence and is safe on its own. A-2026-10-04-05: `_uniquify_tool_call_ids` indexed the replacement list positionally and raised IndexError when a payload carried more results for one id than calls; it clamps. A-2026-10-04-06: `_repair_tool_arguments` rewrote unparseable arguments to `{}` IN PLACE in the live history, so the model later read its own past turn as a call with no arguments; it now rewrites copies. Commits 45b6666, 2708d28, db3e41e.",
       "gate": "done - 45b6666, 2708d28, db3e41e; tests/test_tool_args_repair.py (including through `_payload`) and tests/test_payload_ids.py; all falsified (HEAD reproduced the IndexError, the mutation, and the skipped halving)"
@@ -1508,7 +1510,8 @@
       "title": "scan budget: backgrounded walks pay, spaced quoted roots stay whole, recursive-default verbs count",
       "state": "shipped",
       "anchor": {
-        "commit": "61b46da"
+        "commit": "61b46da",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-03: the auto-background return skipped `charge_scan`, so the slowest walks (the ones that ran past the window) cost the run's budget nothing; the hand-off now charges the time it held the turn. A-2026-10-05-07: the root scan read the quote-stripped command, truncating a quoted path with a space at the first space into a broad profile root; it now reads quoted paths whole and flattens quotes only for a re-executor. A-2026-10-05-08: `tree`, `du`, `rg`/`ag`/`ack`, `rsync` and `ls -R` recurse without a flag and were invisible to the flag-gated shapes; they are shapes now, `Path.walk()` joins the code shapes, and the broad-root condition still keeps narrow work unbilled. Commits cc011c7, 724432d, 61b46da.",
       "gate": "done - cc011c7, 724432d, 61b46da; tests/test_cost_guard.py; falsified (0.00s vs 0.31s on the hand-off; the pre-fix root was the truncated profile; the verbs matched no shape)"
@@ -1518,7 +1521,8 @@
       "title": "the stall watchdog's clock and the segment reset are honest",
       "state": "shipped",
       "anchor": {
-        "commit": "36ebbe5"
+        "commit": "36ebbe5",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-05: `_post` counted the watchdog's own warning as run progress, resetting the clock it watches - the abandon stretched by the warn interval, and with warn >= abandon it could never fire; the warning posts with touch=False and doctor fails on warn >= abandon. A-2026-10-05-02: the continuation segment reset `steps` but not `progress_at`, so the plan-drift delta went negative and the guard was dead after segment 1; it resets with the counters, and the runway line names the segment. A-2026-10-05-01: the caps are per segment by design, so the config comments and config.example.json now say so (llm.max_turns bounds the run). A-2026-10-04-08: doctor reports a request budget longer than the abandon window (a note - the shipped defaults trip it at 1230s vs 20m). Commits 36ebbe5, 0409fc1.",
       "gate": "done - 36ebbe5, 0409fc1; tests/test_stall.py; falsified (the warn post moved `last` pre-fix; the drift guard fired once pre-fix, twice fixed)"
@@ -1528,7 +1532,8 @@
       "title": "a start that never runs stops being retried",
       "state": "shipped",
       "anchor": {
-        "commit": "e4f5a28"
+        "commit": "e4f5a28",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-04: the supervisor retried a permanent config error for ever at the 60s ceiling - 5,368 restarts over four days on the fleet box, every one at uptime=0s, with the reason printed once in bot-stdout.log and nobody listening. Ten rapid failed starts in a row now stop the ladder, write the bot's last words into supervisor.log, and exit 4; a bot that RAN before each crash still retries on the normal backoff.",
       "gate": "done - e4f5a28; tests/test_supervise.py; the pre-fix decision function returns (10, 60) where the fix returns (10, 0)"
@@ -1538,7 +1543,8 @@
       "title": "published claims measured from the tree again; checkout-only notes",
       "state": "shipped",
       "anchor": {
-        "commit": "3eca558"
+        "commit": "3eca558",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-04-10: the README's '~3.5K-token fixed prompt' and the doc's 4,145/4,374 table were releases stale, and the measured-block generator hardcoded one of the figures inside its own 'rendered from the tree' block. Measured 2026-10-05: 4,116 est on a clean unpack, 5,860 est as the live install sends it; the generator no longer carries a figure, measure-prompt.py measures each leg from its own directory and prints the context-file cost. A-2026-10-04-11: the README says one import at startup (six installable). A-2026-10-04-01: the Develop section says it is a git checkout, not an installed tree. A-2026-10-04-I1: doctor's python floor is 3.10. A-2026-10-04-07: the streaming-failure warning says the endpoint stays off streaming for the rest of the process. Commits 6ba4d71, 42d589c, c15e869, 92812c6, 3eca558.",
       "gate": "done - 6ba4d71, 42d589c, c15e869, 92812c6, 3eca558; tests/test_measured_doc.py grades the doc from the tree"
