@@ -1284,6 +1284,20 @@ def main():
             if saved_owned is not None:
                 fb._scheduled_task_owned = saved_owned
 
+        # The Windows helper itself: it must stop all THREE process kinds and scope the
+        # bot filter to this install. The old filter (pythonw.exe + '*tinycmdr.py*')
+        # never matched the supervisor, so the surviving supervisor held the lock and
+        # relaunched the OLD bot while the wscript relaunch died on that lock; and
+        # unscoped, it killed a second install's bot on the same box (A-2026-10-05-13).
+        _ps = (BASE / "maintenance" / "restart-tinycmdr.ps1").read_text(encoding="utf-8")
+        check("the Windows restart helper stops the supervisor and the launcher",
+              "tinycmdr-supervise.py" in _ps and "tinycmdr-service.vbs" in _ps)
+        check("...and scopes the bot filter to this install (no bare name match)",
+              'like "*$install*"' in _ps
+              and "-Filter \"Name='pythonw.exe'\"" not in _ps)
+        check("...and verifies the supervisor, not only a bot, came back",
+              "supervisor(s) $($sup.Count)" in _ps)
+
         # --- the page lane is BACK, as the default door ---------------------------------
         # `web` is a management verb, the help names it, and the page flags adjust the
         # page per run instead of being refused; the flag path is exercised at the

@@ -9,12 +9,35 @@ $install = Split-Path -Parent $here
 $log = Join-Path $here 'restart-tinycmdr.log'
 function Log([string]$m) { "$((Get-Date).ToString('s')) $m" | Add-Content -Path $log }
 
+# The bot, its SUPERVISOR and the wscript launcher, scoped to this install - the
+# same three clauses install-tinycmdr.ps1's Stop-TinycmdrProcesses uses (keep the
+# two in step). The old filter was Name='pythonw.exe' + '*tinycmdr.py*': it never
+# matched tinycmdr-supervise.py, so the surviving supervisor held the lock and
+# relaunched the OLD bot while this script's wscript relaunch exited on that
+# lock - a restart never reloaded the supervisor; and unscoped, it killed a
+# second install's bot on the same box (A-2026-10-05-13). The supervisor clause
+# is deliberately not scoped by dir: in the documented no-venv fallback its
+# command line is "<machine python> tinycmdr-supervise.py" with no install path.
+function Get-TinycmdrProcesses {
+    @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+      Where-Object {
+          if (-not $_.CommandLine) { return $false }
+          if ($_.Name -like 'python*') {
+              return ($_.CommandLine -like "*$install*") -or
+                     ($_.CommandLine -like '*tinycmdr-supervise.py*')
+          }
+          if ($_.Name -eq 'wscript.exe') {
+              return ($_.CommandLine -like '*tinycmdr-service.vbs*')
+          }
+          return $false
+      })
+}
+
 Log "=== restart run start (pid $PID, elevated: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) ==="
 
-$bots = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
-          Where-Object { $_.CommandLine -like '*tinycmdr.py*' })
-Log "tinycmdr processes found: $($bots.Count) -> $($bots.ProcessId -join ',')"
-foreach ($b in $bots) {
+$procs = Get-TinycmdrProcesses
+Log "tinycmdr processes found: $($procs.Count) -> $($procs.ProcessId -join ',')"
+foreach ($b in $procs) {
     try {
         Stop-Process -Id $b.ProcessId -Force -ErrorAction Stop
         Log "  killed pid $($b.ProcessId)"
@@ -23,15 +46,14 @@ foreach ($b in $bots) {
     }
 }
 Start-Sleep -Seconds 4
-$left = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
-          Where-Object { $_.CommandLine -like '*tinycmdr.py*' })
+$left = Get-TinycmdrProcesses
 Log "after kill: $($left.Count) tinycmdr process(es) left"
 
 # start through the service vbs = exactly what the Tinycmdr logon/startup task does
 & wscript.exe //B //Nologo (Join-Path $install 'tinycmdr-service.vbs')
 Log "launched tinycmdr-service.vbs"
 Start-Sleep -Seconds 15
-$now = @(Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
-         Where-Object { $_.CommandLine -like '*tinycmdr.py*' })
-Log "after start: $($now.Count) process(es): $($now.ProcessId -join ',')"
+$now = Get-TinycmdrProcesses
+$sup = @($now | Where-Object { $_.CommandLine -like '*tinycmdr-supervise.py*' })
+Log "after start: $($now.Count) process(es), supervisor(s) $($sup.Count): $($now.ProcessId -join ',')"
 Log "=== restart run end ==="
