@@ -303,6 +303,8 @@ try:
     check("create_tool loads the tool it wrote", "created and loaded" in out, out[:160])
     check("create_tool puts the new tool in the session's tool list",
           _ct_name in fb.revealed_tools(CTX["session_key"]), out[:200])
+    check("create_tool names memory, not a `remember` tool",
+          "memory action=add" in out and "remember tool" not in out, out[-220:])
 finally:
     try:
         fb.REGISTRY.custom.pop(_ct_name, None)
@@ -310,6 +312,15 @@ finally:
         _ct_path.with_suffix(".py.bak").unlink(missing_ok=True)
     except OSError:
         pass
+
+# The prompt line and the create_tool success line used to send the model to a `remember`
+# tool this build does not have; the capability is `memory action=add` (2026-10-05, a
+# live install: the model that obeys gets the unknown-tool answer, which then reads as a
+# broken build).
+_prompt_out = fb.build_system_prompt()
+check("the system prompt names memory (action=add), not a remember tool",
+      "with memory (action=add)" in _prompt_out and "with remember:" not in _prompt_out,
+      [l for l in _prompt_out.splitlines() if "durable machine facts" in l][:1])
 
 # ---- list_tools tells the truth about THIS session --------------------------------
 

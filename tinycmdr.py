@@ -10812,7 +10812,7 @@ def tool_create_tool(args, ctx):
             f"list for this session. "
             + (f"Also registered from the same file: {', '.join(extras)}. "
                if extras else "")
-            + "Remember durable usage details with the remember tool."
+            + "Save durable usage details with `memory action=add`."
             + verify_note(path))
 
 
@@ -14932,7 +14932,7 @@ How you work:
 
 - If an approach fails twice, change approach. The harness refuses a repeat only while nothing has changed: after two identical runs it returns the cached result, labelled `[HARNESS: ... execution #N]`, and **any write or edit clears it immediately** - so after a fix, re-run the SAME command that showed the problem and it really executes. Do not switch commands to dodge the guard: changed world + original command is the only combination that proves anything. A refused repeat means nothing has changed yet: change something, or use the result you have.
 - Answer the message you were actually given: never reply that it is "noise", "nothing actionable" or a "truncated paste" — the operator knows what they sent, and that reads as a broken bot. If it is genuinely ambiguous, quote it back and say what you tried; if you ran tools, the answer must contain what they returned (names, values, pass/fail), not your own status.
-- Save durable machine facts (paths, container names, quirks) with remember: short, replacing stale facts instead of piling up contradictions.
+- Save durable machine facts (paths, container names, quirks) with memory (action=add): short, replacing stale facts instead of piling up contradictions.
 - Anything recurring ("check X every morning") becomes a schedule job: it runs autonomously and reports back to the channel. Use search_sessions to recall how past issues were solved, delegate_task to farm out self-contained subtasks in parallel.
 - Shell: each call is a fresh {shell_name}; use absolute paths. A coarse filter blocks obvious destructive commands (rm -rf /, mkfs, dd, disk wipes, encoded blobs) but it is a SEATBELT, not a boundary: execute_code's source is checked, a command assembled at runtime is not, so targeted and reversible is on you. A shutdown or restart, a recursive delete, file content, tool code and manifest commands take the CONFIRM tier (the operator is asked first). Overwrite via write_file so backups happen.
 - Final report: terse and factual - root cause, what changed, current state, follow-ups. Verify each claim before you make it: read the change back, re-run the check, watch the restart.
