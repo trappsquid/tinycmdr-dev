@@ -1001,5 +1001,566 @@ finally:
     os.environ.update(_env_saved)
 
 
+# ---- run 12, pass 3: the remainder of the Telegram finder ---------------------------
+# Measured on the 1.0.84 line before each fix; every check below is RED on the
+# pre-fix snapshot. The LOCAL half only - payloads the client builds, the poller's
+# dispatch/dedupe/gating, the renderer's output. No network anywhere.
+
+import logging as _logging
+
+
+class _CaptureLog(_logging.Handler):
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
+    def emit(self, record):
+        try:
+            self.lines.append(record.getMessage())
+        except Exception:               # noqa: BLE001 - a capture must not break a test
+            self.lines.append("")
+
+
+# A-191/A-192/A-193/A-196: renderer edges.
+check("A-191: a quote in a URL cannot escape the href attribute (no tag injection)",
+      'a"b' not in fb.tg_html('[x](https://e.com/a"b)'),
+      repr(fb.tg_html('[x](https://e.com/a"b)')))
+check("A-191: ...and an ordinary link still renders",
+      fb.tg_html("[docs](https://example.com/x)")
+      == '<a href="https://example.com/x">docs</a>')
+check("A-192: None renders as nothing, not the word None", fb.tg_escape(None) == "",
+      repr(fb.tg_escape(None)))
+try:
+    _nul = fb.tg_html("a\x000\x00b")
+except Exception as _e:                 # noqa: BLE001 - the crash IS the finding
+    _nul = "RAISED %s" % type(_e).__name__
+check("A-193: a stray NUL in model output cannot break the render",
+      _nul == "a0b" and "<code>" not in _nul, repr(_nul))
+_tbl2 = fb.tg_html("| a | b |\n| 1 | 2 |")
+check("A-196: a pipe table with no separator row still rides in <pre>",
+      _tbl2.startswith("<pre>") and "</pre>" in _tbl2, repr(_tbl2))
+
+# A-194/A-195: a long answer carrying a URL longer than half a message (a signed link,
+# a data URI) must still split into WHOLE, non-empty messages. The cut used to collapse
+# to one character when the atom started a piece, so the URL came out as an empty
+# message, then "h", then a broken "ttps://..." link.
+_long_url = "https://signed.example.com/report?" + "k=ABCDEFGH" * 300
+_lu_txt = ("filler word " * 500) + "see " + _long_url + "\n\n" + ("tail " * 500)
+_lu_pieces = fb.tg_render(_lu_txt)
+check("A-194: no message is empty or whitespace-only",
+      all(p.strip() for p in _lu_pieces), [len(p) for p in _lu_pieces])
+check("A-195: ...and every message is within the ceiling",
+      all(len(p) <= fb.TG_MAX for p in _lu_pieces), [len(p) for p in _lu_pieces])
+check("A-195: ...and nothing is lost on the way",
+      len("".join(_lu_pieces)) >= len(_lu_txt) * 0.95,
+      (len("".join(_lu_pieces)), len(_lu_txt)))
+_fit_url = "https://example.com/report/" + "abcDEF123" * 55
+_fu_pieces = fb.tg_render(("filler word " * 500) + " see " + _fit_url + "\n\n"
+                          + ("tail " * 400))
+check("A-195: a URL that fits is never divided",
+      any(_fit_url in p for p in _fu_pieces), [len(p) for p in _fu_pieces])
+
+
+# A-152: a failed edit must re-open the live message, not redraw a dead id for ever.
+class _DeadEditClient(FakeClient):
+    def edit(self, chat_id, message_id, text, buttons=None):
+        raise RuntimeError("Bad Request: message to edit not found")
+
+
+_dec = _DeadEditClient()
+_ded = fb.TelegramDestination(_dec, chat_id=51, session_key="t-dead")
+_ded.line("tool", "step one")
+_ded._flush(force=True)                     # opens the live message
+_ded.line("tool", "step two")
+_ded._flush(force=True)                     # the edit fails: recovery is armed
+_ded._flush(force=True)                     # and the next flush must RE-OPEN, not re-edit
+check("A-152: a failed edit re-opens the live message instead of freezing it",
+      len(_dec.messages) >= 2, (_ded.live_id, len(_dec.messages)))
+
+
+# A-153/A-198: the run's close forces the last live write and unpins the status.
+class _FinClient(FakeClient):
+    pass
+
+
+_fc9 = _FinClient()
+_fd9 = fb.TelegramDestination(_fc9, chat_id=52, session_key="t-fin")
+_fd9.line("tool", "step one")
+_fd9._flush(force=True)
+_fd9.update(None, "status", "working · 3 steps")
+_fd9.line("tool", "step two")                     # inside the throttle window
+_fd9.update(None, "final", "✅ Done — 2 step(s)")
+check("A-153: the closing line forces the last live write past the throttle",
+      any("step two" in e["text"] for e in _fc9.edits), [e["text"] for e in _fc9.edits])
+check("A-198: ...and the pinned status does not outlive the run", _fd9.status == "",
+      repr(_fd9.status))
+
+
+# A-148: the question is part of the run's own story.
+_ac9 = FakeClient()
+_ad9 = fb.TelegramDestination(_ac9, chat_id=53, session_key="t-askline")
+_box9 = {}
+
+
+def _ask9():
+    _box9["v"] = _ad9.ask("Restart the task now?", ["yes", "no"], wait=5)
+
+
+_th9 = threading.Thread(target=_ask9, daemon=True)
+_th9.start()
+time.sleep(0.3)
+_ad9.button_ask("opt:1")
+_th9.join(3)
+_asklines = [t for k, t in _ad9.lines if k == "ask"]
+check("A-148: the question is recorded in the run's live message",
+      bool(_asklines) and "Restart the task now?" in _asklines[0],
+      [k for k, _ in _ad9.lines])
+check("A-148: ...and the line says what came back",
+      bool(_asklines) and "yes" in _asklines[0], _asklines)
+
+
+# A-159/A-160: verb parsing.
+_pp = fb.TelegramPoller(FakeClient(), {"1"})
+try:
+    _empty_verb = _pp._verb(1, "")
+except Exception as _e:                 # noqa: BLE001 - the crash IS the finding
+    _empty_verb = "RAISED %s" % type(_e).__name__
+check("A-159: an empty line is not a verb, and does not IndexError",
+      _empty_verb is False, repr(_empty_verb))
+_pc = FakeClient()
+_pp2 = fb.TelegramPoller(_pc, {"1"})
+check("A-160: /help@MyBot is the help command it looks like",
+      _pp2._verb(1, "/help@MyBot") is True and "tinycmdr" in _pc.messages[-1]["text"],
+      [m["text"][:20] for m in _pc.messages])
+
+
+# A-161: the "no text here" notice is once per chat, not once per photo.
+_pn = FakeClient()
+_pn2 = fb.TelegramPoller(_pn, {"7"})
+
+
+def _media(mid):
+    return {"update_id": mid, "message": {
+        "message_id": mid, "chat": {"id": 61, "type": "private"},
+        "from": {"id": 7, "username": "u"}}}
+
+
+for _i in range(3):
+    _pn2.handle(_media(_i + 1))
+check("A-161: three media messages draw ONE notice, not three",
+      len([m for m in _pn.messages if "read text" in m["text"]]) == 1,
+      [m["text"][:30] for m in _pn.messages])
+
+
+# A-162: a non-string text must not kill the update.
+_pm = FakeClient()
+_pm2 = fb.TelegramPoller(_pm, {"7"})
+_pm_got = []
+_pm2.submit = lambda cid, text, mid: _pm_got.append((cid, text, mid))
+try:
+    _pm_handled = _pm2.handle({"update_id": 1, "message": {
+        "message_id": 1, "text": 123, "chat": {"id": 62, "type": "private"},
+        "from": {"id": 7, "username": "u"}}})
+except Exception as _e:                 # noqa: BLE001 - the crash IS the finding
+    _pm_handled = "RAISED %s" % type(_e).__name__
+check("A-162: a malformed non-string text is handled, not swallowed",
+      _pm_handled is True and _pm_got == [(62, "123", 1)], (_pm_handled, _pm_got))
+
+
+# A-163/A-164: the log lines an operator actually reads.
+_cap = _CaptureLog()
+fb.log.addHandler(_cap)
+fb.log.setLevel(_logging.DEBUG)
+try:
+    _pl = FakeClient()
+    _pl2 = fb.TelegramPoller(_pl, {"7"})
+    _pl2.handle({"update_id": 1, "message": {
+        "message_id": 1, "text": "hi", "chat": {"id": 63}, "from": {"id": 7}}})
+    _pl2.handle({"update_id": 2, "callback_query": {
+        "id": "cb1", "from": {"id": 7, "username": "u"}, "data": "opt:1"}})
+finally:
+    fb.log.removeHandler(_cap)
+_typelog = [ln for ln in _cap.lines if "DM only" in ln]
+_btnlog = [ln for ln in _cap.lines if "button press" in ln]
+check("A-163: a message with no chat.type is logged as such, not 'a None chat'",
+      bool(_typelog) and "chat.type" in _typelog[-1], _typelog[-1:])
+check("A-164: a press with no chat is not blamed on the (allowed) user",
+      bool(_btnlog) and "no chat" in _btnlog[-1], _btnlog[-1:])
+
+
+# A-166: the dedupe window is per chat.
+_p166 = fb.TelegramPoller(FakeClient(), {"11", "22"})
+_handed166 = []
+_p166.submit = lambda cid, text, mid: _handed166.append((cid, mid))
+for _i in range(1, 4002):
+    _p166.handle(msg(11, "x", 11, mid=_i))
+_p166.handle(msg(22, "hello", 22, mid=1))
+for _i in range(4002, 8003):
+    _p166.handle(msg(11, "x", 11, mid=_i))
+_after_b = len(_handed166)
+_p166.handle(msg(22, "hello", 22, mid=1))          # redelivery after 4000 chat-A ids
+check("A-166: a busy chat cannot evict another chat's dedupe history",
+      len(_handed166) == _after_b, (len(_handed166), _after_b))
+
+
+# A-171: a redelivered /stop must bite again.
+_p171 = fb.TelegramPoller(FakeClient(), {"7"})
+_p171.submit = lambda *a: None
+_ev171 = threading.Event()
+_p171.cancel[7] = _ev171
+_p171.handle(msg(7, "/stop", 7, mid=1))
+_first171 = _ev171.is_set()
+_ev171.clear()
+_p171.handle(msg(7, "/stop", 7, mid=1))
+check("A-171: a redelivered /stop still stops the run",
+      _first171 and _ev171.is_set(), (_first171, _ev171.is_set()))
+
+
+# A-172: /new resets the visible progress message too.
+_p172 = fb.TelegramPoller(FakeClient(), {"7"})
+_d172 = fb.TelegramDestination(FakeClient(), chat_id=7, session_key="telegram-7")
+_d172.live_id = 42
+_d172.lines = [("tool", "old step")]
+_p172.live[7] = _d172
+_p172.handle(msg(7, "/new", 7, mid=1))
+check("A-172: /new clears the previous conversation's steps from the live message",
+      _d172.lines == [], list(_d172.lines))
+
+
+# A-173: the help screen lists every verb, and the prefix.
+check("A-173: the help screen names /start and the /tinycmdr prefix",
+      "/start" in fb.TG_HELP and "/tinycmdr" in fb.TG_HELP, fb.TG_HELP[:60])
+
+
+# A-170: a failed steer receipt must not lose the update.
+class _NoReceiptClient(FakeClient):
+    def send(self, *a, **k):
+        raise RuntimeError("Too Many Requests")
+
+
+class _Ctrl:
+    def __init__(self):
+        self.got = None
+
+    def steer(self, sender, text):
+        self.got = (sender, text)
+
+
+_p170 = fb.TelegramPoller(_NoReceiptClient(), {"7"})
+_ctrl170 = _Ctrl()
+_saved_ctrl = fb.RUNS.control
+fb.RUNS.control = lambda key: _ctrl170
+try:
+    try:
+        _steer170 = _p170.steer(7, "please hurry", "7")
+    except Exception as _e:             # noqa: BLE001 - the crash IS the finding
+        _steer170 = "RAISED %s" % type(_e).__name__
+finally:
+    fb.RUNS.control = _saved_ctrl
+check("A-170: a steer whose receipt fails is still steered",
+      _steer170 is True and _ctrl170.got == ("7", "please hurry"),
+      (_steer170, _ctrl170.got))
+
+
+# A-158: telegram.http_timeout is a knob, not a code edit.
+_saved_ht = fb.CONFIG["telegram"].get("http_timeout")
+try:
+    fb.CONFIG["telegram"]["http_timeout"] = 7
+    check("A-158: telegram.http_timeout bounds a non-poll call",
+          fb.TelegramClient("1:x").http_timeout == 7,
+          fb.TelegramClient("1:x").http_timeout)
+finally:
+    if _saved_ht is None:
+        fb.CONFIG["telegram"].pop("http_timeout", None)
+    else:
+        fb.CONFIG["telegram"]["http_timeout"] = _saved_ht
+
+
+# ---- run_telegram-level checks: the lane's own gating, state and lifecycle ----------
+_TG_TOK = "12345:" + "A" * 35
+
+
+class _OnePollClient(FakeClient):
+    """Poll 1 yields `batch`; poll 2 leaves the lane (SystemExit is not an Exception)."""
+
+    batch = []                              # a class attribute: an instance would shadow it
+
+    def __init__(self, token):
+        super().__init__()
+        self.polls = 0
+        self.offsets = []
+
+    def updates(self, offset):
+        self.offsets.append(offset)
+        self.polls += 1
+        if self.polls == 1:
+            return list(self.batch)
+        raise SystemExit
+
+
+class _NoPollClient(FakeClient):
+    """The API never answers a poll: the first call leaves the lane."""
+
+    def __init__(self, token):
+        super().__init__()
+
+    def updates(self, offset):
+        raise SystemExit
+
+
+def _tg_setup(client_cls, config, poller_cls=None, **stubs):
+    """Patch the lane for a run_telegram() drive. Returns (client_holder, restore).
+
+    `restore` is explicit because a worker thread keeps calling drive_run AFTER
+    run_telegram() has returned (the poll loop leaves the lane while a run is still
+    held), and the fake must outlive the lane for that.
+    """
+    _names = ("TelegramClient", "TelegramPoller", "lane_up", "REPORTER",
+              "announce_startup", "drive_run", "TG_IDLE_SECONDS")
+    _saved = {n: getattr(fb, n, None) for n in _names}
+    _sched = fb.SCHEDULER.dispatcher
+    _cfg = fb.CONFIG["telegram"]
+    _holder = {}
+
+    class _Cap(client_cls):
+        def __init__(self, token):
+            super().__init__(token)
+            _holder["client"] = self
+
+    fb.CONFIG["telegram"] = dict(config)
+    fb.TelegramClient = _Cap
+    fb.lane_up = lambda lane, detail="": None
+    fb.SCHEDULER.dispatcher = None
+    fb.REPORTER = None
+    fb.announce_startup = lambda d: None
+    if poller_cls is not None:
+        fb.TelegramPoller = poller_cls
+    for _k, _v in stubs.items():
+        setattr(fb, _k, _v)
+
+    def _restore():
+        for _n in _names:
+            setattr(fb, _n, _saved[_n])
+        fb.SCHEDULER.dispatcher = _sched
+        fb.CONFIG["telegram"] = _cfg
+
+    return _holder, _restore
+
+
+def _run_tg(client_cls, config, poller_cls=None, **stubs):
+    """(outcome, client, lane_up_details) for one run_telegram() with the API faked."""
+    _holder, _restore = _tg_setup(client_cls, config, poller_cls, **stubs)
+    _ups = []
+    fb.lane_up = lambda lane, detail="": _ups.append(detail)
+    try:
+        try:
+            fb.run_telegram()
+            _out = ("returned", None)
+        except SystemExit as _e:
+            _out = ("exit", _e.code)
+        except Exception as _e:                     # noqa: BLE001 - the class IS the check
+            _out = ("raised", type(_e).__name__)
+    finally:
+        _restore()
+    return _out, _holder.get("client"), _ups
+
+
+# A-154: getMe answering `result: null` must not name the lane "@None".
+class _NullMeClient(_OnePollClient):
+    def me(self):
+        return {}
+
+
+_out154, _cl154, _ups154 = _run_tg(_NullMeClient, {"token": _TG_TOK, "allowed_users": ["7"]})
+check("A-154: a null getMe reports @unknown, not @None",
+      bool(_ups154) and all("@None" not in d for d in _ups154)
+      and any("unknown" in d for d in _ups154), _ups154)
+
+# A-178: lane_up waits for the API to answer a poll.
+_out178, _cl178, _ups178 = _run_tg(_NoPollClient, {"token": _TG_TOK, "allowed_users": ["7"]})
+check("A-178: a lane that dies on poll 1 is not reported 'up'",
+      _ups178 == [], _ups178)
+
+# A-176: a captive portal's getMe is a network problem, not a refused token.
+class _PortalClient(_NoPollClient):
+    def me(self):
+        raise RuntimeError("getMe: HTTP 204 and no JSON")
+
+
+_out176, _cl176, _ups176 = _run_tg(_PortalClient, {"token": _TG_TOK, "allowed_users": ["7"]})
+check("A-176: a captive-portal getMe is raised for the retry, not exit 2",
+      _out176 == ("raised", "RuntimeError"), _out176)
+
+# A-177: a token revoked mid-run stops the lane instead of polling for ever.
+class _RevokedClient(_OnePollClient):
+    def updates(self, offset):
+        self.offsets.append(offset)
+        self.polls += 1
+        if self.polls >= 2:
+            raise SystemExit(9)
+        raise RuntimeError("getUpdates: Unauthorized (HTTP 401)")
+
+
+_out177, _cl177, _ups177 = _run_tg(_RevokedClient, {"token": _TG_TOK, "allowed_users": ["7"]})
+check("A-177: a mid-run refusal ends the lane at once",
+      _out177 == ("exit", 2) and _cl177.polls == 1, (_out177, _cl177.polls))
+
+# A-174: a non-numeric allowed id refuses at startup.
+_out174, _cl174, _ups174 = _run_tg(_OnePollClient, {"token": _TG_TOK,
+                                                    "allowed_users": ["@david"]})
+check("A-174: a non-numeric allowed_users id refuses the lane at startup",
+      _out174 == ("exit", 2), _out174)
+
+_saved_tg174 = dict(fb.CONFIG.get("telegram") or {})
+_saved_mm174 = dict(fb.CONFIG["mattermost"])
+_saved_cp174 = fb.CONFIG_PATH
+_cfgdir174 = Path(_tempfile.mkdtemp(prefix="tg-doctor-"))
+_env174 = {k: os.environ.pop(k) for k in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN")
+           if k in os.environ}
+try:
+    # validate_startup_config refuses before it reads anything else when there is no
+    # config.json, so the rule is graded against a staged one - the same reason
+    # tests/hermetic.py exists. A clean clone has no config.json in the tree.
+    _staged174 = _cfgdir174 / "config.json"
+    _staged174.write_text("{}", encoding="utf-8")
+    fb.CONFIG_PATH = _staged174
+    fb.CONFIG["telegram"] = {"token": _TG_TOK, "allowed_users": ["@david"]}
+    fb.CONFIG["mattermost"]["token"] = ""
+    _msg174 = fb.validate_startup_config()
+    check("A-174: ...and doctor catches it before the lane even starts",
+          bool(_msg174) and "NUMERIC" in _msg174, _msg174)
+finally:
+    fb.CONFIG_PATH = _saved_cp174
+    shutil.rmtree(_cfgdir174, ignore_errors=True)
+    fb.CONFIG["telegram"].clear()
+    fb.CONFIG["telegram"].update(_saved_tg174)
+    fb.CONFIG["mattermost"].clear()
+    fb.CONFIG["mattermost"].update(_saved_mm174)
+    os.environ.update(_env174)
+
+# A-165: the update offset survives a restart, so the backlog is not replayed.
+_saved_off = fb._state().get("telegram_offset")
+
+
+def _clear_offset():
+    fb._state(lambda st: st.pop("telegram_offset", None))
+
+
+class _HelpOnceClient(_OnePollClient):
+    batch = [msg(7, "/help", 7, mid=5)]
+
+
+try:
+    _clear_offset()
+    _out_a, _cla, _ = _run_tg(_HelpOnceClient, {"token": _TG_TOK, "allowed_users": ["7"]})
+    _out_b, _clb, _ = _run_tg(_HelpOnceClient, {"token": _TG_TOK, "allowed_users": ["7"]})
+    check("A-165: a restart resumes at the last acknowledged update",
+          _out_a == ("exit", None) and _clb is not None and _clb.offsets[:1] == [6],
+          (None if _cla is None else _cla.offsets, None if _clb is None else _clb.offsets))
+finally:
+    if _saved_off is None:
+        _clear_offset()
+    else:
+        fb._state(lambda st: st.__setitem__("telegram_offset", _saved_off))
+
+
+# A-167/A-168: a run queued behind a stopped one must not inherit its stop.
+_qbox = {}
+
+
+class _CapPoller(fb.TelegramPoller):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        _qbox["poller"] = self
+
+
+class _TwoMsgsClient(_OnePollClient):
+    batch = [msg(7, "first", 7, mid=1), msg(7, "second", 7, mid=2)]
+
+
+_runs167 = []
+_stop_seen = threading.Event()
+
+
+def _hold_drive(key, text, reporter, **kw):
+    _runs167.append((text, kw.get("cancel_event")))
+    if len(_runs167) == 1:
+        _stop_seen.wait(5)
+    return "ok"
+
+
+try:
+    _h167, _restore167 = _tg_setup(_TwoMsgsClient, {"token": _TG_TOK, "allowed_users": ["7"]},
+                                   poller_cls=_CapPoller, drive_run=_hold_drive,
+                                   TG_IDLE_SECONDS=5.0)
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    _dl = time.time() + 5
+    while len(_runs167) < 1 and time.time() < _dl:
+        time.sleep(0.02)
+    _p167 = _qbox.get("poller")
+    _ev1 = _p167.cancel.get(7) if _p167 else None
+    if _ev1 is not None:
+        _ev1.set()
+    _stop_seen.set()
+    _dl = time.time() + 5
+    while len(_runs167) < 2 and time.time() < _dl:
+        time.sleep(0.02)
+    check("A-167/168: a queued run does not start already stopped",
+          len(_runs167) == 2 and _runs167[1][1] is not None
+          and not _runs167[1][1].is_set(),
+          [(t, None if e is None else e.is_set()) for t, e in _runs167])
+finally:
+    _stop_seen.set()
+    _restore167()
+
+
+# A-169: a burst of DMs in one chat is capped, with a notice.
+_qbox2 = {}
+
+
+class _CapPoller2(fb.TelegramPoller):
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        _qbox2["poller"] = self
+
+
+_runs169 = []
+_gate169 = threading.Event()
+
+
+def _gate_drive(key, text, reporter, **kw):
+    _runs169.append(text)
+    _gate169.wait(5)
+    return "ok"
+
+
+try:
+    _h169, _restore169 = _tg_setup(_NoPollClient, {"token": _TG_TOK, "allowed_users": ["7"]},
+                                   poller_cls=_CapPoller2, drive_run=_gate_drive,
+                                   TG_IDLE_SECONDS=5.0)
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    _cl169 = _h169.get("client")
+    _p169 = _qbox2.get("poller")
+    _cap169 = getattr(fb, "TG_QUEUE_MAX", 5)
+    _p169.submit(7, "m0", 0)
+    _dl = time.time() + 5
+    while not _runs169 and time.time() < _dl:
+        time.sleep(0.02)
+    for _i in range(1, _cap169 + 2):
+        _p169.submit(7, "m%d" % _i, _i)
+    check("A-169: a burst of DMs is capped with a notice in the chat",
+          any("already working through" in m["text"] for m in _cl169.messages),
+          [m["text"][:40] for m in _cl169.messages])
+finally:
+    _gate169.set()
+    _restore169()
+
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

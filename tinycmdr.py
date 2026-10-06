@@ -330,6 +330,9 @@ DEFAULT_CONFIG = {
         # here at N secs (the same shape as llm.retry_after_max). 0 disables the
         # wait, so a rate-limited answer is dropped as before.
         "retry_after_max": 60,
+        # Per Bot API call (getMe, sendMessage, ...), seconds. The long poll has its
+        # own. Raise it on a slow uplink without editing the code.
+        "http_timeout": 45,
     },
     "mattermost": {
         "url": "",                 # CHANGE ME: your Mattermost host (installer sets it)
@@ -29652,6 +29655,7 @@ _LANE_PERMANENT_RE = re.compile(
     r"|\b40[013]\b[\s:,()\-]*(?:bad request|unauthori[sz]ed|forbidden|invalid|expired|"
     r"refused|denied|missing|unusable|no[t]?\s+authoriz)"
     r"|InvalidOrMissingParameters|NoAccessTokenProvided|NotEnoughPermissions"
+    r"|unauthori[sz]ed"
     r"|the token was refused|no Mattermost token|no Telegram token|is unusable)", re.I)
 
 
@@ -30101,8 +30105,22 @@ TG_POLL_TIMEOUT = 50          # getUpdates long poll, seconds
 TG_IDLE_SECONDS = 10.0
 
 TG_UPLOAD_TIMEOUT = 300.0     # a file upload is not a poll: leave room for a slow uplink
+TG_HTTP_TIMEOUT = 45          # per Bot API call, overridable by telegram.http_timeout
 TG_CAPTION_MAX = 1024         # the Bot API's caption ceiling; a longer note is cut, not refused
 TG_PHOTO_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
+
+TG_SEEN_PER_CHAT = 200        # message ids remembered per chat for redelivery dedupe
+TG_NOTICE_MAX = 256           # chats remembered for the once-only "no text here" notice
+TG_QUEUE_MAX = 5              # DMs allowed to queue behind a live run in one chat
+
+# The verbs this lane answers. Kept in one place so the dedupe can tell an order
+# (idempotent, must re-fire when redelivered) from a task (must not) - A-171.
+_TG_VERBS = ("/start", "/help", "/stop", "/new", "/usage")
+
+# Of those, ONLY /stop is re-run on a redelivered update: a task must never run twice
+# and /help or /usage re-answering is just noise, but a /stop dropped as "already seen"
+# leaves a run going while the operator believes it stopped (A-171).
+_TG_REDELIVER = ("/stop",)
 
 TG_HELP = ("<b>tinycmdr</b>\n"
 
@@ -30114,7 +30132,13 @@ TG_HELP = ("<b>tinycmdr</b>\n"
 
            "<b>/usage</b> tokens and time for this chat's last run\n"
 
-           "<b>/stop</b> cancel the run in flight\n\n"
+           "<b>/stop</b> cancel the run in flight\n"
+
+           "<b>/help</b> this screen (also <b>/start</b>)\n\n"
+
+           "Every verb also works with a <b>/tinycmdr</b> prefix — "
+
+           "<b>/tinycmdr stop</b>, for instance — and a <b>@botname</b> suffix.\n\n"
 
            "Anything else is a request. While it works, the message above keeps "
 
@@ -30136,6 +30160,8 @@ def tg_escape(text):
 
     """
 
+    if text is None:
+        return ""
     return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
@@ -30158,7 +30184,12 @@ def tg_html(text):
     Tags emitted: <b> <i> <code> <pre> <a> - nothing else, and no attribute is taken
     from the model's text except the sanitized href.
     """
-    text = tg_escape(str(text))
+    text = tg_escape(text).replace("\x00", "").replace("\x01", "")
+    # ^ tg_escape(None) is "" (A-192), and a stray NUL/^A in model output (a tool's own
+    #   bytes) would collide with the placeholder alphabet below - `\x00<digits>\x00` -
+    #   so the restore read an index that was never minted and the answer died with
+    #   IndexError (A-193). Telegram's HTML accepts neither byte, so they are dropped
+    #   before any placeholder exists.
     code = []                       # inline code spans, restored as <code>
     pre = []                        # fenced blocks, restored as <pre>
 
@@ -30197,17 +30228,22 @@ def tg_html(text):
     text = re.sub(r"`([^`\n]+)`", _keep, text)
     text = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<![*\w])\*([^*\n]+)\*(?![*\w])", r"<i>\1</i>", text)
-    text = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text)
+    text = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s\"<>]+)\)", r'<a href="\2">\1</a>', text)
     text = re.sub(r"(?<![\"'=])(https?://[^\s<>\")]+)",
                   lambda m: '<a href="%s">%s</a>' % (m.group(1), m.group(1)), text)
 
     # 3. a pipe table -> <pre> (Telegram's HTML has no table element)
     lines, out, i = text.split("\n"), [], 0
     while i < len(lines):
+        # A table is a run of lines that start with a pipe. The `---|---` separator row a
+        # model usually writes is KEPT in the body when present, but it is no longer the
+        # thing that TRIGGERS the branch: a model that writes a header and data rows with
+        # no separator line arrived as raw pipes (A-2026-10-05-196). Two adjacent pipe
+        # lines are enough.
         if (i + 1 < len(lines) and lines[i].strip().startswith("|")
-                and re.match(r"^[\s:|-]*-[\s:|-]*$", lines[i + 1].strip())):
-            body = [lines[i], lines[i + 1]]                # header + separator, kept
-            i += 2
+                and lines[i + 1].strip().startswith("|")):
+            body = [lines[i]]
+            i += 1
             while i < len(lines) and lines[i].strip().startswith("|"):
                 body.append(lines[i])
                 i += 1
@@ -30236,7 +30272,7 @@ _TG_TAG_RX = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)[^>]*>")
 # that renders as one tag is also an atom the splitter refuses to break.
 _TG_SPAN_RX = re.compile(
     r"`[^`\n]+`"                          # inline code
-    r"|\[[^\]\n]+\]\([^)\s]+\)"           # a markdown link
+    r"|\[[^\]\n]+\]\([^)\s\"<>]+\)"           # a markdown link
     r"|\*\*[^*\n]+\*\*"                   # bold
     r"|(?<![*\w])\*[^*\n]+\*(?![*\w])"    # italic
     r"|https?://[^\s<>\")]+")             # a bare URL
@@ -30329,7 +30365,9 @@ def tg_html_split(text, limit=TG_MAX):
                 break
             cut = _tg_safe_cut(rest, max(1, limit - len(closers)))
         carry = "".join("<%s>" % t for t in open_tags)
-        out.append((chunk + closers).rstrip())
+        piece = (chunk + closers).rstrip()
+        if piece:                       # an all-whitespace chunk is not a message (A-194)
+            out.append(piece)
         rest = (carry + rest[cut:]).lstrip("\n")
     if rest:
         out.append(rest)
@@ -30357,10 +30395,21 @@ def _tg_raw_cut(text, limit):
     cut = _tg_fits(text, limit)
     if cut <= 0:
         return 1                            # one char already renders over: hard cut
-    for m in _TG_SPAN_RX.finditer(text[:cut + 1]):
-        if m.start() < cut < m.end():
-            cut = m.start()
-            break
+
+    def _pull_back(c):
+        """`c`, pulled to before any span it would divide.
+
+        An atom that STARTS the remaining text cannot be kept whole - it is longer than a
+        message on its own (a signed link, a data URI) - so the binary cut stands and the
+        atom is hard-cut. Without that guard the pull-back returned 0, `max(1, cut)`
+        emitted ONE character, and a long answer's URL came out as an empty message, then
+        "h", then a broken "ttps://..." link (A-2026-10-05-194/195)."""
+        for m in _TG_SPAN_RX.finditer(text[:c + 1]):
+            if m.start() < c < m.end():
+                return m.start() if m.start() > 0 else c
+        return c
+
+    cut = _pull_back(cut)
     open_at, pos = None, 0
     for line in text[:cut].split("\n"):
         s = line.lstrip()
@@ -30374,10 +30423,7 @@ def _tg_raw_cut(text, limit):
         if c >= limit // 3 and len(tg_html(text[:c])) <= limit:
             cut = c
             break
-    for m in _TG_SPAN_RX.finditer(text[:cut + 1]):
-        if m.start() < cut < m.end():
-            cut = m.start()
-            break
+    cut = _pull_back(cut)
     while cut > 1 and len(tg_html(text[:cut])) > limit:
         cut -= 1
     return max(1, cut)
@@ -30400,7 +30446,12 @@ def tg_render(text, limit=TG_MAX):
     out, rest = [], text
     while rest:
         cut = _tg_raw_cut(rest, limit)
-        out.append(tg_html(rest[:cut]).rstrip())
+        piece = tg_html(rest[:cut]).rstrip()
+        # A cut can land just after a run of whitespace, leaving a piece that renders as
+        # nothing. Posting it meant an "(empty)" message in the chat (A-194); drop it and
+        # carry on.
+        if piece:
+            out.append(piece)
         rest = rest[cut:].lstrip("\n")
     return out or [""]
 
@@ -30439,9 +30490,24 @@ class TelegramClient:
 
 
 
-    def __init__(self, token, http_timeout=45):
+    def __init__(self, token, http_timeout=None):
 
         self._base = "%s/bot%s/" % (TG_API, token)
+
+        if http_timeout is None:
+
+            # telegram.http_timeout bounds every non-poll call; the long poll has its own
+            # (A-158). Read HERE, where the client is built, so the one-argument
+            # constructor stays - every caller and every test stub keeps working.
+
+            try:
+
+                http_timeout = float((CONFIG.get("telegram") or {}).get(
+                    "http_timeout", TG_HTTP_TIMEOUT) or TG_HTTP_TIMEOUT)
+
+            except (TypeError, ValueError):
+
+                http_timeout = TG_HTTP_TIMEOUT
 
         self.http_timeout = http_timeout
 
@@ -30492,15 +30558,25 @@ class TelegramClient:
 
                 continue
 
-            raise RuntimeError("%s: %s" % (method,
-
-                                           data.get("description") or r.status_code))
+            # The API's own error_code (falling back to the HTTP status) rides in the
+            # message: a `{"ok":false,"description":"Unauthorized"}` used to come out as
+            # "getUpdates: Unauthorized", which _lane_error_permanent cannot read as a
+            # refusal and which the poll loop then retried for ever (A-157/A-176/A-177).
+            raise RuntimeError("%s: %s (HTTP %s)" % (method,
+                                                     data.get("description") or "no description",
+                                                     data.get("error_code") or r.status_code))
 
 
 
     def me(self):
 
-        return self.call("getMe") or {}
+        """getMe as a dict. A 200 with a null result (a misbehaving proxy) is not a
+        crash and not a username: {} lets the caller name the lane "@unknown" instead of
+        printing "connected as @None" (A-2026-10-05-154)."""
+
+        me = self.call("getMe")
+
+        return me if isinstance(me, dict) else {}
 
 
 
@@ -30743,6 +30819,12 @@ class TelegramDestination(Destination):
 
         except Exception as exc:            # a failed edit must never kill the run
 
+            # A failed EDIT (the message was deleted, a 400, a flood control) must not
+            # leave the run redrawing a dead id for ever: the next flush opens a fresh
+            # message instead, so the live view keeps moving (A-2026-10-05-152). Only the
+            # edit branch is dropped - "no message yet" is already the send branch's state.
+            if self.live_id is not None:
+                self.live_id = None
             log.warning("telegram: the live message failed (%s)", exc)
 
 
@@ -30785,9 +30867,25 @@ class TelegramDestination(Destination):
 
         if kind == "final":
 
+            # The run is over. Clear the pinned status line, or the closing flush would
+            # leave the last status dangling under the final steps (A-2026-10-05-198), and
+            # FORCE the last live write - the one-edit-a-second throttle would otherwise
+            # drop it and the growing message would end on a step that is not the last
+            # (A-2026-10-05-153).
+            self.status = ""
+
+            self._flush(force=True)
+
             self.answer(text)
 
             return ref
+
+        if kind == "error":
+
+            # A failed run closes the same way: no pinned status, a forced last write.
+            self.status = ""
+
+            return self.line(kind, text, src)
 
         return self.line(kind, text, src)
 
@@ -30903,11 +31001,47 @@ class TelegramDestination(Destination):
 
                    for i, o in enumerate(options or [])]
 
+        row = self._asking.get("q")
+
+        if row is not None:
+
+            # Appended, not flushed: the question message must be the newest one in the
+            # chat, so the live redraw waits for the next flush (or the resolution).
+            self.lines.append(("ask", str(question)))
+
+            row["ref"] = ("tg", len(self.lines) - 1)
+
         self.c.send(self.chat_id, body, buttons=buttons or None,
 
                     reply_to=self.reply_to)
 
         self.c.typing(self.chat_id)
+
+
+
+    def _resolve_ask(self, row, outcome):
+
+        """Rewrite the question's live line with what happened to it (A-148)."""
+
+        ref = (row or {}).get("ref")
+
+        if not ref:
+
+            return
+
+        try:
+
+            idx = ref[1]
+
+            kind, question = self.lines[idx]
+
+            self.lines[idx] = (kind, "%s — %s" % (question.split(" — ")[0], outcome))
+
+            self._flush(force=True)
+
+        except Exception:                   # a missing line must never break an answer
+
+            pass
 
 
 
@@ -30938,6 +31072,8 @@ class TelegramDestination(Destination):
     def post_done(self, text):
 
         """What happened to the question: answered, stopped or timed out."""
+
+        self._resolve_ask(self._asking.get("q"), str(text))
 
         self.line("checkin", text)
 
@@ -30990,6 +31126,8 @@ class TelegramDestination(Destination):
             return None
 
         answered = row["ev"].wait(wait)
+
+        self._resolve_ask(row, row["answer"] if answered else "no answer")
 
         self._asking.pop("q", None)
 
@@ -31093,7 +31231,14 @@ class TelegramPoller:
 
         self.cancel = {}                # chat_id -> the run's cancel event
 
-        self.seen = deque(maxlen=4000)
+        # Dedupe is PER CHAT: message ids are per chat, so one shared window let a busy
+        # second user evict the first user's history and a redelivery became a second run
+        # (A-166). Each chat keeps the last TG_SEEN_PER_CHAT ids it handled.
+        self.seen = {}                  # chat_id -> deque of message ids
+
+        # Chats already told "I can only read text here", so a photo album draws ONE
+        # notice, not one per photo (A-161). Bounded so it cannot grow for ever.
+        self._no_text_told = {}         # chat_id -> True, insertion-ordered (bounded)
 
 
 
@@ -31107,7 +31252,16 @@ class TelegramPoller:
 
     def _verb(self, chat_id, text):
 
-        verb = text.split()[0].lower()
+        words = text.split()
+
+        if not words:                   # `/stop` on an empty line must not IndexError
+
+            return False                # (A-159: the guard and the split were 20 lines apart)
+
+        # `/help@MyBot` is the form Telegram itself writes into a group and a /cmd link;
+        # the lane is DM-only, but a user who types it still wants help, not a task sent
+        # to the model (A-160).
+        verb = words[0].lower().split("@", 1)[0]
 
         if verb in ("/start", "/help"):
 
@@ -31134,6 +31288,18 @@ class TelegramPoller:
         if verb == "/new":
 
             AGENT.reset(tg_session_key(chat_id))
+
+            # A FRESH conversation needs a fresh progress message: the live destination
+            # kept the old run's steps on screen (A-172).
+            live = self.live.get(chat_id)
+
+            if live is not None:
+
+                live.lines = []
+
+                live.status = ""
+
+                live._flush(force=True)
 
             self.c.send(chat_id, "\U0001F195 fresh conversation")
 
@@ -31177,9 +31343,19 @@ class TelegramPoller:
 
                  sender or "?", chat_id)
 
-        self.c.send(chat_id, "\U0001f4e8 Passing that into the run now — it picks "
+        try:
 
-                             "it up on its next step.")
+            self.c.send(chat_id, "\U0001f4e8 Passing that into the run now \u2014 it picks "
+
+                                 "it up on its next step.")
+
+        except Exception as exc:            # noqa: BLE001 - the steer already landed
+
+            # The message is already in the run: a failed RECEIPT (a 429 on this one
+            # send) must not raise into handle(), where "one update failed" would blame
+            # the update that actually worked (A-170).
+
+            log.warning("telegram: the steer receipt could not be sent (%s)", exc)
 
         return True
 
@@ -31197,7 +31373,19 @@ class TelegramPoller:
 
             chat_id = ((cb.get("message") or {}).get("chat") or {}).get("id")
 
-            if not chat_id or not self.allowed_user(user):
+            if not chat_id:
+
+                # A press can lose its message (deleted, or a truncated update). That is
+                # not the user being disallowed, and it is not a reason a /stop in the
+                # chat should depend on (A-164).
+
+                log.warning("telegram: ignored a button press with no chat (from %s)",
+
+                            user.get("id"))
+
+                return False
+
+            if not self.allowed_user(user):
 
                 log.warning("telegram: ignored a button press from %s", user.get("id"))
 
@@ -31227,7 +31415,15 @@ class TelegramPoller:
 
         user = msg.get("from") or {}
 
-        text = (msg.get("text") or msg.get("caption") or "").strip()
+        # Telegram always sends a string, but a malformed update with a number used to
+        # die in `.strip()` and the sender got nothing at all (A-162).
+        raw = msg.get("text")
+
+        if raw is None:
+
+            raw = msg.get("caption")
+
+        text = str(raw).strip() if raw is not None else ""
 
         if not chat_id:
 
@@ -31235,9 +31431,9 @@ class TelegramPoller:
 
         if chat.get("type") != "private":
 
-            log.info("telegram: ignored a message in a %s chat (DM only)",
+            log.info("telegram: ignored a message with chat.type=%r (DM only); it needs "
 
-                     chat.get("type"))
+                     "a private chat", chat.get("type"))
 
             return False
 
@@ -31253,33 +31449,53 @@ class TelegramPoller:
 
             # A photo, voice note or sticker carries no text (a caption does, and is
             # read now); it used to vanish with no reply and no log line, which reads
-            # as the bot being broken. Say so once.
+            # as the bot being broken. Say so ONCE per chat - three photos used to draw
+            # three identical replies (A-161).
 
             log.info("telegram: a message with no text from chat %s", chat_id)
 
-            try:
+            if chat_id not in self._no_text_told:
 
-                self.c.send(chat_id, "I can only read text here - describe it in words.")
+                self._no_text_told[chat_id] = True
 
-            except Exception:                   # noqa: BLE001 - a reply must not kill the lane
+                while len(self._no_text_told) > TG_NOTICE_MAX:      # bounded
 
-                pass
+                    self._no_text_told.pop(next(iter(self._no_text_told)), None)
+
+                try:
+
+                    self.c.send(chat_id, "I can only read text here - describe it in words.")
+
+                except Exception:               # noqa: BLE001 - a reply must not kill the lane
+
+                    pass
 
             return False
 
         mid = msg.get("message_id")
 
-        # Telegram numbers message ids per chat, so the dedupe key is the pair:
+        # Telegram numbers message ids per chat, so the window is per chat and holds the
+        # last TG_SEEN_PER_CHAT ids: one busy user can no longer evict another's history
+        # and turn a redelivery into a second run (A-166).
+        seen = self.seen.setdefault(chat_id, deque(maxlen=TG_SEEN_PER_CHAT))
 
-        # with two allowed users a bare id swallowed the second chat's message.
+        # A verb is an ORDER, not a task, and it is idempotent: a redelivered `/stop`
+        # (the offset replays after a restart) must bite again, while a redelivered task
+        # must not run twice. The dedupe below therefore lets the verbs through (A-171).
 
-        seen_key = (chat_id, mid)
+        _cmdr = cmdr_strip(text)
 
-        if seen_key in self.seen:
+        if _cmdr != text:
+
+            text = _cmdr
+
+        verb = text.split()[0].lower().split("@", 1)[0] if text.split() else ""
+
+        if mid in seen and verb not in _TG_REDELIVER:
 
             return True
 
-        self.seen.append(seen_key)
+        seen.append(mid)
 
         # A verb is an order, not an answer. This used to try reply_ask FIRST, so a
 
@@ -31292,11 +31508,8 @@ class TelegramPoller:
         # that is not a verb still falls through to the question.
 
         # `/tinycmdr <cmd>` works here too: a Telegram client hands an unknown command
-        # over as ordinary text, so the prefix only has to be understood.
-        _cmdr = cmdr_strip(text)
-        if _cmdr != text:
-            text = _cmdr
-        if text.startswith("/") and self._verb(chat_id, text):
+        # over as ordinary text, so the prefix only has to be understood (done above).
+        if verb in _TG_VERBS and self._verb(chat_id, text):
 
             return True
 
@@ -31440,6 +31653,25 @@ def run_telegram():
 
         _refuse("telegram.allowed_users is empty (deny-by-default)")
 
+    bad = sorted(a for a in allowed if not re.fullmatch(r"\d+", a))
+
+    if bad:
+
+        # The field takes NUMERIC ids and the check compares them as strings, so a
+        # "@david" or a username can never match: the lane starts, looks alive, and
+        # silently refuses every DM with only a per-message warning (A-174). A startup
+        # error is the honest shape.
+
+        log.critical("telegram.allowed_users has %s - Telegram ids are NUMERIC (message "
+
+                     "@userinfobot for yours), and a username can never match. Fix it and "
+
+                     "restart.", ", ".join(repr(b) for b in bad[:5]))
+
+        _refuse("telegram.allowed_users has non-numeric id(s): %s"
+
+                % ", ".join(repr(b) for b in bad[:5]))
+
     client = TelegramClient(token)
 
     try:
@@ -31456,11 +31688,24 @@ def run_telegram():
 
     except Exception as exc:
 
+        if not _lane_error_permanent(exc):
+
+            # A transport failure wearing a credential costume: a captive portal's HTML
+            # or a 204 with no JSON raises RuntimeError, not RequestException, and it used
+            # to be reported as "the token was refused" + exit 2 - so the supervisor
+            # restarted the box into the same portal for ever (A-176). Raising hands it to
+            # the in-process retry, exactly like the unreachable case above.
+
+            raise
+
         log.critical("telegram: the token was refused (%s)", exc)
 
         _refuse("the Telegram token was refused: %s" % exc)
 
-    lane_up("telegram", "connected as @%s" % me.get("username"))
+    # The name the lane reports itself under. getMe can answer `result: null` (a proxy
+    # between us and the API), which used to read "connected as @None" (A-154).
+    who = me.get("username") or "unknown"
+
     # The Scheduler and the scheduled-report door, exactly as run_bot wires them: on a
     # Telegram-only box a scheduled job's progress went to the log and its answer to
     # stdout, with nobody at the other end (A-200). announce_startup is honoured here
@@ -31472,7 +31717,7 @@ def run_telegram():
         announce_startup(_tg_disp)
     log.info("telegram: connected as @%s, %d allowed id(s), DM only",
 
-             me.get("username"), len(allowed))
+             who, len(allowed))
 
 
 
@@ -31577,33 +31822,70 @@ def run_telegram():
 
                     poller.live.pop(chat_id, None)
 
-                    poller.cancel.pop(chat_id, None)
+                    # The mailbox slot belongs to the run that is live. Clearing it
+                    # unconditionally wiped the slot for a run still QUEUED behind this
+                    # one, so a /stop during that next run found nothing and answered
+                    # "nothing is running" while the run kept going (A-167/168). The next
+                    # run claims the slot for itself when it starts; only an empty queue
+                    # lets it go.
+
+                    if queues.get(chat_id) is None or queues[chat_id].empty():
+
+                        poller.cancel.pop(chat_id, None)
 
 
 
     def submit(chat_id, text, msg_id):
 
+        over = False
+
         with locks:
 
-            if chat_id not in queues:
+            q = queues.get(chat_id)
 
-                queues[chat_id] = queue.Queue()
+            if q is not None and q.qsize() >= TG_QUEUE_MAX:
 
-                t = threading.Thread(target=worker, args=(chat_id,), daemon=True,
+                # Six DMs typed in annoyance used to become six sequential full runs,
+                # each with its own growing message (A-169). The cap is per chat; the
+                # refusal is said in the chat, not swallowed.
+                over = True
 
-                                     name="tg-%s" % chat_id)
+            else:
 
-                workers[chat_id] = t
+                if q is None:
 
-                t.start()
+                    q = queues[chat_id] = queue.Queue()
 
-            # The cancel event lives from here, not from the worker: /stop reads
+                    t = threading.Thread(target=worker, args=(chat_id,), daemon=True,
 
-            # this slot, so it exists the moment a message is submitted.
+                                         name="tg-%s" % chat_id)
 
-            cancel = poller.cancel.setdefault(chat_id, threading.Event())
+                    workers[chat_id] = t
 
-        queues[chat_id].put((text, msg_id, cancel))
+                    t.start()
+
+                # A FRESH event per message, so a run that queues behind a stopped one
+                # does not inherit its stop; but the slot keeps the event of the run that
+                # is live (setdefault), so a /stop typed before the first run starts still
+                # bites (A-167/168).
+
+                cancel = threading.Event()
+
+                poller.cancel.setdefault(chat_id, cancel)
+
+                q.put((text, msg_id, cancel))
+
+        if over:
+
+            try:
+
+                client.send(chat_id, "I'm already working through %d message(s) here - "
+
+                                     "send this one when they are done." % TG_QUEUE_MAX)
+
+            except Exception as e:                          # noqa: BLE001 - the cap holds
+
+                log.warning("telegram: could not say the queue is full: %s", e)
 
 
 
@@ -31611,22 +31893,59 @@ def run_telegram():
 
 
 
-    offset = 0
+    # The offset is the lane's ACK, and it survives a restart (A-165). Telegram keeps
+    # unacknowledged updates 24 h, so after a crash or any downtime the whole backlog
+    # used to be delivered again and each DM launched a full run - the same order,
+    # answered twice or three times. It is read here and written after every batch.
+    try:
+
+        offset = int((_state().get("telegram_offset") or 0))
+
+    except (TypeError, ValueError):
+
+        offset = 0
+
+    _persisted_offset = offset
+
+    def _remember_offset(nxt):
+
+        """Record the next update_id to ask for, so a restart does not replay."""
+
+        nonlocal _persisted_offset
+
+        try:
+
+            _state(lambda st: st.__setitem__("telegram_offset", int(nxt)))
+
+            _persisted_offset = int(nxt)
+
+        except Exception as e:                              # noqa: BLE001 - not fatal
+
+            log.debug("telegram: could not persist the update offset: %s", e)
 
     _failing_since = None
+    # The lane is not "up" until the API has ANSWERED a poll: lane_up before the loop
+    # reported a lane that died on its first poll as up for the whole grace window
+    # (A-178). `_heard` is that first-answer flag; a recovery re-uses the same call.
+    _heard = False
     while True:
 
         try:
 
             updates = client.updates(offset)
 
-            if _failing_since is not None:
-
-                lane_up("telegram", "connected as @%s" % me.get("username"))
-
-                _failing_since = None
-
         except Exception as exc:                            # noqa: BLE001 - retried
+
+            if _lane_error_permanent(exc):
+
+                # A token revoked MID-RUN answered and said no; retrying it every 5s
+                # just hammers the API twelve times a minute for ever (A-177). Same
+                # exit as a refused start: record why, then stop.
+                log.critical("telegram: the token was refused mid-run (%s) - stopping "
+
+                             "the lane; replace TINYCMDR_TG_TOKEN and restart", exc)
+
+                _refuse("the Telegram token was refused mid-run: %s" % _lane_reason(exc))
 
             # MONOTONIC: this window must not be broken by a wall-clock step (NTP, a VM
             # resume) - `now - _failing_since` going negative is read as "no time has
@@ -31655,6 +31974,14 @@ def run_telegram():
 
             continue
 
+        if not _heard or _failing_since is not None:
+
+            lane_up("telegram", "connected as @%s" % who)
+
+            _heard = True
+
+            _failing_since = None
+
         for update in updates:
 
             offset = max(offset, int(update.get("update_id") or 0) + 1)
@@ -31666,6 +31993,10 @@ def run_telegram():
             except Exception:                               # noqa: BLE001 - per update
 
                 log.exception("telegram: one update failed")
+
+        if offset != _persisted_offset:
+
+            _remember_offset(offset)
 
 
 
@@ -36889,6 +37220,15 @@ def validate_startup_config():
                 "this bot is deny-by-default - it would ignore every DM.\n"
                 "Put your numeric Telegram id there (or TELEGRAM_ALLOWED_USERS "
                 "in .env).")
+    _tg_bad = sorted(str(u).strip() for u in tg_users
+                     if not re.fullmatch(r"\d+", str(u).strip()))
+    if tg_token and _tg_bad:
+        # An "@david" or a username can NEVER match the numeric id the gate compares
+        # against: the lane starts, looks alive, and silently refuses every DM (A-174).
+        return ("telegram.allowed_users has %s - Telegram ids are NUMERIC (message "
+                "@userinfobot for yours), and a username can never match, so this lane "
+                "would refuse every DM.\nFix allowed_users (or TELEGRAM_ALLOWED_USERS "
+                "in .env)." % ", ".join(repr(b) for b in _tg_bad[:5]))
     users = CONFIG["mattermost"].get("allowed_users")
     if (_mm_token and (users is None
                           or (isinstance(users, (list, tuple)) and not users)
