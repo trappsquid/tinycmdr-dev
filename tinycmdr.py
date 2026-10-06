@@ -53,6 +53,7 @@ import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import quote as _url_quote, quote_plus as _url_quote_plus
 
 import requests
 
@@ -1371,17 +1372,23 @@ def attach_tool_images(messages, session_key):
     return messages + [{"role": "user", "content": parts}]
 
 
+# The share of a sample that must be emoji before est_tokens charges the emoji divisor.
+# 0.30 is "mostly emoji": a line of prose with one or two emoji keeps the text divisors.
+_EMOJI_SHARE = 0.30
+
+
 def est_tokens(text):
     """Rough token count, deliberately cheap: this runs on every payload assembly.
 
     len//4 is right for English prose and wrong for what an ops agent carries.
     Code and JSON run ~3.0 chars/token (braces, punctuation and short identifiers
-    split into more pieces), CJK and other wide scripts ~1.3, and a long tool
-    result / file body ~3.4. With one flat divisor the harness believed a
-    code-heavy session was 2-3x further from the budget than it was, so the cut
-    that protects the request fired late - and on a cloud endpoint the bill follows
-    the real count (2026-09-22). _force_shrink catches the eventual 400, so
-    the old cost was a failure moved to the moment the context was fullest.
+    split into more pieces), CJK and other wide scripts ~1.3, emoji ~2 tokens
+    apiece, and a long tool result / file body ~3.4. With one flat divisor the
+    harness believed a code-heavy session was 2-3x further from the budget than
+    it was, so the cut that protects the request fired late - and on a cloud
+    endpoint the bill follows the real count (2026-09-22). _force_shrink catches
+    the eventual 400, so the old cost was a failure moved to the moment the
+    context was fullest.
 
     A content-aware divisor, not a per-endpoint calibration: one pass over a
     bounded sample, no network call, and it cannot go stale when a box is restarted
@@ -1394,16 +1401,28 @@ def est_tokens(text):
         return 1
     sample = text if n <= 4000 else text[:2000] + text[-2000:]
     m = len(sample)
-    wide = other = dense = 0
+    wide = other = dense = emoji = 0
     for c in sample:
         o = ord(c)
-        if o > 0x2E7F:                       # CJK, kana, hangul
+        # Emoji are their own class (an earlier review run 11, A-109): a 4-byte codepoint (or a
+        # VS16/ZWJ sequence) is ~2 real tokens, not one, so the CJK 1.3 divisor under-counted
+        # an emoji-heavy result by ~2x. VS16 (U+FE0F) and ZWJ (U+200D) ride with the base
+        # emoji, and these ranges sit above CJK, so this arm is tested first.
+        if (0x1F300 <= o <= 0x1FAFF or 0x1F000 <= o <= 0x1F2FF
+                or 0x2600 <= o <= 0x27BF or o in (0xFE0F, 0x200D)):
+            emoji += 1
+        elif o > 0x2E7F:                     # CJK, kana, hangul
             wide += 1
-        elif o > 0x7F:                       # accents, cyrillic, arabic, emoji
+        elif o > 0x7F:                       # accents, cyrillic, arabic
             other += 1
         elif c in "{}[]()<>=;:,./|-_$#@&*+%!^~":
             dense += 1
-    if wide > m * 0.10:
+    # A sample that is MOSTLY emoji (>= _EMOJI_SHARE of it) takes the emoji divisor: 1 token
+    # per 0.5 chars is ~2 tokens per emoji. Below the share one emoji in a line of prose must
+    # not be charged 2 tokens, so the ordinary text divisors stand.
+    if emoji > m * _EMOJI_SHARE:
+        per = 0.5
+    elif wide > m * 0.10:
         per = 1.3
     elif other > m * 0.10:
         per = 2.6
@@ -3209,6 +3228,16 @@ def _llama_ping_interval():
 _STREAM_UNSUPPORTED = set()
 
 
+# The ONE secret-name vocabulary, shared by both sides (an earlier review run 11, A-110): an
+# environment variable (below) and a config.json path (_secret_config_path: the `config`
+# verb's refusal and the verb-log scrub) are graded by the SAME shape, so
+# `config set db.password X` is refused exactly like DB_PASSWORD is redacted. The
+# `password|passwd` arm is the credential-at-any-length rule the env side already used;
+# `token`/`api_key`/`*_api_key` are the arms the config side already accepted.
+_SECRET_NAME_RX = re.compile(
+    r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$")
+
+
 def _secret_values():
     """Every secret this process was handed, so anything leaving the process —
     tool output entering context, an answer posted to chat, notes carried in the
@@ -3243,8 +3272,7 @@ def _secret_values():
         # 6, the rule the config-side sweep above already uses. Measured 2026-09-29 -
         # the floor skipped this install's 10-char SUDO_PASSWORD, and a skipped secret
         # in _SECRETS is a secret that reaches the transcript, the log and the chat.
-        if isinstance(v, str) and re.search(
-                r"(?i)(^|_)(token|key|pat|password|passwd|secret|credential)s?$",
+        if isinstance(v, str) and _SECRET_NAME_RX.search(
                 k) and (len(v) >= 12 or (re.search(r"(?i)_?passw(or)?d$", k)
                                          and len(v) >= 6)):
             vals.add(v)
@@ -3256,12 +3284,20 @@ _SECRETS = _secret_values()
 
 
 def scrub(text):
-    """Mask known secrets before text enters context or leaves the process."""
+    """Mask known secrets before text enters context or leaves the process.
+
+    Exact match plus the two percent-encoded shapes a URL carries: a secret in a query
+    string arrives as `%40`/`%2F` (quote(safe="")) or, in form-urlencoded data, with a space
+    as `+` (what urllib.parse.quote_plus produces). A case-insensitive pass is deliberately
+    NOT done: folding case would redact a short secret (a 6-char password, `token`) wherever
+    the ordinary word appeared in prose, mangling output the model has to read.
+    """
     if not text or not _SECRETS or not isinstance(text, str):
         return text
     for s in _SECRETS:
-        if s in text:
-            text = text.replace(s, "«redacted»")
+        for form in (s, _url_quote(s, safe=""), _url_quote_plus(s)):
+            if form in text:
+                text = text.replace(form, "«redacted»")
     return text
 
 
@@ -9138,8 +9174,20 @@ def _merge_conflict_span(lines, first_line=1):
     return None
 
 
-def tools_dir_verdict(path):
+# Bounds for the no-argument shelf verdict: how many loading files and how many refused
+# files are named before the note is trimmed ("+N more" / dropped). Kept small so the
+# [HARNESS:] line stays one readable line in a tool result.
+_SHELF_VERDICT_MAX = 8
+_SHELF_BAD_MAX = 3
+
+
+def tools_dir_verdict(path=None):
     """The loader's own answer about a file written into the bot's ./tools/ (or "").
+
+    With no `path` it answers for the SHELF itself: what ./tools/ holds and what the loader
+    refuses (an earlier review run 11, A-138: `path` had no default, so a general call raised a
+    bare TypeError - the argument is now optional, and the honest general verdict is the
+    shelf inventory).
 
     with write_file and then found out whether it was valid by running the loader by hand
     in a subprocess - three drafts on a Linux install, and on a Windows install a file that was refused
@@ -9147,8 +9195,32 @@ def tools_dir_verdict(path):
     of the write; saying it there removes the whole detour.
     """
     try:
+        root = Path(REGISTRY.tools_dir).resolve()
+    except OSError:
+        return ""
+    if path is None or not str(path).strip():
+        try:
+            files = sorted(p for p in root.iterdir()
+                           if p.is_file() and p.suffix in (".py", ".json")
+                           and p.name != "__init__.py")
+        except OSError:
+            return ""
+        good, bad = [], []
+        for p in files:
+            try:
+                good.append(f"{p.name} -> {', '.join(d[0] for d in load_tool_defs(p))}")
+            except Exception as e:                                   # noqa: BLE001
+                bad.append(f"{p.name} ({str(e)[:60]})")
+        shown = good[:_SHELF_VERDICT_MAX]           # 8: keep the note to a readable line
+        more = (f" (+{len(good) - len(shown)} more)"
+                if len(good) > len(shown) else "")
+        return (f"  [HARNESS: ./tools/ holds {len(files)} drop-in file(s): "
+                f"{'; '.join(shown) or 'none load'}{more}"
+                + (f". The loader REFUSES: {'; '.join(bad[:_SHELF_BAD_MAX])}."
+                   if bad else ".") + "]")
+    try:
         target = Path(path).resolve()
-        if target.parent != Path(REGISTRY.tools_dir).resolve():
+        if target.parent != root:
             return ""
     except OSError:
         return ""
@@ -11654,15 +11726,24 @@ def tool_create_tool(args, ctx):
                 "write_file (shapes: tools/README.md).")
     if name in CORE_TOOL_NAMES:
         return f"ERROR: '{name}' is a core tool name; pick another."
+    # A name already on the CUSTOM shelf is a collision too (an earlier review run 11, A-137): only
+    # the CORE_TOOL_NAMES check existed, so create_tool on a name a register-style file holds
+    # (ported_todo.py registers todo_list) wrote a second tools/<name>.py and shadowed the
+    # tool. Refuse either collision, naming which shelf holds the name.
+    path = TOOLS_DIR / f"{name}.py"
+    _owner = (REGISTRY.custom.get(name) or {}).get("source")
+    if name in REGISTRY.custom:
+        return (f"ERROR: '{name}' is already the name of a custom tool on this box"
+                + (f" (loaded from tools/{Path(_owner).name})" if _owner else "")
+                + "; pick another name, or remove it with action=delete.")
+    if path.exists():
+        return (f"ERROR: tools/{name}.py already exists as a drop-in tool file. Read it "
+                "with read_file and rewrite it only if you're improving it.")
     if not _code.strip():
         return (f"ERROR: create_tool got no code for {name!r}, so there is nothing to "
                 f"write. Pass the complete Python source in `code` (NAME, DESCRIPTION, "
                 f"SCHEMA, run(args, ctx)), or write a register()-style file or a "
                 f".tool.json manifest with write_file - shapes: tools/README.md.")
-    path = TOOLS_DIR / f"{name}.py"
-    if path.exists():
-        return (f"ERROR: tools/{name}.py already exists. Read it with "
-                "read_file and rewrite it only if you're improving it.")
     refusal = confirm_gate(args.get("code") or "",
                            "create_tool %s" % name, ctx)
     if refusal:
@@ -33929,11 +34010,15 @@ def _secret_config_path(path):
     dispatch, carried the value to tinycmdr.log anyway). llm.* is exempt - a local
     endpoint's key lives in config.json - and the *_api_key arm is for a provider key
     written by hand (`search.anysearch_api_key`), which the old two-name test accepted.
+    The vocabulary is _SECRET_NAME_RX, the SAME rule the environment sweep uses, so the
+    config side no longer misses `password|passwd|credential` (an earlier review run 11, A-110:
+    `config set db.password X` was not treated as a secret).
     """
     _section, _, key = path.rpartition(".")
     if _section.startswith("llm"):
         return False
-    return key in ("token", "api_key") or key.endswith("_api_key")
+    return (_SECRET_NAME_RX.search(key) is not None
+            or key in ("token", "api_key") or key.endswith("_api_key"))
 
 
 def _verb_log_args(verb, rest):

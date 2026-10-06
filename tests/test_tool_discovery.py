@@ -930,6 +930,45 @@ finally:
     fb.REGISTRY.custom.update(_saved_custom)
     shutil.rmtree(_del_dir, ignore_errors=True)
 
+# ---- create_tool refuses a name another CUSTOM tool already holds (A-137) -------------
+# Only CORE_TOOL_NAMES was checked, so create_tool on a name a register-style file held
+# (ported_todo.py registers todo_list) or a drop-in tools/<name>.py got the create path -
+# answered "got no code" and, with code, wrote a second file that shadowed the tool.
+_coll_dir = Path(tempfile.mkdtemp(prefix="fb-toolcoll-"))
+_coll_file = _coll_dir / "ported_todo.py"
+_coll_file.write_text("NAME = 'todo_list'\n", encoding="utf-8")
+_saved_tools2 = fb.TOOLS_DIR
+_saved_custom2 = dict(fb.REGISTRY.custom)
+try:
+    fb.TOOLS_DIR = _coll_dir
+    fb.REGISTRY.custom["todo_list"] = {
+        "fn": lambda *a: "", "source": _coll_file, "mutates": False, "category": "",
+        "schema": {"type": "function", "function": {
+            "name": "todo_list", "description": "", "parameters": {}}}}
+    _c1 = fb.tool_create_tool({"action": "new", "name": "todo_list"}, {})
+    check("create_tool refuses a name an existing custom tool holds, naming the shelf",
+          _c1.startswith("ERROR") and "already the name of a custom tool" in _c1
+          and "tools/ported_todo.py" in _c1, _c1)
+    (_coll_dir / "mcp.py").write_text("NAME = 'mcp'\n", encoding="utf-8")
+    _c2 = fb.tool_create_tool({"action": "new", "name": "mcp"}, {})
+    check("...and a name a drop-in tool FILE holds, before it asks for code",
+          _c2.startswith("ERROR") and "tools/mcp.py already exists" in _c2, _c2)
+finally:
+    fb.TOOLS_DIR = _saved_tools2
+    fb.REGISTRY.custom.clear()
+    fb.REGISTRY.custom.update(_saved_custom2)
+    shutil.rmtree(_coll_dir, ignore_errors=True)
+
+# ---- tools_dir_verdict() with no path answers for the shelf (A-138) -------------------
+# `path` was required, so the README's "check one file through the harness's own loader"
+# pointed a human at a call that raised a bare TypeError instead of a verdict.
+try:
+    _vd = fb.tools_dir_verdict()
+except TypeError as _e:
+    _vd = "TypeError: %s" % _e
+check("tools_dir_verdict() with no argument gives the shelf verdict, not a TypeError",
+      isinstance(_vd, str) and "./tools/" in _vd and "drop-in file" in _vd, _vd)
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

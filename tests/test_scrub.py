@@ -192,6 +192,44 @@ try:
 finally:
     fb._SECRETS = _prev_secrets
 
+# ---- the config side and the env side share ONE secret vocabulary (A-110) --------------
+# The env rule ended in token|key|pat|password|passwd|secret|credential; the config-side
+# rule (_secret_config_path, which feeds BOTH the `config` verb's refusal and the verb-log
+# scrub) named only token/api_key, so `config set db.password X` was not treated as a
+# secret. The llm.* exemption and the *_api_key arm are asserted here so the widening
+# cannot quietly drop them.
+check("the config secret rule mirrors the env vocabulary (and llm.* stays exempt)",
+      all(fb._secret_config_path(p) for p in
+          ("db.password", "db.passwd", "db.credential", "mattermost.password"))
+      and not fb._secret_config_path("llm.api_key")
+      and fb._secret_config_path("mattermost.token")
+      and fb._secret_config_path("search.anysearch_api_key"),
+      {p: fb._secret_config_path(p) for p in
+       ("db.password", "db.passwd", "db.credential", "mattermost.password",
+        "llm.api_key", "mattermost.token", "search.anysearch_api_key")})
+_plog = fb._verb_log_args("config", ["set", "db.password", "hunter2"])
+check("a password-named config key's VALUE never reaches the verb log",
+      "hunter2" not in _plog and "<redacted>" in _plog, _plog)
+
+# ---- a percent-encoded secret in a URL is still the secret (A-111) ---------------------
+# scrub was exact-match only: the same key in a query string (`%40`, `%2F`, `+` for a
+# space) went through untouched.
+from urllib.parse import quote, quote_plus                                   # noqa: E402
+_enc_secret = "p@ss/word:1234 secretvalue"
+_prev_enc = fb._SECRETS
+try:
+    fb._SECRETS = set(fb._SECRETS) | {_enc_secret}
+    _pct = "https://x.invalid/?k=" + quote(_enc_secret, safe="")
+    _form = "https://x.invalid/?k=" + quote_plus(_enc_secret)
+    check("a percent-encoded secret in a URL is redacted (quote(safe=''))",
+          _enc_secret not in _pct and fb.scrub(_pct) == "https://x.invalid/?k=«redacted»",
+          fb.scrub(_pct))
+    check("...and the form-urlencoded shape (+ for a space) too",
+          _enc_secret not in _form and fb.scrub(_form) == "https://x.invalid/?k=«redacted»",
+          fb.scrub(_form))
+finally:
+    fb._SECRETS = _prev_enc
+
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))
 sys.exit(1 if FAILS else 0)

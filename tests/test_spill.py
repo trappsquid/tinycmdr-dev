@@ -64,6 +64,26 @@ def main():
         check(fb.cap_output("shell", "one line", "command output") == "one line",
               "a result under the cap passes through unchanged")
 
+        # ---- emoji are their OWN token class, not CJK (A-109) --------------------------
+        # 400 emoji estimated 307 tokens (1.30 chars/token) because the 4-byte codepoint
+        # landed in the CJK 1.3 divisor; a tokenizer spends ~2 tokens on each. The prose
+        # half of the check is the guard: a stray emoji in a line of text must NOT be
+        # charged 2 tokens apiece.
+        _emoji = "\U0001F600" * 400
+        _et = fb.est_tokens(_emoji)
+        _prose = "the build finished and the report is attached " * 20 + "ok \U0001F600\n"
+        check(_et >= 400 * 1.8 and fb.est_tokens(_prose) <= len(_prose) / 2.0,
+              f"an emoji-only sample costs ~2 tokens per emoji ({_et} for 400, "
+              f"{round(400 / _et, 2)} emoji/token), while a prose line with a stray emoji "
+              f"keeps the text divisor ({fb.est_tokens(_prose)} for {len(_prose)} chars)")
+        # VS16 (U+FE0F) and ZWJ (U+200D) ride with the base emoji, so a heart+VS16 or a
+        # ZWJ family is charged the emoji rate too.
+        _vs = fb.est_tokens("\u2764\uFE0F" * 200)
+        _zwj = fb.est_tokens("\U0001F468\u200D\U0001F469\u200D\U0001F467" * 50)
+        check(_vs >= 200 * 1.8 and _zwj >= 50 * 1.8,
+              f"a VS16 emoji and a ZWJ family are in the emoji class ({_vs} for 200 "
+              f"heart+VS16, {_zwj} for 50 family sequences)")
+
         # ---- switching it off restores the old behaviour -------------------------------
         fb.CONFIG["agent"]["spill_output"] = False
         try:
