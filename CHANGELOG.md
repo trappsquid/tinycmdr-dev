@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **The auto-approval line names what it is running** (reported 2026-10-06): a later session showed only "approved permanently - running" beside no command, which reads like an ask that approved itself. The line now carries the scrubbed command, the scope, the date the grant was given (stamped at grant time; an older file says "no date recorded") and the undo path (`tinycmdr approvals clear`). (tests/test_guard_battery.py)
 
+### Added
+- **The Responses API is a real wire** (`/responses`): a chat history becomes `input` items with explicit part types, the system message becomes `instructions`, tool schemas flatten, reasoning summaries land in `reasoning_content`, `usage.input_tokens/output_tokens` map onto the existing accounting, and a stream adapter feeds the existing SSE reader. It is used when `base_url` says `/responses`, or when an OpenAI-style 400 naming BOTH `tools` and `reasoning_effort` proves the chat wire cannot carry them - that one escalates once to the `/responses` sibling and the fact is remembered per endpoint. (tests/test_responses_wire.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed

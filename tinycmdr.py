@@ -15990,6 +15990,290 @@ def apply_reasoning(payload, url=None, model=None):
         payload["reasoning_effort"] = wire
 
 
+def _wire_for(url):
+    """Which request SHAPE this endpoint gets: "responses" or "chat".
+
+    The URL is the primary signal (`.../responses`); the escalation learned from a 400
+    that named BOTH `tools` and `reasoning_effort` is the second, so a base_url pinned at
+    /chat/completions can be taught to use its sibling without a restart.
+    """
+    if "/responses" in str(url or ""):
+        return "responses"
+    if _endpoint_facts(url).get("wire") == "responses":
+        return "responses"
+    return "chat"
+
+
+def _responses_sibling_url(url):
+    """`.../responses` for a chat-completions URL, or None when it cannot be derived.
+
+    Same origin and path with the trailing `/chat/completions` swapped: OpenAI serves
+    both wires under /v1. A URL that does not END in /chat/completions names a
+    nonstandard path, so no sibling is guessed for it - the field-drop fallback stands.
+    """
+    if not isinstance(url, str) or "/responses" in url:
+        return None
+    suffix = "/chat/completions"
+    if not url.endswith(suffix):
+        return None
+    return url[:-len(suffix)] + "/responses"
+
+
+def _responses_escalation_url(url, body):
+    """The /responses sibling to retry on when a 400 says tools+effort cannot ride
+    together, or None when this URL is not a candidate.
+
+    The 400 must name BOTH `tools` and `reasoning_effort`: a bare unsupported-field
+    message is no evidence the endpoint offers a /responses wire at all. A URL already on
+    the responses wire, or one with no derivable sibling, returns None so the caller's
+    field-drop fallback stands.
+    """
+    if _wire_for(url) == "responses":
+        return None
+    if not (re.search(r"\btools\b", str(body or ""), re.I)
+            and re.search(r"reasoning_effort", str(body or ""), re.I)):
+        return None
+    return _responses_sibling_url(url)
+
+
+def responses_payload(model, messages, tools=None, max_output_tokens=None, stream=False):
+    """A chat message history as an OpenAI Responses API request body.
+
+    The Responses wire is not a renamed chat payload: `messages` becomes `input`, a
+    system message becomes `instructions`, text parts carry an explicit type, and the
+    tool schemas are flat. Built in one place so every caller sends the same body, and
+    `store=False` because this harness owns its own history.
+    """
+    instructions = None
+    items = []
+    for m in messages or []:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "")
+        if role == "system":
+            text = _delta_text(m.get("content"))
+            if text:
+                instructions = ((instructions + "\n\n") if instructions else "") + text
+            continue
+        if role == "tool":
+            items.append({"type": "function_call_output",
+                          "call_id": m.get("tool_call_id") or "",
+                          "output": _delta_text(m.get("content"))})
+            continue
+        if role == "assistant":
+            # The calls go BEFORE the text: the Responses API pairs each call with its
+            # output, and the assistant's own prose reads after the call it announced.
+            for tc in (m.get("tool_calls") or []):
+                fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                args = fn.get("arguments")
+                if not isinstance(args, str):
+                    args = json.dumps(args or {}, ensure_ascii=False)
+                items.append({"type": "function_call",
+                              "call_id": (tc.get("id") if isinstance(tc, dict) else "") or "",
+                              "name": fn.get("name") or "",
+                              "arguments": args})
+            text = _delta_text(m.get("content"))
+            if text:
+                items.append({"role": "assistant",
+                              "content": [{"type": "output_text", "text": text}]})
+            continue
+        text = _delta_text(m.get("content"))
+        if text:
+            items.append({"role": "user",
+                          "content": [{"type": "input_text", "text": text}]})
+    payload = {"model": model, "input": items, "store": False}
+    if instructions:
+        payload["instructions"] = instructions
+    if tools:
+        payload["tools"] = [
+            {"type": "function",
+             "name": ((t.get("function") or {}).get("name") if isinstance(t, dict) else "")
+                     or (t.get("name") if isinstance(t, dict) else "") or "",
+             "description": ((t.get("function") or {}).get("description")
+                             if isinstance(t, dict) else "") or "",
+             "parameters": ((t.get("function") or {}).get("parameters")
+                            if isinstance(t, dict) else None) or {}}
+            for t in tools if isinstance(t, dict)]
+    if max_output_tokens:
+        payload["max_output_tokens"] = int(max_output_tokens)
+    if stream:
+        payload["stream"] = True
+    return payload
+
+
+def parse_responses(data):
+    """An OpenAI Responses body as (msg, finish), in the shape `_chat` already reads.
+
+    `output` items become the assistant message: `output_text` message parts join into
+    `content`, `function_call` items become tool_calls, and a `reasoning` item's
+    summary/content text becomes `reasoning_content`. finish is "tool_calls" when a call
+    is present, else the status mapped onto the chat vocabulary.
+    """
+    text_parts, reason_parts, calls = [], [], []
+    for item in ((data.get("output") or []) if isinstance(data, dict) else []):
+        if not isinstance(item, dict):
+            continue
+        itype = item.get("type")
+        if itype == "function_call":
+            args = item.get("arguments")
+            if not isinstance(args, str):
+                args = json.dumps(args or {}, ensure_ascii=False)
+            calls.append({"id": item.get("call_id") or item.get("id") or "",
+                          "type": "function",
+                          "function": {"name": item.get("name") or "",
+                                       "arguments": args}})
+        elif itype == "reasoning":
+            # `summary` is the modern field; older/raw payloads put the text in
+            # `content`. Either way the parts carry `{"text": ...}`.
+            for part in (item.get("summary") or item.get("content") or []):
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    reason_parts.append(part["text"])
+                elif isinstance(part, str):
+                    reason_parts.append(part)
+        elif itype == "message":
+            for part in (item.get("content") or []):
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    text_parts.append(part["text"])
+                elif isinstance(part, str):
+                    text_parts.append(part)
+    msg = {"role": "assistant", "content": "".join(text_parts)}
+    if reason_parts:
+        msg["reasoning_content"] = "".join(reason_parts)
+    if calls:
+        msg["tool_calls"] = calls
+        finish = "tool_calls"
+    else:
+        finish = {"completed": "stop",
+                  "incomplete": "length"}.get(str(data.get("status") or ""),
+                                             str(data.get("status") or ""))
+    return msg, finish
+
+
+def responses_stream_event(event):
+    """(kind, payload) for one Responses SSE event, or (None, None).
+
+    The kinds are the pieces the chat accumulator already consumes: text/reasoning
+    deltas, a call's NAME (announced on the output item, never on the argument stream),
+    its argument fragments, and the terminal event carrying usage.
+    """
+    if not isinstance(event, dict):
+        return None, None
+    etype = str(event.get("type") or "")
+    if etype == "response.output_text.delta":
+        return "text", event.get("delta") or ""
+    if etype in ("response.reasoning_summary_text.delta",
+                 "response.reasoning_text.delta"):
+        return "reasoning", event.get("delta") or ""
+    if etype == "response.function_call_arguments.delta":
+        return "tool_args", {"delta": event.get("delta") or "",
+                             "item_id": event.get("item_id") or "",
+                             "output_index": event.get("output_index")}
+    if etype == "response.output_item.added":
+        item = event.get("item") or {}
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            return "tool_name", {"name": item.get("name") or "",
+                                 "call_id": item.get("call_id") or item.get("id") or "",
+                                 "output_index": event.get("output_index")}
+        return None, None
+    if etype == "response.completed":
+        resp = event.get("response") or {}
+        usage = resp.get("usage") if isinstance(resp, dict) else None
+        return "done", {"usage": usage or {}, "response": resp}
+    return None, None
+
+
+def _responses_as_chat(data):
+    """A Responses body in the chat-completion shape the rest of `_chat` reads.
+
+    The usage names differ (`input_tokens`/`output_tokens`), so they are mapped here, at
+    the one boundary, rather than teaching every downstream reader a second vocabulary.
+    """
+    msg, finish = parse_responses(data)
+    u = data.get("usage") if isinstance(data, dict) else None
+    usage = {}
+    if isinstance(u, dict):
+        usage = {"prompt_tokens": int(u.get("input_tokens") or 0),
+                 "completion_tokens": int(u.get("output_tokens") or 0)}
+        details = u.get("input_tokens_details")
+        if isinstance(details, dict) and details.get("cached_tokens"):
+            usage["prompt_tokens_details"] = {
+                "cached_tokens": int(details["cached_tokens"])}
+    return {"choices": [{"message": msg, "finish_reason": finish}], "usage": usage}
+
+
+class _ResponsesStreamAdapter:
+    """A Responses SSE stream presented as the chat-completion SSE lines `_stream_chat` reads.
+
+    `_stream_chat` already owns the hard parts of streaming: the reader thread, the two
+    waits (prefill vs idle), cancel-by-socket-shutdown, the leading-think-fence routing,
+    and tool-fragment assembly. A Responses stream carries the same information under
+    different event names, so instead of forking that machinery this translates each
+    event into the chat chunk it consumes. Minimal by design: it only rewrites lines.
+    """
+
+    def __init__(self, resp):
+        self._resp = resp
+
+    def __getattr__(self, name):
+        # `close()` and `raw` are what _stream_chat's cancel path touches; both belong
+        # to the underlying response.
+        return getattr(self._resp, name)
+
+    def iter_lines(self, decode_unicode=False):
+        def chat(obj):
+            return ("data: " + json.dumps(obj, ensure_ascii=False)).encode("utf-8")
+
+        for raw in self._resp.iter_lines(decode_unicode=False):
+            text = (raw.decode("utf-8", "replace") if isinstance(raw, bytes)
+                    else str(raw or ""))
+            line = text.strip()
+            if not line or line.startswith(":"):
+                # Keep-alive comments forwarded so the reader's ping counter sees them.
+                yield (line.encode("utf-8") if isinstance(raw, bytes) else line)
+                continue
+            if not line.startswith("data:"):
+                # `event:` lines duplicate the JSON `type`; nothing else is expected.
+                continue
+            try:
+                event = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            kind, payload = responses_stream_event(event)
+            if kind == "text":
+                yield chat({"choices": [{"delta": {"content": payload}}]})
+            elif kind == "reasoning":
+                yield chat({"choices": [{"delta": {"reasoning_content": payload}}]})
+            elif kind == "tool_name":
+                yield chat({"choices": [{"delta": {"tool_calls": [{
+                    "index": payload.get("output_index"),
+                    "id": payload.get("call_id") or "", "type": "function",
+                    "function": {"name": payload.get("name") or "",
+                                 "arguments": ""}}]}}]})
+            elif kind == "tool_args":
+                yield chat({"choices": [{"delta": {"tool_calls": [{
+                    "index": payload.get("output_index"),
+                    "function": {"arguments": payload.get("delta") or ""}}]}}]})
+            elif kind == "done":
+                u = payload.get("usage") or {}
+                chat_usage = {"prompt_tokens": int(u.get("input_tokens") or 0),
+                              "completion_tokens": int(u.get("output_tokens") or 0)}
+                details = u.get("input_tokens_details")
+                if isinstance(details, dict) and details.get("cached_tokens"):
+                    chat_usage["prompt_tokens_details"] = {
+                        "cached_tokens": int(details["cached_tokens"])}
+                if chat_usage["prompt_tokens"] or chat_usage["completion_tokens"]:
+                    yield chat({"usage": chat_usage})
+                resp = payload.get("response") or {}
+                has_calls = any(isinstance(it, dict)
+                                and it.get("type") == "function_call"
+                                for it in (resp.get("output") or []))
+                finish = "tool_calls" if has_calls else {
+                    "completed": "stop", "incomplete": "length"}.get(
+                        str(resp.get("status") or ""), "stop")
+                yield chat({"choices": [{"delta": {}, "finish_reason": finish}]})
+                yield b"data: [DONE]"
+
+
 def _apply_reasoning_flags(payload, url):
     """Merge `llm.reasoning_flags` when the endpoint has PROVEN it takes the echo back.
 
@@ -17194,28 +17478,41 @@ class Agent:
             #     WINDOW and never by window // 4 - clamping a retry to the cap that just
             #     failed would make it the no-op it is not (see the escalation below).
             cap = int(max_tokens) if max_tokens else int(env.get("reply") or 0)
-            payload = {
-                "model": ep_model,
-                "messages": _messages_for_wire(messages, url),
-            }
+            wire = _wire_for(url)
+            # Disclosure decides what is SENT, not what exists: the registry still
+            # holds every tool, so a call for a hidden one is executed and revealed.
+            _wire_tools = select_tool_schemas(session_key) if use_tools else None
+            if use_tools:
+                note_schema_transition(session_key, _wire_tools)
+            if wire == "responses":
+                # A /responses endpoint speaks a DIFFERENT body, not the chat one with a
+                # renamed reasoning key: build it whole (input items, flattened tools,
+                # max_output_tokens) rather than posting a chat payload that 400s.
+                payload = responses_payload(
+                    ep_model, _messages_for_wire(messages, url),
+                    tools=_wire_tools, max_output_tokens=cap or None,
+                    stream=bool(stream_on and url not in _STREAM_UNSUPPORTED))
+                cap_field = "max_output_tokens"
+            else:
+                payload = {
+                    "model": ep_model,
+                    "messages": _messages_for_wire(messages, url),
+                }
+                cap_field = "max_tokens"
             _ck = _cache_key_for(url, session_key)
             if _ck:
                 payload["prompt_cache_key"] = _ck
             apply_sampling(payload)
             apply_reasoning(payload, url, ep_model)
             _apply_reasoning_flags(payload, url)
-            if use_tools:
-                # Disclosure decides what is SENT, not what exists: the registry still
-                # holds every tool, so a call for a hidden one is executed and revealed.
-                _wire_tools = select_tool_schemas(session_key)
-                note_schema_transition(session_key, _wire_tools)
+            if use_tools and wire == "chat":
                 payload["tools"] = _wire_tools
                 payload["tool_choice"] = "auto"
-            if CONFIG["llm"].get("no_think"):
+            if wire == "chat" and CONFIG["llm"].get("no_think"):
                 # qwen3-style thinking models: ask the template to skip the
                 # think block (ignored by servers that don't support it)
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
-            if stream_on and url not in _STREAM_UNSUPPORTED:
+            if wire == "chat" and stream_on and url not in _STREAM_UNSUPPORTED:
                 payload["stream"] = True
                 if _is_local_url(url):
                     # llama.cpp reports usage AND timings on the final chunk when
@@ -17253,11 +17550,13 @@ class Agent:
             waited_after_429 = False
             dropped_optional = False
             handled_reasoning_400 = False
+            # Set when a tools+reasoning_effort 400 has been answered by switching this
+            # call to the endpoint's /responses sibling - tried once, never in a loop.
+            responses_escalated = False
             empty_retried = False
             transient_left = int(CONFIG["llm"].get("same_endpoint_retries", 3))
-            # The field carrying the output cap: `max_tokens` unless a provider's 400
-            # names it, in which case the same value goes out as its replacement.
-            cap_field = "max_tokens"
+            # cap_field is set with the payload above: `max_tokens` for chat,
+            # `max_output_tokens` for the Responses wire (whose 400 would name THAT).
             while True:
                 if cap:
                     payload[cap_field] = cap
@@ -17273,9 +17572,17 @@ class Agent:
                     resp.raise_for_status()
                     if not use_stream:
                         data = resp.json()
+                        if wire == "responses":
+                            # The Responses body is mapped to the chat shape HERE so every
+                            # downstream decision (usage, escalation, clamp) is shared.
+                            data = _responses_as_chat(data)
                     else:
+                        # The Responses SSE stream is translated to chat chunks by the
+                        # adapter; _stream_chat's machinery is otherwise untouched.
+                        _stream_src = (_ResponsesStreamAdapter(resp)
+                                       if wire == "responses" else resp)
                         data, sstats = _stream_chat(
-                            resp, cancel_event=cancel_event,
+                            _stream_src, cancel_event=cancel_event,
                             idle_seconds=CONFIG["llm"].get("stream_idle_seconds", 120),
                             on_delta=on_delta,
                             # The prefill wait is bounded by the request timeout, NOT by
@@ -17351,16 +17658,53 @@ class Agent:
                         last_err = e
                         continue
                     _r400 = _reasoning_400_verdict(body) if status == 400 else None
+                    if _r400 == "none" and not responses_escalated:
+                        # The 400 named BOTH `tools` and a reasoning effort: this endpoint
+                        # cannot carry them on the chat wire, but its /responses sibling
+                        # can. Remember the wire for the ORIGIN (later calls skip the 400)
+                        # and retry ONCE on the sibling. When no sibling can be derived
+                        # this falls through to the field-drop below.
+                        _sibling = _responses_escalation_url(url, body)
+                        if _sibling:
+                            responses_escalated = True
+                            _from = url
+                            _endpoint_note(_from, wire="responses")
+                            _record_attempt(usage, _from, "retry",
+                                            f"400 named tools+reasoning_effort: {body}",
+                                            secs)
+                            log.warning("LLM %s cannot combine tools with a reasoning "
+                                        "effort on its chat wire - retrying once on the "
+                                        "/responses sibling %s", _from, _sibling)
+                            url = _sibling
+                            wire = "responses"
+                            payload = responses_payload(
+                                ep_model, _messages_for_wire(messages, url),
+                                tools=_wire_tools, max_output_tokens=cap or None,
+                                stream=bool(stream_on
+                                            and url not in _STREAM_UNSUPPORTED))
+                            cap_field = "max_output_tokens"
+                            _ck = _cache_key_for(url, session_key)
+                            if _ck:
+                                payload["prompt_cache_key"] = _ck
+                            apply_sampling(payload)
+                            apply_reasoning(payload, url, ep_model)
+                            _apply_reasoning_flags(payload, url)
+                            dump_payload(payload, ep_model)
+                            last_err = e
+                            continue
                     if _r400 and not handled_reasoning_400:
                         # The endpoint just said which way it wants the field. Remember the
                         # answer per endpoint - one call once, then never again.
                         handled_reasoning_400 = True
                         _endpoint_note(url, reasoning=_r400)
                         if _r400 == "none":
-                            # Cannot have tools AND an effort: the effort goes.
+                            # Cannot have tools AND an effort: the effort goes (when the
+                            # /responses escalation above applied, that already retried).
                             for _fk in ("reasoning_effort", "reasoning", "thinking"):
                                 payload.pop(_fk, None)
-                        else:
+                        elif wire == "chat":
+                            # Only the chat body carries `messages`; the Responses body
+                            # was already rebuilt from the same history.
                             payload["messages"] = _messages_for_wire(messages, url)
                         _record_attempt(usage, url, "retry",
                                         f"400 says reasoning_content {_r400}: {body}", secs)
