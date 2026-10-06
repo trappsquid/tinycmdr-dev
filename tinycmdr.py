@@ -25271,10 +25271,27 @@ def run_webui():
         _conn_live = 0
 
         def process_request(self, request, client_address):
+            # Loopback callers are exempt: they are already ON the box (the same trust
+            # boundary as this process), and they are the ones that probe /api/health -
+            # the installers, the restart doors, curl from a terminal. Counting them
+            # made a busy server read as a DEAD one to `curl -sf`, which is the answer
+            # the restart path must never get wrong (measured 2026-10-05: 40 idle
+            # sockets aborted the health probe mid-connection). A LAN peer stays capped
+            # - that is the 2026-09-23 thread-stacking incident - and now hears BUSY in
+            # HTTP instead of a bare close, so a monitor can tell it apart from a dead box.
+            peer = str((client_address or ("",))[0])
+            exempt = peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
             with self._conn_lock:
-                if self._conn_live >= self.MAX_CONN:
+                if self._conn_live >= self.MAX_CONN and not exempt:
                     log.info("web: refused a connection, %d already open",
                              self._conn_live)
+                    try:
+                        request.sendall(b"HTTP/1.1 503 Service Unavailable\r\n"
+                                        b"Retry-After: 1\r\n"
+                                        b"Content-Length: 0\r\n"
+                                        b"Connection: close\r\n\r\n")
+                    except OSError:
+                        pass
                     request.close()
                     return
                 self._conn_live += 1

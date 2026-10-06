@@ -30,6 +30,7 @@ import logging
 import os
 import re
 import shutil
+import socket
 import struct
 import sys
 import tempfile
@@ -454,6 +455,55 @@ def main():
               fb._web_authority("127.0.0.1")))
     code, body, _ = req("GET", "/api/tasks", {**TOK, "Origin": base})
     check(code == 200, "a same-origin request passes", code)
+
+    # ---- saturation answers BUSY, and never to the box's own probes ----------
+    # Measured 2026-10-05: 40 idle sockets made /api/health abort mid-connection, and the
+    # restart doors probe it with `curl -sf` - a page that is merely busy read as a dead
+    # box. Loopback (this process's own probes) is exempt from the cap now; a LAN peer
+    # over the cap gets an HTTP 503 instead of a silent close.
+    idle = []
+    try:
+        for _ in range(srv.MAX_CONN + 8):
+            try:
+                idle.append(socket.create_connection(("127.0.0.1", port), timeout=5))
+            except OSError:
+                break
+        deadline = time.time() + 5
+        while srv._conn_live < srv.MAX_CONN and time.time() < deadline:
+            time.sleep(0.05)
+        check(srv._conn_live >= srv.MAX_CONN,
+              "the connection cap is reachable (%d live)" % srv._conn_live)
+        code, body, _ = req("GET", "/api/health", timeout=10)
+        check(code == 200 and b'"ok"' in body,
+              "a loopback health probe still answers while the cap is full",
+              (code, body[:60]))
+
+        class _FakeSock:
+            def __init__(self):
+                self.sent, self.closed = b"", False
+
+            def sendall(self, data):
+                self.sent += data
+
+            def close(self):
+                self.closed = True
+
+        saved = srv._conn_live
+        srv._conn_live = srv.MAX_CONN
+        fake = _FakeSock()
+        srv.process_request(fake, ("192.0.2.9", 4242))
+        srv._conn_live = saved
+        check(b"503" in fake.sent and b"Retry-After" in fake.sent and fake.closed,
+              "an over-cap peer is answered 503, not a silent close", fake.sent[:60])
+    finally:
+        for s in idle:
+            try:
+                s.close()
+            except OSError:
+                pass
+        deadline = time.time() + 5
+        while srv._conn_live >= srv.MAX_CONN and time.time() < deadline:
+            time.sleep(0.05)
 
     # ---- the resolver is NOT on the request path ----------------------------
     # Measured on a macOS CI runner: getfqdn/gethostbyname_ex took >5s, and because the
