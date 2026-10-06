@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Restart after an update:** replacing `tinycmdr-supervise.py` does not replace the supervisor process that is already running - that process is the one that relaunches the bot, so it keeps executing the old code until one restart from outside it (the elevated restart helper, or a log off/on). The first restart after such an update is therefore still the pre-update supervisor; the second is the new one.
+
 ## [1.0.80] - 2026-10-05
 
 ### Fixed

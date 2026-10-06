@@ -18,6 +18,10 @@ function Log([string]$m) { "$((Get-Date).ToString('s')) $m" | Add-Content -Path 
 # Second install's bot on the same box. The supervisor clause
 # is deliberately not scoped by dir: in the documented no-venv fallback its
 # command line is "<machine python> tinycmdr-supervise.py" with no install path.
+# Caveat: an update replaces FILES, not the supervisor PROCESS. After one that changed
+# tinycmdr-supervise.py, the still-running supervisor is what relaunches the bot, so it
+# keeps executing the old code until a restart from outside it runs (this helper, or a
+# log off/on) - this helper kills it and the logon path starts the new one.
 function Get-TinycmdrProcesses {
     @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       Where-Object {
