@@ -43,6 +43,9 @@ say() { printf '\n=== %s\n' "$*"; }
 say "leak gate: files, commit messages, reachable blobs"
 "$PY" maintenance/leak-gate.py --pre-push || fail=1
 
+say "no host-state file is tracked"
+"$PY" maintenance/check-hygiene.py || fail=1
+
 say "the published numbers are regenerated from the tree"
 "$PY" maintenance/measured-block.py || fail=1
 

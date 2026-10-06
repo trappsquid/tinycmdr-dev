@@ -9,6 +9,11 @@ logs/
 sessions/
 spill/
 state.json
+# The operator's own theme and persona. The app seeds a missing one from the shipped
+# theme.default.toml / soul.example.md at first start, and the host's edited copy must
+# never be clobbered by an update - so neither is tracked.
+theme.toml
+soul.md
 *.bak*
 web-token.txt
 .env

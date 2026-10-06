@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> **Hosts that update by `git pull`: read this first.** `theme.toml` and `soul.md` stop being
+> tracked in this release - they are the host's own theme and persona, and an update must never
+> clobber an edited copy. On a host that installs by `git pull`, copy both files aside BEFORE the
+> pull, then compare and restore that host's copies. The pull deletes a tracked file the incoming
+> commit no longer carries, so an edited theme or persona would be lost. This step is deliberate
+> and is not scripted around.
+
+### Changed
+- **`theme.toml` and `soul.md` are host state and are no longer tracked:** `.gitignore` carries
+  both; `maintenance/check-hygiene.py` fails when `git ls-files` reports a host-state file, and
+  `maintenance/pre-push.sh` runs it; the package ships `theme.default.toml` and `soul.example.md`
+  instead. A checkout or install that lacks the live files gets them materialized from those
+  defaults at first start (1.0.81), so untracking costs a fresh clone nothing.
+  (tests/test_repo_hygiene.py)
+
 ### Added
 - **Endpoint learning:** whether a remote endpoint takes historical `reasoning_content` is decided by the wire, not by a model name - it is replayed once the endpoint has emitted reasoning, a 400 that says the field must be passed back turns it on, and a 400 that calls it unsupported turns it off; the verdict persists per endpoint in `logs/state.json`. (tests/test_endpoint_learn.py, tests/test_reasoning_replay.py)
 - **`prompt_cache_key`:** remote calls carry a session-stable sticky-routing hint (`llm.prompt_cache_key: auto|off|<literal>`); a host that rejects it with a named 400 is remembered and never asked again. (tests/test_endpoint_learn.py)

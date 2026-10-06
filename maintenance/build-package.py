@@ -91,10 +91,12 @@ SHIP = [
     # at a file that is not there, which is how boxes ended up with no respawn at all.
     "tinycmdr-supervise.py",
     "field-notes.md",
-    # The persona: who the agent is plus three judgment hints a local model
+    # The persona seed: who the agent is plus three judgment hints a local model
     # loses without help. Shipped so an operator re-personas by editing one file
     # instead of patching the build (the fallback in the code is the same text).
-    "soul.md",
+    # NOT soul.md - that is the host's edited copy, materialized from this seed at
+    # first start, so shipping it would land one host's persona on every other host.
+    "soul.example.md",
     "requirements.txt",
     "config.example.json",
     ".env.example",
@@ -136,7 +138,7 @@ SHIP = [
     "skills",
     # The starter drop-in tools, the shapes doc and the toolsmith. tools/ is
     # otherwise per-host payload and stays banned from directory walks below
-    # (FORBIDDEN_DIRS); these five files are shipped source, like soul.md.
+    # (FORBIDDEN_DIRS); these five files are shipped source, like soul.example.md.
     "tools/patch.py",
     "tools/process.py",
     "tools/toolsmith.py",
@@ -182,11 +184,9 @@ SHIP = [
     "assets/fonts/OFL-cinzel.txt",
     "assets/fonts/OFL-inter.txt",
     "assets/fonts/OFL-jetbrainsmono.txt",
-    # The theme: the designer's palette as a host-owned file (an update seeds it once and
-    # never overwrites it), so a host can retheme without patching the build.
-    "theme.toml",
-    # The default under the host-owned file above, byte-identical: `doctor` and `update`
-    # diff the two so a host that never edited its theme learns when the default moved.
+    # The theme seed: the designer's palette under the default-only name. The host's
+    # live theme.toml is materialized from this at first start and is never shipped,
+    # so one host's retheme cannot reach another (an update moves this default).
     "theme.default.toml",
 ]
 
@@ -203,6 +203,10 @@ FORBIDDEN_NAMES = {
     # and where things live). Shipping this box's map to another box is worse than shipping
     # none: it is wrong in a way that reads as authoritative.
     "atlas.md",
+    # The host's live theme and persona. The package ships the seeds
+    # (theme.default.toml, soul.example.md) and the app materializes these two on the
+    # host, so a copy inside the zip would overwrite a host's edited file.
+    "theme.toml", "soul.md",
 }
 FORBIDDEN_DIRS = {"sessions", "snapshots", "tools", "tmp", "__pycache__",
                   # Run output, not source: the graded-eval runner writes a jsonl per run
@@ -241,7 +245,7 @@ ENV_PREFIX = "env "
 # every install, which is exactly how this box's endpoint ended up in the code.
 APP_FILES = ("INSTALL-WINDOWS.cmd", "INSTALL-MACOS.command", "UNINSTALL-MACOS.command",
              "tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
-             "soul.md",
+             "soul.example.md",
              ".env.example", "README.md",
              "CHANGELOG.md", "install/install-tinycmdr.ps1",
              "install/uninstall-tinycmdr.ps1",
@@ -568,7 +572,7 @@ def audit(target, host_vals, allow_secrets=False):
         parts = f.relative_to(target).parts
         if f.name in FORBIDDEN_NAMES or any(p in FORBIDDEN_DIRS for p in parts):
             # tools/ is per-host payload - except the starter files SHIP
-            # names explicitly, which are shipped source like soul.md.
+            # names explicitly, which are shipped source like soul.example.md.
             if rel not in {r for r in SHIP if r.startswith("tools/")}:
                 problems.append(f"forbidden file: {rel}")
         if parts[0] == "maintenance" and f.name not in ALLOWED_MAINTENANCE:

@@ -75,3 +75,21 @@ Each item becomes an entry in `STATUS.json` with a `state`, an `anchor` git can 
 or `{commit: ..., expect: tagged|untagged}`) and a `gate` saying what would close it, then
 `python3 tests/test_status.py` must pass. A finding that cannot be anchored goes into the item's
 `detail` as a measurement, not into a new prose file.
+
+## Repo hygiene
+
+Host state is never tracked. The same tree is deployed to many hosts, so a tracked
+per-host file reads as canonical and an update overwrites the copy that host owns.
+`.gitignore` carries the names, `maintenance/check-hygiene.py` fails when `git ls-files`
+reports one, `maintenance/pre-push.sh` runs it, and `tests/test_repo_hygiene.py` holds the
+same line in the gate.
+
+`theme.toml` and `soul.md` are the operator's theme and persona. A checkout or install that
+lacks them gets a copy of the shipped `theme.default.toml` / `soul.example.md` at first
+start (`_materialize_host_files` in `tinycmdr.py`), and an existing file is never touched -
+so untracking them costs a fresh clone nothing.
+
+**A host that installs by `git pull` has a human step.** Before pulling a commit that stops
+tracking `theme.toml` / `soul.md`, copy both files aside, pull, then compare and restore the
+host's copies. The pull deletes a tracked file the incoming commit no longer carries, so an
+edited theme or persona would be lost. This step is deliberate and is not scripted around.
