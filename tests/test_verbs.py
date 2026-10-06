@@ -124,7 +124,7 @@ def main():
 
         # ---- update prunes the project's kit (and this list DELETES) ------------------
         # `update` used to git-pull the whole repo, so user machines accumulated the test
-        # suites, the CI workflow, the docs and the maintainer kit. It now deletes those BY
+        # suites, the CI workflow, the docs and the maintenance kit. It now deletes those BY
         # NAME. Grade the two ways that can go wrong: the kit must go, and a host's own
         # files sitting in the same folders (private_rules.py, where-roles.json) must not.
         # Run in a temp tree so the suite's own install is never touched.
@@ -143,7 +143,7 @@ def main():
             (_ptmp / "maintenance" / "where-roles.json").write_text(
                 '[{"role":"live","path":"/a"},{"role":"dev","path":"/b"}]', encoding="utf-8")
             _note = fb._prune_dev_kit()
-            check("pruning removes the project's kit (dirs, files, maintainer scripts)",
+            check("pruning removes the project's kit (dirs, files, maintenance scripts)",
                   not (_ptmp / "tests").exists() and not (_ptmp / "docs").exists()
                   and not (_ptmp / ".github").exists()
                   and not (_ptmp / "CHANGELOG.md").exists()

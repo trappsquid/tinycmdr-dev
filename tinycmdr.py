@@ -32760,7 +32760,7 @@ def _verb_config(rest):
 # ---- one artifact: update consumes the RELEASE the installer does ----------------------
 # `update` used to be `git pull` of the development repository, which meant a user could
 # receive unreleased commits, accumulated the project's own kit (test suites, CI workflow,
-# docs, changelog, ledger, maintainer scripts), and depended on git being installed. Two
+# docs, changelog, ledger, maintenance scripts), and depended on git being installed. Two
 # delivery channels - releases for installs, git for updates - then drifted apart: the
 # Unix installer verified its download and the Windows one did not, and "shipping a
 # behaviour" quietly meant "a commit landed". It now downloads the SAME verified package
@@ -32772,7 +32772,7 @@ DEFAULT_UPDATE_URL = "https://github.com/trappsquid/tinycmdr/releases/latest/dow
 # exclusion list, for the same reason as before: a path this forgets stays (harmless),
 # while an allowlist that forgot one would DELETE something the harness needs.
 _DEV_ONLY_PATHS = ("/tests/", "/.github/", "/docs/", "/STATUS.json", "/CHANGELOG.md")
-# maintenance/ ships only its restart helpers; these names are the maintainer kit. Deleted
+# maintenance/ ships only its restart helpers; these names are the maintenance kit. Deleted
 # BY NAME and never by "anything not shipped" - that folder also holds a host's own files
 # (private_rules.py, where-roles.json) which must never be touched.
 _DEV_MAINTENANCE_DROP = ("atlas-merge.py", "build-package.py", "check-package-modes.py",
@@ -32781,7 +32781,7 @@ _DEV_MAINTENANCE_DROP = ("atlas-merge.py", "build-package.py", "check-package-mo
                          "pre-push.sh", "private_rules.example.py", "release.sh",
                          "smoke-install.py", "smoke-install.sh", "where.py")
 _NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, changelog, "
-                "maintainer scripts): a package does not carry them. `tinycmdr update "
+                "maintenance scripts): a package does not carry them. `tinycmdr update "
                 "--full` keeps everything instead.")
 
 # Paths the HOST owns: a package may SEED them, but an update must never write over an
@@ -33086,7 +33086,7 @@ def _verb_update(rest):
     line, and `--version` runs), back the current files up beside themselves, write the new
     bytes, and say what changed.
 
-    `--full` keeps the project's own kit (tests/, docs/, the maintainer scripts) on this
+    `--full` keeps the project's own kit (tests/, docs/, the maintenance scripts) on this
     host instead of pruning it. Nothing here ever restarts anything: the operator decides
     when a running bot is replaced."""
     import shutil
