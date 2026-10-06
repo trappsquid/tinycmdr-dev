@@ -1554,7 +1554,8 @@
       "title": "a computer_use starter ships for macOS, Windows and Linux",
       "state": "shipped",
       "anchor": {
-        "commit": "0a8b920"
+        "commit": "0a8b920",
+        "expect": "tagged"
       },
       "detail": "The GUI tool is a shipped starter now: capture the screen or a window, list apps and windows, and click, type, scroll by numbered element or point - three native backends, no third-party driver (macOS System Events/JXA + screencapture, Windows UI Automation/Win32, Linux X11 xdotool + a grabber). action=doctor reports the macOS Accessibility and Screen Recording grants with the exact interpreter path to grant, the Windows session/DPI facts and the missing Linux tools; screenshots attach to the model when agent.vision is on. The file is tracked, carries both package lists and is seeded by the installer copy; tools/README and docs/computer-use.md are the shape and host docs.",
       "gate": "done - 0a8b920; tests/test_computer_use.py; tests/test_contracts.py fails when a starter is tracked but unpackaged or vice versa; live on macOS: list_apps, list_windows and screencapture verified; click/type need the Accessibility grant doctor names"
@@ -1564,7 +1565,8 @@
       "title": "the web door compares Origin host AND port; a saturated server answers 503",
       "state": "shipped",
       "anchor": {
-        "commit": "040664e"
+        "commit": "040664e",
+        "expect": "tagged"
       },
       "detail": "The Origin gate compared hostnames only, so a page served from another port of the same name rode the session cookie and could drive the token-authenticated API (the same request to /api/chat is shell access). The compare is (host, port) now. Separately, reaching the connection cap closed the socket with no HTTP status, so a health probe could not tell a busy page from a dead box: loopback callers are exempt from the cap and an over-cap LAN peer gets 503 + Retry-After. The origin docstring states the token-mandatory premise again.",
       "gate": "done - 040664e, f51c09c, 66bf56a; tests/test_webui.py; the cross-port Origin was reproduced with a browser pre-fix; the saturation checks fail pre-fix"
@@ -1574,7 +1576,8 @@
       "title": "the page lane is reported by health and doctor",
       "state": "shipped",
       "anchor": {
-        "commit": "f9817f9"
+        "commit": "f9817f9",
+        "expect": "tagged"
       },
       "detail": "run_webui recorded a lane (lane_up on bind, lane_down on a bind or token failure) and lanes_snapshot iterated a hardcoded chat pair, so /api/health, `tinycmdr health` and doctor could not tell \"page up\" from \"page never started\". A RECORDED web lane is reported now, gated by web.enabled; no record is no news, so a CLI-only box still reports no lane; lane_up names the port actually bound.",
       "gate": "done - f9817f9; tests/test_lane_health.py; the two lane checks fail pre-fix, and tests/test_lane_choice still grades the no-lane line"
@@ -1584,7 +1587,8 @@
       "title": "tool doors read execution; gated tools name their config key; shipped tools are runnable",
       "state": "shipped",
       "anchor": {
-        "commit": "55848ed"
+        "commit": "55848ed",
+        "expect": "tagged"
       },
       "detail": "execute_code refused code that merely named a <tool>.py path - a comment, a string, a print or a read - and the source is parsed now, so a mention counts only when it is imported or fed to a call that runs it. The script door tokenizes with quote awareness, so `python \"C:\\Program Files\\...\\toolsmith.py\"` (the only spelling Windows accepts) reaches it. The shipped tools carry a key=value __main__ again, so running one as a script works. A config-gated tool (mcp/a2a) answers with the config key that registers it instead of blaming the build, and create_tool/the system prompt point at `memory` (there is no `remember` tool).",
       "gate": "done - 6ff7eb7, 55848ed, 598d92c, 032541b, 00c8ce7, 7e75c3f, 8a9acc3; tests/test_tool_doors.py; every new check fails pre-fix"
@@ -1594,7 +1598,8 @@
       "title": "prompt surfaces: scrub, caps and honest cuts",
       "state": "shipped",
       "anchor": {
-        "commit": "11331bc"
+        "commit": "11331bc",
+        "expect": "tagged"
       },
       "detail": "The trailing state block (notes, memory index, spill, run state) is scrubbed like every other prompt path, so a secret that landed on disk no longer rides every request. The skills index is bounded like its siblings: descriptions drop before names, and the tail counts what was dropped (skills_index_max_chars). An always-runbook cut lands on a line boundary with a marker and a skipped runbook is named. The compaction budget and the envelope line use the same volatile block the payload sends (session, atlas/shell flags, prior-unfinished). find_tools' schema declares `category`, the call the prompt teaches. memory action=search matches an AND of the query's words.",
       "gate": "done - 11331bc, 3dadbe9, d9c6f27, 2fba69a, 1b18d5a, fabae9a, a8da14a; tests/test_memory_okf.py, tests/test_tool_discovery.py, tests/test_envelope.py; each new check fails pre-fix"
@@ -1604,7 +1609,8 @@
       "title": "restart helpers: literal path matching, scoped filters, real exit codes",
       "state": "shipped",
       "anchor": {
-        "commit": "885ecb4"
+        "commit": "885ecb4",
+        "expect": "tagged"
       },
       "detail": "The PowerShell kill filters used -like, which reads [ ] * ? in a PATH as wildcards - a bracketed install folder matched nothing and the scoped clause silently let the old bot live. Both copies (installer and restart helper) compare literally (OrdinalIgnoreCase) and every clause is install-scoped, so a second install's watchdog is never touched. The Windows helper exits non-zero when processes survive the kill or none come back. The macOS helper's start accepts an already-loaded agent, stop says when nothing was loaded, and logs survives a fresh install with neither log present.",
       "gate": "done - 885ecb4; tests/test_verbs.py and tests/test_installer_windows.py pin the literal spelling and the macOS verb behaviour; bash -n on the shell helper"
@@ -1614,18 +1620,19 @@
       "title": "a hand-run suite never opens a browser",
       "state": "shipped",
       "anchor": {
-        "commit": "b62e8cc"
+        "commit": "b62e8cc",
+        "expect": "tagged"
       },
       "detail": "run_all.py guards its children with TINYCMDR_NO_BROWSER=1, but running a suite the way its own header says (python tests/test_webui.py) started the page surface in-process with the ambient environment, and the auto-open fired. The suites that start a surface carry the guard themselves now, and test_webui fails any tests/test_*.py that starts one without it.",
       "gate": "done - b62e8cc; tests/test_webui.py; proven without a browser: with the env unset the guarded path writes .web-open and calls webbrowser.open, with it set neither"
-    }
-,
+    },
     {
       "id": "host-files-materialize-1-0-81",
       "title": "theme.toml and soul.md materialize from the shipped defaults on start",
       "state": "shipped",
       "anchor": {
-        "commit": "bdc4347"
+        "commit": "bdc4347",
+        "expect": "tagged"
       },
       "detail": "Both files are host state. A checkout or install that lacks one gets a copy of theme.default.toml / soul.example.md at startup (logged once); an existing file is never touched, so an edited theme or persona survives every start. soul.example.md is the shipped twin of soul.md; DEFAULT_SOUL stays as the read fallback.",
       "gate": "done - bdc4347; tests/test_host_file_materialize.py; the fresh-tree checks fail pre-fix (no file was created)"
@@ -1635,7 +1642,8 @@
       "title": "community standards files and templates",
       "state": "shipped",
       "anchor": {
-        "commit": "cee8c28"
+        "commit": "cee8c28",
+        "expect": "tagged"
       },
       "detail": "CODE_OF_CONDUCT.md (Contributor Covenant 2.1, contact via the maintainer's GitHub profile), CONTRIBUTING.md (the real flow: gate, pre-push, commit shape), SECURITY.md (GitHub private vulnerability reporting as the sole channel), .github/ISSUE_TEMPLATE and PULL_REQUEST_TEMPLATE. No email addresses in any of them.",
       "gate": "done - cee8c28; the GitHub community-standards checklist is the verifier after the push"
@@ -1649,14 +1657,14 @@
       },
       "detail": "Phase 2 of the repo-hygiene plan, for the release AFTER materialization ships and is deployed: git rm --cached theme.toml soul.md, add both to .gitignore, sweep build/check tooling references, wire maintenance/check-hygiene.py into pre-push.sh and CI, append the REPO HYGIENE section to AGENTS.md. Git-deployed hosts need a HUMAN step before pulling the untracking commit - copy theme.toml and soul.md aside, pull, compare and restore - it must be prominent in that release's notes and must not be automated around. Do not collapse this into the materialization release: a git pull on an untracked-then-pulled file deletes an edited host copy.",
       "gate": "pending - the materialization release must be deployed first"
-    }
-,
+    },
     {
       "id": "lane-doors-1-0-81",
       "title": "the lane doors report honestly and never double-listen",
       "state": "shipped",
       "anchor": {
-        "commit": "a7b271e"
+        "commit": "a7b271e",
+        "expect": "tagged"
       },
       "detail": "--telegram takes startup validation and the single-instance lock like every other service lane, so a second poller can no longer split DMs with a running service. The Telegram lane reports itself down after five minutes of failed polls (a lane that started and went deaf never raised, so health said up for ever) and comes back up when polls recover. A caption is read as the question, and a message with no text gets a one-line reply and a log line instead of silence. The Mattermost catch-up sweep calls the shared user_is_allowed check rather than its own membership test (a bare-string allowlist made that test always true, silently dropping every recovered post; null raised every cycle). The dead first assignment in reply_ask is gone.",
       "gate": "done - a7b271e; tests/test_verbs.py, tests/test_lane_health.py, tests/test_catchup.py; each new check fails pre-fix; the suite that started the search (test_job_control) was fixed separately in 9509bd8"
@@ -1666,7 +1674,8 @@
       "title": "ListTasks hands out a real continuation token",
       "state": "shipped",
       "anchor": {
-        "commit": "519837c"
+        "commit": "519837c",
+        "expect": "tagged"
       },
       "detail": "An empty nextPageToken while tasks remained told a spec-following client the page was the last, so everything past page one was unreachable; the token is now the next offset.",
       "gate": "done - 519837c; tests/test_a2a.py; the two page checks fail pre-fix"
@@ -1680,18 +1689,17 @@
       },
       "detail": "Three items from the lane/web audit, each with its shape recorded: (1) a2a SendMessage stores the task only after the run and ignores a client taskId, so a client timeout loses the handle and the retry re-executes every tool call - store a TASK_STATE_WORKING placeholder before the run and treat a client taskId as an idempotency key; (2) eight readers still collapse web.port 0 to 8790 (a2a card, status, health, setup, web/firewall links) - one web-port helper that preserves 0 and resolves it from the bound port recorded in the lane state; (3) lane-deafness detection is three mechanisms (MM liveness exits 75, MM catch-up rescues, TG reports down now) - one heartbeat-stale path that calls lane_down for every lane.",
       "gate": "pending - next release"
-    }
-,
+    },
     {
       "id": "windows-install-path-1-0-81",
       "title": "the Windows install's PATH entry is broadcast, and the one-liner does not pause",
       "state": "shipped",
       "anchor": {
-        "commit": "925f685"
+        "commit": "925f685",
+        "expect": "tagged"
       },
       "detail": "The user-PATH write never broadcast WM_SETTINGCHANGE, so a window opened right after a fresh install kept Explorer's stale environment and answered \"'tinycmdr' is not recognized\" until logoff; both PATH writes (install and the uninstall revert) broadcast now, and the installer also refreshes its own session so the verb works in the window that ran it. The hosted one-liner runs inside the caller's terminal, so it sets FB_NOPAUSE=1 before handing to INSTALL-WINDOWS.cmd: the press-any-key barrier is for the double-click window, which really does close.",
       "gate": "done - 925f685; tests/test_verbs.py pins the broadcast after every Set-UserPathRaw call and the one-liner's FB_NOPAUSE ordering; static (PowerShell is not executed on the dev box) - a fresh Windows install is the live verifier"
     }
-
   ]
 }
