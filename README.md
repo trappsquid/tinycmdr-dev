@@ -174,6 +174,8 @@ tinycmdr restart     # start running it (chat restarts itself)
 ```
 
 Never overwrites `config.json`, `.env`, `soul.md`, notes, `tools/`, `skills/`, `theme.toml`.
+A missing `theme.toml` or `soul.md` is recreated from the shipped default
+(`theme.default.toml`, `soul.example.md`) on start; an edited one is never touched.
 An old or broken install updates with the same command (the launcher falls back to the published
 `update.sh` / `update.ps1`).
 
