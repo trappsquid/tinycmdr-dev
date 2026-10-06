@@ -1887,6 +1887,24 @@
         "commit": "1e9960b"
       },
       "detail": "A-2026-10-05-107 and -108, run 11 (fixed 2026-10-06, 1e9960b). With every spill file deleted the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output (measured: two index rows with id==1). The counter advances over every row ever written (file or no file) and the index merge no longer re-persists a row whose file is gone. tests/test_spill_durability.py: 2 checks red pre-fix; simulate_restart now resets the counter, which is what made the bug invisible to the suite before."
+    },
+    {
+      "id": "mcp-client-hardening-1-0-84",
+      "title": "the MCP client validates, remembers failures and reads its server",
+      "state": "shipped",
+      "anchor": {
+        "commit": "2f0af5a"
+      },
+      "detail": "A-2026-10-05-80 .. -89, an earlier review run 11 (fixed 2026-10-06, 2f0af5a). A non-map agent.mcp_servers answers an ERROR naming the accepted {command, args?} shape instead of raising; a non-numeric mcp_timeout falls back to 60 with one WARNING and a real 0 stays 0; a failed handshake is remembered on the live entry for a bounded 60s window; a dead server is noticed by polling inside the wait; a spec with no command says exactly that; a JSON-string arguments is parsed; tool names match case-insensitively and go out under the server's spelling; stderr is captured into a bounded 20-line/4KB ring and its tail rides every failure; mismatched replies are parked and server-initiated requests are never consumed as replies. tests/test_mcp.py: 50 checks, 24 red pre-fix."
+    },
+    {
+      "id": "computer-use-alt-1-0-84",
+      "title": "the Windows helper holds Alt",
+      "state": "shipped",
+      "anchor": {
+        "commit": "d6c448b"
+      },
+      "detail": "A-2026-10-05-113, run 11 (fixed 2026-10-06, d6c448b). Python canonicalises Alt to `option` while the PowerShell helper switched only on `alt`, so every Alt combo went out on Windows without Alt held; blocked_combo('f4', ['alt']) slipped the table while the option spelling was refused; and the Windows-only ctrl+alt+delete entry sat behind the macOS keycode gate. Both sides fold alt->option now, the block is decided before the keycode gate, and the helper arms option in all three switches - pinned by a contract check that every modifier the Python half can emit is an arm in the embedded helper. tests/test_computer_use.py: 2 checks red pre-fix."
     }
   ]
 }
