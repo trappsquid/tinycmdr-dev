@@ -3631,6 +3631,24 @@ def host_file_gaps():
     return gaps
 
 
+def _host_gap_notes(written):
+    """Update lines for host-owned files whose shipped default THIS package changed.
+
+    A gap alone is not news: an operator's edited file SHOULD differ from the default, and a
+    copy of a default that moved releases ago differs too. Only a default the package just
+    wrote is a change the operator is missing right now - that, and nothing else, is worth a
+    line. `doctor` still lists every gap: a report wants the whole state.
+    """
+    wrote = set(written)
+    out = []
+    for name, default in host_file_gaps():
+        if default not in wrote:
+            continue
+        out.append("%s: this release changed the shipped default (%s) and your copy was "
+                   "kept - delete it to take the new one, or diff the two" % (name, default))
+    return out
+
+
 def tool_tier(name):
     """The capability tier of a tool; UNKNOWN tools are `exec` (fail closed)."""
     return _TOOL_TIERS.get(str(name or ""), "exec")
@@ -32509,8 +32527,8 @@ def _disk_version():
     return m.group(1) if m else VERSION
 
 
-def _declared_dev_tree():
-    """True when this box's where-roles.json makes THIS folder the development tree.
+def _dev_tree_reason():
+    """Return "declared", "checkout" or None - why THIS folder must keep its dev kit.
 
     The existence of a declaration file is not the question: a two-tree box has one in the
     LIVE tree too, and that tree is exactly the one that wants pruning (measured
@@ -32521,50 +32539,52 @@ def _declared_dev_tree():
     """
     f = BASE_DIR / "maintenance" / "where-roles.json"
     if not f.exists():
-        # No declaration: does this LOOK like a checkout? Use evidence the prune itself
-        # would destroy - .git/, tests/run_all.py, requirements-test.txt. Without this,
-        # a contributor who cloned and never ran where.py lost tests/, docs/ AND
-        # where.py - the only tool that could have declared the tree - in one update
-        #. Fails safe in the same direction as a corrupt declaration.
-        return ((BASE_DIR / ".git").exists()
+        # No declaration: does this LOOK like a checkout? Evidence the prune itself would
+        # destroy - .git/, tests/run_all.py, requirements-test.txt. Without this, a
+        # contributor who cloned and never ran where.py lost tests/, docs/ AND where.py -
+        # the only tool that could have declared the tree - in one update. Fails safe in
+        # the same direction as a corrupt declaration.
+        if ((BASE_DIR / ".git").exists()
                 or (BASE_DIR / "tests" / "run_all.py").exists()
-                or (BASE_DIR / "requirements-test.txt").exists())
+                or (BASE_DIR / "requirements-test.txt").exists()):
+            return "checkout"
+        return None
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
     except Exception:                                    # noqa: BLE001
-        return True
+        return "declared"
     if not isinstance(data, list):
-        return True
+        return "declared"
     for ent in data:
         if not isinstance(ent, dict) or str(ent.get("role") or "").lower() != "dev":
             continue
         target = str(ent.get("path") or ent.get("dir") or "").strip()
         if not target:
-            return True                                  # a bare dev entry: this tree
+            return "declared"                            # a bare dev entry: this tree
         try:
             if Path(target).expanduser().resolve() == BASE_DIR.resolve():
-                return True
+                return "declared"
         except OSError:
-            return True
-    return False
+            return "declared"
+    return None
 
 
 def _prune_dev_kit(keep_dev=False):
     """Delete the project's own kit from this install, and say what went.
 
-    Returns a one-line report, or "" when nothing was removed. Never prunes a tree the
-    box's own declaration (maintenance/where-roles.json, the file where.py reads) makes the
-    DEVELOPMENT tree: deleting the tests out from under the person editing them is not an
-    update, it is sabotage. Deletes BY NAME - never "anything the package lacks" - because
-    those folders also hold a host's own files (private_rules.py, where-roles.json,
-    sessions/, notes) that must survive an update.
+    Returns a one-line report, or "" when nothing was removed. Never prunes the
+    development tree - whether maintenance/where-roles.json declares it or the folder
+    simply looks like a checkout (.git/, tests/run_all.py) - because deleting the tests out
+    from under the person editing them is not an update, it is sabotage. Keeps quiet about
+    it: the keep is the normal, correct outcome, not news. Deletes BY NAME - never
+    "anything the package lacks" - because those folders also hold a host's own files
+    (private_rules.py, where-roles.json, sessions/, notes) that must survive an update.
     """
     import shutil
     if keep_dev or os.environ.get("TINYCMDR_UPDATE_KEEP_DEV"):
         return ""
-    if _declared_dev_tree():
-        return ("  (this tree is declared the DEVELOPMENT tree in maintenance/where-roles.json, "
-                "so nothing was pruned - pass --full to say so deliberately)")
+    if _dev_tree_reason() is not None:
+        return ""
     gone = []
     for rel in _DEV_ONLY_PATHS:
         p = BASE_DIR / rel.strip("/")
@@ -32771,14 +32791,8 @@ def _verb_update(rest):
     if not rest:
         asset = _update_asset()
         base = _update_base()
-        # No git, ever, and no assumption about the tree. Installers from 1.0.46-1.0.48
-        # used `git pull --ff-only`, which refused on the dirty checkout their own kit
-        # prune created - a dead end users could not get out of. Say plainly that this
-        # path does not care, so a stranded install knows it is not the blocker.
-        if (BASE_DIR / ".git").exists():
-            print("note: this install is a git checkout; update no longer uses git - it "
-                  "installs the verified release over whatever state the tree is in, so a "
-                  "dirty, pruned or gitless checkout cannot block it.")
+        # No git, ever: the update is a verified file copy, so a dirty, pruned or gitless
+        # checkout cannot block it (installers 1.0.46-1.0.48 used `git pull --ff-only`).
         print("updating from %s/%s" % (base, asset))
         work = Path(tempfile.mkdtemp(prefix="tinycmdr-update-"))
         try:
@@ -32833,15 +32847,13 @@ def _verb_update(rest):
                 print("your persona is an edit to a shipped file - copied to %s first"
                       % Path(_kept).name)
             written, skipped = _apply_package(root)
-            # A host-owned file the package also ships a default for: say when the default
-            # moved, because the update deliberately did NOT overwrite it.
-            for _name, _default in host_file_gaps():
-                print("    %s is yours, so it was left alone - but this release's default "
-                      "(%s) differs. Never edited it? Delete it to inherit the fix."
-                      % (_name, _default))
+            # Host-owned file whose shipped default this package MOVED: the one gap worth
+            # a line, because the operator is missing a change right now.
+            for _line in _host_gap_notes(written):
+                print("    " + _line)
             ensure_launcher_executable()
             if skipped:
-                print("    left your own %s alone" % ", ".join(skipped[:3]))
+                print("    kept your versions of: %s" % ", ".join(skipped[:3]))
             print("wrote %d file(s)%s"
                   % (len(written),
                      (": " + ", ".join(written[:5]) + ("..." if len(written) > 5 else ""))
