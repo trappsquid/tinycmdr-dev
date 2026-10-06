@@ -1331,6 +1331,7 @@ def est_tokens(text):
     with a different tokenizer. The opt-in live comparison against a real
     tokenizer lives in tests/test_tokens.py.
     """
+    text = str(text or "")
     n = len(text)
     if n <= 0:
         return 1
@@ -1467,6 +1468,7 @@ def _is_local_url(url):
 
 def _host_is_local(host):
     """One hostname: is it this machine or this LAN?"""
+    host = str(host or "")
     if host in ("localhost", "::1", "127.0.0.1", "0.0.0.0") or host.endswith(".local"):
         return True
     parts = host.split(".")
@@ -2287,6 +2289,7 @@ def _one_json_object(text):
     None unless the text really is one object followed by another - a single well-formed
     object is never returned, however long it is or however much it repeats itself
     inside - so this can only ever collapse a doubled payload, never trim a real one."""
+    text = str(text or "")
     dec = json.JSONDecoder()
     last, nonempty, i, n = None, None, 0, len(text)
     while i < n:
@@ -3568,6 +3571,7 @@ def cap_output(name, text, label="output", limit=None, session=None):
     Returns the text unchanged when it fits, a head+tail window plus a pointer when it does
     not, and plain truncation when the spill itself fails.
     """
+    text = str(text or "")
     try:
         cap = (int(limit) if limit else
                mem_limit_chars("tool_output_max_chars", 10000,
@@ -3847,11 +3851,178 @@ def resolve_approval(name, args, ctx):
     return None
 
 
+# ---- the never tier reads the COMMAND, not one spelling of it -------------------------
+# Measured 2026-10-06 (an earlier review run 10): the regex tier was anchored to one surface shape
+# per command, so canonical spellings of the very commands it exists to stop ran with no gate
+# at all - `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="/dev/sdz9"` all executed
+# live on a Windows box. Two mechanisms: a switch between verb and target missed an
+# order-anchored regex, and _live_text() deletes quoted arguments, which is exactly where a
+# quoted operand lives. So the built-in never tier is decided on the TOKENS of each command
+# segment - word order and quoting cannot dodge a token rule - and the operator's regexes
+# keep running beside it (a host that replaces blocked_patterns cannot lose these, the same
+# way destructive_risk() is kept out of the list).
+_GUARD_NEVER_VERBS = ("format", "diskpart", "fdisk", "sgdisk", "wipefs", "clear-disk",
+                      "initialize-disk", "format-volume", "mke2fs", "shred")
+_GUARD_ROOT_TARGETS = {"/", "/*", "/.", "/..", "//", "c:", "c:\\", "\\",
+                       "\\\\?\\c:", "\\\\?\\c:\\", "*"}
+_GUARD_ENCODED_SWITCHES = ("-e", "-ec", "-enc", "-encodedcommand", "/e", "/enc")
+
+
+def _guard_tokens(command):
+    """One token list per command segment of a shell-ish line.
+
+    Quotes are consumed (the token keeps its content), so `of="/dev/sdz9"` and
+    `of=/dev/sdz9` yield the same token; `;`, `&&`, `||`, `|` and newlines split segments;
+    `#` starts a comment when it begins a token; `<`, `>` and `>>` become operator tokens
+    (that is how a redirect to a device is seen). A trailing unterminated quote runs to the
+    end of the line rather than dropping its content.
+    """
+    segments, cur, word, quote = [], [], "", ""
+    text = str(command or "")
+
+    def end_word():
+        nonlocal word
+        if word:
+            cur.append(word)
+            word = ""
+
+    def end_segment():
+        nonlocal cur
+        end_word()
+        if cur:
+            segments.append(cur)
+        cur = []
+
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if quote:
+            if ch == quote:
+                quote = ""
+            elif ch == "\\" and quote == '"' and i + 1 < n:
+                i += 1
+                word += text[i]
+            else:
+                word += ch
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+            i += 1
+            continue
+        if ch in " \t":
+            end_word()
+            i += 1
+            continue
+        if ch == "#" and not word:
+            while i < n and text[i] not in "\n\r":
+                i += 1
+            continue
+        if ch in ";&|\n\r":
+            end_segment()
+            while i < n and text[i] in ";&|\n\r":
+                i += 1
+            continue
+        if ch in "<>":
+            end_word()
+            if i + 1 < n and text[i + 1] == ch:
+                cur.append(ch + ch)
+                i += 1
+            else:
+                cur.append(ch)
+            i += 1
+            continue
+        word += ch
+        i += 1
+    end_segment()
+    return segments
+
+
+def _guard_verb(token):
+    """The bare command word of a token: path stripped, extension dropped, lowercased."""
+    base = str(token or "").strip().strip('"').replace("/", "\\").rsplit("\\", 1)[-1]
+    for suffix in (".exe", ".com", ".cmd", ".bat", ".ps1", ".sh"):
+        if base.lower().endswith(suffix):
+            base = base[: -len(suffix)]
+    return base.lower()
+
+
+def _guard_device(token):
+    """Is this token a raw device (not /dev/null, the measuring stick)?"""
+    t = str(token or "").strip().lower().replace("//", "/")
+    if t.startswith("/dev/"):
+        return t != "/dev/null"
+    return t.startswith("\\\\.\\physicaldrive") or t.startswith("\\\\?\\")
+
+
+def _guard_root_target(token):
+    t = str(token or "").strip().lower().replace("//", "/")
+    return t in _GUARD_ROOT_TARGETS
+
+
+def _guard_never_verdict(command):
+    """The built-in never tier, read off the tokens. A reason string, or None.
+
+    Each arm is the canonical spelling class the regexes above miss:
+      * a disk/partition/filesystem writer decided by its VERB, whatever switches sit
+        between the verb and the target (`format /FS:NTFS Q:`);
+      * `dd` with `of=` pointing at a device, quoted or doubled-slashed;
+      * a powershell/pwsh invocation carrying an encoded-command switch (the blob's
+        quoting is irrelevant once tokens are read);
+      * a recursive+force delete whose target is a root (`rm -rf "/"`, `rm -r -f /`,
+        `--no-preserve-root`);
+      * a redirect into a device (`> "/dev/sda"`).
+    """
+    for toks in _guard_tokens(command):
+        if not toks:
+            continue
+        verb = _guard_verb(toks[0])
+        lows = [t.lower() for t in toks]
+        if verb in _GUARD_NEVER_VERBS or verb.startswith("mkfs"):
+            # `format` alone can be an English sentence's first word ("format the
+            # paragraph"): the disk writers need a switch or a device-shaped argument
+            # before the verb alone decides. mkfs is unambiguous - nothing else spells it.
+            if verb in ("format", "format.com") and not any(
+                    t.startswith(("-", "/")) or re.fullmatch(r"[a-z]:\\?", t)
+                    for t in lows[1:]):
+                continue
+            return ("%s is a never-tier command: a disk, partition or filesystem write "
+                    "cannot be approved in-band" % verb)
+        if verb == "dd":
+            for tok in lows:
+                if tok.startswith("of=") and _guard_device(tok[3:]):
+                    return ("dd writing to a raw device (of=%s) is never-tier"
+                            % tok[3:])
+        if verb in ("powershell", "pwsh"):
+            for tok in lows[1:]:
+                if tok in _GUARD_ENCODED_SWITCHES or tok.startswith("-encodedcommand"):
+                    return ("an encoded powershell command is opaque by design: "
+                            "never-tier")
+        if verb in ("rm", "rmdir", "rd", "del", "erase", "remove-item", "ri"):
+            recursive = any(t in ("-r", "-rf", "-fr", "-recurse", "--recursive", "/s",
+                                  "-force-recurse") or t.startswith("-rf")
+                            for t in lows[1:])
+            force = any(t in ("-f", "--force", "/q", "-force") or t.startswith("-rf")
+                        for t in lows[1:])
+            no_preserve = any(t == "--no-preserve-root" for t in lows[1:])
+            root = any(_guard_root_target(t) for t in toks[1:])
+            if no_preserve or (recursive and (force or no_preserve) and root):
+                return ("a recursive force delete of a whole tree (%s) is never-tier"
+                        % " ".join(toks[:3]))
+        for i, tok in enumerate(lows):
+            if tok in (">", ">>") and i + 1 < len(toks) and _guard_device(toks[i + 1]):
+                return "a redirect into a raw device is never-tier"
+    return None
+
+
 def is_blocked(command):
     # case-insensitive on purpose: PowerShell cmdlets are capitalised
     # (Remove-Item, Stop-Computer) and 'Format C:' must match too (the patterns
     # compile with IGNORECASE in _patterns)
     text = str(command or "")
+    never = _guard_never_verdict(text)
+    if never:
+        return never
     live = _live_text(text)
     mention = None
     for pat in _patterns("blocked_patterns"):
@@ -3879,11 +4050,25 @@ def _confirm_hit(text, kind="confirm_patterns"):
     instead of silencing the whole tier with confirm-allow's {"all": true}. deny still
     wins: allow is only consulted here, after is_blocked refused its own match.
     """
+    text = str(text or "")
     allow_kind = ("allow_content_patterns" if kind == "confirm_content_patterns"
                   else "allow_patterns")
     for pat in _patterns(allow_kind):
         if pat.search(text):
             return None
+    if kind == "confirm_patterns":
+        # Aliases are the confirm tier's blind spot (an earlier review run 10, A-2026-10-05-77):
+        # `ri -Recurse -Force` matched nothing because the pattern named `remove-item`,
+        # and the delete ran with no question. The command word is read off tokens now,
+        # so every alias and any flag order land on the same rule.
+        for toks in _guard_tokens(text):
+            if not toks:
+                continue
+            _verb = _guard_verb(toks[0])
+            if (_verb in ("remove-item", "ri", "rm", "rd", "rmdir", "del", "erase")
+                    and any(t.lower() in ("-recurse", "-r", "--recursive", "/s")
+                            for t in toks[1:])):
+                return "recursive delete (%s)" % _verb
     for pat in _patterns(kind):
         if pat.search(text):
             return pat.pattern

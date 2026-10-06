@@ -469,6 +469,52 @@ def test_confirm_approval_scopes():
           fb.RunReporter(_ApprovalDest("no"), "approve-s3").confirm("rm -rf /tmp/z") is False)
 
 
+def test_the_never_tier_reads_tokens_not_spellings():
+    """Night audit run 10 (A-2026-10-05-75/76): the never tier was anchored to one surface
+    shape per command, so `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="..."`
+    ran with no gate at all, and a per-line read-only exemption let `mkfs... # cat`
+    through. Word order and quotes must not change the verdict; mentions must stay
+    allowed."""
+    must_block = [
+        "format /FS:NTFS Q:", "format.com /Q C:",
+        'powershell -enc "SQBFAFgA"', "pwsh -EncodedCommand SQBFAFgA",
+        'dd of="/dev/sdz9"', "dd of=//dev/sda", "dd of=/dev/sda",
+        "rm -rf --no-preserve-root /", "rm -r -f /", 'rm -rf "/"',
+        '> "/dev/sda"',
+        "mkfs.ext4 /dev/sdb # cat", "find / -xdev; mkfs.ext4 /dev/sdb",
+        "diskpart", "clear-disk -Number 1",
+    ]
+    must_allow = [
+        "format the paragraph as markdown",
+        r"C:\tools\format-report.ps1 -Path x",
+        "ls /sbin/mkfs*", "grep -rn mkfs /sbin",
+        "dd if=/dev/zero of=/dev/null bs=1M count=100",
+    ]
+    for c in must_block:
+        check("never-tier: %s" % c, fb.is_blocked(c), c)
+    for c in must_allow:
+        check("not never-tier: %s" % c, fb.is_blocked(c) is None, fb.is_blocked(c))
+
+
+def test_the_confirm_tier_reads_aliases():
+    """A-2026-10-05-77: the pattern named `remove-item`, so `ri -Recurse -Force` ran with
+    no question. Every alias and any flag order lands on the same rule now."""
+    for c in ("ri -Recurse -Force C:\\x", "del C:\\x /s /q", "erase /s /q C:\\x",
+              "rmdir /s /q C:\\x", "Remove-Item -Recurse -Force C:\\x"):
+        check("confirm: %s" % c, fb._confirm_hit(c, "confirm_patterns"), c)
+
+
+def test_the_gate_helpers_coerce_instead_of_raising():
+    """A-2026-10-05-79: `is_blocked(None)` coerced while its siblings raised TypeError /
+    AttributeError. Each helper answers a safe default for a non-string now."""
+    check("est_tokens(None) floors at 1", fb.est_tokens(None) == 1)
+    check("cap_output(None) is an empty string", fb.cap_output("shell", None) == "")
+    check("cap_output(12345) stringifies", fb.cap_output("shell", 12345) == "12345")
+    check("_one_json_object(None) is None", fb._one_json_object(None) is None)
+    check("_host_is_local(None) is False", fb._host_is_local(None) is False)
+    check("_confirm_hit(None) is None", fb._confirm_hit(None) is None)
+
+
 def main():
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
