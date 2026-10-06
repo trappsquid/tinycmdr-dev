@@ -8564,6 +8564,11 @@ def tool_read_file(args, ctx):
                     f"covered - the file is bigger than one read. The full text is at "
                     f"`{path}`: use tail=N for its end, or a narrower offset.")
         selected = lines[offset:offset + limit]
+        if not selected and offset >= len(lines):
+            # Past the end is not a range: the header printed `lines 99999–99999 of 98`
+            # and no body (A-2026-10-05-70). Name the file's real length instead.
+            return (f"ERROR: line {offset} is past the end of {path} ({len(lines)} lines). "
+                    f"Use offset <= {max(0, len(lines) - 1)}.")
         # Same honesty fix as the tail header: when the read was cut, name the window it
         # covered rather than printing a count that reads like the file's own length.
         header = (f"(lines {offset}–{offset + len(selected)} of the {len(lines)} lines "

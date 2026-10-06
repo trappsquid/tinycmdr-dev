@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / "tinycmdr.py"
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-window"
 if STAGE.exists():
     shutil.rmtree(STAGE, ignore_errors=True)
@@ -73,6 +73,15 @@ out = str(fb.tool_read_file({"path": str(SMALL), "offset": -5, "limit": 3}, {}))
 check("a negative offset is refused, not answered with negative line refs",
       out.startswith("ERROR: offset is a START line"), out[:90])
 check("...and the refusal names the door for the last lines", "tail=N" in out, out[:160])
+# A-2026-10-05-70: an offset past the end answered `(lines 99999–99999 of 200)` with no
+# body - a range that reads as if the file had those lines.
+out = str(fb.tool_read_file({"path": str(SMALL), "offset": 99999}, {}))
+check("a read past the end names the file's real length",
+      out.startswith("ERROR: line 99999 is past the end") and "(200 lines)" in out,
+      out[:120])
+head, body = header_and_body(fb.tool_read_file({"path": str(SMALL), "offset": 199}, {}))
+check("...while the file's last line is still a read", body and body[0] == "line 200",
+      (head, body[:2]))
 
 # ------------------------------------------------------ the window past the read cap
 REAL_CAP = fb._MAX_CAPTURE_BYTES
