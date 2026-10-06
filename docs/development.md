@@ -204,7 +204,7 @@ Traps this project has actually paid for:
 
 ## Looking at the page
 
-The web page is the operator's design (`assets/webui.css`, the backdrop photo
+The web page is the maintainer's own design (`assets/webui.css`, the backdrop photo
 (`assets/roman-temple-spring.jpg`, the replacement for the drawn
 colonnade), the bundled fonts, the icons inlined into the markup). To look at the tree's own page WITHOUT touching
 the running service, serve a scratch copy - the service on 8790 belongs to the install:

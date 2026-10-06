@@ -579,7 +579,7 @@
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (44f97d1), after the first --app screenshot ('looks the exact same') and the round-3 review. The app is now a window: a frame whose title bar carries the app name, the session and a live clock; a left rail with the session, a context gauge, the last run's calls/tok-s, the model and the keys; cards drawn on a filled surface; a status bar whose spinner and clock tick while a run is in flight; and a labeled `you` composer box. The round-3 items are in the same commit: the transcript opens on the first exchange (the chrome carries the banner, the note and the capability line), an empty draft card is never committed as a stub, the done line and the rail read one run accumulator, no rich Markdown default colour reaches an answer body (magenta headings, cyan lists/table headers and the white `bw` code background were all on screen), the footer carries the run status only, and the input box says `you`. A bare `tinycmdr` now passes --app from both shims on every OS (falling back to inline cards where the app cannot run), and TINYCMDR_APP=1 does the same for a hand-typed --cli. tests/test_tui.py pins the chrome and the six polish behaviours.",
-      "gate": "merged to main (gate 68/68 green); the operator still has to look at it on a Linux and a Windows terminal before the platform matrix is fully claimed. release.sh states the tagged claim"
+      "gate": "merged to main (gate 68/68 green); a Linux and a Windows terminal pass is still outstanding before the platform matrix is fully claimed. release.sh states the tagged claim"
     },
     {
       "id": "console-app-draft-region-not-replaced",
@@ -1051,7 +1051,7 @@
         "commit": "cafadfd",
         "expect": "tagged"
       },
-      "detail": "The art's crop was (225, 80, 900, 850) while the badge master's content box at max(rgb)>=45 is x 58..912, y 5..939: the emblem's lower ~90px were discarded and the operator saw the helmet 'cut off too early'. Re-rendered from the master with the designer's framing extended to y=940, and the art block is captioned `tinycmdr` underneath. maintenance/make-brand-art.py now states the measured box and refuses to overwrite the shipped designer render without --force.",
+      "detail": "The art's crop was (225, 80, 900, 850) while the badge master's content box at max(rgb)>=45 is x 58..912, y 5..939: the emblem's lower ~90px were discarded and the helmet read as cut off too early. Re-rendered from the master with the designer's framing extended to y=940, and the art block is captioned `tinycmdr` underneath. maintenance/make-brand-art.py now states the measured box and refuses to overwrite the shipped designer render without --force.",
       "gate": "tests/test_tui.py (the caption row; the accepted dot counts of the re-rendered art; the artifact loads and stays within the rail)"
     },
     {
@@ -1755,7 +1755,7 @@
       "id": "config-set-deep-path-1-0-82",
       "title": "a deep config set nests, or is refused",
       "state": "shipped",
-      "detail": "A-2026-10-05-68, an earlier review run 9 (fixed 2026-10-06, 5c82837). config rpartition'd the path into one section, so `set zz.a.b v2` wrote the literal top-level key \"zz.a\" beside zz={a:v1} - a write that missed the path the operator named and that unset could not reach. The walk now creates each missing intermediate dict and refuses (rc=1, naming the walked path and its value) when an intermediate exists as a scalar. tests/test_verbs.py: 2 of the 4 new checks red on the pre-fix build (TINYCMDR_TEST_APP).",
+      "detail": "A-2026-10-05-68, an earlier review run 9 (fixed 2026-10-06, 5c82837). config rpartition'd the path into one section, so `set zz.a.b v2` wrote the literal top-level key \"zz.a\" beside zz={a:v1} - a write that missed the path given and that unset could not reach. The walk now creates each missing intermediate dict and refuses (rc=1, naming the walked path and its value) when an intermediate exists as a scalar. tests/test_verbs.py: 2 of the 4 new checks red on the pre-fix build (TINYCMDR_TEST_APP).",
       "anchor": {
         "commit": "5c82837",
         "expect": "tagged"

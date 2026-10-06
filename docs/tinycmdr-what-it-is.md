@@ -93,7 +93,7 @@ config-driven, and each item below exists because something went wrong in the fi
 
 ### 3.1 Commands: `/tinycmdr <verb>` in chat, `tinycmdr <verb>` in a shell
 
-One word for both, because the operator got tired of being asked which one to type:
+One word for both, because being asked which one to type was tiresome:
 same verbs, same behaviour, whichever door you are at. Chat needs the prefix (a client
 only sends `/`-lines that match a registered command); a shell does not. A bare
 `tinycmdr` in a shell opens a session, because that is what a person at a keyboard
