@@ -969,6 +969,14 @@ def main():
         check("a scalar in the middle is refused, not shadowed by a flat dotted key",
               rc == 1 and "is not a section" in err and "zz.a" not in written,
               (rc, err[:160], written.get("zz", {}).get("a")))
+        # A-2026-10-05-69: the verb line is logged BEFORE dispatch, so a refused secret
+        # write still put its VALUE in tinycmdr.log in cleartext.
+        rc, out, err = call(fb, ["config", "set", "mattermost.token", "SENTINEL-a69"])
+        _log = workdir / "tinycmdr.log"
+        logged = _log.read_text(encoding="utf-8", errors="replace") if _log.exists() else ""
+        check("a secret value never reaches the verb log",
+              rc == 2 and "SENTINEL-a69" not in logged and "<redacted>" in logged,
+              (rc, err[:80], [l for l in logged.splitlines() if "mattermost.token" in l][:1]))
         rc, out, err = call(fb, ["config", "set", "agent.probe_port", "nope"])
         check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])

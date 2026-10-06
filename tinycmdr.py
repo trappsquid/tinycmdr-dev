@@ -32342,6 +32342,29 @@ def _verb_reasoning(rest):
     return _verb_config(["set", "llm.reasoning", want])
 
 
+def _secret_config_path(path):
+    """True when a config.json path names a secret (whose one home is .env).
+
+    One rule for two callers: the config verb's write refusal and the verb log's scrub
+    (A-2026-10-05-69: the refusal message was written but the argv line, logged BEFORE
+    dispatch, carried the value to tinycmdr.log anyway). llm.* is exempt - a local
+    endpoint's key lives in config.json - and the *_api_key arm is for a provider key
+    written by hand (`search.anysearch_api_key`), which the old two-name test accepted.
+    """
+    _section, _, key = path.rpartition(".")
+    if _section.startswith("llm"):
+        return False
+    return key in ("token", "api_key") or key.endswith("_api_key")
+
+
+def _verb_log_args(verb, rest):
+    """The argv the verb log records - a secret VALUE replaced, never written."""
+    if verb == "config" and len(rest) >= 2 and rest[0] in ("set", "unset") \
+            and _secret_config_path(rest[1]):
+        return " ".join([rest[0], rest[1]] + ["<redacted>"] * (len(rest) - 2))
+    return " ".join(rest)
+
+
 def _verb_config(rest):
     """`config get|set|unset <dotted.key> [value]` — a config.json edit with a read-back.
 
@@ -32366,12 +32389,9 @@ def _verb_config(rest):
         return 2
     parts = path.split(".")
     section, key = ".".join(parts[:-1]), parts[-1]
-    if not section.startswith("llm") and (key in ("token", "api_key")
-                                          or key.endswith("_api_key")):
+    if _secret_config_path(path):
         # Secrets have exactly one home (.env), and config.json is a file the agent reads
-        # into a prompt and can quote into chat. The *_api_key arm is for a provider key
-        # written by hand (`search.anysearch_api_key`): the old test only knew the two
-        # exact names and accepted that one, which nothing reads and the loader drops.
+        # into a prompt and can quote into chat.
         print("%s is a secret: put it in %s instead (tinycmdr token set <NAME>)"
               % (path, ENV_FILE.name), file=sys.stderr)
         return 2
@@ -34179,7 +34199,7 @@ def run_verb(argv):
         print("unknown verb %r\n" % verb, file=sys.stderr)
         print(VERB_HELP)
         return 2
-    log.info("verb: %s %s", verb, " ".join(rest))
+    log.info("verb: %s %s", verb, _verb_log_args(verb, rest))
     if verb == "status":
         return _verb_status()
     if verb == "doctor":
