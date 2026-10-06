@@ -1339,11 +1339,31 @@ def main():
         _ps = (BASE / "maintenance" / "restart-tinycmdr.ps1").read_text(encoding="utf-8")
         check("the Windows restart helper stops the supervisor and the launcher",
               "tinycmdr-supervise.py" in _ps and "tinycmdr-service.vbs" in _ps)
-        check("...and scopes the bot filter to this install (no bare name match)",
-              'like "*$install*"' in _ps
+        # -like reads [ ] * ? in a PATH as wildcards: a bracketed install dir matched
+        # nothing, so the scoped clause silently let the old bot live (A-2026-10-05-53).
+        # The literal OrdinalIgnoreCase compare replaced it in BOTH copies, and the
+        # supervisor clause is scoped like the bot clause now (the vbs passes the full
+        # path; A-2026-10-05-54).
+        check("...and scopes the filter with a literal, wildcard-safe compare",
+              "IndexOf($install," in _ps and 'like "*$install*"' not in _ps
               and "-Filter \"Name='pythonw.exe'\"" not in _ps)
+        _psi = (BASE / "install" / "install-tinycmdr.ps1").read_text(encoding="utf-8")
+        check("...and the installer's copy spells it the same way (kept in step)",
+              "IndexOf($Dir," in _psi and 'like "*$Dir*"' not in _psi)
         check("...and verifies the supervisor, not only a bot, came back",
               "supervisor(s) $($sup.Count)" in _ps)
+        check("...and exits non-zero when its own log records a failed restart",
+              "exit $exitCode" in _ps and "$exitCode = 1" in _ps)
+
+        # The macOS helper: start must accept an already-loaded agent, stop must not claim
+        # a stop that did not happen, and logs must not die on a fresh install.
+        _rmac = (BASE / "maintenance" / "restart-tinycmdr-macos.sh").read_text(encoding="utf-8")
+        check("the macOS helper's start is idempotent",
+              'launchctl print "$TARGET"' in _rmac and "already loaded" in _rmac)
+        check("...its stop says when nothing was loaded",
+              "nothing was loaded for" in _rmac)
+        check("...and its logs verb survives neither log existing",
+              "no logs at either path yet" in _rmac)
 
         # The POSIX twin: its pkill must be scoped+anchored, and its install guard
         # must be able to fail (list-unit-files exits 0 either way, so the friendly

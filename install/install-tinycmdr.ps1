@@ -401,13 +401,14 @@ function Stop-TinycmdrProcesses {
         and before an uninstall: the running bot holds tinycmdr.log and tinycmdr.lock,
         so overwriting in place either fails or leaves a stale process alive.
 
-        The bot and the supervisor are two processes. In the documented no-venv
-        fallback the supervisor's command line is "<machine python>
-        tinycmdr-supervise.py" - no install dir anywhere - so the old
-        "python% AND the install dir" filter killed only the bot child, and the
-        surviving supervisor respawned it straight into the folder being overwritten
-        or removed (that is what left -Uninstall saying "being used by
-        another process"). wscript.exe hosts the hidden launcher, so it is in scope too.
+        The bot, its supervisor and the launcher all carry the install dir in their
+        command lines: the vbs launcher passes the full ...\tinycmdr-supervise.py path
+        (measured 2026-10-05 from the vbs template), so one literal match on $Dir covers
+        all three and never reaches a second install. Matching is IndexOf with
+        OrdinalIgnoreCase, never -like: -like reads [ ] * ? in a PATH as wildcards, so a
+        bracketed install dir matched nothing (measured 2026-10-05) and the scoped
+        clause silently let the old bot live. A hand-run bare
+        `python tinycmdr-supervise.py` (no path) is deliberately not killed.
     #>
     param([string] $Dir)
     $killed = 0
@@ -415,12 +416,9 @@ function Stop-TinycmdrProcesses {
         Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
             Where-Object {
                 if (-not $_.CommandLine) { return $false }
-                if ($_.Name -like 'python*') {
-                    return ($_.CommandLine -like "*$Dir*") -or
-                           ($_.CommandLine -like "*tinycmdr-supervise.py*")
-                }
-                if ($_.Name -eq 'wscript.exe') {
-                    return ($_.CommandLine -like "*tinycmdr-service.vbs*")
+                if ($_.Name -like 'python*' -or $_.Name -eq 'wscript.exe') {
+                    return $_.CommandLine.IndexOf($Dir,
+                        [System.StringComparison]::OrdinalIgnoreCase) -ge 0
                 }
                 return $false
             } |

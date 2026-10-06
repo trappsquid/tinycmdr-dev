@@ -10,14 +10,17 @@ $log = Join-Path $here 'restart-tinycmdr.log'
 function Log([string]$m) { "$((Get-Date).ToString('s')) $m" | Add-Content -Path $log }
 
 # The bot, its SUPERVISOR and the wscript launcher, scoped to this install - the
-# same three clauses install-tinycmdr.ps1's Stop-TinycmdrProcesses uses (keep the
+# same clauses install-tinycmdr.ps1's Stop-TinycmdrProcesses uses (keep the
 # two in step). The old filter was Name='pythonw.exe' + '*tinycmdr.py*': it never
 # matched tinycmdr-supervise.py, so the surviving supervisor held the lock and
 # relaunched the OLD bot while this script's wscript relaunch exited on that
 # lock - a restart never reloaded the supervisor; and unscoped, it killed a
-# Second install's bot on the same box. The supervisor clause
-# is deliberately not scoped by dir: in the documented no-venv fallback its
-# command line is "<machine python> tinycmdr-supervise.py" with no install path.
+# Second install's bot on the same box.
+# Everything this install runs carries the install dir in its command line: the
+# bot, the supervisor (the vbs launcher passes the full ...\tinycmdr-supervise.py;
+# measured 2026-10-05 from the vbs template) and the launcher itself. A hand-run
+# bare `python tinycmdr-supervise.py` (no path) is deliberately NOT killed - that
+# is the cost of never touching a second install's watchdog.
 # Caveat: an update replaces FILES, not the supervisor PROCESS. After one that changed
 # tinycmdr-supervise.py, the still-running supervisor is what relaunches the bot, so it
 # keeps executing the old code until a restart from outside it runs (this helper, or a
@@ -26,12 +29,13 @@ function Get-TinycmdrProcesses {
     @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
       Where-Object {
           if (-not $_.CommandLine) { return $false }
-          if ($_.Name -like 'python*') {
-              return ($_.CommandLine -like "*$install*") -or
-                     ($_.CommandLine -like '*tinycmdr-supervise.py*')
-          }
-          if ($_.Name -eq 'wscript.exe') {
-              return ($_.CommandLine -like '*tinycmdr-service.vbs*')
+          if ($_.Name -like 'python*' -or $_.Name -eq 'wscript.exe') {
+              # IndexOf with OrdinalIgnoreCase, never -like: -like reads [ ] * ? in the
+              # PATH as WILDCARDS, so a bracketed install dir matched nothing and the old
+              # bot survived the restart (measured 2026-10-05). OrdinalIgnoreCase is a
+              # literal compare with Windows path semantics.
+              return $_.CommandLine.IndexOf($install,
+                  [System.StringComparison]::OrdinalIgnoreCase) -ge 0
           }
           return $false
       })
@@ -39,6 +43,7 @@ function Get-TinycmdrProcesses {
 
 Log "=== restart run start (pid $PID, elevated: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) ==="
 
+$exitCode = 0
 $procs = Get-TinycmdrProcesses
 Log "tinycmdr processes found: $($procs.Count) -> $($procs.ProcessId -join ',')"
 foreach ($b in $procs) {
@@ -52,12 +57,22 @@ foreach ($b in $procs) {
 Start-Sleep -Seconds 4
 $left = Get-TinycmdrProcesses
 Log "after kill: $($left.Count) tinycmdr process(es) left"
+if ($left.Count -gt 0) { $exitCode = 1 }
 
 # start through the service vbs = exactly what the Tinycmdr logon/startup task does
 & wscript.exe //B //Nologo (Join-Path $install 'tinycmdr-service.vbs')
 Log "launched tinycmdr-service.vbs"
-Start-Sleep -Seconds 15
-$now = Get-TinycmdrProcesses
+# Wait for it to appear rather than sampling once at 15s: the supervisor starts the bot,
+# and on a cold box that has taken longer. A bare 0 here used to exit 0 anyway; the
+# helper now returns the verdict (the macOS and POSIX twins always did).
+$now = @()
+for ($i = 0; $i -lt 10; $i++) {
+    Start-Sleep -Seconds 3
+    $now = Get-TinycmdrProcesses
+    if ($now.Count -gt 0) { break }
+}
 $sup = @($now | Where-Object { $_.CommandLine -like '*tinycmdr-supervise.py*' })
 Log "after start: $($now.Count) process(es), supervisor(s) $($sup.Count): $($now.ProcessId -join ',')"
-Log "=== restart run end ==="
+if ($now.Count -eq 0) { $exitCode = 1 }
+Log "=== restart run end (exit $exitCode) ==="
+exit $exitCode

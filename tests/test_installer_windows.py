@@ -216,12 +216,15 @@ def main():
     print("\n== the stop filter sees the supervisor and the folder removal retries ==")
     stop = between(install, "function Stop-TinycmdrProcesses {", "function Remove-TinycmdrFolder {")
     stop_code = stop[stop.find("param([string] $Dir)"):] if "param([string] $Dir)" in stop else ""
-    check("the stop filter matches tinycmdr-supervise.py in its filter code",
-          "tinycmdr-supervise.py" in stop_code, "filter: %r" % stop_code[:200])
-    check("the stop filter matches wscript.exe hosts",
-          "'wscript.exe'" in stop_code and "tinycmdr-service.vbs" in stop_code)
-    check("the stop filter still matches python processes by install dir",
-          "$_.Name -like 'python*'" in stop_code and '"*$Dir*"' in stop_code)
+    check("the stop filter scopes every process kind by the install dir, literally",
+          "$_.Name -like 'python*' -or $_.Name -eq 'wscript.exe'" in stop_code
+          and "IndexOf($Dir" in stop_code and "OrdinalIgnoreCase" in stop_code,
+          "filter: %r" % stop_code[:200])
+    check("...so a wildcard-shaped install dir still matches (the old -like did not)",
+          '-like "*$Dir*"' not in stop_code,
+          "filter: %r" % stop_code[:200])
+    check("...and the supervisor's name is still on record for the intent",
+          "tinycmdr-supervise.py" in stop, "filter: %r" % stop[:200])
     rm = between(install, "function Remove-TinycmdrFolder {", "function Say")
     check("folder removal retries instead of a one-shot Remove-Item",
           re.search(r"for \(\$i = 1; \$i -le \d+; \$i\+\+\)", rm) is not None and "Start-Sleep" in rm)

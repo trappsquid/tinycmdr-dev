@@ -68,12 +68,25 @@ case "$ACTION" in
         ;;
     start)
         [ -f "$PLIST" ] || die "no agent at $PLIST - run install/install-tinycmdr-macos.sh first"
-        launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
+        if launchctl print "$TARGET" >/dev/null 2>&1; then
+            # Already loaded IS the goal. Bootstrap on a loaded job fails (37) and the
+            # legacy `load -w` fails too, so under set -e this verb used to die with no
+            # message on a perfectly healthy agent (measured 2026-10-05 by the audit).
+            info "already loaded"
+        else
+            launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
+        fi
         say "started $LABEL"
         ;;
     stop)
-        launchctl bootout "$TARGET" 2>/dev/null || launchctl unload -w "$PLIST" 2>/dev/null || true
-        say "stopped $LABEL"
+        if launchctl print "$TARGET" >/dev/null 2>&1; then
+            launchctl bootout "$TARGET" 2>/dev/null || launchctl unload -w "$PLIST" 2>/dev/null || true
+            say "stopped $LABEL"
+        else
+            # Nothing was loaded: say that, instead of reporting a stop that did not
+            # happen (the old `|| true` swallowed it either way).
+            say "nothing was loaded for $LABEL"
+        fi
         ;;
     restart)
         if [ "$(uname -s)" = "Darwin" ] && [ -f "$PLIST" ]; then
@@ -97,8 +110,17 @@ case "$ACTION" in
         fi
         ;;
     logs)
-        tail -n 60 "$INSTALL_DIR/logs/launchd.err.log" 2>/dev/null \
-            || tail -n 60 "$INSTALL_DIR/tinycmdr.log"
+        if [ -f "$INSTALL_DIR/logs/launchd.err.log" ]; then
+            tail -n 60 "$INSTALL_DIR/logs/launchd.err.log"
+        elif [ -f "$INSTALL_DIR/tinycmdr.log" ]; then
+            tail -n 60 "$INSTALL_DIR/tinycmdr.log"
+        else
+            # The verb an operator reaches for when nothing started: on a fresh install
+            # neither file exists yet, and the bare tail error under set -e named `tail`,
+            # not the situation (measured 2026-10-05 by the audit).
+            info "no logs at either path yet: $INSTALL_DIR/logs/launchd.err.log or $INSTALL_DIR/tinycmdr.log"
+            exit 1
+        fi
         ;;
     *) die "usage: restart-tinycmdr-macos.sh [restart|status|start|stop|logs]" ;;
 esac
