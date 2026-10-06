@@ -24034,8 +24034,14 @@ WEB_RUNLOG_LOCK = threading.Lock()
 WEB_KEY_RX = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
 
 def _web_key_ok(key):
-    """A session key becomes a filename, so it is checked, never trusted."""
-    return bool(key) and bool(WEB_KEY_RX.match(key)) and not key.startswith(".")
+    """A session key becomes a filename, so it is checked, never trusted.
+
+    Non-strings are refused rather than passed to the regex: a request body with
+    `{"session": []}` used to raise here and drop the connection with no reply -
+    the same zero-byte failure A-206 fixed for a non-object body."""
+    return (isinstance(key, str) and bool(key)
+            and bool(WEB_KEY_RX.match(key)) and not key.startswith("."))
+
 
 def _web_client(headers):
     """The browser's own id. Scripts send none and get the shared conversation."""
@@ -24146,6 +24152,7 @@ def web_sessions(client, include_all=False):
 def web_new_session(client, title=""):
     """A fresh conversation, owned by this browser."""
     key = "web-" + os.urandom(4).hex()
+    pruned = []
 
     def fn(st):
         st["sessions"].append({"key": key, "client": client, "title": title or "",
@@ -24153,15 +24160,30 @@ def web_new_session(client, title=""):
         if client:
             st["open"][client] = key
         mine = [s for s in st["sessions"] if (s.get("client") or "") == client]
-        if len(mine) > WEB_SESSION_MAX:      # the oldest ones stay on disk, unlisted
+        # The bound is WEB_SESSION_MAX conversations per client. Past it the oldest
+        # are dropped from the registry AND their files go with them: leaving the
+        # runlogs behind left sessions/ growing without bound on a kiosk or a
+        # rotating-client script, which is the unbounded-growth half of the bound
+        # (A-237, measured 2026-10-06: the entry vanished from the rail, the
+        # <key>.web.jsonl stayed on disk for ever).
+        if len(mine) > WEB_SESSION_MAX:
             drop = sorted(mine, key=lambda s: s.get("last_active") or 0
                           )[0:len(mine) - WEB_SESSION_MAX]
             gone = {s.get("key") for s in drop}
             st["sessions"] = [s for s in st["sessions"]
                               if s.get("key") not in gone]
+            pruned.extend(sorted(gone))
         return key
 
-    return _web_state(fn)
+    made = _web_state(fn)
+    # Outside the registry lock, like web_delete_session: file removal never runs
+    # while WEB_STATE_LOCK is held.
+    for old in pruned:
+        _web_forget_files(old)
+        log.info("web conversation %s pruned past the per-client bound (%d)",
+                 old, WEB_SESSION_MAX)
+    return made
+
 
 def web_rename_session(key, title):
     def fn(st):
@@ -24196,6 +24218,20 @@ def web_delete_session(key):
 
     if not _web_state(fn):
         return "missing"
+    _web_forget_files(key)
+    AGENT.histories.pop(key, None)
+    AGENT.model_overrides.pop(key, None)
+    log.info("web conversation %s deleted", key)
+    return "deleted"
+
+
+def _web_forget_files(key):
+    """Every file that belongs to one conversation key.
+
+    The registry entry is the index; these are the data - the session history, the
+    run log the page repaints from, the carry, the transcript and the event stream.
+    One helper, so "forget a conversation" means the same thing whether the
+    operator deleted it or the per-client bound pruned it (A-237)."""
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
     for suffix in (".json", ".web.jsonl", ".carry.json", ".transcript.jsonl",
                    ".events.jsonl"):
@@ -24203,10 +24239,7 @@ def web_delete_session(key):
             (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
         except Exception as e:
             log.warning("could not remove %s%s: %s", safe, suffix, e)
-    AGENT.histories.pop(key, None)
-    AGENT.model_overrides.pop(key, None)
-    log.info("web conversation %s deleted", key)
-    return "deleted"
+
 
 def web_set_open(client, key):
     if not client:
@@ -24248,6 +24281,38 @@ def web_resolve_session(client, requested):
         return requested
     return web_open_key(client) or "web"
 
+
+def web_owner_of(key):
+    """The client a conversation belongs to, or "" for the shared one."""
+    entry = web_entry(key)
+    return (entry.get("client") or "") if entry else ""
+
+
+def web_owned_by_other(key, client):
+    """True when `key` belongs to a DIFFERENT browser than the caller.
+
+    A conversation with no owner is the SHARED one (the adopted sessions/web, what
+    /api/chat and header-less scripts drive): nobody owns it, so it is never
+    "somebody else's". Everything else is that browser's, and another browser may
+    READ it - the rail's shared view does exactly that - but must not rename,
+    delete, or open it as its own (A-235, measured 2026-10-06: a second client
+    renamed, opened and DELETED a first client's conversations, and
+    `{"deleted": key}` removes that conversation's runlog for good)."""
+    owner = web_owner_of(key)
+    return bool(owner) and owner != client
+
+
+def web_run_owner(run):
+    """The client that owns a run: the browser that started it, else the owner of
+    the conversation it runs in. "" is the shared conversation - nobody's.
+
+    A parked question may only be answered, and a confirm-tier command only
+    approved, by the run's own browser: /api/steer used to find the run by id
+    alone, so every client that could see the rail could answer another browser's
+    question (A-244)."""
+    return getattr(run, "client", "") or web_owner_of(run.session_key)
+
+
 # -- the conversation on disk: one line list per finished run --------------
 WEB_DEST_PREFIX = "web:"
 
@@ -24287,7 +24352,11 @@ def _finish_web_run(run, reporter, answer, failed=False):
     """
     with run.lock:
         run.done = True
-        seen_final = run.answered
+        # Has a final answer line already been drawn? Then the run drew it itself
+        # (a path that does not drop its streamed draft) and this must not add a
+        # second copy. The old code read a `run.answered` latch that nothing ever
+        # set, so the check could never be true (A-245); the stream is the truth.
+        seen_final = any(l.get("kind") == "final" for l in run.lines)
     if answer and not seen_final:
         run.answer_i = run.add("final", answer)
     # The Done line lands BEFORE the run is marked done. Otherwise a client that
@@ -24434,12 +24503,15 @@ WEB_RUN_KEEP = 40          # finished runs that stay pollable
 class WebRun:
     """One agent run driven from the browser, with its own line buffer."""
 
-    def __init__(self, run_id, session_key):
+    def __init__(self, run_id, session_key, client=""):
         self.id = run_id
         self.session_key = session_key
+        # The browser that started this run ("" for a script or a scheduled job).
+        # /api/steer compares this with the caller before answering a parked
+        # question or approving a confirm-tier command (A-244).
+        self.client = client
         self.lines = []
         self.done = False
-        self.answered = False
         self.cancel = threading.Event()
         self.steer = []
         self.started = time.time()
@@ -24579,6 +24651,16 @@ class WebRun:
         with self.lock:
             self.asked = None
 
+    def post_done(self, text):
+        """What happened to the question: answered, stopped, or timed out.
+
+        The web door had no post_done at all, so a timed-out question left the
+        ❓ line with NOTHING after it - a reload could not tell waiting from
+        timed-out from answered (A-246). ask_operator hands the same words here
+        that chat and the console show, so the three lanes name an outcome the
+        same way."""
+        self.add("system", text)
+
     def post(self, question, options, wait, label=None):
         """The question belongs in the run's own stream, where the page is already
         drawing lines, and nowhere else: this door has no second surface."""
@@ -24592,8 +24674,9 @@ class WebRun:
             out, self.steer = self.steer, []
         return [("web", m) for m in out]
 
-def _web_new_run(session_key="web"):
-    run = WebRun(os.urandom(6).hex(), session_key)
+
+def _web_new_run(session_key="web", client=""):
+    run = WebRun(os.urandom(6).hex(), session_key, client)
     with WEB_RUNS_LOCK:
         WEB_RUNS[run.id] = run
         if len(WEB_RUNS) > WEB_RUN_KEEP:
@@ -24730,6 +24813,13 @@ class WebDestination(Destination):
         self.run.add("ask", "❓ " + str(question) + tail)
         answered = row["ev"].wait(wait)
         self.run.close_question(answered=bool(row.get("answer")))
+        if not answered:
+            # A question that times out left NO trace: the ❓ line stayed with
+            # nothing after it, so a reload could not tell "still waiting" from
+            # "closed, nobody answered" (A-246). The wait is named so the reader
+            # knows how long the door was held open.
+            self.run.add("system", "⌛ no answer within %ds — the question is "
+                                   "closed" % int(wait))
         return row.get("answer") if answered else None
 
 def _web_drive(run, text):
@@ -24904,6 +24994,25 @@ def _web_ascii_name(name):
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(name or "file"))[:120] or "file"
 
 
+def _json_type_name(value):
+    """The JSON type of a parsed body, for the 400 that names what arrived.
+
+    `None` is the JSON literal null; a Python bool is a JSON boolean, and it must
+    be checked before int (bool is an int subclass)."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
 
 # The web lane, part 2: the HTTP server and the page it serves.
 # Same recovery source as the block above; re-aimed in place: the token is
@@ -24965,7 +25074,7 @@ WEB_PAGE = """
       <div id=sessions class="campaign-list"></div>
     </div>
     <div class="sidebar-footer">
-      <label class="host-toggle"><input id=allclients type=checkbox checked><span></span> Show every conversation on this host</label>
+      <label class="host-toggle" title="Every browser on this host, not just this one: the rail shows every conversation kept on this box. Reading another browser's conversation is allowed here; renaming, deleting or running in it is not."><input id=allclients type=checkbox checked><span></span> Show every conversation on this host</label>
       <div class="host-card"><div><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M12 20v2" /> <path d="M12 2v2" /> <path d="M17 20v2" /> <path d="M17 2v2" /> <path d="M2 12h2" /> <path d="M2 17h2" /> <path d="M2 7h2" /> <path d="M20 12h2" /> <path d="M20 17h2" /> <path d="M20 7h2" /> <path d="M7 20v2" /> <path d="M7 2v2" /> <rect x="4" y="4" width="16" height="16" rx="2" /> <rect x="8" y="8" width="8" height="8" rx="1" /> </svg><strong id=host></strong></div><small id=hostver></small></div>
     </div>
   </aside>
@@ -26840,13 +26949,32 @@ def run_webui():
         return None
 
     class Handler(BaseHTTPRequestHandler):
+        # HTTP/1.1, so the page's poll reuses ONE connection instead of paying a
+        # fresh TCP handshake and thread for every /api/events request: this class
+        # defaulted to HTTP/1.0, which closes after each reply (A-202, measured
+        # 2026-10-06: a pipelined second GET got no answer at all). Keep-alive is
+        # only safe because every response path sends an exact Content-Length and
+        # every request body is either fully read or the connection is closed -
+        # an undrained body would be parsed as the NEXT request line.
+        protocol_version = "HTTP/1.1"
         # a peer that sends a request line and never finishes the headers or the
         # body is cut off by the socket timeout, so one silent client cannot
         # hold a handler thread (2026-09-23)
         timeout = 60
+        _body_taken = False     # this request's body has been read or closed off
+        _head_only = False      # do_HEAD runs the GET routing with the body dropped
+        _body_got = "no body"   # what _body() found, for the 400 that names the shape
 
         def log_message(self, *a):
             pass
+
+        def _write(self, data):
+            """The response body, dropped for HEAD.
+
+            A HEAD answer is exactly the GET headers - status, Content-Type and
+            Content-Length included - with no body (A-203)."""
+            if not self._head_only:
+                self.wfile.write(data)
 
         def _send(self, body, code=200, ctype="text/html; charset=utf-8", extra=None):
             data = body.encode()
@@ -26860,7 +26988,7 @@ def run_webui():
             for name, value in (extra or ()):
                 self.send_header(name, value)
             self.end_headers()
-            self.wfile.write(data)
+            self._write(data)
 
         def _json(self, obj, code=200, extra=None):
             self._send(json.dumps(obj), code, "application/json", extra=extra)
@@ -26884,6 +27012,8 @@ def run_webui():
             self.send_header("Content-Disposition",
                              "attachment; filename=%s" % _web_ascii_name(path.name))
             self.end_headers()
+            if self._head_only:
+                return                  # HEAD: the headers are the whole answer
             try:
                 with open(path, "rb") as fh:
                     while True:
@@ -26995,6 +27125,11 @@ def run_webui():
             return out
 
         def do_GET(self):
+            # A GET carries no body, but if one is announced it must still be read
+            # or the connection closed: on HTTP/1.1 keep-alive (A-202) those bytes
+            # would be parsed as the next request line. `_drain` is idempotent and a
+            # no-op for the ordinary body-less GET.
+            self._drain()
             if not self._origin_ok():
                 self._forbidden()
                 return
@@ -27052,8 +27187,12 @@ def run_webui():
                     for key, role, snippet, _rank in session_search_hits(q, 20)]})
             elif self.path.startswith("/api/sessions"):
                 # The rail: what conversations this browser has, newest first.
-                # ?all=1 is the token holder's view of every conversation on this
-                # host, which is what the operator uses on their own box.
+                # ?all=1 is the token holder's view of EVERY conversation on this
+                # host, which is what the operator uses on their own box - and it
+                # is an EXPOSURE the shared view is accepted for: any holder of the
+                # page token sees every conversation's key, title and last-active
+                # (A-236). Mutation stays scoped to the owning client (A-235); the
+                # page's toggle title says exactly what this view is.
                 if not self._auth_ok():
                     self._json({"error": "unauthorized"}, 401)
                     return
@@ -27153,7 +27292,7 @@ def run_webui():
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "max-age=86400")
                 self.end_headers()
-                self.wfile.write(data)
+                self._write(data)
             elif self.path.startswith("/mark.png"):
                 data = _web_mark_bytes()
                 self.send_response(200)
@@ -27161,7 +27300,7 @@ def run_webui():
                 self.send_header("Content-Length", str(len(data)))
                 self.send_header("Cache-Control", "max-age=86400")
                 self.end_headers()
-                self.wfile.write(data)
+                self._write(data)
             elif self.path.startswith("/chibi.png"):
                 art = _web_chibi_bytes()
                 if art is None:
@@ -27172,7 +27311,7 @@ def run_webui():
                     self.send_header("Content-Length", str(len(art)))
                     self.send_header("Cache-Control", "max-age=86400")
                     self.end_headers()
-                    self.wfile.write(art)
+                    self._write(art)
             elif self.path.startswith("/fonts/"):
                 name = self.path.split("/fonts/", 1)[1].split("?", 1)[0]
                 path = _web_font_path(name)
@@ -27187,7 +27326,7 @@ def run_webui():
                     # under a running page (a release writes new bytes, new generation)
                     self.send_header("Cache-Control", "max-age=604800")
                     self.end_headers()
-                    self.wfile.write(data)
+                    self._write(data)
             elif self.path.startswith("/page.css"):
                 css = _web_page_css()
                 if css is None:
@@ -27204,13 +27343,59 @@ def run_webui():
                     self.send_header("Content-Length", str(len(art)))
                     self.send_header("Cache-Control", "max-age=86400")
                     self.end_headers()
-                    self.wfile.write(art)
+                    self._write(art)
             elif self.path == "/" or self.path.startswith("/?"):
                 self._send(_web_page_html())
             else:
                 self._send("not found", 404, "text/plain")
 
+        def do_HEAD(self):
+            """HEAD runs the SAME routing as GET and throws the body away.
+
+            `curl -I` (what most uptime checkers and the restart probes use) hit
+            Python's stock 501 for an unknown method, so a healthy bot read as dead
+            (A-203). The status line, Content-Type and Content-Length are the GET
+            ones - `_write` drops only the body - so a checker sees exactly what a
+            GET would answer."""
+            self._head_only = True
+            try:
+                self.do_GET()
+            finally:
+                self._head_only = False
+
+        def _refuse_method(self, method):
+            """A method this server does not serve, refused in the API's own shape.
+
+            Python's stock 501 is an HTML error page, which a JSON client cannot
+            read (A-204/A-205)."""
+            self._drain()
+            self._json({"error": "method not allowed",
+                        "method": method,
+                        "allows": "GET, HEAD, POST, OPTIONS"}, 405,
+                       extra=[("Allow", "GET, HEAD, POST, OPTIONS")])
+
+        def do_OPTIONS(self):
+            self._refuse_method("OPTIONS")
+
+        def do_PUT(self):
+            self._refuse_method("PUT")
+
+        def do_DELETE(self):
+            self._refuse_method("DELETE")
+
+        def do_PATCH(self):
+            self._refuse_method("PATCH")
+
         def _body(self):
+            """The request body as a JSON OBJECT, or None.
+
+            None means "refuse with 400" (see _need_body), never "silently drop the
+            request". A JSON body that is not an object - `[]`, `"hi"`, `0`, `true` -
+            used to reach `body.get(...)` and raise, so the caller's connection was
+            dropped with ZERO bytes and no reply at all (A-206, measured 2026-10-06).
+            `_body_got` names what arrived so the refusal can name the shape.
+            """
+            self._body_taken = True
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 if not 0 <= length <= WEB_BODY_MAX:
@@ -27226,18 +27411,40 @@ def run_webui():
                     except Exception:
                         pass
                     self.close_connection = True
+                    self._body_got = "a body over the %d-byte cap" % WEB_BODY_MAX
                     return None
                 # An absolute deadline for THIS read: a client that announces a length and
                 # trickles bytes must not hold a worker for the whole socket timeout.
                 self.connection.settimeout(WEB_BODY_DEADLINE)
-                return json.loads(self.rfile.read(length) or b"{}")
-            except Exception:
+                raw = self.rfile.read(length) or b"{}"
+                self._body_got = "body"
+                parsed = json.loads(raw)
+            except Exception as e:
+                self._body_got = "an unreadable body (%s)" % type(e).__name__
                 return None
+            if not isinstance(parsed, dict):
+                self._body_got = "a JSON %s" % _json_type_name(parsed)
+                return None
+            return parsed
+
+        def _need_body(self):
+            """The JSON object body, or None after answering 400 with the shape.
+
+            ONE refusal for every JSON route, so a body like `[]` can never reach
+            `body.get(...)` and kill the connection (A-206) and the caller is told
+            what to send instead."""
+            body = self._body()
+            if body is None:
+                self._json({"error": "expected a JSON object body",
+                            "got": self._body_got,
+                            "content_type": "application/json"}, 400)
+            return body
 
         def _raw(self, max_bytes):
             """A raw (non-JSON) request body - uploads - with _body's discipline: the
             claimed length is capped BEFORE reading and the read runs under an absolute
             deadline, so a trickling client cannot hold a worker."""
+            self._body_taken = True
             try:
                 length = int(self.headers.get("Content-Length", 0))
                 if not 0 < length <= max_bytes:
@@ -27255,7 +27462,14 @@ def run_webui():
             Answering an unauthorized POST while the caller is still sending the
             body makes Windows abort the connection under the caller (WinError
             10053) instead of delivering the 401, which looks like the server
-            crashed rather than refused. Same for a 404 on a POST."""
+            crashed rather than refused. Same for a 404 on a POST.
+
+            Idempotent: with HTTP/1.1 keep-alive (A-202) a second read of the same
+            Content-Length would block until the socket timeout, waiting for bytes
+            that are already gone."""
+            if self._body_taken:
+                return
+            self._body_taken = True
             try:
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 if length < 0:
@@ -27269,7 +27483,7 @@ def run_webui():
             except Exception:
                 pass
 
-        def _start_run(self, text, key="web"):
+        def _start_run(self, text, key="web", client=""):
             """Kick off a browser run on its own thread; the page polls for
             lines.  One run per CONVERSATION at a time - two conversations may
             both be working, which is what makes parking one and opening another
@@ -27277,6 +27491,14 @@ def run_webui():
             web_touch(key)
             busy = _web_active_run(key)
             if busy is not None:
+                _busy_owner = web_run_owner(busy)
+                if _busy_owner and _busy_owner != client:
+                    # A reloaded tab of ANOTHER browser is not a second tab of
+                    # yours: its text must not be queued into someone else's run.
+                    self._json({"error": "that run belongs to another browser on "
+                                         "this host - start your own conversation "
+                                         "to send it a message"}, 403)
+                    return
                 # A tab that reloaded (or a second tab) does not know a run is
                 # live, and its message used to be dropped on the floor. Queue
                 # it into the running run as a steer - what the page does when
@@ -27288,7 +27510,7 @@ def run_webui():
                          busy.id)
                 self._json({"run_id": busy.id, "busy": True, "steered": True})
                 return
-            run = _web_new_run(key)
+            run = _web_new_run(key, client)
             run.add("you", text)
             threading.Thread(target=_web_drive, args=(run, text),
                              daemon=True, name=f"webrun-{run.id}").start()
@@ -27330,9 +27552,8 @@ def run_webui():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
                     return
-                body = self._body()
+                body = self._need_body()
                 if body is None:
-                    self._json({"error": "bad request"}, 400)
                     return
                 text = (body.get("message") or "").strip()
                 if not text:
@@ -27340,13 +27561,23 @@ def run_webui():
                     return
                 client = _web_client(self.headers)
                 key = web_resolve_session(client, body.get("session"))
+                # Starting a run in another browser's conversation writes into it
+                # as surely as a rename would (A-235): the owning browser's run
+                # must not be steered, and its transcript must not be extended,
+                # by a different browser. The SHARED conversation (owner "") is
+                # still open to everyone.
+                if web_owned_by_other(key, client):
+                    self._json({"error": "that conversation belongs to another "
+                                         "browser on this host - you may read it in "
+                                         "the shared view, not run in it"}, 403)
+                    return
                 kind, payload = _web_command(text, key)
                 if kind != "task":
                     # fast-path commands answer immediately, like /api/chat
                     self._json({"reply": payload, "immediate": True, "session": key})
                     return
                 web_set_open(client, key)
-                self._start_run(payload, key)
+                self._start_run(payload, key, client)
                 return
             if self.path.startswith("/api/upload"):
                 if not self._auth_ok():
@@ -27375,7 +27606,9 @@ def run_webui():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
                     return
-                body = self._body() or {}
+                body = self._need_body()
+                if body is None:
+                    return
                 op = (body.get("op") or "").strip()
                 key = (body.get("key") or "").strip()
                 client = _web_client(self.headers)
@@ -27387,6 +27620,17 @@ def run_webui():
                 if op in ("rename", "delete", "open"):
                     if not _web_key_ok(key) or web_entry(key) is None:
                         self._json({"error": "no such conversation"}, 404)
+                        return
+                    # Only the browser that owns a conversation may change it.
+                    # Reading stays open: the rail's shared view shows every
+                    # conversation on this host (A-235 - a second browser could
+                    # rename, open and DELETE a first browser's conversation, and
+                    # a delete removes its runlog for good).
+                    if web_owned_by_other(key, client):
+                        self._json({"error": "that conversation belongs to another "
+                                             "browser on this host - you may read it "
+                                             "in the shared view, but not %s it" % op},
+                                   403)
                         return
                     if op == "rename":
                         web_rename_session(key, body.get("title") or "")
@@ -27418,11 +27662,26 @@ def run_webui():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
                     return
-                body = self._body() or {}
+                body = self._need_body()
+                if body is None:
+                    return
                 run = WEB_RUNS.get(body.get("run_id", ""))
                 text = (body.get("message") or "").strip()
                 if run is None:
                     self._json({"error": "no such run"}, 404)
+                    return
+                # Bind the message to the run's OWN browser. This route answers a
+                # parked question and approves a confirm-tier command, so a run id
+                # seen in the shared rail was enough for any token holder to
+                # answer another browser's question or approve its command
+                # (A-244, measured 2026-10-06: a second client answered a first
+                # client's parked question). The owning tab still works; a run in
+                # the shared conversation has no owner and stays open to all.
+                owner = web_run_owner(run)
+                if owner and owner != _web_client(self.headers):
+                    self._json({"error": "that run belongs to another browser on "
+                                         "this host - only that browser can answer "
+                                         "its questions"}, 403)
                     return
                 if not text:
                     self._json({"error": "empty message"}, 400)
@@ -27453,7 +27712,9 @@ def run_webui():
                     self._drain()
                     self._json({"error": "unauthorized"}, 401)
                     return
-                body = self._body() or {}
+                body = self._need_body()
+                if body is None:
+                    return
                 run = WEB_RUNS.get(body.get("run_id", ""))
                 if run is None:
                     self._json({"error": "no such run"}, 404)
@@ -27473,7 +27734,11 @@ def run_webui():
                 return
             req = self._body()
             if req is None:
-                self._json({"reply": "bad request"}, 400)
+                # /api/chat's own shape is {"reply": ...}, so the shape complaint
+                # rides there instead of a bare "bad request" (A-206).
+                self._json({"reply": "expected a JSON object body (e.g. "
+                                     '{"message": "..."}); got %s' % self._body_got,
+                            "error": "expected a JSON object body"}, 400)
                 return
             text = (req.get("message") or "").strip()
             if not text:

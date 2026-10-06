@@ -614,6 +614,283 @@ def main():
     check(dest.attach("/nope/missing.bin").startswith("NOT SENT"),
           "attach() refuses what is not a file")
 
+    # ---- the door's framing: HTTP/1.1, HEAD, method refusals, body shape ----
+    # Every check below drives the real Handler over raw HTTP; none needs a browser.
+    def probe(method, path, headers=None, body=None, timeout=10):
+        """(status, headers, body, http_version) over a fresh connection.
+
+        A dropped connection (no reply at all) comes back as
+        (None, {}, b"<why>", None) so a check FAILS on it rather than the suite
+        dying with a traceback - the exact shape A-206's crash produced."""
+        c = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            c.request(method, path, body=body, headers=headers or {})
+            r = c.getresponse()
+            return r.status, dict(r.getheaders()), r.read(), r.version
+        except Exception as e:                                   # noqa: BLE001
+            return None, {}, ("%s: %s" % (type(e).__name__, e)).encode(), None
+        finally:
+            c.close()
+
+    # A-202: this class defaulted to HTTP/1.0, so every poll paid a fresh TCP
+    # handshake and closed the connection. Two requests on ONE connection is the
+    # real proof, not the version string alone.
+    c1 = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        c1.request("GET", "/api/health")
+        _r1 = c1.getresponse()
+        _ver, _b1 = _r1.version, _r1.read()
+        c1.request("GET", "/api/health")
+        _r2 = c1.getresponse()
+        _code2, _b2 = _r2.status, _r2.read()
+        check(_ver == 11 and _r1.status == 200 and _code2 == 200 and _b2 == _b1,
+              "the door speaks HTTP/1.1 and reuses the connection for the next poll",
+              (_ver, _r1.status, _code2))
+    except Exception as e:                                       # noqa: BLE001
+        check(False, "the door speaks HTTP/1.1 and reuses the connection for the next poll",
+              "%s: %s" % (type(e).__name__, e))
+    finally:
+        c1.close()
+
+    # ...and every response carries an exact Content-Length: that is what makes
+    # keep-alive safe (an unframed body is read to EOF, i.e. the next reply).
+    framed = []
+    for _m, _p, _h, _d in (("GET", "/", TOK, None),
+                           ("GET", "/api/health", None, None),
+                           ("GET", "/api/tasks", TOK, None),
+                           ("GET", "/api/tasks", None, None),          # 401
+                           ("GET", "/api/jobs", TOK, None),
+                           ("GET", "/api/inventory", TOK, None),
+                           ("GET", "/api/log", TOK, None),
+                           ("GET", "/api/commands", TOK, None),
+                           ("GET", "/api/session?key=web-none", TOK, None),
+                           ("GET", "/api/download?run=x&uid=y", TOK, None),   # 404
+                           ("GET", "/api/login", TOK, None),
+                           ("GET", "/page.css", None, None),
+                           ("GET", "/manifest.webmanifest", None, None),
+                           ("GET", "/icon.png", None, None),
+                           ("GET", "/mark.png", None, None),
+                           ("GET", "/fonts/nope.woff2", None, None),   # 404
+                           ("GET", "/nope", None, None),              # 404
+                           ("POST", "/api/sessions", TOK, b'{"op":"zzz"}'),  # 400
+                           ("POST", "/api/login", TOK, b""),          # 200
+                           ("OPTIONS", "/api/run", TOK, None)):       # 405
+        _st, _hd, _bd, _ = probe(_m, _p, _h, _d)
+        cl = _hd.get("Content-Length")
+        framed.append((_m, _p, _st, cl, len(_bd) if isinstance(_bd, bytes) else -1))
+    check(all(cl is not None and int(cl) == n for _, _, _, cl, n in framed),
+          "every route frames its reply with an exact Content-Length", framed)
+
+    # ...and an error answered BEFORE the body is read must still leave the
+    # connection usable (drained, not poisoned): the 401's body is discarded and
+    # the next request on the same socket answers.
+    c2 = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        c2.connect()
+        c2.auto_open = 0        # a silent reconnect would hide a poisoned socket
+        c2.request("POST", "/api/run", body=b'{"message":"hi"}')     # no token -> 401
+        _a = c2.getresponse()
+        _code_a, _ = _a.status, _a.read()
+        c2.request("GET", "/api/health")
+        _code_b = c2.getresponse().status
+        check(_code_a == 401 and _code_b == 200,
+              "a body sent with a refused POST is drained; the SAME connection survives",
+              (_code_a, _code_b))
+    except Exception as e:                                       # noqa: BLE001
+        check(False, "a body sent with a refused POST is drained; the SAME connection "
+                     "survives", "%s: %s" % (type(e).__name__, e))
+    finally:
+        c2.close()
+
+    # A-203: HEAD was Python's stock 501, so `curl -I` read a healthy bot as dead.
+    _st, _hd, _bd, _ = probe("HEAD", "/api/health")
+    check(_st == 200 and _bd == b"" and int(_hd.get("Content-Length") or 0) > 0,
+          "HEAD /api/health answers the GET headers with no body",
+          (_st, len(_bd), _hd.get("Content-Length")))
+    _st, _hd, _bd, _ = probe("HEAD", "/api/tasks", TOK)
+    check(_st == 200 and _bd == b"",
+          "HEAD runs the routing (a gated route still answers its status)", (_st, _bd[:40]))
+
+    # A-204 / A-205: the stock 501 is an HTML page no JSON client can read.
+    for _meth in ("OPTIONS", "PUT", "DELETE", "PATCH"):
+        _st, _hd, _bd, _ = probe(_meth, "/api/run", TOK, b"")
+        try:
+            _j = json.loads(_bd)
+        except Exception:
+            _j = {}
+        check(_st == 405 and _j.get("error") == "method not allowed"
+              and _meth in (_j.get("method") or ""),
+              "%s is refused in the API's JSON shape, not a 501 HTML page" % _meth,
+              (_st, _bd[:80]))
+
+    # A-206: a JSON body that is not an object used to reach `body.get(...)` and
+    # raise, dropping the connection with zero bytes.
+    for _path in ("/api/run", "/api/sessions", "/api/steer", "/api/stop", "/api/chat"):
+        for _shape in (b"[]", b'["x"]', b'"hi"', b"0", b"true", b"null"):
+            _st, _hd, _bd, _ = probe("POST", _path, TOK, _shape)
+            ok = _st == 400 and b"expected a JSON object body" in _bd
+            check(ok, "a %s body to %s is refused with 400 naming the shape"
+                      % (_shape.decode(), _path), (_st, _bd[:90]))
+
+    # ---- A-235: a conversation belongs to the browser that made it ----------
+    CA = {"X-Tinycmdr-Token": token, "X-Tinycmdr-Client": "suiteA"}
+    CB = {"X-Tinycmdr-Token": token, "X-Tinycmdr-Client": "suiteB"}
+
+    def _mk(hdr, title=""):
+        _c, _b, _ = req("POST", "/api/sessions", hdr,
+                        json.dumps({"op": "new", "title": title}).encode())
+        return json.loads(_b)["key"] if _c == 200 else None
+
+    key_a = _mk(CA, "A's own")
+    check(bool(key_a) and fb.web_entry(key_a) is not None, "browser A made a conversation")
+    check(req("POST", "/api/sessions", CB,
+              json.dumps({"op": "rename", "key": key_a, "title": "hijacked"}).encode())[0] == 403,
+          "a second browser cannot RENAME the first browser's conversation")
+    check(req("POST", "/api/sessions", CB,
+              json.dumps({"op": "open", "key": key_a}).encode())[0] == 403,
+          "...nor open it as its own")
+    # A SECOND conversation to aim a cross-client DELETE at, so the read/open guards
+    # below grade a conversation nobody deleted.
+    key_d = _mk(CA, "A's deletable")
+    _del = req("POST", "/api/sessions", CB,
+               json.dumps({"op": "delete", "key": key_d}).encode())
+    check(_del[0] == 403 and fb.web_entry(key_d) is not None,
+          "...nor DELETE it (that removes its runlog for good)", (_del[0], _del[1][:90]))
+    _run_in = probe("POST", "/api/run", CB,
+                    json.dumps({"message": "/tinycmdr help", "session": key_a}).encode())
+    check(_run_in[0] == 403,
+          "...nor start a run inside it (which would extend its transcript)",
+          (_run_in[0], _run_in[2][:90]))
+    # the refusal names whose it is
+    check(b"another browser on this host" in _del[1],
+          "the refusal says whose conversation it is", _del[1][:120])
+    # READING stays open: the rail's shared view is documented, and A-236 keeps it
+    _see = req("GET", "/api/sessions?all=1", CB)
+    _keys = [s.get("key") for s in (json.loads(_see[1]).get("sessions") or [])]
+    check(_see[0] == 200 and key_a in _keys,
+          "a second browser can still READ every conversation on the host", (_see[0], key_a in _keys))
+    # the OWNER still works, and the SHARED conversation (no owner) stays open
+    check(req("POST", "/api/sessions", CA,
+              json.dumps({"op": "rename", "key": key_a, "title": "mine"}).encode())[0] == 200,
+          "the owning browser still renames its own conversation")
+    shared = fb.web_new_session("")
+    check(req("POST", "/api/sessions", CB,
+              json.dumps({"op": "rename", "key": shared, "title": "shared"}).encode())[0] == 200,
+          "the SHARED conversation (no owner) is still anyone's to rename")
+    key_b = _mk(CB, "B's own")
+    check(req("POST", "/api/sessions", CB,
+              json.dumps({"op": "delete", "key": key_b}).encode())[0] == 200,
+          "a browser still deletes its OWN conversation")
+    check(req("POST", "/api/sessions", CA,
+              json.dumps({"op": "open", "key": key_a}).encode())[0] == 200,
+          "the owner still opens its own conversation")
+    # ...and a caller with no client header - the installer's probe, curl, a script -
+    # keeps driving the shared conversation exactly as before.
+    _cli = probe("POST", "/api/run", TOK, json.dumps({"message": "/tinycmdr help"}).encode())
+    check(_cli[0] == 200 and b'"immediate": true' in _cli[2].lower(),
+          "a caller with no client header still drives the shared conversation",
+          (_cli[0], _cli[2][:80]))
+
+    # ---- A-236: the shared view is an accepted exposure, and it says so ------
+    _see = req("GET", "/api/sessions?all=1", CA)
+    _allkeys = [s.get("key") for s in (json.loads(_see[1]).get("sessions") or [])]
+    check(_see[0] == 200 and key_a in _allkeys,
+          "?all=1 lists every conversation on the host to any token holder (the "
+          "documented shared view, an accepted exposure)")
+    _html = req("GET", "/", limit=400000)[1].decode("utf-8", "replace")
+    check("id=allclients" in _html and "not just this one" in _html,
+          "the rail's toggle spells out that it means every browser on this host, "
+          "not just this one")
+
+    # ---- A-237: the per-client bound takes the pruned runlog with it ---------
+    # The registry stopped at WEB_SESSION_MAX conversations per client, but the
+    # pruned conversation's <key>.web.jsonl stayed on disk for ever.
+    for _ in range(fb.WEB_SESSION_MAX):
+        fb.web_new_session("suiteZ")
+    _zk = [s.get("key") for s in fb._web_state()["sessions"]
+           if (s.get("client") or "") == "suiteZ"]
+
+    def _age(st):
+        for _s in st["sessions"]:
+            if (_s.get("client") or "") == "suiteZ" and _s.get("key") in _zk:
+                _s["last_active"] = float(_zk.index(_s["key"]))
+        return True
+
+    fb._web_state(_age)
+    _oldest, _kept = _zk[0], _zk[1]
+    fb._web_runlog_path(_oldest).write_text(
+        json.dumps({"run_id": "r", "lines": []}) + "\n", encoding="utf-8")
+    fb._web_runlog_path(_kept).write_text(
+        json.dumps({"run_id": "r2", "lines": []}) + "\n", encoding="utf-8")
+    fb.web_new_session("suiteZ")            # the 51st: the oldest is pruned
+    check(fb.web_entry(_oldest) is None,
+          "the per-client bound drops the oldest conversation from the registry")
+    check(not fb._web_runlog_path(_oldest).exists(),
+          "...and deletes its runlog with it, so sessions/ cannot grow without bound",
+          str(fb._web_runlog_path(_oldest)))
+    check(fb._web_runlog_path(_kept).exists(),
+          "...while a conversation inside the bound keeps its runlog")
+
+    # ---- A-244: /api/steer is bound to the run's OWN browser ----------------
+    # This route answers a parked question and approves a confirm-tier command,
+    # so a run id seen in the shared rail must not be enough.
+    run_a = fb._web_new_run("web")
+    run_a.client = "suiteA"                 # a run browser A started
+    row_a = run_a.opener("Approve the dangerous command?", ["yes", "no"], 30)
+    _st, _b = req("POST", "/api/steer", CB,
+                  json.dumps({"run_id": run_a.id, "message": "yes"}).encode())[:2]
+    check(_st == 403 and row_a.get("answer") is None and not row_a["ev"].is_set(),
+          "a second browser cannot answer another browser's parked question",
+          (_st, _b[:120], row_a.get("answer")))
+    check(b"another browser on this host" in _b,
+          "the steer refusal names whose run it is", _b[:120])
+    _st, _b = req("POST", "/api/steer", CA,
+                  json.dumps({"run_id": run_a.id, "message": "yes"}).encode())[:2]
+    check(_st == 200 and row_a.get("answer") == "yes",
+          "the OWNING browser still answers it", (_st, _b[:80], row_a.get("answer")))
+    run_s = fb._web_new_run("web")          # no client header was ever involved:
+    row_s = run_s.opener("Confirm?", ["yes"], 30)   # the shared conversation, nobody's
+    _st = req("POST", "/api/steer", CB,
+              json.dumps({"run_id": run_s.id, "message": "yes"}).encode())[0]
+    check(_st == 200 and row_s.get("answer") == "yes",
+          "a run in the SHARED conversation is still answerable by any browser",
+          (_st, row_s.get("answer")))
+
+    # ---- A-245: the answer is drawn exactly once ----------------------------
+    # The dead `run.answered` latch read False for ever, so a run that had already
+    # drawn its own final line got a SECOND one at the end.
+    _r245 = fb._web_new_run("web")
+    _d245 = fb.WebDestination(_r245)
+    _d245.line("final", "the run drew this answer itself")
+    fb._finish_web_run(_r245, fb.RunReporter(_d245, "web"), "a fallback answer")
+    _finals = [l["text"] for l in _r245.lines if l["kind"] == "final"]
+    check(_finals == ["the run drew this answer itself"],
+          "a run that already drew a final answer gets no second copy", _finals)
+    _r245b = fb._web_new_run("web")
+    fb._finish_web_run(_r245b, fb.RunReporter(fb.WebDestination(_r245b), "web"),
+                       "the only answer")
+    _finalsb = [l["text"] for l in _r245b.lines if l["kind"] == "final"]
+    check(_finalsb == ["the only answer"],
+          "a run that drew no final line still gets its answer exactly once", _finalsb)
+
+    # ---- A-246: a question's OUTCOME is written down -------------------------
+    # A timeout left the ❓ line with nothing after it: a reload could not tell
+    # waiting from timed-out from answered.
+    _r246 = fb._web_new_run("web")
+    _ans246 = fb.WebDestination(_r246).ask("Answer me?", ["yes", "no"], 1.0)
+    _sys246 = [l["text"] for l in _r246.lines if l["kind"] == "system"]
+    check(_ans246 is None
+          and any("no answer within" in t and "closed" in t for t in _sys246),
+          "a question nobody answers leaves a 'no answer within Ns' line", _sys246)
+    # ...and the same for a question asked through the run's own ask_user door
+    # (ask_operator): the web door had no post_done, so that path recorded nothing.
+    _r246b = fb._web_new_run("web")
+    _st246, _ = fb.ask_operator("web", "Anybody there?", ctx={"ask_door": _r246b},
+                                timeout=1)
+    _lt246 = [l["text"] for l in _r246b.lines]
+    check(_st246 == "timeout" and any("no answer" in t.lower() for t in _lt246),
+          "a question the door times out on records its outcome too", (_st246, _lt246))
+
     # ---- a second start announces instead of fighting -----------------------
     fb.CONFIG["web"]["port"] = port
     buf = io.StringIO()
