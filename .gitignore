@@ -99,3 +99,5 @@ venv/
 # tree look dirty next to a REAL tracked modification - the two are told apart.
 experiments.jsonl
 maintenance/tool-audit-*/
+# the browser auto-open marker (one tab per token+port per window)
+.web-open

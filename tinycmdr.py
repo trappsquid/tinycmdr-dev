@@ -1132,7 +1132,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.79"
+VERSION = "1.0.80"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -26127,12 +26127,55 @@ def _web_answers(port, timeout=2.0):
         return False
 
 
-def _announce_web(port, open_browser=True):
+_WEB_OPEN_TTL = 6 * 3600   # one auto-opened tab per token+port per this window
+
+
+def _browser_open_mark(tok, port):
+    """Record that a tab for (token, port) was just opened. Best-effort, never raises."""
+    try:
+        key = hashlib.sha1(("%s|%d" % (tok, port)).encode("utf-8", "replace")).hexdigest()[:16]
+        (BASE_DIR / ".web-open").write_text(
+            json.dumps({"key": key, "port": int(port), "at": round(time.time(), 3)}),
+            encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _browser_open_due(tok, port, ttl=None):
+    """True when the auto-open should fire: one tab per token+port per TTL.
+
+    Every start used to open a tab, so a restart ladder, a supervisor loop or a day of
+    gate runs stacked dozens in the operator's browser - each carrying the token of the
+    process that opened it, which is why a pile of them read "token not accepted" after
+    any rotation. The marker records (token digest, port, time): the same pair inside the
+    TTL skips the open with a log line (never silent), a rotated token or a different port
+    opens at once, and the `web` verb bypasses this entirely because typing it IS the
+    asking. Never raises; an unwritable marker never stops the announce.
+    """
+    ttl = _WEB_OPEN_TTL if ttl is None else ttl
+    key = hashlib.sha1(("%s|%d" % (tok, port)).encode("utf-8", "replace")).hexdigest()[:16]
+    marker = BASE_DIR / ".web-open"
+    now = time.time()
+    try:
+        if marker.exists():
+            prev = json.loads(marker.read_text(encoding="utf-8") or "{}")
+            if prev.get("key") == key and now - float(prev.get("at") or 0) < ttl:
+                log.info("browser auto-open skipped: this link opened %d min ago",
+                         int((now - float(prev.get("at") or 0)) / 60))
+                return False
+    except Exception:
+        pass
+    _browser_open_mark(tok, port)
+    return True
+
+
+def _announce_web(port, open_browser=True, force=False):
     """Say where the page is - tokenized link first, then how to reach it.
 
     The token rides the FRAGMENT: it never reaches the server, so it cannot land
-    in its log or a Referer header. The token-free URL is what a bookmark keeps
-    (the page exchanges the fragment for localStorage and scrubs the address bar).
+    in its log or a Referer header. The page hands the fragment to /api/login once,
+    takes an HttpOnly cookie, and scrubs the address bar; the cookie is what a
+    bookmark then rides.
     """
     web = CONFIG.get("web") or {}
     port = int(port)
@@ -26150,7 +26193,7 @@ def _announce_web(port, open_browser=True):
     else:
         print("  from another machine: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
               % (port, port))
-    if open_browser and _browser_possible():
+    if open_browser and _browser_possible() and (force or _browser_open_due(tok, port)):
         try:
             import webbrowser
             webbrowser.open(base + (("#token=" + tok) if tok else ""))
@@ -26159,7 +26202,7 @@ def _announce_web(port, open_browser=True):
     print("")
 
 
-def start_web_surface(open_browser=True):
+def start_web_surface(open_browser=True, force=False):
     """Start the page beside whatever else this process does. Best-effort: a box
     where it cannot start still has its other doors, and the reason is printed."""
     web = CONFIG.get("web") or {}
@@ -26179,7 +26222,7 @@ def start_web_surface(open_browser=True):
         # The service (or another session) already serves the page: announce it
         # instead of spending six seconds failing to bind the same port.
         print("tinycmdr page: already serving here")
-        _announce_web(port, open_browser=open_browser)
+        _announce_web(port, open_browser=open_browser, force=force)
         return None
     srv = run_webui()
     if srv is None:
@@ -26189,7 +26232,7 @@ def start_web_surface(open_browser=True):
         for line in web_busy_note(web.get("host") or "127.0.0.1", port):
             print(line, file=sys.stderr)
         return None
-    _announce_web(srv.server_address[1], open_browser=open_browser)
+    _announce_web(srv.server_address[1], open_browser=open_browser, force=force)
     return srv
 
 
@@ -26213,6 +26256,7 @@ def _verb_web(rest=None):
         try:
             import webbrowser
             webbrowser.open(full)
+            _browser_open_mark(tok, port)
         except Exception:
             pass
     return 0
@@ -34305,7 +34349,8 @@ def main():
     if _terminal_mode and "--web" not in sys.argv:
         _srv = None
     else:
-        _srv = start_web_surface(open_browser=not _web_no_browser)
+        _srv = start_web_surface(open_browser=not _web_no_browser,
+                                 force=("--web" in sys.argv))
     if "--app" in sys.argv:
         run_cli(app=True)
     elif "--cli" in sys.argv:

@@ -182,12 +182,10 @@ def _leak_path(line):
     return _status_path(line)
 
 
-def run_one(path, timeout, logdir, verbose):
-    """Run one suite in its own process group; return (status, seconds, detail)."""
-    rel = path.relative_to(REPO).as_posix()
-    out_path = logdir / (path.name + ".out")
-    err_path = logdir / (path.name + ".err")
+def child_env(path, logdir):
+    """The environment a suite runs in. The no-browser guard lives here, not per suite."""
     env = dict(os.environ)
+    env["TINYCMDR_NO_BROWSER"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"    # no __pycache__ in the checkout
     env.pop("TINYCMDR_TEST_APP", None)      # a stale pick from the caller's shell
     env.pop("TINYCMDR_SRC", None)
@@ -196,6 +194,18 @@ def run_one(path, timeout, logdir, verbose):
     # this reason). Without it, every suite that logs appends into the checkout and git
     # status cannot even show it: the file is ignored, so it stayed invisible.
     env["TINYCMDR_LOG_FILE"] = str(logdir / (path.stem + ".log"))
+    # A suite that starts the web lane must never open a real browser tab: a day of gate
+    # runs on a Mac measured ~60 of them in the operator's browser. Per-suite guards
+    # existed; the runner owning it means a suite added later cannot leak one.
+    return env
+
+
+def run_one(path, timeout, logdir, verbose):
+    """Run one suite in its own process group; return (status, seconds, detail)."""
+    rel = path.relative_to(REPO).as_posix()
+    out_path = logdir / (path.name + ".out")
+    err_path = logdir / (path.name + ".err")
+    env = child_env(path, logdir)
     kwargs = {}
     if os.name == "posix":
         kwargs["start_new_session"] = True

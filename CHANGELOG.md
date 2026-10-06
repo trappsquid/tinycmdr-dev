@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.80] - 2026-10-05
+
+### Fixed
+- **The page opens one tab per link.** The auto-open now fires once per token+port per six-hour window (marker in `.web-open`, logged when it skips) instead of once per process, so a restart ladder or a day of gate runs can no longer stack dozens of tabs; a rotated token opens at once, and the `web` verb / `--web` always open because typing them is the asking. (tests/test_webui.py)
+- **No suite can open a browser tab.** `tests/run_all.py` gives every suite `TINYCMDR_NO_BROWSER=1` through one `child_env()`; the per-suite opt-ins remain. (tests/test_webui.py)
+
 ## [1.0.79] - 2026-10-05
 
 ### Changed

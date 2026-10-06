@@ -540,6 +540,38 @@ def main():
     t0 = time.time()
     with contextlib.redirect_stdout(buf):
         again = fb.start_web_surface(open_browser=False)
+
+        # ---- the auto-open fires once per token+port per window (2026-10-05) -------
+        # A restart ladder or a day of gate runs used to open one tab per start; each
+        # carried the token of the process that opened it, so a pile of them read
+        # "token not accepted" after any rotation. The marker lives in BASE_DIR.
+        marker = fb.BASE_DIR / ".web-open"
+        marker.unlink(missing_ok=True)
+        check(fb._browser_open_due("tokA", 8790, ttl=3600) is True,
+              "the first auto-open for a token+port is due")
+        check(fb._browser_open_due("tokA", 8790, ttl=3600) is False,
+              "...and the same one inside the window is not (no stacked tabs)")
+        check(fb._browser_open_due("tokB", 8790, ttl=3600) is True,
+              "a ROTATED token opens at once (the stale tab is what was refused)")
+        marker.unlink(missing_ok=True)
+        check(fb._browser_open_due("tokA", 8790, ttl=0) is True,
+              "an expired window opens again")
+        saved_env = os.environ.get("TINYCMDR_NO_BROWSER")
+        os.environ["TINYCMDR_NO_BROWSER"] = "1"
+        try:
+            check(fb._browser_possible() is False,
+                  "TINYCMDR_NO_BROWSER=1 forbids the auto-open outright")
+        finally:
+            if saved_env is None:
+                os.environ.pop("TINYCMDR_NO_BROWSER", None)
+            else:
+                os.environ["TINYCMDR_NO_BROWSER"] = saved_env
+        # The RUNNER owns that guard so a suite added later cannot leak a tab.
+        sys.path.insert(0, str(BASE / "tests"))
+        import run_all  # noqa: E402
+        child = run_all.child_env(BASE / "tests" / "test_webui.py", BASE)
+        check(child.get("TINYCMDR_NO_BROWSER") == "1",
+              "run_all gives every suite the no-browser guard", child.get("TINYCMDR_NO_BROWSER"))
     dt = time.time() - t0
     out = buf.getvalue()
     check(again is None and "already serving" in out and dt < 1.0,
