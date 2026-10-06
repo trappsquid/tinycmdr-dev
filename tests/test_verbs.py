@@ -1349,6 +1349,24 @@ def main():
         _psi = (BASE / "install" / "install-tinycmdr.ps1").read_text(encoding="utf-8")
         check("...and the installer's copy spells it the same way (kept in step)",
               "IndexOf($Dir," in _psi and 'like "*$Dir*"' not in _psi)
+        # A user-PATH write must broadcast WM_SETTINGCHANGE, or a window opened right
+        # after the install keeps Explorer's stale environment and answers "not
+        # recognized" until logoff (a brand-new-install report, 2026-10-06).
+        check("the installer broadcasts the PATH change",
+              "function Send-EnvBroadcast" in _psi and "WM_SETTINGCHANGE" in _psi)
+        _writes = [m.start() for m in re.finditer(r"Set-UserPathRaw \(", _psi)]
+        check("...after every user-PATH write",
+              bool(_writes)
+              and all("Send-EnvBroadcast" in _psi[s:s + 200] for s in _writes),
+              _writes)
+        # The hosted one-liner runs in the caller's terminal: the wrapper's
+        # press-any-key barrier (meant for the double-click window) must be off.
+        _boot = (BASE / "install.ps1").read_text(encoding="utf-8")
+        _nopause = _boot.find("$env:FB_NOPAUSE")
+        _call = _boot.find("& cmd.exe /c INSTALL-WINDOWS.cmd")
+        check("the one-liner suppresses the installer's press-any-key barrier",
+              _nopause != -1 and _call != -1 and _nopause < _call,
+              (_nopause, _call))
         check("...and verifies the supervisor, not only a bot, came back",
               "supervisor(s) $($sup.Count)" in _ps)
         check("...and exits non-zero when its own log records a failed restart",

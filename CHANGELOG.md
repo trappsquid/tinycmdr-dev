@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Telegram lane:** `--telegram` takes the same startup validation and single-instance lock as every other service lane; the lane reports itself down after five minutes of failed polls instead of claiming `up` for ever; a caption is read as the question and a text-less message gets a one-line answer instead of silence. (tests/test_verbs.py, tests/test_lane_health.py)
 - **Mattermost catch-up:** recovered posts go through the same hardened allowlist check as live intake, so a bare-string or null `allowed_users` can no longer drop every recovered post (or raise every cycle). (tests/test_catchup.py)
 - **a2a:** `ListTasks` returns a real continuation token, so pages past the first are reachable. (tests/test_a2a.py)
+- **Windows install:** the installer broadcasts the PATH change to the shell and refreshes its own session, so `tinycmdr` works in the window that ran it and in windows opened afterwards, without a logoff; the one-line `irm ... | iex` install no longer stops at a press-any-key barrier in the caller's terminal (the double-click wrapper keeps its pause). (tests/test_verbs.py)
 
 ## [1.0.80] - 2026-10-05
 

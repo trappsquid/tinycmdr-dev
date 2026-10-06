@@ -489,6 +489,26 @@ function Set-UserPathRaw {
     finally { $key.Close() }
 }
 
+function Send-EnvBroadcast {
+    # Windows only re-reads HKCU\Environment when someone broadcasts WM_SETTINGCHANGE.
+    # Without it, Explorer keeps the OLD PATH and a window opened right after the
+    # install answers "The term 'tinycmdr' is not recognized" until logoff (measured
+    # 2026-10-06 on a brand-new install). Best-effort: this must never fail the install.
+    try {
+        if (-not ("Tinycmdr.EnvBroadcast" -as [type])) {
+            Add-Type -Namespace Tinycmdr -Name EnvBroadcast -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+public static extern System.IntPtr SendMessageTimeout(System.IntPtr hWnd, uint Msg,
+    System.UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout,
+    out System.UIntPtr lpdwResult);
+'@
+        }
+        $out = [System.UIntPtr]::Zero
+        [void][Tinycmdr.EnvBroadcast]::SendMessageTimeout([System.IntPtr]0xffff, 0x001A,
+            [System.UIntPtr]::Zero, "Environment", 2, 2000, [ref]$out)
+    } catch { }
+}
+
 function Get-UserPathParts {
     # Non-empty entries only, in order, with any %VAR% text kept verbatim.
     return @((Get-UserPathRaw) -split ';' | Where-Object { $_ -and $_.Trim() })
@@ -649,6 +669,7 @@ if ($Uninstall) {
     if ((-not (Test-Path $InstallDir)) -and (Test-UserPathHas $InstallDir)) {
         $keep = @(Get-UserPathParts | Where-Object { $_.TrimEnd('\') -ne $InstallDir.TrimEnd('\') })
         Set-UserPathRaw ($keep -join ';')
+        Send-EnvBroadcast
         Say "path    : $InstallDir removed from the user Path"
     }
     Say "done"
@@ -1346,7 +1367,14 @@ if ($NoPath) {
         Say "path    : already on your user PATH: tinycmdr status"
     } else {
         Set-UserPathRaw (((Get-UserPathParts) + $InstallDir) -join ';')
+        Send-EnvBroadcast
         Say "path    : added to your user PATH - open a NEW window and run: tinycmdr status"
+    }
+    # ...and make it work in THIS window too: a user who just ran the install (or the
+    # one-liner) wants to type `tinycmdr` right away, and the registry write plus the
+    # broadcast only reach windows opened later. Process-local, nothing else touched.
+    if ($env:Path -notlike ("*" + $InstallDir + "*")) {
+        $env:Path = $env:Path.TrimEnd(';') + ';' + $InstallDir
     }
 }
 

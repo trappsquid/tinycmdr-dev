@@ -61,6 +61,10 @@ try {
     if (-not (Test-Path $door)) { Die "$($src.FullName) has no INSTALL-WINDOWS.cmd - the download looks wrong" }
 
     Say 'handing over to INSTALL-WINDOWS.cmd'
+    # There is no separate window to keep open here: this runs in the caller's own
+    # terminal, so the wrapper's "Press any key to close this window" barrier must not
+    # appear (the double-click .zip path keeps it - that window really does close).
+    $env:FB_NOPAUSE = '1'
     Push-Location $src.FullName
     try {
         if ($InstallerArgs.Count -gt 0) { & cmd.exe /c INSTALL-WINDOWS.cmd @InstallerArgs }
