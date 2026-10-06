@@ -74,7 +74,17 @@ def run(args, ctx):
         return f"ERROR reading {path}: {e}"
     if len(raw) > 8 * 1024 * 1024:
         return f"ERROR: {path} is over 8 MiB - edit it in pieces with a script"
-    text = raw.decode("utf-8", "replace")
+    try:
+        text = raw.decode("utf-8")
+        enc = "utf-8"
+    except UnicodeDecodeError:
+        # A Latin-1/CP1252 source is a byte stream, not broken text. "replace" turned every
+        # non-ASCII byte into U+FFFD and the writer then emitted those replacement
+        # characters - bytes the edit never touched were destroyed, under a diff that
+        # showed only the intended line (an earlier review run 11, A-131). latin-1 maps every
+        # byte 1:1, so anything the edit does not touch round-trips exactly.
+        text = raw.decode("latin-1")
+        enc = "latin-1"
     nl = "\r\n" if "\r\n" in text else "\n"
     lf, lf_old, lf_new = (s.replace("\r\n", "\n") for s in (text, old, new))
 
@@ -89,7 +99,7 @@ def run(args, ctx):
             out = lf
             for a, b in reversed(spans):
                 out = out[:a] + lf_new + out[b:]
-            return _finish(path, raw, text, out, nl, strategy, len(spans))
+            return _finish(path, raw, text, out, nl, strategy, len(spans), enc)
 
     lines = lf.split("\n")
     for strategy, skip in (("whitespace/indentation-insensitive", False),
@@ -103,22 +113,28 @@ def run(args, ctx):
             for a, b in reversed(hits):
                 lines = lines[:a] + lf_new.split("\n") + lines[b + 1:]
             return _finish(path, raw, text, "\n".join(lines), nl, strategy,
-                           len(hits))
+                           len(hits), enc)
     return ("ERROR: old_string not found in any of the four match modes "
             "(exact, case, whitespace, blank lines). Read the section with "
             "read_file and copy a shorter unique anchor.")
 
 
-def _finish(path, raw, before, after_lf, nl, strategy, count):
+def _finish(path, raw, before, after_lf, nl, strategy, count, enc="utf-8"):
     if after_lf == before.replace("\r\n", "\n"):
         return "OK: nothing changed"
     out = after_lf.replace("\n", nl) if nl != "\n" else after_lf
+    try:
+        data = out.encode(enc)
+    except UnicodeEncodeError as e:
+        # The file's own encoding cannot carry what was just typed. Say that instead of
+        # writing replacement characters or a mojibake re-encode (A-131's sibling risk).
+        return ("ERROR: %s is %s, which cannot carry %r. Convert the file first, or "
+                "write it with write_file." % (path, enc, e.object[e.start:e.end]))
     backup = path.with_name(path.name + ".bak")
     try:
         backup.write_bytes(raw)               # byte-identical, or it is no backup
         tmp = path.with_name(path.name + ".tmp-patch")
-        with open(tmp, "w", encoding="utf-8", newline="") as f:
-            f.write(out)                      # newline="": no translation
+        tmp.write_bytes(data)                 # bytes: no newline translation, no re-encode
         os.replace(tmp, path)
     except OSError as e:
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
