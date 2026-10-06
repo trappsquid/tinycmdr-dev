@@ -17,6 +17,15 @@
   ],
   "items": [
     {
+      "id": "web-door-statuses-1-0-84",
+      "title": "the page's door answers each mistake with its status, and stops mapping the box",
+      "detail": "an earlier review run 13 A-207..A-226: chunked 411 (closed), over-cap 413, stall 408, nonsense Content-Length 411, target cap 414 (WEB_TARGET_MAX 4096), loopback's own connection cap (MAX_CONN_EXEMPT 256), the pre-auth 403 no longer names the port or a tunnel recipe, [::1]/trailing-dot Hosts resolve, the origin-mismatch 403 explains itself, a 401 clears a stale cookie, _query() decodes per the URL spec, first duplicate key wins, upper-case session keys fold, plus the fixes' checks.",
+      "state": "shipped",
+      "anchor": {
+        "commit": "09a4093"
+      }
+    },
+    {
       "id": "startup-retry-has-no-backoff",
       "title": "an offline window costs ~1650 process restarts, one every 10s",
       "state": "shipped",
