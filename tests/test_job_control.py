@@ -105,10 +105,18 @@ def main():
 
         # ---- the push: a settled job is announced once
         block = fb.settled_jobs_block()
-        check(jid in block and "exit 0" in block,
+        # Match the announcement LINE, not a raw substring: the block carries the log
+        # path of every announced job, and the staged install's temp directory can
+        # contain a job id by chance (TMPDIR=/tmp/b4check reproduced it), so
+        # `jid4 not in block` failed on a path that merely contained "b4".
+        def _announced(block_text, job_id):
+            return re.search(r"(?m)^- %s finished," % re.escape(job_id), block_text)
+
+        check(_announced(block, jid) and "exit 0" in block,
               "a finished job is announced", block)
         check(fb.settled_jobs_block() == "", "...once")
-        check(jid4 not in block, "a still-running job is NOT announced", block)
+        check(not _announced(block, jid4),
+              "a still-running job is NOT announced", block)
 
         # ---- auto-background: a slow shell call returns an id instead of blocking
         fb.CONFIG["agent"]["auto_background_seconds"] = 1
