@@ -8,16 +8,30 @@ is decoded losslessly (UTF-8 strict, else Latin-1, which maps every byte 1:1), a
 result is re-encoded in the SAME encoding, strictly - a character that encoding cannot
 carry is an error naming the file, never replacement characters.
 
-    python tests/test_patch_bytes.py
+Night audit run 11, second half:
+
+  A-132  a file that mixes line endings came back uniformly the dominant convention
+         (`line1\\r\\nline2\\n` -> all CRLF), so an edit to one line rewrote every other
+         line's ending. Each existing line keeps its OWN ending; inserted lines take the
+         dominant one.
+  A-133  a whitespace-only old_string matched under the whitespace-insensitive strategy
+         and edited a blank line; it is refused with "nothing to anchor on".
+  A-134  an anchor of only blank lines matched (and collapsed) any adjacent blank run;
+         refused by the same rule.
+
+    python tests/test_patch_bytes.py                     [TINYCMDR_SRC=<patch.py>]
 """
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-PATCH = BASE / "tools" / "patch.py"
+# The tool under test. TINYCMDR_SRC points the suite at a snapshot (the pre-fix
+# tools/patch.py) so every check below can be watched going red.
+PATCH = BASE / os.environ.get("TINYCMDR_SRC", "tools/patch.py")
 
 FAILS = []
 
@@ -69,6 +83,41 @@ def main():
               "cannot carry" in out and "latin-1" in out, out[:160])
         check("...and the file is untouched",
               latin.read_bytes() == b"caf\xe9 TAIL\nsecond\n", latin.read_bytes())
+
+        # ---- A-132: a file that mixes endings keeps each line's OWN ending. The file is
+        #      mostly CRLF with one LF line; the edit replaces a CRLF line and inserts a
+        #      line, so the LF line is what proves the endings were not flattened.
+        mixed = work / "mixed.txt"
+        mixed.write_bytes(b"a\r\nb\r\nc\nd\r\n")
+        rc, out = run_patch(mixed, "b", "B")
+        check("a mixed-ending file keeps each line's own ending",
+              mixed.read_bytes() == b"a\r\nB\r\nc\nd\r\n", mixed.read_bytes())
+
+        mixed2 = work / "mixed2.txt"
+        mixed2.write_bytes(b"a\r\nb\r\nc\nd\r\n")
+        rc, out = run_patch(mixed2, "b", "B1\nB2")
+        check("...while an inserted line takes the file's dominant ending",
+              mixed2.read_bytes() == b"a\r\nB1\r\nB2\r\nc\nd\r\n", mixed2.read_bytes())
+
+        # ---- A-133/A-134: an anchor with no non-blank content has nothing to anchor on
+        blank = work / "blank.txt"
+        # No trailing newline on purpose: with one, `split("\n")` ends in an empty line
+        # and the pre-fix tool refused for the wrong reason (two candidates) instead of
+        # matching the one blank line this anchor used to edit.
+        blank.write_bytes(b"one\n \t\ntwo")
+        rc, out = run_patch(blank, "  ", "X")
+        check("a whitespace-only anchor is refused",
+              "ERROR" in out and "anchor" in out, out[:160])
+        check("...and the file is untouched", blank.read_bytes() == b"one\n \t\ntwo",
+              blank.read_bytes())
+
+        blanks = work / "blanks.txt"
+        blanks.write_bytes(b"one\n\n\ttwo\n")
+        rc, out = run_patch(blanks, "\n\n", "X")
+        check("a blank-line-only anchor is refused",
+              "ERROR" in out and "anchor" in out, out[:160])
+        check("...and the file with the blank run is untouched",
+              blanks.read_bytes() == b"one\n\n\ttwo\n", blanks.read_bytes())
 
         if FAILS:
             print("\n%d FAILED: %s" % (len(FAILS), "; ".join(FAILS)))

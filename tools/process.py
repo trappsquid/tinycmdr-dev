@@ -14,6 +14,7 @@ its output is.
   list    the whole table
 """
 import ctypes
+import contextlib
 import json
 import os
 import re
@@ -64,6 +65,88 @@ BASE = Path(__file__).resolve().parent.parent
 JOBS_FILE = BASE / "logs" / "process-jobs.json"
 _PROCS = {}          # id -> Popen, for jobs THIS session started
 STILL_ACTIVE = 259
+
+# ONE lock around every job-table read-modify-write. The table used to be read and
+# written with no lock at all, so six concurrent starts each read the same copy, each
+# picked `b1`, and six jobs shared one log (an earlier review run 11, A-130). A sibling lock
+# file (flock/msvcrt) covers other processes, a re-entrant lock covers the threads a
+# batch's tool calls run on, and a bounded wait means a lock that cannot be taken
+# proceeds anyway - the save is still an atomic replace, so a reader never sees a
+# spliced table.
+_JOBS_LOCK = threading.RLock()
+_JOBS_LOCK_DEPTH = threading.local()
+_JOBS_LOCK_FILE = JOBS_FILE.with_name(JOBS_FILE.name + ".lock")
+_JOBS_LOCK_WAIT = 20.0
+_JOBS_LOCK_POLL = 0.02
+
+
+def _jobs_file_lock():
+    """The table's lock file, taken non-blocking with a bounded wait. (fd, held)."""
+    try:
+        _JOBS_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_JOBS_LOCK_FILE),
+                     os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
+    except OSError:
+        return None, False
+    deadline = time.time() + _JOBS_LOCK_WAIT
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+                os.lseek(fd, 0, 0)
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd, True
+        except OSError:
+            if time.time() >= deadline:
+                return fd, False       # never fatal: a lock must not freeze the tool
+            time.sleep(_JOBS_LOCK_POLL)
+
+
+def _jobs_file_unlock(fd, held):
+    if fd is None:
+        return
+    try:
+        if held:
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, 0)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+@contextlib.contextmanager
+def _table_lock():
+    """Hold the job table for one read-modify-write. Re-entrant per thread, so `start`
+    can allocate an id and `adopt` can take it again inside the same call."""
+    with _JOBS_LOCK:
+        depth = getattr(_JOBS_LOCK_DEPTH, "n", 0)
+        if depth:
+            _JOBS_LOCK_DEPTH.n = depth + 1
+            try:
+                yield
+            finally:
+                _JOBS_LOCK_DEPTH.n -= 1
+            return
+        fd, held = _jobs_file_lock()
+        _JOBS_LOCK_DEPTH.n = 1
+        try:
+            yield
+        finally:
+            _JOBS_LOCK_DEPTH.n = 0
+            _jobs_file_unlock(fd, held)
 
 # Every job runs through this tiny wrapper, for two things the bare Popen could not do:
 #   * write `__EXIT__<rc>` into the log, so a job that outlives the process that started it
@@ -147,13 +230,44 @@ def _ready(job, wait_for):
     return ok, ", ".join(why) or "no condition"
 
 
-def next_jid():
-    """The next free job id, from the current table."""
-    jobs = _load()
+def _free_jid(jobs):
     n = 1
     while f"b{n}" in jobs:
         n += 1
     return f"b{n}"
+
+
+def _new_row(jid, cmd_text):
+    """A job's row with the shape `list`/`status` expect. `pid` is None until the
+    process is recorded (a reserved id is a row, not a hole)."""
+    return {"pid": None, "command": cmd_text,
+            "log": str(BASE / "logs" / f"proc-{jid}.log"),
+            "in": str(BASE / "logs" / f"proc-{jid}.in"),
+            "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+
+def next_jid():
+    """The next free id, RESERVED in the table before it is returned.
+
+    Allocation and the save are one locked read-modify-write: two callers can never be
+    handed the same id and then share one log. The reservation is what closes the gap
+    in this tool's own caller - it allocates here and records the process in
+    promote_probe() a moment later - and an id reserved by a start that never finished
+    is a visible row rather than a collision."""
+    with _table_lock():
+        jobs = _load()
+        jid = _free_jid(jobs)
+        jobs[jid] = _new_row(jid, "")
+        _save(jobs)
+        return jid
+
+
+def _drop_reserved(jid):
+    """Forget a reserved id whose process never started."""
+    with _table_lock():
+        jobs = _load()
+        if jobs.pop(jid, None) is not None:
+            _save(jobs)
 
 
 def spawn_detached(jid, argv, shell):
@@ -181,12 +295,13 @@ def spawn_detached(jid, argv, shell):
 
 def adopt(jid, proc, cmd_text, log_path, spool):
     """Record a detached job in the table, the moment it outlives its probe window."""
-    jobs = _load()
-    jobs[jid] = {"pid": proc.pid, "command": cmd_text, "log": str(log_path),
-                 "in": str(spool),
-                 "started": time.strftime("%Y-%m-%d %H:%M:%S")}
-    _PROCS[jid] = proc
-    _save(jobs)
+    with _table_lock():
+        jobs = _load()
+        jobs[jid] = {"pid": proc.pid, "command": cmd_text, "log": str(log_path),
+                     "in": str(spool),
+                     "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+        _PROCS[jid] = proc
+        _save(jobs)
 
 
 def discard_detached(log_path, spool):
@@ -278,12 +393,13 @@ def promote_probe(jid, proc, state, cmd_text):
         state["buf"].clear()
     if rest:
         fh.write(rest)
-    jobs = _load()
-    jobs[jid] = {"pid": proc.pid, "command": cmd_text, "log": str(log_path),
-                 "in": state.get("spool") or "",
-                 "started": time.strftime("%Y-%m-%d %H:%M:%S")}
-    _PROCS[jid] = proc
-    _save(jobs)
+    with _table_lock():
+        jobs = _load()
+        jobs[jid] = {"pid": proc.pid, "command": cmd_text, "log": str(log_path),
+                     "in": state.get("spool") or "",
+                     "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+        _PROCS[jid] = proc
+        _save(jobs)
     return log_path, state.get("spool") or ""
 
 
@@ -326,6 +442,10 @@ def _hidden():
 
 
 def _alive(pid):
+    if pid is None:
+        # A reserved row (an id allocated, its process not recorded yet): no pid, so
+        # nothing to probe - never a TypeError out of `list`.
+        return False
     if os.name == "nt":
         h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
         if not h:
@@ -339,6 +459,19 @@ def _alive(pid):
         return True
     except OSError:
         return False
+
+
+def _record_end(jid, rc):
+    """Persist a finished job's exit code. A whole-table save from a caller's stale
+    snapshot is how one writer loses another's row, so re-read under the lock."""
+    with _table_lock():
+        jobs = _load()
+        row = jobs.get(jid)
+        if row is None:
+            return
+        row["rc"] = rc
+        row["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        _save(jobs)
 
 
 def _state(jobs, jid):
@@ -355,10 +488,10 @@ def _state(jobs, jid):
             return True, None
         job["rc"] = rc
         job["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        _save(jobs)
+        _record_end(jid, rc)
         _PROCS.pop(jid, None)
         return False, rc
-    alive = _alive(job["pid"])
+    alive = _alive(job.get("pid"))
     if not alive and job.get("rc") is None:
         # The collector is gone (a restart) - the wrapper's marker in the log is the
         # surviving record of what the job actually exited with.
@@ -366,28 +499,77 @@ def _state(jobs, jid):
         if rc is not None:
             job["rc"] = rc
             job["ended"] = time.strftime("%Y-%m-%d %H:%M:%S")
-            _save(jobs)
+            _record_end(jid, rc)
             return False, rc
     return alive, job.get("rc")
 
 
+ACTIONS = ("start", "status", "wait", "output", "kill", "send", "list")
+# The shape a wait_for spec may take; named in every refusal so the caller has the fix.
+WAIT_FOR_SHAPE = '{"log": "<regex>", "port": 1234, "timeout": 30}'
+
+
+def _wait_for_refusal(wait_for):
+    """Why this wait_for spec cannot be used, or None. Checked BEFORE the job starts:
+    an unguarded int()/re.compile() reached a ValueError or re.error from inside the
+    readiness loop, after the job had already been spawned (an earlier review run 11, A-128)."""
+    if not isinstance(wait_for, dict):
+        return "wait_for must be an object like %s" % WAIT_FOR_SHAPE
+    unknown = [k for k in wait_for if k not in ("log", "port", "timeout")]
+    if unknown:
+        return ("wait_for takes only \"log\", \"port\" and \"timeout\" (got %s); "
+                "the shape is %s" % (", ".join(repr(k) for k in unknown), WAIT_FOR_SHAPE))
+    log = wait_for.get("log")
+    if log is not None:
+        if not isinstance(log, str):
+            return ('wait_for "log" is a regex string, got %r; the shape is %s'
+                    % (log, WAIT_FOR_SHAPE))
+        if log.strip():
+            try:
+                re.compile(log)
+            except re.error as e:
+                return ('wait_for "log" is not a valid regex (%s); the shape is %s'
+                        % (e, WAIT_FOR_SHAPE))
+    port = wait_for.get("port")
+    if port is not None:
+        if isinstance(port, bool) or not isinstance(port, int) \
+                or not 0 < port < 65536:
+            return ('wait_for "port" is a TCP port number, got %r; the shape is %s'
+                    % (port, WAIT_FOR_SHAPE))
+    timeout = wait_for.get("timeout")
+    if timeout is not None and (isinstance(timeout, bool)
+                                or not isinstance(timeout, (int, float))):
+        return ('wait_for "timeout" is seconds, got %r; the shape is %s'
+                % (timeout, WAIT_FOR_SHAPE))
+    return None
+
+
 def run(args, ctx):
     action = str(args.get("action") or "").strip().lower()
+    if action not in ACTIONS:
+        # Before any job lookup: an unknown (or missing) action used to answer
+        # "no job ''", which reads as an id problem and names nothing actionable.
+        return ("ERROR: unknown action %r (expected one of: %s)"
+                % (action, ", ".join(ACTIONS)))
     jobs = _load()
     jid = str(args.get("id") or "").strip()
     if action == "start":
         cmd = args.get("command")
         if isinstance(cmd, str):
             cmd = cmd.strip()
-        if not cmd or (isinstance(cmd, str) is False
-                       and not all(isinstance(a, str) for a in cmd)):
+        # A dict, a number or a list with a non-string in it must be refused HERE: it
+        # used to pass this check (a dict iterates its keys), then `spawn_detached`
+        # json.dumps'd it or died, and `list` afterwards died on `job['command'][:70]`
+        # (an earlier review run 11, A-126).
+        if not ((isinstance(cmd, str) and cmd)
+                or (isinstance(cmd, list) and cmd
+                    and all(isinstance(a, str) for a in cmd))):
             return "ERROR: start needs a command (a shell string or an argv list)"
-        n = 1
-        while f"b{n}" in jobs:
-            n += 1
-        jid = f"b{n}"
-        log_path = (BASE / "logs" / f"proc-{jid}.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        wait_for = args.get("wait_for")
+        if wait_for:
+            bad = _wait_for_refusal(wait_for)
+            if bad:
+                return f"ERROR: {bad}"
         # A string is a SHELL command, a list is argv verbatim.
         if isinstance(cmd, str) and cmd.startswith("["):
             # A model whose session never had this schema sends the ARGV LIST as a JSON
@@ -424,9 +606,11 @@ def run(args, ctx):
                 return refusal
             argv = cmd
             shell = False
+        jid = next_jid()               # allocated AND saved under the table lock
         try:
             proc, log_path, spool = spawn_detached(jid, argv, shell)
         except OSError as e:
+            _drop_reserved(jid)
             return f"ERROR: could not start: {e}"
         adopt(jid, proc, cmd, log_path, spool)
         jobs = _load()                 # adopt wrote to disk; this dict is a snapshot
@@ -438,8 +622,7 @@ def run(args, ctx):
                 f"note: stdout to a file is block-buffered in the child, so a "
                 f"log fills as the child flushes - python needs -u for "
                 f"line-live output")
-        wait_for = args.get("wait_for")
-        if isinstance(wait_for, dict) and wait_for:
+        if wait_for:
             deadline = time.time() + max(1, min(int(wait_for.get("timeout") or 30),
                                                 300))
             ready, why = False, "not checked"
@@ -460,9 +643,14 @@ def run(args, ctx):
         out = []
         for k, job in sorted(jobs.items()):
             alive, rc = _state(jobs, k)
-            state = "running" if alive else (f"exit {rc}" if rc is not None
-                                            else "finished (code not captured)")
-            out.append(f"{k}: {state} - {job['command'][:70]}")
+            if job.get("pid") is None and rc is None:
+                state = "starting (id reserved; no pid yet)"
+            else:
+                state = "running" if alive else (f"exit {rc}" if rc is not None
+                                                 else "finished (code not captured)")
+            # A legacy row whose command is not a string (a dict, a number) used to kill
+            # the whole listing with KeyError/TypeError on the slice (A-126).
+            out.append(f"{k}: {state} - {str(job.get('command') or '')[:70]}")
         return "\n".join(out)
     if jid not in jobs:
         return f"ERROR: no job {jid!r} (see action=list)"
@@ -484,15 +672,20 @@ def run(args, ctx):
         return (f"{jid} finished, exit {rc}" if rc is not None
                 else f"{jid} finished (code not captured; see its log)")
     if action == "output":
-        try:
-            lines = job["log"] and open(job["log"], encoding="utf-8",
-                                        errors="replace").read().splitlines()
-        except OSError as e:
-            return f"ERROR: {e}"
+        log_path = str(job.get("log") or "")
+        if not log_path:
+            return f"ERROR: {jid} has no log recorded"
+        if not Path(log_path).is_file():
+            return f"ERROR: no log at {log_path}"
+        # read_job_log closes the handle and strips the wrapper's `__EXIT__` marker line.
+        # This went through a bare open(...).read() - the handle was never closed (five
+        # ResourceWarnings; on Windows the log stayed locked until the GC ran) and the
+        # marker was echoed back as output (an earlier review run 11, A-124/A-125).
+        lines = read_job_log(log_path).splitlines()
         n = max(1, min(int(args.get("lines") or 40), 200))
         tail = lines[-n:]
         return (f"{jid} log tail ({len(tail)} of {len(lines)} lines, "
-                f"{job['log']}):\n" + "\n".join(tail))
+                f"{log_path}):\n" + "\n".join(tail))
     if action == "send":
         if not alive:
             return (f"{jid} is not running%s - nothing to send"
@@ -512,7 +705,11 @@ def run(args, ctx):
     if action == "kill":
         if not alive:
             return f"{jid} was already finished"
-        pid = int(job["pid"])
+        pid = job.get("pid")
+        if not pid:
+            return (f"{jid} has no pid recorded (an id reserved by a start that did not "
+                    f"finish); nothing to kill")
+        pid = int(pid)
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -525,8 +722,17 @@ def run(args, ctx):
         time.sleep(0.5)
         jobs = _load()
         alive, rc = _state(jobs, jid)
-        return f"{jid} killed" + ("" if not alive else " (still alive?!)")
-    return f"ERROR: unknown action {action!r}"
+        # Report exactly what was confirmed. `taskkill /F /T` and killpg kill the tree
+        # they can see, and a process the job detached itself is not in it - "killed" was
+        # a claim this tool could not check (an earlier review run 11, A-129).
+        if alive:
+            return (f"{jid}: kill sent to the wrapper's tree (pid {pid}), but the "
+                    f"wrapper is still alive - nothing is confirmed killed. A process "
+                    f"the job detached itself is outside that tree; kill its pid "
+                    f"directly if it persists")
+        return (f"{jid}: the wrapper is gone after the kill sent to its tree "
+                f"(pid {pid}); a process the job detached itself is not confirmed "
+                f"killed")
 
 if __name__ == "__main__":
     # Standalone smoke test: `python process.py action=list` prints run()'s result.

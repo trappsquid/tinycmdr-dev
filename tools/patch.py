@@ -3,8 +3,10 @@
 Reach for it when edit_file's exact match fails: the anchor may differ from the
 file in whitespace, indentation, line endings or case and still be the block
 you mean. One replacement per call (or every occurrence with replace_all),
-a byte-identical .bak before the write, the file's own newline convention kept,
-and the diff of what changed so a wrong edit is visible when it happens.
+a byte-identical .bak before the write, every byte the edit did not reach kept
+as it was (each line keeps its own ending; inserted lines take the file's
+dominant one), and the diff of what changed so a wrong edit is visible when it
+happens.
 """
 import difflib
 import os
@@ -27,6 +29,32 @@ SCHEMA = {
     "required": ["path", "old_string", "new_string"],
 }
 MUTATES = True
+
+
+def _lf_map(text):
+    """(folded, start, after): `text` with every CRLF folded to LF, plus for every
+    index of the folded text the index of that same character in the file (`start`) and
+    the index just past it, its own \\r included (`after`). `start` carries an end
+    sentinel. The maps are what let an edit write the file's own bytes back everywhere
+    the match did not reach: a file that mixes endings (line1 CRLF, line2 LF) used to
+    come back uniformly the dominant convention, so an edit to one line rewrote every
+    other line's ending too (an earlier review run 11, A-132)."""
+    folded, start, after = [], [], []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == "\r" and i + 1 < n and text[i + 1] == "\n":
+            i += 1                     # the \r of a CRLF; the \n is folded below
+        folded.append(text[i])
+        start.append(i)
+        after.append(i + 1)
+        i += 1
+    start.append(n)                    # sentinel: len(folded) -> end of text
+    return "".join(folded), start, after
+
+
+def _splice(text, head_at, tail_at, replacement):
+    """`text` with the original bytes [head_at, tail_at) replaced, the rest byte-exact."""
+    return text[:head_at] + replacement + text[tail_at:]
 
 
 def _spans_exact(text, needle):
@@ -86,7 +114,20 @@ def run(args, ctx):
         text = raw.decode("latin-1")
         enc = "latin-1"
     nl = "\r\n" if "\r\n" in text else "\n"
-    lf, lf_old, lf_new = (s.replace("\r\n", "\n") for s in (text, old, new))
+    lf, start, after = _lf_map(text)
+    lf_old = old.replace("\r\n", "\n")
+    lf_new = new.replace("\r\n", "\n")
+    if not lf_old.strip():
+        # An anchor with no non-blank content is unanchorable: as one word of spaces it
+        # matched the first blank line under the whitespace-insensitive strategy, and as
+        # a run of blank lines it matched (and collapsed) any adjacent blank run (night
+        # audit run 11, A-133/A-134). Nothing to anchor on - refuse instead of editing
+        # blind.
+        return ("ERROR: old_string has no non-blank content - there is nothing to "
+                "anchor on. Include the text of the line (or lines) to change.")
+    # Only the lines the edit INSERTS take the file's dominant ending; the map keeps
+    # every byte outside the match (including a lone CRLF in an LF file) as it was.
+    replacement = lf_new.replace("\n", nl)
 
     # strategies in order of precision; the first with exactly one hit wins
     for strategy, spans in (
@@ -96,12 +137,17 @@ def run(args, ctx):
             if len(spans) > 1 and not replace_all:
                 return (f"ERROR: old_string occurs {len(spans)} times. Include "
                         f"more surrounding lines, or set replace_all.")
-            out = lf
+            out = text
             for a, b in reversed(spans):
-                out = out[:a] + lf_new + out[b:]
-            return _finish(path, raw, text, out, nl, strategy, len(spans), enc)
+                # `after[b-1]` carries the \r of a CRLF that ended the match: it belongs
+                # to the replaced text, not to the line after it.
+                out = _splice(out, start[a], after[b - 1], replacement)
+            return _finish(path, raw, text, out, strategy, len(spans), enc)
 
     lines = lf.split("\n")
+    starts = [0]
+    for ln in lines[:-1]:              # folded index of each line's first character
+        starts.append(starts[-1] + len(ln) + 1)
     for strategy, skip in (("whitespace/indentation-insensitive", False),
                            ("blank-line-insensitive", True)):
         hits = _spans_lines(lines, lf_old.split("\n"), skip)
@@ -110,19 +156,25 @@ def run(args, ctx):
                 return (f"ERROR: {len(hits)} candidate regions match after "
                         f"normalisation. Include more surrounding lines, or "
                         f"set replace_all.")
+            out = text
             for a, b in reversed(hits):
-                lines = lines[:a] + lf_new.split("\n") + lines[b + 1:]
-            return _finish(path, raw, text, "\n".join(lines), nl, strategy,
-                           len(hits), enc)
+                # The window is lines a..b. Its last line's ending is kept, not dropped:
+                # that newline is the separator before line b+1 (or the file's final
+                # newline), and a CRLF there is one character pair, not a \r to lose.
+                end = starts[b + 1] - 1 if b + 1 < len(lines) else len(lf)
+                tail = start[end]
+                if end < len(lf) and text[tail - 1:tail] == "\r":
+                    tail -= 1
+                out = _splice(out, start[starts[a]], tail, replacement)
+            return _finish(path, raw, text, out, strategy, len(hits), enc)
     return ("ERROR: old_string not found in any of the four match modes "
             "(exact, case, whitespace, blank lines). Read the section with "
             "read_file and copy a shorter unique anchor.")
 
 
-def _finish(path, raw, before, after_lf, nl, strategy, count, enc="utf-8"):
-    if after_lf == before.replace("\r\n", "\n"):
+def _finish(path, raw, before, out, strategy, count, enc="utf-8"):
+    if out == before:
         return "OK: nothing changed"
-    out = after_lf.replace("\n", nl) if nl != "\n" else after_lf
     try:
         data = out.encode(enc)
     except UnicodeEncodeError as e:
@@ -140,7 +192,8 @@ def _finish(path, raw, before, after_lf, nl, strategy, count, enc="utf-8"):
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
     rows = []
     for line in difflib.unified_diff(
-            before.replace("\r\n", "\n").split("\n"), after_lf.split("\n"),
+            before.replace("\r\n", "\n").split("\n"),
+            out.replace("\r\n", "\n").split("\n"),
             fromfile=f"{path} (before)", tofile=f"{path} (after)",
             lineterm="", n=1):
         rows.append(line[:200])

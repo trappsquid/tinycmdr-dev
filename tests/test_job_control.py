@@ -6,16 +6,43 @@ know a service was up), could not answer a prompt (stdin was DEVNULL), and a job
 ended was only discoverable by asking. No broker: the wrapper and the spool are plain
 files under logs/.
 
-    python tests/test_job_control.py
+Night audit run 11 additions, each graded against the pre-fix tool
+(TINYCMDR_SRC=/tmp/pre-process.py makes the file under test the snapshot; the checks
+below then fail):
+
+  A-124  output leaked the log handle (5 ResourceWarnings; on Windows the log stayed
+         locked until the GC ran) and A-125 echoed the wrapper's `__EXIT__` marker as
+         job output, because it bypassed read_job_log();
+  A-126  a non-string command was accepted at start (a dict iterated its keys, a number
+         raised TypeError) and then killed `list` for good on `job['command'][:70]`;
+  A-127  an unknown (or missing) action answered `ERROR: no job ''` instead of naming
+         the action vocabulary;
+  A-128  wait_for values reached int() and re.compile() unguarded (ValueError/re.error),
+         after the job had already been spawned;
+  A-129  kill reported "killed" when all it could confirm was that the wrapper died (a
+         process the job detached itself is outside taskkill's/killpg's tree);
+  A-130  the job table had no lock, so concurrent starts read one table and shared one
+         id and one log (measured: 6 starts -> 3 rows).
+
+    python tests/test_job_control.py                     [TINYCMDR_SRC=<process.py>]
 """
+import gc
+import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 import time
+import warnings
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
+# The tool under test. TINYCMDR_SRC points the suite at a snapshot (the pre-fix
+# tools/process.py) so every check below can be watched going red.
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tools/process.py")
 TESTS = BASE / "tests"
 sys.path.insert(0, str(TESTS))
 
@@ -32,6 +59,16 @@ def check(cond, what, detail=""):
         print(f"ok   {what}")
 
 
+def safe(fn, args, ctx):
+    """run(), with a crash reported as its own outcome: an unvalidated argument used to
+    raise straight out of run() (A-126/A-128), and the suite must grade that rather than
+    die on it."""
+    try:
+        return fn(args, ctx)
+    except Exception as e:                                       # noqa: BLE001
+        return "RAISED %s: %s" % (type(e).__name__, e)
+
+
 def main():
     workdir = Path(tempfile.mkdtemp(prefix="fbjobs-"))
     try:
@@ -39,7 +76,7 @@ def main():
         # A staged install carries no tools/; the process tool is a drop-in, so it must be
         # in place BEFORE the module import constructs the registry.
         (workdir / "tools").mkdir(exist_ok=True)
-        shutil.copy2(BASE / "tools" / "process.py", workdir / "tools" / "process.py")
+        shutil.copy2(SRC, workdir / "tools" / "process.py")
         fb = run_scenario.load(workdir)
         proc = fb.REGISTRY.get("process")
         check(proc is not None, "the process tool is loaded")
@@ -140,6 +177,117 @@ def main():
         check("late" in out and time.time() - t0 >= 2,
               "wait=true blocks regardless", out[:80])
         fb.CONFIG["agent"]["auto_background_seconds"] = 0
+
+        # =============== an earlier review run 11 (A-124 .. A-130) ===============
+
+        # ---- A-127: an unusable action names the vocabulary, before any job lookup
+        out = safe(run_proc, {"action": "frobnicate"}, ctx)
+        check(out.startswith("ERROR") and "unknown action" in out and "status" in out,
+              "an unknown action names the action vocabulary", out)
+        out = safe(run_proc, {}, ctx)
+        check(out.startswith("ERROR") and "unknown action" in out,
+              "a missing action is refused the same way", out)
+
+        # ---- A-126: a command that is neither a shell string nor an argv list of
+        #             strings is refused up front, with the intended ERROR line (an int
+        #             raised TypeError here, a dict iterated its keys and was accepted)
+        for bad in (5, {"a": "b"}):
+            out = safe(run_proc, {"action": "start", "command": bad}, ctx)
+            check(out.startswith("ERROR") and "needs a command" in out,
+                  "start refuses command=%r" % (bad,), out)
+
+        # ---- A-124/A-125: output must not leak the log handle, nor echo the wrapper's
+        #                   `__EXIT__<rc>` marker back as if the job had printed it
+        out = run_proc({"action": "start",
+                        "command": [py, "-u", "-c", "print('MARKER-TEST')"]}, ctx)
+        jid6 = out.split()[1]
+        time.sleep(1.0)
+        with warnings.catch_warnings(record=True) as seen:
+            warnings.simplefilter("always")
+            for _ in range(5):                     # the five the audit measured
+                log = run_proc({"action": "output", "id": jid6, "lines": 20}, ctx)
+            gc.collect()
+        leaked = [w for w in seen if w.category is ResourceWarning
+                  and ("proc-%s.log" % jid6) in str(w.message)]
+        check("__EXIT__" not in log and "MARKER-TEST" in log,
+              "output does not echo the wrapper's __EXIT__ marker", log)
+        check(not leaked, "output closes the log it read",
+              [str(w.message) for w in leaked][:2])
+
+        # ---- A-126 cont.: a legacy row with a non-string command cannot kill `list`
+        jobs_file = workdir / "logs" / "process-jobs.json"
+        table = json.loads(jobs_file.read_text(encoding="utf-8"))
+        table["b99"] = {"pid": 999999, "command": 5, "log": "", "started": "old"}
+        jobs_file.write_text(json.dumps(table), encoding="utf-8")
+        out = safe(run_proc, {"action": "list"}, ctx)
+        check("b99" in out and not out.startswith("RAISED"),
+              "list survives a legacy row whose command is not a string", out)
+
+        # ---- A-128: a wait_for spec is validated before the job is spawned
+        for wf in ({"log": "("}, {"timeout": "abc"}, {"port": "nope"}, "soon",
+                   {"port": 70000}):
+            out = safe(run_proc, {"action": "start", "command": [py, "-c", "pass"],
+                                  "wait_for": wf}, ctx)
+            check(out.startswith("ERROR") and "wait_for" in out and '"log"' in out
+                  and '"port"' in out,
+                  "wait_for %r is refused, naming the accepted shape" % (wf,), out)
+
+        # ---- A-129: kill reports what it confirmed, not more
+        out = run_proc({"action": "start",
+                        "command": [py, "-u", "-c", "import time;time.sleep(300)"]}, ctx)
+        jid7 = out.split()[1]
+        time.sleep(0.5)
+        killed = safe(run_proc, {"action": "kill", "id": jid7}, ctx)
+        check("the wrapper is gone" in killed,
+              "kill says exactly what it confirmed (the wrapper is gone)", killed)
+
+        # ---- A-130: concurrent starts never share an id or a log. Six threads first
+        #             (one process), then six separate processes (the lock file).
+        before_rows = len(json.loads(jobs_file.read_text(encoding="utf-8")))
+        results = []
+        gate = threading.Barrier(6)
+
+        def _concurrent_start():
+            gate.wait()
+            results.append(safe(run_proc, {"action": "start",
+                                           "command": [py, "-u", "-c",
+                                                       "import time;time.sleep(20)"]},
+                                ctx))
+
+        threads = [threading.Thread(target=_concurrent_start) for _ in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        ids = [r.split()[1] for r in results if r.startswith("started")]
+        check(len(ids) == 6 and len(set(ids)) == 6,
+              "6 concurrent starts in one process get 6 distinct ids", results)
+
+        # Six separate processes, released together by wall clock: only the lock file can
+        # serialize these, and without it they all read one table and pick the same id.
+        script = (
+            "import importlib.util, os, sys, time\n"
+            "spec = importlib.util.spec_from_file_location('proc_under_test', sys.argv[1])\n"
+            "mod = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(mod)\n"
+            "time.sleep(max(0.0, float(os.environ['FB_GO']) - time.time()))\n"
+            "print(mod.run({'action': 'start', 'command': [sys.executable, '-u', '-c',"
+            " 'import time;time.sleep(20)']}, {}))\n")
+        env = dict(os.environ, FB_GO=str(time.time() + 1.5))
+        kids = [subprocess.Popen(
+            [py, "-c", script, str(workdir / "tools" / "process.py")],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True) for _ in range(6)]
+        outs = [k.communicate(timeout=60)[0] for k in kids]
+        pids6 = [o.split()[1] for o in outs if o.startswith("started")]
+        check(len(pids6) == 6 and len(set(pids6)) == 6,
+              "6 concurrent starts in 6 processes get 6 distinct ids", outs)
+        after_rows = len(json.loads(jobs_file.read_text(encoding="utf-8")))
+        check(after_rows == before_rows + 12,
+              "...and each start is a row of its own", (before_rows, after_rows))
+
+        for j in ("b99",) + tuple(ids) + tuple(pids6):
+            run_proc({"action": "kill", "id": j}, ctx)
 
         for j in (jid2, jid4, jid5):
             run_proc({"action": "kill", "id": j}, ctx)
