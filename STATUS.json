@@ -1950,6 +1950,15 @@
         "commit": "30a51fe"
       },
       "detail": "A-2026-10-05-109/-110/-111/-137/-138, run 11 (fixed 2026-10-06, 30a51fe). est_tokens gives emoji their own class (~2 tokens each; 400 emoji was 307); the config-side secret rule shares the env-side vocabulary (db.password refused, its value never reaches the verb log); scrub redacts percent-encoded secrets (a URL query no longer leaks one; a case-insensitive pass is deliberately not done); create_tool refuses a name an existing custom tool holds; tools_dir_verdict() answers without an argument. A-2026-10-05-112 REFUTED here by measurement (the spill note's omitted-byte arithmetic agrees across CRLF/accent/3001-byte bodies). tests/test_spill.py, test_scrub.py, test_tool_discovery.py: 13 checks red pre-fix."
+    },
+    {
+      "id": "telegram-ask-path-1-0-84",
+      "title": "the Telegram lane can ask, and its answers arrive whole",
+      "state": "shipped",
+      "anchor": {
+        "commit": "cef08fe"
+      },
+      "detail": "A-2026-10-05-139 .. -151 and -156, an earlier review run 12 (fixed 2026-10-06, cef08fe). TelegramDestination sets has_human (the lane had never asked anything: every confirm-tier command was declined silently, with no line); the confirm question posts with its command as <pre>; run_telegram passes ask_door so ask_user reaches a person; a button answer lands as the option's WORDS; a /stop with a question open stops the run; a second question while one is open is refused; a failed post returns at once (was 30.005s); the caller's wait is capped; the renderer splits first and escapes per chunk (no more tag cut at 4096) and protects fenced blocks; the client honours a 429 retry_after bounded by telegram.retry_after_max; the Telegram token joins the secret sweep. tests/test_telegram.py: 87 checks, 26 red pre-fix."
     }
   ]
 }
