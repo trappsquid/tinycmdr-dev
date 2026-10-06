@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **The Responses API is a real wire** (`/responses`): a chat history becomes `input` items with explicit part types, the system message becomes `instructions`, tool schemas flatten, reasoning summaries land in `reasoning_content`, `usage.input_tokens/output_tokens` map onto the existing accounting, and a stream adapter feeds the existing SSE reader. It is used when `base_url` says `/responses`, or when an OpenAI-style 400 naming BOTH `tools` and `reasoning_effort` proves the chat wire cannot carry them - that one escalates once to the `/responses` sibling and the fact is remembered per endpoint. (tests/test_responses_wire.py)
 
+### Fixed
+- **`web.port: 0` is an instruction, not a missing value** (lane/web leftover 2): eight runtime readers collapsed 0 to 8790 and built links to a port the box is not serving. One `web_port_effective()` now answers with the configured port, else the port the page actually BOUND (read back from the persisted lane record), else 8790 as a documented guess; the a2a card, the tunnel hint, doctor, the firewall notes, the setup summary and the token link all use it. (tests/test_webui.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed

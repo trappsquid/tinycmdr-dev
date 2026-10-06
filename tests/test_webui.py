@@ -15,6 +15,10 @@ lane promises or an incident the old one paid for:
       the agent offered (a run line of kind 'file'), by run id + uid.
     * /api/health tells the truth and needs no token; the page itself needs none.
     * a second start on a busy port announces the running page instead of failing.
+    * web.port 0 means "the OS picks a free port": every reader that NAMES a port (the
+      a2a card, `tinycmdr web`, doctor, the setup summary, the firewall hints) says the
+      port that was actually bound - recorded by run_webui as lane_up "port N" - and only
+      falls back to the published 8790 when nothing was recorded.
 
 Offline and self-contained: loopback only, port 0, no model.
 
@@ -42,7 +46,9 @@ import zlib
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / "tinycmdr.py"
+# TINYCMDR_SRC points this at a reverted copy, so a fix can be watched going red
+# (tests/run_all.py clears it for a normal run).
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 
 # A suite never opens a browser tab - and that has to include a HAND-RUN suite. run_all.py
 # passes TINYCMDR_NO_BROWSER=1 to its children, but running this file directly (which its
@@ -703,6 +709,73 @@ def main():
         check("127.0.0.1" in first,
               "no LAN address known: loopback leads", first)
     check("cleartext" in out, "and says the token travels in cleartext there")
+
+    # ---- web.port 0 means "the OS picks", and the readers must say which port ----
+    # Eight readers collapsed a configured 0 to 8790, so a 0 host printed links to a port
+    # it is not serving - and on a box where something else holds 8790, to the wrong
+    # program. The bound port is what run_webui records (lane_up "port N"), and every
+    # reader names it through web_port_effective (measured 2026-10-06).
+    _eff = getattr(fb, "web_port_effective", None)
+    check(callable(_eff), "the build has the effective-port helper",
+          "web_port_effective is missing (a pre-fix build)")
+
+    def _named_port():
+        return _eff() if callable(_eff) else None
+
+    def _record(port, ok=True):
+        """The lane record run_webui writes: lane_up on a bind, lane_down when it fails."""
+        data = fb._lane_state_read()
+        data.setdefault("lanes", {})["web"] = {"ok": ok, "since": 1.0,
+                                               "detail": "port %d" % port}
+        fb.LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fb.LANE_STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
+
+    BOUND = 18790                 # a port this suite never bound, so it cannot be a
+                                  # coincidence with the default or the live server
+    fb.CONFIG["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0,
+                        "token": token}
+    _record(BOUND)
+    check(_named_port() == BOUND,
+          "web.port 0 + a bind record: the helper names the bound port", _named_port())
+    check(fb.a2a_base_url() == "http://127.0.0.1:%d" % BOUND,
+          "...and a2a's card URL names it, not 8790", fb.a2a_base_url())
+    check((fb.a2a_card().get("supportedInterfaces") or [{}])[0].get("url")
+          == "http://127.0.0.1:%d/a2a" % BOUND,
+          "...and the published agent card advertises it",
+          (fb.a2a_card().get("supportedInterfaces") or [{}])[:1])
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = fb._verb_web()
+    check(rc == 0 and (":%d/" % BOUND) in buf.getvalue(),
+          "...and `tinycmdr web` prints that port", buf.getvalue()[:80])
+    check(fb._web_port(fb.CONFIG["web"]) == (BOUND, None),
+          "...and doctor's page line follows", fb._web_port(fb.CONFIG["web"]))
+
+    # 0 with nothing recorded: the published default is a GUESS for a reader, and the
+    # configured 0 stays on disk exactly as written.
+    fb.LANE_STATE_FILE.unlink(missing_ok=True)
+    check(_named_port() == 8790,
+          "web.port 0 with no record falls back to 8790", _named_port())
+    check(fb.a2a_base_url() == "http://127.0.0.1:8790",
+          "...and a2a says 8790 there too", fb.a2a_base_url())
+    check(fb.CONFIG["web"]["port"] == 0,
+          "...and the configured 0 was not rewritten", fb.CONFIG["web"]["port"])
+
+    # A real configured port outranks the record, unchanged behaviour.
+    _record(BOUND)
+    fb.CONFIG["web"]["port"] = 8788
+    check(_named_port() == 8788 and fb.a2a_base_url() == "http://127.0.0.1:8788",
+          "a configured 8788 wins over the record",
+          "%s %s" % (_named_port(), fb.a2a_base_url()))
+
+    # A FAILED record's detail names the port it TRIED - which is the 0 itself. Reading it
+    # back as a bound port would hand out "port 0" as an address.
+    fb.CONFIG["web"]["port"] = 0
+    _record(0, ok=False)
+    check(_named_port() == 8790,
+          "a failed lane record is not read as a bound port", _named_port())
+    fb.CONFIG["web"]["port"] = 0
+    fb.LANE_STATE_FILE.unlink(missing_ok=True)
 
     srv.shutdown()
     srv.server_close()

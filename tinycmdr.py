@@ -10272,8 +10272,7 @@ def a2a_base_url():
     host = str((CONFIG.get("web") or {}).get("host") or "127.0.0.1")
     if host in ("0.0.0.0", "::", ""):
         host = "127.0.0.1"
-    port = int((CONFIG.get("web") or {}).get("port") or 8790)
-    return "http://%s:%d" % (host, port)
+    return "http://%s:%d" % (host, web_port_effective())
 
 
 def a2a_card():
@@ -26209,13 +26208,17 @@ def run_webui():
             # Say what WOULD work. The old body was four words of jargon, and the operator
             # who hit it (2026-09-28, browsing to a live install by IP) had no way to learn
             # that the page accepts only particular names - or which.
+            # The tunnel example names THIS page's port, not the shipped default: web.port 0
+            # would otherwise hand out 8790, where this box is not serving.
+            _port = web_port_effective()
             self._json({
                 "error": "forbidden: unexpected Host, or a cross-origin request",
                 "host": (self.headers.get("Host") or ""),
                 "accepts": ", ".join(sorted(_web_local_hosts())),
                 "fix": ("browse this box by one of `accepts`, or make the name you use one "
                         "of them: `tinycmdr config set web.host <name-or-ip>` then restart. "
-                        "A tunnel sidesteps it: ssh -N -L 8790:127.0.0.1:8790 <user>@<box>"),
+                        "A tunnel sidesteps it: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
+                        % (_port, _port)),
             }, 403)
 
         # -- routing ------------------------------------------------------
@@ -26771,17 +26774,61 @@ def run_webui():
     lane_up("web", "port %d" % srv.server_address[1])
     return srv
 
+def web_port_effective():
+    """The port the page is on, which is what a reader must NAME.
+
+    `web.port: 0` is an instruction - "let the OS pick a free port" - not a missing value.
+    Collapsing it to 8790 built links to a port this box is not serving: with 0 the bound
+    port is decided by the kernel, and on a box where something else holds 8790 the link
+    pointed at the wrong program (the a2a card, the setup summary, doctor, `web`, `token
+    set` and the firewall hints all did this, measured 2026-10-06).
+
+    Order:
+      1. the configured port when it is a real one (any non-zero int) - the 0 case never
+         reaches a reader as a port a browser could open;
+      2. else the port the running page actually BOUND, as run_webui records it on a
+         SUCCESSFUL bind (logs/state.json, lanes.web.detail "port N") - the persisted
+         lane record, so a cold process (`tinycmdr web`, a cron doctor) reads back what
+         the serving process wrote;
+      3. else 8790.
+
+    That last step is a GUESS for a box that has recorded nothing yet, never a silent
+    rewrite of a configured 0: the 0 stays on disk as written, and a 0 host whose record
+    exists reports the record's port instead.
+
+    Never raises: config.json is hand-editable and `int("nope")` is not this function's
+    problem to report (doctor owns that complaint).
+    """
+    try:
+        configured = int((CONFIG.get("web") or {}).get("port"))
+    except (TypeError, ValueError):
+        configured = 0
+    if configured:
+        return configured
+    record = ((_lane_state_read().get("lanes") or {}).get("web") or {})
+    # Only a SUCCESSFUL bind records the bound port; a failure's "detail" names the port
+    # it tried, which is the 0 that got here in the first place.
+    if record.get("ok"):
+        m = re.match(r"port\s+(\d+)", str(record.get("detail") or ""))
+        if m:
+            return int(m.group(1))
+    return 8790
+
+
 def _web_port(web):
-    """(port, complaint) for the configured web port. Never raises.
+    """(port, complaint) for the web port this box serves. Never raises.
 
     A hand-edited config.json can hold anything here (`int('nope')` was a traceback out
-    of two verbs before this), and a verb that reports on a box must name the problem."""
+    of two verbs before this), and a verb that reports on a box must name the problem.
+    A configured 0 is not a problem to report: `web_port_effective` answers which port
+    the page is actually on."""
     raw = (web or {}).get("port")
     try:
-        return int(raw), None
+        int(raw)
     except (TypeError, ValueError):
         return 8790, ("web.port in config.json is %r, which is not a port: reading 8790"
                       % (raw,))
+    return web_port_effective(), None
 
 def _port_holder(port):
     """Who is listening on a TCP port, as a printable line (or None). Read-only."""
@@ -26890,7 +26937,8 @@ def _firewall_note(port):
     say the same thing, because switching a running install to the LAN happens long after
     the installer asked.
     """
-    port = int(port or 8790)
+    # A caller with no port (or a configured 0) means "the port the page is on", not 8790.
+    port = int(port) if port else web_port_effective()
     if os.name == "nt":
         return ["to reach it from other machines, Windows Defender Firewall needs an inbound rule",
                 "  (once, in an ELEVATED PowerShell):",
@@ -27106,7 +27154,7 @@ def _announce_web(port, open_browser=True, force=False):
     if str(web.get("host") or "") in ("0.0.0.0", "::"):
         print("  token required; that link works from any machine on your network - "
               "the token travels in cleartext there, so use a network you trust")
-        for _line in _firewall_note(int(web.get("port") or 8790)):
+        for _line in _firewall_note(port):
             print("  " + _line)
     else:
         print("  from another machine: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
@@ -27147,7 +27195,7 @@ def start_web_surface(open_browser=True, force=False):
         # Say what would work: who holds the port, and that a page already answering
         # there is usable as-is (the log gets the same, but a person at the terminal
         # sees this).
-        for line in web_busy_note(web.get("host") or "127.0.0.1", port):
+        for line in web_busy_note(web.get("host") or "127.0.0.1", web_port_effective()):
             print(line, file=sys.stderr)
         return None
     _announce_web(srv.server_address[1], open_browser=open_browser, force=force)
@@ -27158,13 +27206,14 @@ def _verb_web(rest=None):
     """Open the page: print the tokenized link, hand it to the browser when there
     is one. Read-only with respect to the running service - a second process must
     NOT bind the port to answer this."""
-    web = CONFIG.setdefault("web", {})
     tok = _web_token() or _web_token_mint()
     if not tok:
         print("no token: mint one with `tinycmdr token set TINYCMDR_WEB_TOKEN`.",
               file=sys.stderr)
         return 2
-    port = int(web.get("port") or 8790)
+    # A configured 0 means the OS picked the port at bind time; the link must name that
+    # port, not 8790, or `tinycmdr web` hands out an address this box is not serving.
+    port = web_port_effective()
     urls = _web_base_urls(port)
     full = urls[0][0] + "#token=" + tok
     print("tinycmdr page: %s" % full)
@@ -30733,7 +30782,9 @@ def run_setup(rest=None):
             web["host"] = "0.0.0.0" if ans_lan in ("y", "yes", "true", "1") else "127.0.0.1"
         else:
             web["host"] = cur_host
-        cur_port = web.get("port") or 8790
+        # A configured 0 is "the OS picks a free port", so the default this prompt shows
+        # is the port the box is actually on, not 8790 - and Enter keeps the 0 on disk.
+        cur_port = web.get("port") or web_port_effective()
         ans_port = input("   Port [%s]: " % cur_port).strip()
         if ans_port:
             try:
@@ -30741,6 +30792,10 @@ def run_setup(rest=None):
             except ValueError:
                 print(dim("   '%s' is not a port; keeping %s" % (ans_port, cur_port)))
         web.setdefault("port", 8790)
+        # `web` above is the dict being written; the helper reads the LIVE config, which
+        # does not carry a port typed in this wizard run yet. So the typed value wins,
+        # and anything falsy (0, absent) means "ask the helper".
+        page_port = int(web.get("port") or web_port_effective())
         cur_tok = _web_token()
         # The write path enforces the shape (`token set`'s rule: 20+ of letters, digits,
         # _ or -), and a refused value must come back as a question, not as a link that
@@ -30769,12 +30824,12 @@ def run_setup(rest=None):
             _web_token_mint(announce=True)
         tok = _web_token()
         if tok:
-            urls = _web_base_urls(int(web.get("port") or 8790))
+            urls = _web_base_urls(page_port)
             print(dim("   page link : %s#token=%s" % (urls[0][0], tok)))
             if web.get("host") in ("0.0.0.0", "::"):
                 print(dim("   that link works from your network; the token rides in "
                           "cleartext there, so use a network you trust"))
-                for _line in _firewall_note(int(web.get("port") or 8790)):
+                for _line in _firewall_note(page_port):
                     print(dim("   " + _line))
     else:
         print(dim("   the page will not start; `tinycmdr --web` can still serve it for "
@@ -30817,7 +30872,7 @@ def run_setup(rest=None):
         "TG Users     : %s" % (", ".join(str(x) for x in (tg.get("allowed_users") or [])) or "(none)"),
         "---",
         "Page         : %s" % ("http://%s:%s (token in .env)"
-                               % (web.get("host") or "127.0.0.1", web.get("port") or 8790)
+                               % (web.get("host") or "127.0.0.1", web_port_effective())
                                if web.get("enabled", True) else "(disabled)"),
         "Web search   : %s" % ("off-LAN providers allowed"
                                if search.get("allow_cloud_egress")
@@ -34893,8 +34948,7 @@ def _verb_token(rest):
             return 1
         print("%s written to %s (mode 600 where the OS honours it)" % (name, ENV_FILE))
         if name == "TINYCMDR_WEB_TOKEN":
-            port = int((CONFIG.get("web") or {}).get("port") or 8790)
-            urls = _web_base_urls(port)
+            urls = _web_base_urls(web_port_effective())
             print("page link : %s#token=%s" % (urls[0][0], clean))
             for base, _loop in urls[1:]:
                 print("            also: %s" % base)
