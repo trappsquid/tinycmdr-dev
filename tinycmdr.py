@@ -26003,6 +26003,7 @@ def run_webui():
                 log.error("web UI disabled: cannot bind %s:%d (%s). Ports below 1024 need "
                           "root - set web.port to a port above 1024 (the default is 8790), "
                           "or run the service elevated.", host, port, e)
+                lane_down("web", "cannot bind %s:%d (%s)" % (host, port, e))
                 return None
             if attempt == 5:
                 # A taken port must never kill the bot (8787 - RStudio Server's
@@ -26011,6 +26012,7 @@ def run_webui():
                 log.error("web UI disabled: cannot bind %s:%d (%s). Another "
                           "process holds the port — set web.port or "
                           "web.enabled: false in config.json.", host, port, e)
+                lane_down("web", "port %d is held by another process" % port)
                 return None
             # after a restart the previous instance may still be releasing the
             # port for a second or two
@@ -26019,7 +26021,9 @@ def run_webui():
             time.sleep(1)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     log.info("web UI listening on http://%s:%d", host, srv.server_address[1])
-    lane_up("web", "port %d" % port)
+    # The BOUND port, not the configured one: web.port 0 means "any free port", and the
+    # record is what health/doctor read back.
+    lane_up("web", "port %d" % srv.server_address[1])
     return srv
 
 def _web_port(web):
@@ -27974,8 +27978,22 @@ def lanes_snapshot():
         state = json.loads(json.dumps(LANE_STATE)) or (stored.get("lanes") or {})
         fails = json.loads(json.dumps(LANE_FAILS)) or (stored.get("failures") or {})
     out = {}
-    for lane in ("mattermost", "telegram"):
-        if not _lane_token(lane):
+    for lane in ("mattermost", "telegram", "web"):
+        if lane == "web":
+            # The page lane carries no chat token, so its evidence is the RECORD
+            # run_webui writes: lane_up on bind, lane_down when it cannot start. A cold
+            # process on a box that merely has web.enabled (the default) has no news to
+            # report, and "configured, never started" would read as a lane on a box that
+            # deliberately runs CLI-only (tests/test_lane_choice grades that line). Once a
+            # record exists it is kept current and reported like the chat lanes
+            # (measured 2026-10-05: logs/state.json held a current `web` record while
+            # /api/health, `tinycmdr health` and doctor showed two lanes, so "the page
+            # never started" was invisible to the operator's one "is it alive?" command).
+            if not (state.get(lane) or fails.get(lane)):
+                continue
+            if not (CONFIG.get("web") or {}).get("enabled", True):
+                continue
+        elif not _lane_token(lane):
             continue
         st = state.get(lane) or {}
         fail = fails.get(lane) or {}

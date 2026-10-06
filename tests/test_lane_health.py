@@ -78,11 +78,39 @@ lanes = T.lanes_snapshot()
 check("a configured lane with no record reads 'configured', not 'up'",
       lanes["mattermost"]["state"] == "configured"
       and lanes["mattermost"]["failed_starts"] == 0, lanes)
-check("the lanes are the chat lanes, and only those (no page lane)",
-      set(lanes) <= {"mattermost", "telegram"}, list(lanes))
+check("no lane appears that this build does not know",
+      set(lanes) <= {"mattermost", "telegram", "web"}, list(lanes))
 rc, out, _err = run_verb(T._verb_health)
 check("health names the configured lane and its state on one line",
       "lane mattermost=configured" in out, out)
+
+# ---------------------------------------------------- the web lane is REPORTED
+# It was written by run_webui and read by nobody (measured 2026-10-05: the live
+# state.json held a current `web` record while /api/health, `tinycmdr health` and doctor
+# showed two lanes - so "the page never started" was invisible to the operator's one
+# "is it alive?" command).
+check("an enabled page with no record is NOT a lane (no news, not a placeholder)",
+      "web" not in T.lanes_snapshot(), list(T.lanes_snapshot()))
+T.lane_up("web", "port 8790")
+check("a bound page reads 'up' with the port it bound",
+      T.lanes_snapshot().get("web", {}).get("state") == "up"
+      and T.lanes_snapshot().get("web", {}).get("detail") == "port 8790",
+      T.lanes_snapshot().get("web"))
+T.lane_down("web", "no token configured")
+check("...and a page that cannot start reads 'failed' with the reason",
+      T.lanes_snapshot().get("web", {}).get("state") == "failed"
+      and T.lanes_snapshot().get("web", {}).get("detail") == "no token configured",
+      T.lanes_snapshot().get("web"))
+_web_cfg = T.CONFIG.setdefault("web", {})
+_had_enabled = "enabled" in _web_cfg
+_web_cfg["enabled"] = False
+check("a page the config turns off is not reported at all",
+      "web" not in T.lanes_snapshot(), list(T.lanes_snapshot()))
+if _had_enabled:
+    _web_cfg["enabled"] = True
+else:
+    _web_cfg.pop("enabled", None)
+T.lane_up("web", "port 8790")            # leave the record clean for the checks below
 
 # --------------------------------------- a failure counts ACROSS the restarts it causes
 n1, same1, _first = T.lane_down("mattermost", "401 Invalid or expired session")
