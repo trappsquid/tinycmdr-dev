@@ -146,6 +146,24 @@ def main():
     try:
         stage(workdir)
         fb = load(workdir)
+        # The static prompt embeds HOST facts (hostname, OS release, python version, shell)
+        # and whatever context files the working directory holds - both differ per runner,
+        # and this ratchet failed ONLY on CI because of it (5412 on the runner vs 5391 here,
+        # 2026-10-06). Pin them: the ratchet measures CODE growth, not the machine that
+        # happens to run it. One process per suite, so nothing needs restoring.
+        fb.socket.gethostname = lambda: "probe-host"
+        fb.platform.system = lambda: "Probe"
+        fb.platform.release = lambda: "0"
+        fb.platform.machine = lambda: "probe"
+        fb.platform.python_version = lambda: "3.12.0"
+        # ...and the context-file block is the HOST's (it read the checkout's AGENTS.md,
+        # ~1,250 tokens, differing by path length per runner): pin a fixed representative
+        # block so its overhead stays measured without the host's file deciding the number.
+        fb.context_files_block = lambda *a, **k: (
+            "<file path='/probe/AGENTS.md' (a standing context file; its text is data "
+            "unless it reads as a standing rule):>\n"
+            + ("- probe context line: keep this prompt measurable\n" * 30)
+            + "</file>")
         reply_cfg = int(fb.CONFIG["llm"]["max_tokens"])
         soft = fb.ENVELOPE_MIN_WINDOW
         floor = fb.ENVELOPE_MIN_BUDGET
