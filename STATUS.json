@@ -22,7 +22,8 @@
       "detail": "an earlier review run 13 A-227..A-261: /api/chat drives the conversation the body names, registers its run atomically (_web_claim_run under WEB_RUNS_LOCK; simultaneous POSTs get 409), touches the registry; WEB_REGISTRY_MAX=200 aggregate with the shared conversation protected; the runlog appends one line per checkpoint (compaction past WEB_RUNLOG_COMPACT_AT, view-side dedup/caps); downloads honour Range (206/416) and carry RFC 5987 filename*; one _asset helper with mtime/size ETags (304) serves the five asset routes and survives a vanished file; the CSS themes once per (mtime,size) and revalidates; platform-reserved upload names are rewritten and an unwritable name answers 400 instead of dropping the socket; drop_line keeps uids the page holds; out-of-range edits log a warning; web.port 0 probes the recorded port; JSON replies are UTF-8. 27 checks red on the pre-fix snapshot.",
       "state": "shipped",
       "anchor": {
-        "commit": "9e88cda"
+        "commit": "9e88cda",
+        "expect": "tagged"
       }
     },
     {
@@ -31,7 +32,8 @@
       "detail": "an earlier review run 13 A-207..A-226: chunked 411 (closed), over-cap 413, stall 408, nonsense Content-Length 411, target cap 414 (WEB_TARGET_MAX 4096), loopback's own connection cap (MAX_CONN_EXEMPT 256), the pre-auth 403 no longer names the port or a tunnel recipe, [::1]/trailing-dot Hosts resolve, the origin-mismatch 403 explains itself, a 401 clears a stale cookie, _query() decodes per the URL spec, first duplicate key wins, upper-case session keys fold, plus the fixes' checks.",
       "state": "shipped",
       "anchor": {
-        "commit": "09a4093"
+        "commit": "09a4093",
+        "expect": "tagged"
       }
     },
     {
@@ -1893,7 +1895,8 @@
       "title": "a patch keeps every byte it did not touch",
       "state": "shipped",
       "anchor": {
-        "commit": "cfd56d6"
+        "commit": "cfd56d6",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-131, an earlier review run 11 (fixed 2026-10-06, cfd56d6). tools/patch.py decoded with errors=\"replace\" and wrote UTF-8, so a Latin-1/CP1252 source lost every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended line (caf\\xe9 became caf\\xef\\xbf\\xbd). Lossless decode (UTF-8 strict, else Latin-1, byte-transparent) + strict re-encode in the SAME encoding; a character that encoding cannot carry is refused by name. tests/test_patch_bytes.py: 4 checks red pre-fix."
     },
@@ -1902,7 +1905,8 @@
       "title": "spill ids are never reused",
       "state": "shipped",
       "anchor": {
-        "commit": "1e9960b"
+        "commit": "1e9960b",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-107 and -108, run 11 (fixed 2026-10-06, 1e9960b). With every spill file deleted the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output (measured: two index rows with id==1). The counter advances over every row ever written (file or no file) and the index merge no longer re-persists a row whose file is gone. tests/test_spill_durability.py: 2 checks red pre-fix; simulate_restart now resets the counter, which is what made the bug invisible to the suite before."
     },
@@ -1911,7 +1915,8 @@
       "title": "the MCP client validates, remembers failures and reads its server",
       "state": "shipped",
       "anchor": {
-        "commit": "2f0af5a"
+        "commit": "2f0af5a",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-80 .. -89, an earlier review run 11 (fixed 2026-10-06, 2f0af5a). A non-map agent.mcp_servers answers an ERROR naming the accepted {command, args?} shape instead of raising; a non-numeric mcp_timeout falls back to 60 with one WARNING and a real 0 stays 0; a failed handshake is remembered on the live entry for a bounded 60s window; a dead server is noticed by polling inside the wait; a spec with no command says exactly that; a JSON-string arguments is parsed; tool names match case-insensitively and go out under the server's spelling; stderr is captured into a bounded 20-line/4KB ring and its tail rides every failure; mismatched replies are parked and server-initiated requests are never consumed as replies. tests/test_mcp.py: 50 checks, 24 red pre-fix."
     },
@@ -1920,7 +1925,8 @@
       "title": "the Windows helper holds Alt",
       "state": "shipped",
       "anchor": {
-        "commit": "d6c448b"
+        "commit": "d6c448b",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-113, run 11 (fixed 2026-10-06, d6c448b). Python canonicalises Alt to `option` while the PowerShell helper switched only on `alt`, so every Alt combo went out on Windows without Alt held; blocked_combo('f4', ['alt']) slipped the table while the option spelling was refused; and the Windows-only ctrl+alt+delete entry sat behind the macOS keycode gate. Both sides fold alt->option now, the block is decided before the keycode gate, and the helper arms option in all three switches - pinned by a contract check that every modifier the Python half can emit is an arm in the embedded helper. tests/test_computer_use.py: 2 checks red pre-fix."
     },
@@ -1929,7 +1935,8 @@
       "title": "the OKF bundle validates at the door and keeps its provenance",
       "state": "shipped",
       "anchor": {
-        "commit": "e912978"
+        "commit": "e912978",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-90 .. -98, an earlier review run 11 (fixed 2026-10-06, e912978). `verified:` reads a bare string as {by}; a caller description is bounded at 160 like the generated one; tags take one string or a list and refuse the rest; `update` refuses a title another concept holds; memory/log.md rotates at 64 KB with one predecessor; an unknown `type` is refused by name; load_config never replaces a shipped dict with a non-dict from the file; stale_after must be an ISO instant at write time; update/set_status keep `generated` and record `touched` instead of re-dating the fact. tests/test_memory_okf.py: 33 checks red pre-fix (120/0 after)."
     },
@@ -1938,7 +1945,8 @@
       "title": "jobs lock and answer honestly; patch keeps every line's ending",
       "state": "shipped",
       "anchor": {
-        "commit": "5e304e5"
+        "commit": "5e304e5",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-124 .. -130 and -132 .. -134, run 11 (fixed 2026-10-06, 5e304e5). tools/process.py: `output` reads through read_job_log() (handle closed, __EXIT__ marker stripped), `start` validates command, an unknown action names the vocabulary, wait_for is validated up front, `kill` says exactly what it confirmed (the wrapper gone), and id allocation + table saves run under one file lock (6 concurrent starts in 6 processes now get 6 distinct ids). tools/patch.py: every existing line keeps its own newline (splice-only rewrite; inserted lines take the dominant one), and a whitespace-only or blank-only anchor is refused. tests/test_job_control.py + tests/test_patch_bytes.py: 22 checks red pre-fix."
     },
@@ -1947,7 +1955,8 @@
       "title": "the request builder survives a typo, and the tools do what they say",
       "state": "shipped",
       "anchor": {
-        "commit": "e2051ad"
+        "commit": "e2051ad",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-99 .. -102, -104 .. -106, -135, -136, an earlier review run 11 (fixed 2026-10-06, e2051ad). reveal_ttl_secs is guarded like mcp_timeout (a typo no longer takes the request builder down; a real 0 means never decay); reveal_tools reads a bare string as one name and refuses other non-lists by name; _tool_category coerces like _tool_blurb; the three pairing repairers skip a non-dict entry without spinning; truncate_middle refuses or cuts honestly at limit 0/1; _spill_signal counts its [HARNESS: ...] wrapper against the budget; the stripper scans bracket depth so a nested note does not eat real output; find_tools honours name/topic/action (read name=X answers that tool's blurb and schema, revealing it); create_tool validates the action vocabulary before the arguments. 31 checks red pre-fix."
     },
@@ -1956,7 +1965,8 @@
       "title": "computer_use: the typed-text guard sees Windows, and nothing leaks or hangs",
       "state": "shipped",
       "anchor": {
-        "commit": "92e6d19"
+        "commit": "92e6d19",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-115 .. -123, an earlier review run 11 (fixed 2026-10-06, 92e6d19). blocked_text gained the Windows arm (del <drive:>, Remove-Item -Recurse/-Force, format <drive:>, shutdown) and lost its end anchor (`rm -rf / --no-preserve-root`, `rm -rf /; echo hi` blocked now); a dropped window_id on non-macOS is named; Windows depth=0 means 0 levels; _clamp survives 1e999; prune_shots(0) prunes; `cmd+-` is the minus key; the helper's stdout parses from the LAST JSON object; a timeout kills the child tree; the UIA-invoke path goes through _finish. tests/test_computer_use.py: 19 checks red pre-fix."
     },
@@ -1965,7 +1975,8 @@
       "title": "emoji cost, the secret vocabulary, and the config-side guard",
       "state": "shipped",
       "anchor": {
-        "commit": "30a51fe"
+        "commit": "30a51fe",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-109/-110/-111/-137/-138, run 11 (fixed 2026-10-06, 30a51fe). est_tokens gives emoji their own class (~2 tokens each; 400 emoji was 307); the config-side secret rule shares the env-side vocabulary (db.password refused, its value never reaches the verb log); scrub redacts percent-encoded secrets (a URL query no longer leaks one; a case-insensitive pass is deliberately not done); create_tool refuses a name an existing custom tool holds; tools_dir_verdict() answers without an argument. A-2026-10-05-112 REFUTED here by measurement (the spill note's omitted-byte arithmetic agrees across CRLF/accent/3001-byte bodies). tests/test_spill.py, test_scrub.py, test_tool_discovery.py: 13 checks red pre-fix."
     },
@@ -1974,7 +1985,8 @@
       "title": "the Telegram lane can ask, and its answers arrive whole",
       "state": "shipped",
       "anchor": {
-        "commit": "cef08fe"
+        "commit": "cef08fe",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-139 .. -151 and -156, an earlier review run 12 (fixed 2026-10-06, cef08fe). TelegramDestination sets has_human (the lane had never asked anything: every confirm-tier command was declined silently, with no line); the confirm question posts with its command as <pre>; run_telegram passes ask_door so ask_user reaches a person; a button answer lands as the option's WORDS; a /stop with a question open stops the run; a second question while one is open is refused; a failed post returns at once (was 30.005s); the caller's wait is capped; the renderer splits first and escapes per chunk (no more tag cut at 4096) and protects fenced blocks; the client honours a 429 retry_after bounded by telegram.retry_after_max; the Telegram token joins the secret sweep. tests/test_telegram.py: 87 checks, 26 red pre-fix."
     },
@@ -1983,7 +1995,8 @@
       "title": "lane health tells the truth about a lane that keeps failing",
       "state": "shipped",
       "anchor": {
-        "commit": "2a7d522"
+        "commit": "2a7d522",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-179 .. -186, an earlier review run 12 (fixed 2026-10-06, 2a7d522). lane_down keys the repeat counter on a normalised reason class (a varying message no longer resets it); the lane record merges per lane under the lock (proven with two real processes - a lane this process does not own survives); the poll-failure stamp is monotonic-safe (a backwards clock reports, not hides); _lane_error_permanent requires the HTTP status shape (an id/port containing 401 is not a refused credential); a negative failure count is clamped before the backoff curve; a stale 'up' record is corrected on the exit path and lanes_snapshot can say the pid is dead. A-184's uptime half was REFUTED by measurement (the clamp is behaviour-preserving); the negative-COUNT half was real and is fixed. tests/test_lane_health.py + test_telegram.py: 23 checks red pre-fix."
     },
@@ -1992,7 +2005,8 @@
       "title": "the Telegram lane can carry a file and report its own work",
       "state": "shipped",
       "anchor": {
-        "commit": "2a7d522"
+        "commit": "2a7d522",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-199 .. -201, run 12 (fixed 2026-10-06, 2a7d522). sendDocument/sendPhoto appear nowhere in the shipped build, so 'send me the report' returned a Windows path - the transport exists now and run_telegram passes send_file_cb into the run; and a Telegram-only box wires SCHEDULER.dispatcher / REPORTER and honours announce_startup, so a scheduled job reports somewhere and a restart says it is back on this lane too. tests/test_telegram.py: 13 checks red pre-fix."
     },
@@ -2001,7 +2015,8 @@
       "title": "the page's door speaks HTTP/1.1, and an answer belongs to its conversation",
       "state": "shipped",
       "anchor": {
-        "commit": "a065fe5"
+        "commit": "a065fe5",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-202 .. -206 and -235 .. -237, -244 .. -246, an earlier review run 13 (fixed 2026-10-06, a065fe5). HTTP/1.1 with keep-alive (every route Content-Length-framed; an undrained body can no longer poison the next request on the socket); HEAD runs the routing and drops the body (curl -I /api/health used to read 501); OPTIONS/PUT/DELETE/PATCH refuse in JSON with Allow; a non-object JSON body answers a JSON 400 instead of raising and closing with zero bytes. A-244 (HIGH): /api/steer compares the caller with the run's owning client, so a second tab, a LAN peer or a stale script can no longer answer another conversation's parked question - or the confirm gate. The mutate half of the session registry is scoped to the owning client (a foreign delete removed the runlog file); the shared ?all=1 view keeps working with an explicit title; a pruned conversation's runlog is deleted with it; WebRun.answered is a real latch; a timed-out question draws a line. tests/test_webui.py: 50 checks red pre-fix; keep-alive and HEAD verified live with curl."
     }
