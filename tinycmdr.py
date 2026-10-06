@@ -32370,6 +32370,22 @@ def _verb_log_args(verb, rest):
     return " ".join(rest)
 
 
+def _case_twin_note(node, name, walked, tail=()):
+    """` - did you mean a.max_steps?` - the case near-miss hint (A-2026-10-05-72).
+
+    Verbs are case-insensitive (`STATUS` runs), keys are case-sensitive, and a flipped
+    key answered `(not set)` rc=0 - indistinguishable from "no such setting". One
+    unambiguous case-insensitive match is named; two candidates stay silent, because
+    "did you mean" with two answers is not a hint. `tail` is the rest of the path as the
+    caller typed it, so the suggestion is the whole corrected path, not one segment.
+    """
+    low = name.lower()
+    hits = [k for k in node if isinstance(k, str) and k.lower() == low]
+    if len(hits) != 1:
+        return ""
+    return " - did you mean %s?" % ".".join(list(walked) + [hits[0]] + list(tail))
+
+
 def _verb_config(rest):
     """`config get|set|unset <dotted.key> [value]` — a config.json edit with a read-back.
 
@@ -32410,7 +32426,10 @@ def _verb_config(rest):
         if not isinstance(cur, dict):
             walked = ".".join(parts[:i + 1])
             if what == "get":
-                print("(not set)" if part not in node else "(%s is not a section)" % walked)
+                if part in node:
+                    print("(%s is not a section)" % walked)
+                else:
+                    print("(not set)" + _case_twin_note(node, part, parts[:i], parts[i + 1:]))
                 return 0
             if part not in node:
                 node[part] = {}
@@ -32421,7 +32440,7 @@ def _verb_config(rest):
         node = node[part]
     if what == "get":
         if key not in node:
-            print("(not set)")
+            print("(not set)" + _case_twin_note(node, key, parts[:-1]))
             return 0
         print(json.dumps(node[key]) if not isinstance(node[key], str) else node[key])
         return 0

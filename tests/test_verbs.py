@@ -977,6 +977,16 @@ def main():
         check("a secret value never reaches the verb log",
               rc == 2 and "SENTINEL-a69" not in logged and "<redacted>" in logged,
               (rc, err[:80], [l for l in logged.splitlines() if "mattermost.token" in l][:1]))
+        # A-2026-10-05-72: verbs are case-insensitive but keys are not, and a flipped key
+        # answered (not set) rc=0 - silence that reads as "no such setting".
+        rc, out, err = call(fb, ["config", "get", "AGENT.max_steps"])
+        check("a case-flipped SECTION gets a near-miss hint",
+              rc == 0 and "(not set)" in out and "agent.max_steps" in out, out[:80])
+        rc, out, err = call(fb, ["config", "get", "agent.MAX_STEPS"])
+        check("...and so does a flipped leaf", rc == 0 and "agent.max_steps" in out, out[:80])
+        rc, out, err = call(fb, ["config", "get", "zzzz.nope"])
+        check("a real miss stays plain (no invented hint)", out.strip() == "(not set)",
+              out[:60])
         rc, out, err = call(fb, ["config", "set", "agent.probe_port", "nope"])
         check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])
