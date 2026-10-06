@@ -34,6 +34,15 @@ tool does (guards and all) and `ctx["config"]` is the bot config. Handle your
 errors and return a message: an exception becomes a tool error, which works but
 tells the model less.
 
+Every native tool this tree ships - and every file `toolsmith action=new` writes - ends
+with a standalone block, so the file is also a runnable script:
+
+    python my_tool.py who=world count=3
+
+parses each `key=value` argument (JSON values are decoded), calls `run(args, {})` and
+prints the result. That is the smoke-test path; a tool that needs the run's `ctx`
+(shell, send_file, report) is called through the harness.
+
 ## 2. Register-style: anything.py
 
 The shape agent tool libraries use. The file calls `registry.register()` at

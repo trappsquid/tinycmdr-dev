@@ -527,3 +527,18 @@ def run(args, ctx):
         alive, rc = _state(jobs, jid)
         return f"{jid} killed" + ("" if not alive else " (still alive?!)")
     return f"ERROR: unknown action {action!r}"
+
+if __name__ == "__main__":
+    # Standalone smoke test: `python process.py action=list` prints run()'s result.
+    # ctx is empty here; a tool that needs the run's ctx (shell, send_file, report)
+    # is called through the harness.
+    import json
+    import sys
+    args = dict()
+    for tok in sys.argv[1:]:
+        k, _, v = tok.partition("=")
+        try:
+            args[k] = json.loads(v)
+        except ValueError:
+            args[k] = v
+    print(run(args, dict()))

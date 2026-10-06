@@ -6664,8 +6664,11 @@ def _tool_run_as_script(command):
     """The tool this command RUNS AS A SCRIPT, or "": `python tools/x.py`, `python -m x`.
 
     A different miss from a bare name, and a worse one, because the wrong door WORKS:
-    every tool file in ./tools/ is also a runnable script, so `python toolsmith.py
-    "action=new" ...` really does scaffold the tool. Measured on the drive 2026-09-23 -
+    every tool file this tree ships, and every file toolsmith writes, carries a
+    `__main__`, so `python toolsmith.py "action=new" ...` really does scaffold the tool
+    (measured 2026-10-05: the three shipped files carried none, so a missed door ran
+    them as scripts, printed nothing and exited 0 - a silent no-op the run recorded as
+    success). Measured on the drive 2026-09-23 -
     told to build a tool, the run read toolsmith.py off disk, spilled it twice, tried
     `python -m toolsmith` (which failed), ran `python toolsmith.py` (which worked), listed
     tools, read the file again, and called find_tools; 12 calls in, it had never once made

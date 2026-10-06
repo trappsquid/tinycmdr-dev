@@ -134,3 +134,18 @@ def _finish(path, raw, before, after_lf, nl, strategy, count):
     return (f"OK: patched {path} [strategy: {strategy}] "
             f"({count} occurrence(s), backup: {backup.name})\n"
             f"--- diff ---\n" + "\n".join(rows))
+
+if __name__ == "__main__":
+    # Standalone smoke test: `python patch.py path=... old_string=... new_string=...`
+    # prints run()'s result. ctx is empty here; a tool that needs the run's ctx
+    # (shell, send_file, report) is called through the harness.
+    import json
+    import sys
+    args = dict()
+    for tok in sys.argv[1:]:
+        k, _, v = tok.partition("=")
+        try:
+            args[k] = json.loads(v)
+        except ValueError:
+            args[k] = v
+    print(run(args, dict()))

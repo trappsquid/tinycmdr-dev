@@ -17,6 +17,7 @@ Run:  python tests/test_tool_doors.py
 import importlib.util
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -140,6 +141,42 @@ out = fb.tool_shell({"command": 'python "C:\\Program Files\\tinycmdr\\tools\\too
                                 "action=list", "raw": True}, dict(CTX))
 check("shell: a quoted path with a space answers the door, not a silent no-op",
       "is a TOOL on this box" in out, out[:160])
+
+# A tool FILE must really be a runnable script: that is the door's premise, and the way a
+# tool is smoke-tested from a shell. The three shipped files carried no __main__
+# (measured 2026-10-05), so a door miss ran one, printed nothing and exited 0 - the run
+# recorded that as success.
+_toolsmith_py = Path(fb.REGISTRY.tools_dir) / "toolsmith.py"
+_proc = subprocess.run([sys.executable, str(_toolsmith_py), "action=list"],
+                       capture_output=True, text=True, timeout=180)
+check("toolsmith.py is runnable: action=list answers on stdout",
+      _proc.returncode == 0 and "Tools in" in _proc.stdout,
+      (_proc.stdout + _proc.stderr)[:200])
+
+_cli_dir = Path(tempfile.mkdtemp(prefix="fbtest-doors-cli-"))
+try:
+    _spec = importlib.util.spec_from_file_location("doors_toolsmith_cli", _toolsmith_py)
+    _ts = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_ts)
+    _made = _ts.run({"action": "new", "name": "doors_cli_probe", "args": "who:str=world",
+                     "dir": str(_cli_dir), "overwrite": True}, {})
+    _scaffold = _cli_dir / "doors_cli_probe.py"
+    check("a scaffolded tool carries the standalone block",
+          "if __name__" in _scaffold.read_text(encoding="utf-8"), _made[:200])
+    _proc = subprocess.run([sys.executable, str(_scaffold), "who=world"],
+                           capture_output=True, text=True, timeout=120)
+    _both = (_proc.stdout or "") + (_proc.stderr or "")
+    check("...and running it calls run() (the stub reports what is unimplemented)",
+          "TODO: doors_cli_probe is a scaffold" in _both, _both[:200])
+    _proc = subprocess.run([sys.executable, str(Path(fb.REGISTRY.tools_dir) / "patch.py"),
+                            "path=" + str(_cli_dir / "missing.txt"),
+                            "old_string=a", "new_string=b"],
+                           capture_output=True, text=True, timeout=120)
+    check("patch.py is runnable and prints run()'s error",
+          _proc.returncode == 0 and "ERROR" in _proc.stdout,
+          (_proc.stdout + _proc.stderr)[:200])
+finally:
+    shutil.rmtree(_cli_dir, ignore_errors=True)
 
 _ported = Path(fb.REGISTRY.tools_dir) / "doors_ported_probe.py"
 _ported.write_text(

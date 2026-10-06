@@ -89,6 +89,21 @@ def run(args, ctx):
     # ctx["shell"](command) runs a shell command the way the shell tool does, and
     # ctx["config"] is the bot config. Return clear text; raise nothing if you can.
 {body}
+
+if __name__ == "__main__":
+    # Standalone smoke test: `python {name}.py key=value ...` prints run()'s result.
+    # ctx is empty here; a tool that needs the run's ctx (shell, send_file, report)
+    # is called through the harness.
+    import json
+    import sys
+    args = dict()
+    for tok in sys.argv[1:]:
+        k, _, v = tok.partition("=")
+        try:
+            args[k] = json.loads(v)
+        except ValueError:
+            args[k] = v
+    print(run(args, dict()))
 '''
 
 _MANIFEST_TEMPLATE = {
@@ -362,3 +377,18 @@ def run(args, ctx):
     return ("ERROR: action must be one of new, wrap, list, check (got %r). This tool makes "
             "tools: new scaffolds a native one, wrap imports an existing script, list indexes "
             "tools/, check loads one file." % action)
+
+if __name__ == "__main__":
+    # Standalone smoke test: `python toolsmith.py action=list` prints run()'s result.
+    # ctx is empty here; a tool that needs the run's ctx (shell, send_file, report)
+    # is called through the harness.
+    import json
+    import sys
+    args = dict()
+    for tok in sys.argv[1:]:
+        k, _, v = tok.partition("=")
+        try:
+            args[k] = json.loads(v)
+        except ValueError:
+            args[k] = v
+    print(run(args, dict()))
