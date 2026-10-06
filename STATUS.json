@@ -1720,6 +1720,33 @@
       },
       "detail": "Operator-directed (2026-10-06): the installers never ask WHICH search provider a box uses - they only ask 'May the bot's web search send queries off this machine?' (install-tinycmdr.ps1 ~1118, .sh ~998, `setup` ~29916) while search.providers keeps whatever config.example.json shipped (anysearch, tavily, ...). A searxng entry pointing at a box on the LAN is the only shape whose traffic stays on this network, and nothing at install time says that or lets the operator pick it. The ask mirrors the model-endpoint flow: choose the kind (searxng on this network / a cloud provider / none), then ask ONLY what that kind needs - a URL for searxng (no key ever), or an API key (hidden, written to the provider's api_key_env in .env) for a keyed provider. The runtime already supports the keyless cloud case (_search_key: \"Empty is legitimate: anysearch's anonymous tier answers without one\"), so the installer must offer 'anonymous, no key' for anysearch instead of demanding one. No provider MENU: dozens exist and none belongs hardcoded in the ask. Mirror the model-endpoint questions instead - ask for the search API's URL, an optional API key (hidden; blank = a provider that answers anonymously, which the runtime supports), and an optional label - then offer to add another entry; the entries in order are the primary-then-fallback chain (_search_providers tries them in order). Egress is derived from the chain: an entry whose endpoint is off this network needs the explicit allow, and the summary names the entries that would be refused while it is off. Runtime side: an entry with an unknown or absent kind but its own url must be accepted and called with a generic JSON POST (known kinds keep their adapters); today _search_providers refuses any kind outside _SEARCH_DEFAULT_URL, and that refusal is what makes an open-ended ask impossible. Name the active chain in the install summary and doctor. .env TINYCMDR_SEARCH_PROVIDERS stays the unattended door.",
       "gate": "pending - next release; no code change yet"
+    },
+    {
+      "id": "update-notes-1-0-82",
+      "title": "the update speaks only when there is an action",
+      "state": "shipped",
+      "anchors": {
+        "commit": "93dfa82"
+      },
+      "detail": "Fixed 2026-10-06 (93dfa82; test 99ac80a, doc re-measure 281c681). The update narrated its own policy: the .git-checkout notice (a 1.0.46-1.0.48 failure mode), the dev-kit keep line (it named a maintenance/where-roles.json a clone may not have - _declared_dev_tree() conflated 'declared' with checkout evidence), and the host-default note ('this release's default differs' for a theme.default.toml the release never touched). All silent now, except a host default this package actually moved, which prints one action line; _dev_tree_reason() returns declared/checkout/None; the kept-files report is one plain line. tests/test_update_notes.py fails on the pre-fix build; tests/test_verbs.py grades the reason."
+    },
+    {
+      "id": "contributor-covenant-removed-1-0-82",
+      "title": "the Contributor Covenant is out",
+      "state": "shipped",
+      "anchors": {
+        "commit": "5e205a3"
+      },
+      "detail": "Removed 2026-10-06 (5e205a3). Contributor Covenant 2.1 boilerplate (added cee8c28 for 1.0.81) promised enforcement by 'community leaders' for a project with one maintainer and no community, and nothing in the tree referenced it. CONTRIBUTING.md and SECURITY.md stay - both state rules this project follows. Restore: git checkout v1.0.81 -- CODE_OF_CONDUCT.md"
+    },
+    {
+      "id": "single-file-invariant-1-0-82",
+      "title": "tinycmdr.py stays one file, as an invariant",
+      "state": "shipped",
+      "anchors": {
+        "commit": "f51cd01"
+      },
+      "detail": "Recorded 2026-10-06 (f51cd01) in AGENTS.md Invariants, after the operator endorsed the single-file shape - especially the agent reading and editing itself. tinycmdr.py stays one file: what the operator reads end to end, what SHA256SUMS verifies and the update copies (nothing builds on the host), and what the agent edits when it works on itself. Parts would be assembled at package-build time at the earliest; that re-architecture needs its own item, not a cleanup."
     }
 
   ]

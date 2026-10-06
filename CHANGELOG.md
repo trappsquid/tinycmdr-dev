@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.82] - 2026-10-06
+
 ### Changed
 - **Update output:** the notes that narrated updater policy instead of the update are gone (the `.git`-checkout notice, the dev-kit keep line naming a `where-roles.json` a clone may not have); the host-default note speaks only when this release actually moved the shipped default, and the kept-files report is one plain line. The update prints what it wrote and what to do next. (tests/test_update_notes.py)
 
