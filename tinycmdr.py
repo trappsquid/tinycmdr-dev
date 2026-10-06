@@ -2125,14 +2125,21 @@ def _replay_reasoning_ok(url=None):
 
 
 def _reasoning_400_verdict(body):
-    """What a 400 that names reasoning_content MEANS: "on", "off", or None (unparsed).
+    """What a 400 about reasoning MEANS: "on", "off", "none", or None (unparsed).
 
-    Two opposite answers wear the same field name: DeepSeek's thinking mode 400s when the
-    field is MISSING ('reasoning_content ... must be passed back to the API'); Groq and
-    1min.AI 400 when it is PRESENT (an unsupported-field message). The wording is the only
-    signal, so it is parsed in exactly one place.
+    Three answers wear this surface. DeepSeek's thinking mode 400s when the field is
+    MISSING ('reasoning_content ... must be passed back to the API') -> "on"; Groq and
+    1min.AI 400 when it is PRESENT (an unsupported-field message) -> "off"; and OpenAI's
+    newer families 400 when TOOLS and a reasoning effort ride together ('Function tools
+    with reasoning_effort are not supported ... in /v1/chat/completions') -> "none",
+    meaning this endpoint cannot have both, so the reasoning field is dropped for it.
     """
-    if not isinstance(body, str) or "reasoning_content" not in body:
+    if not isinstance(body, str):
+        return None
+    if re.search(r"reasoning_effort", body, re.I) and re.search(
+            r"not supported|unsupported|not allowed", body, re.I):
+        return "none"
+    if "reasoning_content" not in body:
         return None
     if re.search(r"must be passed back|is required", body, re.I):
         return "on"
@@ -15702,6 +15709,11 @@ def apply_reasoning(payload, url=None, model=None):
     """
     level = reasoning_level(model)
     mode = str(CONFIG["llm"].get("reasoning_mode") or "auto").strip().lower()
+    if _endpoint_facts(url).get("reasoning") == "none":
+        # This endpoint answered 400 when tools and a reasoning effort rode together
+        # ('Function tools with reasoning_effort are not supported ...'): the field is
+        # off for THIS host, so later turns never re-pay that 400. Logged when learned.
+        return
     if mode not in ("effort", "responses", "budget"):
         if "/responses" in str(url or ""):
             mode = "responses"
@@ -15734,6 +15746,23 @@ def apply_reasoning(payload, url=None, model=None):
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
     else:
         payload["reasoning_effort"] = wire
+
+
+def _apply_reasoning_flags(payload, url):
+    """Merge `llm.reasoning_flags` when the endpoint has PROVEN it takes the echo back.
+
+    Z.AI's `clear_thinking: false` and Fireworks' `reasoning_history: "preserved"` are the
+    documented paired flags: their docs say the echoed field is INERT without them, and an
+    ignored echo is not visible on the wire - so this is a config lever, never a vendor
+    branch, and it rides only where the endpoint already answered 'on'.
+    """
+    flags = CONFIG["llm"].get("reasoning_flags")
+    if not isinstance(flags, dict) or not flags:
+        return
+    if _endpoint_facts(url).get("reasoning") != "on":
+        return
+    for k, v in flags.items():
+        payload.setdefault(k, v)
 
 
 def apply_sampling(payload):
@@ -16932,6 +16961,7 @@ class Agent:
                 payload["prompt_cache_key"] = _ck
             apply_sampling(payload)
             apply_reasoning(payload, url, ep_model)
+            _apply_reasoning_flags(payload, url)
             if use_tools:
                 # Disclosure decides what is SENT, not what exists: the registry still
                 # holds every tool, so a call for a hidden one is executed and revealed.
@@ -17084,12 +17114,19 @@ class Agent:
                         # answer per endpoint - one call once, then never again.
                         handled_reasoning_400 = True
                         _endpoint_note(url, reasoning=_r400)
-                        payload["messages"] = _messages_for_wire(messages, url)
+                        if _r400 == "none":
+                            # Cannot have tools AND an effort: the effort goes.
+                            for _fk in ("reasoning_effort", "reasoning", "thinking"):
+                                payload.pop(_fk, None)
+                        else:
+                            payload["messages"] = _messages_for_wire(messages, url)
                         _record_attempt(usage, url, "retry",
                                         f"400 says reasoning_content {_r400}: {body}", secs)
                         log.warning("LLM %s %s reasoning_content - retrying the same "
                                     "endpoint", url,
-                                    "requires" if _r400 == "on" else "rejects")
+                                    "requires" if _r400 == "on"
+                                    else "rejects" if _r400 == "off"
+                                    else "cannot combine tools with")
                         last_err = e
                         continue
                     if status == 400 and not dropped_optional:

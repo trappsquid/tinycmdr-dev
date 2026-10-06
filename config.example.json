@@ -58,6 +58,8 @@
     "replay_reasoning": true,
     "_comment_prompt_cache_key": "Sticky-routing hint for remote endpoints: OpenAI and Moonshot take `prompt_cache_key`, and OpenRouter routes stickily on the same field (its docs call it `session_id`). `auto` derives one value per conversation from the session key, fixed across a compaction, which is the APIs' own guidance; `off` sends none; any other string is sent as-is (256 chars max). A host that answers 400 naming the field is remembered and never asked again. Local endpoints never get it.",
     "prompt_cache_key": "auto",
+    "_comment_reasoning_flags": "Paired preservation flags for a host whose docs say the echoed reasoning is INERT without them (Z.AI: {\"clear_thinking\": false}; Fireworks: {\"reasoning_history\": \"preserved\"}). Merged into the request only when the endpoint itself has been learned to take the echo back, which is what keeps this a config lever instead of a vendor table.",
+    "reasoning_flags": {},
     "replay_reasoning_max_chars": 4000,
     "fallbacks": [
       {

@@ -87,6 +87,36 @@ def main():
                   "('messages.1': property 'reasoning_content' is unsupported)") == "off")
         check("a 400 that says neither is not guessed at",
               fb._reasoning_400_verdict("context length exceeded") is None)
+        check("a tools+reasoning_effort 400 means the field is OFF for that host",
+              fb._reasoning_400_verdict(
+                  "Function tools with reasoning_effort are not supported for "
+                  "gpt-5.6-terra in /v1/chat/completions.") == "none")
+
+        # --- the none verdict reaches apply_reasoning and the paired flags -----
+        blocked = "https://tools-only.example.com/v1"
+        fb.CONFIG["llm"]["reasoning"] = "medium"
+        try:
+            probe = {}
+            fb.apply_reasoning(probe, blocked, "whatever")
+            check("a level rides a healthy endpoint", "reasoning_effort" in probe, probe)
+            fb._endpoint_note(blocked, reasoning="none")
+            probe = {}
+            fb.apply_reasoning(probe, blocked, "whatever")
+            check("...and is dropped for an endpoint that cannot combine it with tools",
+                  "reasoning_effort" not in probe and "reasoning" not in probe, probe)
+
+            fb._endpoint_note(host, reasoning="on")
+            fb.CONFIG["llm"]["reasoning_flags"] = {"clear_thinking": False}
+            probe = {}
+            fb._apply_reasoning_flags(probe, host)
+            check("the paired preservation flags ride where the echo is wanted",
+                  probe.get("clear_thinking") is False, probe)
+            probe = {}
+            fb._apply_reasoning_flags(probe, blocked)
+            check("...and never elsewhere", not probe, probe)
+        finally:
+            fb.CONFIG["llm"].pop("reasoning_flags", None)
+            fb.CONFIG["llm"]["reasoning"] = "auto"
 
         # --- the strip happens at SEND time, never at capture ------------------
         strict = "https://strict.example.com/v1"
