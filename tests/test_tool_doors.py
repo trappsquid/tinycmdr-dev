@@ -99,6 +99,27 @@ check("shell: the door is opened, not just named", "schema is now in your tool l
 check("shell: and it does not lecture about an identical file/tool name",
       "is the FILE" not in out, out[:200])
 
+# A quoted path with a SPACE is the only spelling Windows accepts, so it must reach the
+# door (2026-10-05, a live Windows install: the whitespace split cut the path in half, so
+# the door missed the one shape every default install needs - the file ran as a script,
+# exited 0 and printed nothing, and the run recorded that as success).
+for label, cmd, want in (
+        ("double quotes", 'python "C:\\Program Files\\tinycmdr\\tools\\toolsmith.py" action=list',
+         "toolsmith"),
+        ("single quotes", "python 'C:\\Program Files\\tinycmdr\\tools\\toolsmith.py'",
+         "toolsmith"),
+        ("a flag before the path", 'python -u "/opt/My Tools/tools/toolsmith.py"', "toolsmith"),
+        ("a POSIX path with a space", 'python "/opt/My Tools/tools/patch.py"', "patch"),
+        ("the unquoted spelling still works", "python tools/toolsmith.py action=list", "toolsmith"),
+):
+    got = fb._tool_run_as_script(cmd)
+    check(f"door: {label} is seen", got == want, f"{got!r} != {want!r}")
+
+out = fb.tool_shell({"command": 'python "C:\\Program Files\\tinycmdr\\tools\\toolsmith.py" '
+                                "action=list", "raw": True}, dict(CTX))
+check("shell: a quoted path with a space answers the door, not a silent no-op",
+      "is a TOOL on this box" in out, out[:160])
+
 _ported = Path(fb.REGISTRY.tools_dir) / "doors_ported_probe.py"
 _ported.write_text(
     "from tools.registry import registry\n"

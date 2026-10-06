@@ -6628,6 +6628,37 @@ def _tool_for_file_name(stem):
     return ""
 
 
+def _split_command_tokens(command):
+    """Split a command line with QUOTE awareness: a quoted run stays one token.
+
+    Every default Windows install path has a space, so the only spelling that reaches
+    python is `python "C:\\Program Files\\tinycmdr\\tools\\toolsmith.py"` - and a
+    whitespace split cuts that into `C:\\Program` and `Files\\...`, so the door that
+    exists for exactly this shape never fired there (measured 2026-10-05, a live Windows
+    install: the quoted form ran the FILE with exit 0 and no output, while the unquoted
+    form failed at the OS). Quotes are stripped, the separators are the set the old
+    split used, and an unbalanced quote swallows the tail instead of raising.
+    """
+    toks, cur, quote = [], "", ""
+    for ch in command or "":
+        if quote:
+            if ch == quote:
+                quote = ""
+            else:
+                cur += ch
+        elif ch in "\"'":
+            quote = ch
+        elif ch.isspace() or ch in "|;&()":
+            if cur:
+                toks.append(cur)
+                cur = ""
+        else:
+            cur += ch
+    if cur:
+        toks.append(cur)
+    return toks
+
+
 def _tool_run_as_script(command):
     """The tool this command RUNS AS A SCRIPT, or "": `python tools/x.py`, `python -m x`.
 
@@ -6640,7 +6671,7 @@ def _tool_run_as_script(command):
     the `toolsmith` TOOL CALL its prompt names. Success at the wrong door is why it never
     self-corrects, so the answer is the door plus the arguments, not an error.
     """
-    toks = [t for t in re.split(r"[\s|;&()]+", (command or "").strip()) if t]
+    toks = _split_command_tokens(command)
     for i, tok in enumerate(toks):
         base = tok.strip("\"'").replace("\\", "/").rsplit("/", 1)[-1].lower()
         if not re.fullmatch(r"python[0-9]*(w)?(\.exe)?|py(\.exe)?", base):
