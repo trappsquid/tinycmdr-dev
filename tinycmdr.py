@@ -14552,6 +14552,29 @@ def _load_soul():
     return DEFAULT_SOUL
 
 
+def _materialize_host_files():
+    """Create the live copies of the host-editable files from their shipped defaults.
+
+    A checkout or an install can lack `theme.toml` or `soul.md` - both are host state
+    that belongs to whoever runs the box, and the shipped defaults are
+    `theme.default.toml` and `soul.example.md`. On start, a missing live file is copied
+    from its default and one line is logged; an existing file is never touched, so an
+    edited theme or soul survives every start and every update. `theme.toml`'s pair also
+    rides `_HOST_DEFAULT_PAIRS`, which is how `update`/`doctor` report a moved default.
+    """
+    for live, default in (("theme.toml", "theme.default.toml"),
+                          ("soul.md", "soul.example.md")):
+        dst, src = BASE_DIR / live, BASE_DIR / default
+        if dst.exists() or not src.exists():
+            continue
+        try:
+            shutil.copyfile(src, dst)
+            log.info("%s was missing; materialized it from %s", live, default)
+        except OSError as e:                       # noqa: BLE001 - never block startup
+            log.warning("could not materialize %s from %s: %s", live, default, e)
+
+
+_materialize_host_files()
 _SOUL = _load_soul()
 
 
