@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A patch rewrites its line and nothing else, byte for byte** (an earlier review run 11, A-131): `tools/patch.py` read with `errors="replace"` and wrote UTF-8, so a Latin-1/CP1252 file lost every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended line. The file is decoded losslessly (UTF-8 strict, else Latin-1) and re-encoded in the SAME encoding, strictly: a character that encoding cannot carry is refused by name instead of mangled. (tests/test_patch_bytes.py)
 - **Spill ids are never reused** (A-107/A-108): with every spill file gone the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output. The counter now advances over every row ever written, file or no file, and the index merge no longer re-persists a row whose file is gone (which also stops the index growing for ever). (tests/test_spill_durability.py)
 
+### Fixed
+- **`computer_use`: Alt is held on Windows, and the blocked-combo check no longer depends on one platform's key table** (an earlier review run 11, A-113): the Python half canonicalises Alt to `option` while the PowerShell helper switched only on `alt`, so every Alt combo (`alt+f4`, `win+alt+…`) went out without Alt; `blocked_combo('f4', ['alt'])` also slipped the table while the `option` spelling was refused, and the Windows-only `ctrl+alt+delete` entry sat behind the macOS keycode gate. Both sides now fold `alt` to `option`, the block is decided before the keycode gate, and the helper arms `option` in all three switches - pinned by a contract check that every modifier the Python half can emit is an arm in the embedded helper. (tests/test_computer_use.py)
+
 ## [1.0.83] - 2026-10-06
 
 > **Hosts that update by `git pull`: read this first.** `theme.toml` and `soul.md` stop being

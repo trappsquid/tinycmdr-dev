@@ -12,13 +12,15 @@ network or an app.
 import contextlib
 import importlib.util
 import io
+import os
+import re
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / "tools" / "computer_use.py"
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tools/computer_use.py")
 FAILS = []
 
 
@@ -80,6 +82,31 @@ def main():
     key, mods, _ = mod.canon_combo("win+l")
     check("win+L is blocked where cmd IS the Windows key",
           bool(mod.blocked_combo(key, mods)) == mod.IS_WIN, (key, mods, mod.IS_WIN))
+
+    # A-113 (an earlier review run 11): Alt is canonicalised to `option` on the Python side, so
+    # BOTH spellings must hit the table, and the Windows-only entries must not depend on
+    # the macOS keycode table (that gate made ctrl+alt+delete unblockable on Windows).
+    for spelling in ("alt", "option"):
+        check("the block sees %r on f4 (force-quit dialog)" % spelling,
+              bool(mod.blocked_combo("f4", [spelling])),
+              mod.blocked_combo("f4", [spelling]))
+    _was_win = mod.IS_WIN
+    try:
+        mod.IS_WIN = True
+        check("ctrl+alt+delete is blocked on Windows (secure attention)",
+              bool(mod.blocked_combo("delete", ["ctrl", "alt"])),
+              mod.blocked_combo("delete", ["ctrl", "alt"]))
+    finally:
+        mod.IS_WIN = _was_win
+
+    # The two halves must agree on the modifier vocabulary: every word the Python
+    # canonicaliser can emit (plus `shift`, armed directly) is an arm in the embedded
+    # PowerShell helper - the bug was `option` missing from all three switches, which
+    # sent every Alt combo with no Alt held.
+    wanted = set(mod._KEY_ALIASES.values()) | {"shift"}
+    arms = set(re.findall(r'^\s+"([a-z]+)"\s+\{', mod._PS_HELPER, re.M))
+    check("the PowerShell helper arms every modifier the Python half can emit",
+          wanted <= arms, (sorted(wanted), sorted(arms)))
 
     # ---- the screenshot dedup ---------------------------------------------
     mod._SHOT_DEDUP.clear()

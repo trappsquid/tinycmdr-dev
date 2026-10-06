@@ -290,7 +290,12 @@ def canon_combo(keys):
 # one of them: `cmd+shift+delete` IS `cmd+shift+backspace`, and the empty-trash
 # combo was written with "backspace". Canonicalise before matching, never after.
 _BLOCK_CANON = {"delete": "backspace", "esc": "escape", "enter": "return",
-                "del": "backspace", "forwarddelete": "forwarddelete"}
+                "del": "backspace", "forwarddelete": "forwarddelete",
+                # `alt` is the word a user types and `option` is what the alias fold
+                # produces; BOTH sides of this comparison must fold identically, or
+                # `blocked_combo('f4', ['alt'])` slips the table while
+                # `blocked_combo('f4', ['option'])` is refused (an earlier review run 11, A-113).
+                "alt": "option"}
 
 
 def blocked_combo(key, mods):
@@ -304,8 +309,9 @@ def blocked_combo(key, mods):
     Windows-only entries apply where "cmd" is the Windows key.
     """
     key = _BLOCK_CANON.get(key, key)
-    if key not in _KEYCODES:
-        return ""
+    # The block is decided first: the keycode gate below exists for the SEND path, and
+    # gating the block on one platform's key table made a Windows-only combo
+    # (`ctrl+alt+delete`, secure attention) unblockable there (an earlier review run 11, A-113).
     combo = frozenset(_BLOCK_CANON.get(p, p) for p in list(mods) + [key])
     table = _BLOCKED_COMBOS + (_WINDOWS_BLOCKED_COMBOS if IS_WIN else ())
     for banned in table:
@@ -314,6 +320,8 @@ def blocked_combo(key, mods):
                     "shortcut; this tool does not send it. If the operator "
                     "asked for it, say so and let them press it."
                     % "+".join(sorted(combo)))
+    if key not in _KEYCODES:
+        return ""
     return ""
 
 
@@ -1110,6 +1118,7 @@ function Get-Flags($mods) {
       "ctrl"   { $f = $f -bor 0x0002 }
       "shift"  { $f = $f -bor 0x0004 }
       "alt"    { $f = $f -bor 0x0001 }
+      "option" { $f = $f -bor 0x0001 }
       "win"    { $f = $f -bor 0x0008 }
       "cmd"    { $f = $f -bor 0x0008 }
     }
@@ -1160,6 +1169,7 @@ function Do-Key($name, $mods) {
       "ctrl"  { [TC.Native]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero) }
       "shift" { [TC.Native]::keybd_event(0x10, 0, 0, [UIntPtr]::Zero) }
       "alt"   { [TC.Native]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero) }
+      "option" { [TC.Native]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero) }
       "win"   { [TC.Native]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero) }
       "cmd"   { [TC.Native]::keybd_event(0x5B, 0, 0, [UIntPtr]::Zero) }
     }
@@ -1172,6 +1182,7 @@ function Do-Key($name, $mods) {
       "ctrl"  { [TC.Native]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero) }
       "shift" { [TC.Native]::keybd_event(0x10, 0, 2, [UIntPtr]::Zero) }
       "alt"   { [TC.Native]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero) }
+      "option" { [TC.Native]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero) }
       "win"   { [TC.Native]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero) }
       "cmd"   { [TC.Native]::keybd_event(0x5B, 0, 2, [UIntPtr]::Zero) }
     }
