@@ -162,6 +162,26 @@ def test_the_sweep_recovers_a_post_made_while_the_process_was_down():
           asked.get("since") == int(base * 1000) + 1, asked)
 
 
+def test_the_sweep_uses_the_shared_allowlist_check():
+    """The sweep must not re-implement the allowlist: a bare-string allowlist made the
+    raw membership test always true (every recovered post silently dropped) and a null
+    one raised every cycle."""
+    base = time.time() - 300
+    for shape, want in ((["alice"], True), ("alice", True), (None, False)):
+        write_state({"last_seen": {"chan-A": base}})
+        fb.CONFIG["mattermost"]["allowed_users"] = shape
+        try:
+            d = FakeDispatcher()
+            d.driver = FakeDriver()
+            d.bot_user_id = "u-bot"
+            d._is_dm = lambda channel_id: True
+            recovered = d._catch_up_once()
+        finally:
+            fb.CONFIG["mattermost"]["allowed_users"] = ["alice"]
+        check("the sweep recovers through the shared allowlist check (%r)" % (shape,),
+              (recovered == 1) is want, recovered)
+
+
 def test_the_first_sweep_runs_before_the_first_sleep():
     """A restart is the case this sweep exists for: waiting a full interval first
     leaves the order that arrived during the downtime unanswered for a minute more."""

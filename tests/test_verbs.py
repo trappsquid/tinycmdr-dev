@@ -1364,6 +1364,22 @@ def main():
         check("...and its logs verb survives neither log existing",
               "no logs at either path yet" in _rmac)
 
+        # Every SERVICE lane takes startup validation and the single-instance lock:
+        # --telegram used to walk into its lane without either, and two pollers on one
+        # token split every DM.
+        _main_src = (BASE / "tinycmdr.py").read_text(encoding="utf-8")
+        _tg_at = _main_src.find('elif "--telegram" in sys.argv:')
+        _tg_next = _main_src.find("\n    else:", _tg_at)
+        _tg_branch = _main_src[_tg_at:_tg_next] if _tg_at != -1 else ""
+        check("--telegram takes the service preflight before its lane starts",
+              "_service_preflight()" in _tg_branch
+              and _tg_branch.find("_service_preflight()")
+              < _tg_branch.find("lane_with_retry"),
+              _tg_branch[:120])
+        check("...and the bare/bot lane takes it too",
+              _main_src.count("_service_preflight()") >= 3,
+              _main_src.count("_service_preflight()"))
+
         # The POSIX twin: its pkill must be scoped+anchored, and its install guard
         # must be able to fail (list-unit-files exits 0 either way, so the friendly
         # Branch was dead code - and the pkill ran BEFORE it).

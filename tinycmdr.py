@@ -1126,7 +1126,7 @@ def apply_model_profile():
 
 PROFILE = apply_model_profile()
 IS_WINDOWS = os.name == "nt"
-VERSION = "1.0.80"
+VERSION = "1.0.81"
 # Exit code meaning "start me again on purpose", as opposed to a crash.
 RESTART_EXIT_CODE = 75
 START_TIME = time.time()
@@ -26544,7 +26544,6 @@ class MattermostDispatcher:
         row = self.pending_asks.pop(ch if ch else session_key, None)
         if row is None or row["ev"].is_set():
             return False
-        row["answer"] = text
         row["answer"] = _ask_record_choice(row, text) or text
         row["ev"].set()
         log.info("ask_user: answer handed to the parked run (%s)", sender or "?")
@@ -27039,7 +27038,7 @@ class MattermostDispatcher:
                 if (not p.get("message") or pid in self.seen
                         or (self.bot_user_id and uid == self.bot_user_id)):
                     continue
-                if uid not in CONFIG["mattermost"]["allowed_users"]:
+                if not user_is_allowed("", uid):
                     self.seen.append(pid)   # never reconsider it
                     continue
                 ts = int(p.get("create_at") or 0) / 1000.0
@@ -27709,6 +27708,17 @@ def lane_up(lane, detail=""):
         log.warning("%s lane recovered after %d failed start(s), the first at %s",
                     lane, prior["count"],
                     time.strftime("%Y-%m-%d %H:%M", time.localtime(prior.get("first") or 0)))
+
+
+def lane_poll_failure_due(failing_since, now, grace=300.0):
+    """True when a lane whose polls have failed since `failing_since` must be reported down.
+
+    A lane that STARTED and then went deaf never raises, so nothing ever calls
+    lane_down: the record keeps saying "up" while the box can hear nothing. The
+    Telegram poll loop retries internally for ever; this is the decision that turns
+    that silence into a lane record every other reader can see.
+    """
+    return failing_since is not None and (now - failing_since) >= grace
 
 
 # ------------------------------------------------- retrying a lane that CANNOT START
@@ -28738,9 +28748,9 @@ class TelegramPoller:
 
         user = msg.get("from") or {}
 
-        text = (msg.get("text") or "").strip()
+        text = (msg.get("text") or msg.get("caption") or "").strip()
 
-        if not chat_id or not text:
+        if not chat_id:
 
             return False
 
@@ -28757,6 +28767,24 @@ class TelegramPoller:
             log.warning("telegram: ignored a message from %s (@%s) - not in "
 
                         "telegram.allowed_users", user.get("id"), user.get("username"))
+
+            return False
+
+        if not text:
+
+            # A photo, voice note or sticker carries no text (a caption does, and is
+            # read now); it used to vanish with no reply and no log line, which reads
+            # as the bot being broken. Say so once.
+
+            log.info("telegram: a message with no text from chat %s", chat_id)
+
+            try:
+
+                self.c.send(chat_id, "I can only read text here - describe it in words.")
+
+            except Exception:                   # noqa: BLE001 - a reply must not kill the lane
+
+                pass
 
             return False
 
@@ -29013,13 +29041,37 @@ def run_telegram():
 
     offset = 0
 
+    _failing_since = None
     while True:
 
         try:
 
             updates = client.updates(offset)
 
+            if _failing_since is not None:
+
+                lane_up("telegram", "connected as @%s" % me.get("username"))
+
+                _failing_since = None
+
         except Exception as exc:                            # noqa: BLE001 - retried
+
+            now = time.time()
+
+            if _failing_since is None:
+
+                _failing_since = now
+
+            elif lane_poll_failure_due(_failing_since, now):
+
+                # The loop retries for ever in silence: without this, health says the
+                # lane is up while it has heard nothing for minutes. Report through the
+                # same lane record the other lanes use, once per window.
+
+                lane_down("telegram", "poll failing for %d min: %s"
+                          % (int((now - _failing_since) / 60), exc))
+
+                _failing_since = now
 
             log.warning("telegram: poll failed (%s), retrying in 5s", exc)
 
@@ -34386,16 +34438,13 @@ def main():
     else:
         _srv = start_web_surface(open_browser=not _web_no_browser,
                                  force=("--web" in sys.argv))
-    if "--app" in sys.argv:
-        run_cli(app=True)
-    elif "--cli" in sys.argv:
-        # TINYCMDR_APP=1 prefers the full-screen app for the human door; `--cli` still
-        # spells the inline lane out by hand, and `--app` overrides either way. The app
-        # falls back to the inline cards on a terminal that cannot host it.
-        run_cli(app=os.environ.get("TINYCMDR_APP") == "1")
-    elif "--telegram" in sys.argv:
-        lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
-    else:
+    def _service_preflight():
+        """Validation + the single-instance lock, for a SERVICE lane. Exits on refusal.
+
+        Every service door (bare, --mattermost, --telegram) must take both, or a second
+        process on the same token silently double-answers every DM: --telegram used to
+        walk straight into its lane without either.
+        """
         err = validate_startup_config()
         if err:
             log.critical("STARTUP ABORTED: %s", err.replace("\n", " "))
@@ -34420,6 +34469,19 @@ def main():
             except Exception:
                 pass
             sys.exit(3)
+
+    if "--app" in sys.argv:
+        run_cli(app=True)
+    elif "--cli" in sys.argv:
+        # TINYCMDR_APP=1 prefers the full-screen app for the human door; `--cli` still
+        # spells the inline lane out by hand, and `--app` overrides either way. The app
+        # falls back to the inline cards on a terminal that cannot host it.
+        run_cli(app=os.environ.get("TINYCMDR_APP") == "1")
+    elif "--telegram" in sys.argv:
+        _service_preflight()
+        lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
+    else:
+        _service_preflight()
         lanes = lanes_to_serve()
         if "--mattermost" in sys.argv and not _mm_token_configured():
             print("--mattermost was given, but no Mattermost token is configured.",

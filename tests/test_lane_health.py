@@ -106,6 +106,15 @@ _had_enabled = "enabled" in _web_cfg
 _web_cfg["enabled"] = False
 check("a page the config turns off is not reported at all",
       "web" not in T.lanes_snapshot(), list(T.lanes_snapshot()))
+
+# A lane that STARTED and then went deaf never raises, so nothing calls lane_down: the
+# Telegram poll loop retries internally for ever. The grace decision is graded here.
+_due = getattr(T, "lane_poll_failure_due", None)
+check("a lane whose polls keep failing is reported down after the grace window",
+      callable(_due) and _due(None, 5000.0) is False
+      and _due(1000.0, 1000.0 + 299, grace=300.0) is False
+      and _due(1000.0, 1000.0 + 300, grace=300.0) is True,
+      "grace window")
 if _had_enabled:
     _web_cfg["enabled"] = True
 else:
