@@ -195,6 +195,9 @@ def main():
           "the page takes its token from the URL fragment first", body[:60])
     check(b"id=lanetext" in body and b"id=lanedismiss" in body,
           "the lane banner has its own text span and a dismiss button")
+    ver_link = ("/releases/tag/v" + fb.VERSION).encode()
+    check(b'id=ver class="brand-version" href="' in body and ver_link in body,
+          "the header version stamp links to this build's release notes", body[:120])
     check(req("GET", "/icon.png")[0] == 200, "the icon is served")
     check(req("GET", "/manifest.webmanifest")[0] == 200, "the manifest is served")
 

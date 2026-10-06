@@ -266,6 +266,14 @@ textarea:focus-visible {
   font-weight: 700;
 }
 
+a.brand-version {
+  text-decoration: none;
+}
+
+a.brand-version:hover {
+  color: var(--gold-bright);
+}
+
 /* the lane-down marker: the version turns the error colour (the class the JS adds) */
 .brand-version.bad {
   color: var(--error);

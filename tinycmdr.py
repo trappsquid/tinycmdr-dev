@@ -23546,7 +23546,7 @@ WEB_PAGE = """
   <div class="header-left">
     <button id=menu class="icon-button" aria-label="conversations" title="conversations"><svg class="lucide" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" > <path d="M4 5h16" /> <path d="M4 12h16" /> <path d="M4 19h16" /> </svg></button>
     <div class="brand-medallion"><img id=medallionimg src="/mark.png?v={{VERSION}}" alt="tinycmdr badge"></div>
-    <div class="brand-copy"><span class="brand-name">tinycmdr</span><span id=ver class="brand-version"></span></div>
+    <div class="brand-copy"><span class="brand-name">tinycmdr</span><a id=ver class="brand-version" href="{{RELEASE_URL}}" target="_blank" rel="noopener" title="release notes"></a></div>
   </div>
   <div class="header-center"><span id=model></span></div>
   <div class="header-right">
@@ -24440,7 +24440,7 @@ async function versionCheck(){
   // events and gets overwritten - but the banner is DISMISSIBLE (see showWarn above); the
   // marker in the header and the tab title are the parts that never go away.
   verEl.className='brand-version'+(dl.length?' bad':'');
-  verEl.title=dl.length?dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; '):'';
+  verEl.title=dl.length?dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; '):'release notes';
   // the banner says what it MEANS; the detail (lane, code, reason) is one click away
   const detail=dl.map(function(k){return k+': '+((j.lanes[k]||{}).detail||'down');}).join('; ');
   showWarn(dl.length?'Messages can be drafted locally, but they may not be dispatched.':'', detail);
@@ -25094,6 +25094,19 @@ def _web_theme_vars():
     return out
 
 
+def _release_page_url():
+    """The release notes for THIS build - what the page's version stamp links to.
+
+    Derived from update_url (the one place the repo's URL lives), so a fork or a mirror
+    keeps its own links: .../releases/latest/download -> .../releases/tag/v<version>.
+    """
+    base = str(CONFIG["agent"].get("update_url")
+               or os.environ.get("TINYCMDR_UPDATE_URL")
+               or DEFAULT_UPDATE_URL)
+    root = base.split("/releases/")[0].rstrip("/")
+    return "%s/releases/tag/v%s" % (root, VERSION)
+
+
 def _web_page_html():
     """The page, with the host's palette and art baked in and nothing left to fetch."""
     # The art URLs carry the app version: /page.css and the HTML revalidate, but the
@@ -25103,6 +25116,7 @@ def _web_page_html():
     figure = ("/chibi.png?v=%s" % VERSION if _web_chibi_bytes() is not None
               else "/mark.png?v=%s" % VERSION)
     return (WEB_PAGE.replace("{{VERSION}}", VERSION)
+                    .replace("{{RELEASE_URL}}", _release_page_url())
                     .replace("{{THEME_COLOR}}", _web_theme_vars()["--bg"])
                     .replace("{{EMPTY_ART}}", figure)
                     .replace("{{BACKDROP}}", _web_backdrop_html()))
