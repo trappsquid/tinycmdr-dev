@@ -560,9 +560,13 @@ def main():
 
     # ---- the body cap is checked BEFORE the read ----------------------------
     big = b"x" * (fb.WEB_BODY_MAX + 64)
-    code, _, _ = req("POST", "/api/run", {**TOK, "Content-Type": "application/json"},
-                     big)
-    check(code == 400, "an oversized body is refused without reading it", code)
+    code, body, _ = req("POST", "/api/run", {**TOK, "Content-Type": "application/json"},
+                        big)
+    # 413, not 400 (A-208): the client can tell "send less" from "your JSON is broken",
+    # and the same body never reaches the parser.
+    check(code == 413 and b"too large" in body,
+          "an oversized body is refused with 413 (send less), without reading it",
+          (code, body[:80]))
 
     # ---- uploads ------------------------------------------------------------
     small = b"suite upload payload"
@@ -731,6 +735,161 @@ def main():
             ok = _st == 400 and b"expected a JSON object body" in _bd
             check(ok, "a %s body to %s is refused with 400 naming the shape"
                       % (_shape.decode(), _path), (_st, _bd[:90]))
+
+    # A-207: `Transfer-Encoding: chunked` was neither decoded nor refused - the body
+    # read as the integer 0, the caller got "empty message", and the chunk bytes were
+    # left for the next keep-alive request. It now answers 411 and closes.
+    _st, _hd, _bd, _ = probe("POST", "/api/run",
+                             {**TOK, "Transfer-Encoding": "chunked"},
+                             b"7\r\n{\"a\":1}\r\n0\r\n\r\n")
+    try:
+        _j = json.loads(_bd)
+    except Exception:
+        _j = {}
+    check(_st == 411 and "Content-Length" in (_j.get("error") or "")
+          and _hd.get("Connection") == "close",
+          "a chunked body is refused with 411 and the connection closed, not misread",
+          (_st, _hd.get("Connection"), _bd[:80]))
+
+    # ...and a second request on that same socket gets no reply at all (the leftover
+    # chunk bytes are never parsed as a request line).
+    _sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+    try:
+        _sock.sendall(b"POST /api/run HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                      b"X-Tinycmdr-Token: %s\r\nTransfer-Encoding: chunked\r\n\r\n"
+                      b"7\r\n{\"a\":1}\r\n0\r\n\r\n" % (port, token.encode()))
+        _d = b""
+        while b"\r\n\r\n" not in _d:
+            _c = _sock.recv(4096)
+            if not _c:
+                break
+            _d += _c
+        _after = b""
+        try:
+            _sock.sendall(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
+            _after = _sock.recv(4096)
+        except OSError:
+            _after = b""          # the socket is gone: exactly what must happen
+        check(b"411" in _d.split(b"\r\n", 1)[0] and b"HTTP/" not in _after,
+              "no request is parsed out of a refused chunked body's leftover bytes",
+              (_d[:40], _after[:40]))
+    finally:
+        _sock.close()
+
+    # A-208: over the cap is 413 ("send less"), already checked above; A-210/A-211: a
+    # body that stalls is 408, and a Content-Length that is not a count is 411 - the
+    # two used to be one 400 that named neither.
+    for _cl in ("abc", "-1", ""):
+        _st, _hd, _bd, _ = probe("POST", "/api/run", {**TOK, "Content-Length": _cl})
+        check(_st == 411 and b"Content-Length" in _bd,
+              "a Content-Length of %r is refused with 411, naming the length"
+              % _cl, (_st, _bd[:80]))
+    _saved_dl = fb.WEB_BODY_DEADLINE
+    fb.WEB_BODY_DEADLINE = 0.5
+    try:
+        _sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+        try:
+            _sock.sendall(b"POST /api/run HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                          b"X-Tinycmdr-Token: %s\r\nContent-Type: application/json\r\n"
+                          b"Content-Length: 1000\r\n\r\n{\"m\""
+                          % (port, token.encode()))
+            _t0 = time.time()
+            _d = b""
+            while b"\r\n\r\n" not in _d:
+                _c = _sock.recv(4096)
+                if not _c:
+                    break
+                _d += _c
+            _dt = time.time() - _t0
+            check(b"408" in _d.split(b"\r\n", 1)[0] and _dt < 5,
+                  "a body that stalls is answered 408 (a stall is not a syntax error)",
+                  (round(_dt, 2), _d[:70]))
+        finally:
+            _sock.close()
+    finally:
+        fb.WEB_BODY_DEADLINE = _saved_dl
+
+    # A-212/A-213: loopback is exempt from the LAN cap but not from ALL limits - a
+    # SECOND, larger cap bounds the thread count a local process can hold.
+    _cap2 = getattr(srv, "MAX_CONN_EXEMPT", None)
+    check(isinstance(_cap2, int) and _cap2 > srv.MAX_CONN,
+          "loopback has its own, larger cap instead of no cap at all", _cap2)
+    if isinstance(_cap2, int):
+        class _FakeSock2:
+            def __init__(self):
+                self.sent, self.closed = b"", False
+
+            def sendall(self, data):
+                self.sent += data
+
+            def close(self):
+                self.closed = True
+
+        _saved = srv._conn_live
+        srv._conn_live = _cap2
+        _fake = _FakeSock2()
+        srv.process_request(_fake, ("127.0.0.1", 4242))
+        srv._conn_live = _saved
+        check(b"503" in _fake.sent and _fake.closed,
+              "a loopback peer past the second cap is answered 503 like a LAN peer",
+              _fake.sent[:60])
+
+    # A-215: the pre-auth 403 used to carry the live port and a copy-pasteable
+    # `ssh -N -L` tunnel recipe. `accepts` stays; the tunnel does not.
+    _st, _hd, _bd, _ = probe("GET", "/api/tasks", {"Host": "evil.example"})
+    _low = _bd.decode("latin1").lower()
+    check(_st == 403 and "ssh -n -l" not in _low and "tunnel" not in _low,
+          "the pre-auth 403 names no port and no tunnel recipe", (_st, _bd[:120]))
+
+    # A-216/A-217: a bare (port-less) IPv6 Host and a trailing-dot FQDN Host are the
+    # SAME box; both used to be refused.
+    for _h in ("[::1]", "127.0.0.1.", "localhost."):
+        _st, _, _, _ = probe("GET", "/api/tasks", {**TOK, "Host": _h})
+        check(_st == 200, "Host %r is recognised as this box" % _h, _st)
+
+    # A-219: a reverse proxy that presents an Origin without the page's port gets a
+    # 403 that NAMES the disagreement, not one that only suggests web.host.
+    _st, _, _bd, _ = probe("GET", "/api/tasks", {**TOK, "Origin": "http://127.0.0.1"})
+    check(_st == 403 and b"disagree" in _bd and b"Origin" in _bd,
+          "the origin-mismatch 403 explains that Origin and Host must agree",
+          (_st, _bd[:140]))
+
+    # A-221: a 401 that saw a stale cookie clears it, so a rotated token does not leave
+    # the browser 401ing on a value nothing removes.
+    _st, _hd, _bd, _ = probe("GET", "/api/tasks",
+                             {"Cookie": "tinycmdr_token=stale-from-before"})
+    _sc = _hd.get("Set-Cookie") or ""
+    check(_st == 401 and "tinycmdr_token=" in _sc and "Max-Age=0" in _sc,
+          "a 401 presenting a stale cookie clears it (Max-Age=0)", (_st, _sc))
+
+    # A-223/A-224: query values are percent-decoded the way the page encodes them, and a
+    # duplicated key keeps its FIRST value (what a log line shows).
+    for _q, _want in (("caf%C3%A9", "café"), ("hello+world", "hello world"),
+                      ("%25", "%"), ("a%2Bb", "a+b")):
+        _st, _, _bd, _ = probe("GET", "/api/search?q=" + _q, TOK)
+        try:
+            _got = json.loads(_bd).get("query")
+        except Exception:
+            _got = None
+        check(_st == 200 and _got == _want,
+              "?q=%s decodes to %r" % (_q, _want), _got)
+    _st, _, _bd, _ = probe("GET", "/api/search?q=first&q=second", TOK)
+    check(json.loads(_bd).get("query") == "first",
+          "a duplicated query key keeps the FIRST value", json.loads(_bd).get("query"))
+
+    # A-225: keys are minted lowercase, so a shift-key slip reaches the conversation
+    # that exists instead of naming a second, empty one - and the regex is lowercase.
+    check(not fb._web_key_ok("WEB"),
+          "an upper-case session key is refused by WEB_KEY_RX")
+    _st, _, _bd, _ = probe("GET", "/api/session?key=WEB", TOK)
+    check(_st == 200 and json.loads(_bd).get("key") == "web",
+          "?key=WEB resolves to the existing conversation 'web'",
+          json.loads(_bd).get("key"))
+
+    # A-226: the request target is bounded; past it the answer is 414, not a walk of
+    # every routing branch.
+    _st, _, _bd, _ = probe("GET", "/" + "z" * 9000)
+    check(_st == 414, "an over-long request target is refused with 414", (_st, _bd[:60]))
 
     # ---- A-235: a conversation belongs to the browser that made it ----------
     CA = {"X-Tinycmdr-Token": token, "X-Tinycmdr-Client": "suiteA"}

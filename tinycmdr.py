@@ -24034,7 +24034,10 @@ WEB_RUNLOG_MAX_CHARS = 500_000  # ...and a ceiling on the file itself
 
 WEB_RUNLOG_LOCK = threading.Lock()
 
-WEB_KEY_RX = re.compile(r"[A-Za-z0-9_.-]{1,64}\Z")
+# Session keys are generated lowercase ("web", "web-<hex>"), and the rail lets the
+# operator retype one. Allowing A-Z let a shift-key slip ("WEB") name a SECOND, empty
+# conversation beside "web" (A-225, measured 2026-10-06). Lowercase only, everywhere.
+WEB_KEY_RX = re.compile(r"[a-z0-9_.-]{1,64}\Z")
 
 def _web_key_ok(key):
     """A session key becomes a filename, so it is checked, never trusted.
@@ -24279,7 +24282,13 @@ def web_touch(key):
 
 def web_resolve_session(client, requested):
     """The conversation a request means: what it asked for, else what this
-    browser had open, else the shared one. Never anything outside the host."""
+    browser had open, else the shared one. Never anything outside the host.
+
+    A requested key is folded to lower case first: keys are minted lowercase, so a
+    shift-key slip ("WEB") used to resolve to a SECOND, empty conversation that did
+    not exist, instead of reaching "web" (A-225, measured 2026-10-06)."""
+    if isinstance(requested, str):
+        requested = requested.lower()
     if requested and _web_key_ok(requested):
         return requested
     return web_open_key(client) or "web"
@@ -24980,6 +24989,12 @@ WEB_BODY_MAX = 1048576
 # client that never finishes its headers; this bounds the BODY, so a caller that announces
 # a length and then trickles bytes cannot hold a worker for the whole minute.
 WEB_BODY_DEADLINE = 15
+
+# The request-target bound (A-226). Routing walks a chain of startswith() over self.path,
+# so a huge path is unbounded work per request from a peer that needs no token (measured
+# 2026-10-06: a 9,000-character path ran every branch before the 404). The longest URL the
+# page builds is a download link, far under this; past it the honest answer is 414.
+WEB_TARGET_MAX = 4096
 # The uploads ceiling: one file through POST /api/upload. Aligned with SEND_FILE_MAX so
 # the two directions agree, and read under the same deadline discipline as _body.
 WEB_UPLOAD_MAX = SEND_FILE_MAX
@@ -26791,16 +26806,19 @@ def _web_authority(authority):
     """(host, port) for a Host header or an Origin authority.
 
     A missing port stays "" on both sides, so what is compared is exactly what the
-    client addressed. IPv6 literals may or may not carry their brackets.
+    client addressed. IPv6 literals may or may not carry their brackets. A trailing
+    dot is the FQDN spelling of the same host (`127.0.0.1.` is `127.0.0.1`), so it is
+    dropped before the compare - a bookmark or link that gained the dot is not a
+    different name (A-217).
     """
     a = (authority or "").strip().lower()
     if a.startswith("["):
         host, _, rest = a.partition("]")
-        return host[1:], rest.lstrip(":")
+        return host[1:].rstrip("."), rest.lstrip(":")
     host, sep, port = a.rpartition(":")
     if not sep or ":" in host:              # no colon, or a bare (bracketless) IPv6
-        return a, ""
-    return host, port
+        return a.rstrip("."), ""
+    return host.rstrip("."), port
 
 
 def _web_hosts_resolve():
@@ -26884,22 +26902,33 @@ def run_webui():
         # live handlers and refuse past a modest cap; a refused connection never
         # spawns a thread, and the counter drops when a handler thread ends.
         MAX_CONN = 32
+        # A SECOND, larger cap for the exempt peers above (A-212/A-213). Exempting
+        # loopback removed the ceiling entirely: any local process - including one the
+        # agent itself starts - could hold as many 60-second handler threads as it could
+        # open sockets (measured 2026-10-06: 48 simultaneous local connections were all
+        # served and _conn_live reached 48). This keeps `curl -sf` from a busy box working
+        # while still bounding the thread count; a refusal past it is the same 503.
+        MAX_CONN_EXEMPT = 256
         _conn_lock = threading.Lock()
         _conn_live = 0
 
         def process_request(self, request, client_address):
-            # Loopback callers are exempt: they are already ON the box (the same trust
-            # boundary as this process), and they are the ones that probe /api/health -
-            # the installers, the restart doors, curl from a terminal. Counting them
-            # made a busy server read as a DEAD one to `curl -sf`, which is the answer
-            # the restart path must never get wrong (measured 2026-10-05: 40 idle
-            # sockets aborted the health probe mid-connection). A LAN peer stays capped
-            # - that is the 2026-09-23 thread-stacking incident - and now hears BUSY in
-            # HTTP instead of a bare close, so a monitor can tell it apart from a dead box.
+            # Loopback callers are exempt from the LAN cap: they are already ON the box
+            # (the same trust boundary as this process), and they are the ones that probe
+            # /api/health - the installers, the restart doors, curl from a terminal.
+            # Counting them made a busy server read as a DEAD one to `curl -sf`, which is
+            # the answer the restart path must never get wrong (measured 2026-10-05: 40
+            # idle sockets aborted the health probe mid-connection). They are not exempt
+            # from ALL limits: past MAX_CONN_EXEMPT they hear the same 503, so the thread
+            # count stays bounded even locally (A-213). A LAN peer stays capped at
+            # MAX_CONN - that is the 2026-09-23 thread-stacking incident - and hears BUSY
+            # in HTTP instead of a bare close, so a monitor can tell it apart from a dead
+            # box.
             peer = str((client_address or ("",))[0])
             exempt = peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+            cap = self.MAX_CONN_EXEMPT if exempt else self.MAX_CONN
             with self._conn_lock:
-                if self._conn_live >= self.MAX_CONN and not exempt:
+                if self._conn_live >= cap:
                     log.info("web: refused a connection, %d already open",
                              self._conn_live)
                     try:
@@ -26967,6 +26996,10 @@ def run_webui():
         _body_taken = False     # this request's body has been read or closed off
         _head_only = False      # do_HEAD runs the GET routing with the body dropped
         _body_got = "no body"   # what _body() found, for the 400 that names the shape
+        _body_code = 400        # the status a refused body deserves (400/408/411/413)
+        _cookie_given = False   # this request carried a tinycmdr_token cookie
+        _refuse_why = "host"    # which _origin_ok rule refused this request
+        _refuse_origin = ""     # the Origin that did not match, for the 403
 
         def log_message(self, *a):
             pass
@@ -26988,12 +27021,27 @@ def run_webui():
             # how a real fix gets reported as "still broken". Poll responses too.
             self.send_header("Cache-Control", "no-store, must-revalidate")
             self.send_header("Content-Length", str(len(data)))
+            if self.close_connection:
+                # A reply that will be followed by a close must SAY so: on keep-alive
+                # (A-202) a client that cannot see the close would reuse a socket the
+                # server is about to drop. Set by _drain/_body for a refused or
+                # unreadable body, where leftover bytes make reuse unsafe (A-207).
+                self.send_header("Connection", "close")
             for name, value in (extra or ()):
                 self.send_header(name, value)
             self.end_headers()
             self._write(data)
 
         def _json(self, obj, code=200, extra=None):
+            if code == 401 and self._cookie_given:
+                # A cookie was presented and did not authenticate - usually a token
+                # rotated with `tinycmdr token set` while this browser still held the
+                # old one. Nothing used to clear it, so the browser kept sending a
+                # stale value and 401'd until the page's own boot dance ran (A-221);
+                # Max-Age=0 drops it, and the page then asks for the new token.
+                extra = list(extra or ()) + [
+                    ("Set-Cookie", "tinycmdr_token=; Path=/; HttpOnly; "
+                                   "SameSite=Strict; Max-Age=0")]
             self._send(json.dumps(obj), code, "application/json", extra=extra)
 
         def _file(self, path):
@@ -27048,6 +27096,7 @@ def run_webui():
                     name, _, value = part.strip().partition("=")
                     if name == "tinycmdr_token":
                         given = value
+                        self._cookie_given = True      # so a 401 can clear a stale one
                         break
             return hmac.compare_digest(
                 given.encode("utf-8", "replace"), token.encode("utf-8"))
@@ -27063,7 +27112,12 @@ def run_webui():
             (a file:// page, a sandboxed iframe) is refused.
             """
             host_hdr = (self.headers.get("Host") or "").strip().lower()
-            name = host_hdr.rsplit(":", 1)[0].strip("[]")
+            # _web_authority, not rsplit: a bare IPv6 Host ("[::1]", no port - what a
+            # proxy or an HTTP/1.0 client sends) was parsed to "" and refused, and a
+            # trailing dot ("127.0.0.1.", the FQDN form a bookmark or link can gain)
+            # came back different from the name this box answers to (A-216/A-217,
+            # measured 2026-10-06: both were 403).
+            name = _web_authority(host_hdr)[0]
             # This box's own names answer the question "did you address me?"; `web.host`,
             # when it names one host, is an extra name the operator chose.
             allowed = _web_local_hosts()
@@ -27077,6 +27131,7 @@ def run_webui():
             if name not in allowed:
                 log.warning("web: refused a request with Host %r (not a loopback/"
                             "configured name)", host_hdr)
+                self._refuse_why = "host"
                 return False
             origin = (self.headers.get("Origin") or "").strip()
             if not origin:
@@ -27092,6 +27147,8 @@ def run_webui():
                 return True
             log.warning("web: refused a cross-origin request (Origin %r, Host %r)",
                         origin, host_hdr)
+            self._refuse_why = "origin"
+            self._refuse_origin = origin
             return False
 
         def _forbidden(self):
@@ -27099,35 +27156,80 @@ def run_webui():
             # Say what WOULD work. The old body was four words of jargon, and the operator
             # who hit it (2026-09-28, browsing to a live install by IP) had no way to learn
             # that the page accepts only particular names - or which.
-            # The tunnel example names THIS page's port, not the shipped default: web.port 0
-            # would otherwise hand out 8790, where this box is not serving.
-            _port = web_port_effective()
-            self._json({
+            # `accepts` stays (an operator diagnostic, A-38). The live PORT and the
+            # copy-pasteable tunnel recipe that used to ride along do NOT: this body is
+            # built before auth, so one unauthenticated request mapped the box and handed
+            # out the port to tunnel to (A-215, measured 2026-10-06). `tinycmdr web`
+            # prints the tunnel command locally, where the operator already is.
+            payload = {
                 "error": "forbidden: unexpected Host, or a cross-origin request",
                 "host": (self.headers.get("Host") or ""),
                 "accepts": ", ".join(sorted(_web_local_hosts())),
-                "fix": ("browse this box by one of `accepts`, or make the name you use one "
-                        "of them: `tinycmdr config set web.host <name-or-ip>` then restart. "
-                        "A tunnel sidesteps it: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
-                        % (_port, _port)),
-            }, 403)
+            }
+            if self._refuse_why == "origin":
+                # A reverse proxy on port 80 presents an Origin without the page's port
+                # while Host carries it, and the old body only suggested `web.host`, which
+                # never clears this (A-219, measured 2026-10-06). Name the disagreement.
+                origin = self._refuse_origin or (self.headers.get("Origin") or "")
+                payload["reason"] = ("the Origin (%s) and the Host (%s) disagree; a "
+                                     "reverse proxy must forward both unchanged, port "
+                                     "included" % (origin,
+                                                   self.headers.get("Host") or ""))
+                payload["fix"] = ("load the page by the address in `accepts` (its Origin "
+                                  "and Host then agree), or have the proxy pass an Origin "
+                                  "that matches the Host it sends - same name AND port.")
+            else:
+                payload["reason"] = ("the Host (%s) is not a name this box answers to"
+                                     % (self.headers.get("Host") or ""))
+                payload["fix"] = ("browse this box by one of `accepts`, or make the name "
+                                  "you use one of them: `tinycmdr config set web.host "
+                                  "<name-or-ip>` then restart.")
+            self._json(payload, 403)
 
         # -- routing ------------------------------------------------------
 
         def _query(self):
-            """?a=b&c=d as a dict, without depending on urllib.parse."""
+            """?a=b&c=d as a dict, with each key and value percent-decoded.
+
+            The page builds every URL with encodeURIComponent, so a search term or a
+            filename with an accent or a space arrives percent-encoded. The old
+            "%20-only" replace matched it against its own encoding (A-223, measured
+            2026-10-06: ?q=caf%C3%A9 echoed caf%C3%A9, ?q=hello+world kept the +). A
+            duplicated key keeps its FIRST value - what a proxy or a log line shows -
+            instead of the last (A-224).
+            """
+            from urllib.parse import unquote_plus
             if "?" not in self.path:
                 return {}
             out = {}
             for pair in self.path.split("?", 1)[1].split("&"):
                 if "=" in pair:
                     k, v = pair.split("=", 1)
-                    out[k] = v.replace("%20", " ")
+                    k, v = unquote_plus(k), unquote_plus(v)
                 elif pair:
-                    out[pair] = ""
+                    k, v = unquote_plus(pair), ""
+                else:
+                    continue
+                if k not in out:
+                    out[k] = v
             return out
 
+        def _target_ok(self):
+            """The request-target bound (A-226), checked before any routing branch.
+
+            The chain below runs startswith() over self.path for every branch, so a huge
+            target is unbounded work a token-less peer can ask for (measured 2026-10-06:
+            a 9,000-character path walked the whole chain before the 404). 414 names it.
+            """
+            if len(self.path) <= WEB_TARGET_MAX:
+                return True
+            self._drain()
+            self._json({"error": "request target too long", "max": WEB_TARGET_MAX}, 414)
+            return False
+
         def do_GET(self):
+            if not self._target_ok():
+                return
             # A GET carries no body, but if one is announced it must still be read
             # or the connection closed: on HTTP/1.1 keep-alive (A-202) those bytes
             # would be parsed as the next request line. `_drain` is idempotent and a
@@ -27275,9 +27377,10 @@ def run_webui():
                     self._json({"error": "unauthorized"}, 401)
                     return
                 q = self._query()
-                from urllib.parse import unquote as _uq
-                run = WEB_RUNS.get(_uq(str(q.get("run") or "")))
-                uid = _uq(str(q.get("uid") or ""))
+                # _query() has already percent-decoded both values, so no second
+                # unquote here (a name holding a literal "%2F" must not become "/").
+                run = WEB_RUNS.get(str(q.get("run") or ""))
+                uid = str(q.get("uid") or "")
                 line = None
                 if run is not None:
                     with run.lock:
@@ -27392,36 +27495,70 @@ def run_webui():
         def _body(self):
             """The request body as a JSON OBJECT, or None.
 
-            None means "refuse with 400" (see _need_body), never "silently drop the
-            request". A JSON body that is not an object - `[]`, `"hi"`, `0`, `true` -
-            used to reach `body.get(...)` and raise, so the caller's connection was
-            dropped with ZERO bytes and no reply at all (A-206, measured 2026-10-06).
-            `_body_got` names what arrived so the refusal can name the shape.
+            None means "refuse" (see _need_body), never "silently drop the request".
+            `_body_got` names what arrived and `_body_code` is the status the refusal
+            deserves, so a caller can tell the answers apart:
+              * 411 - a Transfer-Encoding body (chunked is not decoded here, A-207), or
+                a Content-Length that is not a count (A-211);
+              * 413 - a body over the cap, which says "send less" rather than "your JSON
+                is broken" (A-208);
+              * 408 - a body that announced bytes and then stalled, which is not a syntax
+                error (A-210);
+              * 400 - everything else, including a JSON value that is not an object
+                (A-206) and malformed JSON.
             """
             self._body_taken = True
+            self._body_code = 400
+            if (self.headers.get("Transfer-Encoding") or "").strip():
+                # Chunked was neither decoded nor refused: the body read as the integer
+                # 0, the caller got "empty message", and the chunk bytes stayed in the
+                # socket for the next keep-alive request (A-207, measured 2026-10-06).
+                # A length is required here; say so, and close so nothing is mis-parsed.
+                self.close_connection = True
+                self._body_got = "a Transfer-Encoding body (chunked is not supported)"
+                self._body_code = 411
+                return None
             try:
                 length = int(self.headers.get("Content-Length", 0))
-                if not 0 <= length <= WEB_BODY_MAX:
-                    # the claimed length is attacker-controlled and both paths
-                    # ran before the 401 (2026-09-23): a huge
-                    # claim allocates or blocks, and read(-n) runs to EOF.
-                    # Read (and drop) what we can, bounded by the cap and under the
-                    # deadline, so the caller HEARS the refusal instead of a reset.
-                    try:
-                        if length > 0:
-                            self.connection.settimeout(WEB_BODY_DEADLINE)
-                            self.rfile.read(min(length, WEB_BODY_MAX))
-                    except Exception:
-                        pass
-                    self.close_connection = True
-                    self._body_got = "a body over the %d-byte cap" % WEB_BODY_MAX
-                    return None
+            except (TypeError, ValueError):
+                self.close_connection = True
+                self._body_got = ("a Content-Length that is not a count (%r)"
+                                  % (self.headers.get("Content-Length"),))
+                self._body_code = 411
+                return None
+            if length < 0:
+                self.close_connection = True
+                self._body_got = "a negative Content-Length (%d)" % length
+                self._body_code = 411
+                return None
+            if length > WEB_BODY_MAX:
+                # the claimed length is attacker-controlled and both paths
+                # ran before the 401 (2026-09-23): a huge
+                # claim allocates or blocks, and read(-n) runs to EOF.
+                # Read (and drop) what we can, bounded by the cap and under the
+                # deadline, so the caller HEARS the refusal instead of a reset.
+                try:
+                    self.connection.settimeout(WEB_BODY_DEADLINE)
+                    self.rfile.read(min(length, WEB_BODY_MAX))
+                except Exception:
+                    pass
+                self.close_connection = True
+                self._body_got = "a body over the %d-byte cap" % WEB_BODY_MAX
+                self._body_code = 413
+                return None
+            try:
                 # An absolute deadline for THIS read: a client that announces a length and
                 # trickles bytes must not hold a worker for the whole socket timeout.
                 self.connection.settimeout(WEB_BODY_DEADLINE)
                 raw = self.rfile.read(length) or b"{}"
                 self._body_got = "body"
                 parsed = json.loads(raw)
+            except (socket.timeout, TimeoutError):
+                self.close_connection = True
+                self._body_got = ("a body that stalled (no bytes within %ds)"
+                                  % WEB_BODY_DEADLINE)
+                self._body_code = 408
+                return None
             except Exception as e:
                 self._body_got = "an unreadable body (%s)" % type(e).__name__
                 return None
@@ -27431,16 +27568,28 @@ def run_webui():
             return parsed
 
         def _need_body(self):
-            """The JSON object body, or None after answering 400 with the shape.
+            """The JSON object body, or None after answering with `_body_code`.
 
             ONE refusal for every JSON route, so a body like `[]` can never reach
             `body.get(...)` and kill the connection (A-206) and the caller is told
-            what to send instead."""
+            what to send instead - with the status that names the condition (413 too
+            big, 408 stalled, 411 no usable length, else 400)."""
             body = self._body()
             if body is None:
-                self._json({"error": "expected a JSON object body",
-                            "got": self._body_got,
-                            "content_type": "application/json"}, 400)
+                code = self._body_code
+                if code == 413:
+                    err = {"error": "request body too large", "got": self._body_got,
+                           "max": WEB_BODY_MAX, "content_type": "application/json"}
+                elif code == 411:
+                    err = {"error": "a request body needs a Content-Length",
+                           "got": self._body_got, "content_type": "application/json"}
+                elif code == 408:
+                    err = {"error": "the request body stalled", "got": self._body_got,
+                           "content_type": "application/json"}
+                else:
+                    err = {"error": "expected a JSON object body", "got": self._body_got,
+                           "content_type": "application/json"}
+                self._json(err, code)
             return body
 
         def _raw(self, max_bytes):
@@ -27474,17 +27623,28 @@ def run_webui():
                 return
             self._body_taken = True
             try:
+                if (self.headers.get("Transfer-Encoding") or "").strip():
+                    # No Content-Length bounds the read, and the chunk bytes would be
+                    # parsed as the next keep-alive request: answer, then close (A-207).
+                    self.close_connection = True
+                    return
                 length = int(self.headers.get("Content-Length", 0) or 0)
                 if length < 0:
                     self.close_connection = True
                     return
                 if length > 0:
                     self.connection.settimeout(WEB_BODY_DEADLINE)
-                    self.rfile.read(min(length, WEB_BODY_MAX))
+                    got = self.rfile.read(min(length, WEB_BODY_MAX))
+                    # A short read means EOF (or a stall): bytes we did not account for
+                    # may remain, so this connection cannot be reused.
+                    if len(got) < min(length, WEB_BODY_MAX):
+                        self.close_connection = True
                 if length > WEB_BODY_MAX:
                     self.close_connection = True
             except Exception:
-                pass
+                # A body we could not read to its end leaves unknown bytes behind; the
+                # safe answer is to stop reusing the connection.
+                self.close_connection = True
 
         def _start_run(self, text, key="web", client=""):
             """Kick off a browser run on its own thread; the page polls for
@@ -27521,6 +27681,8 @@ def run_webui():
             self._json({"run_id": run.id, "busy": False})
 
         def do_POST(self):
+            if not self._target_ok():
+                return
             if not self._origin_ok():
                 self._forbidden()
                 return
@@ -27592,8 +27754,10 @@ def run_webui():
                     self._json({"error": "upload refused: empty, over %d bytes, or "
                                          "stalled" % WEB_UPLOAD_MAX}, 413)
                     return
-                from urllib.parse import unquote
-                raw = unquote(self._query().get("name") or "").strip()
+                # _query() already percent-decoded the name once; decoding again would
+                # turn a literal "%2e%2e" in a filename into ".." before _web_safe_name
+                # sees it (A-223).
+                raw = (self._query().get("name") or "").strip()
                 UPLOADS_DIR.mkdir(exist_ok=True)
                 dest = UPLOADS_DIR / ("%d_%s" % (int(time.time()),
                                                  _web_safe_name(raw) if raw else "upload.bin"))
