@@ -747,6 +747,24 @@ check("and its capability line carries no warning",
 # capped and the leaf is on demand. Three things a shelf has to do: resolve from the label
 # the prompt shows (and from a shorter word for it), name its tools WITH descriptions, and
 # reveal NOTHING - a reveal is per-session schema rent that calling the tool pays anyway.
+# A-101 (an earlier review run 11): the A-79 class again - `_tool_category` raised on a
+# non-string while `_tool_blurb` beside it coerced. The pair must agree. The calls are
+# wrapped because the PRE-FIX build raises right here, and a crashing suite reports less
+# than a failing check (the rest of the suite never runs).
+def _safe(fn, *a):
+    try:
+        return fn(*a)
+    except Exception as e:                                   # noqa: BLE001
+        return "RAISED %s" % type(e).__name__
+
+
+check("_tool_category coerces a non-string instead of raising",
+      _safe(fb._tool_category, None) == "" and _safe(fb._tool_category, 12345) == "",
+      (_safe(fb._tool_category, None), _safe(fb._tool_category, 12345)))
+check("_tool_blurb coerces a non-string too",
+      _safe(fb._tool_blurb, None) == "" and _safe(fb._tool_blurb, 12345) == "",
+      (_safe(fb._tool_blurb, None), _safe(fb._tool_blurb, 12345)))
+
 _shelves = {}
 _other_shipped, _other_host = [], []
 _shipped_sources = shipped_tool_sources()
@@ -798,6 +816,119 @@ check("prompt: the index block carries NAMES with no per-tool description line",
           for n in fb.REGISTRY.custom) and
       all(fb.REGISTRY.custom[n]["schema"]["function"]["description"][:30] not in _sp
           for n in fb.REGISTRY.custom), [n for n in fb.REGISTRY.custom])
+
+# ---- a typo'd reveal TTL never reaches the request builder (A-99) --------------------
+# `float("bogus")` raised a ValueError out of revealed_tools -> visible_tool_names ->
+# select_tool_schemas, i.e. out of building the very next request: one typo in config and
+# the whole conversation dies before a token is sent. Guarded like _mcp_timeout.
+_saved_ttl = fb.CONFIG["agent"].get("reveal_ttl_secs")
+try:
+    fb.CONFIG["agent"]["reveal_ttl_secs"] = "bogus"
+    try:
+        _ttl_out, _ttl_err = fb.select_tool_schemas("ttl-probe"), None
+    except Exception as _e:                                    # noqa: BLE001 - the point
+        _ttl_out, _ttl_err = None, _e
+    check("a non-numeric reveal_ttl_secs does not raise out of the request builder",
+          _ttl_err is None and isinstance(_ttl_out, list), _ttl_err)
+    _ttl_fn = getattr(fb, "_reveal_ttl_secs", None)
+    check("...it falls back to the shipped default of 1800s",
+          _ttl_fn is not None and _ttl_fn() == 1800.0,
+          _ttl_fn() if _ttl_fn else "no _reveal_ttl_secs")
+    fb.CONFIG["agent"]["reveal_ttl_secs"] = 0
+    check("...and a real 0 still means 'never decay'",
+          _ttl_fn is not None and _ttl_fn() == 0.0,
+          _ttl_fn() if _ttl_fn else "no _reveal_ttl_secs")
+finally:
+    if _saved_ttl is None:
+        fb.CONFIG["agent"].pop("reveal_ttl_secs", None)
+    else:
+        fb.CONFIG["agent"]["reveal_ttl_secs"] = _saved_ttl
+
+# ---- reveal_tools takes one name as a string, refuses a non-list (A-100) --------------
+_rt_name = sorted(fb.hidden_tools(None))[0] if fb.hidden_tools(None) else "search_files"
+fb.reveal_tools("rt-str", _rt_name)
+check("reveal_tools reads a bare string as ONE name, not its characters",
+      fb.revealed_tools("rt-str") == {_rt_name}, fb.revealed_tools("rt-str"))
+try:
+    fb.reveal_tools("rt-bad", 7)
+    _rt_err = None
+except TypeError as _e:
+    _rt_err = str(_e)
+check("reveal_tools refuses a non-list with a message naming what it wants",
+      _rt_err is not None and "list" in _rt_err and "7" in _rt_err, _rt_err)
+
+# ---- find_tools honours name, topic and action (A-135) ------------------------------
+# `{}`, `action=list`, `action=search topic=...`, `action=read name=X` and a bogus name all
+# returned byte-identical text because the handler read only query/category/all.
+_base = fb.tool_find_tools({}, {"session_key": "ft-args"})
+_out = fb.tool_find_tools({"name": "search_files"}, {"session_key": "ft-name"})
+check("find_tools {name: X} reads that tool back, not the generic list", _out != _base,
+      _out[:160])
+check("...and answers with that tool's own blurb and argument schema",
+      "search_files" in _out and "args:" in _out, _out[:200])
+check("an unknown name says so instead of listing everything",
+      "No tool named" in fb.tool_find_tools({"name": "no_such_tool_zzz"},
+                                            {"session_key": "ft-unk"}))
+check("topic filters exactly as query does",
+      fb.tool_find_tools({"topic": "zzzznothing"}, {"session_key": "ft-topic"})
+      == fb.tool_find_tools({"query": "zzzznothing"}, {"session_key": "ft-topic"}))
+check("action=search with a topic searches, not lists",
+      fb.tool_find_tools({"action": "search", "topic": "zzzznothing"},
+                         {"session_key": "ft-search"}) != _base)
+check("action=list is the plain surface listing",
+      fb.tool_find_tools({"action": "list"}, {"session_key": "ft-list"}) == _base)
+check("action=read without a name says what it needs",
+      "needs `name`" in fb.tool_find_tools({"action": "read"}, {"session_key": "ft-rn"}))
+check("a bogus action names the vocabulary",
+      "unknown action" in fb.tool_find_tools({"action": "wat"}, {"session_key": "ft-bad"}))
+check("the find_tools schema declares name, topic and action",
+      all(k in str(fb.CORE_TOOLS["find_tools"]["schema"])
+          for k in ("name", "topic", "action")))
+
+# ---- create_tool validates its action vocabulary before anything else (A-136) --------
+# action=delete used to fall into the create path and complain about a missing `code`.
+check("create_tool action=delete without a name says what it needs",
+      "action=delete needs `name`" in fb.tool_create_tool({"action": "delete"}, {}))
+check("create_tool with a bogus action names the vocabulary",
+      "unknown create_tool action" in fb.tool_create_tool({"action": "wat"}, {}))
+check("create_tool action=delete on an unknown tool says so, not 'no code'",
+      "no custom tool named" in fb.tool_create_tool(
+          {"action": "delete", "name": "no_such_zzz"}, {}))
+# A real delete, staged in a throwaway tools dir so the repository's own tools/ is untouched.
+_del_dir = Path(tempfile.mkdtemp(prefix="fb-toolsdel-"))
+_del_file = _del_dir / "probe_tool.py"
+_del_file.write_text("NAME = 'probe_tool'\n", encoding="utf-8")
+_reg_file = _del_dir / "ported_todo.py"
+_reg_file.write_text("NAME = 'todo_list'\n", encoding="utf-8")
+_saved_tools_dir = fb.TOOLS_DIR
+_saved_custom = dict(fb.REGISTRY.custom)
+try:
+    fb.TOOLS_DIR = _del_dir
+    fb.REGISTRY.custom["probe_tool"] = {
+        "fn": lambda *a: "", "source": _del_file, "mutates": False, "category": "",
+        "schema": {"type": "function", "function": {
+            "name": "probe_tool", "description": "", "parameters": {}}}}
+    fb.REGISTRY.custom["todo_list"] = {
+        "fn": lambda *a: "", "source": _reg_file, "mutates": False, "category": "",
+        "schema": {"type": "function", "function": {
+            "name": "todo_list", "description": "", "parameters": {}}}}
+    _del_out = fb.tool_create_tool({"action": "delete", "name": "probe_tool"},
+                                   {"session_key": "ft-del"})
+    check("create_tool action=delete removes the file and the registration, and says so",
+          _del_out.startswith("OK: deleted tools/probe_tool.py")
+          and "probe_tool" in _del_out and not _del_file.exists()
+          and "probe_tool" not in fb.REGISTRY.custom, _del_out)
+    _reg_out = fb.tool_create_tool({"action": "delete", "name": "todo_list"},
+                                   {"session_key": "ft-del"})
+    check("...and it resolves a register-style tool by its TOOL name, not its file name",
+          _reg_out.startswith("OK: deleted tools/ported_todo.py")
+          and "todo_list" in _reg_out and not _reg_file.exists()
+          and "todo_list" not in fb.REGISTRY.custom, _reg_out)
+finally:
+    fb.TOOLS_DIR = _saved_tools_dir
+    fb.REGISTRY.custom.clear()
+    fb.REGISTRY.custom.update(_saved_custom)
+    shutil.rmtree(_del_dir, ignore_errors=True)
 
 print()
 print("%d passed, %d failed" % (len(PASSES), len(FAILS)))

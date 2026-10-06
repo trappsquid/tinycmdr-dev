@@ -7,6 +7,7 @@ lands on disk, the prompt gets both ends plus a pointer that works, and a spill 
 written degrades to the old truncation instead of breaking the run.
 """
 import json
+import os
 import re
 import shutil
 import sys
@@ -34,6 +35,10 @@ def check(cond, what):
 
 
 def main():
+    # A pre-fix run points the suite at an OLD build with TINYCMDR_SRC, like the other
+    # suites; the scenario loader spells the same knob TINYCMDR_TEST_APP.
+    if os.environ.get("TINYCMDR_SRC") and not os.environ.get("TINYCMDR_TEST_APP"):
+        os.environ["TINYCMDR_TEST_APP"] = os.environ["TINYCMDR_SRC"]
     workdir = Path(tempfile.mkdtemp(prefix="fbtest-spill-"))
     try:
         run_scenario.stage_install(workdir, 24000)
@@ -204,6 +209,44 @@ def main():
               f"a spill whose file was deleted drops off the index instead of dangling "
               f"(was {ids_a[-1]}, now {ids_a2})")
         fb.CONFIG["agent"]["spill_keep"] = 50
+
+        # ---- the truncation note must never lie, nor return the text it cut (A-104) ----
+        # `limit` 0 or 1 fell through `text[-0:]` (== the whole text): a 50-char body came
+        # back in full with a note claiming part of it was gone, and 1 on 500 chars gave 547.
+        _small = "abcdefghij" * 5
+        _out0 = fb.truncate_middle(_small, 0)
+        check("too small" in _out0 and _small[:10] not in _out0,
+              f"truncate_middle(text, 0) refuses instead of returning the whole text "
+              f"({_out0[:60]!r})")
+        _out1 = fb.truncate_middle("x" * 500, 1)
+        check(len(_out1) < 100 and "500 chars omitted" in _out1,
+              f"truncate_middle(text, 1) does not return 547 chars ({len(_out1)})")
+        _outm = fb.truncate_middle("H" * 20 + "M" * 21 + "T" * 20, 21)
+        check(_outm.startswith("H" * 10) and _outm.endswith("T" * 10)
+              and "41 chars omitted" in _outm,
+              f"a normal limit keeps a head and a tail and names the real omission "
+              f"({_outm!r})")
+
+        # ---- the spill-signal budget bounds the WHOLE block, wrapper included (A-105) ---
+        # Only the picked lines were charged, so a 100-char budget returned a 146-char
+        # [HARNESS:] header plus the lines - 215 chars in all.
+        _sig_body = "\n".join(f"line {i} error: boom" for i in range(80))
+        _sig_small = fb._spill_signal(_sig_body, 0, len(_sig_body), 100)
+        check(len(_sig_small) <= 100,
+              f"a 100-char budget is not overrun by the wrapper ({len(_sig_small)})")
+        _sig_big = fb._spill_signal(_sig_body, 0, len(_sig_body), 4000)
+        check(len(_sig_big) <= 4000 and "error: boom" in _sig_big,
+              "a workable budget still carries the cause lines")
+
+        # ---- the [HARNESS: ...] stripper matches nested brackets (A-106) ---------------
+        # The old `[^\]]*` stopped at the FIRST `]`, eating the note's tail and the real
+        # output behind it, so two different results could read as one signature.
+        check(fb._dedupe_text("[HARNESS: a [nested] b] tail") == "tail",
+              "a nested-bracket note strips cleanly "
+              f"({fb._dedupe_text('[HARNESS: a [nested] b] tail')!r})")
+        check(fb._dedupe_text("[HARNESS: note] X [HARNESS: note]")
+              != fb._dedupe_text("[HARNESS: note] Y [HARNESS: note]"),
+              "two genuinely different results do not collapse to one signature")
 
         print()
         print(f"{len(PASSES)} passed, {len(FAILS)} failed")

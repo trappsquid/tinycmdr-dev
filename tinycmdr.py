@@ -3293,11 +3293,27 @@ except Exception:
 
 
 def truncate_middle(text, limit, label="output"):
+    """Head + a truthful note + tail, never showing more than `limit` chars of text.
+
+    `limit <= 1` used to fall through `text[-0:]`, which is the WHOLE text: a 30-char body
+    came back in full with a note claiming 10 chars were omitted, and `limit=1` on 500
+    chars returned 547 (an earlier review run 11, A-104). The note now names the chars that are
+    really gone and a limit too small for a head and a tail is refused in words instead of
+    handing back the text it claimed to cut.
+    """
+    text = str(text or "")
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 0
     if len(text) <= limit:
         return text
     half = limit // 2
+    if half < 1:
+        return (f"[{label}: {len(text)} chars omitted - a {limit}-char limit is too small "
+                f"to show any of them]")
     return (text[:half] +
-            f"\n... [{label} truncated: {len(text) - limit} chars omitted] ...\n" +
+            f"\n... [{label} truncated: {len(text) - 2 * half} chars omitted] ...\n" +
             text[-half:])
 
 
@@ -3601,6 +3617,18 @@ _SPILL_SIGNAL = re.compile(
     r"|exit[_ ]?(?:code|status)\s*[=:]?\s*[1-9])")
 
 
+_SPILL_SIGNAL_LINE_MAX = 400   # one excerpted line is clamped here
+_SPILL_SIGNAL_LINES = 12       # ... and the excerpt carries at most this many
+
+
+def _spill_signal_block(picked):
+    """The excerpt exactly as _spill_signal returns it, so the caller's budget can bound
+    the WHOLE block - the `[HARNESS: ...]` header and footer included (A-105)."""
+    return (f"[HARNESS: {len(picked)} line(s) from the dropped middle that name a cause or "
+            f"a failure - the full text is still in the spill file:\n"
+            + "\n".join(picked) + "]\n")
+
+
 def _spill_signal(text, lo, hi, budget):
     """The cause-naming lines from the span of a spilled result the prompt drops.
 
@@ -3611,26 +3639,33 @@ def _spill_signal(text, lo, hi, budget):
     the way to see the rest. Nothing is invented and nothing moves out of the file: a body
     of ordinary output has no such line and returns "" - which is why this costs nothing
     on the results that do not need it.
+
+    `budget` bounds the WHOLE returned block, header and footer included: charging only for
+    the picked lines let a budget of 100 return a 146-char wrapper around them - 215 chars
+    in all (an earlier review run 11, A-105). A budget too small to carry even a one-line note
+    returns "", and the caller keeps the pointer alone.
     """
     span = text[lo:hi]
     if not span or budget <= 0:
         return ""
-    picked, used = [], 0
+    try:
+        budget = int(budget)
+    except (TypeError, ValueError):
+        return ""
+    picked = []
     for raw in span.splitlines():
         line = raw.strip()
         if not line or not _SPILL_SIGNAL.search(line):
             continue
-        if used + len(line) + 1 > budget:
+        if len(picked) >= _SPILL_SIGNAL_LINES:
             break
-        picked.append(line[:400])
-        used += min(len(line), 400) + 1
-        if len(picked) >= 12:
+        trial = picked + [line[:_SPILL_SIGNAL_LINE_MAX]]
+        if len(_spill_signal_block(trial)) > budget:
             break
+        picked = trial
     if not picked:
         return ""
-    return (f"[HARNESS: {len(picked)} line(s) from the dropped middle that name a cause or "
-            f"a failure - the full text is still in the spill file:\n"
-            + "\n".join(picked) + "]\n")
+    return _spill_signal_block(picked)
 
 
 def cap_output(name, text, label="output", limit=None, session=None):
@@ -4143,7 +4178,29 @@ def _confirm_hit(text, kind="confirm_patterns"):
     return None
 
 
-_HARNESS_NOTE_RX = re.compile(r"\[HARNESS[^\]]*\]", re.S)
+_HARNESS_NOTE_SCAN = 4096   # bound: a note that never closes inside this window is left alone
+
+
+def _harness_note_end(text, start):
+    """Index just past the `]` that closes the note opening at `start` (the `[`), or None
+    when it does not close within _HARNESS_NOTE_SCAN chars of the opener.
+
+    Bracket DEPTH, not the first `]`: a note whose own text carries a bracketed fragment
+    (`[HARNESS: a [nested] b]`) used to be cut at the inner `]`, eating the note's tail and
+    the real output behind it (an earlier review run 11, A-106). The bound keeps a malformed,
+    never-closing note from scanning a whole 30k-char result.
+    """
+    depth = 0
+    end = min(len(text), start + _HARNESS_NOTE_SCAN)
+    for k in range(start, end):
+        ch = text[k]
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return k + 1
+    return None
 
 
 def _dedupe_text(text):
@@ -4151,8 +4208,27 @@ def _dedupe_text(text):
 
     identical call looked DIFFERENT to the guard and re-ran the command - the exact repeat
     the guard exists to refuse. A hint the harness adds is not the world changing.
+
+    Every `[HARNESS: ...]` block is removed with its nested brackets matched, so two
+    genuinely different results cannot collapse onto one signature because a nested bracket
+    ended the strip early (A-106). An unterminated opener inside the bound is kept as-is.
     """
-    return _HARNESS_NOTE_RX.sub("", str(text or "")).strip()
+    s = str(text or "")
+    parts = []
+    i = 0
+    while True:
+        j = s.find("[HARNESS", i)
+        if j < 0:
+            parts.append(s[i:])
+            break
+        parts.append(s[i:j])
+        end = _harness_note_end(s, j)
+        if end is None:
+            parts.append(s[j:j + 1])   # unterminated: keep it and move past the opener
+            i = j + 1
+        else:
+            i = end
+    return "".join(parts).strip()
 
 
 def _call_sig(name, args):
@@ -11488,8 +11564,76 @@ def _annotate_promise(answer, calls):
             "for none. Whatever it says it was about to do has not run yet.")
 
 
+def _delete_custom_tool(args, ctx):
+    """create_tool action=delete: remove one custom tool's file and registration.
+
+    Without an action vocabulary every call fell into the create path, so even
+    `action=delete` answered "got no code" - a complaint about an argument the caller never
+    owed (an earlier review run 11, A-136).
+    """
+    raw = str(args.get("name") or "").strip()
+    if not raw:
+        return ("ERROR: create_tool action=delete needs `name` - the custom tool to remove, "
+                "e.g. {\"action\": \"delete\", \"name\": \"disk_report\"}. list_tools names "
+                "every tool on this box.")
+    name = re.sub(r"[^a-zA-Z0-9_]", "_", raw).strip("_").lower()
+    if name in CORE_TOOL_NAMES:
+        return (f"ERROR: '{name}' is a core tool; create_tool deletes CUSTOM tools only.")
+    path = None
+    # Resolve by REGISTRATION name first: a register-shape file (ported_todo.py registers
+    # todo_list) is named in list_tools by the TOOL name, so that is the name a caller has.
+    _src = (REGISTRY.custom.get(name) or {}).get("source")
+    if _src and Path(_src).exists():
+        path = Path(_src)
+    if path is None:
+        for _t, _v in REGISTRY.custom.items():
+            _s = _v.get("source")
+            if _s and Path(_s).name == f"{name}.py" and Path(_s).exists():
+                path = Path(_s)
+                break
+    if path is None:
+        _cand = TOOLS_DIR / f"{name}.py"
+        path = _cand if _cand.exists() else None
+    if path is None or not path.exists():
+        return (f"ERROR: no custom tool named '{name}' to delete - it is not loaded and "
+                f"tools/{name}.py does not exist. list_tools names every tool on this box.")
+    # Keep the delete inside tools/: `source` is where the loader read the file from, and a
+    # tool door must not be talked into unlinking something else on disk.
+    try:
+        _root = TOOLS_DIR.resolve()
+        _inside = _root == path.resolve() or _root in path.resolve().parents
+    except Exception:
+        _inside = False
+    if not _inside:
+        return (f"ERROR: refusing to delete {path} - it is outside tools/. Remove it by "
+                f"hand if that is really what you want.")
+    registered = sorted(t for t, v in REGISTRY.custom.items()
+                        if v.get("source") and Path(v["source"]) == path)
+    try:
+        path.unlink()
+    except OSError as e:
+        return f"ERROR: could not delete tools/{path.name}: {e}"
+    for t in registered:
+        REGISTRY.custom.pop(t, None)
+    return (f"OK: deleted tools/{path.name}"
+            + (f", which registered the tool(s): {', '.join(registered)}. " if registered
+               else ". ")
+            + "It is out of this session's tool list and will not load on restart.")
+
+
 def tool_create_tool(args, ctx):
-    """Write a new custom tool into tools/ and hot-load it."""
+    """Write a new custom tool into tools/ and hot-load it; action=delete removes one."""
+    # Validate the action FIRST: a `delete` (or a typo) used to be answered with the create
+    # path's "no code" complaint, which names an argument the call did not need.
+    action = str(args.get("action") or "").strip().lower()
+    if action in ("", "new", "create"):
+        action = "new"
+    if action == "delete":
+        return _delete_custom_tool(args, ctx)
+    if action != "new":
+        return (f"ERROR: unknown create_tool action {action!r}. The actions are new (the "
+                f"default: write and load a tool - needs `code` and `name`) and delete "
+                f"(remove a custom tool - needs `name`).")
     # `name` is derivable, and the run that derives it is the one that omits it (measured
     # 2026-09-25 driving a live install): the call carried `code` alone with the name in the file's
     # own `# NAME: big_files` header, came back as a bare KeyError('name'), and the run
@@ -11604,13 +11748,24 @@ def tool_find_tools(args, ctx):
     A CATEGORY argument (the shelves the static prompt lists names under) returns that
     category's tools with their descriptions and no schemas: the prose the prompt no longer
     carries per tool, one call away.
+
+    `name` reads one tool back (blurb + argument schema); `topic` is a query by another
+    name; and `action` names the intent (list = the surface, search = query/topic, read =
+    name) instead of being silently ignored like any other stray key (A-135).
     """
     session = (ctx or {}).get("session_key")
     query = str(args.get("query") or "").strip()
+    name_arg = str(args.get("name") or "").strip()
+    topic = str(args.get("topic") or "").strip()
+    action = str(args.get("action") or "").strip().lower()
     limit = int(CONFIG["agent"].get("disclosure_max") or 4)
     runbooks = (" If what you want is a PROCEDURE rather than a tool, the runbooks are in "
                 "the skills index in your prompt: read the matching one with the skill "
                 "tool.")
+    if action not in ("", "list", "search", "read"):
+        return (f"[HARNESS: unknown action {action!r}. find_tools actions: list (what this "
+                f"box has), search (query/topic), read (name) - or pass query, category or "
+                f"all directly.]")
     if args.get("all") or query.lower() in ("*", "all", "everything"):
         names = hidden_tools(session)
         if not names:
@@ -11620,12 +11775,28 @@ def tool_find_tools(args, ctx):
                 "tool is now in your list for this session - if the question was which tools "
                 "are hidden, THIS list is the answer:]\n" % len(names)
                 + "\n".join(f"- {n}: {_tool_blurb(n)}" for n in names))
+    # A NAME is a read: that one tool's blurb and argument schema (or an honest miss). An
+    # `action=read` without it is a malformed call, said so instead of answered with a list.
+    if name_arg or action == "read":
+        if not name_arg:
+            return ("[HARNESS: find_tools action=read needs `name` - e.g. "
+                    "{\"action\": \"read\", \"name\": \"search_files\"}.]")
+        return _tool_read_answer(name_arg, session)
     # The tree's leaf. A category answer is a LOOKUP, not a reveal: a reveal is per-session
     # schema rent, and calling a tool by name afterwards reveals it anyway. This is the
     # path that replaced a description line per tool in the static prompt.
     cat = str(args.get("category") or "").strip()
     if cat:
         return _category_answer(cat, session)
+    # `topic` is the same filter as `query`, and `action=list` means the whole surface:
+    # both used to be ignored, which made every one of these calls byte-identical.
+    if not query and topic:
+        query = topic
+    if action == "search" and not query:
+        return ("[HARNESS: find_tools action=search needs `query` or `topic` - e.g. "
+                "{\"action\": \"search\", \"topic\": \"restart the gateway\"}.]")
+    if action == "list":
+        query = ""
     if not query:
         names = hidden_tools(session)
         if not names:
@@ -13132,15 +13303,19 @@ CORE_TOOLS = {
             "command the way the shell tool does, and ctx carries config, "
             "cancel_event (check it in anything long), send_file, report, "
             "ask_door, render_ui and the session key - tools/README.md is the "
-            "full list. Set module-level "
+            "Set module-level "
             "MUTATES = True if it changes local state. Handle errors; return "
             "clear text. tools/ also loads register()-style tool files and "
             "<name>.tool.json manifests (write those with write_file; the "
-            "shapes are in tools/README.md).",
-            {"name": {"type": "string", "description": "snake_case tool name"},
+            "shapes are in tools/README.md). action=delete removes a custom "
+            "tool (needs `name` only).",
+            {"action": {"type": "string", "enum": ["new", "delete"],
+                        "description": "new (default) writes and loads the tool; delete "
+                                       "removes a custom tool"},
+             "name": {"type": "string", "description": "snake_case tool name"},
              "code": {"type": "string",
-                      "description": "Complete Python source of the tool file"}},
-            ["name", "code"]),
+                      "description": "Complete Python source of the tool file (new only)"}},
+            ["name"]),
     },
     "plan": {
         "fn": tool_plan,
@@ -13169,6 +13344,13 @@ CORE_TOOLS = {
             
             {"query": {"type": "string",
                        "description": "What you want to do or the tool name"},
+             "name": {"type": "string",
+                      "description": "One tool, by name: returns its blurb and arguments"},
+             "topic": {"type": "string",
+                       "description": "What you want to do (same as query)"},
+             "action": {"type": "string", "enum": ["list", "search", "read"],
+                        "description": "list the surface, search by query/topic, or read "
+                                       "by name"},
              "category": {"type": "string",
                           "description": "A shelf from the tool index"},
              "all": {"type": "boolean",
@@ -14695,6 +14877,16 @@ def reveal_tools(session_key, names):
     call; the NAME stays in the shelf/inventory lines, and calling it by name re-reveals it
     (the call itself always executes - disclosure is about schemas, never about existence).
     """
+    # A bare string is ONE name, not a sequence of characters: `reveal_tools(key, "task")`
+    # is the natural way a caller spells a single reveal, and iterating it would register
+    # t, a, s and k. Anything else that is not an iterable of names is refused with a
+    # message a caller can act on, instead of the bare `'int' object is not iterable`
+    # TypeError this used to raise (an earlier review run 11, A-100).
+    if isinstance(names, str):
+        names = [names]
+    elif names is not None and not isinstance(names, (list, tuple, set, frozenset)):
+        raise TypeError("reveal_tools expects a tool name or a list of names (got %s: %r)"
+                        % (type(names).__name__, names))
     with _revealed_lock:
         seen = _revealed.setdefault(session_key or "", {})
         now = time.time()
@@ -14704,8 +14896,30 @@ def reveal_tools(session_key, names):
         return sorted(seen)
 
 
+def _reveal_ttl_secs():
+    """Seconds a revealed schema stays in the payload (agent.reveal_ttl_secs).
+
+    One typo in this key used to take the whole conversation down: `float("bogus")` raised
+    a ValueError out of revealed_tools -> visible_tool_names -> select_tool_schemas, i.e.
+    out of the REQUEST BUILDER, before a single token was sent (an earlier review run 11, A-99).
+    Guarded like _mcp_timeout: non-numeric -> the shipped default (1800), said once; a real
+    0 is kept as 0 and still means "a revealed schema never decays".
+    """
+    raw = CONFIG["agent"].get("reveal_ttl_secs")
+    if raw is None:
+        return 1800.0
+    try:
+        if isinstance(raw, bool):        # a flag is not a number of seconds
+            raise ValueError("a boolean is not a duration")
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        log.warning("agent.reveal_ttl_secs: %r is not a number of seconds - using 1800.",
+                    raw)
+        return 1800.0
+
+
 def revealed_tools(session_key):
-    ttl = float(CONFIG["agent"].get("reveal_ttl_secs") or 0)
+    ttl = _reveal_ttl_secs()
     with _revealed_lock:
         seen = dict(_revealed.get(session_key or "", {}))
     if ttl <= 0:
@@ -14860,6 +15074,7 @@ def hidden_inventory_line():
 
 
 def _tool_blurb(name):
+    name = str(name or "")
     if name in CORE_TOOLS:
         desc = CORE_TOOLS[name]["schema"]["function"]["description"]
     else:
@@ -14919,6 +15134,10 @@ def _tool_category(name, desc="", tools=None):
     `tools` points the lookup at another registry's dict, which is how the drop-in
     suite stages one without touching this process's REGISTRY.
     """
+    # The pair with _tool_blurb: a name that is not a string files on no shelf instead of
+    # raising AttributeError out of the prompt/index builders (an earlier review run 11, A-101).
+    if not isinstance(name, str) or not name:
+        return ""
     shelf = (getattr(REGISTRY, "custom", None) or {}) if tools is None else tools
     tool = shelf.get(name) or {}
     declared = " ".join(str(tool.get("category") or "").split())
@@ -15011,6 +15230,35 @@ def _category_answer(cat, session_key):
     if len(names) > len(shown):
         out += "\n... +%d more in this category" % (len(names) - len(shown))
     return out
+
+
+def _tool_read_answer(name, session):
+    """find_tools by NAME: that one tool's blurb and argument schema, or an honest miss.
+
+    `name` and `query` used to be the same silent nothing: the handler read `query`,
+    `category` and `all` only, so `{"name": "search_files"}` (the most natural way to ask
+    after a tool by name) returned the same bytes as `{}` (an earlier review run 11, A-135). A
+    name lookup resolves core and custom tools alike, reveals the one asked for - asking by
+    name is the same intent as a query hit - and answers the miss with the closest names
+    and the remaining surface rather than a bare "no".
+    """
+    everything = set(CORE_TOOLS) | set(REGISTRY.custom)
+    hit = next((n for n in sorted(everything) if n == name), None)
+    if hit is None:
+        low = name.lower()
+        hit = next((n for n in sorted(everything) if n.lower() == low), None)
+    if hit is None:
+        near = _match_tools(name, 3, session)
+        tail = _surface_tail(session) if near else ""
+        return (f"No tool named {name!r} exists on this box."
+                + (f" Closest matches: {', '.join(near)}.{tail}" if near else
+                   " Nothing similar is hidden either - list_tools names every tool it"
+                   " has."))
+    reveal_tools(session, [hit])
+    schema = REGISTRY.get(hit)["schema"]["function"]
+    return (f"[HARNESS: `{hit}` is in your list for this session — call it directly]\n"
+            f"- {hit}: {_tool_blurb(hit)}\n"
+            f"  args: {json.dumps(schema['parameters'], separators=(',', ':'))}")
 
 # Words that appear across half the registry, so an overlap on one of them says nothing
 # about capability. Measured 2026-09-23 on a live install: "send Mattermost message to
@@ -16718,6 +16966,11 @@ def _tool_pairing_problems(messages):
     problems = []
     pending = {}
     for idx, m in enumerate(messages):
+        if not isinstance(m, dict):
+            # A repair pass on a harness-assembled payload can meet a stray non-dict entry
+            # (None, a number); skipping it reports no problem for it instead of raising
+            # AttributeError out of the pass (an earlier review run 11, A-102).
+            continue
         role = m.get("role")
         if role == "tool":
             tid = m.get("tool_call_id") or ""
@@ -16767,6 +17020,9 @@ def _uniquify_tool_call_ids(messages):
     counts, rewrites = {}, {}
     out = []
     for m in messages:
+        if not isinstance(m, dict):
+            out.append(m)             # non-dict entry: pass it through, do not raise (A-102)
+            continue
         tcs = m.get("tool_calls") if m.get("role") == "assistant" else None
         if tcs:
             new_calls = None
@@ -16793,6 +17049,9 @@ def _uniquify_tool_call_ids(messages):
         return messages
     result_seen, fixed = {}, []
     for m in out:
+        if not isinstance(m, dict):
+            fixed.append(m)           # non-dict entry: untouched (A-102)
+            continue
         tid = m.get("tool_call_id") if m.get("role") == "tool" else ""
         if tid in rewrites:
             idx = result_seen.get(tid, 0)
@@ -16820,14 +17079,20 @@ def _repair_tool_pairing(messages):
     passes — and log it, so the call site still gets fixed rather than silently
     papered over.
     """
-    if not any(m.get("role") == "assistant" and m.get("tool_calls")
-               for m in messages):
+    if not any(isinstance(m, dict) and m.get("role") == "assistant"
+               and m.get("tool_calls") for m in messages):
         return messages
     messages = _uniquify_tool_call_ids(messages)
     out = []
     i = 0
     while i < len(messages):
         m = messages[i]
+        # A non-dict entry is passed through and i advances, so the skip can never spin
+        # the loop forever (an earlier review run 11, A-102).
+        if not isinstance(m, dict):
+            out.append(m)
+            i += 1
+            continue
         tcs = m.get("tool_calls") if m.get("role") == "assistant" else None
         if not tcs:
             out.append(m)
@@ -16840,6 +17105,10 @@ def _repair_tool_pairing(messages):
         j = i + 1
         while j < len(messages):
             nxt = messages[j]
+            if not isinstance(nxt, dict):
+                deferred.append(nxt)  # non-dict entry: defer as-is, j advances (A-102)
+                j += 1
+                continue
             role = nxt.get("role")
             tid = nxt.get("tool_call_id") or ""
             if role == "tool" and tid in want and tid not in answered:
@@ -18531,7 +18800,7 @@ class Agent:
             was = name in revealed_tools(_key)
             reveal_tools(_key, [name])
             if not was:
-                ttl = float(CONFIG["agent"].get("reveal_ttl_secs") or 0)
+                ttl = _reveal_ttl_secs()
                 idle = f" (expires after {ttl:.0f}s unused)" if ttl > 0 else ""
                 out += (f"\n[HARNESS: `{name}` was not in your tool list; it is now, for "
                         f"the rest of this session{idle}.]")

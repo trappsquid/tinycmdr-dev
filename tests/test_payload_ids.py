@@ -110,6 +110,40 @@ def main():
           out[2]["tool_calls"][0]["id"] == "k_dup1"
           and out[3]["tool_call_id"] == "k_dup1", out)
 
+    # ---- a stray non-dict entry must not raise out of a repair pass (A-102) ----------
+    # These passes run on harness-assembled payloads, where a None (or a number) can appear.
+    # Each used to AttributeError on the first such entry and take the request with it.
+    try:
+        problems = fb._tool_pairing_problems([None, 7, {"role": "user", "content": "hi"}])
+        raised = None
+    except Exception as e:                                     # noqa: BLE001 - the point
+        problems, raised = None, e
+    check("_tool_pairing_problems skips a non-dict entry instead of raising",
+          raised is None and problems == [], (raised, problems))
+
+    dirty = [None, 7, {"role": "user", "content": "hi"}]
+    try:
+        out = fb._uniquify_tool_call_ids(dirty)
+        raised = None
+    except Exception as e:                                     # noqa: BLE001 - the point
+        out, raised = None, e
+    check("_uniquify_tool_call_ids passes a non-dict entry through instead of raising",
+          raised is None and out == dirty, (raised, out))
+
+    mixed = [None,
+             {"role": "assistant", "content": "",
+              "tool_calls": [_call("x", "shell"), _call("x", "shell")]},
+             {"role": "tool", "tool_call_id": "x", "content": "r1"},
+             {"role": "tool", "tool_call_id": "x", "content": "r2"}]
+    try:
+        repaired = fb._repair_tool_pairing(mixed)
+        raised = None
+    except Exception as e:                                     # noqa: BLE001 - the point
+        repaired, raised = None, e
+    check("_repair_tool_pairing skips a non-dict entry without spinning or raising",
+          raised is None and repaired is not None and repaired[0] is None
+          and fb._tool_pairing_problems(repaired) == [], (raised, repaired))
+
     print()
     if FAILURES:
         print("%d check(s) failed" % len(FAILURES))
