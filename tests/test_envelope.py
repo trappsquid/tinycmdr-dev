@@ -295,6 +295,33 @@ def main():
                                  ceiling=fb.TOOL_RESULT_CAP_CEILING) == 16384 // 8,
               "  on a small window the ceiling changes nothing (window // 8 still wins)")
 
+        # --- the compaction budget counts the volatile block the payload carries ----
+        # The budget and the sent block must be the same text: _compact used to ask
+        # volatile_context() with no session and no atlas/shell flags while the payload
+        # passed them, so the guard deducted less than it sent.
+        _seen = []
+        _real_vc = fb.volatile_context
+
+        def _spy(*a, **kw):
+            _seen.append(kw)
+            return _real_vc(*a, **kw)
+
+        fb.volatile_context = _spy
+        try:
+            _msgs = ([{"role": "system", "content": "s"}]
+                     + [{"role": "user", "content": "q%d" % _i} for _i in range(8)])
+            try:
+                fb.AGENT._compact(list(_msgs), "env-compact-probe",
+                                  atlas=True, shell=True)
+            except TypeError:
+                pass                     # an old build: the check below fails cleanly
+        finally:
+            fb.volatile_context = _real_vc
+        check("the compaction budget asks for the block the payload will send",
+              bool(_seen) and _seen[0].get("session_key") == "env-compact-probe"
+              and _seen[0].get("atlas") is True and _seen[0].get("shell") is True
+              and "prior_unfinished" in _seen[0])
+
         # --- a SLOW box gets a shorter generation, sized to its measured rate ----------
         # Measured 2026-09-29 on macOS: the same endpoint served 8-57 tok/s depending
         # on how many requests shared its two slots, so one 16,384-token cap meant a six-minute

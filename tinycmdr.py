@@ -16465,7 +16465,7 @@ class Agent:
                      "reclaimed", key, pruned, saved)
         return saved
 
-    def _compact(self, messages, key=None):
+    def _compact(self, messages, key=None, atlas=False, shell=False):
         """Shrink context when over budget. Never touches messages[0] (system)
         or the newest exchange; never leaves orphan tool messages.
 
@@ -16475,12 +16475,17 @@ class Agent:
         (and re-prefill the whole conversation) on the very next turn. We cut
         back to LOW_WATER of the budget instead, which buys many turns of
         headroom for one cache miss. The trailing volatile block is counted
-        here too — it is part of the payload even though it is not in the list.
+        here too — it is part of the payload even though it is not in the list —
+        with the same arguments the payload will pass (`key`, atlas, shell,
+        prior-unfinished), so the deduction matches what rides the request.
         """
         # The images riding the next request are not in `messages` (by design),
         # so their cost has to be subtracted here or a session at the edge of its
         # budget would push the request past the window.
-        budget = (self._context_budget(key) - est_tokens(volatile_context())
+        _unf = self._prior_run_unfinished(key) if key else ""
+        budget = (self._context_budget(key)
+                  - est_tokens(volatile_context(session_key=key, atlas=atlas,
+                                                shell=shell, prior_unfinished=_unf))
                   - pending_image_tokens(key))
         # 0) incremental reclamation first: blanking a superseded read does not cut the
         # front of history, so on the small-suffix path it is cache-safe and buys turns
@@ -17604,14 +17609,16 @@ class Agent:
                                 "content": (f"[operator, mid-run — this arrived while "
                                             f"you were working and it overrides the "
                                             f"earlier instruction] {msg}")})
-                    messages = self._compact(messages, session_key)
                     # The atlas rides the FIRST turn of a run, and again after a failure
                     # that read like a wrong path. Anywhere else it is geography nobody
-                    # asked for, and it is paid for on every turn.
+                    # asked for, and it is paid for on every turn. Computed before the
+                    # compaction so the budget counts the same block the payload will.
                     want_facts = bool(not _run.get("calls")
                                       or bool(_run.get("atlas_reask")))
                     if _run.get("atlas_reask"):
                         _run["atlas_reask"] = False
+                    messages = self._compact(messages, session_key,
+                                             atlas=want_facts, shell=want_facts)
                     try:
                         _delta_gate["streamed"] = False
                         reply = self._chat(
