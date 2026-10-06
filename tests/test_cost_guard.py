@@ -144,16 +144,16 @@ def main():
         # ---- a quoted path with a SPACE keeps its whole root ------
         # The root scan used to read the quote-STRIPPED command, and the bare-path
         # alternative stops at whitespace - so every quoted walk under a profile like
-        # "C:\Users\David Trapp" was judged as rooted at C:\Users\David and billed,
+        # "C:\Users\Example User" was judged as rooted at C:\Users\David and billed,
         # and eventually refused, as a whole-tree sweep.
-        narrow_spaced = r'''Get-ChildItem -Recurse "C:\Users\David Trapp\tinycmdr"'''
+        narrow_spaced = r'''Get-ChildItem -Recurse "C:\Users\Example User\tinycmdr"'''
         check(fb.command_cost_risk(narrow_spaced) is None,
               "a quoted path three levels into a spaced profile is narrow")
-        profile = r'''Get-ChildItem -Recurse "C:\Users\David Trapp"'''
+        profile = r'''Get-ChildItem -Recurse "C:\Users\Example User"'''
         risk = fb.command_cost_risk(profile)
-        check(bool(risk) and risk["root"] == r"C:\Users\David Trapp",
+        check(bool(risk) and risk["root"] == r"C:\Users\Example User",
               f"a quoted PROFILE root is still broad, and named in full ({risk})")
-        check(fb.code_cost_risk('os.walk("C:/Users/David Trapp/tinycmdr")') is None,
+        check(fb.code_cost_risk('os.walk("C:/Users/Example User/tinycmdr")') is None,
               "a quoted spaced path in Python keeps its root too")
 
         # ---- the per-call ceiling --------------------------------------------

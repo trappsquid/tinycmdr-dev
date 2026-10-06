@@ -65,7 +65,7 @@ def main():
         # A carry sidecar (*.carry.json) has a dict root and sorted() puts it BEFORE the
         # transcript, so the old loop iterated its string keys and died with "'str' object
         # has no attribute 'get'" on the first sidecar: the tool built to recall a session
-        # could not read any session that had ever run a tool. Found by the Windows bed on its
+        # could not read any session that had ever run a tool. Found by Windows on its
         # own build 2026-09-20, after it lost a conversation's research to a run boundary.
         sk = "mm-recall-demo"
         (fb.SESSIONS_DIR / f"{sk}.json").write_text(json.dumps([

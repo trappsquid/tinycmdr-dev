@@ -254,7 +254,7 @@ def main():
         # tools never ran. That is the common path, not the exception.
         # The paths are QUOTED, and that is load-bearing rather than tidiness: on a host whose
         # temporary directory contains a space (any Windows profile for a two-word account
-        # name, e.g. "C:\Users\David Trapp\AppData\Local\Temp\...") an unquoted path is two
+        # name, e.g. "C:\Users\Example User\AppData\Local\Temp\...") an unquoted path is two
         # arguments to the shell, so the command is not one anybody would run and the first
         # token is the only thing any reader could recover. Quoted, it is the shape the shell
         # actually receives - and the shape the detector has to read (fixed the same day).

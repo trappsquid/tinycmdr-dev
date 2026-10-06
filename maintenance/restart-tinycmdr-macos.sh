@@ -71,7 +71,7 @@ case "$ACTION" in
         if launchctl print "$TARGET" >/dev/null 2>&1; then
             # Already loaded IS the goal. Bootstrap on a loaded job fails (37) and the
             # legacy `load -w` fails too, so under set -e this verb used to die with no
-            # message on a perfectly healthy agent (measured 2026-10-05 by the audit).
+            # message on a perfectly healthy agent (measured 2026-10-05).
             info "already loaded"
         else
             launchctl bootstrap "gui/$UID_NUM" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
@@ -117,7 +117,7 @@ case "$ACTION" in
         else
             # The verb an operator reaches for when nothing started: on a fresh install
             # neither file exists yet, and the bare tail error under set -e named `tail`,
-            # not the situation (measured 2026-10-05 by the audit).
+            # not the situation (measured 2026-10-05).
             info "no logs at either path yet: $INSTALL_DIR/logs/launchd.err.log or $INSTALL_DIR/tinycmdr.log"
             exit 1
         fi

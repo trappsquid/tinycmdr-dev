@@ -1,6 +1,6 @@
 """The route hint: a shell content search gets pointed at search_files, once per run.
 
-Measured on the operator drive's first work order (the Windows bed, 2026-09-23): "find every line
+Measured on a live install's first work order (Windows, 2026-09-23): "find every line
 that calls atomic_write_text" became Select-String + a second Select-String for the def lines +
 a python regex in execute_code + a 13,482-char spill + a repeat-read map -- 6 calls and 4.5
 minutes for what ONE search_files call answers, with search_files never called. The hidden
@@ -36,13 +36,13 @@ def check(name, cond, detail=""):
 
 hint = getattr(fb, "route_hint", lambda *a, **k: "")
 
-# The exact command the drive spent 4.5 minutes on.
+# The exact command a live install spent 4.5 minutes on.
 DRIVE_CMD = ('Select-String -Path C:\\tinycmdr\\tinycmdr.py -Pattern "atomic_write_text" '
              '-AllMatches | ForEach-Object { "{0}: {1}" -f $_.LineNumber, $_.Line.Trim() }')
 
 # ---- it fires, and says something usable -----------------------------------------
 got = hint(DRIVE_CMD, {"session_key": "r-fire"})
-check("fires on the drive's own Select-String command", bool(got), got)
+check("fires on a live install's own Select-String command", bool(got), got)
 check("the hint names search_files", "search_files" in got, got[:120])
 check("and gives the call shape, not just the name",
       '"pattern"' in got and '"path"' in got, got[:200])
@@ -51,7 +51,7 @@ check("and is bounded", 0 < len(got) < 400, len(got))
 check("and rides as a HARNESS note, like the other harness verdicts", "[HARNESS:" in got, got[:60])
 
 # ---- twice per run, then quiet; again in the next run ----------------------------
-# The drive repeated the same Select-String four minutes after the first hint and heard
+# A live install repeated the same Select-String four minutes after the first hint and heard
 # nothing (measured 2026-09-23), so the second miss is taught too - and the third is the
 # loop guard's business, not this line's.
 check("a second miss in the SAME run is taught as well",

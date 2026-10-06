@@ -88,20 +88,20 @@ class FakeDispatcher(fb.MattermostDispatcher):
 
 
 class _FakeMsg:
-    def __init__(self, channel_id, text, sender="david", mid="m1"):
+    def __init__(self, channel_id, text, sender="alice", mid="m1"):
         self.sender_name = sender
         self.channel_id = channel_id
         self.text = text
         self.create_at = time.time() * 1000
         self.id = mid
         self.root_id = ""
-        self.user_id = "david-id"
+        self.user_id = "alice-id"
         self.is_direct_message = True
 
 
 def dispatcher():
     d = FakeDispatcher()
-    fb.CONFIG["mattermost"]["allowed_users"] = ["david", "david-id"]
+    fb.CONFIG["mattermost"]["allowed_users"] = ["alice", "alice-id"]
     return d
 
 

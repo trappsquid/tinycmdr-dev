@@ -86,13 +86,13 @@ def test_scalars_that_would_misparse_get_quoted():
              # json.dumps is how the emitter quotes these, so parse must UNDO the
              # escapes rather than only strip the quotes: a Windows path doubled its
              # Backslashes on every rewrite.
-             r"C:\Users\David Trapp\tinycmdr", 'say "hi"', r"two\\pairs\\here"]
+             r"C:\Users\Example User\tinycmdr", 'say "hi"', r"two\\pairs\\here"]
     for value in risky:
         text = fb.okf_dump({"type": "Fact", "title": value}, "")
         got, _ = fb.okf_parse(text)
         check(f"a scalar round-trips: {value!r}", got.get("title") == value,
               repr(got.get("title")))
-    tricky = r"C:\Users\David Trapp"
+    tricky = r"C:\Users\Example User"
     once = fb.okf_dump({"type": "Fact", "title": tricky}, "")
     again, _ = fb.okf_parse(once)
     check("a backslash value re-dumps byte-identically (idempotent)",

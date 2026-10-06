@@ -470,7 +470,7 @@
         "commit": "9b44d84",
         "expect": "tagged"
       },
-      "detail": "Closed 2026-09-29 on main. The shell-write detector captured an optional quote followed by no-whitespace, so a QUOTED path - the only correct way to pass one containing a space - was cut at its first space: on C:\\Users\\David Trapp it returned C:\\Users\\David, which does not exist, and this module ignores a candidate it cannot find, so write verification verified nothing. It reads a quoted run or a bare one now; the spill messages quote the kept path and test_stall captures to the delimiter; test_verify's fixtures quote. test_verify, test_stall (317 checks) and the gate pass on both platforms.",
+      "detail": "Closed 2026-09-29 on main. The shell-write detector captured an optional quote followed by no-whitespace, so a QUOTED path - the only correct way to pass one containing a space - was cut at its first space: on C:\\Users\\Example User it returned C:\\Users\\David, which does not exist, and this module ignores a candidate it cannot find, so write verification verified nothing. It reads a quoted run or a bare one now; the spill messages quote the kept path and test_stall captures to the delimiter; test_verify's fixtures quote. test_verify, test_stall (317 checks) and the gate pass on both platforms.",
       "gate": "done"
     },
     {

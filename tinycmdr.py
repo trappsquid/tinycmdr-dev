@@ -327,7 +327,7 @@ DEFAULT_CONFIG = {
         # ON by default. Written the other way round first, and that was wrong here: a box
         # whose providers are configured is a box that wants to search, and defaulting to
         # "refuse every lookup" turned ordinary questions into memory-based guesses
-        # (measured 2026-09-27: an operator asked for an event's dates, web_search AND
+        # (measured 2026-09-27: an event's dates were asked for, web_search AND
         # fetch_url were both REFUSED, and the answer invented a month the festival is not
         # in). Set it false to keep search on this network only - a searxng provider on the
         # LAN never needs the flag, and neither does fetch_url for a URL on it.
@@ -665,7 +665,7 @@ DEFAULT_CONFIG = {
             # answered "clear out the junk" with `robocopy /MOVE` of a 194-item directory and
             # NOTHING in either tier matched it - only the model's own question protected it.
             r"\brobocopy\b[^|;]*/move\b",
-            # The Windows machine-verb class (measured on a Windows bed):
+            # The Windows machine-verb class (measured on a live Windows install):
             # every one of these was `is_blocked=False, confirm=None`, so the whole class
             # ran with no gate at all. They are confirm-tier, not absolute: stopping a
             # service and stopping the wrong one look identical to a regex, and that is
@@ -954,7 +954,7 @@ def config_drift():
 
     Reads happen once, at start (`load_config`), so an edit - by a person, or by the agent
     acting on the operator's own message - changes NOTHING until a restart, and nothing
-    said so. Measured 2026-09-28 on a live install: the operator asked the agent from Mattermost
+    said so. Measured 2026-09-28 on a live install: a Mattermost message asked the agent
     to change a setting, the agent wrote config.json, the service was restarted, and the
     change did not take - the answer the operator needed was "the file changed, this
     process has not", and no surface said it. `config set` does warn ("a running bot reads
@@ -5165,7 +5165,7 @@ def verify_note(path):
 # A path is quoted precisely because it contains a space, and the old capture was
 # `["']?([^\s"';|)]+)` - an optional quote followed by "no whitespace" - so a quoted path was
 # truncated at its first space. Measured 2026-09-29 on a Windows install whose profile is
-# "C:\Users\David Trapp": `Set-Content -Path 'C:\Users\David Trapp\s1.json' -Value x` yielded
+# "C:\Users\Example User": `Set-Content -Path 'C:\Users\Example User\s1.json' -Value x` yielded
 # "C:\Users\David". That path does not exist, and this module ignores a candidate it cannot
 # find, so the write was never verified and nothing said so. The same truncation would hit a
 # macOS or Linux path with a space in it - only a Windows install, whose temp directory
@@ -5921,7 +5921,7 @@ def command_cost_risk(command):
 # knows cold over a tool whose argument shape it has not seen: the hidden names are in its
 # prompt now, but the SHAPE is not, and the payload budget (8,518 of 8,900) will not carry
 # search_files' 528-char schema. So the hint rides the result the miss already cost, names
-# the exact call, and fires at most TWICE per run: once was not enough in the drive, where
+# the exact call, and fires at most TWICE per run: once was not enough on a live install, where
 # the model repeated the same Select-String four minutes later and heard nothing; a third
 # time would be nagging.
 _SHELL_CONTENT_SEARCH = re.compile(r"(?i)\b(select-string|findstr|grep|rg)\b")
@@ -6573,7 +6573,7 @@ def _bare_tool_name(command):
     if not bare or bare.startswith(("/", "-", ".")):
         return ""
     # the whole command when it is just the name, and also the FIRST token of a longer one:
-    # the drive ran `list_tools` and then `list_tools 2>&1 | Select-String "delegate|..."`,
+    # a live install ran `list_tools` and then `list_tools 2>&1 | Select-String "delegate|..."`,
     # and read the PowerShell error as a tool that had failed.
     first = re.split(r"[\s|;&]+", bare, 1)[0]
     for cand in (bare, first):
@@ -6668,7 +6668,7 @@ def _tool_run_as_script(command):
     `__main__`, so `python toolsmith.py "action=new" ...` really does scaffold the tool
     (measured 2026-10-05: the three shipped files carried none, so a missed door ran
     them as scripts, printed nothing and exited 0 - a silent no-op the run recorded as
-    success). Measured on the drive 2026-09-23 -
+    success). Measured on a live install 2026-09-23 -
     told to build a tool, the run read toolsmith.py off disk, spilled it twice, tried
     `python -m toolsmith` (which failed), ran `python toolsmith.py` (which worked), listed
     tools, read the file again, and called find_tools; 12 calls in, it had never once made
@@ -7085,7 +7085,7 @@ def tool_shell(args, ctx):
 def tool_execute_code(args, ctx):
     """Run Python code directly (the predecessor harness's execute_code equivalent)."""
     code = args["code"]
-    # The tool-file-as-script miss, on the door the drive actually reaches for. The shell
+    # The tool-file-as-script miss, on the door a live install actually reaches for. The shell
     # door answers it (_tool_run_as_script) but code that runs or imports ./tools/<name>.py
     # from inside Python walked straight past that guard: measured 2026-09-24 on macOS,
     # told to call power_report and toolsmith the run made four execute_code calls that ran
@@ -8563,7 +8563,7 @@ def tool_read_file(args, ctx):
         #
         # But a model asking for a FILE can share a tool's name: `/Users/.../notes` is the
         # memory file `notes.md` one keystroke short, and answering with the tool lecture
-        # alone sent it looking elsewhere (the operator reported exactly that read call). The
+        # alone sent it looking elsewhere (that read call was reported). The
         # sibling is named first; the tool note stays because the name really is a tool.
         stem = path.name[:-3] if path.name.lower().endswith(".py") else path.name
         sibs = []
@@ -10988,8 +10988,8 @@ def session_search_hits(query, limit=25):
     """[(key, role, snippet, rank)] for transcripts matching ALL query words.
 
     The core `search_sessions` runs on, factored out so the PAGE's own search reads the
-    same corpus with the same rules - the operator asked to search INSIDE conversations,
-    not just across session titles (2026-10-04). Words AND across a session's text, the
+    same corpus with the same rules, searching INSIDE conversations and not just across
+    session titles (2026-10-04). Words AND across a session's text, the
     snippet comes from its best-matching message (most query words, then longest), and
     both file shapes in sessions/ are tolerated: the transcript (*.json, a list of
     message dicts) and the carry sidecar (*.carry.json, a dict whose lists hold
@@ -11958,7 +11958,7 @@ def _ask_format(question, options):
 def _ask_record_choice(row, text):
     """Which option a reply reads as, or None.
 
-    A bare number is the selector. A number with a clause ("2 but not the macOS bed")
+    A bare number is the selector. A number with a clause ("2 but not macOS")
     keeps the whole text: the clause is an instruction, and the answer reaches the model
     verbatim either way. What resolving it adds is the reading - the model is told which
     option the words started from, so it does not re-ask a decision it already has.
@@ -13297,7 +13297,7 @@ def _ensure_sessions_dir():
 # substrate for the real answer: one append-only JSONL per session, beside the history it
 # describes.
 #
-# Scope, decided by the operator 2026-09-19: SHADOW ONLY. The events are written and nothing
+# Scope, 2026-09-19: SHADOW ONLY. The events are written and nothing
 # reads them - no prompt, no history, no metric derives from this yet. Arguments are SCRUBBED
 # and digested, never stored raw, so a .env read or a command carrying a token cannot land in
 # the file. Off unless a host sets agent.event_log true in its own config.json.
@@ -15029,7 +15029,7 @@ _COMPLETION_RX = re.compile(
 # model says it is ABOUT TO work ("I'll gather ... then write it up") and stops there,
 # with no tool call at all. _COMPLETION_RX only counts announcements that arrive WITH
 # calls queued, so a promise delivered as the final answer looked like a finished run.
-# Measured on the macOS bed 2026-09-24: four consecutive runs, ONE model call each, 0
+# Measured on macOS 2026-09-24: four consecutive runs, ONE model call each, 0
 # tool calls, every reply a promise. The same task with the nudge text below in front
 # of it made its shell call in the same minute, so this is a missing trigger class
 # rather than a broken model.
@@ -15049,7 +15049,7 @@ _INTENT_RX = re.compile(
     r"as i (?:gather|read|check)|gathering the)\b",
     re.IGNORECASE)
 # A promise is SHORT. A long reply that merely contains "let me ... check" is prose the
-# operator asked for, and re-asking it would spend a call for nothing.
+# prose the run meant to keep, and re-asking it would spend a call for nothing.
 _INTENT_MAX_CHARS = 700
 # How the harness's OWN end-of-run lines begin when a run did not finish. A run that
 # stopped badly leaves one of these as the last assistant turn in the transcript, which is
@@ -15083,7 +15083,7 @@ _RESULT_CLAIM_RX = re.compile(
     # (b) a measured value with a unit, ATTACHED to something on this box: "b1.txt: 19
     #     bytes", "the file contains 3 lines", "12 files in the folder". The context
     #     lookahead is what keeps a true-from-memory answer out of the class - it
-    #     caught "16 GB unified memory." on the macOS bed, in a run with no tool call, and a
+    #     caught "16 GB unified memory." on macOS, in a run with no tool call, and a
     #     bare machine spec is not a claim about anything the run fetched.
     r"|(?:[/\]|\.[a-z]{2,4}\b|\b(?:files?|paths?|dirs?|director(?:y|ies)|folders?|logs?|tools?|commands?|output|results?|hash|sha|checksum)\b)[^\n]{0,40}?\b\d[\d,._]*\s*(?:bytes?|chars?|characters?|lines?|rows?|entries|items|steps?|files?|tokens?)\b"
     # (b2) a report VERB joined to a subject that exists only on the box: "the log
@@ -16010,7 +16010,7 @@ class Agent:
         Read from the session's own history, which is durable (the file on disk), and
         self-clearing: the moment a run answers normally the last assistant turn is an
         answer, and this returns "". Detecting it from the transcript rather than from a
-        flag in run_state is deliberate - run_state is per PROCESS, and the macOS bed's
+        flag in run_state is deliberate - run_state is per PROCESS, and the live macOS install's
         hijack happened after a restart that would have wiped such a flag.
         """
         hist = (self.histories or {}).get(session_key) or []
@@ -16029,7 +16029,7 @@ class Agent:
                 break
         # THE ORDER WAS NEVER ANSWERED. A run that is killed leaves the operator's message as
         # the last turn of the conversation and nothing after it - the shape "Continue with the
-        # task" was typed into on the macOS bed 2026-09-24, where the harness could only answer
+        # task" was typed into on macOS 2026-09-24, where the harness could only answer
         # "I don't have context for what 'the task' refers to". Every path that ENDS a run
         # leaves an assistant turn (the stop, the budget and the turn-limit lines all append
         # one), so a dangling operator message is an interruption by construction. Read from
@@ -17568,7 +17568,7 @@ class Agent:
                    # A /stop has to reach work already in flight, so the tools get the same
                    # event the run checks at its turn boundaries: a shell command or a
                    # snippet that is still running is killed within a poll, not left to
-                   # finish while the operator waits (operator rule, 2026-09-18).
+                   # finish while the operator waits (rule, 2026-09-18).
                    "cancel_event": cancel_event,
                    # Tools are revealed per session, so the context has to carry it.
                    "session_key": session_key,
@@ -18172,7 +18172,7 @@ class Agent:
                     # A MODEL THAT KEEPS RESTATING ITSELF IS NOT MOVING. The reporter
                     # folds the repeat so the operator reads one line, and the run does its
                     # part: say it out loud once, then wrap up with the report it already
-                    # has. Measured on the macOS bed 2026-09-24: one stuck run restated the
+                    # has. Measured on macOS 2026-09-24: one stuck run restated the
                     # same status EIGHT times in three minutes while every call it made
                     # failed (no chat lane on that box, a curl at a port nothing served),
                     # and the operator read the same sentence eight times with no way to
@@ -19365,7 +19365,7 @@ def _line_words(text):
 def same_open(a, b):
     """True when two NARRATION lines open with the same words as read.
 
-    Measured on the macOS bed 2026-09-24: one stuck run posted eight lines that
+    Measured on macOS 2026-09-24: one stuck run posted eight lines that
     all opened "The video is already downloaded (9.2 MB ..." and were the same
     sentence to the operator, differing only in the tail - a path, the words
     "from an earlier run", a clause about the chat lane being down. The exact
@@ -19560,7 +19560,7 @@ class RunReporter:
             # SAME OPENING = THE SAME LINE. An exact match kept a looping run from
             # re-posting an IDENTICAL line, and left the near-identical ones: eight
             # posts that all opened with the same sentence and differed in the tail
-            # (macOS bed, 2026-09-24). same_open folds those into the line that is
+            # (macOS, 2026-09-24). same_open folds those into the line that is
             # already there.
             if new_turn and not same_open(body, self.stream_open.get(src) or ""):
                 ref = None
@@ -19922,8 +19922,8 @@ class RunReporter:
             return
         if (AGENT.last_usage.get(self.session_key) or {}).get("infra_failed"):
             # An endpoint that could not be reached is a failure however cleanly
-            # it was reported, so the Done line goes red (the operator asked for
-            # red to mean "something is actually wrong").
+            # it was reported, so the Done line goes red (red must mean "something is
+            # actually wrong").
             ok = False
         usage = AGENT.last_usage.get(self.session_key) or {}
         # ONE source of truth for the run's counters: the same accumulator the rail,
@@ -29928,7 +29928,7 @@ def run_setup(rest=None):
     # The page is the default door; its token is the one secret this project will MINT
     # for you - and since 2026-10-04 the wizard also lets the operator SET it. A token
     # chosen elsewhere (a password manager, a fleet convention) used to force a hand-edit
-    # of .env after setup; that was reported by the operator. Enter keeps the host's own
+    # of .env after setup; that was reported. Enter keeps the host's own
     # token or mints one, either way the answer is a working link, not homework.
     web = raw.setdefault("web", {})
     cur_on = bool(web.get("enabled", True))
@@ -30687,8 +30687,7 @@ def _cli_command(text):
         _cli_usage_line(force=True)
         return True
     # A MANAGEMENT verb the session cannot run still has an answer: say which door has it.
-    # Measured 2026-09-30 - the operator asked how to update from the CLI, typed /update in a
-    # session and got "not a command - /tinycmdr help lists them", where the list has no
+    # Measured 2026-09-30: /update typed in a session got "not a command - /tinycmdr help lists them", where the list has no
     # update verb in it. `update` is the one that arrives as "how do I update?", so it names
     # both steps.
     bare = verb.lstrip("/")

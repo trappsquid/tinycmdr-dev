@@ -601,7 +601,7 @@ check("...and grows to show a long paste, to a ceiling",
       _app5._composer_rows() == fb.AppScreen.COMPOSER_MAX_ROWS
       and _app5._composer_rows() > 1, _app5._composer_rows())
 
-# --- the run's key is a filename; the editing surface is not one (the Windows bed
+# --- the run's key is a filename; the editing surface is not one (Windows
 # measured 2026-09-22: a PromptSession in the key slot crashed _save() with
 # "expected string or bytes-like object", so sessions/ stayed empty and the
 # event log was never written) ---------------------------------------------

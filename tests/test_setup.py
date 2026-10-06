@@ -259,7 +259,7 @@ def main():
         mod._is_local_url = lambda url: False
         mod._detect_window = lambda url, headers=None: 0
         # kind (cloud), url, key (wrong), key again (right) - the link is asked BEFORE
-        # the key, so the key has an endpoint to belong to (operator's order report,
+        # the key, so the key has an endpoint to belong to (asked in this order,
         # 2026-10-04) - then model NUMBER, context window (asked here because a hosted
         # endpoint reports none), MM, TG, page x4, egress
         answers = ["cloud", "https://api.example.com/v1", "sk-bad", "sk-good", "1",

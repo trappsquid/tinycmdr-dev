@@ -240,7 +240,7 @@ def test_tools_runs_are_bound_to_a_fresh_event_per_message():
 # --- 6: the listener thread answers /stop and /restart force ------------------
 
 class FakeMessage:
-    def __init__(self, text, sender="david", channel="c1", mid=None):
+    def __init__(self, text, sender="alice", channel="c1", mid=None):
         self.sender_name = sender
         self.channel_id = channel
         self.create_at = int(time.time() * 1000)
@@ -268,7 +268,7 @@ def make_dispatcher():
     return d, posted
 
 
-def with_allowed(sender="david"):
+def with_allowed(sender="alice"):
     cfg = fb.CONFIG["mattermost"]
     saved = cfg.get("allowed_users")
     cfg["allowed_users"] = [sender]

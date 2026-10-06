@@ -305,7 +305,7 @@ def blocked_combo(key, mods):
     `del` are `backspace`), and the TABLE entries get the same fold - otherwise
     `ctrl-opt-del` spells the old force-logout combo with "del" and slips a list
     that only knows "delete" (found 2026-10-05 while checking our table against
-    Hermes', which canonicalises both sides for exactly this reason). The
+    the predecessor harness's, which canonicalises both sides for exactly this reason). The
     Windows-only entries apply where "cmd" is the Windows key.
     """
     key = _BLOCK_CANON.get(key, key)
@@ -439,7 +439,7 @@ def scale_note(shot_px, display_pts):
 
 
 def prune_shots(keep=MAX_SHOTS):
-    """Keep the newest N screenshots. Unbounded capture is a disk leak; hermes
+    """Keep the newest N screenshots. Unbounded capture is a disk leak; the predecessor harness
     caps the same way at 20."""
     try:
         shots = sorted(SCRATCH.glob("screen-*.png"), key=lambda p: p.stat().st_mtime)
@@ -474,7 +474,7 @@ def _remember(session, snap):
 # resend the same frame (and its ~1,000 tokens) every step. The DELIVERED bytes
 # are hashed; identical bytes for the same session+target omit the image and say
 # so in the text, with a streak cap so full pixels always come back before too
-# long. Adopted from Hermes' measured behaviour (their _screenshot_dedup_check),
+# long. Adopted from the predecessor harness's measured behaviour (its _screenshot_dedup_check),
 # 2026-10-05 - the one part of their loop economics worth keeping.
 # ---------------------------------------------------------------------------
 _SCREENSHOT_DEDUP_MAX_STREAK = 2

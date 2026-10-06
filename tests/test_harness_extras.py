@@ -173,8 +173,8 @@ def main():
               a == b and "users" not in a, (a, b))
         u1 = fb._failure_signature(r"get-item : could not find \\10.1.1.1\share\a.tmp")
         check("a UNC path is squeezed too", "share" not in u1 and "p" in u1, u1)
-        d = fb._failure_signature(r"whoami: mnq\david trapp")
-        check("a domain\\user token is not a path and survives", "mnq" in d, d)
+        d = fb._failure_signature(r"whoami: acme\jdoe")
+        check("a domain\\user token is not a path and survives", "acme" in d, d)
 
         # ---- a CLI run with nobody who can type (piped stdin) declares no human
         # A Windows install, 2026-10-03: a `--once` run driven over ssh with the script piped in

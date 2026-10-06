@@ -80,7 +80,7 @@ def run_windows(args):
     env.pop("PYTHONPATH", None)
     # cmd.exe's documented two-quote special case: when the command line after /c carries more
     # than one quoted token, the OUTER quotes are stripped, so
-    #     cmd /c "C:\Users\David Trapp\tinycmdr.cmd" --once "a b"
+    #     cmd /c "C:\Users\Example User\tinycmdr.cmd" --once "a b"
     # is read as the command `C:\Users\David` with junk after it, and cmd answers
     # "'C:\Users\David' is not recognized as an internal or external command". A Windows profile
     # with a space - the normal case for a two-word name - hits this every time. One extra pair

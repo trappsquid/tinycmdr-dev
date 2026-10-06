@@ -1,7 +1,7 @@
 """Run the web UI's own page script and grade what it renders.
 
 The HTTP suite (test_webui.py) only ever looked at the SERVER's line buffer.
-Both defects the operator reported were in the PAGE's renderer, so they sailed
+Both defects were in the PAGE's renderer, so they sailed
 through every "green" release:
 
   * the page keyed its DOM nodes by the bare line index, and every run numbers
@@ -223,7 +223,7 @@ def main():
           f"({res['prompts']} prompt(s), token {res.get('token')!r})")
 
     # -- 1c. a stale token on any GET: one prompt, one retry, the page recovers ---
-    # The bare "unauthorized" note with no way back was reported by the operator
+    # The bare "unauthorized" note with no way back was reported
     # (2026-10-04: "why do all my pages to tinycmdr webui say unauthorized now"). The
     # page clears the token, asks once with the way back named, and retries the GET.
     sc = {"runs": [], "steps": [{"kind": "polls", "n": 3}], "auth_401_once": True}

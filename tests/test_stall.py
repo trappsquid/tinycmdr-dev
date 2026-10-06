@@ -334,20 +334,20 @@ class FakeDispatcher(fb.MattermostDispatcher):
 
 
 class _FakeMsg:
-    def __init__(self, channel_id, text, sender="david", mid="m1"):
+    def __init__(self, channel_id, text, sender="alice", mid="m1"):
         self.sender_name = sender
         self.channel_id = channel_id
         self.text = text
         self.create_at = time.time() * 1000
         self.id = mid
         self.root_id = ""
-        self.user_id = "david-id"
+        self.user_id = "alice-id"
         self.is_direct_message = True
 
 
 def _dispatcher():
     d = FakeDispatcher()
-    fb.CONFIG["mattermost"]["allowed_users"] = ["david", "david-id"]
+    fb.CONFIG["mattermost"]["allowed_users"] = ["alice", "alice-id"]
     return d
 
 
@@ -369,7 +369,7 @@ def test_stop_is_handled_out_of_band_not_queued_behind_the_run():
 
 
 def test_stop_after_the_run_was_already_flagged_does_not_say_nothing_is_running():
-    """Live 2026-09-12 on the Windows bed: the stall watchdog had already SET the wedged
+    """Live 2026-09-12 on Windows: the stall watchdog had already SET the wedged
     run's cancel event, so /stop answered "Nothing is running right now" while the
     channel was still busy - which the operator reads as "my stop was ignored"."""
     d = _dispatcher()
@@ -437,7 +437,7 @@ def test_a_run_does_not_wait_for_ever_on_an_abandoned_session_lock():
     wedged.acquire()               # the abandoned run, still inside run(), still holds it
     fb.AGENT._run_lock_wait_secs = lambda: 0.4   # the wait under test, not the 60s one
     try:
-        finished, _ = timed(lambda: d._handle(ch, "david", "carry on", "m-lock",
+        finished, _ = timed(lambda: d._handle(ch, "alice", "carry on", "m-lock",
                                               "", True, 0), 30)
         held_after = wedged.locked()
     finally:
@@ -462,7 +462,7 @@ def test_the_watchdog_respawn_ends_in_an_answer_not_a_blocked_worker():
     _redirect_state()
     ch = "chan-stall-lock"
     q = d.queues.setdefault(ch, fb.queue.Queue())
-    q.put(("david", "carry on", "m-lock2", "m-lock2", True))   # queued behind the wedged run
+    q.put(("alice", "carry on", "m-lock2", "m-lock2", True))   # queued behind the wedged run
     wedged = fb.AGENT._lock(f"mm-{ch}")
     wedged.acquire()               # the run the tick is about to write off, still holding it
     d.worker_gen[ch] = 3           # a zombie worker's signature: no thread to race the tick
@@ -509,7 +509,7 @@ def test_second_message_while_busy_steers_the_live_run_instead_of_queueing():
     check("steering: no second worker was spawned",
           [k for k in d.workers].count(ch) == 1, list(d.workers))
     check("steering: the run drains it exactly once",
-          d._take_steering(ch) == [("david", "leave it alone")]
+          d._take_steering(ch) == [("alice", "leave it alone")]
           and d._take_steering(ch) == [], d.steering)
     d.running.discard(ch)
 
@@ -536,7 +536,7 @@ def test_steering_the_run_never_read_becomes_a_normal_message():
     d = _dispatcher()
     ch = "chan-requeue"
     with d.steering_lock:
-        d.steering[ch] = [("david", "hold on"), ("david", "leave it")]
+        d.steering[ch] = [("alice", "hold on"), ("alice", "leave it")]
     n = d._requeue_steering(ch)
     q = d.queues.get(ch)
     items = []
@@ -612,7 +612,7 @@ def test_stall_watchdog_warns_then_abandons_and_serves_the_queue():
 
     # now wedge it well past the abandon threshold, with something queued
     d.active[ch]["last"] = fb.now_mono() - 25 * 60
-    d.queues[ch].put(("david", "queued while stuck", "m3", "m3", True))
+    d.queues[ch].put(("alice", "queued while stuck", "m3", "m3", True))
     ev = threading.Event()
     d.cancel_events.setdefault(ch, set()).add(ev)
     d._stall_tick()
@@ -629,7 +629,7 @@ def test_stale_worker_exits_instead_of_stealing_the_channel():
     d = _dispatcher()
     ch = "chan-gen"
     q = fb.queue.Queue()
-    q.put(("david", "old work", "m9", "m9", True))
+    q.put(("alice", "old work", "m9", "m9", True))
     d.worker_gen[ch] = 5              # channel belongs to generation 5
     d._worker(ch, q, 3)               # a worker from generation 3
     check("stale worker does not consume the newer channel's queue",
@@ -1435,7 +1435,7 @@ def test_the_system_prompt_describes_the_repeat_guard_that_exists():
     """The prompt must match the guard's real behaviour. The old wording said "never
     re-issue a call" and told the model to invent a different command - but after a
     real change, re-running the SAME command is the only thing that proves anything,
-    and it does execute (2026-09-12: the Windows bed fixed a tool, got its own pre-edit
+    and it does execute (2026-09-12: Windows fixed a tool, got its own pre-edit
     output back, and explained it away as the harness caching)."""
     sp = fb.build_system_prompt()
     check("prompt: the guard applies only while nothing has changed",
@@ -1845,7 +1845,7 @@ def test_startup_validation_catches_an_unconfigured_host():
 
 
 def test_console_output_survives_a_legacy_code_page():
-    """Live the Windows bed, first install: `tinycmdr.py --once` died printing its own
+    """Live Windows, first install: `tinycmdr.py --once` died printing its own
     banner. A plain PowerShell console uses a legacy code page (cp437), which
     cannot encode the em dash, and a bare print() raises UnicodeEncodeError and
     takes the process with it. Reproduced by forcing PYTHONIOENCODING=cp437;
@@ -2011,7 +2011,7 @@ def test_shipped_requirements_cover_what_the_code_declares():
               "installer does not use the file")
     else:
         # The installer is Windows-only, so a Mac or Linux checkout has no install/:
-        # asserting it there fails for the wrong reason (found on the macOS bed 2026-09-19).
+        # asserting it there fails for the wrong reason (found on macOS 2026-09-19).
         check("deps: installer absent from this tree -> installer check skipped", True)
     check("deps: a missing Mattermost client is a loud failure",
           "needs mmpy_bot" in src and "sys.exit(2)" in src, "no loud path")
@@ -2199,7 +2199,7 @@ def test_a_correction_that_arrives_with_the_answer_gets_another_turn():
     def steer():
         drains["n"] += 1
         # second drain = the one that runs as the model's answer comes back
-        return [("david", "Leave it alone")] if drains["n"] == 2 else []
+        return [("alice", "Leave it alone")] if drains["n"] == 2 else []
 
     fb.AGENT._chat = fake_chat
     try:
@@ -2221,7 +2221,7 @@ def test_a_correction_that_arrives_with_the_answer_gets_another_turn():
 
 
 def test_an_answer_that_arrives_with_the_correction_is_delivered():
-    """The measured loss this pins (drive 2026-09-23, the Windows bed): the model composed
+    """The measured loss this pins (drive 2026-09-23, Windows): the model composed
     the full task answer, steering landed in the same second, the run took another
     turn - and the run's DELIVERED response carried only the steering reply. The
     composed answer survived only as the leftover streamed draft (its text lives in
@@ -2243,7 +2243,7 @@ def test_an_answer_that_arrives_with_the_correction_is_delivered():
 
     def steer():
         drains["n"] += 1
-        return [("david", "one more thing")] if drains["n"] == 2 else []
+        return [("alice", "one more thing")] if drains["n"] == 2 else []
 
     fb.AGENT._chat = fake_chat
     try:
@@ -2262,7 +2262,7 @@ def test_an_answer_that_arrives_with_the_correction_is_delivered():
 def test_a_mutation_lets_the_same_call_run_again():
     """The repeat guard must not outlive the change it was measured against.
 
-    Found in the Windows bed's own log: it ran a tool, edited that tool with edit_file,
+    Found in the live Windows install's own log: it ran a tool, edited that tool with edit_file,
     re-ran the check, got identical output, and read the repeat as "the harness caching
     a pre-edit call". Had it tried a third time, the guard would have REFUSED it and
     handed back the PRE-EDIT result - after which a fixed tool looks broken. So any
@@ -2555,7 +2555,7 @@ def test_a_backward_wall_clock_step_does_not_stretch_the_run_budget():
 
 def test_the_second_read_of_a_file_leaves_with_its_map():
     """24 of the 40 code calls in the 2026-09-18 run were another whole-file read of the
-    SAME 8,700-line source (measured on the Windows bed). A path read twice in one run leaves
+    SAME 8,700-line source (measured on Windows). A path read twice in one run leaves
     with its index attached, so the next question goes to a region instead of through the
     whole file."""
     big = TMP / "big_source.py"
@@ -2630,7 +2630,7 @@ def test_list_tools_is_bounded_and_still_useful():
 
 
 def test_fetch_url_cannot_blow_up_the_context():
-    """The largest page in the Windows bed's ten-day log was 30,048 chars, 17.6% of that host's
+    """The largest page in the live Windows install's ten-day log was 30,048 chars, 17.6% of that host's
     result chars: the model may ask for more than the 8k default, not for 30 KB."""
     had = hasattr(fb, "requests")
     saved_get = getattr(fb.requests, "get", None) if had else None
@@ -2808,7 +2808,7 @@ def test_the_safety_seatbelt_covers_execute_code_too():
 
 
 def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
-    """Measured live on the Windows bed 2026-09-18: the model announced "fresh pass complete" five
+    """Measured live on Windows 2026-09-18: the model announced "fresh pass complete" five
     times in 25 minutes and answered every announcement with another tool round, while every
     call was distinct, so no repeat-based guard could see it. The delivery guard counts
     announcements that arrive with tool calls queued, demands the report, then forces it."""
@@ -2866,7 +2866,7 @@ def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
 
 
 # --------------------------------------------------------------------------
-# the restatement guard (macOS bed, 2026-09-24)
+# the restatement guard (macOS, 2026-09-24)
 # --------------------------------------------------------------------------
 # Measured: a stuck run described the SAME status EIGHT times in three minutes
 # while every call it made failed and nothing changed. The calls were different,

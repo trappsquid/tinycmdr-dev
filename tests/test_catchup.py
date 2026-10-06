@@ -7,7 +7,7 @@ Why this suite exists. The sweep's own docstring names the case it is for - "a m
 posted during a gap (or while the bot was restarting) is silently ignored" - but it walks
 the in-memory high-water map, and every new process starts with an empty one. So it had
 no channel to ask about until something arrived over the websocket, which is exactly what
-a post made inside a downtime never does. Measured on the Windows bed and the macOS bed
+a post made inside a downtime never does. Measured on Windows and macOS
 2026-09-24: a restart was armed, the child was killed, an order was posted while it was
 down, and no run started, no answer was posted and nothing was logged. The operator's
 opinion of that is "the bot ate my message".
@@ -46,7 +46,7 @@ STATE = STAGE / "state.json"
 fb.GLOBAL_STATE_FILE = STATE
 fb.CONFIG["agent"]["catch_up_seconds"] = 60
 fb.CONFIG["agent"]["catch_up_max_minutes"] = 30
-fb.CONFIG["mattermost"]["allowed_users"] = ["david"]
+fb.CONFIG["mattermost"]["allowed_users"] = ["alice"]
 
 PASSES, FAILURES = [], []
 
@@ -61,7 +61,7 @@ def check(name, cond, detail=""):
 
 
 class FakeMessage:
-    def __init__(self, channel_id, text, sender="david", user_id="u-david",
+    def __init__(self, channel_id, text, sender="alice", user_id="u-alice",
                  create_at=None, msg_id=None):
         self.channel_id = channel_id
         self.sender_name = sender
@@ -77,7 +77,7 @@ class FakeThread:
         self.posts = {"chan-A": [{"id": "p-down", "channel_id": "chan-A",
                                   "message": "an order posted while the "
                                              "bot was down",
-                                  "user_id": "david",
+                                  "user_id": "alice",
                                   "create_at": int((time.time() - 30) * 1000)}]}
 
     def get_posts_for_channel(self, channel_id, params=None):

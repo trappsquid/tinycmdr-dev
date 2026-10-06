@@ -394,7 +394,7 @@ if [ "$UNINSTALL" = 1 ]; then
     # SCOPED, like the wrapper below and like the Linux installer's cleanup. A probe
     # install (--install-dir /tmp/..., --no-launchd) shares the DEFAULT label with a
     # real install, so an unscoped `bootout` + `rm` here stopped a live agent and
-    # deleted its plist: measured 2026-09-24 on the macOS bed, where a probe uninstall
+    # deleted its plist: measured 2026-09-24 on macOS, where a probe uninstall
     # took the running bot down with it. The plist is removed only when it names
     # THIS install directory.
     if [ "$IS_MAC" = 1 ] && [ -f "$PLIST" ]; then

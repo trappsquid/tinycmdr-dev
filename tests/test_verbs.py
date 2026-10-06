@@ -1340,10 +1340,10 @@ def main():
         check("the Windows restart helper stops the supervisor and the launcher",
               "tinycmdr-supervise.py" in _ps and "tinycmdr-service.vbs" in _ps)
         # -like reads [ ] * ? in a PATH as wildcards: a bracketed install dir matched
-        # nothing, so the scoped clause silently let the old bot live (A-2026-10-05-53).
+        # nothing, so the scoped clause silently let the old bot live (measured 2026-10-05).
         # The literal OrdinalIgnoreCase compare replaced it in BOTH copies, and the
         # supervisor clause is scoped like the bot clause now (the vbs passes the full
-        # path; A-2026-10-05-54).
+        # path; measured 2026-10-05).
         check("...and scopes the filter with a literal, wildcard-safe compare",
               "IndexOf($install," in _ps and 'like "*$install*"' not in _ps
               and "-Filter \"Name='pythonw.exe'\"" not in _ps)

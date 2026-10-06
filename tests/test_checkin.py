@@ -895,7 +895,7 @@ def test_capability_line_reports_what_this_process_can_enforce():
 def test_a_promise_with_no_tool_call_is_asked_to_act_once():
     """The model says it is about to work and stops there, with no tool call at all.
 
-    Measured on the macOS bed 2026-09-24: four runs in a row, ONE model call each, 0 tool
+    Measured on macOS 2026-09-24: four runs in a row, ONE model call each, 0 tool
     calls, every reply a promise ("I'll gather what we did in the MVT session, then
     write and publish the post. Let me start by checking..."). The delivery guard only
     counted announcements that arrive WITH calls queued, so the promise was posted as
@@ -1000,7 +1000,7 @@ def test_a_promise_after_real_work_gets_one_ask_then_the_report():
 
 # ------------- 1.0.8: a filled-in report with no tool call is not an answer
 
-# The live sample. One order each to the Windows bed and the macOS bed on 2026-09-24, 2 model
+# The live sample. One order each to Windows and macOS on 2026-09-24, 2 model
 # calls and 0 tool calls on both boxes, and this came back as the run's report - for a
 # directory neither box had created. The promise guard missed it (nothing is promised),
 # and the evidence check missed it too (nothing is changed): a measured value is neither.
@@ -1098,7 +1098,7 @@ def test_the_result_claim_detector_fires_on_reports_and_stays_quiet_on_prose():
         "Should I delete the old folder first?",
         "both files are written.",
         # regress-audit.py over every fleet bot's DELIVERED answers found this
-        # one on the macOS bed: a true-from-memory answer in a run with no tool
+        # one on macOS: a true-from-memory answer in a run with no tool
         # call. A bare machine spec is not a claim about anything fetched, so
         # the measurement branch needs box-ish context beside the number.
         "16 GB unified memory.",
@@ -1138,7 +1138,7 @@ def test_the_payload_carries_the_warning_only_after_a_wreck():
 
 
 # --------------------------------------------------------------------------
-# the copy-paste repeat problem (macOS bed, 2026-09-24)
+# the copy-paste repeat problem (macOS, 2026-09-24)
 # --------------------------------------------------------------------------
 # One stuck run posted the same sentence EIGHT times in three minutes: eight
 # narration lines that all opened "The video is already downloaded (9.2 MB ..."

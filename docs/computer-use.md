@@ -31,8 +31,7 @@ not stop at the checkbox:
 
 - **Accessibility**: `doctor` prints the OS flag AND a real AX read, because they answer
   different questions. The flag answers for the process that asked (the `osascript`
-  child); the read is what the tool actually needs. Measured 2026-10-05 on macOS 27
-  (build 26A428):
+  child); the read is what the tool actually needs. Measured 2026-10-05 on macOS 27:
 
   | flag | read | meaning |
   | :--- | :--- | :--- |

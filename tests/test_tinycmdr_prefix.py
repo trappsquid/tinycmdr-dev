@@ -102,7 +102,7 @@ def test_the_retired_prefix_gets_a_pointer():
         skip("legacy prefix", "chatless build")
         return
     d, posted = make_dispatcher()
-    d._handle("c1", "david", "/cmdr status", "m9", "m9", True)
+    d._handle("c1", "alice", "/cmdr status", "m9", "m9", True)
     text = " ".join(posted)
     check("chat answers a /cmdr line with the new prefix",
           "/tinycmdr" in text and "Unknown command" not in text, text[:200])
@@ -139,20 +139,20 @@ def test_chat_handler_routes_a_prefixed_command():
         skip("chat handler", "chatless build")
         return
     d, posted = make_dispatcher()
-    d._handle("c1", "david", "/tinycmdr new", "m1", "m1", True)
+    d._handle("c1", "alice", "/tinycmdr new", "m1", "m1", True)
     check("/tinycmdr new clears the session locally",
           any("Session cleared" in p for p in posted), posted)
     check("/tinycmdr new did not queue a task", not d.queues.get("c1"), d.queues)
 
     d2, posted2 = make_dispatcher()
-    d2._handle("c1", "david", "/tinycmdr help", "m2", "m2", True)
+    d2._handle("c1", "alice", "/tinycmdr help", "m2", "m2", True)
     text = " ".join(posted2)
     check("/tinycmdr help answers with the command list",
           "**Commands**" in text and "/tinycmdr help" in text, text[:200])
     check("/tinycmdr help queued nothing", not d2.queues.get("c1"), d2.queues)
 
     d3, posted3 = make_dispatcher()
-    d3._handle("c1", "david", "/tinycmdr wibble", "m3", "m3", True)
+    d3._handle("c1", "alice", "/tinycmdr wibble", "m3", "m3", True)
     check("an unknown verb is answered locally, never sent to the model",
           any("Unknown command" in p for p in posted3) and not d3.queues.get("c1"),
           posted3)
@@ -166,11 +166,11 @@ def test_listener_thread_reads_a_prefixed_command():
     saved_restart = fb.perform_restart
     calls = []
     fb.perform_restart = lambda *a, **kw: calls.append((a, kw))
-    fb.CONFIG["mattermost"]["allowed_users"] = ["david"]
+    fb.CONFIG["mattermost"]["allowed_users"] = ["alice"]
     try:
         class FakeMessage:
             def __init__(self, text, mid):
-                self.sender_name = "david"
+                self.sender_name = "alice"
                 self.channel_id = "c1"
                 self.create_at = 0
                 self.id = mid

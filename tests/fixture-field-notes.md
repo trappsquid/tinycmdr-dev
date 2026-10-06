@@ -29,7 +29,7 @@ source: hand-rolled shell that forgot to quote, 2026-09-13
 match: is not recognized as the name of a cmdlet, the term ' is not recognized
 scope: windows
 note: The name is not on THIS shell's PATH. Use the full path, or check what PATH the child really got: a Scheduled Task, a service and an interactive console each start with a different one.
-source: Windows bed, where the task's PATH had no winget directory
+source: a live Windows install, where the task's PATH had no winget directory
 
 ## Windows: the action needs elevation and this shell holds the filtered token
 match: requires elevation, must be run as administrator, requested operation requires elevation

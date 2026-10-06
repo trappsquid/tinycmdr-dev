@@ -112,7 +112,7 @@ def main():
         mod2 = stage(work / "add")
         mod2._is_local_url = lambda url: False
         # kind, url, key, number, alias, then the cloud-failover consent (the link is
-        # asked BEFORE the key: a key belongs to an endpoint - operator's order report,
+        # asked BEFORE the key: a key belongs to an endpoint - asked in this order,
         # 2026-10-04)
         answers = ["cloud", base, "sk-good", "2", "team-a", "y"]
         old_in = sys.stdin

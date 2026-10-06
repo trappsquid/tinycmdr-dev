@@ -1,6 +1,6 @@
 """Tool discovery: a capability question must not be answered with a wrong tool.
 
-Measured on a live install 2026-09-23 (the Windows bed, 35B-A3B, its own log): three find_tools
+Measured on a live install 2026-09-23 (Windows, 35B-A3B, its own log): three find_tools
 calls, each answered "[HARNESS: now callable]" with a tool that does something else -
 
     "send Mattermost message to channel"            -> `schedule`  (the word "channel")
@@ -89,7 +89,7 @@ revealed = lambda out: "now callable" in out or "every remaining tool is now" in
 TAIL = "Everything else on this machine"
 
 # ---- the three measured queries are the regression this suite exists for ---------
-# What was measured (a Windows bed, 2026-09-23): these three revealed a WRONG tool -
+# What was measured (a live Windows install, 2026-09-23): these three revealed a WRONG tool -
 # `schedule` (the word "channel"), `blog` ("post"), `delegate_task` ("agent") - and the box then
 # spent 35 minutes rebuilding a capability it already had. The REGRESSION is the wrong answer,
 # not the existence of an answer: on a box that owns a mattermost tool (a host that manages other installs' own
@@ -236,7 +236,7 @@ check("the line is bounded", len(inv_line) < 320, len(inv_line))
 check("the prompt is still byte-identical across two builds",
       fb.build_system_prompt() == sp)
 check("the placeholder is a live field, not literal braces", "{inventory}" not in sp)
-check("the line says these are CORE tools (the drive mislabeled them custom)",
+check("the line says these are CORE tools (a live install mislabeled them custom)",
       "Those are core tools" in fb.hidden_inventory_line(), fb.hidden_inventory_line()[:200])
 check("and points at the custom block for the rest",
       "custom tools listed at the end" in fb.hidden_inventory_line())
@@ -423,7 +423,7 @@ check("a tool name as the first token of a pipeline is answered as a tool too",
       "is a TOOL on this box" in out, out[:160])
 
 # ---- round 6: the tool RUN AS A SCRIPT (`python toolsmith.py ...`) -------------------
-# Found on the drive 2026-09-23: every tool file in ./tools/ is also a runnable script, so
+# Found on a live install 2026-09-23: every tool file in ./tools/ is also a runnable script, so
 # this miss SUCCEEDS and the model never self-corrects. Told to build a tool, the run ran
 # `python toolsmith.py "action=new" ...` (which worked), and never made the `toolsmith` TOOL
 # CALL its prompt names.
@@ -467,7 +467,7 @@ finally:
 # ---- round 7: the skill tool, with the RIGHT verb ------------------------------------
 # Nine of eleven skill calls in one round went to `skill{action:list|search, name:<tool>}`,
 # one answered with 8 KB of skill taxonomy. The door is the same whichever verb was guessed.
-# The name is the one the drive actually used, and it is a CORE tool, so this half needs no
+# The name is the one a live install actually used, and it is a CORE tool, so this half needs no
 # staged registry entry.
 for _act in ("list", "search", "read"):
     out = fb.tool_skill({"action": _act, "name": "search_sessions", "topic": "x"}, {})
