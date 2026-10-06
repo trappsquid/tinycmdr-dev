@@ -7,8 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.81] - 2026-10-05
+
+### Added
+- **`computer_use` ships as a starter tool:** capture the screen or a window, list apps and windows, and click, type, scroll by numbered element or coordinate on macOS (System Events/JXA + `screencapture`), Windows (UI Automation/Win32) and Linux (X11: `xdotool` + a grabber), with no third-party driver; screenshots attach to the model when `agent.vision` is on; `action=doctor` reports the macOS Accessibility/Screen Recording grants (with the exact interpreter path to grant), the Windows session/DPI facts and the Linux tooling. (tools/computer_use.py, tools/README.md, docs/computer-use.md, tests/test_computer_use.py)
+- **Host files materialize on start:** a missing `theme.toml` or `soul.md` is recreated from the shipped `theme.default.toml` / `soul.example.md` at startup (logged once); an existing file is never touched. (tests/test_host_file_materialize.py)
+- **Community files:** `CODE_OF_CONDUCT.md`, `CONTRIBUTING.md`, `SECURITY.md` (GitHub private vulnerability reporting is the security door) and the issue/PR templates.
+
 ### Changed
-- **Restart after an update:** replacing `tinycmdr-supervise.py` does not replace the supervisor process that is already running - that process is the one that relaunches the bot, so it keeps executing the old code until one restart from outside it (the elevated restart helper, or a log off/on). The first restart after such an update is therefore still the pre-update supervisor; the second is the new one.
+- **Restart after an update:** replacing `tinycmdr-supervise.py` does not replace the supervisor process that is already running - that process is the one that relaunches the bot, so it keeps executing the old code until one restart from outside it (the elevated restart helper, or a log off/on). The first restart after such an update is still the pre-update supervisor; the second is the new one.
+- **Comments and fixtures:** generic example users and paths, no dated incident narration and no development-process pointers; comments state the rule or the deployment fact.
+
+### Fixed
+- **Web door (security):** the Origin gate compared hostnames only, so a page served from another port of the same name could ride the session cookie and drive the token-authenticated API; it compares host and port now. (tests/test_webui.py)
+- **Web door:** a saturated server answers HTTP 503 with `Retry-After` instead of closing silently, and loopback callers (the health probes) are never refused; a busy page can no longer read as a dead box. (tests/test_webui.py)
+- **Health:** the page lane is reported like the chat lanes once it has been recorded, so "page up" and "page never started" are distinguishable; a failed bind or a missing token is recorded. (tests/test_lane_health.py)
+- **Tool doors:** `execute_code` answers the tool-as-script door only when the source actually runs or imports the file (a comment, a string or a read is not a call); the script door recognizes a quoted interpreter path with a space; the shipped tools are runnable scripts again; `find_tools` declares `category`; a config-gated tool (`mcp`, `a2a`) names the config key instead of blaming the build; `create_tool` and the system prompt point at `memory` (there is no `remember` tool). (tests/test_tool_doors.py, tests/test_tool_discovery.py)
+- **Prompt surfaces:** the trailing state block is scrubbed like every other prompt path; the skills index is bounded (descriptions drop before names) and always-runbooks announce a cut or a skip; the compaction budget counts the block the payload sends; `memory action=search` matches a multi-word query against a concept containing every word. (tests/test_memory_okf.py, tests/test_tool_discovery.py, tests/test_envelope.py)
+- **Restart helpers:** the Windows kill filter matches paths literally (a bracketed install folder no longer silently unscopes it) and is install-scoped in both copies, and the helper exits non-zero when a restart fails; on macOS `start` accepts an already-loaded agent, `stop` says when nothing was loaded and `logs` survives a fresh install. (tests/test_verbs.py, tests/test_installer_windows.py)
+- **Tests:** a suite run by hand no longer opens a browser tab (the suites that start the page carry the no-browser guard), and the gate fails any suite that forgets it. (tests/test_webui.py)
+- **Tests:** the background-job announcement check matches job ids as announcement lines, so a staged path that contains an id can no longer fail it. (tests/test_job_control.py)
+- **Telegram lane:** `--telegram` takes the same startup validation and single-instance lock as every other service lane; the lane reports itself down after five minutes of failed polls instead of claiming `up` for ever; a caption is read as the question and a text-less message gets a one-line answer instead of silence. (tests/test_verbs.py, tests/test_lane_health.py)
+- **Mattermost catch-up:** recovered posts go through the same hardened allowlist check as live intake, so a bare-string or null `allowed_users` can no longer drop every recovered post (or raise every cycle). (tests/test_catchup.py)
+- **a2a:** `ListTasks` returns a real continuation token, so pages past the first are reachable. (tests/test_a2a.py)
 
 ## [1.0.80] - 2026-10-05
 
