@@ -1959,6 +1959,24 @@
         "commit": "cef08fe"
       },
       "detail": "A-2026-10-05-139 .. -151 and -156, an earlier review run 12 (fixed 2026-10-06, cef08fe). TelegramDestination sets has_human (the lane had never asked anything: every confirm-tier command was declined silently, with no line); the confirm question posts with its command as <pre>; run_telegram passes ask_door so ask_user reaches a person; a button answer lands as the option's WORDS; a /stop with a question open stops the run; a second question while one is open is refused; a failed post returns at once (was 30.005s); the caller's wait is capped; the renderer splits first and escapes per chunk (no more tag cut at 4096) and protects fenced blocks; the client honours a 429 retry_after bounded by telegram.retry_after_max; the Telegram token joins the secret sweep. tests/test_telegram.py: 87 checks, 26 red pre-fix."
+    },
+    {
+      "id": "lane-health-truth-1-0-84",
+      "title": "lane health tells the truth about a lane that keeps failing",
+      "state": "shipped",
+      "anchor": {
+        "commit": "2a7d522"
+      },
+      "detail": "A-2026-10-05-179 .. -186, an earlier review run 12 (fixed 2026-10-06, 2a7d522). lane_down keys the repeat counter on a normalised reason class (a varying message no longer resets it); the lane record merges per lane under the lock (proven with two real processes - a lane this process does not own survives); the poll-failure stamp is monotonic-safe (a backwards clock reports, not hides); _lane_error_permanent requires the HTTP status shape (an id/port containing 401 is not a refused credential); a negative failure count is clamped before the backoff curve; a stale 'up' record is corrected on the exit path and lanes_snapshot can say the pid is dead. A-184's uptime half was REFUTED by measurement (the clamp is behaviour-preserving); the negative-COUNT half was real and is fixed. tests/test_lane_health.py + test_telegram.py: 23 checks red pre-fix."
+    },
+    {
+      "id": "telegram-files-and-reporting-1-0-84",
+      "title": "the Telegram lane can carry a file and report its own work",
+      "state": "shipped",
+      "anchor": {
+        "commit": "2a7d522"
+      },
+      "detail": "A-2026-10-05-199 .. -201, run 12 (fixed 2026-10-06, 2a7d522). sendDocument/sendPhoto appear nowhere in the shipped build, so 'send me the report' returned a Windows path - the transport exists now and run_telegram passes send_file_cb into the run; and a Telegram-only box wires SCHEDULER.dispatcher / REPORTER and honours announce_startup, so a scheduled job reports somewhere and a restart says it is back on this lane too. tests/test_telegram.py: 13 checks red pre-fix."
     }
   ]
 }
