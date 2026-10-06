@@ -37,6 +37,9 @@ not authority.
   verifies (`SHA256SUMS`, then a plain copy - nothing builds on the host) and what the agent reads
   and edits when it works on itself. Parts would have to be assembled at package-build time, never
   install time - that re-architecture needs its own item, not a cleanup.
+- **Commit messages, `STATUS.json` details and comments state what changed and why, in plain
+  facts.** The repo is public and reads as one maintainer's record: no quoted conversations, no
+  first-person plural, no process narration.
 - **One way to do each thing.** If you reach for a new script, note or doc, check first whether
   `where.py`, `STATUS.json`, `run_all.py`, `measured-block.py` or `release.sh` already owns it.
 
