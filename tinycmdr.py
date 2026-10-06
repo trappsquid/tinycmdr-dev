@@ -25260,14 +25260,12 @@ def run_webui():
         def _origin_ok(self):
             """Same-origin/Host check for EVERY route.
 
-            This lane is loopback-only by default and carries NO token then, so any page
-            on any site could `fetch("http://127.0.0.1:8790/api/run", {method: "POST",
-            body: ...})` and the browser would deliver it: CSRF against shell access.
-            Two rules: Host must be a loopback name (or the configured bind host), and an
-            Origin header, when the browser sends one, must match that host AND its port
-            (cookies are host-scoped, so the port is part of the check). curl, the
-            installer's probe and the supervisor send no Origin and keep working; an
-            opaque "null" origin (a file:// page, a sandboxed iframe) is refused.
+            The token is mandatory; this rule is defence in depth on top of it. Host must
+            be a loopback name (or the configured bind host), and an Origin header, when
+            the browser sends one, must match that host AND its port (cookies are
+            host-scoped, so the port is part of the check). curl, the installer's probe
+            and the supervisor send no Origin and keep working; an opaque "null" origin
+            (a file:// page, a sandboxed iframe) is refused.
             """
             host_hdr = (self.headers.get("Host") or "").strip().lower()
             name = host_hdr.rsplit(":", 1)[0].strip("[]")
