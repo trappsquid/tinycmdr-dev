@@ -25076,8 +25076,11 @@ def web_jobs_view():
 
 def web_log_tail(lines=120):
     """The tail of this host's log, read from the end: the file is big enough
-    (megabytes) that slurping it for a panel would be silly."""
-    path = BASE_DIR / "tinycmdr.log"
+    (megabytes) that slurping it for a panel would be silly. It reads the same path
+    the file log writes to: with TINYCMDR_LOG_FILE set (the suites, an operator) the
+    panel used to read BASE_DIR/tinycmdr.log while the logger wrote elsewhere, so the
+    panel showed a stale file - found by the A-256 pin under the test gate."""
+    path = _log_path
     try:
         with open(path, "rb") as f:
             f.seek(0, os.SEEK_END)

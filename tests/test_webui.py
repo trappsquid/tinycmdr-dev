@@ -1577,6 +1577,13 @@ def main():
           _cd255)
 
     # ---- A-256/257: the panels clamp and leak nothing ---------------------------
+    # The file log is per-suite under the gate (run_all.py points TINYCMDR_LOG_FILE at a
+    # fresh file), so seed the file this route reads: the check grades the CLAMP, not
+    # who happened to log first (it read the tree's own log when run by hand).
+    _lp256 = Path(fb._log_path)
+    _lp256.parent.mkdir(parents=True, exist_ok=True)
+    with _lp256.open("a", encoding="utf-8") as _fh256:
+        _fh256.write("seed: the log panel has a line to clamp\n")
     _st256, _hd256, _bd256, _ = probe("GET", "/api/log?lines=99999", TOK)
     _j256 = json.loads(_bd256)
     check(_st256 == 200 and 0 < len(_j256.get("lines", [])) <= 500,
