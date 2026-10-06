@@ -950,6 +950,25 @@ def main():
         check("--str cannot hide a truthy string under a boolean key",
               rc == 2 and "true or false" in err, (rc, err[:160]))
         call(fb, ["config", "unset", "agent.vision"])
+        # A-2026-10-05-68: a 3+ segment path whose parent was missing wrote a LITERAL
+        # top-level dotted key ("zz.a.b" became the key "zz.a"), which unset could not
+        # reach - the write silently missed the path the operator named.
+        rc, out, err = call(fb, ["config", "set", "zz.deep.leaf", "v2"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("a deep config set creates the intermediate sections",
+              rc == 0 and written.get("zz", {}).get("deep", {}).get("leaf") == "v2"
+              and "zz.deep" not in written, (rc, written.get("zz"), written.get("zz.deep")))
+        rc, out, err = call(fb, ["config", "get", "zz.deep.leaf"])
+        check("...and reads back at the path that was set", rc == 0 and "v2" in out, out[:80])
+        rc, out, err = call(fb, ["config", "get", "zz.missing.leaf"])
+        check("a deep get on a missing parent says (not set), rc=0",
+              rc == 0 and "(not set)" in out, (rc, out[:80]))
+        call(fb, ["config", "set", "zz.a", "scalar"])
+        rc, out, err = call(fb, ["config", "set", "zz.a.b", "v2"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("a scalar in the middle is refused, not shadowed by a flat dotted key",
+              rc == 1 and "is not a section" in err and "zz.a" not in written,
+              (rc, err[:160], written.get("zz", {}).get("a")))
         rc, out, err = call(fb, ["config", "set", "agent.probe_port", "nope"])
         check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])

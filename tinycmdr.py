@@ -32364,7 +32364,8 @@ def _verb_config(rest):
         print("%r is not a dotted key path (llm.base_url, agent.max_steps)" % path,
               file=sys.stderr)
         return 2
-    section, _, key = path.rpartition(".")
+    parts = path.split(".")
+    section, key = ".".join(parts[:-1]), parts[-1]
     if not section.startswith("llm") and (key in ("token", "api_key")
                                           or key.endswith("_api_key")):
         # Secrets have exactly one home (.env), and config.json is a file the agent reads
@@ -32379,15 +32380,18 @@ def _verb_config(rest):
         print(err, file=sys.stderr)
         return 1
     node = raw
-    for part in ([section] if section else []):
-        if not isinstance(node.get(part), dict):
+    for i, part in enumerate(parts[:-1]):
+        cur = node.get(part)
+        if not isinstance(cur, dict):
+            walked = ".".join(parts[:i + 1])
             if what == "get":
-                print("(not set)" if part not in node else "(%s is not a section)" % part)
+                print("(not set)" if part not in node else "(%s is not a section)" % walked)
                 return 0
             if part not in node:
                 node[part] = {}
-            elif not isinstance(node[part], dict):
-                print("%s is not a section in config.json" % part, file=sys.stderr)
+            else:
+                print("%s is not a section in config.json (it holds %s), so %s cannot be "
+                      "set" % (walked, json.dumps(cur), path), file=sys.stderr)
                 return 1
         node = node[part]
     if what == "get":
