@@ -119,7 +119,7 @@ def test_the_tool_exists_and_is_reachable():
           "send_file" in fb.hidden_inventory_line(), fb.hidden_inventory_line()[:160])
 
     revealed = fb.reveal_tools_named_in(None, "download that clip and attach it here in chat")
-    check("an order that asks for an attachment reveals it",
+    check("an order that asks for an attachment reveals the tool",
           "send_file" in revealed, revealed)
 
     schema = {s["function"]["name"]: s for s in fb.select_tool_schemas(None)}.get(
@@ -130,6 +130,9 @@ def test_the_tool_exists_and_is_reachable():
     check("the description says what it is for",
           "attach" in schema.get("description", "").lower(),
           schema.get("description"))
+    check("...and names the page as a transport",
+          "page" in schema.get("description", "").lower(),
+          schema.get("description", "")[:200])
 
 
 def test_the_tool_hands_the_lane_the_path_and_the_note():

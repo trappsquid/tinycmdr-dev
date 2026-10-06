@@ -12440,12 +12440,11 @@ CORE_TOOLS = {
     "send_file": {
         "fn": tool_send_file,
         "schema": _schema(
-            "Attach a file from this machine to the chat the operator is reading "
-            "- use it when the order is to SEND or SHOW a file rather than to "
-            "report a path. The file goes out as a real attachment in this channel. "
-            "ONLY a lane with an attachment transport can carry it: a CLI or --once "
-            "lane cannot, and answers with an error naming the path - so do not plan a "
-            "deliverable around this tool on such a lane.",
+            "Send a file from this machine to the person you are talking to - a "
+            "deliverable, a screenshot, a report - whenever the order is to SEND or "
+            "SHOW a file rather than report a path. The chat page offers it as a "
+            "download, a chat lane posts it as an attachment; a plain terminal run "
+            "carries nothing and answers with the path to hand over instead.",
             {"path": {"type": "string",
                       "description": "Absolute path of the file to attach"},
              "note": {"type": "string",
