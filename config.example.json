@@ -56,6 +56,8 @@
     "no_think": false,
     "_comment_replay_reasoning": "Assistant reasoning_content is replayed on history turns to LOCAL endpoints: a llama.cpp/vLLM chat template rebuilds the <think> block from it, which keeps the replayed prefix byte-aligned turn to turn (a diverging prefix throws away the KV-cache hit from that point, on every turn, for the models that emit the most tokens). A remote endpoint never receives the field. replay_reasoning_max_chars bounds what a long think block re-buys each turn.",
     "replay_reasoning": true,
+    "_comment_prompt_cache_key": "Sticky-routing hint for remote endpoints: OpenAI and Moonshot take `prompt_cache_key`, and OpenRouter routes stickily on the same field (its docs call it `session_id`). `auto` derives one value per conversation from the session key, fixed across a compaction, which is the APIs' own guidance; `off` sends none; any other string is sent as-is (256 chars max). A host that answers 400 naming the field is remembered and never asked again. Local endpoints never get it.",
+    "prompt_cache_key": "auto",
     "replay_reasoning_max_chars": 4000,
     "fallbacks": [
       {

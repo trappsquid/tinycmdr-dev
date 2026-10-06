@@ -1994,7 +1994,8 @@ def _delta_text(value):
 # reasoning parser, as a leading `<think>...</think>` fence inside `content`. Both
 # shapes used to reach the operator as answer text and pollute replayed history; the
 # alias list and the leading-fence rule cover both.
-_REASONING_FIELDS = ("reasoning_content", "reasoning_text", "reasoning")
+_REASONING_FIELDS = ("reasoning_content", "reasoning_text", "reasoning_details",
+                     "reasoning")
 _THINK_OPENERS = (("<think", "</think>"), ("<thinking", "</thinking>"))
 
 
@@ -2034,19 +2035,175 @@ def _think_fence_open(lead):
     return None, ""
 
 
+def _endpoint_origin(url):
+    """`scheme://host:port` - one entry per endpoint, never per path.
+
+    /v1/chat/completions, /v1/messages and /responses of one server share every fact the
+    box learns about it (the docs at one host disagree only about paths, not habits).
+    """
+    m = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*)://([^/?#]+)", str(url or ""))
+    if m:
+        return "%s://%s" % (m.group(1).lower(), m.group(2).lower())
+    return str(url or "")
+
+
+_ENDPOINT_FACTS = {"loaded": False, "data": {}}
+
+
+def _endpoint_facts(url):
+    """Facts this box has LEARNED about one endpoint: reasoning echo, refused fields.
+
+    Persisted in logs/state.json beside the lane record, because a fact re-learned on
+    every process start costs a 400 every time - and provider documentation disagrees in
+    BOTH directions about the echo (DeepSeek answers 400 when the field is missing, Groq
+    answers 400 when it is present), so the only durable answer is what the endpoint
+    itself did. Model names are never consulted: the ENDPOINT teaches the harness.
+    """
+    if not _ENDPOINT_FACTS["loaded"]:
+        data = _load_json_state(LANE_STATE_FILE, "the endpoint facts")
+        ents = (data or {}).get("endpoints") if isinstance(data, dict) else None
+        _ENDPOINT_FACTS["data"] = dict(ents) if isinstance(ents, dict) else {}
+        _ENDPOINT_FACTS["loaded"] = True
+    return _ENDPOINT_FACTS["data"].get(_endpoint_origin(url)) or {}
+
+
+def _endpoint_note(url, **facts):
+    """Record learned facts about one endpoint (read-modify-write under the state lock)."""
+    key = _endpoint_origin(url)
+    try:
+        with _LANE_LOCK:
+            data = _load_json_state(LANE_STATE_FILE, "the endpoint facts")
+            data = data if isinstance(data, dict) else {}
+            ents = data.get("endpoints")
+            if not isinstance(ents, dict):
+                ents = {}
+            ent = ents.get(key)
+            if not isinstance(ent, dict):
+                ent = {}
+            for k, v in facts.items():
+                if k == "drop":
+                    merged = list(ent.get("drop") or [])
+                    for item in (v if isinstance(v, (list, tuple, set)) else [v]):
+                        if item not in merged:
+                            merged.append(item)
+                    ent["drop"] = merged
+                else:
+                    ent[k] = v
+            ents[key] = ent
+            data["endpoints"] = ents
+            LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(LANE_STATE_FILE, json.dumps(data, indent=2) + "\n")
+            _ENDPOINT_FACTS["data"] = ents
+            _ENDPOINT_FACTS["loaded"] = True
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("could not record endpoint facts for %s: %s", key, e)
+
+
 def _replay_reasoning_ok(url=None):
     """Whether assistant turns may carry `reasoning_content` back to the endpoint.
 
-    A local llama.cpp/vLLM chat template rebuilds the `<think>` block from it, which is
-    what keeps the replayed prefix byte-aligned turn to turn - without it the template
-    renders a different token sequence for that turn and the prefix KV-cache diverges
-    from that point, on every turn, for exactly the models that emit the most tokens.
-    A strict remote provider may reject an unknown message field, so replay is
-    local-only by default.
+    LOCAL: yes - a llama.cpp/vLLM chat template rebuilds the `<think>` block from it,
+    which keeps the replayed prefix byte-aligned turn to turn (a diverging prefix throws
+    the KV-cache hit away from that point, on every turn, for exactly the models that
+    emit the most tokens).
+
+    REMOTE: the wire decides. DeepSeek's thinking mode answers 400 ('reasoning_content
+    in the thinking mode must be passed back'), Z.AI/OpenCode-Zen and Kimi k2.6/k3 keep
+    coherence only when it is replayed; Groq and 1min.AI answer 400 calling the field
+    unsupported. Both facts are learned from those answers (and from the endpoint simply
+    emitting reasoning) and remembered per endpoint, so no model or vendor table is ever
+    needed. `llm.replay_reasoning` overrides: false/off = never, "always" = send it
+    before the endpoint has proven anything.
     """
-    if not CONFIG["llm"].get("replay_reasoning", True):
+    cfg = CONFIG["llm"].get("replay_reasoning", True)
+    if cfg is False or str(cfg).lower() == "off":
         return False
-    return _is_local_url(url or CONFIG["llm"].get("base_url", ""))
+    url = url or CONFIG["llm"].get("base_url", "")
+    if _is_local_url(url) or str(cfg).lower() == "always":
+        return True
+    return _endpoint_facts(url).get("reasoning") == "on"
+
+
+def _reasoning_400_verdict(body):
+    """What a 400 that names reasoning_content MEANS: "on", "off", or None (unparsed).
+
+    Two opposite answers wear the same field name: DeepSeek's thinking mode 400s when the
+    field is MISSING ('reasoning_content ... must be passed back to the API'); Groq and
+    1min.AI 400 when it is PRESENT (an unsupported-field message). The wording is the only
+    signal, so it is parsed in exactly one place.
+    """
+    if not isinstance(body, str) or "reasoning_content" not in body:
+        return None
+    if re.search(r"must be passed back|is required", body, re.I):
+        return "on"
+    if re.search(r"unsupported|unknown|not supported", body, re.I):
+        return "off"
+    return None
+
+
+def _messages_for_wire(messages, url):
+    """The history as THIS endpoint may see it - the echo decision, applied at send time.
+
+    The history keeps the reasoning text unconditionally (that is what lets an endpoint
+    which LATER says the field is required be served without replaying the turn), so the
+    strip belongs here, not at capture. Returning `messages` itself when the echo is on
+    keeps the wire bytes for the local templates byte-identical to what they were.
+    """
+    if _replay_reasoning_ok(url):
+        return messages
+    out = []
+    for m in messages:
+        if isinstance(m, dict) and m.get("reasoning_content"):
+            m = {k: v for k, v in m.items() if k != "reasoning_content"}
+        out.append(m)
+    return out
+
+
+def _session_cache_key(session_key):
+    """A stable sticky-routing key for ONE conversation, or None.
+
+    OpenAI and Moonshot take `prompt_cache_key`; OpenRouter routes stickily on it too
+    (its own docs call the same hint `session_id` and accept this field). It is a routing
+    hint, not a namespace: the API's own guidance is one value per conversation, fixed
+    across a compaction - which is why it derives from the session key, not from any
+    message content.
+    """
+    cfg = CONFIG["llm"].get("prompt_cache_key", "auto")
+    if cfg is False or str(cfg).lower() == "off":
+        return None
+    if str(cfg).lower() != "auto":
+        return str(cfg)[:256]
+    if not session_key:
+        return None
+    return "tinycmdr-" + hashlib.sha1(str(session_key).encode("utf-8")).hexdigest()[:24]
+
+
+def _cache_key_for(url, session_key):
+    """The key to put on THIS call, or None (local endpoints and refused hosts get none)."""
+    if _is_local_url(url or CONFIG["llm"].get("base_url", "")):
+        return None
+    if "prompt_cache_key" in (_endpoint_facts(url).get("drop") or ()):
+        return None
+    return _session_cache_key(session_key)
+
+
+def _cached_tokens_from_usage(u):
+    """Prompt tokens served from a prefix cache, in any of the field shapes in the wild.
+
+    `prompt_cache_hit_tokens` is the DeepSeek/Moonshot name, `prompt_tokens_details.
+    cached_tokens` is OpenAI's (vLLM, xAI, OpenRouter report it too), and xAI/OpenRouter
+    also split `cache_write_tokens`. Never a sum of two shapes: a provider that grew one
+    field while keeping the other would otherwise double-count.
+    """
+    if not isinstance(u, dict):
+        return 0
+    hit = u.get("prompt_cache_hit_tokens")
+    if hit:
+        return int(hit)
+    details = u.get("prompt_tokens_details")
+    if isinstance(details, dict) and details.get("cached_tokens"):
+        return int(details["cached_tokens"])
+    return 0
 
 
 def _reasoning_for_replay(msg):
@@ -16769,8 +16926,11 @@ class Agent:
             cap = int(max_tokens) if max_tokens else int(env.get("reply") or 0)
             payload = {
                 "model": ep_model,
-                "messages": messages,
+                "messages": _messages_for_wire(messages, url),
             }
+            _ck = _cache_key_for(url, session_key)
+            if _ck:
+                payload["prompt_cache_key"] = _ck
             apply_sampling(payload)
             apply_reasoning(payload, url, ep_model)
             if use_tools:
@@ -16821,6 +16981,7 @@ class Agent:
             escalated = False
             waited_after_429 = False
             dropped_optional = False
+            handled_reasoning_400 = False
             empty_retried = False
             transient_left = int(CONFIG["llm"].get("same_endpoint_retries", 3))
             # The field carrying the output cap: `max_tokens` unless a provider's 400
@@ -16918,6 +17079,20 @@ class Agent:
                                     url)
                         last_err = e
                         continue
+                    _r400 = _reasoning_400_verdict(body) if status == 400 else None
+                    if _r400 and not handled_reasoning_400:
+                        # The endpoint just said which way it wants the field. Remember the
+                        # answer per endpoint - one call once, then never again.
+                        handled_reasoning_400 = True
+                        _endpoint_note(url, reasoning=_r400)
+                        payload["messages"] = _messages_for_wire(messages, url)
+                        _record_attempt(usage, url, "retry",
+                                        f"400 says reasoning_content {_r400}: {body}", secs)
+                        log.warning("LLM %s %s reasoning_content - retrying the same "
+                                    "endpoint", url,
+                                    "requires" if _r400 == "on" else "rejects")
+                        last_err = e
+                        continue
                     if status == 400 and not dropped_optional:
                         # A 400 that NAMES one of the optional fields we added is the
                         # provider saying "unknown argument", not "your request is
@@ -16930,6 +17105,7 @@ class Agent:
                         # provider complained about ONE field, and dropping both would
                         # turn a stream request into a blocking one.
                         named = [k for k in ("stream_options", "chat_template_kwargs",
+                                             "prompt_cache_key",
                                              "return_progress", "sse_ping_interval",
                                              "stream")
                                  if k in payload
@@ -16937,6 +17113,11 @@ class Agent:
                         if named:
                             for k in named:
                                 payload.pop(k, None)
+                            if "prompt_cache_key" in named:
+                                # Remember the refusal: the key is a hint, and paying one
+                                # 400 for it on EVERY request would be worse than never
+                                # sending it to this host again.
+                                _endpoint_note(url, drop=["prompt_cache_key"])
                             dropped_optional = True
                             _record_attempt(usage, url, "retry",
                                             f"400 named {', '.join(named)}: {body}",
@@ -17057,6 +17238,12 @@ class Agent:
                 msg = _normalize_assistant_message(choice.get("message") or {})
                 finish = choice.get("finish_reason") or ""
                 rc = msg.get("reasoning_content")
+                if rc and not _is_local_url(url):
+                    # The endpoint EMITTED reasoning - that alone is the evidence it takes
+                    # the field back (vendors disagree in both directions; see
+                    # _replay_reasoning_ok). One observation teaches every later request,
+                    # because the fact persists per endpoint.
+                    _endpoint_note(url, reasoning="on")
                 if usage is not None:
                     usage["calls"] = usage.get("calls", 0) + 1
                     usage["llm_secs"] = usage.get("llm_secs", 0.0) + secs
@@ -17074,8 +17261,8 @@ class Agent:
                             u.get("completion_tokens") or 0)
                         usage["peak_prompt"] = max(
                             usage.get("peak_prompt", 0), pt)
-                        usage["cache_hit"] = usage.get("cache_hit", 0) + int(
-                            u.get("prompt_cache_hit_tokens") or 0)
+                        usage["cache_hit"] = usage.get("cache_hit", 0) + \
+                            _cached_tokens_from_usage(u)
                     else:
                         # server didn't report usage — estimate from payload
                         est_p = self._messages_token_est(messages)
@@ -17753,15 +17940,14 @@ class Agent:
                                     f"run; nothing was changed. Retry, or check "
                                     f"the endpoint.")
                         return f"⚠️ LLM call failed: {e}"
-                    # Reasoning replay follows the endpoint: a local template needs it to
-                    # rebuild the <think> block (prefix-cache alignment); a strict remote
-                    # provider may reject the message-level field, so it is dropped there.
-                    if _replay_reasoning_ok():
-                        _rr = _reasoning_for_replay(reply)
-                        if _rr:
-                            reply["reasoning_content"] = _rr
-                        else:
-                            reply.pop("reasoning_content", None)
+                    # The history keeps the reasoning text unconditionally; whether THIS
+                    # endpoint may see it is decided at send time (_messages_for_wire),
+                    # from facts learned off the wire. Capture here is what lets an
+                    # endpoint that later says the field is required be served without
+                    # replaying the turn.
+                    _rr = _reasoning_for_replay(reply)
+                    if _rr:
+                        reply["reasoning_content"] = _rr
                     else:
                         reply.pop("reasoning_content", None)
                     messages.append(reply)

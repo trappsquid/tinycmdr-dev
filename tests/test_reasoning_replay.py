@@ -1,10 +1,13 @@
-"""Reasoning is replayed to LOCAL endpoints, capped, and never to a remote one.
+"""Reasoning is replayed to LOCAL endpoints, and to a remote one only once the wire has
+earned it - by emitting reasoning, or by a 400 that says the field must be passed back.
 
 A llama.cpp/vLLM chat template rebuilds its <think> block from `reasoning_content`; if
 the replayed turn has no trace of it, the template renders a different token sequence for
 that turn and the prefix KV-cache diverges from there - on every turn, for exactly the
-models that emit the most tokens. A strict remote provider may reject the message-level
-field, so replay is local-only.
+models that emit the most tokens. Remote providers disagree in BOTH directions (DeepSeek
+400s when the field is missing, Groq when it is present), so for them the endpoint's own
+behaviour decides and the verdict is remembered per endpoint - never a model-name table.
+See tests/test_endpoint_learn.py for the learning rules themselves.
 
     python tests/test_reasoning_replay.py
 """
@@ -116,14 +119,45 @@ def main():
         check(not bad, "with replay off no assistant turn carries reasoning_content", bad)
         fb.CONFIG["llm"]["replay_reasoning"] = True
 
-        # ---- remote gate end to end: an off-LAN base_url gets no field
-        fb.CONFIG["llm"]["base_url"] = "https://api.example.com/v1"
+        # ---- a remote endpoint that has never emitted reasoning gets no field
+        _saved_urls = (fb.CONFIG["llm"]["base_url"], fb.AGENT.llm_url)
+        fb.CONFIG["llm"]["base_url"] = "https://silent.example.com/v1"
+        fb.AGENT.llm_url = "https://silent.example.com/v1/chat/completions"
         seen = []
-        install_stub(fb, seen, script)
-        fb.AGENT.run("replay-remote", "list the tools")
+
+        def quiet(i, payload):
+            if i == 0:
+                return {"choices": [{"message": {
+                    "role": "assistant", "content": "",
+                    "tool_calls": [{"id": "c1", "type": "function",
+                                    "function": {"name": "list_tools",
+                                                 "arguments": "{}"}}]},
+                    "finish_reason": "tool_calls"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+            return text_reply("done")
+
+        install_stub(fb, seen, quiet)
+        fb.AGENT.run("replay-silent-remote", "list the tools")
         bad = [m for m in seen[-1]["messages"]
                if m.get("role") == "assistant" and m.get("reasoning_content")]
-        check(not bad, "an off-LAN endpoint gets no reasoning field", bad)
+        check(not bad, "an off-LAN endpoint that never emitted reasoning gets no field",
+              bad)
+
+        # ...but one that DID emit it has told the harness what it takes, and gets it
+        # back on the next request (no model was named anywhere in that decision).
+        fb.CONFIG["llm"]["base_url"] = "https://api.example.com/v1"
+        fb.AGENT.llm_url = "https://api.example.com/v1/chat/completions"
+        seen = []
+        install_stub(fb, seen, script)
+        fb.AGENT.run("replay-remote-learned", "list the tools")
+        turns = [m for m in seen[-1]["messages"]
+                 if m.get("role") == "assistant" and m.get("reasoning_content")]
+        check(bool(turns) and turns[0].get("reasoning_content") == THINK[:100],
+              "...but one that emitted reasoning gets it back, learned per endpoint",
+              turns[:1])
+        check(fb._replay_reasoning_ok("https://api.example.com/v1") is True,
+              "...and the fact is remembered for the next request")
+        fb.CONFIG["llm"]["base_url"], fb.AGENT.llm_url = _saved_urls
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
