@@ -38,6 +38,7 @@ import socket
 import struct
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1212,6 +1213,412 @@ def main():
           "a failed lane record is not read as a bound port", _named_port())
     fb.CONFIG["web"]["port"] = 0
     fb.LANE_STATE_FILE.unlink(missing_ok=True)
+
+    # =====================================================================
+    # run 13, pass C (A-227 .. A-261): the POST chain, the run buffer, the
+    # assets and the CLI verbs. Every fix below has its check fail against a
+    # pre-fix build (TINYCMDR_SRC); the refutations are pinned as behaviour.
+    # =====================================================================
+
+    # ---- A-227: naming YOUR OWN conversation runs there, not in the shared one --
+    # A client whose message is resolved to the shared "web" conversation IS steered
+    # into the run going there - that conversation is documented as nobody's. The
+    # audit's shape (a caller that named its OWN conversation) does not reproduce.
+    _real_wd = fb._web_drive
+    _wd_calls = []
+    fb._web_drive = lambda run, text: _wd_calls.append((run.session_key, text))
+    _own227 = fb.web_new_session("suite227", "mine")
+    _live227 = fb._web_new_run("web")
+    _live227.add("you", "shared run going")
+    _st227, _hd227, _bd227, _ = probe(
+        "POST", "/api/run",
+        {**TOK, "X-Tinycmdr-Client": "suite227", "Content-Type": "application/json"},
+        json.dumps({"message": "hello mine", "session": _own227}).encode())
+    fb._web_drive = _real_wd
+    check(_st227 == 200 and b'"busy": false' in _bd227
+          and _wd_calls == [(_own227, "hello mine")]
+          and not any("mid-run" in l["text"] for l in _live227.lines),
+          "a run named for your own conversation starts there; the shared one is untouched",
+          (_st227, _bd227[:80], _wd_calls))
+    _live227.done = True
+
+    # ---- A-228/229/230: /api/chat is ONE run, in the conversation it names ------
+    # A stub driver, held open on a gate, so the check can see the run registered and
+    # a second POST refused - no model is called.
+    _real_agent_run = fb.AGENT.run
+    _seen_keys = []
+    _gate = threading.Event()
+
+    def _stub_run(key, text, *a, **kw):
+        _seen_keys.append(key)
+        _gate.wait(5)
+        return "stub answer in %s" % key
+
+    fb.AGENT.run = _stub_run
+    _chatkey = fb.web_new_session("suiteChat", "chat run")
+    fb._web_state(lambda st: [s.update({"last_active": 1.0})
+                              for s in st["sessions"]
+                              if s.get("key") == _chatkey] or True)
+    _first = {}
+
+    def _chat_first():
+        _first["out"] = req("POST", "/api/chat",
+                            {**TOK, "X-Tinycmdr-Client": "suiteChat",
+                             "Content-Type": "application/json"},
+                            json.dumps({"message": "hello chat",
+                                        "session": _chatkey}).encode())
+    _t = threading.Thread(target=_chat_first)
+    _t.start()
+    for _ in range(400):
+        if fb._web_active_run(_chatkey) is not None:
+            break
+        time.sleep(0.01)
+    _active228 = fb._web_active_run(_chatkey)
+    _second = req("POST", "/api/chat",
+                  {**TOK, "X-Tinycmdr-Client": "suiteChat",
+                   "Content-Type": "application/json"},
+                  json.dumps({"message": "second", "session": _chatkey}).encode())
+    _gate.set()
+    _t.join(10)
+    fb.AGENT.run = _real_agent_run
+    check(_active228 is not None and _active228.session_key == _chatkey
+          and _seen_keys == [_chatkey],
+          "a /api/chat task runs the conversation the body NAMED, and is registered",
+          (_seen_keys, _chatkey))
+    check(_second[0] == 409 and b"already going" in _second[1],
+          "a second /api/chat in the same conversation is refused while one runs",
+          (_second[0], _second[1][:90]))
+    check(_first.get("out", (-1,))[0] == 200
+          and b"stub answer in %s" % _chatkey.encode() in _first["out"][1],
+          "...and the first still answers with the run's text",
+          _first.get("out", (None, b""))[:1])
+    check((fb.web_entry(_chatkey) or {}).get("last_active", 0) > 1.0,
+          "/api/chat touches the conversation in the registry (so the rail does not "
+          "prune a conversation whose transcript is growing)",
+          (fb.web_entry(_chatkey) or {}).get("last_active"))
+    # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
+    # exactly one run. The look and the registration used to be two steps, so all
+    # three passed the check and all three ran (the measured shape of A-228).
+    _racekey = fb.web_new_session("suiteRace", "race")
+    _gate2 = threading.Event()
+    _race_codes = []
+
+    def _stub_race(key, text, *a, **kw):
+        _gate2.wait(5)
+        return "ok"
+
+    fb.AGENT.run = _stub_race
+
+    def _hit():
+        _race_codes.append(req("POST", "/api/chat",
+                               {**TOK, "X-Tinycmdr-Client": "suiteRace",
+                                "Content-Type": "application/json"},
+                               json.dumps({"message": "go",
+                                           "session": _racekey}).encode())[0])
+    _ts2 = [threading.Thread(target=_hit) for _ in range(3)]
+    for _t2 in _ts2:
+        _t2.start()
+    for _ in range(400):
+        if fb._web_active_run(_racekey) is not None:
+            break
+        time.sleep(0.01)
+    _gate2.set()
+    for _t2 in _ts2:
+        _t2.join(10)
+    fb.AGENT.run = _real_agent_run
+    check(_race_codes.count(200) == 1 and _race_codes.count(409) == 2,
+          "three simultaneous /api/chat calls in one conversation start exactly one run",
+          _race_codes)
+
+    # ---- A-231: a platform-reserved upload name, and a write that fails ---------
+    check("*" not in fb._web_safe_name("report*final.pdf")
+          and ":" not in fb._web_safe_name("a:b.txt")
+          and "|" not in fb._web_safe_name("a|b.txt")
+          and '"' not in fb._web_safe_name('a"b.txt'),
+          "an upload name cannot carry a platform-reserved character",
+          fb._web_safe_name("report*final.pdf"))
+    _ts231 = int(time.time())
+    for _off in range(4):
+        (STAGE / "uploads" / ("%d_blocked.txt" % (_ts231 + _off))).mkdir(exist_ok=True)
+    _st231, _hd231, _bd231, _ = probe("POST", "/api/upload?name=blocked.txt", TOK,
+                                      b"payload")
+    check(_st231 == 400 and b"cannot be stored" in _bd231,
+          "an upload name that cannot be written ANSWERS; it does not drop the socket",
+          (_st231, _bd231[:90]))
+
+    # ---- A-232: a truncated stored name is reported back ------------------------
+    _st232, _hd232, _bd232, _ = probe(
+        "POST", "/api/upload?name=" + urllib.parse.quote("q" * 300 + ".txt"), TOK, b"x")
+    _j232 = json.loads(_bd232)
+    check(_st232 == 200 and _j232.get("name_note")
+          and len(_j232.get("name", "")) < 200,
+          "a rewritten/truncated upload name is named in the reply",
+          (_st232, _j232.get("name"), _j232.get("name_note")))
+
+    # ---- A-238: the registry as a whole is bounded ------------------------------
+    _regmax = getattr(fb, "WEB_REGISTRY_MAX", None)
+    # the shared conversation, as a header-less script makes it - and OLD, so a bound
+    # that ignored the protection would take it
+    fb.web_touch("web")
+    fb._web_state(lambda st: [s.update({"last_active": 1.0})
+                              for s in st["sessions"]
+                              if s.get("key") == "web"] or True)
+    for _i in range(230):
+        fb.web_new_session("flood%d" % (_i % 7))
+    _regn = len(fb._web_state()["sessions"])
+    check(bool(_regmax) and _regmax <= 300 and _regn <= _regmax,
+          "the conversation registry is bounded in AGGREGATE, not only per client",
+          (_regmax, _regn))
+    check(fb.web_entry("web") is not None,
+          "...and the SHARED conversation is never the one the bound takes")
+    # ...and the OTHER door: a header-less script starting a run in a conversation
+    # nobody registered goes through web_touch, which appends the entry.
+    for _i in range(30):
+        fb.web_touch("invented-%d" % _i)
+    _regn2 = len(fb._web_state()["sessions"])
+    check(bool(_regmax) and _regn2 <= _regmax,
+          "...and a run in an invented conversation cannot grow it either", _regn2)
+
+    # ---- A-239: the client id is injective past the cut -------------------------
+    check(fb._web_client({"X-Tinycmdr-Client": "a" * 40})
+          != fb._web_client({"X-Tinycmdr-Client": "a" * 32 + "b"}),
+          "two client ids differing past the 32-character cut are different ids")
+    check(fb._web_client({"X-Tinycmdr-Client": "3f2a0b1c9d8e7f60"})
+          == "3f2a0b1c9d8e7f60",
+          "a clean id (what the page mints) is returned unchanged")
+
+    # ---- A-240: a blank rename is refused, not applied --------------------------
+    _k240 = fb.web_new_session("suite240", "keep me")
+    _st240, _hd240, _bd240, _ = probe(
+        "POST", "/api/sessions",
+        {**TOK, "X-Tinycmdr-Client": "suite240", "Content-Type": "application/json"},
+        json.dumps({"op": "rename", "key": _k240, "title": "  "}).encode())
+    check(_st240 == 400 and (fb.web_entry(_k240) or {}).get("title") == "keep me",
+          "a rename to blank is refused and leaves the title alone",
+          (_st240, (fb.web_entry(_k240) or {}).get("title")))
+
+    # ---- A-241/242/243: the run buffer's identity, view and out-of-range --------
+    _r241 = fb._web_new_run("buf241")
+    _r241.add("you", "line0")
+    _r241.add("system", "line1")
+    _r241.add("final", "line2")
+    _uids_241 = [l["uid"] for l in _r241.lines]
+    _r241.drop_line(0)
+    check([l["uid"] for l in _r241.lines] == _uids_241[1:]
+          and [l["i"] for l in _r241.lines] == [0, 1],
+          "drop_line renumbers the index but keeps every uid the page holds",
+          [(l["i"], l["uid"]) for l in _r241.lines])
+    _v242 = _r241.view(1, 0)
+    check(not ({l["uid"] for l in _v242["lines"]}
+               & {l["uid"] for l in _v242["updates"]}),
+          "view() never reports one line as both new and updated", _v242)
+    _sink243 = _Collect()
+    fb.log.addHandler(_sink243)
+    _r243 = fb._web_new_run("buf243")
+    _r243.add("you", "one")
+    _r243.set_line(999, "final", "x")
+    _r243.drop_line(500)
+    fb.log.removeHandler(_sink243)
+    check(any("out of range" in m for m in _sink243.lines),
+          "an out-of-range set_line/drop_line leaves a trace in the log",
+          _sink243.lines[:2])
+
+    # ---- A-247: a checkpoint APPENDS; the read dedupes --------------------------
+    _k247 = "log247suite"
+    fb._web_runlog_path(_k247).unlink(missing_ok=True)
+    for _i in range(3):
+        fb.web_runlog_append(_k247, "r%d" % _i, _i,
+                             [{"i": 0, "uid": "u", "kind": "final", "text": "x",
+                               "r": 1}])
+    _lines247 = len(fb._web_runlog_path(_k247).read_text(encoding="utf-8").splitlines())
+    fb.web_runlog_append(_k247, "r2", 2,
+                         [{"i": 0, "uid": "u", "kind": "final", "text": "grew",
+                           "r": 2}])
+    _lines247b = len(fb._web_runlog_path(_k247).read_text(encoding="utf-8").splitlines())
+    _recs247 = fb.web_runlog(_k247)
+    check(_lines247b == _lines247 + 1,
+          "a runlog checkpoint appends one record instead of rewriting the whole file",
+          (_lines247, _lines247b))
+    check(len(_recs247) == 3 and _recs247[-1]["lines"][0]["text"] == "grew",
+          "and the appended repeat is the NEWEST record for its run id, not a duplicate",
+          [r.get("run_id") for r in _recs247])
+
+    # ---- A-248: the transcript is bounded by the runlog's cap -------------------
+    _k248 = "log248suite"
+    fb._web_runlog_path(_k248).unlink(missing_ok=True)
+    for _i in range(fb.WEB_RUNLOG_KEEP + 5):
+        fb.web_runlog_append(_k248, "s%03d" % _i, _i,
+                             [{"i": 0, "uid": "u", "kind": "final", "text": "x",
+                               "r": 1}])
+    _runs248 = len(fb.web_transcript(_k248)["runs"])
+    check(_runs248 <= fb.WEB_RUNLOG_KEEP + 1,
+          "the transcript a page paints on load is bounded by the run cap",
+          _runs248)
+
+    # ---- A-249: a transcript READ does not write the runlog ---------------------
+    _k249 = "legacy249suite"
+    fb.AGENT.histories[_k249] = [{"role": "user", "content": "hello"},
+                                 {"role": "assistant", "content": "hi"}]
+    fb._web_runlog_path(_k249).unlink(missing_ok=True)
+    _t249 = fb.web_transcript(_k249)
+    check(len(_t249["runs"]) == 1 and not fb._web_runlog_path(_k249).exists(),
+          "reading a legacy conversation's transcript rebuilds it without writing",
+          (len(_t249["runs"]), fb._web_runlog_path(_k249).exists()))
+
+    # ---- A-250/251: downloads resume, and a grown file is refused honestly ------
+    _dl250 = STAGE / "range.bin"
+    _dl250.write_bytes(b"0123456789" * 4)
+    _r250 = fb._web_new_run("dl250suite")
+    _r250.add("file", str(_dl250))
+    _u250 = urllib.parse.quote(_r250.lines[-1]["uid"], safe="")
+    _st250, _hd250, _bd250, _ = probe(
+        "GET", "/api/download?run=%s&uid=%s" % (_r250.id, _u250),
+        {**TOK, "Range": "bytes=5-9"})
+    check(_st250 == 206 and _bd250 == b"56789"
+          and _hd250.get("Content-Range") == "bytes 5-9/40",
+          "a Range download answers 206 with just those bytes",
+          (_st250, _bd250, _hd250.get("Content-Range")))
+    _st250b = probe("GET", "/api/download?run=%s&uid=%s" % (_r250.id, _u250),
+                    {**TOK, "Range": "bytes=500-600"})[0]
+    _st250c, _hd250c, _bd250c, _ = probe(
+        "GET", "/api/download?run=%s&uid=%s" % (_r250.id, _u250), TOK)
+    check(_st250b == 416, "an unsatisfiable range answers 416", _st250b)
+    check(_st250c == 200 and len(_bd250c) == 40
+          and _hd250c.get("Accept-Ranges") == "bytes",
+          "no Range: the whole file, and it advertises that it can resume",
+          (_st250c, len(_bd250c), _hd250c.get("Accept-Ranges")))
+    _cap251 = STAGE / "cap251.bin"
+    _cap251.write_bytes(b"x" * 10)
+    _r251 = fb._web_new_run("dl251suite")
+    _r251.add("file", str(_cap251))
+    _u251 = urllib.parse.quote(_r251.lines[-1]["uid"], safe="")
+    _oldmax251 = fb.SEND_FILE_MAX
+    fb.SEND_FILE_MAX = 5
+    try:
+        _st251, _hd251, _bd251, _ = probe(
+            "GET", "/api/download?run=%s&uid=%s" % (_r251.id, _u251), TOK)
+    finally:
+        fb.SEND_FILE_MAX = _oldmax251
+    check(_st251 == 413 and b"too large" in _bd251,
+          "a file that grew past the cap is refused with a sentence, not served",
+          (_st251, _bd251[:80]))
+
+    # ---- A-252/253/254: assets carry an ETag, survive a vanished file, and are
+    #      templated once ------------------------------------------------------
+    _orig_font253 = fb._web_font_path
+    fb._web_font_path = lambda n: STAGE / "assets" / "fonts" / "vanished.woff2"
+    try:
+        _st252 = probe("GET", "/fonts/inter.woff2")[0]
+    finally:
+        fb._web_font_path = _orig_font253
+    check(_st252 == 404,
+          "a font that vanishes between the lookup and the read answers 404, not a "
+          "dropped socket", _st252)
+    _st253, _hd253, _bd253, _ = probe("GET", "/icon.png")
+    _etag253 = _hd253.get("ETag")
+    _st253b, _hd253b, _bd253b, _ = probe("GET", "/icon.png",
+                                         {"If-None-Match": _etag253 or ""})
+    check(_st253 == 200 and bool(_etag253) and _st253b == 304 and _bd253b == b"",
+          "a static asset carries an ETag and an unchanged one revalidates 304",
+          (_st253, _etag253, _st253b, len(_bd253b)))
+    _art253 = STAGE / "assets" / "page-icon.png"
+    _art253.write_bytes(b"\x89PNG\r\n\x1a\n" + b"new art")
+    _st253c, _hd253c, _bd253c, _ = probe("GET", "/icon.png")
+    _art253.unlink()
+    check(_st253c == 200 and _hd253c.get("ETag") != _etag253,
+          "new bytes on disk are served with a new ETag", _hd253c.get("ETag"))
+    _c254 = {"n": 0}
+    _tv254 = fb._web_theme_vars
+
+    def _count254():
+        _c254["n"] += 1
+        return _tv254()
+
+    fb._web_theme_vars = _count254
+    try:
+        _st254, _hd254, _bd254, _ = probe("GET", "/page.css")
+        req("GET", "/page.css", limit=2000000)
+    finally:
+        fb._web_theme_vars = _tv254
+    check(_c254["n"] <= 1,
+          "an unchanged stylesheet is themed once, not once per request", _c254["n"])
+    _st254b = probe("GET", "/page.css",
+                    {"If-None-Match": _hd254.get("ETag") or ""})[0]
+    check(bool(_hd254.get("ETag")) and _st254b == 304,
+          "the stylesheet revalidates with a 304 instead of being re-read",
+          (_hd254.get("ETag"), _st254b))
+
+    # ---- A-233/234: uploads/ never ages out, and a same-second name overwrites -----
+    # Both are in the ledger already (A-40 and A-39, ACCEPTED: the fix there is a random
+    # suffix). Pinned so the disposition is visible in the suite, not re-litigated.
+    _up_before = len(list((STAGE / "uploads").glob("*")))
+    _dup_a = probe("POST", "/api/upload?name=pinned-dup.bin", TOK, b"one")
+    _dup_b = probe("POST", "/api/upload?name=pinned-dup.bin", TOK, b"two")
+    _up_after = len(list((STAGE / "uploads").glob("*")))
+    _dupfiles = sorted((STAGE / "uploads").glob("*_pinned-dup.bin"))
+    check(_dup_a[0] == 200 and _dup_b[0] == 200 and _dupfiles
+          and _dupfiles[-1].read_bytes() == b"two"
+          and _up_after >= _up_before + 1,
+          "a same-second upload name overwrites, and uploads/ ages nothing out "
+          "(A-233/234, ledger A-40/A-39 accepted)", (_up_before, _up_after))
+
+    # ---- A-255: a non-ASCII download name rides RFC 5987 ------------------------
+    _caf255 = STAGE / "caf\u00e9.pdf"
+    _caf255.write_bytes(b"%PDF-1.4")
+    _r255 = fb._web_new_run("dl255suite")
+    _r255.add("file", str(_caf255))
+    _u255 = urllib.parse.quote(_r255.lines[-1]["uid"], safe="")
+    _st255, _hd255, _bd255, _ = probe(
+        "GET", "/api/download?run=%s&uid=%s" % (_r255.id, _u255), TOK)
+    _cd255 = _hd255.get("Content-Disposition") or ""
+    check("filename*=UTF-8''caf%C3%A9.pdf" in _cd255
+          and "filename=caf_.pdf" in _cd255,
+          "a non-ASCII download name is carried by the RFC 5987 filename*",
+          _cd255)
+
+    # ---- A-256/257: the panels clamp and leak nothing ---------------------------
+    _st256, _hd256, _bd256, _ = probe("GET", "/api/log?lines=99999", TOK)
+    _j256 = json.loads(_bd256)
+    check(_st256 == 200 and 0 < len(_j256.get("lines", [])) <= 500,
+          "the log panel clamps ?lines to its bound instead of erroring",
+          len(_j256.get("lines", [])))
+    _st257, _hd257, _bd257, _ = probe("GET", "/api/health")
+    check(_st257 == 200 and b"lanes" in _bd257
+          and token.encode() not in _bd257,
+          "health needs no token, names the lanes and leaks no token", _st257)
+
+    # ---- A-258: the command box validates before it mutates ---------------------
+    _st258, _bd258, _hd258 = req("POST", "/api/chat",
+                                 {**TOK, "Content-Type": "application/json"},
+                                 json.dumps({"message": "/model junk-model"}).encode())
+    _rep258 = (json.loads(_bd258) or {}).get("reply") or ""
+    check("Nothing switched" in _rep258 and "Known names" in _rep258,
+          "the command box refuses a model no endpoint advertises (no silent "
+          "re-pointing)", _rep258[:90])
+
+    # ---- A-260: a port-0 host with a LIVE, RECORDED page announces --------------
+    _saved260 = dict(fb.CONFIG["web"])
+    fb.CONFIG["web"] = {"enabled": True, "host": "127.0.0.1", "port": 0,
+                        "token": token}
+    _record(port)
+    _buf260 = io.StringIO()
+    with contextlib.redirect_stdout(_buf260):
+        _again260 = fb.start_web_surface(open_browser=False)
+    if _again260 is not None:
+        _again260.shutdown()
+        _again260.server_close()
+    fb.CONFIG["web"] = _saved260
+    check(_again260 is None and "already serving" in _buf260.getvalue(),
+          "web.port 0 + a recorded bind: a second start announces the live page "
+          "instead of binding a second", _buf260.getvalue().strip()[:80])
+
+    # ---- A-261: JSON replies are UTF-8, not \u-escaped --------------------------
+    _st261, _hd261, _bd261, _ = probe("POST", "/api/chat",
+                                      {**TOK, "Content-Type": "application/json"},
+                                      json.dumps({"message": "/new"}).encode())
+    check(_st261 == 200 and "\U0001f504".encode("utf-8") in _bd261
+          and b"\\ud83d" not in _bd261,
+          "a JSON reply is sent as UTF-8, not \\u-escaped", _bd261[:60])
 
     srv.shutdown()
     srv.server_close()

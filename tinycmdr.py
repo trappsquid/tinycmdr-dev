@@ -24028,9 +24028,26 @@ WEB_STATE_LOCK = threading.Lock()
 
 WEB_SESSION_MAX = 50            # conversations kept per client
 
+# ...and a bound on the registry as a WHOLE. The per-client cap is per `client`, and a
+# client id is nothing but a header the caller invents, so N ids bought N x 50 entries
+# in one web-sessions.json that is rewritten whole on every mutation (A-238). Past this,
+# the oldest conversations go whatever browser they belong to.
+WEB_REGISTRY_MAX = 200
+
+# The one key the aggregate bound must never take: the SHARED conversation, which
+# /api/chat, header-less scripts and the legacy adoption all drive, and which has no
+# owner to re-create it (see web_resolve_session).
+WEB_REGISTRY_PROTECT = ("web",)
+
 WEB_RUNLOG_KEEP = 60            # finished runs kept per conversation
 
 WEB_RUNLOG_MAX_CHARS = 500_000  # ...and a ceiling on the file itself
+
+# The append log is compacted when the FILE passes this: past it, the records are
+# rewritten deduped and capped (see web_runlog_append). Without it an append-only log
+# would grow without bound; with it the rewrite happens once per N runs of growth
+# instead of once per checkpoint (A-247).
+WEB_RUNLOG_COMPACT_AT = WEB_RUNLOG_MAX_CHARS + 250_000
 
 WEB_RUNLOG_LOCK = threading.Lock()
 
@@ -24050,9 +24067,23 @@ def _web_key_ok(key):
 
 
 def _web_client(headers):
-    """The browser's own id. Scripts send none and get the shared conversation."""
+    """The browser's own id. Scripts send none and get the shared conversation.
+
+    The id is the header with everything outside [A-Za-z0-9] dropped and the rest cut
+    at 32 characters, which is not injective: `a`*40 and `a`*32+`b` produced the SAME
+    id, so two browsers differing only past the cut (or only in punctuation) shared one
+    rail and one owner (A-239, measured 2026-10-06). When the header was not already a
+    clean short id, a short digest of the RAW value rides along, so ids differ exactly
+    when the headers differ. A clean id (the page mints 16 hex characters) is returned
+    unchanged, so nothing already stored in web-sessions.json moves."""
     raw = (headers.get("X-Tinycmdr-Client") or "").strip()
-    return re.sub(r"[^A-Za-z0-9]", "", raw)[:32]
+    if not raw:
+        return ""
+    clean = re.sub(r"[^A-Za-z0-9]", "", raw)
+    if clean == raw and len(clean) <= 32:
+        return clean
+    return "%s.%s" % (clean[:32], hashlib.sha1(raw.encode("utf-8", "replace"))
+                      .hexdigest()[:12])
 
 def _web_state(mutate=None):
     """The conversation registry: {sessions: [...], open: {client: key}}.
@@ -24155,6 +24186,29 @@ def web_sessions(client, include_all=False):
     rows.sort(key=lambda r: r.get("last_active") or 0, reverse=True)
     return rows
 
+def _web_cap_registry(st):
+    """Drop the oldest conversations past WEB_REGISTRY_MAX; return the pruned keys.
+
+    The aggregate bound (A-238) is applied after EVERY mutation, so no door can grow
+    web-sessions.json past it: web_new_session (an invented client id) and web_touch (a
+    run in an invented conversation) both land here. Two entries are never candidates -
+    the SHARED conversation (WEB_REGISTRY_PROTECT: nobody owns it, so nothing would
+    re-create it) and a conversation with a run in it, which is still being written to.
+    The caller removes the pruned conversations' files OUTSIDE the registry lock."""
+    if len(st["sessions"]) <= WEB_REGISTRY_MAX:
+        return []
+    cand = [s for s in st["sessions"]
+            if s.get("key") not in WEB_REGISTRY_PROTECT
+            and _web_active_run(s.get("key") or "") is None]
+    over = len(st["sessions"]) - WEB_REGISTRY_MAX
+    drop = sorted(cand, key=lambda s: s.get("last_active") or 0)[:over]
+    if not drop:
+        return []
+    gone = {s.get("key") for s in drop}
+    st["sessions"] = [s for s in st["sessions"] if s.get("key") not in gone]
+    return sorted(gone)
+
+
 def web_new_session(client, title=""):
     """A fresh conversation, owned by this browser."""
     key = "web-" + os.urandom(4).hex()
@@ -24179,6 +24233,8 @@ def web_new_session(client, title=""):
             st["sessions"] = [s for s in st["sessions"]
                               if s.get("key") not in gone]
             pruned.extend(sorted(gone))
+        # ...and the registry as a whole (A-238), the one helper every mutation shares.
+        pruned.extend(_web_cap_registry(st))
         return key
 
     made = _web_state(fn)
@@ -24186,8 +24242,8 @@ def web_new_session(client, title=""):
     # while WEB_STATE_LOCK is held.
     for old in pruned:
         _web_forget_files(old)
-        log.info("web conversation %s pruned past the per-client bound (%d)",
-                 old, WEB_SESSION_MAX)
+        log.info("web conversation %s pruned past a registry bound (%d per client, "
+                 "%d total)", old, WEB_SESSION_MAX, WEB_REGISTRY_MAX)
     return made
 
 
@@ -24266,19 +24322,32 @@ def web_open_key(client):
 
 def web_touch(key):
     """Mark a conversation as just used (called when a run starts in it)."""
+    pruned = []
+
     def fn(st):
+        found = False
         for s in st["sessions"]:
             if s.get("key") == key:
                 s["last_active"] = time.time()
-                return True
-        st["sessions"].append({"key": key, "client": "", "title": "",
-                               "created": time.time(), "last_active": time.time()})
+                found = True
+                break
+        if not found:
+            st["sessions"].append({"key": key, "client": "", "title": "",
+                                   "created": time.time(), "last_active": time.time()})
+        # A run in a conversation nobody registered yet must not grow the registry
+        # without bound either (A-238): the same aggregate cap as a new session.
+        pruned.extend(_web_cap_registry(st))
         return True
 
     try:
         _web_state(fn)
     except Exception as e:
         log.warning("could not touch web conversation %s: %s", key, e)
+        return
+    # Outside the registry lock, like web_new_session: file removal never runs while
+    # WEB_STATE_LOCK is held.
+    for old in pruned:
+        _web_forget_files(old)
 
 def web_resolve_session(client, requested):
     """The conversation a request means: what it asked for, else what this
@@ -24387,13 +24456,20 @@ def _web_runlog_path(key):
     return SESSIONS_DIR / f"{safe}.web.jsonl"
 
 def web_runlog(key):
-    """Finished runs of one conversation, oldest first. A damaged line is
-    skipped, never fatal: a transcript is a view, not the work."""
+    """Finished runs of one conversation, oldest first, ONE record per run.
+
+    A run is written more than once - its 20-second checkpoints (see
+    web_runlog_checkpoint) and its final finish - so the FILE is an append-only log of
+    records that may repeat a run id. The LAST record for an id is the newest, and it
+    keeps the FIRST position the id appeared in, which is the order the runs started.
+    Both caps are enforced on this VIEW, so a reader is never handed more than the
+    bound however much of the file is on disk. A damaged line is skipped, never fatal:
+    a transcript is a view, not the work."""
     try:
         raw = _web_runlog_path(key).read_text(encoding="utf-8")
     except OSError:
         return []
-    out = []
+    order, by_id = [], {}
     for line in raw.splitlines():
         line = line.strip()
         if not line:
@@ -24403,8 +24479,18 @@ def web_runlog(key):
         except Exception:
             continue
         if isinstance(rec, dict) and isinstance(rec.get("lines"), list):
-            out.append(rec)
-    return out
+            rid = rec.get("run_id") or "run"
+            if rid not in by_id:
+                order.append(rid)
+            by_id[rid] = rec
+    recs = [by_id[r] for r in order]
+    while len(recs) > WEB_RUNLOG_KEEP:
+        recs.pop(0)
+    text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
+    while len(text) > WEB_RUNLOG_MAX_CHARS and len(recs) > 1:
+        recs.pop(0)
+        text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
+    return recs
 
 WEB_RUNLOG_CHECKPOINT = 20.0   # seconds between mid-run saves
 _WEB_SAVED_AT = {}
@@ -24427,8 +24513,17 @@ def web_runlog_checkpoint(run):
         web_runlog_append(run.session_key, run.id, run.started, lines)
 
 def web_runlog_append(key, run_id, started, lines):
-    """Persist one finished run's lines. Fails SOFT: a disk problem must never
-    turn a finished run into a failed one."""
+    """Persist one run's lines: APPEND one record; do not rewrite the file.
+
+    Every checkpoint used to serialise every run of this conversation and rewrite the
+    whole jsonl - so a live run's 20-second save rewrote every other run's history, and
+    runs in two conversations contended on the one global lock (A-247, measured
+    2026-10-06: an appended record left the file's line count unchanged, i.e. the whole
+    file was rewritten). Appending one line is O(1); `web_runlog` keeps the newest
+    record per run id, so a repeated id is an update, not a duplicate. The file is
+    compacted (rewritten deduped and capped) only once it passes
+    WEB_RUNLOG_COMPACT_AT, so growth stays bounded without a rewrite per run.
+    Fails SOFT: a disk problem must never turn a finished run into a failed one."""
     if not lines:
         return
     rec = {"run_id": run_id, "started": round(started or 0, 3),
@@ -24436,16 +24531,18 @@ def web_runlog_append(key, run_id, started, lines):
     with WEB_RUNLOG_LOCK:
         try:
             _ensure_sessions_dir()
-            recs = web_runlog(key)
-            recs = [r for r in recs if r.get("run_id") != run_id]
-            recs.append(rec)
-            while len(recs) > WEB_RUNLOG_KEEP:
-                recs.pop(0)
-            text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
-            while len(text) > WEB_RUNLOG_MAX_CHARS and len(recs) > 1:
-                recs.pop(0)
-                text = "\n".join(json.dumps(r, ensure_ascii=False) for r in recs)
-            atomic_write_text(_web_runlog_path(key), text + "\n")
+            path = _web_runlog_path(key)
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            try:
+                oversized = path.stat().st_size > WEB_RUNLOG_COMPACT_AT
+            except OSError:
+                oversized = False
+            if oversized:
+                recs = web_runlog(key)             # deduped, oldest first, capped
+                if recs:
+                    atomic_write_text(path, "\n".join(
+                        json.dumps(r, ensure_ascii=False) for r in recs) + "\n")
         except Exception as e:
             log.warning("could not write the web run log for %s: %s", key, e)
 
@@ -24488,7 +24585,11 @@ def web_transcript(key):
             rid = f"history-{key}"
             order.append(rid)
             runs[rid] = {"run_id": rid, "lines": hist, "live": False}
-            web_runlog_append(key, rid, 0, hist)
+            # NOT persisted here: this GET used to append the imported history to the
+            # runlog - a read that writes the file it is reading (A-249). The lines come
+            # from the conversation's own history, so the next read rebuilds them
+            # identically, and the first real run in the conversation writes a record
+            # like any other.
     live = _web_active_run(key)
     if live is not None:
         with live.lock:
@@ -24580,6 +24681,11 @@ class WebRun:
         """
         with self.lock:
             if not isinstance(i, int) or not (0 <= i < len(self.lines)):
+                # A stale index repaints a line that is now something else (the comment
+                # below), and the caller is normally the reporter itself - so say so in
+                # the log, or a wrong-status Done line has no trace to follow (A-243).
+                log.warning("web run %s: set_line(%r) is out of range (%d lines) - "
+                            "ignored", self.id, i, len(self.lines))
                 return
             line = self.lines[i]
             self.rev += 1
@@ -24592,6 +24698,8 @@ class WebRun:
         """Take a line back (the draft that turned out to be the answer)."""
         with self.lock:
             if not isinstance(i, int) or not (0 <= i < len(self.lines)):
+                log.warning("web run %s: drop_line(%r) is out of range (%d lines) - "
+                            "ignored", self.id, i, len(self.lines))
                 return
             self.rev += 1
             self.lines.pop(i)
@@ -24606,7 +24714,12 @@ class WebRun:
                 self.stream_i -= 1
             for n, line in enumerate(self.lines):
                 line["i"] = n
-                line["uid"] = f"{self.id}#{n}"
+                # The uid is the page's HANDLE on the line - "_line" documents it as
+                # stable for the life of the run - so it must not be rewritten here:
+                # renumbering it made every node the page already held unknown, and the
+                # page discarded and rebuilt them, losing a caret, a selection or an
+                # open <details> (A-241, measured 2026-10-06). Only the INDEX moves,
+                # and `r` says the line changed so a poller repaints it in place.
                 line["r"] = self.rev
 
     def view(self, since=0, rev=0):
@@ -24687,17 +24800,43 @@ class WebRun:
         return [("web", m) for m in out]
 
 
+def _web_register_run(run):
+    """Put a run in WEB_RUNS and keep the table at its bound.
+
+    Caller holds WEB_RUNS_LOCK (both callers below take it around the whole
+    find-or-register step, which is what makes the claim atomic)."""
+    WEB_RUNS[run.id] = run
+    if len(WEB_RUNS) > WEB_RUN_KEEP:
+        for old in sorted(WEB_RUNS, key=lambda k: WEB_RUNS[k].started):
+            if len(WEB_RUNS) <= WEB_RUN_KEEP:
+                break
+            if WEB_RUNS[old].done:
+                del WEB_RUNS[old]
+
+
 def _web_new_run(session_key="web", client=""):
     run = WebRun(os.urandom(6).hex(), session_key, client)
     with WEB_RUNS_LOCK:
-        WEB_RUNS[run.id] = run
-        if len(WEB_RUNS) > WEB_RUN_KEEP:
-            for old in sorted(WEB_RUNS, key=lambda k: WEB_RUNS[k].started):
-                if len(WEB_RUNS) <= WEB_RUN_KEEP:
-                    break
-                if WEB_RUNS[old].done:
-                    del WEB_RUNS[old]
+        _web_register_run(run)
     return run
+
+
+def _web_claim_run(session_key="web", client=""):
+    """Start a run in a conversation, or hand back the one already going.
+
+    Returns (run, None) when this caller got the conversation, and (None, busy) when
+    one is already live in it. The look and the registration are ONE step under
+    WEB_RUNS_LOCK: /api/run and /api/chat each checked _web_active_run and then
+    registered, so two callers arriving together both saw "no run" and both started
+    one - the very rule ("one run per conversation") the check existed to keep, and
+    the measured shape of A-228 (three simultaneous POSTs to one conversation)."""
+    with WEB_RUNS_LOCK:
+        for r in WEB_RUNS.values():
+            if r.session_key == session_key and not r.done:
+                return None, r
+        run = WebRun(os.urandom(6).hex(), session_key, client)
+        _web_register_run(run)
+        return run, None
 
 def _web_active_run(session_key="web"):
     with WEB_RUNS_LOCK:
@@ -25001,15 +25140,38 @@ WEB_UPLOAD_MAX = SEND_FILE_MAX
 
 
 def _web_safe_name(name):
-    """A stored filename that cannot escape uploads/ or carry separators/controls."""
+    """A stored filename that cannot escape uploads/ or carry separators/controls.
+
+    The class includes the Windows-reserved characters `" * ? < > | :`: a macOS or
+    Linux client can name a file `report*final.pdf`, and on a Windows host the write
+    raised EINVAL straight out of the handler, so the browser got ZERO bytes and the
+    log got a traceback (A-231, measured 2026-10-06). They are kept out of the stored
+    name on EVERY platform, so one upload has one name whichever OS serves it (`:` is
+    also how `os.path.basename` reads "a:b.txt" as drive `a:`)."""
     base = os.path.basename(str(name or "").replace("\\", "/"))
-    base = re.sub(r"[\x00-\x1f\x7f/\\]", "_", base).strip(" .")
-    return base[:120] or "upload.bin"
+    base = re.sub(r"[\x00-\x1f\x7f/\\\"*?<>|:]", "_", base)
+    return base.strip(" .")[:120] or "upload.bin"
 
 
 def _web_ascii_name(name):
     """A header-safe ASCII filename for Content-Disposition (no CR/LF/quotes)."""
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(name or "file"))[:120] or "file"
+
+
+def _web_filename_header(name):
+    """The Content-Disposition attachment filename, ASCII plus RFC 5987.
+
+    `filename=` must be ASCII, so a non-ASCII name was mangled to `caf_.pdf` /
+    `____.pdf` and the operator could not tell two downloads apart (A-255, measured
+    2026-10-06). RFC 5987's `filename*=UTF-8''<pct-encoded>` carries the real name
+    next to it; a client that does not read the starred form falls back to the ASCII
+    one, and CR/LF are percent-encoded either way."""
+    ascii_name = _web_ascii_name(name)
+    try:
+        quoted = _url_quote(str(name or "file")[:120], safe="")
+    except Exception:                                            # noqa: BLE001
+        return "attachment; filename=%s" % ascii_name
+    return "attachment; filename=%s; filename*=UTF-8''%s" % (ascii_name, quoted)
 
 
 def _json_type_name(value):
@@ -27012,6 +27174,58 @@ def run_webui():
             if not self._head_only:
                 self.wfile.write(data)
 
+        def _asset(self, ctype, path, getter, max_age, fallback=""):
+            """One static asset: an ETag, a conditional request and a guarded read.
+
+            Five routes re-read their file on every request with no validator, and the
+            font route read it OUTSIDE any try, so a file that vanished between the
+            exists() check and the read raised out of the handler and the client got
+            zero bytes (A-252/A-253). Here the ETag comes from the file's mtime and
+            size - a stat, not a read - so a warm tab's revalidation is answered 304
+            without touching the bytes, and `getter` runs inside the try that turns a
+            vanished file into a 404 instead of a dropped connection. `fallback` names
+            the ETag for byte-but-no-file assets (the built-in art, the versioned CSS).
+            """
+            etag = None
+            if path is not None:
+                try:
+                    st = path.stat()
+                    etag = '"%x-%x"' % (st.st_mtime_ns, st.st_size)
+                except OSError:
+                    etag = None
+            if etag is None:
+                etag = '"%s"' % (fallback or "builtin")
+            # max-age=0 with must-revalidate: the asset IS stored, but is stale at
+            # once, so every use revalidates. The page and its stylesheet must not be
+            # served from a stale cache (a fixed server beside yesterday's client reads
+            # as "still broken"), and with the ETag that revalidation is a 304 - not a
+            # re-read and a re-template (A-254).
+            cache = ("max-age=0, must-revalidate" if max_age <= 0
+                     else "max-age=%d" % max_age)
+            if (self.headers.get("If-None-Match") or "").strip() == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", cache)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            try:
+                data = getter()
+            except OSError:
+                data = None
+            if data is None:
+                self._send("not found", 404, "text/plain")
+                return
+            if isinstance(data, str):          # the stylesheet is text; art is bytes
+                data = data.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", cache)
+            self.send_header("ETag", etag)
+            self.end_headers()
+            self._write(data)
+
         def _send(self, body, code=200, ctype="text/html; charset=utf-8", extra=None):
             data = body.encode()
             self.send_response(code)
@@ -27042,13 +27256,21 @@ def run_webui():
                 extra = list(extra or ()) + [
                     ("Set-Cookie", "tinycmdr_token=; Path=/; HttpOnly; "
                                    "SameSite=Strict; Max-Age=0")]
-            self._send(json.dumps(obj), code, "application/json", extra=extra)
+            # ensure_ascii=False: JSON is UTF-8 by definition, and escaping every emoji
+            # and every CJK character to \uXXXX cost six bytes each on the routes the
+            # page polls several times a second (A-261, measured 2026-10-06: a /new
+            # reply was "\\ud83d\\udd04 Session cleared...").
+            self._send(json.dumps(obj, ensure_ascii=False), code, "application/json",
+                       extra=extra)
 
         def _file(self, path):
             """Stream an OFFERED file to the token holder, as an attachment.
 
             Only a file the agent attached (a line of kind 'file' in a live or kept
-            run) can reach here: there is no path browser, and anything else is 404."""
+            run) can reach here: there is no path browser, and anything else is 404.
+            A `Range: bytes=a-b` is honoured, so a download that drops at 99% resumes
+            where it stopped instead of starting from zero (A-250, measured
+            2026-10-06: the header was ignored and the whole body re-sent)."""
             try:
                 size = path.stat().st_size
             except OSError:
@@ -27057,21 +27279,45 @@ def run_webui():
             if size > SEND_FILE_MAX:
                 self._json({"error": "file too large to serve"}, 413)
                 return
-            self.send_response(200)
+            start, end, code = 0, size - 1, 200
+            m = re.match(r"bytes=(\d*)-(\d*)\s*$",
+                         (self.headers.get("Range") or "").strip())
+            if m and (m.group(1) or m.group(2)):
+                if m.group(1):
+                    start = int(m.group(1))
+                    end = int(m.group(2)) if m.group(2) else size - 1
+                else:
+                    # a suffix range: the LAST N bytes
+                    start = max(0, size - int(m.group(2)))
+                    end = size - 1
+                end = min(end, size - 1)
+                if start > end or start >= size:
+                    self._json({"error": "range not satisfiable", "size": size}, 416,
+                               extra=[("Content-Range", "bytes */%d" % size)])
+                    return
+                code = 206
+            self.send_response(code)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("Accept-Ranges", "bytes")
+            if code == 206:
+                self.send_header("Content-Range",
+                                 "bytes %d-%d/%d" % (start, end, size))
             self.send_header("Content-Disposition",
-                             "attachment; filename=%s" % _web_ascii_name(path.name))
+                             _web_filename_header(path.name))
             self.end_headers()
             if self._head_only:
                 return                  # HEAD: the headers are the whole answer
             try:
                 with open(path, "rb") as fh:
-                    while True:
-                        chunk = fh.read(65536)
+                    fh.seek(start)
+                    left = end - start + 1
+                    while left > 0:
+                        chunk = fh.read(min(65536, left))
                         if not chunk:
                             break
                         self.wfile.write(chunk)
+                        left -= len(chunk)
             except (BrokenPipeError, ConnectionError, OSError):
                 pass
 
@@ -27392,64 +27638,36 @@ def run_webui():
             elif self.path.startswith("/manifest.webmanifest"):
                 self._send(_web_manifest(), 200, "application/manifest+json")
             elif self.path.startswith("/icon.png"):
-                data = _web_icon_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "max-age=86400")
-                self.end_headers()
-                self._write(data)
+                self._asset("image/png", BASE_DIR / "assets" / "page-icon.png",
+                            _web_icon_bytes, 86400, fallback="icon-" + VERSION)
             elif self.path.startswith("/mark.png"):
-                data = _web_mark_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(data)))
-                self.send_header("Cache-Control", "max-age=86400")
-                self.end_headers()
-                self._write(data)
+                self._asset("image/png", BASE_DIR / "assets" / "page-mark.png",
+                            _web_mark_bytes, 86400, fallback="mark-" + VERSION)
             elif self.path.startswith("/chibi.png"):
-                art = _web_chibi_bytes()
-                if art is None:
-                    self._send("not found", 404, "text/plain")
-                else:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "image/png")
-                    self.send_header("Content-Length", str(len(art)))
-                    self.send_header("Cache-Control", "max-age=86400")
-                    self.end_headers()
-                    self._write(art)
+                self._asset("image/png", BASE_DIR / "assets" / "page-chibi.png",
+                            _web_chibi_bytes, 86400, fallback="chibi-" + VERSION)
             elif self.path.startswith("/fonts/"):
                 name = self.path.split("/fonts/", 1)[1].split("?", 1)[0]
                 path = _web_font_path(name)
                 if path is None:
                     self._send("not found", 404, "text/plain")
                 else:
-                    data = path.read_bytes()
-                    self.send_response(200)
-                    self.send_header("Content-Type", "font/woff2")
-                    self.send_header("Content-Length", str(len(data)))
                     # the fonts are ours and immutable: a week is safe, they never change
                     # under a running page (a release writes new bytes, new generation)
-                    self.send_header("Cache-Control", "max-age=604800")
-                    self.end_headers()
-                    self._write(data)
+                    self._asset("font/woff2", path, path.read_bytes, 604800,
+                                fallback="font-" + name)
             elif self.path.startswith("/page.css"):
-                css = _web_page_css()
-                if css is None:
-                    self._send("not found", 404, "text/plain")
-                else:
-                    self._send(css, 200, "text/css; charset=utf-8")
+                # max-age 0: kept, but revalidated before EVERY use. A stale stylesheet
+                # (or page) reads as "still broken" after a fix, so it must not be
+                # served from cache - and with the ETag the revalidation is a 304, not
+                # a re-read and a re-template (A-254).
+                self._asset("text/css; charset=utf-8",
+                            BASE_DIR / "assets" / "webui.css", _web_page_css, 0,
+                            fallback="css-" + VERSION)
             elif self.path.startswith("/temple.jpg"):
-                art = _web_temple_bytes()
-                if art is None:
-                    self._send("not found", 404, "text/plain")
-                else:
-                    self.send_response(200)
-                    self.send_header("Content-Type", "image/jpeg")
-                    self.send_header("Content-Length", str(len(art)))
-                    self.send_header("Cache-Control", "max-age=86400")
-                    self.end_headers()
-                    self._write(art)
+                self._asset("image/jpeg",
+                            BASE_DIR / "assets" / "roman-temple-spring.jpg",
+                            _web_temple_bytes, 86400, fallback="temple-" + VERSION)
             elif self.path == "/" or self.path.startswith("/?"):
                 self._send(_web_page_html())
             else:
@@ -27652,7 +27870,7 @@ def run_webui():
             both be working, which is what makes parking one and opening another
             possible instead of queueing behind it."""
             web_touch(key)
-            busy = _web_active_run(key)
+            run, busy = _web_claim_run(key, client)
             if busy is not None:
                 _busy_owner = web_run_owner(busy)
                 if _busy_owner and _busy_owner != client:
@@ -27673,7 +27891,6 @@ def run_webui():
                          busy.id)
                 self._json({"run_id": busy.id, "busy": True, "steered": True})
                 return
-            run = _web_new_run(key, client)
             run.add("you", text)
             threading.Thread(target=_web_drive, args=(run, text),
                              daemon=True, name=f"webrun-{run.id}").start()
@@ -27759,14 +27976,36 @@ def run_webui():
                 # sees it (A-223).
                 raw = (self._query().get("name") or "").strip()
                 UPLOADS_DIR.mkdir(exist_ok=True)
-                dest = UPLOADS_DIR / ("%d_%s" % (int(time.time()),
-                                                 _web_safe_name(raw) if raw else "upload.bin"))
-                dest.write_bytes(data)
+                safe = _web_safe_name(raw) if raw else "upload.bin"
+                dest = UPLOADS_DIR / ("%d_%s" % (int(time.time()), safe))
+                try:
+                    dest.write_bytes(data)
+                except OSError as e:
+                    # A name this filesystem will not take (a reserved character, or a
+                    # name that is already a directory) used to raise OUT of the handler
+                    # and close the socket with zero bytes - the browser showed a
+                    # spinner and the operator never learned why (A-231).
+                    log.warning("web upload: cannot write %s: %s", dest.name, e)
+                    self._json({"error": "that upload name cannot be stored on this "
+                                         "host", "name": dest.name, "got": str(e)}, 400)
+                    return
                 rel = str(dest.relative_to(BASE_DIR))
                 log.info("web upload: %d bytes -> %s", len(data), rel)
-                self._json({"path": rel, "name": dest.name, "bytes": len(data),
-                            "note": "[attachment saved to %s - use read_file to "
-                                    "inspect it]" % rel})
+                reply = {"path": rel, "name": dest.name, "bytes": len(data),
+                         "note": "[attachment saved to %s - use read_file to "
+                                 "inspect it]" % rel}
+                # The stored base is not always the requested one: separators, controls
+                # and the platform-reserved characters are replaced, and the base is cut
+                # at 120. Say so, so a caller that asked for a 300-character name learns
+                # which file it got instead of finding out by listing uploads/ (A-232).
+                want = os.path.basename(str(raw).replace("\\", "/")).strip(" .")
+                if want and want != safe:
+                    reply["name_note"] = ("stored as %s: the requested name was "
+                                          "rewritten (separators, controls and the "
+                                          "platform-reserved characters are replaced, "
+                                          "and the base name is cut at 120)"
+                                          % safe)
+                self._json(reply)
                 return
             if self.path.startswith("/api/sessions"):
                 if not self._auth_ok():
@@ -27800,7 +28039,16 @@ def run_webui():
                                    403)
                         return
                     if op == "rename":
-                        web_rename_session(key, body.get("title") or "")
+                        title = (body.get("title") or "").strip()
+                        if not title:
+                            # A blank title used to be stored as "" and the rail fell
+                            # back to the key: a rename that means nothing DESTROYED the
+                            # label, because "no title" and "an empty one" were the same
+                            # state (A-240, measured 2026-10-06: title "  " stored "").
+                            # Refuse it, so the old title stays.
+                            self._json({"error": "a rename needs a title"}, 400)
+                            return
+                        web_rename_session(key, title)
                         self._json({"ok": True, "sessions": web_sessions(client)})
                         return
                     if op == "delete":
@@ -27911,17 +28159,59 @@ def run_webui():
             if not text:
                 self._json({"reply": "(empty message)"})
                 return
-            kind, payload = _web_command(text)
+            # The conversation this call means: what it asked for, else what this
+            # client had open, else the shared one. It used to be hardcoded "web",
+            # so a gateway caller that believed it was scoping by `session` was not
+            # (A-229, measured 2026-10-06), and the conversation was never touched in
+            # the registry, so it could be pruned out of the rail while its transcript
+            # kept growing (A-230).
+            chat_client = _web_client(self.headers)
+            chat_key = web_resolve_session(chat_client, req.get("session"))
+            if web_owned_by_other(chat_key, chat_client):
+                self._json({"reply": "that conversation belongs to another browser on "
+                                     "this host - you may read it in the shared view, "
+                                     "not chat in it"},
+                           403)
+                return
+            kind, payload = _web_command(text, chat_key)
             if kind == "task":
+                # The same one-run-per-conversation rule /api/run enforces. This route
+                # called AGENT.run directly and registered nothing, so it bypassed the
+                # rule entirely: three simultaneous POSTs all ran in one conversation
+                # (A-228, measured 2026-10-06). Claim the run atomically - the look and
+                # the registration are one step - then drive it through the shared
+                # driver so its lines land in the same buffer the page polls.
+                web_touch(chat_key)
+                run, busy = _web_claim_run(chat_key, chat_client)
+                if busy is not None:
+                    self._json({"reply": "⚠️ a run is already going in this "
+                                         "conversation — wait for it to finish, or "
+                                         "stop it", "busy": True, "run_id": busy.id},
+                               409)
+                    return
+                run.add("you", text)
+                reporter = RunReporter(WebDestination(run), chat_key)
+                failed = False
                 try:
-                    payload = AGENT.run("web", payload)
+                    # AGENT.run, exactly as before: this route has always called the
+                    # driver with no confirm door, and the shell tool reads "no
+                    # confirm_cb" as DECLINED - a scripted caller must keep getting a
+                    # fast decline, not a five-minute wait for a question it cannot
+                    # answer. What changed is the run is now REGISTERED (above), so the
+                    # one-run rule sees it and the rail can.
+                    payload = AGENT.run(chat_key, payload)
                 except (KeyboardInterrupt, SystemExit):
                     raise
                 except BaseException as e:      # noqa: BLE001 - a lane must not die
                     # BaseException, not Exception: a stop raised from inside the run used
                     # to escape here and the browser got nothing at all.
+                    failed = True
                     log.exception("web run failed")
                     payload = f"⚠️ Something broke on my side: {e}"
+                finally:
+                    # Always: a registered run that is never finished would block the
+                    # conversation for ever.
+                    _finish_web_run(run, reporter, payload, failed=failed)
             self._json({"reply": payload})
 
     # Loopback unless the operator says otherwise; the installer asks on a headless
@@ -27964,6 +28254,23 @@ def run_webui():
     lane_up("web", "port %d" % srv.server_address[1])
     return srv
 
+def web_port_recorded():
+    """The port the running page actually BOUND, or None when this host recorded nothing.
+
+    Only a SUCCESSFUL bind records a port (run_webui's lane_up "port N"): a failure's
+    `detail` names the port it TRIED, which is the 0 that got here in the first place.
+    The 8790 fallback therefore lives in web_port_effective, NOT here - a reader that
+    needs "is a page of mine already up?" must not treat the published default as a
+    record, or it would probe an unrelated program on 8790 and conclude it is served.
+    """
+    record = ((_lane_state_read().get("lanes") or {}).get("web") or {})
+    if record.get("ok"):
+        m = re.match(r"port\s+(\d+)", str(record.get("detail") or ""))
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def web_port_effective():
     """The port the page is on, which is what a reader must NAME.
 
@@ -27976,10 +28283,9 @@ def web_port_effective():
     Order:
       1. the configured port when it is a real one (any non-zero int) - the 0 case never
          reaches a reader as a port a browser could open;
-      2. else the port the running page actually BOUND, as run_webui records it on a
-         SUCCESSFUL bind (logs/state.json, lanes.web.detail "port N") - the persisted
-         lane record, so a cold process (`tinycmdr web`, a cron doctor) reads back what
-         the serving process wrote;
+      2. else the port the running page actually BOUND (web_port_recorded) - the
+         persisted lane record, so a cold process (`tinycmdr web`, a cron doctor) reads
+         back what the serving process wrote;
       3. else 8790.
 
     That last step is a GUESS for a box that has recorded nothing yet, never a silent
@@ -27995,14 +28301,8 @@ def web_port_effective():
         configured = 0
     if configured:
         return configured
-    record = ((_lane_state_read().get("lanes") or {}).get("web") or {})
-    # Only a SUCCESSFUL bind records the bound port; a failure's "detail" names the port
-    # it tried, which is the 0 that got here in the first place.
-    if record.get("ok"):
-        m = re.match(r"port\s+(\d+)", str(record.get("detail") or ""))
-        if m:
-            return int(m.group(1))
-    return 8790
+    recorded = web_port_recorded()
+    return recorded if recorded else 8790
 
 
 def _web_port(web):
@@ -28179,20 +28479,43 @@ def _firewall_note(port):
     return lines
 
 
+_WEB_CSS_CACHE = {}          # {"stamp": (css stat, theme stat), "text": themed css}
+
+
 def _web_page_css():
     """The page's stylesheet, themed - or None when the host ships none.
 
     It is a real asset (assets/webui.css, the operator's design) rather than a string in
     this file: editable, reviewable, and served with the palette substituted from the SAME
     theme.toml the terminal reads.
-    """
+
+    The themed result is cached against the (mtime, size) of the two files it reads -
+    webui.css and theme.toml - so a browser that fetches the stylesheet on every boot
+    does not make this re-read and re-substitute a 42 KB file each time; either file
+    changing (or vanishing) invalidates it (A-254, measured 2026-10-06)."""
+    path = BASE_DIR / "assets" / "webui.css"
+    theme_path = BASE_DIR / "theme.toml"
+
+    def _stamp(p):
+        try:
+            st = p.stat()
+            return (st.st_mtime_ns, st.st_size)
+        except OSError:
+            return None
+
+    stamp = (_stamp(path), _stamp(theme_path))
+    if stamp[0] is not None and _WEB_CSS_CACHE.get("stamp") == stamp:
+        return _WEB_CSS_CACHE.get("text")
     try:
-        css = (BASE_DIR / "assets" / "webui.css").read_text(encoding="utf-8")
+        css = path.read_text(encoding="utf-8")
     except OSError:
         return None
     theme = _web_theme_vars()
-    return (css.replace("{{THEME}}", "".join("%s:%s;" % kv for kv in theme.items()))
-               .replace("{{VERSION}}", VERSION))
+    out = (css.replace("{{THEME}}", "".join("%s:%s;" % kv for kv in theme.items()))
+              .replace("{{VERSION}}", VERSION))
+    if stamp[0] is not None:
+        _WEB_CSS_CACHE["stamp"], _WEB_CSS_CACHE["text"] = stamp, out
+    return out
 
 
 def _web_token_mint(announce=True):
@@ -28374,11 +28697,19 @@ def start_web_surface(open_browser=True, force=False):
     # suite's port-0 server into a probe of 8790, and on a box whose live install serves
     # the page that read as "already serving here".
     port = int(raw_port) if raw_port is not None else 8790
-    if _web_answers(port):
+    # With web.port 0 the live page's port was chosen by the OS at bind time and only the
+    # lane record knows it, so probing 0 - which can never answer - made a SECOND process
+    # bind another port and announce a second, independent page instance (A-260, measured
+    # 2026-10-06: a live page on 50917 went unseen and 50922 was bound instead). A
+    # configured 0 asks where THIS install's page already is: only a RECORDED bind counts
+    # (web_port_recorded), never the 8790 fallback - probing a guess can hit an unrelated
+    # program on 8790 and make a host with no page of its own refuse to start one.
+    probe_port = port or web_port_recorded()
+    if probe_port and _web_answers(probe_port):
         # The service (or another session) already serves the page: announce it
         # instead of spending six seconds failing to bind the same port.
         print("tinycmdr page: already serving here")
-        _announce_web(port, open_browser=open_browser, force=force)
+        _announce_web(probe_port, open_browser=open_browser, force=force)
         return None
     srv = run_webui()
     if srv is None:
@@ -28394,8 +28725,10 @@ def start_web_surface(open_browser=True, force=False):
 
 def _verb_web(rest=None):
     """Open the page: print the tokenized link, hand it to the browser when there
-    is one. Read-only with respect to the running service - a second process must
-    NOT bind the port to answer this."""
+    is one. Read-only with respect to the running SERVICE - a second process must
+    NOT bind the port to answer this. It is not read-only on disk: a host with no
+    token gets one minted into .env (the page is gated, so the verb that opens it
+    must be able to create the key), which is the only file it writes."""
     tok = _web_token() or _web_token_mint()
     if not tok:
         print("no token: mint one with `tinycmdr token set TINYCMDR_WEB_TOKEN`.",
