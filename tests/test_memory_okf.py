@@ -53,6 +53,22 @@ def _fresh():
     fb.MEMORY_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _call_tool(args, ctx=None):
+    """tool_memory, with a raise turned into a value: a RED check, not a traceback."""
+    try:
+        return fb.tool_memory(args, ctx or {})
+    except Exception as e:                                            # noqa: BLE001
+        return "RAISED %s: %s" % (type(e).__name__, e)
+
+
+def _tier(fm):
+    """_okf_tier, likewise: a raise grades as a FAIL rather than crashing the suite."""
+    try:
+        return fb._okf_tier(fm)
+    except Exception as e:                                            # noqa: BLE001
+        return "RAISED %s: %s" % (type(e).__name__, e)
+
+
 def test_frontmatter_round_trips_every_field_we_write():
     fm = {"type": "Fact", "title": "Disk: root is 65% full",
           "description": "Root volume: 287 of 460 GiB used (2026-10-04).",
@@ -155,7 +171,10 @@ def test_new_concept_writes_a_conformant_file_and_slugs_it():
           other["id"])
 
 
-def test_update_preserves_unknown_keys_and_bumps_generated():
+def test_update_preserves_unknown_keys_and_keeps_generated():
+    """A touch is not a re-derivation: `generated` is the date the CONTENT was produced,
+    so an update keeps it and records itself in `touched` instead. Re-dating generated on
+    every update made the provenance claim the content was freshly derived (2026-10-05)."""
     _fresh()
     made = fb.memory_new_concept("A fact", "old body")
     path = made["path"]
@@ -163,12 +182,20 @@ def test_update_preserves_unknown_keys_and_bumps_generated():
     fm["x_kept"] = "yes"
     fm["generated"]["at"] = "2000-01-01T00:00:00Z"
     path.write_text(fb.okf_dump(fm, body), encoding="utf-8")
-    out = fb.memory_update_concept(made["id"], body="new body", description="now")
+    fb.memory_update_concept(made["id"], body="new body", description="now")
     fm2, body2 = fb.okf_parse(path.read_text(encoding="utf-8"))
     check("an update rewrites the body", body2.strip() == "new body", repr(body2))
     check("an update keeps unknown keys", fm2.get("x_kept") == "yes", repr(fm2))
-    check("an update bumps generated.at",
-          fm2["generated"]["at"] != "2000-01-01T00:00:00Z", repr(fm2["generated"]))
+    check("an update KEEPS generated (the derivation date did not move)",
+          fm2["generated"]["at"] == "2000-01-01T00:00:00Z", repr(fm2.get("generated")))
+    touched = fm2.get("touched") or {}
+    check("...and says it was touched, with an actor and an instant",
+          str(touched.get("by") or "").startswith("tinycmdr/")
+          and str(touched.get("at") or "").endswith("Z"), repr(touched))
+    fb.memory_set_status(made["id"], "deprecated", reason="gone")
+    fm3, _ = fb.okf_parse(path.read_text(encoding="utf-8"))
+    check("a status change keeps generated too",
+          fm3["generated"]["at"] == "2000-01-01T00:00:00Z" and "touched" in fm3, repr(fm3))
     check("an unknown id changes nothing", fb.memory_update_concept("nope", body="x") is None)
 
 
@@ -402,6 +429,233 @@ def test_search_reads_words_not_a_contiguous_string():
     out = fb.tool_memory({"action": "search", "query": "audit conceptmissing"}, {})
     check("...and a query with a word the concept lacks still misses",
           "no concept matches" in out, out[:120])
+
+
+def test_a_bare_string_verifier_entry_reads_as_a_verifier():
+    """`verified:\\n- human:operator` is natural YAML shorthand for {by: human:operator},
+    but a string entry has no `.by`: the tier was lost and the index raised
+    AttributeError (2026-10-05)."""
+    _fresh()
+    check("a list of bare strings names the verifier",
+          _tier({"verified": ["human:operator"]}) == "human-reviewed",
+          _tier({"verified": ["human:operator"]}))
+    check("a bare string is the same shorthand",
+          _tier({"verified": "human:operator"}) == "human-reviewed",
+          _tier({"verified": "human:operator"}))
+    check("a machine string is machine-confirmed, not unverified",
+          _tier({"verified": ["process:disk-check"]}) == "machine-confirmed",
+          _tier({"verified": ["process:disk-check"]}))
+    check("a mixed list still finds the human",
+          _tier({"verified": ["process:x", "human:operator"]}) == "human-reviewed",
+          _tier({"verified": ["process:x", "human:operator"]}))
+    fm, _ = fb.okf_parse(fb.okf_dump(
+        {"type": "Fact", "title": "T", "verified": ["human:operator"]}, ""))
+    check("the shorthand survives dump/parse",
+          _tier(fm) == "human-reviewed", repr(fm.get("verified")))
+    (fb.MEMORY_DIR / "checked-string.md").write_text(fb.okf_dump(
+        {"type": "Fact", "title": "Checked", "verified": ["human:operator"]}, "b"),
+        encoding="utf-8")
+    try:
+        index = fb.memory_index_render()
+    except Exception as e:                                           # noqa: BLE001
+        index = "RAISED %s: %s" % (type(e).__name__, e)
+    check("...so the index says human-reviewed without raising",
+          "human-reviewed" in index, index[-200:])
+
+
+def test_a_caller_description_is_bounded_like_the_generator():
+    """The index is the whole prompt: a caller-supplied description is bounded at the
+    generator's bound, and the result says when it was cut (a 3,000-char description was
+    accepted verbatim and evicted the rest of the index, 2026-10-05)."""
+    _fresh()
+    bound = getattr(fb, "_MEMORY_DESCRIPTION_MAX", 160)
+    out = _call_tool({"action": "add", "title": "Verbose concept",
+                      "body": "the body of the concept stands here",
+                      "description": "This is the point, " * 200})
+    check("an over-long description is accepted", out.startswith("OK"), out[:120])
+    c = fb._memory_find("verbose-concept")
+    desc = str((c["fm"].get("description") if c else "") or "")
+    check("the stored description is within the generator's bound",
+          bool(desc) and len(desc) <= bound + 1, len(desc))
+    check("...cut at a word boundary with the ellipsis saying so",
+          desc.endswith("…"), desc[-20:])
+    check("...and the result says it was cut",
+          "cut" in out and str(bound) in out, out[:260])
+    out2 = _call_tool({"action": "add", "title": "Terse concept",
+                       "body": "another body stands here", "description": "short point"})
+    c2 = fb._memory_find("terse-concept")
+    check("a description that fits is kept verbatim",
+          out2.startswith("OK") and bool(c2)
+          and c2["fm"].get("description") == "short point",
+          repr(c2["fm"].get("description") if c2 else out2[:120]))
+    big = {"action": "update", "id": "terse-concept", "description": "x " * 300}
+    out3 = _call_tool(big)
+    c3 = fb._memory_find("terse-concept")
+    check("an update bounds a caller description too, and says so",
+          out3.startswith("OK") and "cut" in out3
+          and len(str(c3["fm"].get("description") or "")) <= bound + 1, out3[:200])
+
+
+def test_tags_take_one_string_or_a_list_and_refuse_the_rest():
+    """`tags: 7` raised TypeError out of the tool; `tags: "oneshot"` became ten
+    one-character tags (2026-10-05). A string is ONE tag; a list of strings is the list;
+    anything else is an ERROR."""
+    _fresh()
+    out = _call_tool({"action": "add", "title": "One tag", "body": "a body stands here",
+                      "tags": "oneshot"})
+    c = fb._memory_find("one-tag")
+    check("a string tag is ONE tag, not its characters",
+          out.startswith("OK") and bool(c) and c["fm"].get("tags") == ["oneshot"],
+          repr(c["fm"].get("tags") if c else out[:120]))
+    out2 = _call_tool({"action": "add", "title": "Number tag", "body": "a body stands here",
+                       "tags": 7})
+    check("a non-string, non-list tags value is refused as an ERROR",
+          out2.startswith("ERROR"), out2[:160])
+    out3 = _call_tool({"action": "add", "title": "Mixed tag", "body": "a body stands here",
+                       "tags": ["ok", 7]})
+    check("a list holding a non-string is refused too", out3.startswith("ERROR"), out3[:160])
+    out4 = _call_tool({"action": "add", "title": "List tag", "body": "a body stands here",
+                       "tags": ["host", "disk"]})
+    c4 = fb._memory_find("list-tag")
+    check("a list of strings still works",
+          out4.startswith("OK") and bool(c4)
+          and c4["fm"].get("tags") == ["host", "disk"],
+          repr(c4["fm"].get("tags") if c4 else out4[:120]))
+
+
+def test_update_refuses_a_title_another_concept_holds():
+    """Uniqueness was enforced on add and not on update, so two concepts could share a
+    title and the title-ordered index grew an ambiguous pair (2026-10-05)."""
+    _fresh()
+    fb.memory_new_concept("Alpha fact", "the alpha body")
+    fb.memory_new_concept("Beta fact", "the beta body")
+    raised = None
+    try:
+        fb.memory_update_concept("beta-fact", title="Alpha fact")
+    except ValueError as e:
+        raised = str(e)
+    check("an update to a title another concept holds is refused, naming it",
+          raised is not None and "alpha-fact" in raised, repr(raised))
+    c = fb._memory_find("beta-fact")
+    check("...and the refused update changed nothing",
+          c["fm"].get("title") == "Beta fact", repr(c["fm"].get("title")))
+    out = _call_tool({"action": "update", "id": "beta-fact", "title": "Alpha fact"})
+    check("the tool reports it as an ERROR",
+          out.startswith("ERROR") and "alpha-fact" in out, out[:200])
+    check("a title unchanged by the update is not a collision",
+          _call_tool({"action": "update", "id": "beta-fact", "title": "Beta fact",
+                      "body": "a rewritten beta body"}).startswith("OK"))
+
+
+def test_the_log_rotates_to_exactly_one_predecessor():
+    """log.md was append-only for ever (2,265 B after ~20 mutations, nothing pruned). The
+    bound is one predecessor - log.md -> log.md.1 - the shape the session event ledger
+    uses, so a bundle costs at most two log files."""
+    _fresh()
+    had = hasattr(fb, "_MEMORY_LOG_MAX_BYTES")
+    saved = getattr(fb, "_MEMORY_LOG_MAX_BYTES", None)
+    fb._MEMORY_LOG_MAX_BYTES = 200
+    try:
+        for i in range(40):
+            fb._memory_log_append("Update", "[One](one.md) - change number %d" % i)
+    finally:
+        if had:
+            fb._MEMORY_LOG_MAX_BYTES = saved
+        else:
+            del fb._MEMORY_LOG_MAX_BYTES
+    rolled = fb.MEMORY_DIR / "log.md.1"
+    check("an oversized log rolls to exactly one predecessor", rolled.exists(),
+          sorted(p.name for p in fb.MEMORY_DIR.glob("log.md*")))
+    log = fb.MEMORY_LOG.read_text(encoding="utf-8")
+    check("the live log opens with its title and keeps the newest entry",
+          log.startswith("# Memory log") and "change number 39" in log, log[:200])
+    old = rolled.read_text(encoding="utf-8") if rolled.exists() else ""
+    check("the predecessor holds the entries that were live before the roll",
+          old.startswith("# Memory log") and "change number 39" not in old, old[:200])
+    check("...and there is no second predecessor",
+          sorted(p.name for p in fb.MEMORY_DIR.glob("log.md*")) == ["log.md", "log.md.1"],
+          sorted(p.name for p in fb.MEMORY_DIR.glob("log.md*")))
+
+
+def test_an_unknown_type_is_refused_by_name():
+    """`type: 5` wrote `type: 5` and opened an index section `# 5` (2026-10-05). The
+    vocabulary is the bundle's known types; anything else is refused by name."""
+    _fresh()
+    out = _call_tool({"action": "add", "title": "Numeric type",
+                      "body": "a body stands here", "type": 5})
+    check("an unknown type is refused as an ERROR", out.startswith("ERROR"), out[:160])
+    check("...naming the offending type and the known ones",
+          "'5'" in out and "Fact" in out and "Runbook" in out, out[:200])
+    check("nothing was written", fb.memory_scan() == [], fb.memory_scan())
+    check("a known type still lands",
+          _call_tool({"action": "add", "title": "Proper type",
+                      "body": "another body stands here",
+                      "type": "Runbook"}).startswith("OK"))
+
+
+def test_a_non_dict_config_section_never_replaces_the_default():
+    """`"agent": null` in config.json replaced the shipped dict, so every reader -
+    memory action=list, visible_tool_names, the guard merge itself - raised
+    AttributeError (2026-10-05). A load-time guard keeps the default and names the key."""
+    import json as _json
+    cfg_path = TMP / "config-guard.json"
+    cfg_path.write_text(_json.dumps({"agent": None, "llm": "nope"}), encoding="utf-8")
+    saved_path, saved_cfg = fb.CONFIG_PATH, fb.CONFIG
+    try:
+        fb.CONFIG_PATH = cfg_path
+        try:
+            cfg = fb.load_config()
+        except Exception as e:                                        # noqa: BLE001
+            cfg = {"agent": "RAISED %s: %s" % (type(e).__name__, e)}
+    finally:
+        fb.CONFIG_PATH = saved_path
+    check("a null section keeps the shipped dict", isinstance(cfg.get("agent"), dict),
+          repr(cfg.get("agent"))[:120])
+    check("...with its shipped keys intact",
+          isinstance(cfg.get("agent"), dict)
+          and "memory_concept_max_chars" in cfg["agent"], repr(cfg.get("agent"))[:120])
+    check("a string section keeps the shipped dict too",
+          isinstance(cfg.get("llm"), dict), repr(cfg.get("llm"))[:80])
+    fb.CONFIG = cfg
+    try:
+        try:
+            out = fb.tool_memory({"action": "list"}, {})
+        except Exception as e:                                        # noqa: BLE001
+            out = "RAISED %s: %s" % (type(e).__name__, e)
+        try:
+            names = fb.visible_tool_names()
+        except Exception as e:                                        # noqa: BLE001
+            names = "RAISED %s: %s" % (type(e).__name__, e)
+    finally:
+        fb.CONFIG = saved_cfg
+    check("memory action=list survives a null agent section",
+          isinstance(out, str) and not out.startswith(("RAISED", "ERROR")), out[:120])
+    check("visible_tool_names survives too",
+          isinstance(names, set) and len(names) > 0, repr(names)[:120])
+
+
+def test_stale_after_must_be_an_iso_instant_at_write_time():
+    """A value the staleness compare cannot read used to be accepted at write time
+    (`stale_after: "tomorrow"`, `20200101`) and then silently never fired - the concept
+    read fresh for ever (2026-10-05). Validate at the door and name the shape."""
+    _fresh()
+    out = _call_tool({"action": "add", "title": "Stale tomorrow",
+                      "body": "a body stands here", "stale_after": "tomorrow"})
+    check("a non-ISO stale_after is refused at write time", out.startswith("ERROR"), out[:160])
+    check("...and the accepted shape is named",
+          "ISO" in out and "2026-11-01" in out, out[:200])
+    fb.memory_new_concept("Upd stale", "a body about the update")
+    out2 = _call_tool({"action": "update", "id": "upd-stale", "stale_after": "20200101"})
+    check("an unreadable stale_after on update is refused too",
+          out2.startswith("ERROR"), out2[:160])
+    out3 = _call_tool({"action": "add", "title": "Stale good",
+                       "body": "another body stands here",
+                       "stale_after": "2026-11-01T00:00:00Z"})
+    check("a real ISO instant is accepted", out3.startswith("OK"), out3[:120])
+    out4 = _call_tool({"action": "add", "title": "Stale date",
+                       "body": "yet another body stands here",
+                       "stale_after": "2026-11-01"})
+    check("a real ISO date is accepted too", out4.startswith("OK"), out4[:120])
 
 
 def main():

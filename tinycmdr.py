@@ -1044,6 +1044,16 @@ def load_config():
         for section, values in user.items():
             if isinstance(values, dict) and isinstance(cfg.get(section), dict):
                 cfg[section].update(values)
+            elif isinstance(cfg.get(section), dict):
+                # A shipped section is a DICT and its readers assume it. A file value that
+                # is not one (a null, a list, a string) must never REPLACE it:
+                # `"agent": null` in config.json left CONFIG["agent"] None, so every
+                # reader - memory action=list, visible_tool_names, the guard merge below -
+                # died with AttributeError at load (2026-10-05). Keep the shipped default
+                # and name the key.
+                log.warning("config.json section %r is %s, not an object - the shipped "
+                            "default is kept. Fix or delete the key.",
+                            section, type(values).__name__)
             else:
                 cfg[section] = values
     # Environment variables override secrets (handy for services).
@@ -9430,11 +9440,24 @@ MEMORY_LOCK_FILE = MEMORY_DIR / ".lock"
 OKF_VERSION = "0.2"
 # The key order this harness writes; unknown keys keep their own order after these.
 _OKF_KEY_ORDER = ("type", "title", "description", "resource", "tags", "status",
-                  "stale_after", "generated", "verified", "sources", "usage_window",
-                  "runtime", "parameters", "computation", "executor", "attester")
+                  "stale_after", "generated", "touched", "verified", "sources",
+                  "usage_window", "runtime", "parameters", "computation", "executor",
+                  "attester")
 _OKF_BARE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_./@+-]*$")
 _OKF_RESERVED = ("index", "log")
+# The vocabulary an add may name: anything else writes `type: 5` and opens an index
+# section `# 5` (measured 2026-10-05). Foreign files may still hold other types - the
+# read side tolerates them - but nothing this harness writes leaves the set.
 _MEMORY_TYPES = ("Fact", "Host", "Runbook", "Decision")
+# The index line is the WHOLE prompt side of memory, so a caller-supplied description is
+# bounded to the same 160 chars the generator cuts at: a 3,000-char description was
+# accepted verbatim and one verbose concept evicted the rest of the index (2026-10-05).
+_MEMORY_DESCRIPTION_MAX = 160
+# memory/log.md is otherwise append-only for ever (2,265 B after ~20 mutations, nothing
+# pruned). One predecessor, the shape the session event ledger already uses
+# (`<key>.events.1.jsonl`): log.md -> log.md.1 at this size, replacing the prior roll, so
+# the bundle costs at most two log files and 2x this.
+_MEMORY_LOG_MAX_BYTES = 64_000
 
 
 def _okf_plain(v):
@@ -9660,12 +9683,21 @@ def memory_scan():
 
 def _okf_tier(fm):
     v = fm.get("verified")
-    if isinstance(v, dict):
+    # A bare string is the shorthand for `{by: <string>}`: `verified:\n- human:operator`
+    # is a natural YAML spelling, and reading it as an item with no `.by` both lost the
+    # human tier and raised AttributeError out of the index (2026-10-05).
+    if isinstance(v, (dict, str)):
         v = [v]
     if not isinstance(v, list) or not v:
         return "unverified"
     for entry in v:
-        if str((entry or {}).get("by") or "").startswith("human:"):
+        if isinstance(entry, str):
+            by = entry
+        elif isinstance(entry, dict):
+            by = str(entry.get("by") or "")
+        else:
+            by = ""
+        if by.startswith("human:"):
             return "human-reviewed"
     return "machine-confirmed"
 
@@ -9747,6 +9779,18 @@ def _memory_log_append(kind, text):
     entry = "* **%s**: %s" % (kind, text)
     head = "# Memory log\n"
     body = ""
+    try:
+        # Bounded, or the log grows for ever: roll to ONE predecessor at
+        # _MEMORY_LOG_MAX_BYTES (log.md -> log.md.1), the shape the session event ledger
+        # uses. The roll is checked where the append happens, and a failure to roll is a
+        # skipped rotation, never a lost record.
+        if MEMORY_LOG.exists() and MEMORY_LOG.stat().st_size >= _MEMORY_LOG_MAX_BYTES:
+            rolled = MEMORY_LOG.with_suffix(".md.1")
+            MEMORY_LOG.replace(rolled)
+            log.info("memory log rolled at %d bytes: %s -> %s",
+                     _MEMORY_LOG_MAX_BYTES, MEMORY_LOG.name, rolled.name)
+    except OSError as e:
+        log.debug("memory log roll skipped: %s", e)
     if MEMORY_LOG.exists():
         raw = MEMORY_LOG.read_text(encoding="utf-8", errors="replace")
         body = raw[len(head):].lstrip("\n") if raw.startswith(head) else raw.strip("\n")
@@ -9804,7 +9848,64 @@ def _memory_dup_overlap(body, concepts, ignore=()):
     return None
 
 
-def _memory_description(title, body, bound=160):
+def _memory_cut_unit(text, bound):
+    """Cut a unit at a word boundary, with an ellipsis saying so."""
+    if len(text) <= bound:
+        return text
+    return text[:bound].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+
+
+def _memory_bound_description(text, bound=_MEMORY_DESCRIPTION_MAX):
+    """(bounded description, was_cut) for a CALLER-supplied description.
+
+    The generator already cuts at `bound`; a caller's text went in verbatim, so a
+    3,000-char description rode the whole prompt and evicted every other index line
+    (2026-10-05).
+    """
+    text = " ".join(str(text or "").split())
+    return _memory_cut_unit(text, bound), len(text) > bound
+
+
+def _memory_tags(value):
+    """`tags` normalized to a list of non-empty strings, or ValueError.
+
+    A string is ONE tag, never its characters: `tags: "oneshot"` became ten
+    one-character tags, and a non-iterable (`tags: 7`) raised TypeError out of the tool
+    (both 2026-10-05). Anything that is not a string or a list of strings is refused by
+    NAME at the door.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("tags must be a string or a list of strings, not %s"
+                         % type(value).__name__)
+    out = []
+    for t in value:
+        if not isinstance(t, str):
+            raise ValueError("every tag must be a string, not %s" % type(t).__name__)
+        t = t.strip()
+        if t:
+            out.append(t)
+    return out
+
+
+def _memory_check_stale(value):
+    """The validated `stale_after` string, or ValueError naming the accepted shape.
+
+    An unreadable value (`"tomorrow"`, `20200101`) was accepted at write time and then
+    silently never fired - the concept read as fresh for ever (2026-10-05). The
+    comparison already knows how to read a value (`_okf_when`); refuse at the door what
+    it cannot read.
+    """
+    if _okf_when(value) is None:
+        raise ValueError("stale_after must be an ISO instant - a date (2026-11-01) or a "
+                         "Zulu timestamp (2026-11-01T00:00:00Z), not %r" % str(value))
+    return str(value)
+
+
+def _memory_description(title, body, bound=_MEMORY_DESCRIPTION_MAX):
     """The index line's tail: the first COMPLETE unit that carries the point.
 
     The prompt carries index.md and nothing else, so a description cut mid-sentence is worse
@@ -9830,9 +9931,7 @@ def _memory_description(title, body, bound=160):
     operative = [t for t in named if re.search(r"[^A-Za-z0-9]", t)]
 
     def cut(u):
-        if len(u) <= bound:
-            return u
-        return u[:bound].rsplit(" ", 1)[0].rstrip(" ,;:-") + "…"
+        return _memory_cut_unit(u, bound)
 
     for token in operative + named:
         low = token.lower()
@@ -9864,20 +9963,28 @@ def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
         while "%s-%d" % (slug, n) in taken:
             n += 1
         slug = "%s-%d" % (slug, n)
-    fm = {"type": str(ctype or "Fact").strip() or "Fact", "title": title}
-    if not description:
+    ctype = str(ctype or "Fact").strip() or "Fact"
+    if ctype not in _MEMORY_TYPES:
+        raise ValueError("unknown type %r - memory types are: %s"
+                         % (ctype, ", ".join(_MEMORY_TYPES)))
+    fm = {"type": ctype, "title": title}
+    desc_cut = False
+    if description:
+        description, desc_cut = _memory_bound_description(description)
+    else:
         # The index line is what the prompt carries; a caller that gave only a body gets
         # the first COMPLETE unit of it - never a silent mid-sentence cut (see
         # _memory_description for the measurement that bought this).
         description = _memory_description(title, body)
     if description:
-        fm["description"] = " ".join(str(description).split())
-    if tags:
-        fm["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+        fm["description"] = description
+    tag_list = _memory_tags(tags)
+    if tag_list:
+        fm["tags"] = tag_list
     if status and status != "stable":
         fm["status"] = status
     if stale_after:
-        fm["stale_after"] = str(stale_after)
+        fm["stale_after"] = _memory_check_stale(stale_after)
     if supersedes:
         # Replacement is stated, not piled: the field names what this concept replaces,
         # the caller deprecates the old one in the same call (the ledger's `supersedes`,
@@ -9888,30 +9995,58 @@ def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
         fm["sources"] = sources
     path = MEMORY_DIR / (slug + ".md")
     atomic_write_text(path, okf_dump(fm, body))
-    return {"id": slug, "path": path, "fm": fm}
+    return {"id": slug, "path": path, "fm": fm, "description_cut": desc_cut}
 
 
 def memory_update_concept(cid, body=None, title=None, description=None, tags=None,
                           stale_after=None, actor=None):
-    """Rewrite a concept in place; bumps generated.at. None when the id is unknown."""
+    """Rewrite a concept in place; records the touch. None when the id is unknown."""
     c = _memory_find(cid)
     if c is None:
         return None
     fm = dict(c["fm"])
     if title:
-        fm["title"] = " ".join(str(title).split())
+        title = " ".join(str(title).split())
+        # Uniqueness was enforced on add and NOT on update, so two concepts could share a
+        # title and the index (title-ordered) grew an ambiguous pair (2026-10-05). Refuse
+        # a title another concept holds, and name it.
+        holder = next((o for o in memory_scan()
+                       if o["id"] != c["id"]
+                       and o["title"].strip().lower() == title.lower()), None)
+        if holder is not None:
+            raise ValueError("title %r is already held by memory/%s (%r) - update that "
+                             "concept instead, or pick a different title."
+                             % (title, holder["id"], holder["title"]))
+        fm["title"] = title
+    desc_cut = False
     if description is not None:
-        fm["description"] = " ".join(str(description).split())
+        description, desc_cut = _memory_bound_description(description)
+        fm["description"] = description
     if tags is not None:
-        fm["tags"] = [str(t).strip() for t in tags if str(t).strip()]
+        fm["tags"] = _memory_tags(tags)
     if stale_after is not None:
         if stale_after:
-            fm["stale_after"] = str(stale_after)
+            fm["stale_after"] = _memory_check_stale(stale_after)
         else:
             fm.pop("stale_after", None)
-    fm["generated"] = {"by": actor or _memory_actor(), "at": _memory_now()}
+    _memory_touch(fm, actor)
     atomic_write_text(c["path"], okf_dump(fm, c["body"] if body is None else body))
-    return {"id": c["id"], "path": c["path"], "fm": fm}
+    return {"id": c["id"], "path": c["path"], "fm": fm, "description_cut": desc_cut}
+
+
+def _memory_touch(fm, actor=None):
+    """Record a mutation: `touched`, never `generated`.
+
+    `generated` is the DERIVATION date - when the content was first produced - and
+    re-dating it on every update/status change made the provenance a consumer reads (and
+    the duplicate refusal, which quotes `generated.at`) claim the content was freshly
+    derived when nobody re-derived it (2026-10-05). Keep the first write; put the touch in
+    its own field. A concept a foreign file wrote with no `generated` gets one here, since
+    nothing else will say when it was made.
+    """
+    fm.setdefault("generated", {"by": actor or _memory_actor(), "at": _memory_now()})
+    fm["touched"] = {"by": actor or _memory_actor(), "at": _memory_now()}
+    return fm
 
 
 def memory_set_status(cid, status, reason="", actor=None):
@@ -9923,7 +10058,7 @@ def memory_set_status(cid, status, reason="", actor=None):
         fm.pop("status", None)
     else:
         fm["status"] = status
-    fm["generated"] = {"by": actor or _memory_actor(), "at": _memory_now()}
+    _memory_touch(fm, actor)
     atomic_write_text(c["path"], okf_dump(fm, c["body"]))
     _memory_log_append("Deprecation" if status == "deprecated" else "Update",
                        "[%s](%s.md)%s" % (c["title"], c["id"],
@@ -10082,6 +10217,9 @@ def tool_memory(args, ctx):
                               actor=actor)
             note = " | supersedes memory/%s (now deprecated)" % sup
         out = _memory_report("wrote", made, len(body)) + note
+        if made.get("description_cut"):
+            out += (" | description cut to %d chars (the index is the whole prompt; put "
+                    "the point in the first sentence)." % _MEMORY_DESCRIPTION_MAX)
         # TWO fields the read path already used, taught WITHOUT schema rent - the always-on
         # block sits under its measured ceiling (test_envelope; the macOS runner measures
         # ~17 tokens higher than this box, so the margin is not one to spend): once per
@@ -10104,16 +10242,23 @@ def tool_memory(args, ctx):
         if body is not None and len(str(body)) > cap:
             return ("ERROR: that body is %d chars and the per-concept limit is %d."
                     % (len(str(body)), cap))
-        out = memory_update_concept(
-            c["id"], body=None if body is None else scrub(str(body)),
-            title=" ".join(scrub(str(args.get("title") or "")).split()) or None,
-            description=(" ".join(scrub(str(args.get("description") or "")).split())
-                         if args.get("description") is not None else None),
-            tags=args.get("tags"), stale_after=args.get("stale_after"), actor=actor)
+        try:
+            out = memory_update_concept(
+                c["id"], body=None if body is None else scrub(str(body)),
+                title=" ".join(scrub(str(args.get("title") or "")).split()) or None,
+                description=(" ".join(scrub(str(args.get("description") or "")).split())
+                             if args.get("description") is not None else None),
+                tags=args.get("tags"), stale_after=args.get("stale_after"), actor=actor)
+        except ValueError as e:
+            return "ERROR: %s" % e
         memory_index_update()
         _memory_log_append("Update", "[%s](%s.md)" % (out["fm"].get("title"),
                                                       out["id"]))
-        return _memory_report("updated", out)
+        rep = _memory_report("updated", out)
+        if out.get("description_cut"):
+            rep += (" | description cut to %d chars (the index is the whole prompt; put "
+                    "the point in the first sentence)." % _MEMORY_DESCRIPTION_MAX)
+        return rep
     if action in ("deprecate", "forget"):
         c = _memory_find(args.get("id"))
         if c is None:

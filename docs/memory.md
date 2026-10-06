@@ -29,7 +29,8 @@ frontmatter and makes progressive disclosure the shape of the corpus:
 ```
 memory/
   index.md      # frontmatter: okf_version "0.2" only; the progressive-disclosure list
-  log.md        # newest-first update history, ISO dates
+  log.md        # newest-first update history, ISO dates; rotates to log.md.1 at 64 KB
+  log.md.1      # the one predecessor (absent until log.md reaches the bound)
   <slug>.md     # one concept per fact
   .lock         # the cross-process write lock (never a concept)
 ```
@@ -43,13 +44,14 @@ build writes:
 
 ```markdown
 ---
-type: Fact                      # Fact | Host | Runbook | Decision (unknown types are fine)
+type: Fact                      # Fact | Host | Runbook | Decision (this build writes these)
 title: Disk: root is 65% full
-description: Root volume: 287 of 460 GiB used.      # one line, derived from the body if absent
+description: Root volume: 287 of 460 GiB used.      # <=160 chars, derived from the body if absent
 tags: [host, disk]
 status: stable                  # absent is stable; deprecated is kept, flagged
 stale_after: 2026-11-01T00:00:00Z
-generated: { by: tinycmdr/<model>, at: 2026-10-04T09:00:00Z }
+generated: { by: tinycmdr/<model>, at: 2026-10-04T09:00:00Z }   # when the content was derived
+touched: { by: tinycmdr/<model>, at: 2026-10-05T11:00:00Z }     # when it was last changed
 verified: { by: human:operator, at: 2026-10-04T09:05:00Z }
 sources:
   - { resource: "df -h", title: "df output" }
@@ -60,9 +62,15 @@ sources:
 Root is at 65%.
 ```
 
+`generated` is the DERIVATION date and never moves on an edit; a mutation records itself
+in `touched`, so a `generated` line means the content was produced then. A caller-supplied
+`description` is bounded at 160 chars, the same bound the body-derived one uses.
+
 Actor convention (spec §7): agents `tinycmdr/<version-or-model>`, people
 `human:operator`. Trust tiers are derived from `verified` (spec §5.3): none =
-unverified, non-human = machine-confirmed, a `human:` entry = human-reviewed.
+unverified, non-human = machine-confirmed, a `human:` entry = human-reviewed. A bare
+string entry is the shorthand for `{by: <string>}`, so `verified:\n- human:operator`
+reads as human-reviewed.
 
 **The YAML subset**: scalars, inline lists (`[a, b]`), inline maps (`{k: v}`) and block
 lists of maps - exactly what the spec's own examples use. It is parsed with the stdlib
@@ -76,7 +84,7 @@ and tolerated, per spec §4.1/§11; a concept with no frontmatter at all is stil
 | action | effect |
 | :--- | :--- |
 | `add` | one new concept; a duplicate title is refused and names the id to `update` |
-| `update` | rewrite the body/fields in place, bumping `generated.at` |
+| `update` | rewrite the body/fields in place; records a `touched` stamp, and refuses a title another concept holds (naming it) |
 | `deprecate` | `status: deprecated` - kept for history and links, flagged in the index |
 | `forget` | delete the file; the log records the removal, not the content |
 | `read` | the concept verbatim, with its tier/staleness header |
@@ -85,9 +93,14 @@ and tolerated, per spec §4.1/§11; a concept with no frontmatter at all is stil
 
 Rules that are not negotiable in the handler: a body over `memory_concept_max_chars` is
 **refused, never truncated** (a half-fact rides every future prompt - the notes.md
-lesson); the bundle refuses new concepts past `memory_max_concepts`; every mutation runs
-under one lock (`serialized_on(MEMORY_LOCK_FILE)`) so the concept, `index.md` and
-`log.md` move together; text passes the secret scrubber first.
+lesson); the bundle refuses new concepts past `memory_max_concepts`; `type` must be one
+of the bundle's known types and `stale_after` an ISO instant, both refused by name at
+write time; a caller `description` is bounded at 160 chars and a `tags` value is one
+string or a list of strings; every mutation runs under one lock
+(`serialized_on(MEMORY_LOCK_FILE)`) so the concept, `index.md` and `log.md` move
+together; and text passes the secret scrubber first. `log.md` rotates to the single
+`log.md.1` predecessor at 64 KB, so the history is bounded rather than append-only for
+ever.
 
 ## What the prompt carries
 
