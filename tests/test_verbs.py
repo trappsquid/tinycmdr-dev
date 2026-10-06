@@ -12,6 +12,7 @@ so a script can act on it.
 import contextlib
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -971,9 +972,22 @@ def main():
               (rc, err[:160], written.get("zz", {}).get("a")))
         # A-2026-10-05-69: the verb line is logged BEFORE dispatch, so a refused secret
         # write still put its VALUE in tinycmdr.log in cleartext.
-        rc, out, err = call(fb, ["config", "set", "mattermost.token", "SENTINEL-a69"])
-        _log = workdir / "tinycmdr.log"
-        logged = _log.read_text(encoding="utf-8", errors="replace") if _log.exists() else ""
+        # Grade what the verb LOGGED, not a file: run_all points every suite at one log
+        # path, and its size rotation can move the fresh line into the predecessor while
+        # the check reads the new empty file (green under --select, red under the gate).
+        _lines = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                _lines.append(record.getMessage())
+
+        _cap = _Capture()
+        logging.getLogger().addHandler(_cap)
+        try:
+            rc, out, err = call(fb, ["config", "set", "mattermost.token", "SENTINEL-a69"])
+        finally:
+            logging.getLogger().removeHandler(_cap)
+        logged = "\n".join(str(x) for x in _lines)
         check("a secret value never reaches the verb log",
               rc == 2 and "SENTINEL-a69" not in logged and "<redacted>" in logged,
               (rc, err[:80], [l for l in logged.splitlines() if "mattermost.token" in l][:1]))
