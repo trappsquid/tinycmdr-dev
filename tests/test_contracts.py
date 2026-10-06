@@ -170,7 +170,23 @@ def main():
           "(each handler chain separately)", not bad, order[:4])
     shim_prefixes = re.findall(r"url\.indexOf\('([^']+)'\) === 0", HARNESS)
     check("the page harness's branches are ordered so none shadows a later one",
-          not shadows(shim_prefixes), shadows(shim_prefixes)[:4])
+          not shadows(shim_prefixes), shadows(shim_prefixes))
+
+    # ---- a starter tool ships in BOTH lists, or it ships nowhere -------------
+    # `.gitignore` decides what git carries, SHIP/APP_FILES in build-package.py decide
+    # what the archive contains and what the installers copy - the 1.0.68-1.0.70 assets
+    # shipped in one hand list and not another, and a starter is the same shape of
+    # promise. Both sides are derived, so a new starter cannot be forgotten in one of
+    # them (tools/computer_use.py joined all three on 2026-10-05).
+    _gi = (BASE / ".gitignore").read_text(encoding="utf-8")
+    _tracked_tools = {"tools/%s" % t for t in re.findall(r"^!tools/(\S+)$", _gi, re.M)}
+    _bp = (BASE / "maintenance" / "build-package.py").read_text(encoding="utf-8")
+    _packed_tools = set(re.findall(r'"(tools/[^"/]+)"', _bp))
+    check("every git-tracked tools/ file is in build-package's shipped lists",
+          _tracked_tools and _tracked_tools <= _packed_tools,
+          sorted(_tracked_tools - _packed_tools))
+    check("...and build-package ships no tools/ file git does not track",
+          _packed_tools <= _tracked_tools, sorted(_packed_tools - _tracked_tools))
 
     print("\n%s" % ("all contract checks passed" if not FAILS
                     else "FAILED: %d" % len(FAILS)))
