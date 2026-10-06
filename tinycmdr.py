@@ -12316,9 +12316,7 @@ CORE_TOOLS = {
             {"query": {"type": "string",
                        "description": "What you want to do or the tool name"},
              "category": {"type": "string",
-                          "description": "A shelf from the tool index, e.g. "
-                                         "\"files & edit\": returns that shelf's "
-                                         "descriptions and arguments"},
+                          "description": "A shelf from the tool index"},
              "all": {"type": "boolean",
                      "description": "Reveal every remaining tool"}},
             []),
