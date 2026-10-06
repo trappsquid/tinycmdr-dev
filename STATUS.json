@@ -1653,7 +1653,8 @@
       "title": "untrack theme.toml and soul.md, and wire check-hygiene.py",
       "state": "shipped",
       "anchor": {
-        "commit": "d52fdd0"
+        "commit": "d52fdd0",
+        "expect": "tagged"
       },
       "detail": "Landed 2026-10-06 (d52fdd0). theme.toml and soul.md are host state and are untracked: .gitignore carries both, the package ships theme.default.toml / soul.example.md (a missing host copy is seeded at first start), the SHIP manifest no longer names a host file, and maintenance/check-hygiene.py fails when any of 21 host-state names is tracked (it runs in pre-push.sh and as tests/test_repo_hygiene.py in the gate; red until the untracking, green after). The human step for git-pull hosts - copy theme.toml and soul.md aside BEFORE the pull, then compare and restore - is a prominent blockquote at the top of the Unreleased CHANGELOG entry, deliberately not scripted around. Follow-up landed e4c68a2: with the files untracked, a clone lacks both and the import-time materialization wrote them into the checkout (test_checkin was named by the runner's leak report); the gate's children now run with TINYCMDR_NO_MATERIALIZE=1, the materialization suite clears the guard because that is the behaviour it grades, and a new check pins it.",
       "gate": "pending - the materialization release must be deployed first"
@@ -1825,7 +1826,8 @@
       "title": "the never tier reads tokens, not one spelling",
       "state": "shipped",
       "anchor": {
-        "commit": "963beae"
+        "commit": "963beae",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-75 and -76, an earlier review run 10 (fixed 2026-10-06, 963beae). The never tier was anchored to one surface shape per command: `format /FS:NTFS Q:`, `powershell -enc \"...\"` and `dd of=\"/dev/sdz9\"` executed with no gate (a switch between verb and target missed an order-anchored regex; the quote erasure removed the quoted operand), and the mkfs read-only exemption was per-line, so `mkfs.ext4 /dev/sdb # cat` passed. The built-in tier is decided on the tokens of each command segment now - quotes consumed, separators split, redirects and comments read - with the read-only exemption per command. tests/test_guard_battery.py: 16 blocked spellings, 5 allowed mentions, red on the pre-fix build."
     },
@@ -1834,7 +1836,8 @@
       "title": "the confirm tier reads the aliases",
       "state": "shipped",
       "anchor": {
-        "commit": "963beae"
+        "commit": "963beae",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-77, run 10 (fixed 2026-10-06, 963beae). The recursive-delete pattern named `remove-item`, so `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question. The command word is read off tokens, so every alias and flag order lands on the same rule. tests/test_guard_battery.py pins five spellings."
     },
@@ -1843,7 +1846,8 @@
       "title": "the gate helpers coerce instead of raising",
       "state": "shipped",
       "anchor": {
-        "commit": "963beae"
+        "commit": "963beae",
+        "expect": "tagged"
       },
       "detail": "A-2026-10-05-79, run 10 (fixed 2026-10-06, 963beae). is_blocked(None) coerced while est_tokens(None), cap_output(name, None), _one_json_object(None), _host_is_local(None) and _confirm_hit(None) raised TypeError/AttributeError. Reachability was never proven; each helper answers a safe default for a non-string now, and tests/test_guard_battery.py pins all six."
     },
@@ -1861,7 +1865,8 @@
       "title": "the Responses API is a wire, not a renamed field",
       "state": "shipped",
       "anchor": {
-        "commit": "9387bf0"
+        "commit": "9387bf0",
+        "expect": "tagged"
       },
       "detail": "2026-10-06. `base_url` pointing at /responses used to send a chat-shaped body; the wire is real now - input items with typed parts, instructions, flat tool schemas, reasoning summaries read into reasoning_content, usage.input_tokens/output_tokens mapped onto the accounting, and a stream adapter feeding the existing SSE reader. An OpenAI-style 400 naming BOTH tools and reasoning_effort escalates once to the /responses sibling and the fact is remembered per endpoint (wire=responses), with the reasoning-field drop kept as the fallback when no sibling exists. tests/test_responses_wire.py: 40 checks, all red pre-fix; a stub-server smoke drove the escalation end to end."
     }
