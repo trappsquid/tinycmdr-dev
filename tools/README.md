@@ -2,12 +2,15 @@
 
 Anything in this folder is a tool for the agent: a file dropped in here is
 read when the bot next starts, and a tool written with `create_tool` is live
-at once. No config edit is needed either way. Three starter tools ship with
+at once. No config edit is needed either way. Four starter tools ship with
 tinycmdr and are also the examples for each shape:
 
     patch.py        one targeted edit per call with fuzzy anchors (the tool to
                     reach for when edit_file's exact match fails)
     process.py      background a long job, then status/wait/output/kill it
+    toolsmith.py    make, import or index a drop-in tool: scaffold a native tool,
+                    wrap an existing script as a manifest, list what tools/ has
+                    and check one file through the harness's own loader
     computer_use.py see and drive this machine's screen: capture the screen or a
                     window (screenshots reach the model when agent.vision is on),
                     then click/type/scroll by element number or point - macOS,
