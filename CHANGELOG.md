@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Update output:** the notes that narrated updater policy instead of the update are gone (the `.git`-checkout notice, the dev-kit keep line naming a `where-roles.json` a clone may not have); the host-default note speaks only when this release actually moved the shipped default, and the kept-files report is one plain line. The update prints what it wrote and what to do next. (tests/test_update_notes.py)
 
+### Removed
+- **`CODE_OF_CONDUCT.md`:** the Contributor Covenant 2.1 boilerplate promised enforcement by "community leaders" for a project with one maintainer and no community. The GitHub profile is the contact for everything; `CONTRIBUTING.md` and `SECURITY.md` carry the real rules.
+
 ## [1.0.81] - 2026-10-05
 
 ### Added
