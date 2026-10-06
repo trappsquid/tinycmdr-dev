@@ -8,6 +8,8 @@ message instead of a wall of notifications, the answer as its own message, the g
 that ignores strangers, and the two ways a question gets answered (a button and a
 typed line), both landing in the same slot the reporter reads.
 """
+import atexit
+import tempfile
 import importlib.util
 import os
 import sys
@@ -22,6 +24,17 @@ spec = importlib.util.spec_from_file_location("tinycmdr_tg_under_test", SRC)
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_tg_under_test"] = fb
 spec.loader.exec_module(fb)
+
+# The lane persists state beside the module (GLOBAL_STATE_FILE, the lane record and the
+# event log), and this suite imports the TREE's build - so without this every run wrote
+# state.json and sessions/*.events.jsonl into the checkout (the gate's leak report named
+# them). hermetic redirects the module's own path constants into a temp dir.
+_TMP = Path(tempfile.mkdtemp(prefix="fbtg-"))
+atexit.register(lambda: shutil.rmtree(_TMP, ignore_errors=True))
+sys.path.insert(0, str(BASE / "tests"))
+import hermetic                                                          # noqa: E402
+
+hermetic.redirect_repo_files(fb, _TMP)
 
 PASSES = []
 FAILS = []
