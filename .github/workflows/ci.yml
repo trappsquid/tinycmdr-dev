@@ -71,6 +71,10 @@ jobs:
   # adding them is what turns "reasoned" into "executed". A suite that cannot run here exits 77,
   # which the gate counts as red, so this list grows one addition at a time and never shrinks by
   # silencing a suite.
+  #
+  # 2026-10-05: tests/test_computer_use.py joined. Its self-test branches on IS_WIN for the
+  # blocklist tables, and the suite is hermetic everywhere (it stages a byte-copy and never
+  # touches a screen, which this job has none of).
   windows:
     name: windows / pure-python suites
     runs-on: windows-latest
@@ -102,6 +106,7 @@ jobs:
           --select tests/test_checkin.py
           --select tests/test_endpoint_gate.py
           --select tests/test_installer_windows.py
+          --select tests/test_computer_use.py
 
   # The one loop no suite closes: build the package, install FROM the artifact it produces,
   # and run it. tests/test_installer_*.py install from a tree the suite assembles itself, so

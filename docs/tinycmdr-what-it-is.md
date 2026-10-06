@@ -31,13 +31,13 @@ interfaces          Mattermost bot (DMs + @mentions), Telegram DM, `--once "task
                     inline cards, `--app` full-screen); a host with no chat
                     token is CLI-only
 core tools          21, of which 11 are always-on; the rest answer by name (section 2)
-custom tools        3 example tools ship in ./tools/ (native .py, register-style .py,
+custom tools        4 example tools ship in ./tools/ (native .py, register-style .py,
                     <name>.tool.json); a working box's own drop-ins load from the same
                     folder, and the agent writes its own with create_tool
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               91 suites / 31,240 lines / 3,694 checks that need no model, plus a graded
+tests               92 suites / 31,377 lines / 3,710 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 4, search 3, agent 115
