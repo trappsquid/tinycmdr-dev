@@ -711,6 +711,11 @@ for _shelf, _members in sorted(_shelves.items()):
 check("a shorter word for a shelf resolves too (the prompt's own labels are guessable)",
       "files & edit" in fb.tool_find_tools({"category": "files"},
                                            {"session_key": "cat-short"}))
+# The handler and the prompt both teach `category`; the schema must declare it too, or a
+# schema-conforming caller cannot send the call the prompt tells it to make.
+check("the find_tools schema declares `category`, the call the prompt teaches",
+      "category" in str(fb.CORE_TOOLS["find_tools"]["schema"]),
+      fb.CORE_TOOLS["find_tools"]["schema"])
 check("a category answer reveals nothing (a reveal is schema rent)",
       fb.visible_tool_names("cat-short") == fb.visible_tool_names("cat-never-used"))
 _out = fb.tool_find_tools({"category": "zzz-not-a-shelf"}, {"session_key": "cat-miss"})
