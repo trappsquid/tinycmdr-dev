@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`prompt_cache_key`:** remote calls carry a session-stable sticky-routing hint (`llm.prompt_cache_key: auto|off|<literal>`); a host that rejects it with a named 400 is remembered and never asked again. (tests/test_endpoint_learn.py)
 - **Reasoning field aliases:** `reasoning_details[]` (OpenRouter's thought-signature shape) is read like the other aliases, and cache hits are counted from `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`. (tests/test_endpoint_learn.py)
 
+### Added
+- **The page's version stamp links to release notes:** the header's `vX.Y.Z` opens that build's GitHub release (target `_blank`), derived from `update_url` so a fork or mirror links its own; the lane-down tooltip still wins while a lane is down. Also: `send_file`'s description names the page as a delivery transport, so a page run offers a download card instead of naming a path. (tests/test_webui.py, tests/test_send_file.py)
+- **A tools+reasoning 400 recovers:** when an endpoint answers that tools and a reasoning effort cannot ride together, the effort is dropped for that endpoint and remembered (`_reasoning_400_verdict` -> "none"), and `llm.reasoning_flags` merges a host's documented paired preservation flags where the echo is wanted. (tests/test_endpoint_learn.py)
+
+### Fixed
+- **The composer's resize grip:** the browser's native grip rode the text column's right edge - mid-window, not a corner - and fought the page's content-driven growth; it is off (`resize: none`).
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed
