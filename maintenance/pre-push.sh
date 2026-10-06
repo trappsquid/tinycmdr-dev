@@ -4,9 +4,9 @@
 # WHY THIS EXISTS. On 2026-09-29 two pushes went out with a stale measured block: two edits to
 # tests/test_status.py had added lines, the doc's committed figure still said 22,330 where the tree
 # read 22,349, and main was RED for two commits before anyone looked. Both checks below decide it in
-well under a second. A push must not be able to leave main red for something a local command can
-settle - and the CI gate found that one only because it recomputes the numbers on another
-machine, which is a slow way to learn something a 0.3s check knew.
+# well under a second. A push must not be able to leave main red for something a local command can
+# settle - and the CI gate found that one only because it recomputes the numbers on another
+# machine, which is a slow way to learn something a 0.3s check knew.
 # The heavy gate (tests/run_all.py, about two minutes) is deliberately NOT here: it belongs in CI
 # and in the release checklist. This is the cheap set - the things that go stale because a file
 # changed and nothing regenerated what depends on it.
