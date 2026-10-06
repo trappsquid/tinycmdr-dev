@@ -9542,11 +9542,16 @@ def tool_memory(args, ctx):
         query = " ".join(str(args.get("query") or "").split()).lower()
         if not query:
             return "ERROR: search needs `query`."
+        words = query.split()
         hits = []
         for c in memory_scan():
             hay = " ".join([c["title"], c["description"], c["body"],
                             " ".join(str(t) for t in (c["fm"].get("tags") or []))])
-            if query in hay.lower():
+            hay = hay.lower()
+            # Every word, anywhere: prose queries never arrive as one contiguous
+            # string, and a verbatim match made `search` the one recall path that
+            # punished natural language. A single word behaves as before.
+            if all(w in hay for w in words):
                 hits.append(c)
         if not hits:
             return ("no concept matches %r. Index (memory action=list):\n%s"

@@ -389,6 +389,21 @@ def test_the_volatile_block_is_scrubbed():
         fb.NOTES_FILE.unlink(missing_ok=True)
 
 
+def test_search_reads_words_not_a_contiguous_string():
+    """A prose query matches when every word is somewhere in the concept."""
+    _fresh()
+    fb.tool_memory({"action": "add",
+                    "title": "Audit share: repo path and rotation",
+                    "body": "The report share holds the audit files and rotates them "
+                            "on a schedule."}, {})
+    out = fb.tool_memory({"action": "search", "query": "audit share rotation"}, {})
+    check("a prose query matches with the words anywhere in the concept",
+          "1 match" in out and "Audit share" in out, out[:160])
+    out = fb.tool_memory({"action": "search", "query": "audit conceptmissing"}, {})
+    check("...and a query with a word the concept lacks still misses",
+          "no concept matches" in out, out[:120])
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
