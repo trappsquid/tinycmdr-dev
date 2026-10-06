@@ -980,6 +980,13 @@ color:var(--fg);padding:.45rem .55rem;font:inherit}
   font-size: 0.95rem;
 }
 
+.command-frame textarea {
+  /* The composer grows with its content (capped at 240px in the page's JS). The browser's
+     native resize grip rode the right edge of the text column - mid-window, not a corner -
+     and fought that growth on every send, so it is off. */
+  resize: none;
+}
+
 .command-frame input::placeholder,
 .command-frame textarea::placeholder {
   color: rgba(167, 155, 136, 0.64);
