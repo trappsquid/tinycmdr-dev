@@ -44,6 +44,14 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / "tinycmdr.py"
 
+# A suite never opens a browser tab - and that has to include a HAND-RUN suite. run_all.py
+# passes TINYCMDR_NO_BROWSER=1 to its children, but running this file directly (which its
+# own header invites) left the guard unset, and the in-process server below auto-opened
+# the operator's browser on every start (measured 2026-10-05, twice). The suite carries
+# the guard itself now, and a check below fails any suite that starts a web surface
+# without it.
+os.environ.setdefault("TINYCMDR_NO_BROWSER", "1")
+
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-webui"
 if STAGE.exists():
     shutil.rmtree(STAGE, ignore_errors=True)
@@ -635,6 +643,18 @@ def main():
         child = run_all.child_env(BASE / "tests" / "test_webui.py", BASE)
         check(child.get("TINYCMDR_NO_BROWSER") == "1",
               "run_all gives every suite the no-browser guard", child.get("TINYCMDR_NO_BROWSER"))
+        # ...and the guard must hold for a suite run BY HAND, not only under run_all: this
+        # file starts the in-process server and used to rely on the runner's env (measured
+        # 2026-10-05: `python tests/test_webui.py` auto-opened the operator's browser).
+        # Every suite that can start a web surface must carry the guard itself.
+        _leaky = []
+        for _p in sorted((BASE / "tests").glob("test_*.py")):
+            _text = _p.read_text(encoding="utf-8", errors="replace")
+            if re.search(r"run_webui\(|start_web_surface\(", _text) \
+                    and "TINYCMDR_NO_BROWSER" not in _text:
+                _leaky.append(_p.name)
+        check("every suite that can start the page carries the no-browser guard",
+              not _leaky, _leaky)
     dt = time.time() - t0
     out = buf.getvalue()
     check(again is None and "already serving" in out and dt < 1.0,

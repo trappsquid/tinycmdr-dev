@@ -30,6 +30,12 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / "tinycmdr.py"
+
+# A hand-run suite must not open the operator's browser: run_all passes
+# TINYCMDR_NO_BROWSER=1 to its children, a direct run did not (measured 2026-10-05 -
+# `python tests/test_page_upgrade.py` auto-opened the page through the in-process server
+# below). A check in tests/test_webui.py fails any suite that forgets this.
+os.environ.setdefault("TINYCMDR_NO_BROWSER", "1")
 FAILS = []
 TOK = "upgrade-tok-0123456789abcdef"
 
