@@ -86,6 +86,18 @@ def main():
               "graded below, commit anchors cannot be")
 
     bad_file, bad_commit, wrong_expect, unverified = [], [], [], 0
+    # A misspelled anchor key is worse than a missing one: measured 2026-10-06, ten items
+    # from one batch wrote `anchors` (plural), every per-item check below read
+    # `it.get("anchor") or {}`, skipped them, and the suite still went green - so an item
+    # claiming shipped carried no verified anchor at all. Both shapes fail here now.
+    unanchored = [it.get("id") for it in items
+                  if it.get("state") in ("shipped", "unreleased")
+                  and not isinstance(it.get("anchor"), dict)]
+    stray = sorted({k for it in items for k in it
+                    if isinstance(k, str) and k.startswith("anchor") and k != "anchor"})
+    check("every shipped/unreleased item carries an 'anchor' object", not unanchored,
+          unanchored[:8])
+    check("no item carries a misspelled anchor key", not stray, stray)
     for it in items:
         a = it.get("anchor") or {}
         if "file" in a:
