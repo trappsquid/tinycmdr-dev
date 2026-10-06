@@ -38,8 +38,9 @@ not authority.
   and edits when it works on itself. Parts would have to be assembled at package-build time, never
   install time - that re-architecture needs its own item, not a cleanup.
 - **Commit messages, `STATUS.json` details and comments state what changed and why, in plain
-  facts** - no quoted conversations, no process narration, no first-person plural. "Operator"
-  means whoever runs a box, never the maintainer; the maintainer's own decisions say "I".
+  facts** - no quoted conversations, no process narration, no third-person stand-ins for me.
+  "Operator" means whoever runs a box; when the record is about my own work or decisions it
+  says "I" (David). tests/test_wording.py grades the mechanical half in the gate.
 - **One way to do each thing.** If you reach for a new script, note or doc, check first whether
   `where.py`, `STATUS.json`, `run_all.py`, `measured-block.py` or `release.sh` already owns it.
 

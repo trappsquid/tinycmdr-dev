@@ -2,13 +2,13 @@
 
 Thanks for your interest. This project has a few conventions that are
 load-bearing — they exist because the project has paid for them. Reading this
-file before your first PR saves us both a review round.
+file before your first PR saves you and me a review round.
 
 ## Before you write code
 
 1. Read [`AGENTS.md`](AGENTS.md) and [`docs/development.md`](docs/development.md).
    They are the contract; this file is the summary.
-2. For anything beyond a one-line fix, open an issue first so we can agree on
+2. For anything beyond a one-line fix, open an issue first so I can agree on
    direction. Drive-by feature PRs without a prior discussion are likely to be
    closed, kindly.
 
@@ -46,7 +46,7 @@ bash maintenance/pre-push.sh         # leak gate, tree-clean, regenerated number
 
 - Numbers inside `measured:` blocks in `docs/tinycmdr-what-it-is.md` — they are
   rendered from the tree by `maintenance/measured-block.py`.
-- `STATUS.json` entries — they are re-anchored by the maintainer tooling at
+- `STATUS.json` entries — they are re-anchored by the maintenance tooling at
   release time.
 
 ## License

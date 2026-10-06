@@ -1,7 +1,7 @@
 # Security Policy
 
 tinycmdr is an agent harness: it holds API tokens in `.env`, executes shell
-commands, edits files, and serves a token-gated web page. We take reports about
+commands, edits files, and serves a token-gated web page. I take reports about
 these surfaces seriously.
 
 ## Reporting a Vulnerability
@@ -10,13 +10,13 @@ these surfaces seriously.
 
 **GitHub Private Vulnerability Reporting** is the sole channel: the repository's
 *Security → Advisories → Report a vulnerability* button. If that button is not available to
-you, open a normal issue saying only "I have a security report" and the maintainer
+you, open a normal issue saying only "I have a security report" and I
 (`@trappsquid`) will open a private advisory to continue there - never post the details
 publicly.
 
 Include: the version or commit you tested, the affected component, a description
 of the impact, and reproduction steps or a proof of concept. You will receive an
-acknowledgement within a few days; we aim to confirm or reject within two weeks
+acknowledgement within a few days; I aim to confirm or reject within two weeks
 and will coordinate disclosure timing with you.
 
 ## Scope

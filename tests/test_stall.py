@@ -2324,7 +2324,7 @@ def test_the_guard_still_refuses_when_nothing_changed():
 
 
 def test_an_infrastructure_failure_files_a_red_done_line():
-    """The operator asked for red to mean something is actually wrong. An endpoint that
+    """Red means something is actually wrong. An endpoint that
     could not be reached is exactly that, however cleanly the run reports it, so the
     Done line must not come out white."""
     d = FakeDispatcher()

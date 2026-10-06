@@ -706,7 +706,7 @@ check("find_tools all=true on an already-visible set says so, not an empty diff"
       fb.tool_find_tools({"all": True}, {"session_key": fresh})
       == "All tools are already in your list for this session.")
 # ---- a CAPABILITY phrase reveals the tool that serves it --------------------------
-# Measured 2026-09-25 on the macOS box: the operator asked for a file to be ATTACHED and the
+# Measured 2026-09-25 on the macOS box: a request to ATTACH a file, and the
 # run spent 22 calls and 194.8K prompt tokens echoing send_file's name in the shell, then
 # failed - the name-driven reveal above never fires for "attach it, do not just paste".
 _saved_core = fb.CONFIG["agent"].get("core_tools")
