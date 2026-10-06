@@ -1700,6 +1700,27 @@
       },
       "detail": "The user-PATH write never broadcast WM_SETTINGCHANGE, so a window opened right after a fresh install kept Explorer's stale environment and answered \"'tinycmdr' is not recognized\" until logoff; both PATH writes (install and the uninstall revert) broadcast now, and the installer also refreshes its own session so the verb works in the window that ran it. The hosted one-liner runs inside the caller's terminal, so it sets FB_NOPAUSE=1 before handing to INSTALL-WINDOWS.cmd: the press-any-key barrier is for the double-click window, which really does close.",
       "gate": "done - 925f685; tests/test_verbs.py pins the broadcast after every Set-UserPathRaw call and the one-liner's FB_NOPAUSE ordering; static (PowerShell is not executed on the dev box) - a fresh Windows install is the live verifier"
+    },
+    {
+      "id": "installer-question-flow-next",
+      "title": "the interactive installer's questions, reworked as one flow",
+      "state": "open",
+      "anchor": {
+        "file": "install/install-tinycmdr.ps1"
+      },
+      "detail": "Operator-directed (2026-10-06), for the release after 1.0.81: what the installer asks and HOW it asks it. Today's flow (Windows installer; the POSIX one mirrors it): keep-config? -> 'How should you talk to it?' (Mattermost/Telegram multi-pick) -> server, token, allowed user -> endpoint kind, url, key -> model id -> more endpoints + failover consent -> page host/port/token -> 'May the bot's web search send queries off this machine?' -> autostart -> summary. The rework: one decision per screen with a one-line WHY, numbered options with a visible default, no bare y/N where a choice is meant, the summary naming every decision back, and the same question set for all three doors (install.ps1/.sh and `tinycmdr setup`) so no door drifts. The search question becomes provider-first (see search-provider-declared-next). The answer sequences in tests/test_setup.py, tests/test_model_setup.py and tests/test_installer_*.py feed fixed answers and must be updated in the same commit.",
+      "gate": "pending - next release; no code change yet"
+    },
+    {
+      "id": "search-provider-declared-next",
+      "title": "the installers declare the web-search provider, and egress follows from it",
+      "state": "open",
+      "anchor": {
+        "file": "config.example.json"
+      },
+      "detail": "Operator-directed (2026-10-06): the installers never ask WHICH search provider a box uses - they only ask 'May the bot's web search send queries off this machine?' (install-tinycmdr.ps1 ~1118, .sh ~998, `setup` ~29916) while search.providers keeps whatever config.example.json shipped (anysearch, tavily, ...). A searxng entry pointing at a box on the LAN is the only shape whose traffic stays on this network, and nothing at install time says that or lets the operator pick it. Shape: ask 'How should web_search find pages?' (1: a search box on this network - searxng URL; 2: a cloud provider - pick one and give its key; 3: none), write the chosen search.providers list, and DERIVE allow_cloud_egress from the choice (searxng-only => false; cloud => true only after the existing explicit warning) instead of asking egress as a separate abstract question. Print the chosen provider in the install summary and in doctor; .env TINYCMDR_SEARCH_PROVIDERS stays the unattended door.",
+      "gate": "pending - next release; no code change yet"
     }
+
   ]
 }
