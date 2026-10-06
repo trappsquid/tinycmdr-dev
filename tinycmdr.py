@@ -8337,7 +8337,19 @@ def tool_search_files(args, ctx):
     if not root.exists():
         return f"ERROR: {root} does not exist"
     pat = args.get("pattern") or "*"
-    max_results = int(args.get("max_results") or 50)
+    if args.get("max_results") is not None:
+        try:
+            max_results = int(args["max_results"])
+        except (TypeError, ValueError):
+            return ("ERROR: max_results must be a whole number (got %r); omit it for the "
+                    "default 50." % (args["max_results"],))
+        if max_results < 1:
+            # 0 fell through `or 50` and searched anyway - a caller asking for no results
+            # got a normal page (A-2026-10-05-73). Refuse it where the caller can read why.
+            return ("ERROR: max_results=%d asks for no matches; pass a positive number or "
+                    "omit it (default 50)." % max_results)
+    else:
+        max_results = 50
     per_file_cap = max(1, int(args.get("max_count_per_file")
                               or CONFIG["agent"].get("search_max_per_file", 5)))
     asked_content = args.get("content")

@@ -89,6 +89,14 @@ def main():
         empty = Path(tempfile.mkdtemp(prefix="fbtest-search-empty-"))
         (empty / "x.txt").write_text("nothing here\n", encoding="utf-8")
         check("a real miss is unchanged", search(empty, content="absent") == "No matches.")
+
+        # A-2026-10-05-73: max_results=0 fell through `or 50` and searched anyway.
+        out = search(work, content="hit", max_results=0)
+        check("max_results=0 is refused, not silently defaulted",
+              out.startswith("ERROR: max_results=0") and "positive number" in out, out[:120])
+        out = search(work, content="hit", max_results="lots")
+        check("...and a non-numeric cap is named, not crashed on",
+              out.startswith("ERROR: max_results must be a whole number"), out[:120])
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
