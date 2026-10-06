@@ -8681,6 +8681,13 @@ def tool_write_file(args, ctx):
     _gated = "  [HARNESS: this content matched agent.confirm_patterns and the operator " \
              "approved it]" if _confirm_hit(_content, "confirm_content_patterns") else ""
     try:
+        # Name the dirs a write invents: `no_such_dir/sub/p.txt` used to build the tree
+        # silently, so a typo'd path looked like a successful write (A-2026-10-05-74).
+        _made = []
+        _p = path.parent
+        while not _p.exists() and _p != _p.parent:
+            _made.append(_p)
+            _p = _p.parent
         path.parent.mkdir(parents=True, exist_ok=True)
         if args.get("append"):
             with path.open("a", encoding="utf-8", newline="") as f:
@@ -8713,7 +8720,10 @@ def tool_write_file(args, ctx):
         # Windows only: CON.txt is an ordinary file everywhere else, and a warning there
         # would be noise on every POSIX host.
         _resv = _win_reserved_name(path.name) if IS_WINDOWS else ""
-        return (f"OK: wrote {len(args['content'])} chars to {path}" + note + _gated
+        return (f"OK: wrote {len(args['content'])} chars to {path}"
+                + (f"  [HARNESS: created the missing parent dir(s): "
+                   f"{', '.join(str(x) for x in reversed(_made))}]" if _made else "")
+                + note + _gated
                 + ("" if not _resv else
                    (f"  [HARNESS: `{path.name}` begins with the Windows device name {_resv}: "
                     f"some Windows APIs read that as the device, not as this file. The file "

@@ -427,6 +427,14 @@ check("experiment: show with no id says id, not `#None`",
 out = fb.tool_search_sessions({"query": "  "}, {"session_key": "doors-miss"})
 check("search_sessions: an empty query says what to pass",
       out.startswith("ERROR") and "`query`" in out, out[:160])
+# A-2026-10-05-74: a typo'd path built a tree silently, so the write read as a success
+# with no sign that the directories did not exist before.
+_deep = _miss_dir / "made" / "sub" / "p.txt"
+out = fb.tool_write_file({"path": str(_deep), "content": "x\n", "no_backup": True},
+                         {"session_key": "doors-miss"})
+check("write_file names the parent dirs it creates",
+      "created the missing parent dir(s)" in out and "made" in out and "sub" in out
+      and _deep.exists(), out[:200])
 out = fb.tool_plan({"action": "doing"}, {"session_key": "doors-miss-plan"})
 check("plan: a step verb with no id says id, not `id None`",
       out.startswith("ERROR") and "`id`" in out and "None" not in out, out[:160])
