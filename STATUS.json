@@ -1923,6 +1923,15 @@
         "commit": "5e304e5"
       },
       "detail": "A-2026-10-05-124 .. -130 and -132 .. -134, run 11 (fixed 2026-10-06, 5e304e5). tools/process.py: `output` reads through read_job_log() (handle closed, __EXIT__ marker stripped), `start` validates command, an unknown action names the vocabulary, wait_for is validated up front, `kill` says exactly what it confirmed (the wrapper gone), and id allocation + table saves run under one file lock (6 concurrent starts in 6 processes now get 6 distinct ids). tools/patch.py: every existing line keeps its own newline (splice-only rewrite; inserted lines take the dominant one), and a whitespace-only or blank-only anchor is refused. tests/test_job_control.py + tests/test_patch_bytes.py: 22 checks red pre-fix."
+    },
+    {
+      "id": "prompt-surface-hardening-1-0-84",
+      "title": "the request builder survives a typo, and the tools do what they say",
+      "state": "shipped",
+      "anchor": {
+        "commit": "e2051ad"
+      },
+      "detail": "A-2026-10-05-99 .. -102, -104 .. -106, -135, -136, an earlier review run 11 (fixed 2026-10-06, e2051ad). reveal_ttl_secs is guarded like mcp_timeout (a typo no longer takes the request builder down; a real 0 means never decay); reveal_tools reads a bare string as one name and refuses other non-lists by name; _tool_category coerces like _tool_blurb; the three pairing repairers skip a non-dict entry without spinning; truncate_middle refuses or cuts honestly at limit 0/1; _spill_signal counts its [HARNESS: ...] wrapper against the budget; the stripper scans bracket depth so a nested note does not eat real output; find_tools honours name/topic/action (read name=X answers that tool's blurb and schema, revealing it); create_tool validates the action vocabulary before the arguments. 31 checks red pre-fix."
     }
   ]
 }
