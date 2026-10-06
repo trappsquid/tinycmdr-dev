@@ -100,6 +100,21 @@ def test_send_message_returns_a_task():
         listed, _ = OFF.a2a_handle("ListTasks", {})
         check("ListTasks counts it", listed["totalSize"] >= 1
               and listed["nextPageToken"] == "", listed)
+        # A task ring bigger than one page must hand out a real continuation token: an
+        # empty one while tasks remain tells a spec-following client the page is last.
+        OFF.a2a_handle("SendMessage",
+                       {"message": {"messageId": "m-page2", "role": "ROLE_USER",
+                                    "parts": [{"text": "second"}]}})
+        _all, _ = OFF.a2a_handle("ListTasks", {})
+        _p1, _ = OFF.a2a_handle("ListTasks", {"pageSize": 1})
+        check("a non-final page carries a continuation token",
+              _all["totalSize"] >= 2 and _p1["pageSize"] == 1
+              and _p1["nextPageToken"] == "1", (_all["totalSize"], _p1))
+        _p2, _ = OFF.a2a_handle("ListTasks", {"pageSize": 100,
+                                              "pageToken": _p1["nextPageToken"]})
+        check("...and the following page carries the rest and ends cleanly",
+              len(_p2["tasks"]) == _all["totalSize"] - 1
+              and _p2["nextPageToken"] == "", _p2)
         OFF._A2A_RUN_HOOK = lambda text, ctx: ("boom", True)
         failed, _ = OFF.a2a_handle("SendMessage",
                                    {"message": {"messageId": "m2", "role": "ROLE_USER",

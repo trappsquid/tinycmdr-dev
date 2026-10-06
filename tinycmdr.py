@@ -9963,10 +9963,19 @@ def a2a_handle(method, params, version=None):
         return task, None
     if method == "ListTasks":
         size = max(1, min(100, int(params.get("pageSize") or 50)))
+        try:
+            start = max(0, int(params.get("pageToken") or 0))
+        except (TypeError, ValueError):
+            start = 0
         with _A2A_LOCK:
-            tasks = [_A2A_TASKS[t] for t in reversed(_A2A_TASKS_ORDER)][:size]
-            total = len(_A2A_TASKS_ORDER)
-        return {"tasks": tasks, "nextPageToken": "", "pageSize": len(tasks),
+            ordered = [_A2A_TASKS[t] for t in reversed(_A2A_TASKS_ORDER)]
+            total = len(ordered)
+            tasks = ordered[start:start + size]
+        # A real continuation token: an empty one while tasks remain tells a
+        # spec-following client the page is the last, and it silently never sees
+        # the rest.
+        nxt = str(start + len(tasks)) if start + len(tasks) < total else ""
+        return {"tasks": tasks, "nextPageToken": nxt, "pageSize": len(tasks),
                 "totalSize": total}, None
     if method == "CancelTask":
         return None, {"code": -32002,
