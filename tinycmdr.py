@@ -14489,7 +14489,10 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
         parts.append(mint_line)
     if not parts:
         return ""
-    body = "\n".join(parts)
+    # scrub at the single exit: notes, the memory index, the spill block and every
+    # other part of the trailing block come off disk, and a secret that landed there
+    # must not ride the prompt while tool results and the static half are masked.
+    body = scrub("\n".join(parts))
     if not state_marker:
         return body
     return _STATE_MARKER + body

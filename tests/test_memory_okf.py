@@ -374,6 +374,21 @@ def test_nothing_rides_as_permanently_true():
           "human-reviewed" in index and "checked.md" in index, index)
 
 
+def test_the_volatile_block_is_scrubbed():
+    """A secret on disk (notes, the bundle) must not ride the prompt in the clear."""
+    _fresh()
+    secret = "hunter2-volatile-secret"
+    fb.NOTES_FILE.write_text("context: " + secret, encoding="utf-8")
+    fb._SECRETS.add(secret)
+    try:
+        block = fb.volatile_context(session_key="scrub-probe")
+        check("a secret in notes never rides the prompt block in the clear",
+              secret not in block and "«redacted»" in block, block[:200])
+    finally:
+        fb._SECRETS.discard(secret)
+        fb.NOTES_FILE.unlink(missing_ok=True)
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:
