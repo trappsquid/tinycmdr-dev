@@ -10598,6 +10598,15 @@ MCP_LEGACY_VERSION = "2025-06-18"
 _MCP_PROCS = {}
 _MCP_LOCK = threading.Lock()
 
+# Every buffer below is bounded AT BIRTH: a server that writes stderr for ever, floods
+# replies, or a mistyped timeout must not grow this process or stall the turn.
+_MCP_STDERR_LINES = 20       # the ring of stderr lines kept per server
+_MCP_STDERR_BYTES = 4096     # ...and its byte ceiling, so one huge line cannot fill it
+_MCP_TAIL_CHARS = 600        # how much of that ring rides a failure message
+_MCP_PARKED_MAX = 8          # late/unknown replies parked per server, newest kept
+_MCP_FAIL_WINDOW = 60.0      # seconds a failed handshake is remembered on the live entry
+_MCP_POLL_SLICE = 0.1        # how often a wait checks the server is still alive
+
 
 def _mcp_meta():
     return {"io.modelcontextprotocol/protocolVersion": MCP_PROTOCOL_VERSION,
@@ -10607,15 +10616,111 @@ def _mcp_meta():
 
 
 def _mcp_servers():
-    return (CONFIG.get("agent") or {}).get("mcp_servers") or {}
+    """The configured map, or {} - never a raise. A wrong SHAPE is answered by
+    _mcp_config_error(), which the tool door reads first."""
+    raw = (CONFIG.get("agent") or {}).get("mcp_servers")
+    return raw if isinstance(raw, dict) else {}
+
+
+def _mcp_config_error():
+    """None when agent.mcp_servers is a map, else the ERROR naming the shape it must be.
+
+    A list or a string used to reach `.items()`/`.get()` and raise AttributeError out of
+    the tool door (measured 2026-10-05, A-2026-10-05-80); the door's own exception handler
+    turned that into a generic failure the model could not act on.
+    """
+    raw = (CONFIG.get("agent") or {}).get("mcp_servers")
+    if isinstance(raw, dict):
+        return None
+    got = "none" if raw is None else type(raw).__name__
+    return ("ERROR: agent.mcp_servers must be a map of name -> {command, args?} "
+            "(got %s). Configure it as {\"<name>\": {\"command\": \"npx\", "
+            "\"args\": [\"-y\", \"<package>\"]}}." % got)
+
+
+def _mcp_timeout():
+    """Seconds for one MCP request. agent.mcp_timeout non-numeric -> 60, said once.
+
+    `or 60` silently rewrote a real 0 to 60 (A-2026-10-05-82) and `float("60s")` raised a
+    ValueError out of every call (A-2026-10-05-81). 0 is kept as 0, which means the wait
+    loop's first deadline check fails at once and the answer is honestly "within 0s".
+    """
+    raw = (CONFIG.get("agent") or {}).get("mcp_timeout")
+    if raw is None:
+        return 60.0
+    try:
+        if isinstance(raw, bool):        # a flag is not a number of seconds
+            raise ValueError("a boolean is not a duration")
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        log.warning("agent.mcp_timeout: %r is not a number of seconds - using 60.", raw)
+        return 60.0
+
+
+def _mcp_stderr_note(ent, line):
+    """Push one stderr line onto the entry's bounded ring (A-2026-10-05-88)."""
+    ring = ent["err"]
+    ring.append(line[: _MCP_STDERR_BYTES])
+    if len(ring) > _MCP_STDERR_LINES:
+        del ring[0]
+    while len(ring) > 1 and sum(len(x) + 1 for x in ring) > _MCP_STDERR_BYTES:
+        del ring[0]
+
+
+def _mcp_tail(ent, wait=0.0):
+    """`; stderr: ...` from the ring, or "" - the reason a start-up death gave.
+
+    `wait` gives the reader thread a bounded moment to reach EOF before an exit message is
+    built: the child may be reaped before its last stderr line is read (A-2026-10-05-88).
+    """
+    ring = ent.get("err") or []
+    if not ring and wait > 0:
+        deadline = time.time() + wait
+        while not ent.get("err_done") and time.time() < deadline:
+            time.sleep(0.02)
+        ring = ent.get("err") or []
+    if not ring:
+        return ""
+    return "; stderr: " + (" ".join(" ".join(ring).split()))[: _MCP_TAIL_CHARS]
+
+
+def _mcp_fail(ent, base, wait=0.0):
+    """A failure message plus whatever the server last said on stderr."""
+    return base + _mcp_tail(ent, wait)
+
+
+def _mcp_park(ent, msg):
+    """Keep a reply whose id is not the one in flight, bounded, newest kept.
+
+    Dropping these lost a late reply for good (A-2026-10-05-89); a message that carries
+    `method` is a server-initiated REQUEST and is never parked as a reply.
+    """
+    if not isinstance(msg, dict) or "method" in msg or "id" not in msg:
+        return
+    parked = ent["parked"]
+    parked[msg["id"]] = msg
+    while len(parked) > _MCP_PARKED_MAX:
+        del parked[next(iter(parked))]
 
 
 def _mcp_open(name):
     """(entry, error): the live stdio server, started on first use."""
-    spec = _mcp_servers().get(str(name or ""))
-    if not isinstance(spec, dict) or not str(spec.get("command") or "").strip():
+    servers = _mcp_servers()
+    key = str(name or "")
+    if key not in servers:
         return None, ("ERROR: no MCP server named %r. Configured: %s"
-                      % (name, ", ".join(sorted(_mcp_servers())) or "(none)"))
+                      % (name, ", ".join(sorted(servers)) or "(none)"))
+    spec = servers.get(key)
+    if not isinstance(spec, dict):
+        return None, ("ERROR: MCP server %r is configured as %s, not a map of "
+                      "{command, args?}; this client speaks stdio only."
+                      % (name, type(spec).__name__))
+    if not str(spec.get("command") or "").strip():
+        # It IS configured - it simply has no command. Saying "no such server" named it
+        # as absent while the config still listed it (A-2026-10-05-85).
+        return None, ("ERROR: MCP server %r is configured WITHOUT a command; this client "
+                      "speaks stdio only, so give it {\"command\": \"<executable>\", "
+                      "\"args\": [...]}." % (name,))
     with _MCP_LOCK:
         ent = _MCP_PROCS.get(name)
         if ent and ent["proc"].poll() is None:
@@ -10625,11 +10730,14 @@ def _mcp_open(name):
         env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
         try:
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL, text=True, bufsize=1,
+                                    stderr=subprocess.PIPE, text=True, bufsize=1,
                                     env=env)
         except Exception as e:                                   # noqa: BLE001
             return None, "ERROR: could not start %r: %s" % (name, e)
         q = queue.Queue()
+        ent = {"proc": proc, "q": q, "seq": 0, "modern": None, "tools": None,
+               "err": [], "err_done": False, "parked": {},
+               "fail_until": 0.0, "fail_reason": ""}
 
         def _pump(p=proc, q=q):
             try:
@@ -10644,17 +10752,33 @@ def _mcp_open(name):
             except Exception:                                    # noqa: BLE001
                 pass
 
+        def _err_pump(p=proc, e=ent):
+            # stderr was DEVNULL, so a start-up death had no reason to give
+            # (A-2026-10-05-88). The reader keeps only the bounded ring.
+            try:
+                for line in p.stderr:
+                    _mcp_stderr_note(e, line.rstrip())
+            except Exception:                                    # noqa: BLE001
+                pass
+            e["err_done"] = True
+
         threading.Thread(target=_pump, daemon=True).start()
-        ent = {"proc": proc, "q": q, "seq": 0, "modern": None, "tools": None}
+        threading.Thread(target=_err_pump, daemon=True).start()
         _MCP_PROCS[name] = ent
         return ent, ""
+
+
+def _mcp_exit_reason(ent):
+    """The one wording for a server that is gone, with what it said before dying."""
+    return _mcp_fail(ent, "the server exited (code %s)" % ent["proc"].returncode,
+                     wait=0.25)
 
 
 def _mcp_rpc(ent, method, params, timeout, modern):
     """(result, error) for one newline-delimited JSON-RPC round trip."""
     proc = ent["proc"]
     if proc.poll() is not None:
-        return None, "the server exited (code %s)" % proc.returncode
+        return None, _mcp_exit_reason(ent)
     ent["seq"] += 1
     rid = ent["seq"]
     payload = {"jsonrpc": "2.0", "id": rid, "method": method}
@@ -10667,20 +10791,38 @@ def _mcp_rpc(ent, method, params, timeout, modern):
         proc.stdin.write(json.dumps(payload, ensure_ascii=False) + "\n")
         proc.stdin.flush()
     except Exception as e:                                       # noqa: BLE001
-        return None, "the server's stdin is closed (%s)" % e
+        dead = proc.poll() is not None
+        return None, _mcp_fail(ent, "the server's stdin is closed (%s)" % e,
+                               wait=0.25 if dead else 0.0)
     deadline = time.time() + timeout
     while True:
         left = deadline - time.time()
         if left <= 0:
-            return None, "no answer within %gs" % timeout
-        try:
-            msg = ent["q"].get(timeout=left)
-        except queue.Empty:
+            return None, _mcp_fail(ent, "no answer within %gs" % timeout)
+        msg = ent["parked"].pop(rid, None)     # a late reply to THIS id is still findable
+        if msg is None:
+            try:
+                msg = ent["q"].get(timeout=min(_MCP_POLL_SLICE, max(left, 0.001)))
+            except queue.Empty:
+                if proc.poll() is not None:
+                    # Polling the child inside the wait notices an exit at once instead of
+                    # burning the whole timeout on a corpse (A-2026-10-05-84).
+                    return None, _mcp_exit_reason(ent)
+                continue
+        if not isinstance(msg, dict):
             continue
-        if not isinstance(msg, dict) or msg.get("id") != rid:
-            continue                      # a notification, or a stale reply
+        if msg.get("id") != rid:
+            # Not this request's reply: park it (bounded) rather than drop it, so a late
+            # reply is still findable (A-2026-10-05-89).
+            _mcp_park(ent, msg)
+            continue
+        if "method" in msg:
+            # A server-initiated REQUEST (or notification) that happens to carry this id.
+            # Consuming it as the reply returned its empty `result` (A-2026-10-05-89).
+            continue
         if msg.get("error"):
-            return None, str((msg.get("error") or {}).get("message") or "error")
+            return None, _mcp_fail(ent, str((msg.get("error") or {}).get("message")
+                                            or "error"))
         return msg.get("result") or {}, None
 
 
@@ -10692,6 +10834,8 @@ def _mcp_negotiate(ent, timeout):
     if not err:
         ent["modern"] = True
         ent["tools"] = res
+        ent["fail_until"] = 0.0
+        ent["fail_reason"] = ""
         return True, ""
     first = err
     res, err = _mcp_rpc(ent, "initialize",
@@ -10712,27 +10856,71 @@ def _mcp_negotiate(ent, timeout):
         return False, "initialize worked but tools/list failed: %s" % err
     ent["modern"] = False
     ent["tools"] = res
+    ent["fail_until"] = 0.0
+    ent["fail_reason"] = ""
     return True, ""
+
+
+def _mcp_spec_line(name, spec):
+    """One line of the `list` answer, honest about a malformed entry too."""
+    if isinstance(spec, dict):
+        cmd = str(spec.get("command") or "").strip()
+        if not cmd:
+            return "- %s -> (no command; this client speaks stdio only)" % name
+        args = " ".join(str(a) for a in (spec.get("args") or []))
+        return "- %s -> %s %s" % (name, cmd, args)
+    return "- %s -> %s (not a {command, args?} map)" % (name, type(spec).__name__)
+
+
+def _mcp_arguments(raw):
+    """(dict, error): the `arguments` for tools/call, repaired when it arrived as text.
+
+    A server parses `arguments` as a JSON object, so a JSON STRING forwarded verbatim
+    failed server-side with a message the model could not read (A-2026-10-05-86). Parse it
+    the way the shell door repairs a string argv, and answer an ERROR when it is not JSON.
+    """
+    if raw is None:
+        return {}, ""
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return {}, ""
+        try:
+            raw = json.loads(text)
+        except ValueError as e:
+            return None, ("`arguments` arrived as a JSON string that does not parse (%s). "
+                          "Send a JSON object, e.g. {\"text\": \"hi\"}." % e)
+    if not isinstance(raw, dict):
+        return None, "`arguments` must be a JSON object (got %s)." % type(raw).__name__
+    return raw, ""
 
 
 def tool_mcp(args, ctx):
     """Talk to a configured MCP server: list, tools (discover), call (invoke one)."""
     action = str(args.get("action") or "list").strip().lower()
+    config_error = _mcp_config_error()
+    if config_error:
+        return config_error          # A-2026-10-05-80: a wrong shape answers, never raises
     if action in ("list", ""):
         servers = _mcp_servers()
         if not servers:
             return "ERROR: no MCP servers are configured (agent.mcp_servers)."
-        return ("configured MCP servers:\n" + "\n".join(
-            "- %s -> %s %s" % (n, (c or {}).get("command"),
-                               " ".join(str(a) for a in ((c or {}).get("args") or [])))
-            for n, c in sorted(servers.items())))
+        return ("configured MCP servers:\n"
+                + "\n".join(_mcp_spec_line(n, c) for n, c in sorted(servers.items())))
     name = str(args.get("server") or "")
     ent, err = _mcp_open(name)
     if err:
         return err
-    timeout = float((CONFIG.get("agent") or {}).get("mcp_timeout") or 60)
+    timeout = _mcp_timeout()
+    if ent.get("fail_until", 0) > time.time() and ent.get("fail_reason"):
+        # A failed handshake is remembered on the LIVE entry for a bounded window, so the
+        # next call answers the same reason at once instead of re-paying it
+        # (A-2026-10-05-83).
+        return "ERROR: %s did not answer the handshake: %s" % (name, ent["fail_reason"])
     ok, err = _mcp_negotiate(ent, timeout)
     if not ok:
+        ent["fail_until"] = time.time() + _MCP_FAIL_WINDOW
+        ent["fail_reason"] = err
         return "ERROR: %s did not answer the handshake: %s" % (name, err)
     tools = (ent.get("tools") or {}).get("tools") or []
     if action == "tools":
@@ -10747,22 +10935,32 @@ def tool_mcp(args, ctx):
         tool = str(args.get("tool") or "").strip()
         if not tool:
             return "ERROR: call needs `tool`."
-        known = {t.get("name") for t in tools}
-        if tools and tool not in known:
-            return ("ERROR: %s has no tool %r. Its tools: %s"
-                    % (name, tool, ", ".join(sorted(str(k) for k in known))[:300]))
+        # The SERVER's spelling wins: a case-exact gate refused `Echo` while `echo` was
+        # discovered (A-2026-10-05-87).
+        known = {str(t.get("name")): str(t.get("name")) for t in tools if t.get("name")}
+        by_lower = {k.lower(): v for k, v in known.items()}
+        if tools:
+            call_tool = known.get(tool) or by_lower.get(tool.lower())
+            if not call_tool:
+                return ("ERROR: %s has no tool %r. Its tools: %s"
+                        % (name, tool, ", ".join(sorted(known))[:300]))
+        else:
+            call_tool = tool
+        arguments, arg_err = _mcp_arguments(args.get("arguments"))
+        if arg_err:
+            return "ERROR: %s/%s: %s" % (name, call_tool, arg_err)
         res, err = _mcp_rpc(ent, "tools/call",
-                            {"name": tool, "arguments": args.get("arguments") or {}},
+                            {"name": call_tool, "arguments": arguments},
                             timeout, modern=bool(ent["modern"]))
         if err:
-            return "ERROR: %s/%s: %s" % (name, tool, err)
+            return "ERROR: %s/%s: %s" % (name, call_tool, err)
         parts = res.get("content") or []
         text = "\n".join(str(p.get("text") or "") for p in parts
                          if isinstance(p, dict) and p.get("type") == "text")
         if not text:
             text = json.dumps(res, ensure_ascii=False)[:2000]
         return ("%s%s/%s -> %s" % ("ERROR: " if res.get("isError") else "",
-                                   name, tool, text[:4000]))
+                                   name, call_tool, text[:4000]))
     return "ERROR: action must be list, tools or call."
 
 
