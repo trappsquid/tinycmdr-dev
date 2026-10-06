@@ -1855,6 +1855,15 @@
         "file": "tinycmdr.py"
       },
       "detail": "A-2026-10-05-78, run 10: NOT reproduced on macOS (the verb line IS written there, value redacted), but the target box is Windows and the shape has two Windows-specific mechanisms worth keeping this open for: a rollover RENAMES the log and an open handle (the running bot holds tinycmdr.log) makes the rename fail, and the QueueListener thread reports nothing when a handler raises. Both are now visible instead of silent: _LoudRotatingFileHandler falls back to a plain append when the rollover is blocked (losing the rotation is fine, losing the record is not) and writes one stderr line naming the file and the error (2026-10-06, tests/test_file_log.py). To settle it on that box: run a refused verb and look for the WARNING line, then compare tinycmdr.log against tinycmdr.log.1 - the dropped line may be in the predecessor."
+    },
+    {
+      "id": "responses-wire-1-0-83",
+      "title": "the Responses API is a wire, not a renamed field",
+      "state": "shipped",
+      "anchor": {
+        "commit": "9387bf0"
+      },
+      "detail": "2026-10-06. `base_url` pointing at /responses used to send a chat-shaped body; the wire is real now - input items with typed parts, instructions, flat tool schemas, reasoning summaries read into reasoning_content, usage.input_tokens/output_tokens mapped onto the accounting, and a stream adapter feeding the existing SSE reader. An OpenAI-style 400 naming BOTH tools and reasoning_effort escalates once to the /responses sibling and the fact is remembered per endpoint (wire=responses), with the reasoning-field drop kept as the fallback when no sibling exists. tests/test_responses_wire.py: 40 checks, all red pre-fix; a stub-server smoke drove the escalation end to end."
     }
   ]
 }
