@@ -156,20 +156,21 @@ def main():
                 '[{"role":"dev","path":"%s"}]' % _ptmp, encoding="utf-8")
             _note2 = fb._prune_dev_kit()
             check("a tree the box declares as its DEV tree is never pruned",
-                  (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note2, _note2)
+                  (_ptmp / "tests").exists() and _note2 == "", _note2)
             # No declaration file at all: the tree's own EVIDENCE must hold the prune
             # off, because the prune deletes where.py - the only tool that could have
-            # Declared the tree.
+            # declared the tree. Keeping the kit is silent: it is the normal outcome, and
+            # the old note named a declaration file this tree does not have.
             (_ptmp / "maintenance" / "where-roles.json").unlink()
             (_ptmp / "tests" / "run_all.py").write_text("x", encoding="utf-8")
             _note3 = fb._prune_dev_kit()
             check("a checkout with no declaration is not pruned (tests/run_all.py is evidence)",
-                  (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note3, _note3)
+                  (_ptmp / "tests").exists() and _note3 == "", _note3)
             (_ptmp / "tests" / "run_all.py").unlink()
             (_ptmp / ".git").mkdir()
             _note4 = fb._prune_dev_kit()
             check("...and a tree with .git is not pruned either",
-                  (_ptmp / "tests").exists() and "DEVELOPMENT tree" in _note4, _note4)
+                  (_ptmp / "tests").exists() and _note4 == "", _note4)
             (_ptmp / ".git").rmdir()
         finally:
             fb.BASE_DIR = _saved_base
@@ -278,7 +279,7 @@ def main():
         check("the update path's host-owned set covers every installer dir",
               bool(_hostdirs) and not _missing, (_missing, sorted(_hostdirs)))
 
-        # _declared_dev_tree() decides whether pruning is SAFE here, so grade both
+        # _dev_tree_reason() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,
         # while a "same_as live" (or unreadable) declaration must hold it off - the
         # operator's own box sat in the one-tree shape and could never be cleaned.
@@ -289,15 +290,15 @@ def main():
             _wr.write_text('[{"role":"live","path":"~/tinycmdr"},'
                            '{"role":"dev","path":"/somewhere/else"}]', encoding="utf-8")
             check("a dev tree declared elsewhere does not protect THIS tree",
-                  fb._declared_dev_tree() is False)
+                  fb._dev_tree_reason() is None)
             _wr.write_text('[{"role":"dev","same_as":"live"}]', encoding="utf-8")
-            check("...but 'dev: same_as live' does", fb._declared_dev_tree() is True)
+            check("...but 'dev: same_as live' does", fb._dev_tree_reason() == "declared")
             _wr.write_text('[{"role":"dev","path":"%s"}]' % fb.BASE_DIR, encoding="utf-8")
             check("...and an explicit dev path pointing here does",
-                  fb._declared_dev_tree() is True)
+                  fb._dev_tree_reason() == "declared")
             _wr.write_text("{ not json", encoding="utf-8")
             check("an unreadable declaration is treated as dev (never prune on doubt)",
-                  fb._declared_dev_tree() is True)
+                  fb._dev_tree_reason() == "declared")
         finally:
             if _saved is None:
                 _wr.unlink(missing_ok=True)
