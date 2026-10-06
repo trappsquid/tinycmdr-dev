@@ -1681,6 +1681,17 @@
       "detail": "Three items from the lane/web audit, each with its shape recorded: (1) a2a SendMessage stores the task only after the run and ignores a client taskId, so a client timeout loses the handle and the retry re-executes every tool call - store a TASK_STATE_WORKING placeholder before the run and treat a client taskId as an idempotency key; (2) eight readers still collapse web.port 0 to 8790 (a2a card, status, health, setup, web/firewall links) - one web-port helper that preserves 0 and resolves it from the bound port recorded in the lane state; (3) lane-deafness detection is three mechanisms (MM liveness exits 75, MM catch-up rescues, TG reports down now) - one heartbeat-stale path that calls lane_down for every lane.",
       "gate": "pending - next release"
     }
+,
+    {
+      "id": "windows-install-path-1-0-81",
+      "title": "the Windows install's PATH entry is broadcast, and the one-liner does not pause",
+      "state": "shipped",
+      "anchor": {
+        "commit": "925f685"
+      },
+      "detail": "The user-PATH write never broadcast WM_SETTINGCHANGE, so a window opened right after a fresh install kept Explorer's stale environment and answered \"'tinycmdr' is not recognized\" until logoff; both PATH writes (install and the uninstall revert) broadcast now, and the installer also refreshes its own session so the verb works in the window that ran it. The hosted one-liner runs inside the caller's terminal, so it sets FB_NOPAUSE=1 before handing to INSTALL-WINDOWS.cmd: the press-any-key barrier is for the double-click window, which really does close.",
+      "gate": "done - 925f685; tests/test_verbs.py pins the broadcast after every Set-UserPathRaw call and the one-liner's FB_NOPAUSE ordering; static (PowerShell is not executed on the dev box) - a fresh Windows install is the live verifier"
+    }
 
   ]
 }
