@@ -701,6 +701,219 @@ finally:
      fb.TelegramDestination, fb.RunReporter, fb.AGENT.run, fb.lane_up,
      fb.TG_IDLE_SECONDS) = _keep2
 
+# ---- A-199: the lane can SEND a file. Grade the LOCAL half: the ONE multipart POST the
+# transport builds, and the door's cap/answer. No network anywhere. -------------------
+import tempfile as _tempfile
+
+_file_dir = Path(_tempfile.mkdtemp(prefix="tg-file-"))
+_doc = _file_dir / "report.txt"
+_doc.write_text("hello, operator", encoding="utf-8")
+_pic = _file_dir / "shot.png"
+_pic.write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
+
+
+class _RecPost:
+    """The requests.post the transport makes, recorded instead of sent."""
+
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, data=None, files=None, timeout=None, **kw):
+        self.calls.append({"url": url, "data": data, "files": files, "timeout": timeout})
+
+        class _R:
+            status_code = 200
+
+            def json(self):
+                return {"ok": True, "result": {"message_id": 7}}
+
+        return _R()
+
+
+_saved_requests = fb.requests
+_rec = _RecPost()
+fb.requests = _rec
+try:
+    try:
+        _sent = fb.TelegramClient("1:x").send_file(99, str(_doc), note="the report")
+    except Exception as _e:                     # pre-fix: no such method at all
+        _sent = ("raised", _e)
+finally:
+    fb.requests = _saved_requests
+_call = _rec.calls[0] if _rec.calls else {}
+check("A-199: send_file is ONE multipart POST to sendDocument",
+      hasattr(fb.TelegramClient, "send_file") and len(_rec.calls) == 1
+      and str(_call.get("url", "")).endswith("/sendDocument"),
+      [c.get("url") for c in _rec.calls] or "no send_file")
+check("A-199: ...carrying the chat, the caption and the file itself",
+      str(_call.get("data", {}).get("chat_id")) == "99"
+      and _call.get("data", {}).get("caption") == "the report"
+      and (_call.get("files") or {}).get("document", (None,))[0] == "report.txt"
+      and _sent == {"message_id": 7},
+      (_call.get("data"), sorted((_call.get("files") or {})), _sent))
+
+_rec2 = _RecPost()
+fb.requests = _rec2
+try:
+    fb.TelegramClient("1:x").send_file(99, str(_pic))
+except Exception:                               # pre-fix: no such method at all
+    pass
+finally:
+    fb.requests = _saved_requests
+check("A-199: ...an image goes as sendPhoto (rendered inline, not as a document)",
+      bool(_rec2.calls) and str(_rec2.calls[0]["url"]).endswith("/sendPhoto")
+      and "photo" in (_rec2.calls[0].get("files") or {}),
+      _rec2.calls[0]["url"] if _rec2.calls else "no call")
+
+
+class _FileClient(FakeClient):
+    """A bot API that records the file door's call instead of uploading."""
+
+    def __init__(self):
+        super().__init__()
+        self.files = []
+
+    def send_file(self, chat_id, path, note="", reply_to=None):
+        self.files.append((chat_id, Path(str(path)).name, note, reply_to))
+        return {"message_id": 5}
+
+
+_fc = _FileClient()
+_line = fb.TelegramDestination(_fc, chat_id=99, reply_to=3).attach(str(_doc), "here it is")
+check("A-199: the destination's file door uploads and answers honestly",
+      _line.startswith("sent:") and _fc.files == [(99, "report.txt", "here it is", 3)],
+      (_line, _fc.files))
+_fc2 = _FileClient()
+check("A-199: the door reaches the transport through the reporter the tool is handed",
+      fb.RunReporter(fb.TelegramDestination(_fc2, chat_id=1), "s").attach(
+          str(_doc), "n").startswith("sent:") and bool(_fc2.files),
+      _fc2.files)
+
+_saved_cap = fb.CONFIG["agent"].get("send_file_max_bytes")
+_big = _file_dir / "big.bin"
+_big.write_bytes(b"x" * 4096)
+fb.CONFIG["agent"]["send_file_max_bytes"] = 1024
+try:
+    _cap_line = fb.TelegramDestination(_FileClient(), chat_id=99).attach(str(_big))
+finally:
+    if _saved_cap is None:
+        fb.CONFIG["agent"].pop("send_file_max_bytes", None)
+    else:
+        fb.CONFIG["agent"]["send_file_max_bytes"] = _saved_cap
+check("A-199: ...over the cap is refused with the path, not uploaded",
+      "over this box's 1,024-byte send limit" in _cap_line
+      and "NOT SENT" not in _cap_line, _cap_line)
+check("A-199: ...and a path that is not there is an honest error too",
+      fb.TelegramDestination(_FileClient(), chat_id=99).attach(
+          str(_file_dir / "nope.bin")).startswith("ERROR: no such file"))
+shutil.rmtree(_file_dir, ignore_errors=True)
+
+# ---- A-200/A-201: run_telegram wires the Scheduler and the report door, and honours the
+# restart announce - exactly as run_bot does. -------------------------------------------
+_wire = {}
+
+
+class _WireClient(FakeClient):
+    """The bot API, but the first poll ends the lane (SystemExit leaves the loop)."""
+
+    def __init__(self, token):
+        super().__init__()
+        _wire["client"] = self
+
+    def updates(self, offset):
+        raise SystemExit
+
+
+_keep3 = (fb.CONFIG["telegram"], fb.TelegramClient, fb.REPORTER,
+          fb.SCHEDULER.dispatcher, fb.announce_startup, fb.lane_up,
+          fb.CONFIG["agent"].get("announce_restart"))
+_announced = []
+fb.CONFIG["telegram"] = {"token": "12345:" + "A" * 35, "allowed_users": ["1"]}
+fb.TelegramClient = _WireClient
+fb.REPORTER = None
+fb.SCHEDULER.dispatcher = None
+fb.announce_startup = lambda d: _announced.append(d)
+fb.lane_up = lambda *a, **k: None
+
+
+def _drive_wire():
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+
+
+try:
+    fb.CONFIG["agent"]["announce_restart"] = True
+    _drive_wire()
+    _report = fb.REPORTER
+    check("A-200: run_telegram wires REPORTER, so a scheduled job can report",
+          callable(_report), repr(_report))
+    if callable(_report):
+        _report(4242, "scheduled: the backup finished")
+    check("A-200: ...and the post lands in the chat it is given",
+          any(m["chat"] == 4242 and "the backup finished" in m["text"]
+              for m in _wire["client"].messages),
+          [m["text"][:40] for m in _wire["client"].messages])
+    check("A-200: run_telegram wires SCHEDULER.dispatcher the same way run_bot does",
+          fb.SCHEDULER.dispatcher is not None
+          and all(callable(getattr(fb.SCHEDULER.dispatcher, m, None))
+                  for m in ("_post", "_edit", "send_file")),
+          repr(fb.SCHEDULER.dispatcher))
+    check("A-201: run_telegram honours announce_restart (run_bot calls it)",
+          len(_announced) == 1, len(_announced))
+    fb.CONFIG["agent"]["announce_restart"] = False
+    _drive_wire()
+    check("A-201: ...and the config switch still turns it off",
+          len(_announced) == 1, len(_announced))
+finally:
+    (fb.CONFIG["telegram"], fb.TelegramClient, fb.REPORTER,
+     fb.SCHEDULER.dispatcher, fb.announce_startup, fb.lane_up,
+     _ann_saved) = _keep3
+    if _ann_saved is None:
+        fb.CONFIG["agent"].pop("announce_restart", None)
+    else:
+        fb.CONFIG["agent"]["announce_restart"] = _ann_saved
+
+# A-200: a run started from a chat carries that chat as its channel, which is what a
+# `schedule` job made in that chat reports back to.
+class _MsgWireClient(FakeClient):
+    """Poll 1 hands the lane one task (from an allowed id); poll 2 leaves."""
+
+    def __init__(self, token):
+        super().__init__()
+        self.polls = 0
+
+    def updates(self, offset):
+        self.polls += 1
+        if self.polls == 1:
+            return [msg(777, "schedule the backup", 123456789, mid=1)]
+        raise SystemExit
+
+
+_keep4 = (fb.CONFIG["telegram"], fb.TelegramClient, fb.AGENT.run, fb.lane_up,
+          fb.TG_IDLE_SECONDS, fb.REPORTER, fb.SCHEDULER.dispatcher)
+_seen_channel = {}
+fb.CONFIG["telegram"] = {"token": "12345:" + "A" * 35, "allowed_users": ["123456789"]}
+fb.TelegramClient = _MsgWireClient
+fb.AGENT.run = lambda session_key, text, **kw: _seen_channel.setdefault(
+    "channel_id", kw.get("channel_id"))
+fb.lane_up = lambda *a, **k: None
+fb.TG_IDLE_SECONDS = 1.0
+try:
+    try:
+        fb.run_telegram()
+    except SystemExit:
+        pass
+    _deadline = time.time() + 6
+    while "channel_id" not in _seen_channel and time.time() < _deadline:
+        time.sleep(0.02)
+finally:
+    (fb.CONFIG["telegram"], fb.TelegramClient, fb.AGENT.run, fb.lane_up,
+     fb.TG_IDLE_SECONDS, fb.REPORTER, fb.SCHEDULER.dispatcher) = _keep4
+check("A-200: a run started from a chat carries that chat as its channel",
+      _seen_channel.get("channel_id") == 777, _seen_channel)
+
 # ---- the token has ONE home, and both doors never fight silently -----------
 # (review, 2026-09-22: telegram.token was read from config.json, which contradicts
 # the package's own rule that secrets live only in .env; and with both tokens set

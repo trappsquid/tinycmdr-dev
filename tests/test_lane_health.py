@@ -26,7 +26,9 @@ import importlib.util
 import io
 import json
 import logging
+import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -35,7 +37,10 @@ from pathlib import Path
 import requests
 
 BASE = Path(__file__).resolve().parent.parent
-SRC = BASE / "tinycmdr.py"
+# TINYCMDR_SRC names the module to grade, the same seam tests/test_telegram.py uses: the
+# suite is run against a PRE-FIX copy to prove a check is red before a fix, and against
+# the working tree otherwise.
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
 STAGE = Path(tempfile.gettempdir()) / "tinycmdr-test-stage-lane"
 if STAGE.exists():
     shutil.rmtree(STAGE, ignore_errors=True)
@@ -514,3 +519,125 @@ check("...naming the command that fixes it",
       "token set TINYCMDR_MM_TOKEN" in _said, _said[:160])
 check("...and that failure is PERMANENT, not an outage to wait out",
       T._lane_error_permanent(RuntimeError(_said)) is True, _said[:120])
+
+# =============== run 12, section D: lane plumbing (A-179..A-186) ===============
+# A blank disk, so a record left by the checks above cannot decide these counts.
+T.atomic_write_text(T.LANE_STATE_FILE, json.dumps({}))
+T.LANE_FAILS.clear()
+T.LANE_STATE.clear()
+getattr(T, "_LANE_TOUCHED", set()).clear()     # a pre-fix build has no such set
+T._LANE_FAILS_LOADED = False
+
+# A-179/A-180: the repeat count keys on the lane and the reason CLASS, not the literal
+# text. The poll loop's own message carries a minute count and the transport's carries a
+# different errno each attempt, so a lane failing stubbornly reset its count every time.
+_a1 = T.lane_down("mattermost", "poll failing for 5 min: Connection reset by peer")
+_a2 = T.lane_down("mattermost", "poll failing for 5 min: Temporary failure in name resolution")
+check("A-179: a repeat whose message varies still counts as the SAME failure",
+      (_a1[0], _a1[1], _a2[0], _a2[1]) == (1, False, 2, True), (_a1, _a2))
+_b1 = T.lane_down("mattermost", "401 Invalid or expired session")
+_b2 = T.lane_down("mattermost", "connection reset by peer")
+check("A-179: ...but a different CLASS is still a fresh failure, not attempt 3",
+      (_b1[0], _b1[1], _b2[0], _b2[1]) == (1, False, 1, False), (_b1, _b2))
+_rc = getattr(T, "_lane_reason_class", None)
+check("A-180: the poll loop's varying message normalises to one class",
+      callable(_rc)
+      and _rc("poll failing for 5 min: ConnectionError(1, 'reset')")
+      == _rc("poll failing for 10 min: ConnectionError(2, 'reset')"),
+      "no _lane_reason_class" if not callable(_rc) else "")
+
+# A-181: another process owns a lane this one has never written; this process's next
+# write must carry that lane's record over instead of replacing the whole map.
+_other = T._lane_state_read()
+_other.setdefault("lanes", {})["mattermost"] = {"ok": True, "detail": "someone else's",
+                                                "since": 1.0}
+T.atomic_write_text(T.LANE_STATE_FILE, json.dumps(_other))
+getattr(T, "_LANE_TOUCHED", set()).discard("mattermost")   # not ours
+T.LANE_STATE.pop("mattermost", None)
+T.LANE_FAILS.pop("mattermost", None)
+T._lane_state_write()
+check("A-181: a lane this process does not own survives its next write",
+      (T._lane_state_read().get("lanes") or {}).get(
+          "mattermost", {}).get("detail") == "someone else's",
+      T._lane_state_read().get("lanes"))
+T.lane_up("mattermost", "connected as @me")    # now it IS ours, and ours wins
+check("A-181: ...while a lane this process DOES own is still authoritative",
+      (T._lane_state_read().get("lanes") or {}).get(
+          "mattermost", {}).get("detail") == "connected as @me",
+      T._lane_state_read().get("lanes"))
+
+# A-182: a wall clock that steps backwards must not silence the poll-failure report.
+check("A-182: a clock that stepped backwards reports the lane, not silence",
+      T.lane_poll_failure_due(1000.0, 10.0) is True
+      and T.lane_poll_failure_due(0.0, 299.0) is False
+      and T.lane_poll_failure_due(0.0, 300.0) is True,
+      (T.lane_poll_failure_due(1000.0, 10.0), T.lane_poll_failure_due(0.0, 299.0)))
+
+# A-183: a bare 401 in an id or a port is NOT a refused credential.
+check("A-183: an id or port that merely contains 401 is not a refused credential",
+      T._lane_error_permanent(RuntimeError("update id 401 could not be delivered")) is False
+      and T._lane_error_permanent(RuntimeError("connect to 10.0.0.9:401 failed")) is False,
+      (T._lane_error_permanent(RuntimeError("update id 401 could not be delivered")),
+       T._lane_error_permanent(RuntimeError("connect to 10.0.0.9:401 failed"))))
+check("A-183: ...but the real status shape still is",
+      T._lane_error_permanent(RuntimeError("HTTP 401 Unauthorized")) is True
+      and T._lane_error_permanent(RuntimeError("status: 403 Forbidden")) is True,
+      (T._lane_error_permanent(RuntimeError("HTTP 401 Unauthorized")),
+       T._lane_error_permanent(RuntimeError("status: 403 Forbidden"))))
+
+# A-184: a NEGATIVE uptime (a backwards clock) is a failed start, never a healthy reset -
+# and a negative failure count is never handed to the curve.
+check("A-184: a negative uptime reads as a failed start, not a reset",
+      T.lane_backoff_after(7, -31) == (8, 60) and T.lane_backoff_after(7, 31) == (0, 5),
+      (T.lane_backoff_after(7, -31), T.lane_backoff_after(7, 31)))
+check("A-184: a negative failure count is clamped before the curve sees it",
+      T.lane_backoff_after(-5, -1) == (1, 5), T.lane_backoff_after(-5, -1))
+
+# A-185: a lane that exits 2 records WHY before it goes, so `health` does not keep
+# reporting the exit path's last "up" (the pair-lane process keeps running for the other).
+T.lane_up("telegram", "connected as @stale")   # an earlier healthy run's record
+_tg_before = T.CONFIG.get("telegram")
+T.CONFIG["telegram"] = {}
+try:
+    T.run_telegram()
+    _tg_code = None
+except SystemExit as _e:
+    _tg_code = _e.code
+finally:
+    T.CONFIG["telegram"] = _tg_before
+_tg_rec = (T._lane_state_read().get("lanes") or {}).get("telegram", {})
+check("A-185: a lane that exits 2 writes its true state, the stale 'up' is gone",
+      _tg_code == 2 and _tg_rec.get("ok") is False
+      and "no Telegram token" in str(_tg_rec.get("detail")), (_tg_code, _tg_rec))
+
+# A-186: a record whose writing process is DEAD is the last known state, not "now".
+_dead_proc = subprocess.Popen([sys.executable, "-c", "pass"])
+_dead_proc.wait()
+_dead_pid = _dead_proc.pid
+_alive = getattr(T, "_lane_pid_alive", None)
+check("A-186: the liveness helper knows a live pid and a reaped one",
+      callable(_alive) and _alive(os.getpid()) is True and _alive(_dead_pid) is False,
+      "no _lane_pid_alive" if not callable(_alive)
+      else (_alive(os.getpid()), _alive(_dead_pid)))
+T.atomic_write_text(T.LANE_STATE_FILE, json.dumps({
+    "pid": _dead_pid, "updated": 1.0,
+    "lanes": {"mattermost": {"ok": True, "detail": "up once", "since": 1.0}}}))
+T.LANE_STATE.clear()
+T._LANE_FAILS_LOADED = False
+_snap_dead = T.lanes_snapshot().get("mattermost", {})
+check("A-186: a dead writer's record is marked stale, not presented as current",
+      _snap_dead.get("stale") is True and _snap_dead.get("pid_alive") is False
+      and _snap_dead.get("from_pid") == _dead_pid, _snap_dead)
+T.atomic_write_text(T.LANE_STATE_FILE, json.dumps({
+    "pid": os.getpid(), "updated": 1.0, "lanes": {}}))
+T.LANE_STATE.clear()
+T._LANE_FAILS_LOADED = False
+check("A-186: ...and a live writer's record is not stale",
+      T.lanes_snapshot().get("mattermost", {}).get("stale") is False,
+      T.lanes_snapshot().get("mattermost"))
+
+print()
+if FAILS:
+    print("%d check(s) failed: %s" % (len(FAILS), ", ".join(FAILS)))
+    sys.exit(1)
+print("lane plumbing: reason classes, per-lane merge, clock safety, liveness")

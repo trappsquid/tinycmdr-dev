@@ -1019,6 +1019,10 @@ LANE_STATE = {}                  # lane -> {"ok", "detail", "since"} for THIS pr
 LANE_FAILS = {}                  # lane -> {"count", "error", "first", "last"}, persisted
 _LANE_LOCK = threading.Lock()
 _LANE_FAILS_LOADED = False
+# The lanes THIS process has written (lane_up/lane_down). _lane_state_write merges the
+# on-disk map per lane, and only a lane in here is this process's word to replace or
+# remove: a second process must not clobber a lane it does not own (A-181).
+_LANE_TOUCHED = set()
 LANE_STATE_FILE = BASE_DIR / "logs" / "state.json"
 
 
@@ -29296,18 +29300,39 @@ def _lane_state_read():
 
 def _lane_state_write():
     """Best-effort and atomic, and never fatal: a bot must not die because a status file
-    could not be written (and a fresh clone has no logs/ until this creates one)."""
+    could not be written (and a fresh clone has no logs/ until this creates one).
+
+    Merged PER LANE, never replaced wholesale: another process can own a different lane
+    (the pair-lane service, a `--once` run, a cron `health`), and writing this process's
+    whole view erased the other lane's record - the pair process, or a second writer,
+    silently blanked a lane it never touched (A-181). Only the lanes THIS process has
+    written are authoritative here; every other lane's on-disk record is carried over."""
     try:
         LANE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # The whole read-merge-write is under the lock: the pair-lane process has the
+        # Mattermost lane and the Telegram lane in two threads, and two same-process
+        # writers must not read the same "before" and lose one lane's update.
         with _LANE_LOCK:
             lanes = json.loads(json.dumps(LANE_STATE))
             fails = json.loads(json.dumps(LANE_FAILS))
-        data = _lane_state_read()
-        data.update({"version": VERSION, "pid": os.getpid(), "updated": time.time(),
-                     "lanes": lanes, "failures": fails})
-        data.setdefault("started", time.time())
-        atomic_write_text(LANE_STATE_FILE,
-                          json.dumps(data, indent=2, sort_keys=True) + "\n")
+            touched = set(_LANE_TOUCHED)
+            data = _lane_state_read()
+            merged_lanes = dict(data.get("lanes") or {})
+            merged_fails = dict(data.get("failures") or {})
+            for lane in touched:
+                if lane in lanes:
+                    merged_lanes[lane] = lanes[lane]
+                else:
+                    merged_lanes.pop(lane, None)
+                if lane in fails:
+                    merged_fails[lane] = fails[lane]
+                else:
+                    merged_fails.pop(lane, None)
+            data.update({"version": VERSION, "pid": os.getpid(), "updated": time.time(),
+                         "lanes": merged_lanes, "failures": merged_fails})
+            data.setdefault("started", time.time())
+            atomic_write_text(LANE_STATE_FILE,
+                              json.dumps(data, indent=2, sort_keys=True) + "\n")
     except Exception as e:                                   # noqa: BLE001
         log.debug("could not write %s: %s", LANE_STATE_FILE, e)
 
@@ -29351,12 +29376,18 @@ def _lane_reason(exc):
 
 
 # The failures a HUMAN has to fix. Everything else is retried on the growing backoff.
-# The bare status is matched on a word boundary because that is how the refusal arrives from
-# the libraries ("401 Invalid or expired session"); our own probe says "HTTP 400 ... at <url>".
+# The status must arrive in a STATUS SHAPE - "HTTP 401", "status: 403", "401 Unauthorized",
+# "error code 400" - and not as a bare number anywhere in the text: `\b40[13]\b` matched a
+# port ("connect to host:401"), an id ("update id 401") or a run number, marking a TRANSIENT
+# network fault PERMANENT and parking it on the refused-credential retry (A-183). Every true
+# refusal the libraries hand us is in that shape ("401 Invalid or expired session"; our own
+# probe says "HTTP 400 Bad Request at <url>"), so the shape keeps the true positives.
 _LANE_PERMANENT_RE = re.compile(
-    r"(\b40[13]\b|\b400\b|InvalidOrMissingParameters|NoAccessTokenProvided|"
-    r"NotEnoughPermissions|the token was refused|"
-    r"no Mattermost token|no Telegram token|is unusable)", re.I)
+    r"(?:(?:http|status|error[_ ]?code|response|api|reason)[\s:=\-]*40[013]\b"
+    r"|\b40[013]\b[\s:,()\-]*(?:bad request|unauthori[sz]ed|forbidden|invalid|expired|"
+    r"refused|denied|missing|unusable|no[t]?\s+authoriz)"
+    r"|InvalidOrMissingParameters|NoAccessTokenProvided|NotEnoughPermissions"
+    r"|the token was refused|no Mattermost token|no Telegram token|is unusable)", re.I)
 
 
 def _lane_error_permanent(exc):
@@ -29364,19 +29395,55 @@ def _lane_error_permanent(exc):
     return bool(_LANE_PERMANENT_RE.search(_lane_reason(exc)))
 
 
+# The reason CLASSES. The counting in lane_down must not key on the literal text: the
+# caller's own message carries a clock, a pid or a count ("poll failing for 5 min: ...")
+# and the transport's varies per attempt ("Connection reset by peer" one minute,
+# "Temporary failure in name resolution" the next), so a lane that kept failing looked
+# like a lane failing DIFFERENTLY every time - the count reset on every attempt and the
+# escalation never accumulated (A-179/A-180). A class is what a human would call it.
+_LANE_UNREACHABLE_RE = re.compile(
+    r"(connection|connect|timed? ?out|timeout|unreachable|reset by peer|broken pipe|"
+    r"no route|name resolution|temporary failure|dns|socket|ssl|network|proxy|"
+    r"max retries|could not be reached|requests\.)", re.I)
+_LANE_CLASS_WS = re.compile(r"\s+")
+_LANE_CLASS_NUM = re.compile(r"\d+")
+
+
+def _lane_reason_class(reason):
+    """The class a lane's reason belongs to, for counting repeats: refused, unreachable,
+    or the number-stripped shape for anything else (a port, an errno or a count cannot
+    split one failure into many)."""
+    text = _LANE_CLASS_WS.sub(" ", str(reason or "").strip().lower())
+    if _LANE_PERMANENT_RE.search(text):
+        return "refused"
+    if _LANE_UNREACHABLE_RE.search(text):
+        return "unreachable"
+    return _LANE_CLASS_NUM.sub("#", text)[:120] or "unknown"
+
+
 def lane_down(lane, error):
     """Record a lane failing. Returns (count, was_same_error, first_seen) so the caller can
     decide what to SAY: the full story once per state, and nothing while the same error
-    repeats on the retry backoff."""
+    repeats on the retry backoff.
+
+    The repeat is keyed on the LANE and the reason's CLASS, not the literal text - see
+    _lane_reason_class. A stubborn failure whose message carried a changing clock, count
+    or errno used to look like a brand-new failure on every attempt."""
     _lane_fails_load()
     now = time.time()
+    reason_class = _lane_reason_class(error)
     with _LANE_LOCK:
         prior = LANE_FAILS.get(lane) or {}
-        same = bool(prior) and prior.get("error") == error
+        prior_class = prior.get("reason_class")
+        if prior_class is None and prior.get("error"):
+            prior_class = _lane_reason_class(prior["error"])   # a record from an older build
+        same = bool(prior) and prior_class == reason_class
         first = prior.get("first") if same else now
         count = (prior.get("count") or 0) + 1 if same else 1
-        LANE_FAILS[lane] = {"count": count, "error": error, "first": first, "last": now}
+        LANE_FAILS[lane] = {"count": count, "error": error,
+                            "reason_class": reason_class, "first": first, "last": now}
         LANE_STATE[lane] = {"ok": False, "detail": error, "since": first}
+        _LANE_TOUCHED.add(lane)
     _lane_state_write()
     return count, same, first
 
@@ -29388,6 +29455,7 @@ def lane_up(lane, detail=""):
     with _LANE_LOCK:
         prior = LANE_FAILS.pop(lane, None)
         LANE_STATE[lane] = {"ok": True, "detail": detail, "since": time.time()}
+        _LANE_TOUCHED.add(lane)
     _lane_state_write()
     if prior and prior.get("count"):
         log.warning("%s lane recovered after %d failed start(s), the first at %s",
@@ -29402,8 +29470,20 @@ def lane_poll_failure_due(failing_since, now, grace=300.0):
     lane_down: the record keeps saying "up" while the box can hear nothing. The
     Telegram poll loop retries internally for ever; this is the decision that turns
     that silence into a lane record every other reader can see.
+
+    `failing_since` and `now` must come from the SAME clock, and the caller passes a
+    MONOTONIC one: a wall clock steps backwards (NTP, a VM resume), `now - failing_since`
+    then goes NEGATIVE, and the comparison reads that as "no time has passed" and
+    silences the report on a lane that is still deaf (A-182). A caller that does hand a
+    backwards pair gets True, not False - a subtraction across a clock step proves
+    nothing, and the failure this decision exists to fix is the SILENCE.
     """
-    return failing_since is not None and (now - failing_since) >= grace
+    if failing_since is None:
+        return False
+    elapsed = now - failing_since
+    if elapsed < 0:
+        return True
+    return elapsed >= grace
 
 
 # ------------------------------------------------- retrying a lane that CANNOT START
@@ -29429,8 +29509,13 @@ def lane_backoff_after(failures, uptime):
 
     The supervisor's reset rule: a lifetime longer than LANE_RAPID_EXIT_S was healthy, so
     the count resets and the next attempt waits the start delay; a shorter one is a failed
-    start and grows the backoff.
+    start and grows the backoff. `uptime` is clamped at 0 first: a backwards clock makes
+    `now() - t0` negative, and a negative lifetime is a failed start, not a shorter path
+    through the curve (A-184). `failures` is clamped too, so a caller cannot hand the
+    curve a negative count.
     """
+    failures = max(0, failures)
+    uptime = max(0.0, uptime)
     if uptime > LANE_RAPID_EXIT_S:
         return 0, LANE_BACKOFF_START
     failures += 1
@@ -29519,6 +29604,46 @@ def _lane_token(lane):
     return ""
 
 
+def _lane_pid_alive(pid):
+    """Is the process that WROTE the lane record still running?
+
+    A cold reader (`tinycmdr health` in a cron job, the page) reads the LAST record, and
+    nothing said whether its writer was still there: a crashed bot's last "up" was handed
+    to the operator as current state (A-186). A pid this process is (or has just written
+    with) is alive; anything unopenable is not.
+    """
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    if os.name == "nt":
+        # os.kill(pid, 0) is not a liveness probe on Windows; OpenProcess is the documented
+        # one. PROCESS_QUERY_LIMITED_INFORMATION (0x1000) asks without needing full access.
+        try:
+            import ctypes
+            kern = ctypes.windll.kernel32
+            handle = kern.OpenProcess(0x1000, False, pid)
+            if not handle:
+                return False
+            kern.CloseHandle(handle)
+            return True
+        except Exception:                                    # noqa: BLE001
+            return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True          # it exists, it just is not ours to signal
+    except OSError:
+        return False
+    return True
+
+
 def lanes_snapshot():
     """Every lane this build knows about, with what is actually RECORDED about it.
 
@@ -29552,6 +29677,7 @@ def lanes_snapshot():
             continue
         st = state.get(lane) or {}
         fail = fails.get(lane) or {}
+        alive = _lane_pid_alive(stored.get("pid"))
         out[lane] = {
             "state": ("up" if st.get("ok") else "failed") if st else "configured",
             "detail": st.get("detail") or fail.get("error") or "",
@@ -29559,6 +29685,10 @@ def lanes_snapshot():
             "failed_starts": fail.get("count") or 0,
             "as_of": stored.get("updated"),
             "from_pid": stored.get("pid"),
+            # NOT "current" when the writer is gone: a record whose process has died is
+            # the LAST known state, not now (A-186). `stale` is the flag to read.
+            "pid_alive": alive,
+            "stale": not alive,
         }
     return out
 
@@ -29704,6 +29834,10 @@ TG_POLL_TIMEOUT = 50          # getUpdates long poll, seconds
 # message respawns it.
 
 TG_IDLE_SECONDS = 10.0
+
+TG_UPLOAD_TIMEOUT = 300.0     # a file upload is not a poll: leave room for a slow uplink
+TG_CAPTION_MAX = 1024         # the Bot API's caption ceiling; a longer note is cut, not refused
+TG_PHOTO_SUFFIXES = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp")
 
 TG_HELP = ("<b>tinycmdr</b>\n"
 
@@ -30170,6 +30304,44 @@ class TelegramClient:
 
 
 
+    def send_file(self, chat_id, path, note="", reply_to=None):
+
+        """Upload a local file into the chat: ONE multipart POST, like every other call.
+
+        `sendDocument` is the upload this lane needs - it carries any type and keeps the
+        file's own name - except for an image, which Telegram renders inline as a photo.
+        The file-size cap is the DOOR's (`agent.send_file_max_bytes`, the same shape the
+        Mattermost lane uses); this is only the transport, and it refuses a path that is
+        not there rather than posting nothing. Raises RuntimeError on the API's refusal,
+        which `TelegramDestination.attach` turns into the honest line the model reads.
+        """
+        import mimetypes
+        p = Path(str(path)).expanduser()
+        if not p.is_file():
+            raise RuntimeError("no such file: %s" % p)
+        method, field = ("sendPhoto", "photo") if p.suffix.lower() in TG_PHOTO_SUFFIXES \
+            else ("sendDocument", "document")
+        data = {"chat_id": chat_id}
+        if note:
+            data["caption"] = str(note)[:TG_CAPTION_MAX]
+        if reply_to:
+            data["reply_to_message_id"] = reply_to
+        ctype = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
+        with p.open("rb") as fh:
+            r = requests.post(self._base + method, data=data,
+                              files={field: (p.name, fh, ctype)},
+                              timeout=TG_UPLOAD_TIMEOUT)
+        try:
+            body = r.json()
+        except Exception:                                        # noqa: BLE001 - reported
+            raise RuntimeError("%s: HTTP %s and no JSON" % (method, r.status_code))
+        if not body.get("ok"):
+            raise RuntimeError("%s: %s" % (method,
+                                           body.get("description") or r.status_code))
+        return body.get("result")
+
+
+
     def answer_callback(self, callback_id, text=""):
 
         return self.call("answerCallbackQuery", callback_query_id=callback_id,
@@ -30397,6 +30569,30 @@ class TelegramDestination(Destination):
             log.error("telegram: the answer could not be posted (%s)", exc)
 
 
+
+    # -- the file door ---------------------------------------------------
+    def attach(self, path, note=""):
+        """Put a local file in this chat. The send_file tool's door.
+
+        The base class answered "this lane cannot carry a file", so an order to send
+        something here failed while the chat, console and page lanes could all attach
+        (A-199). The size cap is the SAME `agent.send_file_max_bytes` the Mattermost lane
+        uses, and a send is a send: nothing is written to disk and no backup is taken,
+        so the only two answers are "sent" and an honest error naming the file.
+        """
+        p = Path(str(path)).expanduser()
+        if not p.is_file():
+            return "ERROR: no such file: %s" % p
+        size = p.stat().st_size
+        cap = int(CONFIG["agent"].get("send_file_max_bytes") or SEND_FILE_MAX)
+        if size > cap:
+            return (f"ERROR: {p.name} is {size:,} bytes, over this box's {cap:,}-byte "
+                    f"send limit (agent.send_file_max_bytes). It is at {p}.")
+        try:
+            self.c.send_file(self.chat_id, p, note=note, reply_to=self.reply_to)
+        except Exception as e:                                   # noqa: BLE001
+            return "ERROR: upload failed: %s" % e
+        return f"sent: {p.name} ({size:,} bytes) is now in this chat"
 
     def _open_question(self, question, options):
 
@@ -30869,6 +31065,52 @@ def tg_session_key(chat_id):
     return "telegram-%s" % chat_id
 
 
+class TelegramDispatcher:
+    """What a SCHEDULED job needs to report into a Telegram chat.
+
+    `run_bot` hands the Scheduler its Mattermost dispatcher and sets `REPORTER`; the
+    Telegram lane set neither, so on a Telegram-only box a scheduled job's progress lines
+    went to the log, its answer to stdout, and the operator never saw either (A-200).
+    `Scheduler._fire` builds `MattermostDestination(self.dispatcher, token, ...)`, which
+    speaks `_post`/`_edit`/`_delete`/`send_file`/`pending`; this is exactly that surface
+    over a TelegramClient, so ONE job path carries the report in every lane. Text is
+    converted with `tg_html` here because the Bot API is called with parse_mode=HTML.
+    """
+
+    name = "telegram"
+
+    def __init__(self, client):
+        self.c = client
+        self.pending = {}          # chat_id -> ask wait state (MattermostDestination.ask)
+
+    def _post(self, channel_id, root_id=None, text="", color=None, touch=True):
+        """Post a new message; returns its id (the ref the reporter redraws)."""
+        del root_id, color, touch
+        try:
+            sent = self.c.send(channel_id, tg_html(str(text)))
+        except Exception as e:                                   # noqa: BLE001 - reported
+            log.error("telegram: a scheduled post failed: %s", e)
+            return None
+        return (sent[0] or {}).get("message_id") if sent else None
+
+    def _edit(self, post_id, channel_id, text, color=None):
+        del color
+        try:
+            self.c.edit(channel_id, post_id, tg_html(str(text)))
+        except Exception as e:                                   # noqa: BLE001
+            log.debug("telegram: a scheduled edit failed: %s", e)
+
+    def _delete(self, post_id, channel_id):
+        try:
+            self.c.call("deleteMessage", chat_id=channel_id, message_id=post_id)
+        except Exception as e:                                   # noqa: BLE001
+            log.debug("telegram: could not delete message %s: %s", post_id, e)
+
+    def send_file(self, channel_id, root_id, path, note=""):
+        return TelegramDestination(self.c, channel_id,
+                                   reply_to=root_id).attach(path, note)
+
+
 
 
 
@@ -30885,7 +31127,19 @@ def run_telegram():
 
     """
 
+    global REPORTER
     tg = CONFIG.get("telegram") or {}
+
+    def _refuse(reason):
+        """Record WHY this lane cannot start, then exit 2.
+
+        A lane that dies must not leave the last record standing: on a two-lane box the
+        Mattermost lane keeps the process alive, nothing else rewrites `telegram`, and
+        `health` went on reporting the dead lane's last "up" (A-185). The exit IS the
+        lane's true state, so it is written before the exit.
+        """
+        lane_down("telegram", reason)
+        sys.exit(2)
 
     token = (tg.get("token") or "").strip()
 
@@ -30895,7 +31149,7 @@ def run_telegram():
 
                      "(or telegram.token in config.json) and restart.", BASE_DIR / ".env")
 
-        sys.exit(2)
+        _refuse("no Telegram token configured")
 
     try:
 
@@ -30909,7 +31163,7 @@ def run_telegram():
 
                      ENV_FILE.name, _problem)
 
-        sys.exit(2)
+        _refuse("the Telegram token in %s is unusable: %s" % (ENV_FILE.name, _problem))
 
     allowed = {str(u).strip() for u in (tg.get("allowed_users") or []) if str(u).strip()}
 
@@ -30919,7 +31173,7 @@ def run_telegram():
 
                      "it would ignore every DM. Put your numeric Telegram id there.")
 
-        sys.exit(2)
+        _refuse("telegram.allowed_users is empty (deny-by-default)")
 
     client = TelegramClient(token)
 
@@ -30939,9 +31193,18 @@ def run_telegram():
 
         log.critical("telegram: the token was refused (%s)", exc)
 
-        sys.exit(2)
+        _refuse("the Telegram token was refused: %s" % exc)
 
     lane_up("telegram", "connected as @%s" % me.get("username"))
+    # The Scheduler and the scheduled-report door, exactly as run_bot wires them: on a
+    # Telegram-only box a scheduled job's progress went to the log and its answer to
+    # stdout, with nobody at the other end (A-200). announce_startup is honoured here
+    # too, so a restart asked for from this chat is answered in it (A-201).
+    _tg_disp = TelegramDispatcher(client)
+    SCHEDULER.dispatcher = _tg_disp
+    REPORTER = lambda cid, text: _tg_disp._post(cid, None, text)
+    if CONFIG["agent"].get("announce_restart", True):
+        announce_startup(_tg_disp)
     log.info("telegram: connected as @%s, %d allowed id(s), DM only",
 
              me.get("username"), len(allowed))
@@ -31010,6 +31273,12 @@ def run_telegram():
                 client.typing(chat_id)
 
                 answer = drive_run(key, text, reporter, cancel_event=cancel,
+
+                                   # The chat id is this run's channel: it is what a
+                                   # `schedule` job made here reports back to, and what
+                                   # the watchdog names when it has to speak (A-200).
+
+                                   channel_id=chat_id,
 
                                    # The lane's own destination is the ask_user door:
 
@@ -31094,7 +31363,10 @@ def run_telegram():
 
         except Exception as exc:                            # noqa: BLE001 - retried
 
-            now = time.time()
+            # MONOTONIC: this window must not be broken by a wall-clock step (NTP, a VM
+            # resume) - `now - _failing_since` going negative is read as "no time has
+            # passed" and silences the report (A-182).
+            now = time.monotonic()
 
             if _failing_since is None:
 
@@ -31104,7 +31376,8 @@ def run_telegram():
 
                 # The loop retries for ever in silence: without this, health says the
                 # lane is up while it has heard nothing for minutes. Report through the
-                # same lane record the other lanes use, once per window.
+                # same lane record the other lanes use; the reason CLASS accumulates even
+                # though the transport's own message varies per attempt (A-179/A-180).
 
                 lane_down("telegram", "poll failing for %d min: %s"
                           % (int((now - _failing_since) / 60), exc))
