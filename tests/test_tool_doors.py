@@ -51,10 +51,31 @@ for label, code in (
         ("import-from",
          "import sys\nsys.path.insert(0, '/x/tinycmdr/tools')\nfrom toolsmith import run\n"),
         ("bare-import", "import patch\n"),
+        ("importlib", 'import importlib\nimportlib.import_module("toolsmith")\n'),
 ):
     out = fb.tool_execute_code({"code": code}, dict(CTX))
     check(f"execute_code: a tool FILE via {label} is answered with the door",
           out.startswith("ERROR:") and "is a TOOL on this box" in out, out[:120])
+
+# A mention is not an execution (2026-10-05, a live install): a comment, a bare string,
+# a print and a READ of a tool file each answered the door while the code never ran - one
+# of them a path in a tree that holds no tools/ at all. Only import/subprocess-shaped
+# uses are the miss; everything else must run.
+for label, code, want in (
+        ("a comment naming a tool file",
+         "# note: this is documented beside C:\\somewhere\\plan.py\n"
+         'print("RAN: comment")\n', "RAN: comment"),
+        ("a bare string, never executed",
+         'print("python tools/patch.py runs next")\nprint("RAN: string")\n', "RAN: string"),
+        ("reading a tool file for its bytes",
+         'p = r"%s"\nprint("RAN: bytes =", len(open(p).read()))\n'
+         % (Path(fb.REGISTRY.tools_dir) / "patch.py"), "RAN: bytes"),
+        ("a path outside tools/ whose stem is a tool name",
+         'print("RAN: elsewhere?", len(r"C:\\repo\\deploy\\process.py"))\n', "RAN: elsewhere?"),
+):
+    out = str(fb.tool_execute_code({"code": code}, dict(CTX)))
+    check(f"execute_code: {label} still runs",
+          want in out and "is a TOOL on this box" not in out, out[:160])
 
 out = fb.tool_execute_code({"code": "print('ordinary work')\n"}, dict(CTX))
 check("execute_code: ordinary code still runs", "ordinary work" in out and not out.startswith("ERROR:"),

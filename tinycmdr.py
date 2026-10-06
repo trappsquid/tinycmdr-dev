@@ -20,6 +20,7 @@ The app (the default door): python tinycmdr.py --app
 One-shot task: python tinycmdr.py --once "why is plex crashing"
 """
 
+import ast
 import base64
 import contextlib
 import datetime as _dt
@@ -6692,28 +6693,99 @@ def _tool_run_as_script(command):
     return ""
 
 
+_EXEC_CALLEES = frozenset((
+    "run", "call", "check_call", "check_output", "Popen",        # subprocess
+    "system", "popen", "spawn", "spawnl", "spawnv", "spawnvp",   # os
+    "run_path", "run_module",                                    # runpy
+    "exec", "eval", "__import__", "import_module",               # builtins/importlib
+))
+
+
+def _str_literals(node):
+    """The string constants inside one expression (a list/tuple argument counts)."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        yield node.value
+    elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        for elt in node.elts:
+            yield from _str_literals(elt)
+    elif isinstance(node, ast.JoinedStr):
+        for v in node.values:      # an f-string's fixed parts can still name the file
+            if isinstance(v, ast.Constant) and isinstance(v.value, str):
+                yield v.value
+
+
+def _tool_in_command_text(text):
+    """The registered tool a command-looking string RUNS, or ""."""
+    for m in re.finditer(r"(?<![\w.])([A-Za-z_]\w*)\.py\b", text):
+        cand = m.group(1)
+        if _registered_tool(cand) or _tool_for_file_name(cand):
+            return cand
+    for m in re.finditer(r"(?:^|[\s;&|'\"])(?:from[ \t]+([A-Za-z_]\w*)[ \t]+import"
+                         r"|import[ \t]+([A-Za-z_]\w*))", text):
+        cand = m.group(1) or m.group(2)
+        if _registered_tool(cand) or _tool_for_file_name(cand):
+            return cand
+    for m in re.finditer(r"(?:^|[\s;&|'\"])-m[ \t]+([A-Za-z_]\w*)", text):
+        cand = m.group(1)
+        if _registered_tool(cand) or _tool_for_file_name(cand):
+            return cand
+    return ""
+
+
 def _tool_named_in_code(code):
-    """The registered tool this PYTHON source runs or imports as a file, or "".
+    """The registered tool this PYTHON source RUNS or IMPORTS as a file, or "".
 
     The shell door cannot see inside Python: `subprocess.run(["python3",
     ".../tools/power_report.py"])` and `from toolsmith import run` are the same miss as
     `python tools/power_report.py` typed into the shell, and it is the door the drive
-    reaches for first (measured 2026-09-24, macOS and a Windows box: seven execute_code calls
-    between them, no tool call).
+    reaches for first (measured 2026-09-24, macOS and a Windows box: seven execute_code
+    calls between them, no tool call).
+
+    Only EXECUTION counts. The old read was "any .py path anywhere in the source", so a
+    comment, a bare string, a print and reading a tool file for its bytes each answered
+    the door and the code never ran - including paths in trees that hold no tools/ at all
+    (measured 2026-10-05 on a live install; four such mentions). The source is parsed
+    instead, and a mention counts only when it is imported or fed to a call that runs it.
+    Source that does not parse cannot run anyway; it keeps the text-level read so a shell
+    command pasted into the Python door still gets its answer.
     """
     text = code or ""
     if not text:
         return ""
-    cands = [m.group(1) for m in re.finditer(r"[\w./\\-]*[\\/]([A-Za-z_][\w]*)\.py", text)]
-    cands += [m.group(1) or m.group(2) for m in re.finditer(
-        r"(?:^|\n)[ \t]*(?:from[ \t]+([A-Za-z_][\w]*)[ \t]+import"
-        r"|import[ \t]+([A-Za-z_][\w]*))", text)]
-    cands += [m.group(1) for m in re.finditer(r"-m[ \t]+([A-Za-z_][\w]*)", text)]
-    for cand in cands:
-        # A tools/ FILE whose stem is not a tool name is the same miss one step out:
-        # `import ported_todo` names the file, and the tool it registers is todo_list.
-        if _registered_tool(cand) or _tool_for_file_name(cand):
-            return cand
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return _tool_run_as_script(text)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                cand = alias.name.split(".")[0]
+                if _registered_tool(cand) or _tool_for_file_name(cand):
+                    return cand
+        elif isinstance(node, ast.ImportFrom):
+            module = (node.module or "").split(".")[0]
+            # A tools/ FILE whose stem is not a tool name is the same miss one step out:
+            # `from tools import ported_todo` names the file, and the tool it registers
+            # is todo_list.
+            cands = [module] + ([a.name for a in node.names] if module == "tools" else [])
+            for cand in cands:
+                if cand and (_registered_tool(cand) or _tool_for_file_name(cand)):
+                    return cand
+        elif isinstance(node, ast.Call):
+            func = node.func
+            callee = (func.attr if isinstance(func, ast.Attribute)
+                      else func.id if isinstance(func, ast.Name) else "")
+            if callee not in _EXEC_CALLEES:
+                continue
+            blob = " ".join(s for arg in [*node.args, *[k.value for k in node.keywords]]
+                            for s in _str_literals(arg))
+            cand = _tool_in_command_text(blob)
+            if not cand and callee in ("import_module", "__import__"):
+                first = blob.strip().split()[0].split(".")[0] if blob.strip() else ""
+                if first and (_registered_tool(first) or _tool_for_file_name(first)):
+                    cand = first
+            if cand:
+                return cand
     return ""
 
 
