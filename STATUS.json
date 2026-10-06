@@ -1747,6 +1747,69 @@
         "commit": "f51cd01"
       },
       "detail": "Recorded 2026-10-06 (f51cd01) in AGENTS.md Invariants, after the operator endorsed the single-file shape - especially the agent reading and editing itself. tinycmdr.py stays one file: what the operator reads end to end, what SHA256SUMS verifies and the update copies (nothing builds on the host), and what the agent edits when it works on itself. Parts would be assembled at package-build time at the earliest; that re-architecture needs its own item, not a cleanup."
+    },
+    {
+      "id": "config-set-deep-path-1-0-82",
+      "title": "a deep config set nests, or is refused",
+      "state": "shipped",
+      "anchors": {
+        "commit": "5c82837"
+      },
+      "detail": "A-2026-10-05-68, an earlier review run 9 (fixed 2026-10-06, 5c82837). config rpartition'd the path into one section, so `set zz.a.b v2` wrote the literal top-level key \"zz.a\" beside zz={a:v1} - a write that missed the path the operator named and that unset could not reach. The walk now creates each missing intermediate dict and refuses (rc=1, naming the walked path and its value) when an intermediate exists as a scalar. tests/test_verbs.py: 2 of the 4 new checks red on the pre-fix build (TINYCMDR_TEST_APP)."
+    },
+    {
+      "id": "verb-log-secret-1-0-82",
+      "title": "the verb log never carries a secret value",
+      "state": "shipped",
+      "anchors": {
+        "commit": "0ae0f59"
+      },
+      "detail": "A-2026-10-05-69, run 9 (fixed 2026-10-06, 0ae0f59). The verb line is logged before dispatch, so `config set mattermost.token hunter2` put the value in tinycmdr.log in cleartext even though the write itself was refused ('put it in .env instead'). _secret_config_path is now one predicate shared by the refusal and the log scrub; the value logs as <redacted>. tests/test_verbs.py: +1 sentinel check, red on the pre-fix build."
+    },
+    {
+      "id": "config-key-near-miss-1-0-82",
+      "title": "a case-flipped config key gets a near-miss hint",
+      "state": "shipped",
+      "anchors": {
+        "commit": "d568caf"
+      },
+      "detail": "A-2026-10-05-72, run 9 (fixed 2026-10-06, d568caf). Verbs are case-insensitive but keys are not, and `get AGENT.max_steps` answered (not set) rc=0 - silence that reads as 'no such setting'. One unambiguous case-insensitive match prints the whole corrected path; ambiguity stays silent. tests/test_verbs.py: +3 checks, red on the pre-fix build."
+    },
+    {
+      "id": "read-past-eof-1-0-82",
+      "title": "a read past the end names the file's length",
+      "state": "shipped",
+      "anchors": {
+        "commit": "7154ff0"
+      },
+      "detail": "A-2026-10-05-70, run 9 (fixed 2026-10-06, 7154ff0). An offset past EOF printed the phantom range (lines 99999-99999 of 98) with an empty body; it now returns the honest error naming the file's line count and the largest usable offset, while the last real line still reads. tests/test_read_window.py: +2 checks, red on the pre-fix build (the suite also honors TINYCMDR_SRC now)."
+    },
+    {
+      "id": "blank-config-value-refuted-1-0-82",
+      "title": "A-71 (cannot blank a value): refuted on this build",
+      "state": "closed",
+      "anchors": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "A-2026-10-05-71, run 9 (refuted 2026-10-06). Verified against this build in a staged tree: `config set zz.e1 \"\" --str` returns rc=0 and stores the empty string. The audit's rc=2 came from 1.0.80 through a shell (PowerShell strips the empty argument) and the same run's Dismissed list already names that artifact; the probe's 1.0.81 rc=0 measurement matches. No code change."
+    },
+    {
+      "id": "search-max-results-zero-1-0-82",
+      "title": "a non-positive max_results is refused, not defaulted",
+      "state": "shipped",
+      "anchors": {
+        "commit": "9460a3b"
+      },
+      "detail": "A-2026-10-05-73, run 9 (fixed 2026-10-06, 9460a3b). The audit measured 'max_results=0 returns 1 hit'; reproduced here as 0 falling through `or 50` and searching anyway (the audit's tree had one match). An explicit 0 or negative now returns the named error, and a non-numeric cap is rejected with the shape. tests/test_search_scope.py: +2 checks, red on the pre-fix build."
+    },
+    {
+      "id": "write-file-parent-note-1-0-82",
+      "title": "write_file names the parent dirs it creates",
+      "state": "shipped",
+      "anchors": {
+        "commit": "f235640"
+      },
+      "detail": "A-2026-10-05-74, run 9 (fixed 2026-10-06, f235640). A typo'd path built the whole tree silently and the result read as a plain success; the result now names each missing parent it created. tests/test_tool_doors.py: +1 check, red on the pre-fix build (staged pre-fix tree)."
     }
 
   ]

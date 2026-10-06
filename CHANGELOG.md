@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Update output:** the notes that narrated updater policy instead of the update are gone (the `.git`-checkout notice, the dev-kit keep line naming a `where-roles.json` a clone may not have); the host-default note speaks only when this release actually moved the shipped default, and the kept-files report is one plain line. The update prints what it wrote and what to do next. (tests/test_update_notes.py)
 
+### Fixed
+- **`config set` on a deep path:** a 3+ segment path whose parent was missing wrote a literal top-level dotted key (`zz.a.b` became the key `zz.a`) that no verb could reach again; the walk creates the intermediate dicts, and a scalar in the middle is refused naming the path it holds. (tests/test_verbs.py)
+- **The verb log:** the argv line is logged before dispatch, so `config set mattermost.token <value>` put the value in `tinycmdr.log` in cleartext even when the write itself was refused; the key test is now the refusal's own, and the value logs as `<redacted>`. (tests/test_verbs.py)
+- **`config get`:** a case-flipped key answered `(not set)` rc=0, indistinguishable from a real miss; one unambiguous case-insensitive match prints the whole corrected path. (tests/test_verbs.py)
+- **`read_file` past the end:** an offset beyond the last line printed the phantom range `(lines 99999–99999 of 98)`; it returns the honest error with the file's length and the largest usable offset. (tests/test_read_window.py)
+- **`search_files`:** `max_results=0` fell through `or 50` and searched anyway; a non-positive cap is refused by name. (tests/test_search_scope.py)
+- **`write_file`:** a typo'd path built the missing directories silently; the result names each parent directory it created. (tests/test_tool_doors.py)
+
 ### Removed
 - **`CODE_OF_CONDUCT.md`:** the Contributor Covenant 2.1 boilerplate promised enforcement by "community leaders" for a project with one maintainer and no community. The GitHub profile is the contact for everything; `CONTRIBUTING.md` and `SECURITY.md` carry the real rules.
 
