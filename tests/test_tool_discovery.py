@@ -268,6 +268,42 @@ check("...and is absent when no runbook is installed (no dangling header)",
       "a skill is a runbook, not a tool" not in sp_bare
       and "Prose skills installed" not in sp_bare)
 
+# The index is bounded like every sibling surface (the tool index, the memory index and
+# the notes block all have a cap): descriptions are dropped for a tail of NAMES before a
+# name is lost, because a name is what the `skill` tool is asked for.
+_skcap = Path(tempfile.mkdtemp(prefix="fbskills-cap-"))
+for _i in range(8):
+    _d = _skcap / ("runbook-%02d" % _i)
+    _d.mkdir()
+    (_d / "SKILL.md").write_text(
+        "---\nname: runbook-%02d\ndescription: %s\n---\nbody\n"
+        % (_i, "long description " * 30), encoding="utf-8", newline="\n")
+_keep_cap_dir = fb.SKILLS_DIR
+_keep_index_cap = fb.CONFIG["agent"].get("skills_index_max_chars")
+try:
+    fb.SKILLS_DIR = _skcap
+    fb.CONFIG["agent"]["skills_index_max_chars"] = 300
+    _sp = fb.build_system_prompt()
+    _lines = [l for l in _sp.splitlines()
+              if l.startswith("- runbook-") or "more skills" in l]
+    check("an over-budget skills index drops descriptions before names",
+          len(_lines) == 8 and "long description" not in _sp
+          and sum(len(l) + 1 for l in _lines) <= 300,
+          (_lines[:2], len(_lines)))
+    fb.CONFIG["agent"]["skills_index_max_chars"] = 60
+    _sp = fb.build_system_prompt()
+    _lines = [l for l in _sp.splitlines()
+              if l.startswith("- runbook-") or "more skills" in l]
+    check("...and names how many were dropped when even names overflow",
+          len(_lines) < 8 and "more skills" in _sp, _lines)
+finally:
+    fb.SKILLS_DIR = _keep_cap_dir
+    if _keep_index_cap is None:
+        fb.CONFIG["agent"].pop("skills_index_max_chars", None)
+    else:
+        fb.CONFIG["agent"]["skills_index_max_chars"] = _keep_index_cap
+    shutil.rmtree(_skcap, ignore_errors=True)
+
 check("prompt: the routing bullet names the shell verbs it replaces",
       "Select-String" in sp and "findstr" in sp and "search_files {pattern, path}" in sp)
 check("prompt: the routing bullet carries search_files' own call shape",

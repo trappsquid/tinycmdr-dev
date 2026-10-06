@@ -14731,19 +14731,42 @@ def build_system_prompt(subagent=False):
                     + custom + "\n") if (custom and not subagent) else ""
     skills = [] if subagent else [s for s in skill_index()
                                   if not s.get("hide") and not s.get("always")]
-    skills_block = ("\nProse skills installed (runbooks of local procedures "
-                    "and hard-won warnings — read the relevant one with the "
-                    "`skill` tool BEFORE working in its domain; a skill is a "
-                    "runbook, not a tool, so an inventory asked for TOOLS names "
-                    "tools only, never skill names). If a skill's globs match the "
-                    "path or command you are about to touch, read that runbook "
-                    "first:\n"
-                    + "\n".join(
-                        "- %s%s: %s" % (s["name"],
-                                        " (globs: %s)" % ", ".join(s["globs"])
-                                        if s["globs"] else "", s["desc"])
-                        for s in skills)
-                    + "\n") if skills else ""
+    skills_block = ""
+    if skills:
+        cap = mem_limit_chars("skills_index_max_chars", 2000)
+
+        def _row(s, with_desc=True):
+            head = "- %s%s" % (s["name"],
+                               " (globs: %s)" % ", ".join(s["globs"])
+                               if s["globs"] else "")
+            return head + (": %s" % s["desc"] if with_desc else "")
+
+        def _fits(rows):
+            return cap <= 0 or sum(len(r) + 1 for r in rows) <= cap
+
+        rows = [_row(s) for s in skills]
+        if not _fits(rows):
+            # Descriptions go first and names stay: a NAME is what the `skill` tool is
+            # asked for (and what a reader needs to know a runbook exists); the prose
+            # is one call away.
+            names = [_row(s, False) for s in skills]
+            if _fits(names):
+                rows = names
+            else:
+                kept = []
+                for r in names:
+                    if kept and not _fits(kept + [r]):
+                        break
+                    kept.append(r)
+                rows = kept + ["... +%d more skills (`skill` action=list names them)"
+                               % (len(names) - len(kept))]
+        skills_block = ("\nProse skills installed (runbooks of local procedures "
+                        "and hard-won warnings — read the relevant one with the "
+                        "`skill` tool BEFORE working in its domain; a skill is a "
+                        "runbook, not a tool, so an inventory asked for TOOLS names "
+                        "tools only, never skill names). If a skill's globs match the "
+                        "path or command you are about to touch, read that runbook "
+                        "first:\n" + "\n".join(rows) + "\n")
     text = scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. {'' if subagent else soul_text() + ' '}The operator messages you via Mattermost; you do the work and report back.
 
 Legend for this prompt: NEVER = do not, MUST = required. A line beginning with
