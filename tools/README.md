@@ -29,10 +29,28 @@ and the file defines four things:
     MUTATES = True        # only if the tool changes local state
     CATEGORY = "files & edit"   # optional: the shelf it is listed under in the prompt
 
-`run` returns text. `ctx["shell"](cmd)` runs a shell command the way the shell
-tool does (guards and all) and `ctx["config"]` is the bot config. Handle your
-errors and return a message: an exception becomes a tool error, which works but
-tells the model less.
+`run` returns text. Handle your errors and return a message: an exception becomes a tool
+error, which works but tells the model less.
+
+`ctx` is the tool's environment; the keys are (this list is the one the `create_tool`
+description points at):
+
+    config       the bot config (the same dict the harness reads)
+    depth        how deep this run is (0 = the top-level run; higher for delegated ones)
+    model        the model this session runs on
+    session_key  this session's key (hidden-tool state is keyed on it)
+    source       what this run reports through
+    channel_id   the lane's channel id
+    shell        ctx["shell"](cmd) runs a command the way the shell tool does (guards and all)
+    shell_argv   the box's real shell as an argv prefix (PowerShell on Windows, bash elsewhere)
+    shell_guard  run one command through the same guard the shell tool applies
+    cancel_event set by /stop: check it in any loop and return early
+    report       {"say","progress","note","narration","drop","tool_done"}: the run's reporting callbacks
+    ask_door     how this run asks the operator a question (None when the lane has no door)
+    confirm_cb   how a tool raises its own confirm-tier question (None when the lane has none)
+    send_file    hand the operator a file (None when the lane has no door)
+    render_ui    draw a card (A2UI) when the lane has a renderer
+    tool_images  True when this build attaches {"text":..., "images":[...]} returns to the model
 
 Every native tool this tree ships - and every file `toolsmith action=new` writes - ends
 with a standalone block, so the file is also a runnable script:

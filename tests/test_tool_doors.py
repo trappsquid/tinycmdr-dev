@@ -14,8 +14,11 @@ runtime answer instead of a prompt line:
 
 Run:  python tests/test_tool_doors.py
 """
+import ast
 import importlib.util
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -191,6 +194,43 @@ if "mcp" not in fb.CORE_TOOLS:
         {"session_key": "doors-gated"})
     check("...while a genuinely unknown name keeps the build hint",
           "different build" in _out, _out[:200])
+
+# The author-facing contract must not drift again: every key a tool really receives in
+# ctx is named in tools/README.md, and the create_tool description points at that list.
+# (2026-10-05: the README named 2 of the 16, so an author re-implemented send_file with
+# ctx["shell"] - or gave up - and a long tool never saw cancel_event.)
+
+
+def _ctx_keys_app(src_path):
+    tree = ast.parse(src_path.read_text(encoding="utf-8"))
+    keys = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and isinstance(node.value, ast.Dict)
+                and any(isinstance(t, ast.Name) and t.id == "ctx" for t in node.targets)):
+            got = {k.value for k in node.value.keys
+                   if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+            if "tool_images" in got:
+                keys |= got
+        elif (isinstance(node, ast.Assign) and len(node.targets) == 1
+              and isinstance(node.targets[0], ast.Subscript)):
+            tgt = node.targets[0]
+            if (isinstance(tgt.value, ast.Name) and tgt.value.id == "ctx"
+                    and isinstance(tgt.slice, ast.Constant)
+                    and isinstance(tgt.slice.value, str)):
+                keys.add(tgt.slice.value)
+    return keys
+
+
+_ctx_now = _ctx_keys_app(SRC)
+_readme_now = (BASE / "tools" / "README.md").read_text(encoding="utf-8")
+check("the ctx probe finds the live keys (16 expected)",
+      len(_ctx_now) >= 15, sorted(_ctx_now))
+check("every ctx key a tool receives is named in tools/README.md",
+      all(re.search(r"\b%s\b" % re.escape(k), _readme_now) for k in _ctx_now),
+      sorted(k for k in _ctx_now if not re.search(r"\b%s\b" % re.escape(k), _readme_now)))
+_desc_now = json.dumps(fb.CORE_TOOLS["create_tool"]["schema"])
+check("the create_tool description names cancel_event and points at the list",
+      "cancel_event" in _desc_now and "tools/README.md" in _desc_now, _desc_now[:200])
 
 _ported = Path(fb.REGISTRY.tools_dir) / "doors_ported_probe.py"
 _ported.write_text(
