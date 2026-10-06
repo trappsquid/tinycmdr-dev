@@ -947,15 +947,18 @@ if ($Ask -and (Test-Path (Join-Path $InstallDir "config.json")) -and
 if ($Ask -and -not $KeepConn) {
     Head "how you talk to it"
     Write-Host ""
-    Write-Host "tinycmdr answers messages. Pick how it should get them - a chat account is what"
-    Write-Host "runs in the background; sessions need nothing installed or hosted."
+    Write-Host "tinycmdr answers in one or more of these. The page is the DEFAULT door; a chat"
+    Write-Host "account is what answers messages in the background."
     $picked = Ask-Many "How should you talk to it? Pick any that apply - they work together." @(
+        "The web page (the default door: token-gated, opens on this machine or your network)",
         "A Mattermost bot account (paste a bot token from your server)",
-        "A Telegram bot account (a token from @BotFather; DMs only, nothing to host)",
-        "Sessions by hand in a terminal (nothing runs in the background)")
-    $WantChat = $picked -contains 1
-    $WantTg = $picked -contains 2
-    $WantCli = $picked -contains 3
+        "A Telegram bot account (a token from @BotFather; DMs only, nothing to host)")
+    $WantWeb = $picked -contains 1
+    $WantChat = $picked -contains 2
+    $WantTg = $picked -contains 3
+    Write-Host ""
+    Write-Host "  Sessions by hand are always available, no install needed: run tinycmdr --cli for a"
+    Write-Host "  console, or tinycmdr --once ""<task>"" for one shot."
 
     if ($WantChat) {
         Write-Host ""
@@ -1125,9 +1128,15 @@ if ($Ask -and -not $KeepConn) {
     # ---- the page: loopback, or reachable from your network? ----
     # The page is the default door. Its token is minted into .env below and never
     # echoed; web.host decides who can reach it.
-    if ($NoWeb) {
+    if (-not $NoWeb -and $Ask -and -not $KeepConn -and -not $WantWeb -and -not $WebToken) {
+        # The menu above already answered this: no page picked and no token handed over
+        # means the page stays OFF - its bind, port and token are not asked for at all.
+        $NoWeb = $true
+        Write-Host "  page        : off (not selected above)"
+    } elseif ($NoWeb) {
         Write-Host "  page        : disabled (-NoWeb)"
-    } else {
+    }
+    if (-not $NoWeb) {
         # Ports below 1024 are a PRIVILEGE boundary: without Administrator the bind fails
         # and the page is simply absent. Fall back here, with the reason, rather than
         # leaving the host to discover it at first start.
@@ -1180,7 +1189,6 @@ if ($Ask -and -not $KeepConn) {
     if ($WantTg) {
         $ways += if ($WantChat) { "a Telegram DM (only with --telegram)" } else { "a Telegram DM" }
     }
-    if ($WantCli) { $ways += "sessions you start by hand" }
     Write-Host ("  how you talk : {0}" -f ($ways -join " and "))
     Write-Host ("  model        : {0} at {1}" -f $Model, $ModelBaseUrl)
     if ($ModelKey) { Write-Host "  model key    : given (.env, TINYCMDR_LLM_API_KEY)" }

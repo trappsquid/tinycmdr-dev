@@ -306,6 +306,14 @@ def main():
     # gone - the page lane is not a separate lane object now.
     check("the local-page lane variable is gone", "$LocalWeb" not in install,
           "the installer still computes a page lane")
+    check("the door question offers the page first and describes sessions instead of offering them",
+          "The web page (the default door" in install
+          and "Sessions by hand in a terminal (nothing runs in the background)" not in install
+          and "tinycmdr --cli for a" in install,
+          "the lane menu still implies chat or terminal are the only doors")
+    check("the page's own questions are skipped when the menu did not pick it",
+          "-not $WantWeb -and -not $WebToken" in install,
+          "the page asks for a bind/port/token after 'no page' was answered")
     check("registration counts a chat lane or the page",
           "$Serve = $AnyLane -or (-not $NoWeb)" in install
           and "$RegisterTask = (-not $SkipTask) -and $Serve" in install,

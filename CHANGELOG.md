@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **The composer's resize grip:** the browser's native grip rode the text column's right edge - mid-window, not a corner - and fought the page's content-driven growth; it is off (`resize: none`).
 
+### Changed
+- **The installer's door question names the page first** (`INSTALL-WINDOWS.cmd`): the menu is the web page (the default door), Mattermost, Telegram; terminal sessions are described as always available (`tinycmdr --cli` / `--once`) instead of being offered as something to install, and the page's bind/port/token questions are skipped when the menu did not pick it. (tests/test_installer_windows.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed
@@ -33,7 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`write_file`:** a typo'd path built the missing directories silently; the result names each parent directory it created. (tests/test_tool_doors.py)
 
 ### Removed
-- **`CODE_OF_CONDUCT.md`:** the Contributor Covenant 2.1 boilerplate promised enforcement by "community leaders" for a project with one maintainer and no community. The GitHub profile is the contact for everything; `CONTRIBUTING.md` and `SECURITY.md` carry the real rules.
+- **`CODE_OF_CONDUCT.md`:** the Contributor Covenant 2.1 boilerplate promised enforcement by "community leaders" for a project I maintain alone, with no community. The GitHub profile is the contact for everything; `CONTRIBUTING.md` and `SECURITY.md` carry the real rules.
 
 ## [1.0.81] - 2026-10-05
 

@@ -37,7 +37,7 @@ custom tools        4 example tools ship in ./tools/ (native .py, register-style
 chat commands       19 CLI verbs, 10 chat verbs (section 3.1)
 prose skills        no runbook ships in the repo - ./skills/ is per-host and gitignored,
                     read on demand when a box has any
-tests               95 suites / 32,083 lines / 3,796 checks that need no model, plus a graded
+tests               96 suites / 32,164 lines / 3,798 checks that need no model, plus a graded
                     set of 19 tasks against a real endpoint (9 support scripts;
                     run_all.py is the gate)
 config              config.json, 6 blocks: llm 30, telegram 2, mattermost 6, web 4, search 3, agent 115
@@ -93,7 +93,7 @@ config-driven, and each item below exists because something went wrong in the fi
 
 ### 3.1 Commands: `/tinycmdr <verb>` in chat, `tinycmdr <verb>` in a shell
 
-One word for both, because being asked which one to type was tiresome:
+One word for both, because I got tired of being asked which one to type:
 same verbs, same behaviour, whichever door you are at. Chat needs the prefix (a client
 only sends `/`-lines that match a registered command); a shell does not. A bare
 `tinycmdr` in a shell opens a session, because that is what a person at a keyboard
