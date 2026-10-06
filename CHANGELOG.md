@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **A file log that cannot write now says so** (A-78): a rollover renames the log, and on Windows an open handle (the running bot) makes that rename fail - the exception died in the listener thread, so a record could vanish from the file while the console kept showing it. A blocked rollover falls back to a plain append and one stderr line names the file and the error. (tests/test_file_log.py)
 
+### Fixed
+- **The auto-approval line names what it is running** (reported 2026-10-06): a later session showed only "approved permanently - running" beside no command, which reads like an ask that approved itself. The line now carries the scrubbed command, the scope, the date the grant was given (stamped at grant time; an older file says "no date recorded") and the undo path (`tinycmdr approvals clear`). (tests/test_guard_battery.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed

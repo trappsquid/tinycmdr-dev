@@ -467,6 +467,27 @@ def test_confirm_approval_scopes():
           and fb.confirm_preapproved("anything")[0] is False)
     check("a plain 'no' still declines",
           fb.RunReporter(_ApprovalDest("no"), "approve-s3").confirm("rm -rf /tmp/z") is False)
+    # Reported 2026-10-06: a later session showed only "approved permanently" beside a
+    # command nobody could see, which reads like an ask that approved itself.
+    fb.confirm_allow("clear")
+    d = _ApprovalDest("session")
+    r = fb.RunReporter(d, "approve-s7")
+    r.confirm("rm -rf /tmp/one")
+    r.confirm("rm -rf /tmp/two")
+    check("an auto-approved command names itself in the line",
+          "rm -rf /tmp/two" in d.lines[-1], d.lines[-1])
+    check("...and carries the scope and the undo hint",
+          "session" in d.lines[-1] and "approvals clear" in d.lines[-1], d.lines[-1])
+    fb.confirm_allow("clear")
+    fb.RunReporter(_ApprovalDest("always"), "approve-s8").confirm("rm -rf /tmp/perm")
+    state = json.loads((STAGE / "confirm-allow.json").read_text(encoding="utf-8"))
+    check("a permanent grant records WHEN it was given", bool(state.get("since")), state)
+    d2 = _ApprovalDest("yes")
+    fb.RunReporter(d2, "approve-s9").confirm("rm -rf /tmp/later")
+    check("...so a later session's line carries the command and the date",
+          "rm -rf /tmp/later" in d2.lines[-1] and state["since"] in d2.lines[-1],
+          d2.lines[-1])
+    fb.confirm_allow("clear")
 
 
 def test_the_never_tier_reads_tokens_not_spellings():

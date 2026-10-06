@@ -8063,11 +8063,20 @@ def _confirm_allow_read():
 
 
 def confirm_preapproved(session_key):
-    """(True, reason) when the operator already approved this run, else (False, "")."""
+    """(True, reason) when the gate is already approved, else (False, "").
+
+    The reason NAMES THE SCOPE AND THE DATE: a later session used to read only
+    "approved permanently" beside a command nobody could see, which reads like an ask
+    that approved itself (reported 2026-10-06). "since" is stamped when the grant is
+    written; a file from before that field says so instead of inventing a date.
+    """
     if session_key and session_key in _CONFIRM_SESSION_ALLOW:
         return True, "approved for this session"
-    if _confirm_allow_read().get("all"):
-        return True, "approved permanently"
+    d = _confirm_allow_read()
+    if d.get("all"):
+        since = str(d.get("since") or "").strip()
+        return True, ("approved permanently on %s" % since if since
+                      else "approved permanently (no date recorded)")
     return False, ""
 
 
@@ -8094,6 +8103,7 @@ def confirm_allow(action, session_key=None):
     d = _confirm_allow_read()
     if action == "always":
         d["all"] = True
+        d.setdefault("since", time.strftime("%Y-%m-%d"))
     atomic_write_text(CONFIRM_ALLOW_FILE, json.dumps(d, indent=2))
     return confirm_allow_state()
 
@@ -20259,7 +20269,13 @@ class RunReporter:
         """
         ok_pre, why = confirm_preapproved(self.session_key)
         if ok_pre:
-            self._draw("system", f"✅ {why} - running")
+            # The line names WHAT is running and WHY it was not asked again: a bare
+            # "approved permanently" beside no command read like an ask that approved
+            # itself (reported 2026-10-06). The undo path rides along.
+            subject = scrub(str(command or "").strip())[:120]
+            self._draw("system",
+                       f"✅ {why} - running: {subject}\n"
+                       f"   (`tinycmdr approvals clear` asks again from now on)")
             return True
         answer = self.ask(
             "⚠️ This command matches a confirm-pattern. Allow it?\n"
