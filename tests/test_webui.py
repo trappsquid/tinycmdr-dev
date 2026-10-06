@@ -439,6 +439,19 @@ def main():
     check(r.status == 403, "a foreign Host: 403", r.status)
     check(req("GET", "/api/tasks", {**TOK, "Origin": "http://evil.example"})[0] == 403,
           "a cross-origin request: 403")
+    # Cookies are host-scoped, not port-scoped: a page on another port of this same name
+    # still carries the operator's session cookie, so the Origin check has to compare the
+    # port too (measured 2026-10-05 with a real browser: even the CORS-blocked response
+    # left the request delivered - a conversation was created through it).
+    check(req("GET", "/api/tasks",
+              {**TOK, "Origin": "http://127.0.0.1:%d" % (port + 1)})[0] == 403,
+          "an Origin on another port of the same name: 403")
+    check(fb._web_authority("[::1]:8790") == ("::1", "8790")
+          and fb._web_authority("box") == ("box", "")
+          and fb._web_authority("127.0.0.1") != fb._web_authority("127.0.0.1:8790"),
+          "the authority compare keeps host and port", (
+              fb._web_authority("[::1]:8790"), fb._web_authority("box"),
+              fb._web_authority("127.0.0.1")))
     code, body, _ = req("GET", "/api/tasks", {**TOK, "Origin": base})
     check(code == 200, "a same-origin request passes", code)
 

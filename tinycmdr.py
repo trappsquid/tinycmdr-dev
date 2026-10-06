@@ -25170,6 +25170,22 @@ def _web_hosts_configured():
     return set()
 
 
+def _web_authority(authority):
+    """(host, port) for a Host header or an Origin authority.
+
+    A missing port stays "" on both sides, so what is compared is exactly what the
+    client addressed. IPv6 literals may or may not carry their brackets.
+    """
+    a = (authority or "").strip().lower()
+    if a.startswith("["):
+        host, _, rest = a.partition("]")
+        return host[1:], rest.lstrip(":")
+    host, sep, port = a.rpartition(":")
+    if not sep or ":" in host:              # no colon, or a bare (bracketless) IPv6
+        return a, ""
+    return host, port
+
+
 def _web_hosts_resolve():
     """The names that need the resolver, merged into the cache when they land."""
     extra = set()
@@ -25389,7 +25405,8 @@ def run_webui():
             on any site could `fetch("http://127.0.0.1:8790/api/run", {method: "POST",
             body: ...})` and the browser would deliver it: CSRF against shell access.
             Two rules: Host must be a loopback name (or the configured bind host), and an
-            Origin header, when the browser sends one, must match that host. curl, the
+            Origin header, when the browser sends one, must match that host AND its port
+            (cookies are host-scoped, so the port is part of the check). curl, the
             installer's probe and the supervisor send no Origin and keep working; an
             opaque "null" origin (a file:// page, a sandboxed iframe) is refused.
             """
@@ -25412,9 +25429,14 @@ def run_webui():
             origin = (self.headers.get("Origin") or "").strip()
             if not origin:
                 return True                     # curl, the installer, the supervisor
-            ohost = origin.split("://", 1)[-1].split("/", 1)[0].lower()
-            ohost = ohost.rsplit(":", 1)[0].strip("[]")
-            if ohost == name:
+            # The FULL authority, port included. Cookies are bound to the host, not the
+            # port, so a page served from another port of this same name still carries
+            # the session cookie - and the host-only compare let it drive the API
+            # (measured 2026-10-05 with a real browser: a page on 127.0.0.1:8799 created
+            # a conversation through /api/sessions with the operator's HttpOnly cookie;
+            # the same request to /api/chat is shell access).
+            oauth = origin.split("://", 1)[-1].split("/", 1)[0].lower()
+            if _web_authority(oauth) == _web_authority(host_hdr):
                 return True
             log.warning("web: refused a cross-origin request (Origin %r, Host %r)",
                         origin, host_hdr)
