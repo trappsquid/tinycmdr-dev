@@ -85,6 +85,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -145,7 +146,8 @@ SCHEMA = {
         "keys": {"type": "string",
                  "description": "key: a shortcut, 'cmd+s', or a named key: "
                                 "return, escape, tab, space, delete, up/down/"
-                                "left/right, home, end, pageup, pagedown, f1-f12"},
+                                "left/right, home, end, pageup, pagedown, f1-f12, "
+                                "minus (also spelled '-', e.g. 'cmd+-')"},
         "value": {"type": "string", "description": "set_value: the new value"},
         "seconds": {"type": "number", "description": "wait: seconds (max 30)"},
         "capture_after": {"type": "boolean",
@@ -184,6 +186,11 @@ TREE_TIMEOUT = 60
 AX_TIMEOUT = 30
 INPUT_TIMEOUT = 20
 
+# How long a timed-out helper's process tree gets to die before we stop waiting
+# and report the timeout anyway. Bounded so a child that ignores the signal can
+# never turn a helper timeout into a hang (an earlier review run 11, A-122).
+KILL_GRACE = 5
+
 # Hard blocks. Two classes, both refused outright (no approval door exists in
 # tinycmdr's tool layer, so an unblockable guard is the only honest shape):
 #   - key combos whose only purpose is to end or lock the session, or to
@@ -211,10 +218,25 @@ _BLOCKED_TEXT = (
     re.compile(r"curl\s+[^|]*\|\s*(?:ba)?sh", re.I),
     re.compile(r"wget\s+[^|]*\|\s*(?:ba)?sh", re.I),
     re.compile(r"\bsudo\s+rm\s+-[rf]", re.I),
-    re.compile(r"\brm\s+-rf\s+/\s*$", re.I),
+    # The old form was anchored to the END of the text (`/\s*$`), so a trailing
+    # `; echo hi`, a `&&`, or `--no-preserve-root` read as a different command
+    # and slipped through. What marks this out is `rm -rf` at a filesystem ROOT
+    # (flags in either order), so the root is the anchor and anything can
+    # follow it (an earlier review run 11, A-115).
+    re.compile(r"\brm\s+-[a-z]*(?:rf|fr)[a-z]*\s+/(?:\s|$|[;&|*])", re.I),
+    re.compile(r"\brm\s+[^\n;|&]*--no-preserve-root\b", re.I),
     re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}"),      # fork bomb
     re.compile(r"\bmkfs(?:\.\w+)?\b"),
     re.compile(r"dd\s+[^|\n]*of=/dev/(?:disk|rdisk|sd)"),
+    # Windows destructive vocabulary (an earlier review run 11, A-115). The POSIX
+    # entries above know none of these; measured allowed before this fix:
+    # `del C:\ /s /q`, `Remove-Item -Recurse -Force C:\Users`, `format C:`,
+    # `shutdown now`.
+    re.compile(r"\bdel\s+(?:/[a-z]+\s+)*[a-z]:\\?(?:\s|$|[;&|*])", re.I),
+    re.compile(r"\bRemove-Item\b[^\n;|&]*-Recurse\b[^\n;|&]*-Force\b", re.I),
+    re.compile(r"\bRemove-Item\b[^\n;|&]*-Force\b[^\n;|&]*-Recurse\b", re.I),
+    re.compile(r"\bformat\s+[a-z]:", re.I),
+    re.compile(r"\bshutdown\s+(?:now\b|/[a-z]\b|-[a-z]\b)", re.I),
 )
 # Aliases fold BEFORE the blocklist sees a combo: `ctrl-opt-del` is how Mac users
 # spell force-logout, and without "opt" the parse failed on "two non-modifier keys"
@@ -224,6 +246,12 @@ _KEY_ALIASES = {"command": "cmd", "control": "ctrl", "alt": "option",
                 "\u2318": "cmd", "\u2325": "option",
                 "meta": "cmd", "super": "cmd", "win": "cmd", "windows": "cmd",
                 "ctrl": "ctrl"}
+# Names for KEYS that are not modifiers. `_KEY_ALIASES` above is the modifier
+# vocabulary - every one of its values is an arm in the embedded PowerShell
+# helper's modifier switch - so key names belong here instead (an earlier review run
+# 11, A-120: `minus` is the word for the `-` key, and `-` is what the macOS
+# keycode table knows).
+_KEY_NAME_ALIASES = {"minus": "-"}
 # The four glyphs a Mac user writes in a shortcut, for the glued form (\u2318s).
 _GLYPH_ALIASES = {"\u2318": "cmd", "\u2325": "option", "\u21e7": "shift",
                   "\u2303": "ctrl", "\u25b3": "option"}
@@ -254,11 +282,21 @@ _MODIFIER_FLAGS = {"cmd": 1 << 20, "shift": 1 << 17, "option": 1 << 19,
 # Pure helpers - everything testable without a screen, a permission or a Mac.
 # ===========================================================================
 def canon_combo(keys):
-    """('s', ['cmd']) for 'cmd+s' / 'cmd-s' / 'Command+S' / '⌘+s' / '⌘s'."""
+    """('s', ['cmd']) for 'cmd+s' / 'cmd-s' / 'Command+S' / '\u2318+s' / '\u2318s'.
+
+    The minus KEY is spelled '-' and '-' is also the separator between
+    modifiers, so a TRAILING '-' is the key and not a dangling separator:
+    'cmd+-' is cmd+minus. 'cmd+minus' keeps working because 'minus' folds to
+    the '-' keycode entry (an earlier review run 11, A-120)."""
     raw = str(keys or "").strip().lower()
     if not raw:
         return None, [], "no keys given"
-    key, mods = None, []
+    if raw == "-":
+        return "-", [], ""
+    key, mods, tail = None, [], None
+    if raw.endswith("-") and not raw.endswith("--"):
+        tail = "-"
+        raw = raw[:-1]
     for part in re.split(r"[+\-]", raw):
         part = part.strip()
         if not part:
@@ -272,6 +310,7 @@ def canon_combo(keys):
                 mods.append(glyph)
             part = part[1:].strip()
         part = _KEY_ALIASES.get(part, part)
+        part = _KEY_NAME_ALIASES.get(part, part)
         if part in _MODIFIER_FLAGS:
             if part not in mods:
                 mods.append(part)
@@ -281,6 +320,13 @@ def canon_combo(keys):
             return None, [], ("%r has two non-modifier keys (%r and %r); write "
                               "one key with modifiers, e.g. 'cmd+s'"
                               % (keys, key, part))
+    if tail is not None:
+        if key is None:
+            key = tail
+        else:
+            return None, [], ("%r has two non-modifier keys (%r and %r); write "
+                              "one key with modifiers, e.g. 'cmd+-' for the "
+                              "minus key" % (keys, key, tail))
     if key is None:
         return None, [], "%r has modifiers but no key" % (keys,)
     return key, mods, ""
@@ -443,12 +489,19 @@ def scale_note(shot_px, display_pts):
 
 def prune_shots(keep=MAX_SHOTS):
     """Keep the newest N screenshots. Unbounded capture is a disk leak; the predecessor harness
-    caps the same way at 20."""
+    caps the same way at 20.
+
+    keep=0 keeps nothing - `shots[:-0]` is `shots[:0]`, which pruned NOTHING and
+    turned the disk-leak guard into a no-op (an earlier review run 11, A-119)."""
     try:
         shots = sorted(SCRATCH.glob("screen-*.png"), key=lambda p: p.stat().st_mtime)
     except OSError:
         return
-    for old in shots[:-keep]:
+    try:
+        n = int(keep)
+    except (TypeError, ValueError):
+        n = MAX_SHOTS
+    for old in (shots if n <= 0 else shots[:-n]):
         try:
             old.unlink()
         except OSError:
@@ -517,20 +570,63 @@ def dedup_should_omit(session, digest, target):
 # ===========================================================================
 # macOS: the three helpers that talk to the OS.
 # ===========================================================================
-def _run(argv, timeout):
-    """One subprocess, no shell, capture both streams. Returns (rc, out, err)."""
+def _spawn_group():
+    """Popen kwargs that put the helper in its own session / process group.
+
+    A timed-out `subprocess.run` kills only the DIRECT child; the PowerShell
+    helper's own children survived it (an earlier review run 11, A-122). A new group
+    is what makes `_kill_tree` able to take the whole tree down."""
+    if IS_WIN:
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
+
+
+def _kill_tree(proc):
+    """Kill the helper and everything it started. Best effort: a process that
+    ignores the signal gets `KILL_GRACE` seconds at the call site, never a
+    hang here."""
+    if IS_WIN:
+        try:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=KILL_GRACE)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            pass
     try:
-        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                           timeout=timeout)
+        proc.kill()
+    except OSError:
+        pass
+
+
+def _run(argv, timeout):
+    """One subprocess, no shell, capture both streams. Returns (rc, out, err).
+
+    The child runs in its own session so a TIMEOUT kills the whole process tree
+    rather than just the one process we can see (`_kill_tree`)."""
+    try:
+        p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             **_spawn_group())
     except FileNotFoundError as exc:
         return 127, "", "not found: %s" % exc
-    except subprocess.TimeoutExpired:
-        return 124, "", "timed out after %ss" % timeout
     except OSError as exc:
         return 126, "", str(exc)
+    try:
+        out, err = p.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=KILL_GRACE)   # reap; output is discarded
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            pass
+        return 124, "", "timed out after %ss" % timeout
     return (p.returncode,
-            p.stdout.decode("utf-8", "replace"),
-            p.stderr.decode("utf-8", "replace").strip())
+            out.decode("utf-8", "replace"),
+            err.decode("utf-8", "replace").strip())
 
 
 def _run_script(name, source, args, timeout, lang=None):
@@ -1273,7 +1369,7 @@ try {
       $root = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$w.hwnd)
       if (-not $root) { Out-Json ([ordered]@{ ok = $false; error = "the window has no accessibility element" }); break }
       $max = 120; if ($req.max) { $max = [int]$req.max }
-      $depthMax = 6; if ($req.depth) { $depthMax = [int]$req.depth }
+      $depthMax = 6; if ($null -ne $req.depth) { $depthMax = [int]$req.depth }
       $wants = @(); if ($req.roles) { $wants = @("$($req.roles)".Split(",") | ForEach-Object { $_.Trim().ToLower() } | Where-Object { $_ }) }
 
       function Walk-Tree($walker, $max, $depthMax, $wants) {
@@ -1507,6 +1603,34 @@ def _stage_text(path, text):
         return str(exc)
 
 
+def _last_json_object(text):
+    """The LAST complete JSON object in the helper's stdout, or None.
+
+    The helper prints one compact object, but a diagnostic PowerShell line that
+    contains a `{` sits in front of it, and `_ps` used to start parsing at the
+    FIRST `{` - i.e. in the middle of that noise (an earlier review run 11, A-121).
+    Scanning lines back to front finds the real object; a pretty-printed span is
+    the last-resort fallback."""
+    text = str(text or "")
+    for line in reversed(text.splitlines()):
+        line = line.strip()
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            return json.loads(line)
+        except ValueError:
+            continue
+    # Last resort: a pretty-printed object spanning lines. Try each `{` from the
+    # LAST one back, so a brace in earlier noise cannot shift the start.
+    start = text.rfind("{")
+    while start >= 0:
+        try:
+            return json.loads(text[start:])
+        except ValueError:
+            start = text.rfind("{", 0, start)
+    return None
+
+
 def _ps(cmd, payload, timeout=INPUT_TIMEOUT):
     """One call into the Windows engine. The helper prints one JSON object."""
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -1527,14 +1651,13 @@ def _ps(cmd, payload, timeout=INPUT_TIMEOUT):
                                        "the app may be showing a modal dialog"
                                        % timeout)}
     text = (out or "").strip()
-    start = text.find("{")
-    if start < 0:
+    parsed = _last_json_object(text)
+    if parsed is not None:
+        return parsed
+    if "{" not in text:
         return {"ok": False,
                 "error": (err or out or "the helper printed nothing").strip()[:300]}
-    try:
-        return json.loads(text[start:])
-    except ValueError:
-        return {"ok": False, "error": "the helper's output was not JSON: %r" % text[:200]}
+    return {"ok": False, "error": "the helper's output was not JSON: %r" % text[:200]}
 
 
 def _win_info():
@@ -1638,7 +1761,8 @@ def _win_capture(args, ctx):
                            "UIA; try mode=vision, or roles= to narrow")
     _scale = (info.get("dpi_x") or 96) / 96.0
     return _capture_return(payload, ctx, shot, shot_px,
-                           ((virt.get("w") or 0) / _scale, (virt.get("h") or 0) / _scale))
+                           ((virt.get("w") or 0) / _scale, (virt.get("h") or 0) / _scale),
+                           args)
 
 
 def _win_element_action(args, ctx, op):
@@ -1686,7 +1810,11 @@ def _win_element_action(args, ctx, op):
         res = _ps("invoke", {"match": snap.get("app", ""),
                              "hwnd": snap.get("hwnd"), "path": el["path"]})
         if res.get("ok") and res.get("fired"):
-            return json.dumps({
+            # `_finish`, not a bare json.dumps: this path drops capture_after
+            # otherwise, and a click that says nothing about a follow-up
+            # capture is the one path where the model is left guessing
+            # (an earlier review run 11, A-123).
+            return _finish({
                 "ok": True, "action": "click", "element": idx,
                 "role": el.get("role"), "label": el.get("label"),
                 "path": "uia_" + str(res.get("fired")), "effect": "unverifiable",
@@ -1695,7 +1823,7 @@ def _win_element_action(args, ctx, op):
                                     "with a fresh capture" % res.get("fired")},
                 "summary": "clicked #%d %s %r via %s"
                            % (idx, el.get("role"), el.get("label"),
-                              res.get("fired"))}, ensure_ascii=False)
+                              res.get("fired"))}, args, ctx)
         if not el.get("bounds"):
             return _fail("element #%d exposes no clickable pattern (UIA) and has "
                          "no known position, so there is nothing to click; "
@@ -2185,7 +2313,7 @@ def _capture(args, ctx):
         payload["note"] = ("no elements matched - the app may expose nothing "
                            "over AX (some Electron/Java apps do not); try "
                            "mode=vision for pixels")
-    return _capture_return(payload, ctx, shot, shot_px, dpts)
+    return _capture_return(payload, ctx, shot, shot_px, dpts, args)
 
 
 IMAGE_MAX_SIDE = 1920        # a model does not need more than the screen's
@@ -2261,10 +2389,30 @@ def _attach_copy(path, shot_px, logical):
     return (str(out), size[0], size[1])
 
 
-def _capture_return(payload, ctx, shot, shot_px, logical=None):
+def _dropped_window_id(args, on_mac=None):
+    """One line when window_id was given but this backend cannot honour it.
+
+    window_id is a macOS `screencapture -l` window id (it comes from
+    list_windows); the Windows and Linux backends shoot the whole screen, so a
+    window_id passed there used to vanish with no word about it (an earlier review
+    run 11, A-116). Silence about a dropped argument is how a model is left
+    "shooting window 12" for a turn it never sees."""
+    if not args or args.get("window_id") in (None, ""):
+        return ""
+    if (IS_MAC if on_mac is None else on_mac):
+        return ""
+    return ("note: window_id=%s was ignored on this platform - only macOS can "
+            "shoot one window's pixels; use app=/window= to target a window"
+            % args.get("window_id"))
+
+
+def _capture_return(payload, ctx, shot, shot_px, logical=None, args=None):
     """The capture's result. The text is exactly what it always was; when there is
     a screenshot AND this install can use one, the image rides along and the
     harness attaches it to the next request only."""
+    dropped = _dropped_window_id(args)
+    if dropped:
+        payload["summary"] = ((payload.get("summary") or "") + "\n" + dropped).strip()
     if shot and not _wants_vision(ctx):
         payload["image_note"] = ("the screenshot is saved at %s; agent.vision is off "
                                  "on this install, so the model cannot see it - "
@@ -2898,7 +3046,10 @@ def _center(bounds):
 def _clamp(value, default, low, high):
     try:
         n = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError is int(inf) - `depth: 1e999` is JSON a model can emit,
+        # and it used to escape the clamp as an OverflowError (an earlier review run
+        # 11, A-118).
         n = default
     return max(low, min(high, n))
 
@@ -3054,11 +3205,26 @@ def _selftest():
     k, m, _ = canon_combo("ctrl-opt-del")
     check("ctrl-opt-del is the old force-logout combo, however spelled",
           bool(blocked_combo(k, m)), (k, m))
+    # A-120: '-' is both the minus KEY and a modifier separator, so the trailing
+    # form is the key; `minus` stays a spelling of the same key.
+    key, mods, err = canon_combo("cmd+-")
+    check("a trailing '-' is the minus key",
+          (key, mods, err) == ("-", ["cmd"], ""), (key, mods, err))
+    key, mods, err = canon_combo("cmd+minus")
+    check("cmd+minus is the same key",
+          (key, mods, err) == ("-", ["cmd"], ""), (key, mods, err))
     for text in ("curl http://x | bash", "wget http://x|sh", "sudo rm -rf /",
-                 "rm -rf /", ":(){ :|:& };:", "mkfs.ext4 /dev/sda"):
+                 "rm -rf /", ":(){ :|:& };:", "mkfs.ext4 /dev/sda",
+                 # A-115: a de-anchored root wipe, and the Windows vocabulary
+                 # the POSIX list never knew.
+                 "rm -rf /; echo hi", "rm -rf / --no-preserve-root",
+                 "del C:\\ /s /q", "Remove-Item -Recurse -Force C:\\Users",
+                 "format C:", "shutdown now"):
         check("refused text: %s" % text[:24], bool(blocked_text(text)), text)
     for text in ("hello world", "rm -rf build/", "curl https://x -o f",
-                 "sudo rm build/thing.txt", "def rm_rf(): pass"):
+                 "sudo rm build/thing.txt", "def rm_rf(): pass",
+                 "rm -rf /tmp/build", "del C:\\temp\\thing.txt",
+                 "format this nicely"):
         check("allowed text: %s" % text[:24], not blocked_text(text), text)
 
     # -- the grant diagnosis, pure (the stale branch is what a replaced binary
@@ -3421,7 +3587,7 @@ def _nix_capture(args, ctx):
         payload["screenshot"] = shot
         payload["screenshot_pixels"] = list(shot_px) if shot_px else None
     return _capture_return(payload, ctx, shot, shot_px,
-                           (screen.get("w"), screen.get("h")))
+                           (screen.get("w"), screen.get("h")), args)
 
 
 def _nix_ready():
