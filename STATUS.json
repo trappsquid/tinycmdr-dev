@@ -1932,6 +1932,24 @@
         "commit": "e2051ad"
       },
       "detail": "A-2026-10-05-99 .. -102, -104 .. -106, -135, -136, an earlier review run 11 (fixed 2026-10-06, e2051ad). reveal_ttl_secs is guarded like mcp_timeout (a typo no longer takes the request builder down; a real 0 means never decay); reveal_tools reads a bare string as one name and refuses other non-lists by name; _tool_category coerces like _tool_blurb; the three pairing repairers skip a non-dict entry without spinning; truncate_middle refuses or cuts honestly at limit 0/1; _spill_signal counts its [HARNESS: ...] wrapper against the budget; the stripper scans bracket depth so a nested note does not eat real output; find_tools honours name/topic/action (read name=X answers that tool's blurb and schema, revealing it); create_tool validates the action vocabulary before the arguments. 31 checks red pre-fix."
+    },
+    {
+      "id": "computer-use-platforms-1-0-84",
+      "title": "computer_use: the typed-text guard sees Windows, and nothing leaks or hangs",
+      "state": "shipped",
+      "anchor": {
+        "commit": "92e6d19"
+      },
+      "detail": "A-2026-10-05-115 .. -123, an earlier review run 11 (fixed 2026-10-06, 92e6d19). blocked_text gained the Windows arm (del <drive:>, Remove-Item -Recurse/-Force, format <drive:>, shutdown) and lost its end anchor (`rm -rf / --no-preserve-root`, `rm -rf /; echo hi` blocked now); a dropped window_id on non-macOS is named; Windows depth=0 means 0 levels; _clamp survives 1e999; prune_shots(0) prunes; `cmd+-` is the minus key; the helper's stdout parses from the LAST JSON object; a timeout kills the child tree; the UIA-invoke path goes through _finish. tests/test_computer_use.py: 19 checks red pre-fix."
+    },
+    {
+      "id": "accounting-secrets-1-0-84",
+      "title": "emoji cost, the secret vocabulary, and the config-side guard",
+      "state": "shipped",
+      "anchor": {
+        "commit": "30a51fe"
+      },
+      "detail": "A-2026-10-05-109/-110/-111/-137/-138, run 11 (fixed 2026-10-06, 30a51fe). est_tokens gives emoji their own class (~2 tokens each; 400 emoji was 307); the config-side secret rule shares the env-side vocabulary (db.password refused, its value never reaches the verb log); scrub redacts percent-encoded secrets (a URL query no longer leaks one; a case-insensitive pass is deliberately not done); create_tool refuses a name an existing custom tool holds; tools_dir_verdict() answers without an argument. A-2026-10-05-112 REFUTED here by measurement (the spill note's omitted-byte arithmetic agrees across CRLF/accent/3001-byte bodies). tests/test_spill.py, test_scrub.py, test_tool_discovery.py: 13 checks red pre-fix."
     }
   ]
 }
