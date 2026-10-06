@@ -194,6 +194,12 @@ def child_env(path, logdir):
     # this reason). Without it, every suite that logs appends into the checkout and git
     # status cannot even show it: the file is ignored, so it stayed invisible.
     env["TINYCMDR_LOG_FILE"] = str(logdir / (path.stem + ".log"))
+    # A suite that imports the app must not CREATE host state in the checkout. The app
+    # materializes a missing theme.toml/soul.md from its shipped defaults at import, which
+    # is right on a real box and wrong here: since both stopped being tracked (a clone has
+    # neither), test_checkin's import wrote them into the tree and the leak report named
+    # it. The materialization suite pops this because that behaviour is what it grades.
+    env["TINYCMDR_NO_MATERIALIZE"] = "1"
     # A suite that starts the web lane must never open a real browser tab: a day of gate
     # runs on a Mac measured ~60 of them in the operator's browser. Per-suite guards
     # existed; the runner owning it means a suite added later cannot leak one.

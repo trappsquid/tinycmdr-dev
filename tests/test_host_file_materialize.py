@@ -7,6 +7,7 @@ copy of theme.default.toml / soul.example.md when the app starts, and an existin
     python tests/test_host_file_materialize.py
 """
 import importlib.util
+import os
 import shutil
 import sys
 import tempfile
@@ -30,6 +31,10 @@ def stage(work):
 
 
 def load(work):
+    # The runner exports TINYCMDR_NO_MATERIALIZE=1 for every suite (a suite that imports
+    # the app must not create host state in the checkout). THIS suite grades exactly that
+    # materialization, so it clears the guard before loading.
+    os.environ.pop("TINYCMDR_NO_MATERIALIZE", None)
     spec = importlib.util.spec_from_file_location("tinycmdr_materialize",
                                                   work / "tinycmdr.py")
     mod = importlib.util.module_from_spec(spec)
@@ -51,6 +56,28 @@ def main():
         check("a fresh tree gets soul.md", (work / "soul.md").exists())
         check("...byte-identical to soul.example.md",
               (work / "soul.md").read_bytes() == (work / "soul.example.md").read_bytes())
+
+        # the runner's guard (TINYCMDR_NO_MATERIALIZE=1): an import under the gate must
+        # create neither file, which is what keeps a suite from writing host state into a
+        # checkout (test_checkin's import did exactly that once both files were untracked)
+        work0 = Path(tempfile.mkdtemp(prefix="fbmat0-"))
+        try:
+            stage(work0)
+            os.environ["TINYCMDR_NO_MATERIALIZE"] = "1"
+            try:
+                # A RAW import, not load(): load() clears the guard on purpose (the other
+                # cases grade the materialization the guard suppresses).
+                spec = importlib.util.spec_from_file_location(
+                    "tinycmdr_mat_guard", work0 / "tinycmdr.py")
+                mod = importlib.util.module_from_spec(spec)
+                sys.modules["tinycmdr_mat_guard"] = mod
+                spec.loader.exec_module(mod)
+            finally:
+                os.environ.pop("TINYCMDR_NO_MATERIALIZE", None)
+            check("with the runner's guard set, neither host file is created",
+                  not (work0 / "theme.toml").exists() and not (work0 / "soul.md").exists())
+        finally:
+            shutil.rmtree(work0, ignore_errors=True)
 
         # an existing file is the host's: a start never touches it
         work2 = Path(tempfile.mkdtemp(prefix="fbmat2-"))

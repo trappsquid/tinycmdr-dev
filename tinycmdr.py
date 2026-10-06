@@ -15062,6 +15062,10 @@ def _materialize_host_files():
     edited theme or soul survives every start and every update. `theme.toml`'s pair also
     rides `_HOST_DEFAULT_PAIRS`, which is how `update`/`doctor` report a moved default.
     """
+    if os.environ.get("TINYCMDR_NO_MATERIALIZE") == "1":
+        # The runner's guard: a suite that imports this file must not write host state
+        # into a checkout (see tests/run_all.py's child_env). A real start never sets it.
+        return
     for live, default in (("theme.toml", "theme.default.toml"),
                           ("soul.md", "soul.example.md")):
         dst, src = BASE_DIR / live, BASE_DIR / default

@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **a2a: a client's taskId is its retry handle** (lane/web leftover 1): SendMessage stored the task only after the run, so a peer whose read timed out lost the handle and its retry re-executed every tool call. The id is now checked before the run (a known task answers as-is, WORKING or finished), a well-formed `TASK_STATE_WORKING` placeholder is stored under the same lock before the run so GetTask answers while it works, and only a placeholder is ever overwritten by the result. (tests/test_a2a.py)
 
+### Fixed
+- **A suite's import no longer writes host state into the checkout:** with `theme.toml`/`soul.md` untracked, a clone lacks both and the import-time materialization created them in the tree (`test_checkin`'s import, named by the runner's leak report). The gate's children now run with `TINYCMDR_NO_MATERIALIZE=1` (the runner sets it for the same reason it sets `TINYCMDR_NO_BROWSER`), the materialization suite clears the guard because that behaviour is what it grades, and one new check pins the guard's contract. (tests/test_host_file_materialize.py, tests/run_all.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed
