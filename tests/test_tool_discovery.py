@@ -304,6 +304,36 @@ finally:
         fb.CONFIG["agent"]["skills_index_max_chars"] = _keep_index_cap
     shutil.rmtree(_skcap, ignore_errors=True)
 
+# Always-runbooks announce a cut and name what the budget skipped: a rule that quietly
+# loses its tail reads as a complete rule.
+_skalw = Path(tempfile.mkdtemp(prefix="fbskills-always-"))
+for _i in (0, 1):
+    _d = _skalw / ("always-%02d" % _i)
+    _d.mkdir()
+    (_d / "SKILL.md").write_text(
+        "---\nname: always-%02d\nalways: true\ndescription: rule\n---\n" % _i
+        + ("RULE LINE %02d\n" % _i) * 40, encoding="utf-8", newline="\n")
+_keep_alw_dir = fb.SKILLS_DIR
+_keep_alw_cap = fb.CONFIG["agent"].get("skills_always_max_chars")
+try:
+    fb.SKILLS_DIR = _skalw
+    fb.CONFIG["agent"]["skills_always_max_chars"] = 300
+    fb._ALWAYS_SKILLS_CACHE.update({"at": 0, "block": ""})
+    _blk = fb.always_skills_block()
+    check("an over-budget always-runbook is cut at a line boundary and marked",
+          "truncated" in _blk and "RULE LINE 00" in _blk
+          and "RULE LINE 39" not in _blk, _blk[-200:])
+    check("...and the runbook the spent budget skipped is named",
+          "SKIPPED" in _blk and "always-01" in _blk, _blk[-200:])
+finally:
+    fb.SKILLS_DIR = _keep_alw_dir
+    if _keep_alw_cap is None:
+        fb.CONFIG["agent"].pop("skills_always_max_chars", None)
+    else:
+        fb.CONFIG["agent"]["skills_always_max_chars"] = _keep_alw_cap
+    fb._ALWAYS_SKILLS_CACHE.update({"at": 0, "block": ""})
+    shutil.rmtree(_skalw, ignore_errors=True)
+
 check("prompt: the routing bullet names the shell verbs it replaces",
       "Select-String" in sp and "findstr" in sp and "search_files {pattern, path}" in sp)
 check("prompt: the routing bullet carries search_files' own call shape",

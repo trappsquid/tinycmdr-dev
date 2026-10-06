@@ -14327,20 +14327,44 @@ def always_skills_block():
     if now - _ALWAYS_SKILLS_CACHE["at"] < 60:
         return _ALWAYS_SKILLS_CACHE["block"]
     block = ""
+    skipped = []
     try:
         rows, budget = [], int(CONFIG["agent"].get("skills_always_max_chars") or 3000)
         for s in skill_index():
-            if not s.get("always") or s.get("hide") or budget <= 0:
+            if not s.get("always") or s.get("hide"):
                 continue
             try:
-                text = _read_text_any(s["path"])[:budget]
+                text = _read_text_any(s["path"])
             except Exception:               # noqa: BLE001 - a runbook never breaks a run
                 continue
+            if budget <= 0:
+                skipped.append(s["name"])
+                continue
+            if len(text) > budget:
+                orig = len(text)
+                cut = text[:budget]
+                nl = cut.rfind("\n")
+                if nl > 0:
+                    cut = cut[:nl]
+                text = cut + ("\n[HARNESS: %s truncated at %d chars - read the rest with "
+                              "the skill tool]" % (s["name"], len(cut)))
+                log.warning("always-skill %s is %d chars; the prompt gets %d of them "
+                            "(agent.skills_always_max_chars), cut at a line boundary",
+                            s["name"], orig, len(cut))
             budget -= len(text)
             rows.append("[%s]\n%s" % (s["name"], text.strip()))
         if rows:
             block = ("[HARNESS: standing runbooks for this box (always active, not "
                      "optional reading):]\n" + "\n\n".join(rows))
+        if skipped:
+            # A silently missing always-rule is the worst failure this tier can have:
+            # name it, and name where the rest of the text is.
+            block += ("\n[HARNESS: runbooks SKIPPED - the always-skills budget "
+                      "(agent.skills_always_max_chars) was spent: %s. They are on disk "
+                      "under skills/ and the skill tool reads them.]"
+                      % ", ".join(skipped))
+            log.warning("always-skills budget spent; not injected: %s",
+                        ", ".join(skipped))
     except Exception:                       # noqa: BLE001
         block = ""
     _ALWAYS_SKILLS_CACHE.update({"at": now, "block": block})
