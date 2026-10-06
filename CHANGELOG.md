@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The confirm tier read only `remove-item`** (A-77): `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question; the command word is read off tokens, so every alias and flag order lands on the same rule. (tests/test_guard_battery.py)
 - **The gate helpers coerced differently** (A-79): `is_blocked(None)` answered while `est_tokens(None)`, `cap_output(name, None)`, `_one_json_object(None)`, `_host_is_local(None)` and `_confirm_hit(None)` raised; each answers a safe default for a non-string now. (tests/test_guard_battery.py)
 
+### Fixed
+- **A file log that cannot write now says so** (A-78): a rollover renames the log, and on Windows an open handle (the running bot) makes that rename fail - the exception died in the listener thread, so a record could vanish from the file while the console kept showing it. A blocked rollover falls back to a plain append and one stderr line names the file and the error. (tests/test_file_log.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed

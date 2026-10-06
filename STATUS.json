@@ -1849,12 +1849,12 @@
     },
     {
       "id": "secret-refusal-log-1-0-83",
-      "title": "A-2026-10-05-78: the refusal line IS written here",
-      "state": "closed",
+      "title": "A-2026-10-05-78: a file log that cannot write must say so",
+      "state": "open",
       "anchor": {
         "file": "tinycmdr.py"
       },
-      "detail": "A-2026-10-05-78, run 10: NOT REPRODUCED on this build (2026-10-06). A staged run of `config set web.token <value>` and `config get web.token` each wrote their verb line to tinycmdr.log (three calls, three lines; the value lands as <redacted> from the A-69 fix). The run's 23-to-23 measurement is environmental to that box - the likely candidate is a TINYCMDR_LOG_FILE in the probe's child environment pointing the file handler elsewhere, since the console line was visible. The read-side refusal is by design: secrets have one home, .env."
+      "detail": "A-2026-10-05-78, run 10: NOT reproduced on macOS (the verb line IS written there, value redacted), but the target box is Windows and the shape has two Windows-specific mechanisms worth keeping this open for: a rollover RENAMES the log and an open handle (the running bot holds tinycmdr.log) makes the rename fail, and the QueueListener thread reports nothing when a handler raises. Both are now visible instead of silent: _LoudRotatingFileHandler falls back to a plain append when the rollover is blocked (losing the rotation is fine, losing the record is not) and writes one stderr line naming the file and the error (2026-10-06, tests/test_file_log.py). To settle it on that box: run a refused verb and look for the WARNING line, then compare tinycmdr.log against tinycmdr.log.1 - the dropped line may be in the predecessor."
     }
   ]
 }
