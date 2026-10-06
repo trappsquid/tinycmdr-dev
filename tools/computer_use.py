@@ -1145,7 +1145,7 @@ $VK = @{
   "f7"=0x76; "f8"=0x77; "f9"=0x78; "f10"=0x79; "f11"=0x7A; "f12"=0x7B
   "printscreen"=0x2C; "capslock"=0x14
 }
-foreach ($c in [char[]]'[redacted]') { $VK["$c"] = [int][char]([char]::ToUpper($c)) }
+foreach ($c in [char[]]([char]97..[char]122)) { $VK["$c"] = [int][char]([char]::ToUpper($c)) }
 foreach ($d in 0..9) { $VK["$d"] = 0x30 + $d }
 $VK["-"]=0xBD; $VK["="]=0xBB; $VK["["]=0xDB; $VK["]"]=0xDD; $VK["\"]=0xDC
 $VK[";"]=0xBA; $VK["'"]=0xDE; $VK[","]=0xBC; $VK["."]=0xBE; $VK["/"]=0xBF; $VK["``"]=0xC0
