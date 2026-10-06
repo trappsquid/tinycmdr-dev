@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **The installer's door question names the page first** (`INSTALL-WINDOWS.cmd`): the menu is the web page (the default door), Mattermost, Telegram; terminal sessions are described as always available (`tinycmdr --cli` / `--once`) instead of being offered as something to install, and the page's bind/port/token questions are skipped when the menu did not pick it. (tests/test_installer_windows.py)
 
+### Fixed
+- **The never tier was spelling-anchored** (an earlier review run 10, A-75/A-76): `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="..."` executed with no gate because a switch between verb and target missed an order-anchored regex and the quote erasure removed the quoted operand. The built-in never tier is decided on the tokens of each command segment now (quotes consumed, `;`/`&&`/`|`/newlines split, redirects and comments read), so word order and two quote characters cannot dodge it; the mkfs read-only exemption is per-command, not per-line. (tests/test_guard_battery.py)
+- **The confirm tier read only `remove-item`** (A-77): `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question; the command word is read off tokens, so every alias and flag order lands on the same rule. (tests/test_guard_battery.py)
+- **The gate helpers coerced differently** (A-79): `is_blocked(None)` answered while `est_tokens(None)`, `cap_output(name, None)`, `_one_json_object(None)`, `_host_is_local(None)` and `_confirm_hit(None)` raised; each answers a safe default for a non-string now. (tests/test_guard_battery.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed

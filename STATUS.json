@@ -1819,6 +1819,42 @@
         "commit": "f235640",
         "expect": "tagged"
       }
+    },
+    {
+      "id": "never-tier-tokens-1-0-83",
+      "title": "the never tier reads tokens, not one spelling",
+      "state": "shipped",
+      "anchor": {
+        "commit": "963beae"
+      },
+      "detail": "A-2026-10-05-75 and -76, an earlier review run 10 (fixed 2026-10-06, 963beae). The never tier was anchored to one surface shape per command: `format /FS:NTFS Q:`, `powershell -enc \"...\"` and `dd of=\"/dev/sdz9\"` executed with no gate (a switch between verb and target missed an order-anchored regex; the quote erasure removed the quoted operand), and the mkfs read-only exemption was per-line, so `mkfs.ext4 /dev/sdb # cat` passed. The built-in tier is decided on the tokens of each command segment now - quotes consumed, separators split, redirects and comments read - with the read-only exemption per command. tests/test_guard_battery.py: 16 blocked spellings, 5 allowed mentions, red on the pre-fix build."
+    },
+    {
+      "id": "confirm-tier-aliases-1-0-83",
+      "title": "the confirm tier reads the aliases",
+      "state": "shipped",
+      "anchor": {
+        "commit": "963beae"
+      },
+      "detail": "A-2026-10-05-77, run 10 (fixed 2026-10-06, 963beae). The recursive-delete pattern named `remove-item`, so `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question. The command word is read off tokens, so every alias and flag order lands on the same rule. tests/test_guard_battery.py pins five spellings."
+    },
+    {
+      "id": "gate-helpers-coerce-1-0-83",
+      "title": "the gate helpers coerce instead of raising",
+      "state": "shipped",
+      "anchor": {
+        "commit": "963beae"
+      },
+      "detail": "A-2026-10-05-79, run 10 (fixed 2026-10-06, 963beae). is_blocked(None) coerced while est_tokens(None), cap_output(name, None), _one_json_object(None), _host_is_local(None) and _confirm_hit(None) raised TypeError/AttributeError. Reachability was never proven; each helper answers a safe default for a non-string now, and tests/test_guard_battery.py pins all six."
+    },
+    {
+      "id": "secret-refusal-log-1-0-83",
+      "title": "A-2026-10-05-78: the refusal line IS written here",
+      "state": "closed",
+      "anchor": {
+        "file": "tinycmdr.py"
+      },
+      "detail": "A-2026-10-05-78, run 10: NOT REPRODUCED on this build (2026-10-06). A staged run of `config set web.token <value>` and `config get web.token` each wrote their verb line to tinycmdr.log (three calls, three lines; the value lands as <redacted> from the A-69 fix). The run's 23-to-23 measurement is environmental to that box - the likely candidate is a TINYCMDR_LOG_FILE in the probe's child environment pointing the file handler elsewhere, since the console line was visible. The read-side refusal is by design: secrets have one home, .env."
     }
   ]
 }
