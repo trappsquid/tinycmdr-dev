@@ -33,9 +33,15 @@ def check(cond, what, detail=""):
 
 
 def simulate_restart(fb):
-    """Drop the in-memory index the way a fresh process starts, but keep the disk."""
+    """Drop the in-memory state the way a fresh process starts, but keep the disk.
+
+    The id COUNTER is process state too: a restart begins at 0 and derives the next id
+    from the index. Leaving it standing made this simulation unable to see the id-reuse
+    bug the whole check group exists for (run 11, A-107).
+    """
     fb._SPILLS[:] = []
     fb._SPILLS_LOADED = False
+    fb._SPILL_SEQ["n"] = 0
 
 
 def main():
@@ -116,6 +122,39 @@ def main():
         check("...and this process's own rows are all there",
               len([p for p in paths if p != "spill/ffffffffffffffff.txt"]) >= 2,
               sorted(paths))
+        # ---- ids are never reused, even after every spill file is deleted (A-107)
+        # Measured in run 11: with all spill files gone the counter restarted at 1, so a new
+        # row took id 1 while the index still carried the old id-1 row, and `spill#1`
+        # resolved to a different tool's output than the row the prompt named.
+        rows = fb._spill_rows()
+        max_id = max([int(e["id"]) for e in rows] or [0])
+        for f in spill.glob("*.txt"):
+            f.unlink()
+        simulate_restart(fb)
+        fb._spill_rows()                       # the load advances the sequence
+        fb.cap_output("shell", "after-the-wipe-" + body, "command output", session="sp5")
+        rows = [json.loads(l) for l in fb._spill_index_path().read_text(
+            encoding="utf-8").splitlines() if l.strip()]
+        ids = [int(e["id"]) for e in rows]
+        check(len(ids) == len(set(ids)) and min(ids) > max_id,
+              "an id is never reused after its file is deleted (A-107)", (max_id, ids))
+        check(Path(fb._spill_path("spill#%d" % max(ids), "sp5") or "").exists(),
+              "...and the new row resolves to the new file",
+              fb._spill_path("spill#%d" % max(ids), "sp5"))
+
+        # ---- a dead row is not re-persisted by the merge (A-108)
+        idx = fb._spill_index_path()
+        dead = "spill/00000000000000ff.txt"
+        with idx.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"id": 9999, "path": dead, "at": time.time() + 60,
+                                 "session": "sp6", "tool": "shell"}) + "\n")
+        fb.cap_output("shell", "saves-again-" + body, "command output", session="sp6")
+        paths = {str(e.get("path")) for e in
+                 (json.loads(l) for l in idx.read_text(encoding="utf-8").splitlines()
+                  if l.strip())}
+        check(dead not in paths, "a row whose file is gone is not re-persisted (A-108)",
+              sorted(paths))
+
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

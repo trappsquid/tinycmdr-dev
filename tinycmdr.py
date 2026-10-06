@@ -3364,7 +3364,11 @@ def _spill_index_save():
                     e = json.loads(line)
                 except ValueError:
                     continue
-                if isinstance(e, dict) and e.get("path"):
+                if (isinstance(e, dict) and e.get("path")
+                        and (BASE_DIR / str(e["path"])).exists()):
+                    # A row whose file is gone is not worth re-persisting: readers drop
+                    # it anyway, and keeping it grew the index for ever while holding an
+                    # id hostage (an earlier review run 11, A-108).
                     merged[str(e["path"])] = e
         except OSError:
             pass
@@ -3406,9 +3410,16 @@ def _spill_load():
             if isinstance(e, dict) and e.get("path"):
                 rows.append(e)
         for e in rows[-_SPILLS_MAX:]:
+            # The SEQUENCE advances for every row ever written, whether its file still
+            # exists or not: reusing an id the index still names made `spill#1` resolve
+            # to a different file than the row the prompt named (an earlier review run 11,
+            # A-107: with every spill file gone the counter restarted at 1).
+            try:
+                _SPILL_SEQ["n"] = max(_SPILL_SEQ["n"], int(e.get("id") or 0))
+            except (TypeError, ValueError):
+                pass
             if (BASE_DIR / str(e["path"])).exists():
                 _SPILLS.append(e)
-                _SPILL_SEQ["n"] = max(_SPILL_SEQ["n"], int(e.get("id") or 0))
     except Exception as e:                  # noqa: BLE001 - ditto
         log.debug("spill index load: %s", e)
 
