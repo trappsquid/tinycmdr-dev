@@ -1,6 +1,5 @@
 """The guard battery: every destructive spelling is gated, and nothing else is.
 
-Measured at HEAD before this change: `rm -rf /etc`, `rm -rf ~/Documents`,
 `rm -r -f /`, `rm --recursive --force /`, `find / -delete`, `find / -exec rm -rf {} +` and
 `: () { :|:& };:` were all `is_blocked=False, confirm=None` - the only POSIX patterns
 required `r` and `f` in one flag word immediately before a bare `/`. The same run's

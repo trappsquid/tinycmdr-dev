@@ -4,7 +4,6 @@
 WHY THIS EXISTS. This has gone wrong twice, in the same way. On 2026-09-28 a review found a
 hand-generated map kept beside the ops notes - outside this repository and outside every gate -
 two releases and three facts out of date; it still named a scratch tree that had been deleted.
-On 2026-09-29 a `git pull` in the LIVE tree was blocked by an uncommitted backport nobody
 remembered had been applied, while the dev tree was 27 commits ahead, and the question "which
 tree is which" had to be answered by hand again.
 
@@ -56,11 +55,9 @@ import sys
 import time
 from pathlib import Path
 
-# ---------------------------------------------------------------------------
 # The declaration. The ONLY hand-maintained fact in this file, and the reason
 # there is one place to look. Edit here, not in a note beside it. Only roles
 # true of ANY box belong here: host-specific trees go in where-roles.json.
-# ---------------------------------------------------------------------------
 ROLES = [
     {
         "role": "live",

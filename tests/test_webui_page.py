@@ -8,7 +8,6 @@ through every "green" release:
     its lines from zero - so run 2's first line landed on run 1's first node at
     the TOP of the log ("my previous message got bumped away forever"), and
   * it only ever asked the server for lines at or after the last index it had
-    seen, so a line that grew in place (streamed narration growing into the
     final answer) was never re-read once its index was behind that cursor. The
     page kept the truncated snapshot and the real answer never appeared.
 
@@ -123,7 +122,7 @@ def drawn(res):
 
     The kind is the node's own token among the classes - not the LAST one: a copyable
     answer is `msg final copyable`, and taking the last token read it as `copyable`
-    (found 2026-10-04 when the shim's className stopped lying about classList).
+    .
     """
     out = []
     for r in res["rendered"]:

@@ -153,7 +153,7 @@ def main():
         check("plan_drift_after" not in blk, "no config keys leak into the prompt")
         # The loop stops at max_turns as well as max_steps, so the runway must name both:
         # llm.max_turns=100 next to agent.max_steps=250 meant "about N left" promised a step
-        # budget the turn cap could cut off two thirds early (found 2026-10-02).
+        # budget the turn cap could cut off two thirds early.
         fb.run_state("s1")["turn"] = 3
         blk = fb.run_block("s1")
         check("turn 3 of" in blk and "whichever cap is reached first" in blk,

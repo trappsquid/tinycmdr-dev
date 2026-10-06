@@ -2,7 +2,6 @@
 
 This project's pitch is measured, honest numbers, so a stale number in that document is not
 cosmetic - it is the one thing that would make a reader distrust every other figure in it.
-Measured 2026-09-27, before this suite existed: the doc claimed 5,847 lines / 286 KB (the
 file is 21,635 lines / 1.03 MB), "no benchmark or eval harness" (tests/eval_tasks.py has 18
 machine-graded tasks), "no release process" (.github/workflows/ci.yml + maintenance/release.sh),
 and section 3.2's budget defaults were off by 2-6x (40/10/180/6000 where the tree says
@@ -140,7 +139,6 @@ def main():
 
     # The facts that are NOT computable must keep their provenance, and the claims this suite
     # was written against must not come back.
-    #
     # These checks were PHRASE-shaped, and 2026-09-29 is what that cost (review 5.1/5.2): the
     # guard forbade the literal "no benchmark or eval harness" while a synonym - "no evaluation
     # suite" - sat in the same file contradicting the gated block twelve lines above it, and six

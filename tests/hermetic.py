@@ -1,7 +1,7 @@
 """Inputs a suite must STAGE, because a clean clone does not carry them.
 
 Two gitignored files are load-bearing for suites, and both made a clean clone red
-(measured 2026-09-26, `python tests/run_all.py`):
+:
 
   maintenance/private_rules.py   the fleet's private inventory. maintenance/build-package.py
                                  refuses to import without it, so tests/test_config_example.py

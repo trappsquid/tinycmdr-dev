@@ -1,6 +1,5 @@
 """Memory promotion: event-driven, dismissible, and never a nag.
 
-Measured 2026-10-04 (a self-review of this harness's memory prompting): the save decision
 was made at WRITE TIME - the moment a fact is freshest, which correlates with the effort
 just spent, not with future value - and only for an order whose wording reads as a
 "where is X" question. So the publishable got saved and the load-bearing did not, and

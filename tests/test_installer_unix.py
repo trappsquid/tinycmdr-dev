@@ -433,7 +433,7 @@ def case_linux_secrets_file(sb, pkg, bindir, user, py):
 
     Parity with the macOS installer, which has always taken the path; Linux could only read
     the package's own install/fleet-secrets.env, so a reader feeding a file by path got a
-    different answer per platform (measured 2026-09-26).
+    different answer per platform.
     """
     inst = sb / "lin-secrets"
     fake_venv(inst, py)
@@ -823,7 +823,6 @@ def run_with_stdin(cmd, env, cwd, stdin_text):
 def case_installer_probes_endpoint(sb, pkg, bindir, user, py):
     """The interactive installer asks, PROBES, and offers what it advertised.
 
-    2026-09-30: "there should be a point in the interactive installer that checks
     if your link is even reachable before it continues on with the rest of the install" - and
     a typo at this one question used to be invisible until the first request failed. Two
     runs: a live stub endpoint (reachable, and the model chosen by NUMBER from its list) and

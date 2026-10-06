@@ -1,7 +1,6 @@
 """The envelope: window, measured static, clamped reply, leftover messages budget.
 
 Pins the arithmetic that replaces the old guess.
-Measured at HEAD before this change: an 8,192-token endpoint was sent a
 9,275-token payload and a 16,384-token completion request, because the budget was
 max(4000, window - 7000 - max_tokens) with the 5,322-token static half subtracted
 from nothing. The checks here are the five numbers and the relations between them

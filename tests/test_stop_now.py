@@ -367,7 +367,6 @@ def test_ordinary_text_is_still_steered_not_queued():
 def test_a_stop_reaches_a_sub_agent():
     """A /stop must stop the SUB-AGENTS, not only the run parked on them.
 
-    Measured 2026-09-29: three /stop commands across twenty minutes changed nothing while
     three sub-agents kept writing files. The parent was parked inside delegate_task waiting
     for them, and the sub-agents had been handed no cancel event at all - so the operator's
     stop had nothing to reach, and the parent could not act until every subtask had finished

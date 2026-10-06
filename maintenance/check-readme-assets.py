@@ -63,7 +63,7 @@ def readme_names():
 def release_assets(tag):
     # gh is what reads a release back. A missing one must say so: this raised
     # FileNotFoundError out of subprocess, which reads like a bug in this script rather than
-    # "install the tool it needs" (measured 2026-09-26, the first release cut without gh).
+    # "install the tool it needs".
     try:
         out = subprocess.run(["gh", "release", "view", tag, "--json", "assets"],
                              capture_output=True, text=True)

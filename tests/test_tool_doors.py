@@ -147,7 +147,7 @@ check("shell: a quoted path with a space answers the door, not a silent no-op",
 
 # A tool FILE must really be a runnable script: that is the door's premise, and the way a
 # tool is smoke-tested from a shell. The three shipped files carried no __main__
-# (measured 2026-10-05), so a door miss ran one, printed nothing and exited 0 - the run
+# , so a door miss ran one, printed nothing and exited 0 - the run
 # recorded that as success.
 _toolsmith_py = Path(fb.REGISTRY.tools_dir) / "toolsmith.py"
 _proc = subprocess.run([sys.executable, str(_toolsmith_py), "action=list"],

@@ -226,7 +226,6 @@ FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
 # What in maintenance/ is generic enough to ship: the restart helpers an install needs.
 # Everything else in this folder is host-specific operational scripts - fleet pushes,
 # migrations, probes, backups - and stays out.
-#
 # This is the SAME list as SHIP's maintenance/ entries, written twice, and the two drifting
 # apart refuses the whole build (maintenance_drift() below; it was only a comment until
 # 2026-09-26, and the permitted-but-absent macOS restart helper is what the comment missed).
@@ -670,7 +669,6 @@ PY_FLOOR = (3, 10)
 def maintenance_drift():
     """Problems where SHIP's maintenance/ entries disagree with ALLOWED_MAINTENANCE.
 
-    Measured 2026-09-26: ALLOWED_MAINTENANCE permitted restart-tinycmdr-macos.sh while
     SHIP never listed it, so the macOS package shipped without the file the installer
     prints as its day-two command and install/README-macos.md §5 documents - while the
     installer's copy loop said nothing about the miss. `audit()` only rejects files that
@@ -692,7 +690,6 @@ def maintenance_drift():
 def tier_drift():
     """Problems where config.example.json disagrees with DEFAULT_CONFIG's safety tiers.
 
-    Measured 2026-09-25: every installer writes a new host's config.json FROM
     config.example.json, and the example was missing the `robocopy /MOVE` confirm pattern
     that DEFAULT_CONFIG and that release's own changelog both carry (8 vs 9) - so a fresh
     install shipped without the gate the changelog announced. Nothing caught it: the suites

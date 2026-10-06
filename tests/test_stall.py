@@ -553,7 +553,7 @@ def test_steering_the_run_never_read_becomes_a_normal_message():
 def test_idle_worker_window_does_not_produce_a_false_queued_notice():
     """A worker outlives its run by up to 10s waiting on an empty queue. A
     message landing in that window is NOT queued behind anything, and saying it
-    is (seen live 2026-09-10 13:33) is a lie the operator cannot check."""
+    is is a lie the operator cannot check."""
     d = _dispatcher()
     ch = "chan-idle"
     q = d.queues.setdefault(ch, fb.queue.Queue())
@@ -1019,7 +1019,6 @@ def test_a_reformatted_identical_call_is_still_the_same_call():
     """The refusal has to key on the CANONICAL signature, not on the raw string the model
     happened to emit.
 
-    Measured 2026-09-24 on Windows: the same directory listing really ran three
     times inside one chat turn - three tool results with one identical output digest and one
     byte length - while the loop guard counted it and the refusal that should have stopped
     the third run never fired. The model had re-emitted identical arguments with different
@@ -1060,7 +1059,6 @@ def test_a_refusal_that_comes_back_ends_the_run():
     """One refusal is the guard working as designed. The model issuing the same refused call
     AGAIN is a spin, and the operator should not have to read another card for it.
 
-    Measured 2026-09-24 on Windows: identical attempts kept arriving while the
     guard counted them, and the run ended on a promise of future work instead of a report.
     The hard stop needed `loop_stop_repeats` attempts with the SAME OUTPUT, which a refused
     call never has - it returns the refusal text - so the ladder could not see this shape.
@@ -1096,7 +1094,6 @@ def test_a_re_read_after_elision_is_served_not_refused():
     """The elision is what makes a repeat legitimate: the model asking again is asking for
     something it can no longer SEE.
 
-    Measured 2026-10-03 on a live install: the model re-read a spilled payload by id
     (`read_file spill#3`) whose result compaction had dropped, got refused with 4000 chars
     of it, asked once more, and the loop guard force-stopped the run - "loop detected
     almost every turn". A dropped call is remembered, and its next repeat is served (the
@@ -1449,8 +1446,7 @@ def test_the_system_prompt_describes_the_repeat_guard_that_exists():
 
 
 def test_the_system_prompt_forbids_dismissing_a_request():
-    """Observed live 2026-09-10: the bot ran three docker checks and then replied
-    'nothing actionable ... channel noise' instead of answering."""
+    """    'nothing actionable ... channel noise' instead of answering."""
     sp = fb.build_system_prompt()
     check("prompt: dismissing a message as noise is forbidden",
           "noise" in sp and "nothing actionable" in sp, "rule missing")
@@ -1629,7 +1625,7 @@ def test_payload_dump_is_off_unless_configured(tmp=None):
         # a bad path must not take the run down with it. The path is a FILE used as a
         # directory (ENOTDIR everywhere) rather than r"Z:\nope\<bad>|path": on POSIX that
         # is a RELATIVE name, so the dump created `Z:\nope\<bad>|path/` inside the checkout
-        # (measured 2026-09-26 in run_all.py's leak report) and the check passed for the
+        #  and the check passed for the
         # wrong reason - the write succeeded.
         blocker = pathlib.Path(tempfile.mkdtemp(prefix="fb-dump-blocker-"))
         atexit.register(lambda: shutil.rmtree(blocker, ignore_errors=True))
@@ -2011,7 +2007,7 @@ def test_shipped_requirements_cover_what_the_code_declares():
               "installer does not use the file")
     else:
         # The installer is Windows-only, so a Mac or Linux checkout has no install/:
-        # asserting it there fails for the wrong reason (found on macOS 2026-09-19).
+        # asserting it there fails for the wrong reason.
         check("deps: installer absent from this tree -> installer check skipped", True)
     check("deps: a missing Mattermost client is a loud failure",
           "needs mmpy_bot" in src and "sys.exit(2)" in src, "no loud path")
@@ -2262,7 +2258,6 @@ def test_an_answer_that_arrives_with_the_correction_is_delivered():
 def test_a_mutation_lets_the_same_call_run_again():
     """The repeat guard must not outlive the change it was measured against.
 
-    Found in the live Windows install's own log: it ran a tool, edited that tool with edit_file,
     re-ran the check, got identical output, and read the repeat as "the harness caching
     a pre-edit call". Had it tried a third time, the guard would have REFUSED it and
     handed back the PRE-EDIT result - after which a fixed tool looks broken. So any
@@ -2355,8 +2350,7 @@ def test_an_infrastructure_failure_files_a_red_done_line():
         fb.CONFIG["agent"].update(saved)
 
 def test_a_cap_with_work_left_continues_the_task_instead_of_ending_it():
-    """Measured 2026-09-17: 17 real runs ended on a step or wall-clock cap, and every one of
-    them cost the operator a "continue". A cap with plan steps still open is a checkpoint:
+    """    them cost the operator a "continue". A cap with plan steps still open is a checkpoint:
     the run must open a fresh segment on the same task, say so once, and stop only when the
     continuation budget is spent (or the plan is complete)."""
     probes = []
@@ -2555,7 +2549,7 @@ def test_a_backward_wall_clock_step_does_not_stretch_the_run_budget():
 
 def test_the_second_read_of_a_file_leaves_with_its_map():
     """24 of the 40 code calls in the 2026-09-18 run were another whole-file read of the
-    SAME 8,700-line source (measured on Windows). A path read twice in one run leaves
+    SAME 8,700-line source. A path read twice in one run leaves
     with its index attached, so the next question goes to a region instead of through the
     whole file."""
     big = TMP / "big_source.py"
@@ -2704,8 +2698,7 @@ def test_fetch_url_cannot_blow_up_the_context():
 
 
 def test_the_safety_seatbelt_covers_execute_code_too():
-    """2026-09-18: `is_blocked` had exactly one call site, in tool_shell, so every pattern in
-    blocked_patterns was one `execute_code` away from being bypassed - and the system prompt
+    """    blocked_patterns was one `execute_code` away from being bypassed - and the system prompt
     admitted it. The check on the source text is a seatbelt, not a boundary, but it has to be
     there."""
     safe = fb.tool_execute_code({"code": "print('harmless')"}, {"session_key": "belt-s"})
@@ -2808,8 +2801,7 @@ def test_the_safety_seatbelt_covers_execute_code_too():
 
 
 def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
-    """Measured live on Windows 2026-09-18: the model announced "fresh pass complete" five
-    times in 25 minutes and answered every announcement with another tool round, while every
+    """    times in 25 minutes and answered every announcement with another tool round, while every
     call was distinct, so no repeat-based guard could see it. The delivery guard counts
     announcements that arrive with tool calls queued, demands the report, then forces it."""
     import copy as _copy
@@ -2865,9 +2857,7 @@ def test_a_run_that_keeps_announcing_completion_is_forced_to_deliver():
           all("segment" not in (s or "") for s in seen), seen)
 
 
-# --------------------------------------------------------------------------
 # the restatement guard (macOS, 2026-09-24)
-# --------------------------------------------------------------------------
 # Measured: a stuck run described the SAME status EIGHT times in three minutes
 # while every call it made failed and nothing changed. The calls were different,
 # so the identical-call guard never fired; the sentences were reworded after the
@@ -2994,9 +2984,7 @@ def test_the_restatement_nudge_is_queued_with_the_batch():
     check("and it is not appended inside the per-call loop",
           src.find("if _restate_note:") < k, f"{src.find('if _restate_note:')} {k}")
 
-# --------------------------------------------------------------------------
 # the turn-facts line (measurement build, 2026-09-24)
-# --------------------------------------------------------------------------
 # The question this exists for: "why does the model sometimes write a sentence
 # instead of calling a tool - the server, the model, or our harness?" Nothing in
 # the log could answer it, because only the turns that TRIPPED a guard were
@@ -3062,8 +3050,7 @@ def test_a_turn_is_classified_the_way_the_operator_reads_it():
 
 
 def test_a_bare_action_phrase_never_ends_a_run_as_an_answer():
-    """Measured 2026-09-25 on two live installs, one afternoon each way: the model's whole
-    reply was an action phrase ("Checking where loft boxes is located on this machine.",
+    """    reply was an action phrase ("Checking where loft boxes is located on this machine.",
     "Finding <folder> folder:"), the harness read it as an ANSWER, and the run closed at
     0 tool calls behind a green done line. Twice. The fences are the promise guard's own:
     the run has made no tool call, and it happens once per run.
@@ -3162,9 +3149,7 @@ def test_the_facts_line_marks_the_harness_as_the_last_speaker_when_it_nudged():
     check("and the turn after it records that the harness spoke last",
           any("harness_before=1" in m for m in turns), turns)
 
-# --------------------------------------------------------------------------
 # a promise that ends a run which already did work (2026-09-24)
-# --------------------------------------------------------------------------
 # Measured, from live installs' own transcripts: one install's conversation ends two runs
 # on "Let me find where." / "Let me dig deeper for actual downloadable TAK map
 # files." AFTER real tool work, and the operator's next message is "wait why didnt
@@ -3222,8 +3207,7 @@ def test_a_run_that_stops_on_a_promise_twice_says_so_in_the_delivery():
 
 
 def test_the_result_claim_guard_catches_the_report_phrasing_it_missed():
-    """Measured gap found while writing the classifier: "the log says 12 errors" went
-    through unclassified because the pattern wanted a unit word beside the number."""
+    """    through unclassified because the pattern wanted a unit word beside the number."""
     check("a report verb + a box subject + a number is a claim",
           bool(fb._RESULT_CLAIM_RX.search("The log says 12 errors and 0 warnings.")))
     check("so is the output showing counts",

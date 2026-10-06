@@ -109,7 +109,7 @@ def run(python, install_dir, args, timeout=180):
     # encoding/errors, never plain text=True: the app reconfigures its stdout to UTF-8, and
     # a bare text=True decodes with the LOCALE codec (cp1252 on Windows), so a byte like
     # 0x81 raised UnicodeDecodeError inside subprocess.run and the smoke died on a decoding
-    # fault instead of grading the install (measured by the Windows CI job, 2026-10-03).
+    # fault instead of grading the install.
     return subprocess.run([python, str(Path(install_dir) / "tinycmdr.py"), *args],
                           cwd=install_dir, capture_output=True, timeout=timeout,
                           encoding="utf-8", errors="replace")
@@ -198,7 +198,7 @@ def main():
                   timeout=300)
         out = (got.stdout or "") + (got.stderr or "")
         # A turn with no endpoint exits 0 and prints an honest "infrastructure failure"
-        # card (measured 2026-10-02 against a refused port), so the return code alone
+        # card, so the return code alone
         # grades nothing here - the card must be absent.
         failures += not check("--once exited 0", got.returncode == 0, out)
         failures += not check("--once actually ran (no infrastructure-failure card)",

@@ -204,7 +204,6 @@ def test_repeated_fragments_inside_one_call_are_kept():
     """The resend guard used to drop the SECOND and later copy of any fragment ever seen
     in a call, which deleted real punctuation before JSON was parsed: `grep -nE` ->
     `grepnE`, `head -5` -> `head5`, `/tmp/x, /tmp/y` -> `/tmp/x,/y`, `a, b, c` -> `a, b c`.
-    Measured live on macOS 2026-09-27: 5 of 6 realistic shell commands arrived damaged
     while the raw SSE carried them correctly. Every fragment below is one llama.cpp
     actually sends for this command."""
     cmd = 'ls -la /tmp/alpha, /tmp/beta | grep -nE "x-y" | head -5'
@@ -271,7 +270,6 @@ def test_other_openai_compatible_server_shapes():
     """llama.cpp streams one string fragment per token. Other OpenAI-compatible servers -
     vLLM/SGLang-class, and the proxies in front of them - also send the arguments as an
     OBJECT, the legacy `function_call` delta, and `content` as a list of parts. Measured
-    2026-09-27 against the shipped accumulator: the first ran the tool with EMPTY
     arguments, the second lost the call entirely, and the third lost the whole answer.
     None of the three raised anything."""
     # (a) arguments as a JSON object, then a trailing empty object

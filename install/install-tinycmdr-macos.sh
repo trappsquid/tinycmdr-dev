@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
-#
 # install-tinycmdr-macos.sh - install tinycmdr on a Mac, run by launchd.
-#
 # On a Mac this is the whole job:
-#
 #   bash install-tinycmdr-macos.sh
-#
 # With no switches it ASKS for what the bot cannot work without - the Mattermost
 # server, your user id, a Telegram lane if you want one, and where the model lives:
 # local (this Mac or your LAN) or cloud (a hosted provider), the key first for cloud.
@@ -14,69 +10,63 @@
 # until you say yes.
 # Every answer has a switch; pass them (or -y) and it asks nothing. Secrets are read
 # at masked prompts, so they never have to enter your shell history.
-#
 # It builds a venv, writes config.json from config.example.json (plus
 # install/fleet-defaults.json when it is present), keeps the bot token out of
 # config.json (it goes to .env, mode 600), and registers a per-user launchd
 # agent that starts at login and comes back if it dies.
-#
 # Nothing here needs root: the agent lives in ~/Library/LaunchAgents and the bot
 # runs as you.
-#
-#   --token <t>           Mattermost bot token (TINYCMDR_MM_TOKEN)
-#   --web-host <addr>     the page's bind address: 127.0.0.1 (default) or 0.0.0.0
+#   --token <t> Mattermost bot token (TINYCMDR_MM_TOKEN)
+#   --web-host <addr> the page's bind address: 127.0.0.1 (default) or 0.0.0.0
 #                         to reach it from other machines on your network
-#   --web-port <p>        the page's port (default 8790)
-#   --web-token <t>       the page's access token (TINYCMDR_WEB_TOKEN). Replaces the
+#   --web-port <p> the page's port (default 8790)
+#   --web-token <t> the page's access token (TINYCMDR_WEB_TOKEN). Replaces the
 #                         host's own; absent: keep it, or mint a 32-byte one
-#   --no-web              install without the page (the chat lane only)
-#   --token-file <f>      read the token from a file (first non-empty line)
-#   --search-egress <b>   true|false: may web search send queries OFF this machine?
+#   --no-web install without the page (the chat lane only)
+#   --token-file <f> read the token from a file (first non-empty line)
+#   --search-egress <b> true|false: may web search send queries OFF this machine?
 #                         default false - both built-in providers are third parties,
 #                         and a provider on this LAN (a searxng entry) never needs it
-#   --telegram-token <t>  Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
+#   --telegram-token <t> Telegram bot token (TINYCMDR_TG_TOKEN) - the third door, DMs
 #                         only; with no Mattermost token the agent runs THIS lane
-#   --telegram-ids <i>    numeric Telegram id(s), comma or space separated
-#   --allowed-user <id>   Mattermost user id allowed to command the bot
-#   --mattermost-url <h>  Mattermost host, no scheme (default: fleet-defaults.json)
-#   --install-dir <d>     default ~/tinycmdr
-#   --bot-name <n>        agent.bot_name (default: this Mac's hostname)
-#   --model-base-url <u>  llm.base_url (default: a llama.cpp on this machine, or
+#   --telegram-ids <i> numeric Telegram id(s), comma or space separated
+#   --allowed-user <id> Mattermost user id allowed to command the bot
+#   --mattermost-url <h> Mattermost host, no scheme (default: fleet-defaults.json)
+#   --install-dir <d> default ~/tinycmdr
+#   --bot-name <n> agent.bot_name (default: this Mac's hostname)
+#   --model-base-url <u> llm.base_url (default: a llama.cpp on this machine, or
 #                         answered at the prompt; --use-fleet-model for the LAN box)
-#   --model <m>           llm.model (default: main)
-#   --use-fleet-model     take llm.base_url/model from fleet-defaults.json instead
+#   --model <m> llm.model (default: main)
+#   --use-fleet-model take llm.base_url/model from fleet-defaults.json instead
 #                         (i.e. the LAN model endpoint)
-#   --python <path>       interpreter to build the venv from (default: 3.12, else 3.11/3.10)
-#   --install-python      fetch a private python 3.12 with uv when none is here
+#   --python <path> interpreter to build the venv from (default: 3.12, else 3.11/3.10)
+#   --install-python fetch a private python 3.12 with uv when none is here
 #                         (the installer also OFFERS this when it finds no 3.10-3.12)
-#   --force-python        accept an interpreter NEWER than 3.12 and hope: the pinned
+#   --force-python accept an interpreter NEWER than 3.12 and hope: the pinned
 #                         mmpy_bot is the last release that connects on 3.13+
-#   --label <l>           launchd label (default com.tinycmdr.agent)
-#   --secrets-file <f>    extra KEY=VALUE lines for .env (search keys etc)
-#   --no-path             do not put the `tinycmdr` verb on PATH
-#   --no-launchd          install the files only; do not register the agent
+#   --label <l> launchd label (default com.tinycmdr.agent)
+#   --secrets-file <f> extra KEY=VALUE lines for .env (search keys etc)
+#   --no-path do not put the `tinycmdr` verb on PATH
+#   --no-launchd install the files only; do not register the agent
 #                         (also the way to dry-run this installer off macOS)
 # The questions, in order: the bot token, the Mattermost server and your user id,
 # a Telegram lane (optional), the model endpoint and its key, and "Add another
 # endpoint?" for as many fallbacks as you want. Nothing is written until you answer
 # "Install now?".
-#
-#   --telegram-token <t>  answer for the Telegram question without being asked
-#   --allowed-user <id>   answer for your Mattermost user id
-#   -y | --yes            ask nothing: take the switches above and the defaults
+#   --telegram-token <t> answer for the Telegram question without being asked
+#   --allowed-user <id> answer for your Mattermost user id
+#   -y | --yes ask nothing: take the switches above and the defaults
 #                         (the questions are asked only at a terminal, and a
 #                          piped or scripted run takes the defaults instead)
-#   --force               reinstall in place (boots out the agent first)
-#   --no-start            register the agent, do not start it now
-#   --verify-only         report on an existing install, change nothing
-#   --uninstall           stop the agent, remove it and the install dir
-#   -h | --help           this text
-#
+#   --force reinstall in place (boots out the agent first)
+#   --no-start register the agent, do not start it now
+#   --verify-only report on an existing install, change nothing
+#   --uninstall stop the agent, remove it and the install dir
+#   -h | --help this text
 # Everything is transcribed to $TMPDIR/tinycmdr-install.log (mode 600), so a failure
 # always leaves the reason on disk. No token is ever echoed into it: the bot token goes
 # to .env (mode 600) and the transcript says where to read it - a secret in a
 # transcript is a secret in a file nobody thinks to delete.
-#
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -225,7 +215,7 @@ trim() {   # trim() <string> -> the same string without leading/trailing spaces
 # EVERY question goes to STDERR. The caller reads the answer from stdout
 # (X="$(ask_text ...)"), so a prompt printed to stdout is captured as the answer
 # itself - measured on the first probe: mattermost.url came back as the literal
-# string "    Mattermost server, no https:// (e.g. chat.example.com): mm.probe.local".
+# string " Mattermost server, no https:// (e.g. chat.example.com): mm.probe.local".
 ask_text() {   # ask_text <prompt> [default] -> prints the answer
     local p="$1" dflt="${2:-}" a=""
     if [ -n "$dflt" ]; then printf '    %s [%s]: ' "$p" "$dflt" >&2
@@ -992,7 +982,6 @@ if [ "$IS_MAC" = 1 ]; then
     else
         # `launchctl print` EXITS NON-ZERO for a label that is not loaded, and under
         # `set -e` with pipefail that killed the whole run at the assignment (measured
-        # 2026-09-26: the installer died silently right after the python check).
         _loaded="$( { launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null || true; } \
             | sed -n 's/^[[:space:]]*path = //p' | head -1)"
         if [ -n "$_loaded" ] && [ "$_loaded" != "$PLIST" ]; then
@@ -1028,7 +1017,7 @@ fi
 # owns - the rule update.sh applies. This used to be a hand-written list of names, and
 # that list is a THIRD mirror of "what ships": the new page design added assets/ to the
 # package, the list was never told, and every fresh install served /page.css as a 404 -
-# the page rendered as raw unstyled markup (measured on a fresh install, 2026-10-04).
+# the page rendered as raw unstyled markup.
 # One rule now; update.sh and this installer cannot disagree about the file set again.
 HOST_TOP="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
 # The one host-owned rule: keep in step with tinycmdr.py's _HOST_OWNED_PREFIXES and
@@ -1151,7 +1140,6 @@ fi
 say "config"
 # What the CALLER asked for, captured before any default is filled in. An update
 # (--force, in place) must only change what it was told to change: measured
-# 2026-09-24, this writer used the PACKAGE's config.example.json as its base every
 # time, so re-running the installer replaced a working host's config with the
 # example's placeholders - mattermost.url, allowed_users, the model endpoint and
 # the Telegram allowlist all went back to defaults and the bot would not start.
@@ -1210,7 +1198,6 @@ if [ "$WEB_ON" = 1 ]; then
     # The page's token: set your own here, or take the host's own (a redo keeps it) or
     # a minted one. This question exists because the wizard used to be mint-or-nothing:
     # a LAN operator who wanted a token they chose had to hand-edit .env afterwards
-    # (measured 2026-10-04).
     if [ -n "${WEB_TOKEN_ARG:-}" ]; then
         if [ "${#WEB_TOKEN_ARG}" -lt 12 ]; then
             warn "the page token you set is only ${#WEB_TOKEN_ARG} characters; the token"
@@ -1508,7 +1495,7 @@ fi
 # and the run carries on with an assumed 14,349-token window, while the model box is fine.
 # So dial once, here, from the venv's own python - the exact binary the agent will use, so
 # the approval lands on the one that matters - with the operator watching. Never fatal: a
-# check, not a gate (measured on a live install, 2026-09-27).
+# check, not a gate.
 if [ -x "$VPY" ] && [ -f "$INSTALL_DIR/config.json" ]; then
     say "model endpoint"
     PROBE_OUT="$(TINYCMDR_LLM_API_KEY="$MODEL_KEY" "$VPY" - "$INSTALL_DIR/config.json" <<'PROBEPY'
@@ -1576,7 +1563,7 @@ say "launchd agent"
 # sudo install) made it writable. On a stock Mac it exists and is root-owned, so the
 # old check silently did nothing and the install ended with NO `tinycmdr` command at
 # all - the reader is told to run `tinycmdr status` and their shell has never heard
-# of it (measured 2026-09-26 on macOS). Fall back to ~/.local/bin, and
+# of it. Fall back to ~/.local/bin, and
 # a new terminal can see the folder.
 VERB_PATH=""
 if [ "${NO_PATH:-0}" != "1" ]; then

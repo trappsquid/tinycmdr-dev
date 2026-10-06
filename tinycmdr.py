@@ -172,10 +172,7 @@ def log_console_off():
         pass
 
 
-# --------------------------------------------------------------------------
 # Config
-# --------------------------------------------------------------------------
-
 DEFAULT_CONFIG = {
     "llm": {
         # neutral default: a fresh host points this at its own endpoint (the
@@ -642,15 +639,13 @@ DEFAULT_CONFIG = {
             # shell command text, execute_code's source text, and every write
             # path's payload (write_file/edit_file content, create_tool code and
             # manifest commands) through confirm_gate.
-            #
             # The recursive deletes live HERE rather than in blocked_patterns: a
             # targeted build-directory cleanup is routine ops, and refusing it outright
             # left the model one route - assembling the same command at runtime inside
             # execute_code, past the seatbelt this file admits is not a boundary. A
             # confirm that quotes the exact command back to the operator keeps the
             # risk visible, which an unappealable refusal does not.
-            #
-            # The MACHINE ITSELF takes the same route (measured 2026-09-25): the operator
+            # The MACHINE ITSELF takes the same route: the operator
             # ordered "Restart the tower computer over ssh", the absolute tier refused
             # it, and the run spent 40+ steps writing a .ps1 and launching it through the
             # process tool - a restart that reached the remote box with the pattern never in
@@ -665,7 +660,7 @@ DEFAULT_CONFIG = {
             # answered "clear out the junk" with `robocopy /MOVE` of a 194-item directory and
             # NOTHING in either tier matched it - only the model's own question protected it.
             r"\brobocopy\b[^|;]*/move\b",
-            # The Windows machine-verb class (measured on a live Windows install):
+            # The Windows machine-verb class:
             # every one of these was `is_blocked=False, confirm=None`, so the whole class
             # ran with no gate at all. They are confirm-tier, not absolute: stopping a
             # service and stopping the wrong one look identical to a regex, and that is
@@ -727,7 +722,6 @@ DEFAULT_CONFIG = {
             # destructive_risk() next to _broad_root, which routes a whole-tree target to
             # this tier and a named directory to confirm. A host that
             # replaces this list cannot lose that coverage.
-            #
             # the lookahead, not "end of line": inside code the command is usually quoted, so
             # `os.system("rm -rf /")` ended on a quote and the old pattern missed it (found by
             # tests/test_stall.py on 2026-09-18, the day the seatbelt was extended to code).
@@ -753,7 +747,6 @@ DEFAULT_CONFIG = {
             # alone was theatre here. Still a seatbelt, not a boundary: execute_code's
             # source text is checked against the same patterns, but code that builds a
             # command at runtime is invisible to a regex.
-            #
             # What stays here is the UNRECOVERABLE: disks, partitions, filesystems,
             # shadow copies, the firmware-level wipes, a fork bomb, an encoded command
             # blob. The reversible-but-destructive recursive deletes that used to sit
@@ -1139,10 +1132,7 @@ RESTART_EXIT_CODE = 75
 START_TIME = time.time()
 
 
-# --------------------------------------------------------------------------
 # Small helpers
-# --------------------------------------------------------------------------
-
 # ---------------------------------------------------------- tool images ---
 # A tool may hand the model something to LOOK at. The contract is additive: a
 # tool returns {"text": ..., "images": [spec, ...]} and the text is used exactly
@@ -1150,7 +1140,6 @@ START_TIME = time.time()
 # next request and then gone. They are never stored in the run's `messages`, on
 # purpose - that list is measured by json.dumps (base64 would count as ~300k
 # fake tokens) and rewritten by _compact (which slices content by character).
-#
 # The whole path is dormant unless agent.vision is true, and that ships false (see
 # DEFAULT_CONFIG), so no install gains a behaviour change from this existing.
 _TOOL_IMAGES = {}                 # session_key -> [spec, ...]
@@ -1166,7 +1155,6 @@ _IMAGE_NOTE = ("[HARNESS: %d image(s) produced by the tools above are attached "
 def image_tokens_est(w, h):
     """Tokens a screenshot costs this fleet, from measurement, not a guess.
 
-    Measured 2026-09-28 against the LAN box (llama.cpp, Ornith-1.5-35B-A3B, a real
     desktop capture): 768x499 -> 408 prompt tokens, 1024x666 -> 696, 1470x956 ->
     1,404, 2940x1912 -> 4,053. That is ~1,000-1,070 tokens per megapixel around a
     megapixel and ~720 at 5.6 megapixels, so pixels/1000 is accurate where a
@@ -1512,9 +1500,7 @@ def _host_is_local(host):
 _cloud_skip_warned = False
 
 
-# --------------------------------------------------------------------------
 # LLM transport hardening
-#
 # Three failure modes that used to masquerade as "the model failed":
 #   1. an endpoint that accepts the connection and then trickles bytes —
 #      requests' timeout is per-read, so this hangs until the task budget dies;
@@ -1524,8 +1510,6 @@ _cloud_skip_warned = False
 # Every discarded attempt is recorded so the usage line can admit the retries,
 # and a total transport failure raises InfraError — explicitly NOT a wrong
 # answer from the model.
-# --------------------------------------------------------------------------
-
 FATAL_STATUS = (400, 401, 402, 403, 404)
 
 _CONTEXT_OVERFLOW_RE = re.compile(
@@ -1604,7 +1588,6 @@ def _context_ceiling():
 def static_prompt_tokens(session_key=None):
     """Tokens the STATIC half of every request costs: system prompt + sent schemas.
 
-    Measured, not a constant - the growth of the prompt and the tool schemas had
     already outrun the 7,000-token headroom this replaces. Cached per session for
     WINDOW_TTL and invalidated the moment the visible tool set changes, so a reveal
     (or a tool built mid-run) is counted on the very next call. That is also the
@@ -1842,7 +1825,6 @@ def _http_status(exc):
 def _http_body(exc, limit=600):
     """The endpoint's error body, scrubbed before it goes anywhere.
 
-    Measured: a provider that echoes the request's Authorization header in
     its 401 body put the API key into the fatal notes, the run's return value, the log and
     the chat - every exit this function feeds. `scrub()` is the one place that knows the
     secrets this process was handed, so it runs HERE, at the boundary, not at each caller.
@@ -1993,7 +1975,7 @@ def _delta_text(value):
 
     Usually a string. Some servers send the OpenAI multipart shape instead -
     `[{"type": "text", "text": "..."}]` - and testing `isinstance(value, str)` alone threw
-    a whole answer away without saying so (measured 2026-09-27).
+    a whole answer away without saying so.
     """
     if isinstance(value, str):
         return value
@@ -2157,7 +2139,7 @@ def _one_json_object(text):
         last = (i, end)
         if obj:
             # An EMPTY object is not a better answer than a real one: a server that
-            # re-sends `{}` after the arguments (measured shape) must not win.
+            # re-sends `{}` after the arguments must not win.
             nonempty = (i, end)
         i = end
     keep = nonempty or last
@@ -2657,7 +2639,6 @@ def _pick_model(models, want):
     ("Qwen/Qwen2.5-72B" for a config that says "Qwen2.5-72B") - but when several models are
     advertised and none of them is this one, the answer is "unknown", not "the first one".
 
-    Measured 2026-09-29: the fallback was `models[0]`, so a gateway advertising
     ["...0.5B", "...72B"] with an aliased config name sized the ENTIRE envelope - messages
     budget, reply cap and every window-scaled limit - from the 0.5B's window. Over-reporting is
     the direction this harness calls out as dangerous (2026-09-21: a 126,261-token payload in a
@@ -2757,7 +2738,6 @@ def _detect_window(base_url, headers, timeout=10):
         # that: the loaded model's context_length, which is the number the budget needs.
         # The reply's shape is the fingerprint (a `models` list), so another server's 200
         # to an unrelated route is not read as an answer.
-        #
         # /api/show is deliberately NOT probed. It needs a POST (this function is
         # read-only everywhere else), and its model_info.<arch>.context_length is the
         # model's MAXIMUM: Ollama serves num_ctx, 4096 by default, so using it would
@@ -3097,15 +3077,12 @@ def truncate_middle(text, limit, label="output"):
             text[-half:])
 
 
-# --------------------------------------------------------------------------
 # Over the cap: spill, do not shred (2026-09-18)
-# --------------------------------------------------------------------------
 # Proven on the Windows test box by the harness's own analysis: a 30,045-char tool result lost ~20,100
 # middle characters to truncate_middle, and re-issuing the same call with `raw=true` lost the
 # identical middle - raw bypasses DIGESTION (1105), not the cap, so the documented escape
 # hatch could not recover the data. The only recovery left was re-running the command, which
 # is expensive and actively wrong for a mutating one.
-#
 # So an over-cap result now writes its full text to spill/ and hands back both ends plus the
 # path. Deterministic, no model involved. It fails SOFT on purpose: if the write does not
 # happen the old truncation is used, because a disk problem must never break a run (the same
@@ -3510,13 +3487,11 @@ def _patterns(kind):
 
 
 # --- what the BLOCK tier reads: what would RUN, not what is merely carried -----------------
-#
 # A blocked pattern stands for "this command would do it", so the tier has to match the text
 # that would run - it matched the whole command instead, and that refused a SEARCH for the
 # string. Measured 2026-09-29: `grep -rn "rm -rf /" docs/` came back BLOCKED, with the
 # model told no confirmation unlocks it. A dead end for a read-only command, and the same for
 # `git log -S 'rm -rf /'` or an execute_code whose source merely contains the text.
-#
 # Two views, in this order:
 #   1. LIVE text - quoted regions removed, because a quote is an argument - EXCEPT command
 #      substitutions, which run wherever they appear ("$(...)" and backticks). A match here
@@ -3524,12 +3499,10 @@ def _patterns(kind):
 #   2. A match surviving only INSIDE quotes also blocks, but only when the command hands that
 #      text to something that EXECUTES text. A quoted mention with no executor is inert, and
 #      inert text is not a command.
-#
 # This narrows WHAT IS MATCHED, never what is dangerous. The executor list is about running a
 # STRING, so `sudo grep "rm -rf /" log` stays a search (sudo does not re-parse its arguments),
 # while `sh -c "rm -rf /"`, `bash -c '...'`, `$(rm -rf /)`, `` `rm -rf /` ``, `xargs rm -rf`,
 # `find . -exec ...`, `ssh host "..."` and `subprocess.run("rm -rf /")` all still block.
-#
 # The admitted cost: a mention that sits NEXT TO an interpreter is still refused - `python
 # check.py "rm -rf /"` counts as handing a string to Python. Over-blocking a mention is the
 # direction a seatbelt should err in; refusing a plain search was not.
@@ -3741,7 +3714,6 @@ _HARNESS_NOTE_RX = re.compile(r"\[HARNESS[^\]]*\]", re.S)
 def _dedupe_text(text):
     """The text the repeat guard compares: the TOOL's answer, none of the harness's notes.
 
-    Measured 2026-09-25: the mint hint rides the second call's result, so the third
     identical call looked DIFFERENT to the guard and re-ran the command - the exact repeat
     the guard exists to refuse. A hint the harness adds is not the world changing.
     """
@@ -3776,22 +3748,17 @@ def _call_sig(name, args):
     return (name, hashlib.sha256(norm.encode("utf-8", "replace")).hexdigest())
 
 
-# --------------------------------------------------------------------------
 # Tool-result post-processing: digestion + field notes
-# --------------------------------------------------------------------------
-#
 # Measured on this fleet's log (2026-10-03: 2,087 calls, 79.5% were the five primitives,
 # shell first by a wide margin). Shell output is the haystack a small
 # model loses the signal inside, and the existing cap only CUTS a 30-line error out
 # of 6k chars, it does not find it. Two deterministic passes fix that without
 # spending a single prompt token:
-#
 #   digest       a KNOWN command shape is rendered down to its signal before the
 #                model reads it, and the result says what was dropped and how to get
 #                the full text back (raw=true)
 #   field notes  a FAILED call whose signature is already understood gets the known
 #                cause appended, from field-notes.md
-#
 # Both are deliberately dumb: regex, line filters, no model, no network. That is the
 # point. A lookup table works on a small model, and an operator can audit it.
 
@@ -3840,7 +3807,7 @@ _DIGEST_SHAPES = (
     ("network", re.compile(
         r"\bip\s+(a|addr|route)\b|\bifconfig\b|\bipconfig\b|\bnetstat\b|\bss\s|"
         r"\bping\b|\btraceroute\b", re.I), "head_tail"),
-    # `.txt` was in this shape and had to come out (measured 2026-09-29): the subject for a
+    # `.txt` was in this shape and had to come out: the subject for a
     # read_file is the PATH, so every read of a .txt document was treated as a log file and
     # reduced to its error-looking lines. On a text-rewriting job - the harness reading its
     # own chapter files - that gutted the source, and the model paid a second call each time
@@ -3933,7 +3900,6 @@ def _digest_subject(name, args):
     the command string IS the command. Nothing else is, and treating anything else as one
     shrinks a result the model explicitly asked for.
 
-    Measured 2026-09-29 by probing the shape list:
       * a read_file's `path` is not a command. `docker ps logs.txt` was read as a container
         list, `git diff review.md` as git output, `dir/notes.md` as a directory listing, and
         the `.txt` chapters of a rewrite as log files - the last one gutting every chapter to
@@ -4252,7 +4218,6 @@ def failed_output(text):
     about a COMMAND's output, so they are gated on the harness's own `exit_code=` header -
     they are only meaningful where the harness put them.
 
-    Measured 2026-09-29: scanning arbitrary text instead meant a SUCCESSFUL read_file
     of a file that happened to contain a traceback (or `--- stderr ---`, or a first line
     reading `ERROR: `) was classified as a failed call. A field note and the last-good-call
     replay were then attached to a success - the very thing this docstring forbids - and the
@@ -4472,17 +4437,13 @@ def annotate_failure(name, args, text):
     return (text + ("\n\n" + block if block else "") + replay)
 
 
-# --------------------------------------------------------------------------
 # Shell rights: what this process can actually do (the elevation problem)
-# --------------------------------------------------------------------------
-#
 # Measured reason this exists: a session launched from an ordinary terminal on an
 # account that IS an administrator, hit `Access is denied` reading event logs and a root\wmi
 # class, and reported it to the operator as a mystery ("permission elevation is denied for this
 # shell"). Nothing in the harness was denying anything. UAC hands an administrator TWO tokens,
 # and a process started from a normal console gets the filtered one, so "my account is admin"
 # and "this shell can do admin work" are different statements.
-#
 # The bot lane never meets this because its Scheduled Task runs with highest privileges; a
 # console session inherits whatever console started it. So the fix is not to elevate (a silent
 # UAC prompt would be worse), it is to tell the truth about the current process up front and
@@ -4564,16 +4525,12 @@ def capability_line(lane):
 
 
 
-# --------------------------------------------------------------------------
 # The machine atlas
-# --------------------------------------------------------------------------
-#
 # Measured reason this exists: the eval's most common tool error is a GUESSED PATH (asked for
 # `data/report.csv` when the file was `data/2026/report.csv`; assumed fixtures lived under
 # `tools/`). A model that does not know where it is guesses, and the harness does know. So it
 # hands over the facts instead of hoping: the box, the shell, the install, and where the
 # things it keeps reaching for actually live.
-#
 # Cost shape matters more than content here. This is NOT in the system prompt (that is
 # prefix-cached and must stay byte-identical), and it is not re-sent every turn. It rides the
 # trailing state block in the FIRST turn of a run, and again the moment a failure looks like a
@@ -4833,15 +4790,11 @@ def ensure_atlas(path=None, force=False):
 
 
 
-# --------------------------------------------------------------------------
 # Post-write verification
-# --------------------------------------------------------------------------
-#
 # A write is the one moment the harness knows exactly what changed and can check it:
 # no model call, no extra prompt tokens beyond the verdict line. What it catches is
 # the failure the suites keep meeting: a file that was written is not a file that
 # parses, and "I changed it" is worth nothing if the next reader finds a syntax error.
-#
 # Deliberately narrow. These are checks that are cheap, deterministic and true for
 # every host: parse the file in the language its extension claims, and for a custom
 # tool check the contract the loader enforces anyway. Anything slower (docker compose
@@ -4866,7 +4819,6 @@ def _verify_python(path, text):
         # static scan of attribute names is not that test: seen in the field, a tool
         # whose NAME disagreed with its file name loaded under the WRONG name, so a
         # model calling the file name found nothing. Ask the loader itself.
-        #
         # The gate is the BOT'S OWN tools directory, by resolved path - not the NAME of the
         # directory the file happens to sit in. Measured 2026-09-29: writing
         # `/home/user/proj/tools/helpers.py` (any project's ordinary ./tools/) ran the tool
@@ -4951,15 +4903,12 @@ def _verify_shell(path, text):
     return True, "shell syntax OK"
 
 
-# --------------------------------------------------------------------------
 # 1e: exercise the artifact the way this build would use it
-# --------------------------------------------------------------------------
 # 1c answers "does it parse", which is not the same as "will it work". Two
 # artifact classes have a reader this build owns, so the verdict here is that
 # reader's answer rather than a second opinion about the file:
 #   * a custom tool  - loaded through the registry's own loader, in a subprocess
 #   * config.json    - the startup refusals that are pure data in the file
-#
 # What is deliberately NOT done: executing an arbitrary written script. A verifier
 # that has side effects can break a run (see section 4c), the agent already has
 # shell/execute_code for the runs it actually wants, and a write is not a request
@@ -5030,7 +4979,6 @@ def _exercise_tool_load(path):
 # The Mattermost placeholder, checked on the HOST rather than on the whole URL. The check used
 # to be a substring, so a real host with "change-me" or "example.com" anywhere - including in a
 # PATH - was read as unset (2026-09-29).
-#
 # TWO predicates, because the code deliberately treats the two placeholders differently and
 # that is preserved here: the CHANGE-ME shape config.example.json ships is REFUSED, while the
 # documented example.com host only WARNS ("a host could legitimately use it, and a wrong URL
@@ -5156,12 +5104,8 @@ def verify_note(path):
     return ""
 
 
-# --------------------------------------------------------------------------
 # Core tool implementations
-# --------------------------------------------------------------------------
-
 # Each pattern captures a QUOTED path or a bare one, in that order of preference.
-#
 # A path is quoted precisely because it contains a space, and the old capture was
 # `["']?([^\s"';|)]+)` - an optional quote followed by "no whitespace" - so a quoted path was
 # truncated at its first space. Measured 2026-09-29 on a Windows install whose profile is
@@ -5214,14 +5158,12 @@ def _inside_quotes(text, pos):
 def shell_written_files(command, limit=2):
     """Files a shell command appears to have written, best effort.
 
-    Measured: on this model, shell redirection is the usual way a file gets written, so
     a verifier hooked only to write_file/edit_file never sees most writes. This is a
     heuristic on purpose, and it is safe in both directions: a guessed path that does
     not exist is ignored, and a path that cannot be verified adds nothing.
 
     A redirection INSIDE a quote is text, not a redirection - `grep 'x>y' notes.md` writes
     nothing - so a match that starts inside a quoted region is skipped. Measured
-    2026-09-29: the quoted form produced a candidate path, and when a file of that name
     happened to exist the result carried a verify verdict about a file the command never
     touched.
     """
@@ -5480,7 +5422,6 @@ def _cgroup_mem_mb():
 def _fmt_mb(mb):
     """MiB under 1 GiB: `RAM 0.0 GiB` for a healthy 32 MB process reads as a broken probe.
 
-    Measured 2026-09-25 on a live install whose every check-in said `RAM 0.0 GiB` while the
     running child held 32.5 MB - an operator reads that as a failed gauge, not as a lean
     process.
     """
@@ -5582,7 +5523,6 @@ _WAITS_ON_CHILD_RX = re.compile(r"(?i)(^|\s)-wait\b|\|\s*(wait|receive)\b")
 def _start_process_warning(command):
     """A child started with Start-Process outlives the harness unless something waits.
 
-    Measured on a Windows install, 2026-10-02: `Start-Process cmd -ArgumentList ...`
     then killing the cmd left the grandchild python.exe alive with a dead parent; the
     `process` tool's own kill DOES take the tree, and shell's timeout kills the tree too -
     so the leak belongs to the ad-hoc door, and the fix is to name the managed one.
@@ -5622,7 +5562,6 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     never returns. One channel is served by ONE worker thread, so that channel
     then goes permanently deaf: no error, no log line, messages queue behind
     it silently. That is what froze the DM channel for 21 minutes on
-    2026-09-10, and tmp/repro_pipe_hang.py reproduces it in seconds. Temp
     files have no such coupling, and the tree kill reaps the grandchildren.
     """
     run_dir = Path(tempfile.gettempdir()) / "tinycmdr-runs"
@@ -5725,13 +5664,11 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
 # --- what a GUARD should read -----------------------------------------------------------
 # A guard is only as good as its subject. These two strip what cannot run, so a guard fires on
 # the command/code that would, and not on a mention of it.
-#
 # A comment cannot execute, so a guard that fires on one is a false positive by construction.
 # STRING LITERALS ARE KEPT on purpose: `subprocess.run("reboot")` really does reboot, and a
 # guard that stripped strings would be a hole rather than a fix. Measured 2026-09-29:
 # a comment reading "# restart happens in the next step" tripped the confirm tier over
 # execute_code, which on a lane with nobody at the door is a flat DECLINED.
-#
 # The approximation: a `#` inside a string literal is not a comment, so `print("a # b")` loses
 # its tail here. That is a GUARD SUBJECT, not code that runs - and every pattern in the tiers is
 # a whole command or path shape, never a bare word, so a truncated print cannot stage anything.
@@ -5933,9 +5870,7 @@ _SHELL_NOT_A_SEARCH = re.compile(r"(?i)\b(get-service|systemctl|journalctl|docke
                                  r"netstat|tasklist|get-process|get-childitem|ps\b)\b")
 
 
-# ---------------------------------------------------------------------------
 # Minting: the one judgment the model has no data for
-# ---------------------------------------------------------------------------
 # Measured 2026-09-25 driving a live install: given a repeatable procedure the run does it BY HAND,
 # every time, and never offers to keep it - and the whole log of six days holds ONE
 # `remember` call, because nothing ever asks either. The model sees one run at a time, so
@@ -5965,7 +5900,6 @@ _SHELL_VERB_RX = re.compile(r"\b(?:get|set|new|remove|select|sort|where|measure|
 def _procedure_sig(name, args):
     """The VOCABULARY of a hand-driven command: 'Get-PSDrive + Select-Object'.
 
-    Measured 2026-09-25: a first cut that used the command's own text matched nothing
     across runs - the same job gets typed with different flags, quoting and order every
     time, so the fingerprint moved with the phrasing. What repeats is the SET of things
     the command is made of: the cmdlets (PowerShell) or the verbs (a shell). Sorting them
@@ -6210,7 +6144,6 @@ def mint_offer(session_key, reporter, source="main"):
     job recurs, and because a model-side nudge is a prompt line on every host forever. The
     gate is real work: this run made at least `mint_offer_steps` hand-driven calls
     (shell / execute_code / process), minted nothing, and repeated a shape the census has
-    seen in another run. One offer per procedure per week, and never for a sub-agent.
     """
     if not CONFIG["agent"].get("mint_offer", True) or source != "main":
         return ""
@@ -6461,7 +6394,6 @@ def route_hint(command, ctx):
 # it into execute_code, where os.walk ran under that tool's own 120s cap. Bounding
 # the strategy means bounding what the RUN spends, across BOTH tools, because the
 # operator's cost is the whole run and not any single call.
-#
 # Spend is per session_key (every tool call already carries it in ctx) and is reset
 # at the start of every run, so one turn cannot spend the next turn's budget.
 _SCAN_SPEND = {}
@@ -6566,7 +6498,6 @@ def _registered_tool(name):
 def _bare_tool_name(command):
     """The tool this command names outright, or "": the shell cannot run a tool.
 
-    Measured 2026-09-23 on the drive: the model typed `list_tools` into the shell (439
     chars of PowerShell error) while looking for a tool surface. One line, at the door.
     """
     bare = (command or "").strip()
@@ -6589,7 +6520,6 @@ def _bare_tool_name(command):
 def _narration_tool_name(command):
     """The tool an echo/printf NAMES but does not call, or "" - the narration shape.
 
-    Measured 2026-09-25 on macOS: six `echo "calling send_file now"` calls in ONE run and
     never a tool call, because that host's `core_tools` pin had hidden send_file. The name
     is the model saying what it is about to do, with no shape for it.
 
@@ -6747,7 +6677,7 @@ def _tool_named_in_code(code):
     Only EXECUTION counts. The old read was "any .py path anywhere in the source", so a
     comment, a bare string, a print and reading a tool file for its bytes each answered
     the door and the code never ran - including paths in trees that hold no tools/ at all
-    (measured 2026-10-05 on a live install; four such mentions). The source is parsed
+    . The source is parsed
     instead, and a mention counts only when it is imported or fed to a call that runs it.
     Source that does not parse cannot run anyway; it keeps the text-level read so a shell
     command pasted into the Python door still gets its answer.
@@ -6871,7 +6801,6 @@ def _shell_autobg(command, ctx, threshold, limit=None):
     wins: this wait used to be the only clock in play, so `timeout=5` on a 45-second
     command came back `exit_code=0` after 45s - the parameter was silently ignored for
     every command shorter than agent.auto_background_seconds (measured on a live install,
-    2026-10-03). Past `limit` the command and its tree are killed and the blocking path's
     TIMEOUT answer is returned instead.
     """
     proc = REGISTRY.get("process")
@@ -7026,7 +6955,7 @@ def tool_shell(args, ctx):
     if IS_WINDOWS:
         # A redirected PowerShell writes bytes in the console's OEM code page (cp437 on the Windows box)
         # while _read_capped decodes UTF-8, so `echo ✓ 日本語` came back as
-        # `?? ???` (reproduced on a Windows install, 2026-10-02). The lever is the
+        # `?? ???`. The lever is the
         # CONSOLE's output encoding - a `chcp 65001` in the child, which was tried,
         # does not change what .NET writes to a redirected stream. This is the shell half;
         # execute_code gets UTF-8 from its own `-X utf8` launch.
@@ -7341,7 +7270,6 @@ _ENDPOINT_LOAD_RX = re.compile(
 def _endpoint_load_request(command):
     """True-ish when a command GENERATES against the endpoint this bot talks to.
 
-    Measured 2026-09-25 driving a Windows install: an operator order about a slow
     machine made the run send real completion requests to the production llama.cpp box (a
     bogus model name first, then `main` at 400 + 400 + 120 tokens) - ~900 generated tokens
     and two slots of load on the one box every host on this fleet answers through, while the
@@ -7508,7 +7436,6 @@ def _delete_effect(path, cap=20000):
 def destructive_risk(command, _depth=0):
     """('block'|'confirm', why) for a recursive delete aimed at a TREE, else None.
 
-    Measured: the POSIX spellings had no coverage in either tier, because
     the only patterns required `r` and `f` in ONE flag word immediately before a bare
     `/` - so `rm -rf /etc`, `rm -rf ~/Documents`, `rm -r -f /`, `rm --recursive --force /`,
     `find / -delete` and `find / -exec rm -rf {} +` all ran ungated. The verb cannot decide
@@ -7532,7 +7459,6 @@ def destructive_risk(command, _depth=0):
             # the command is what is left, so recurse into THAT rather than reading the
             # launcher's own argv as the verb (this is how a command hidden one level down
             # reaches the same rule).
-            #
             # cmd spells its switch with a SLASH, not a dash, and only dashes were stripped -
             # so on Windows `cmd /c rm -rf ./build` read as the verb "/c", matched nothing,
             # and the whole POSIX recursive-delete rule was bypassed. A manifest tool's
@@ -7666,7 +7592,6 @@ def _endpoint_touching_tool(name, description=""):
 
 
 # ---- a fresh reconnect gap makes asking pointless (2026-09-21) ----
-#
 # The catch-up sweep exists because the websocket does not replay what it missed;
 # the research box recovered 7 posts on 2026-09-12, which is what "this lane really does lose
 # messages" looks like. A confirmation asked while that is fresh may never be READ, and
@@ -7786,7 +7711,6 @@ def endpoint_gate(subject, why, confirm_cb):
 def _missing_argument_answer(name, missing, params):
     """What a call that left out a DECLARED argument is told, or "" if it did not.
 
-    Measured 2026-09-25 driving a live install: `create_tool` answered a bare
     `ERROR in tool 'create_tool': 'name'` and the run retried the identical call. An
     answer that names the argument and lists the shape costs nothing and saves the retry.
     """
@@ -7803,7 +7727,6 @@ def _missing_argument_answer(name, missing, params):
 def shell_guard(text, ctx, subject="process: "):
     """The shell tool's own tier, exposed to a drop-in tool that spawns its own process.
 
-    Measured 2026-09-25 driving a live install: `process start` launched a .ps1 whose body did
     exactly what the shell tier refuses, so the seatbelt was one tool call away from
     bypassed - the same shape execute_code had before 2026-09-18. A tool that starts a
     process asks here first: the string goes through the confirm tier (quoted back to the
@@ -7856,7 +7779,6 @@ _PATH_LOCKS_GUARD = threading.Lock()
 def _lock_key(path):
     """One key per FILE, whatever the string looked like.
 
-    Measured 2026-09-24 (falsify-lockkey.py): `C:\\x\\big.txt` and `C:/x/big.txt` produced
     different locks, so two edits in one batch both reported success and one was silently
     overwritten - the same lost-update the per-path lock was added to prevent, one level
     down: there the key was missing, here it was unnormalised. normcase folds case on
@@ -8124,7 +8046,6 @@ def atomic_write_bytes(path, data):
 def atomic_write_text(path, text, encoding="utf-8"):
     """Replace a state file with `text` in one step; see atomic_write_bytes.
 
-    Measured failure this exists for: a state file was found holding a
     complete JSON document followed by a duplicated fragment, so every load
     raised "Extra data", the bot logged "starting fresh" and 20 items
     were silently gone. A plain write_text is one crash, one full disk or one
@@ -8183,7 +8104,6 @@ def serialized_on(path):
 def _surface_write_gate(path, subject, ctx):
     """The same decision the SHELL door gets, asked of a file PATH.
 
-    Measured: `printf 'notes cleared by cleanup' > notes.md` was stopped by
     _prompt_surface_write while `tool_write_file({"path": ".../notes.md"})` replaced the
     file with no gate at all - the fastest route past the guard was a TOOL, not a command.
     The shell door and the file door now answer with the same question.
@@ -8210,7 +8130,6 @@ def _surface_write_gate(path, subject, ctx):
 def _win_long_path(path):
     """A Windows ABSOLUTE path past MAX_PATH, in the ``\\\\?\\`` form the Win32 API needs.
 
-    Measured on a Windows install, 2026-10-02: creating a 339-character path throws
     FileNotFoundError [WinError 206] with LongPathsEnabled=0, while the same path with the
     extended prefix works - and Python's Path handles that form (exists / name / child /
     write all verified on the box). So the fix is one conversion at the door, not a second
@@ -8247,7 +8166,6 @@ _WIN_RESERVED_NAMES = frozenset(
 def _win_reserved_name(name):
     """The Windows device name a file's stem collides with (CON, NUL, COM1, LPT1), or "".
 
-    Measured on a Windows install, 2026-10-02: CON.txt, NUL.txt, AUX.txt, COM1.txt and
     LPT1.txt were all created and listed as ordinary files - but Windows resolves those
     stems CASE-INSENSITIVELY and with ANY extension for some APIs, so a file one tool
     creates can be read as the device by the next. A warning, never a refusal: the file is
@@ -8377,7 +8295,7 @@ def tool_edit_file(args, ctx):
 def tool_search_files(args, ctx):
     """Find files by name glob and/or content regex (the predecessor harness's search_files).
 
-    Two contracts meet in this tool and they disagreed (measured 2026-09-25 driving a live install):
+    Two contracts meet in this tool and they disagreed:
     the SCHEMA below calls `pattern` a name glob and puts the grep in `content`, while the
     route hint and the routing bullet in the system prompt both teach
     `search_files {"pattern": "<regex>", "path": "<file or directory>"}`. A run that
@@ -8560,7 +8478,6 @@ def tool_read_file(args, ctx):
         # tools/create_tool.py`, both 56-char misses - because for the tools that ARE files
         # this is how you learn their shape. The core tools live in this file, so answer
         # with the door and the arguments instead of a bare "does not exist".
-        #
         # But a model asking for a FILE can share a tool's name: `/Users/.../notes` is the
         # memory file `notes.md` one keystroke short, and answering with the tool lecture
         # alone sent it looking elsewhere (that read call was reported). The
@@ -8604,7 +8521,7 @@ def tool_read_file(args, ctx):
         # from_end is `tail`'s job and only `tail`'s: with `or offset_req` here, ANY
         # offset read the last 8 MiB and then sliced it by a line number meant for the
         # whole file - `offset=10, limit=2` of a 28.6 MiB file answered with lines
-        # 432238-432239 under a header claiming 10-12 (measured 2026-09-27).
+        # 432238-432239 under a header claiming 10-12.
         text, cut, cap_note = _read_capped(path, from_end=want_tail, strict=True)
         _receipt_record(path, text, ctx)
     except Exception as e:
@@ -8686,7 +8603,6 @@ def _merge_conflict_span(lines, first_line=1):
 def tools_dir_verdict(path):
     """The loader's own answer about a file written into the bot's ./tools/ (or "").
 
-    Measured 2026-09-24 on three boxes: asked to build a tool, every run wrote the file
     with write_file and then found out whether it was valid by running the loader by hand
     in a subprocess - three drafts on a Linux install, and on a Windows install a file that was refused
     at the next start and is not a tool at all. The harness knows the answer at the moment
@@ -9030,27 +8946,21 @@ def _fetch_page(url, max_chars, session=None):
     return cap_output("fetch_url", text, "page", limit=max_chars, session=session)
 
 
-# --------------------------------------------------------------------------
 # Memory - an Open Knowledge Format (OKF) bundle under memory/
-#
 # notes.md is legacy from here on: it stays on disk and still rides the prompt, but the
 # WRITE path is this bundle. Every durable fact is one OKF concept - a markdown file with
 # YAML frontmatter - carrying the fields OKF v0.2 defines for a corpus agents write:
 # provenance (`sources`), trust (`generated`/`verified`), lifecycle
 # (`status`/`stale_after`), and an `index.md` small enough for the prompt to carry.
-#
 # Conformance follows the spec's permissive line: `type` is the only required key,
 # unknown keys survive a rewrite, unknown types are not rejected, and a bare `verified`
 # mapping reads as a one-element list. The YAML subset below is exactly what the spec's
 # own examples use (scalars, inline lists and maps, block lists of maps); it is parsed
 # with the stdlib because this runtime has three dependencies and YAML is not one.
-#
 # Design decisions (2026-10-04): the bundle is `memory/`; the tool
 # surface is ONE tool named `memory` (the old `remember`/`notes` pair is gone); existing
 # notes.md is left untouched - no migration - and attestation (`type: Attested
 # Computation`) is reserved for a later phase, not implemented here.
-# --------------------------------------------------------------------------
-
 MEMORY_DIR = BASE_DIR / "memory"
 MEMORY_INDEX = MEMORY_DIR / "index.md"
 MEMORY_LOG = MEMORY_DIR / "log.md"
@@ -9437,7 +9347,6 @@ def _memory_description(title, body, bound=160):
 
     The prompt carries index.md and nothing else, so a description cut mid-sentence is worse
     than a short one - it reads as complete while the operative token is gone (measured
-    2026-10-04: a concept's index line ended "…ffmpeg 8.1.1 at" and the operative `-lmin`
     never reached the prompt). Units are lines and sentences; the first that fits and names
     a word from the title wins, then the first that names one at all, and only a unit that
     cannot fit is cut - at a word boundary, with an ellipsis saying so.
@@ -9455,7 +9364,7 @@ def _memory_description(title, body, bound=160):
     # (`-lmin`, `-b:v`, `dvd_work`) rather than an ordinary word, and the first such one
     # the title names. The unit that states it is what the index line carries - a
     # first-sentence fallback put "…ffmpeg 8.1.1 at" (the whole point gone) in front of a
-    # model that never sees the body (measured 2026-10-04).
+    # model that never sees the body.
     operative = [t for t in named if re.search(r"[^A-Za-z0-9]", t)]
 
     def cut(u):
@@ -9605,7 +9514,6 @@ def tool_memory(args, ctx):
     by a human and by any other OKF consumer; the prompt carries index.md, never the
     concepts. A body over the cap is REFUSED, never truncated: a half-fact would ride
     every future prompt, which is worse than a missing one (the notes.md lesson,
-    2026-09-21).
     """
     action = str(args.get("action") or "list").strip().lower()
     MEMORY_DIR.mkdir(parents=True, exist_ok=True)
@@ -9758,22 +9666,17 @@ def tool_memory(args, ctx):
             "list.")
 
 
-# --------------------------------------------------------------------------
 # A2UI - agent-driven UI, on the harness's rent terms
-#
 # The page is a surface the agent can draw on. Rather than inventing a payload
 # vocabulary, this speaks A2UI v1.0's envelope - a single `createSurface` message with
 # its components and data model embedded, the spec's one-message instantiation - and
 # declares its OWN catalog, which the spec explicitly encourages: the agent may use
 # exactly the components this renderer has, nothing else.
-#
 # Rent: registration only. `render_ui` is hidden like every non-core tool (call it by
 # name and its schema stays for the session), its NAME is the only byte it adds to the
 # static prompt (the hidden-inventory line), and on a lane with no surface the tool
 # answers honestly instead of pretending. The payload rides the transcript line, never
 # the prompt: the model sees the one-line summary.
-# --------------------------------------------------------------------------
-
 A2UI_VERSION = "v1.0"
 A2UI_CATALOG_ID = "https://tinycmdr.local/a2ui/catalog-1.json"
 _A2UI_COMPONENTS = ("Card", "Column", "Row", "Text", "Divider")
@@ -9887,9 +9790,7 @@ def tool_render_ui(args, ctx):
         return "ERROR: could not render the card: %s" % e
 
 
-# --------------------------------------------------------------------------
 # A2A - the agent mesh door (Agent2Agent v1.0, JSON-RPC binding)
-#
 # Two halves, both off by default, both zero-rent when off:
 #  * the SERVER: `web.a2a` true publishes an AgentCard at /.well-known/agent-card.json
 #    and answers JSON-RPC on POST /a2a. SendMessage runs one message through this box
@@ -9898,8 +9799,6 @@ def tool_render_ui(args, ctx):
 #  * the CLIENT: a hidden `a2a` tool that exists ONLY when agent.a2a_remotes is
 #    configured, so a box with no mesh members pays no prompt bytes at all.
 # Auth is the page's own bearer token and the card says so.
-# --------------------------------------------------------------------------
-
 A2A_PROTOCOL_VERSION = "1.0"
 A2A_MAX_TASKS = 50
 _A2A_TASKS = {}
@@ -10166,22 +10065,17 @@ def tool_a2a(args, ctx):
     return "ERROR: action must be list, card or send."
 
 
-# --------------------------------------------------------------------------
 # MCP - the tool ecosystem's front door (Model Context Protocol, stdio)
-#
 # The harness has its own tool system; MCP matters because the ECOSYSTEM speaks it. A
 # per-host `agent.mcp_servers` map names stdio servers; the hidden `mcp` tool lists
 # their tools and calls one. No servers configured => no tool registered (the payload
 # is byte-identical), and nothing here touches the prompt.
-#
 # Protocol: the 2026-07-28 revision is stateless - every request carries its version
 # and client identity in `_meta`, and results carry `resultType`. Servers from earlier
 # revisions want an `initialize` handshake instead, so the client tries the modern
 # shape and falls back ONCE to `initialize` (2025-06-18) when a server refuses it.
 # Servers are kept alive between calls (the spec asks clients not to tie a process to
 # one task); they exit on stdin EOF when this process does.
-# --------------------------------------------------------------------------
-
 MCP_PROTOCOL_VERSION = "2026-07-28"
 MCP_LEGACY_VERSION = "2025-06-18"
 _MCP_PROCS = {}
@@ -10380,22 +10274,18 @@ def _fsync_dir(d):
             pass
 
 
-# --------------------------------------------------------------------------
 # The experiment ledger: what this box has already TESTED
-# --------------------------------------------------------------------------
 # The campaign harness re-ran arms it had already measured and could not say which
 # number came from which shape of the server, and one verdict ("MTP = wash") was
 # retracted silently because nothing recorded that the earlier line had been superseded
 # (2026-09-21). So the record is a FILE, one JSON object per line, appended and
 # never rewritten, and it carries the fields the box that does this work for a living
 # already keeps (a research box's field set, 2026-09-21):
-#
 #   id, date, agent, status, question, keys, preregistration, engine, binary+commit,
 #   model+quant+file, exact_config, host, gpus, slots, per_slot_ctx, fill_depth,
 #   control_config, control_mean, reps, interleave, result, drift_check,
 #   contamination_check, verdict, artifacts, body, supersedes, superseded_by,
 #   next_trigger
-#
 # fill_depth is not decoration: on that box 8K-fill arms run ~11% above 38.5K, so an arm
 # without it is not comparable with one that has it. Two rules make the file worth its
 # tokens: what rides in the prompt is the INDEX (never the file, never a full record),
@@ -10663,9 +10553,7 @@ def tool_experiment(args, ctx):
     return "ERROR: action must be index, show, add or update."
 
 
-# --------------------------------------------------------------------------
 # Evidence check — grade the report against what the run actually did
-#
 # The model's own summary is not evidence. Two cheap invariants, both lifted
 # from an agent scaffold that graded a claim against the artifact the run
 # produced rather than against the model's opinion of its own work:
@@ -10673,8 +10561,6 @@ def tool_experiment(args, ctx):
 #   * the last file write was never read back or re-checked.
 # It stays silent when it cannot tell (see _is_mutation): a warning that cries
 # wolf is worse than no warning at all.
-# --------------------------------------------------------------------------
-
 MUTATING_TOOLS = {"write_file", "edit_file", "create_tool"}
 
 _CHANGE_CLAIM_RE = re.compile(
@@ -10730,7 +10616,6 @@ def _annotate_evidence(answer, muts, calls):
 def _annotate_promise(answer, calls):
     """Say plainly that this answer ends on an intention, not on a result.
 
-    Measured (2026-09-24): a run that has done real work can still end on "Let me find
     where." - the model stops without a call and the operator reads a status line as if
     it were the outcome. The run gets one more ask (see the promise branch in the loop);
     if it stops again, the delivery itself carries the truth rather than the harness
@@ -10832,7 +10717,6 @@ def _surface_tail(session_key, exclude=(), limit=6):
 
     A model that cannot see its tools guesses at them, and a wrong guess used to come back
     as "no tool matched" plus a bare list of names, which teaches it nothing (measured
-    2026-09-23: three find_tools calls, then 35 minutes of rebuilding a route by hand for a
     capability that was never on the box). This is an OUTCOME line, not a prompt line: it
     rides the discovery call the model chose to make.
     """
@@ -10922,7 +10806,6 @@ def tool_list_tools(args, ctx):
 
     Since the tool tree moved those descriptions OUT of the prompt (2026-09-25), the names
     alone are no longer a complete answer: this is the door the model actually calls.
-    Measured driving the tool-tree build on a live install, asked what its added file/drive
     tools do: the run called list_tools and then read EIGHT tool files, three of them
     twice, for what one answer here says. So the answer carries each custom tool's shelf
     and its one-line blurb, capped like the prompt index, and it is spent only when asked.
@@ -11236,15 +11119,11 @@ def tool_delegate_task(args, ctx):
                              args.get("timeout_seconds"), ctx)
 
 
-# --------------------------------------------------------------------------
 # Skills — prose runbooks; drop skill folders into ./skills/
-# --------------------------------------------------------------------------
-
 def _read_text_any(path, max_bytes=None):
     """Read text that might be UTF-8, UTF-16, or null-padded (Notepad).
 
     max_bytes is a hard ceiling on the read itself, not a filter after it: the
-    2026-09-19 OOM was this function slurping a 47 GB GGUF because a tool call
     named the model path twice and read_bytes() has no upper bound. (Found by
     the model host, which measured the 44,901 MiB mapping against the 47,039,860,096 B
     fnx IQ3_XXS shard.)
@@ -11294,7 +11173,6 @@ def skill_index():
 
     A dot dir is PARKED (skills/.imported-unused and friends): never indexed, so
     kept-for-reference runbooks do not rent prompt on every call (measured
-    2026-09-23: 76 parked skills were 5,366 of the prompt's 20,942 chars).
 
     Frontmatter may also carry `globs:` (when the runbook applies), `always: true`
     (its body is injected into the trailing block) and `hide: true` - spelled
@@ -11463,7 +11341,6 @@ def _skill_search(skills, match, name, topic, key):
     A bare topic is the shape that used to dead-end. The dispatch resolved the skill
     FIRST, so `skill{"action": "search", "topic": "..."}` fell into the no-match branch
     and answered `No skill named ''` - an empty name and nothing to try instead.
-    Measured on a Linux install 2026-10-05: a run stuck on a Mattermost token asked
     exactly that for the minting procedure, got the empty-name answer, and had nothing
     to act on. The match itself is unchanged (topic words, headings weighted 3x), now
     run over every candidate book; a named search still reads one.
@@ -11633,10 +11510,7 @@ def tool_skill(args, ctx):
         return chunk + (surface if off == 0 else "")
 
 
-# --------------------------------------------------------------------------
 # Scheduler (cron gateway equivalent)
-# --------------------------------------------------------------------------
-
 def report(channel_id, text):
     """Deliver a message: to Mattermost in bot mode, stdout otherwise."""
     if REPORTER and channel_id:
@@ -11849,10 +11723,7 @@ class Scheduler:
     pending_asks = {}
 
 
-# --------------------------------------------------------------------------
 # Tool schemas + registry
-# --------------------------------------------------------------------------
-
 def _schema(description, properties, required):
     return {"type": "function", "function": {
         "name": "", "description": description,
@@ -11860,17 +11731,13 @@ def _schema(description, properties, required):
                        "required": required}}}
 
 
-# --------------------------------------------------------------------------
 # ask_user: a run that needs the operator's decision STOPS and asks
-# --------------------------------------------------------------------------
-#
 # Every door into a running conversation was one-way. The operator can steer a run
 # (dispatcher.steering, drained at a turn boundary), but a run that reaches a fork it
 # cannot decide had only two moves: guess and state the assumption, or end the turn with
 # the open question in the report - which throws away the run's in-flight state and only
 # resumes if the next message happens to carry the answer. The prompt rule
 # ("state your assumption, and proceed") is why there was no third.
-#
 # This is the third move, and it has one hard constraint: Mattermost hands messages to
 # the LISTENER thread, so the question is POSTED there and ANSWERED there, while the
 # WAITING happens on the run's own thread. Any door with a human behind it can answer
@@ -11878,7 +11745,6 @@ def _schema(description, properties, required):
 # nobody behind it - a scheduled job with no channel, a sub-agent - must not wait at all.
 # Whoever cannot answer must leave the row unclaimed, or the run stalls on a question
 # the operator never saw.
-#
 # Gates, because the harness spends its budget on an unattended box:
 #   * ON by default since 1.0.0 (`agent.ask_user` in config.json). With it off the tool refuses and
 #     tells the model to state its assumption and carry on.
@@ -12218,7 +12084,7 @@ def set_open_question(session_key, question, options=None):
     task, and on the live box (2026-09-29) it spent its first calls reading its own session
     files and carry file trying to work out what it had asked. Kept in a sidecar rather than
     in run_state on purpose: run_state dies with the process, the session file keeps only the
-    trimmed conversation (measured: one message), and a restart between the two runs is
+    trimmed conversation, and a restart between the two runs is
     ordinary.
 
     The lifecycle is bounded: `open_question()` hands it to exactly one run, and a question
@@ -12650,7 +12516,6 @@ CORE_TOOL_NAMES = set(CORE_TOOLS)
 # ----------------------------------------------------------- drop-in tools ---
 # tools/ takes THREE file shapes, detected per file (2026-09-22). The point is
 # that a tool written for another harness drops in without a rewrite:
-#
 #   native    <name>.py with NAME, DESCRIPTION, SCHEMA and run(args, ctx)
 #   register  <anything>.py calling registry.register(name=..., schema=...,
 #             handler=...) at import - the shape agent tool libraries use, and
@@ -12658,7 +12523,6 @@ CORE_TOOL_NAMES = set(CORE_TOOLS)
 #   manifest  <name>.tool.json: name, description, schema and command - ANY
 #             script in any language. The call's args arrive as one JSON object
 #             on stdin and the script's stdout is the result.
-#
 # load_tool_defs() is the only reader of tool files: the registry loads through
 # it, create_tool verifies through it, and the write verifier probes through it
 # (its subprocess calls probe_tool below, so the contract exists exactly once).
@@ -12685,7 +12549,6 @@ class _RegistryShim:
     def tool_result(self, data=None, **kw):
         """The predecessor harness's second registry helper: a ported file that imports it must load.
 
-        Measured 2026-09-24: `from tools.registry import registry, tool_error, tool_result`
         raised ImportError at exec, so the whole file was refused - the drop-in promise in
         tools/README.md ("a file from another agent harness that speaks this shape drops in
         as it is") broke on an import, before a single argument was read.
@@ -12757,7 +12620,6 @@ def _declared_category(path):
     it a question is how a planted file runs twice. It sits UP HERE, above the registry,
     on purpose: REGISTRY is built at import and every load calls this, so a helper
     defined further down the file is a NameError on the one path that matters (measured
-    2026-09-25: a box with no custom tools never touches it, so the suite stayed green).
     """
     try:
         text = Path(path).read_text(encoding="utf-8", errors="replace")
@@ -13016,7 +12878,7 @@ class ToolRegistry:
             if cand.exists():
                 return self._load_path(cand)
         # A register-shape file answers to the name INSIDE it, which need not be the file
-        # name: ported_todo.py registers todo_list (measured 2026-09-24). Reloading by tool
+        # name: ported_todo.py registers todo_list. Reloading by tool
         # name follows the registration the file already has, so an imported tool is
         # reloadable exactly like a native one instead of "no tools/todo_list.py to load".
         src = (self.custom.get(name) or {}).get("source")
@@ -13112,15 +12974,11 @@ _PROVENANCE_DONE = False   # ToolRegistry.note_provenance() runs once per proces
 REGISTRY = ToolRegistry(TOOLS_DIR)
 
 
-# --------------------------------------------------------------------------
 # Run state: the plan the harness holds, and the runway
-# --------------------------------------------------------------------------
-#
 # Measured behaviour, on this fleet: the model's wasted work clusters in the MIDDLE of
 # long runs (re-reading what it read, re-verifying what it just verified) and it has no
 # sense of runway until the cap arrives — "step budget exhausted" is the first time it
 # learns it was near the end.
-#
 # So the harness keeps the plan and re-sends it every turn inside the TRAILING block,
 # which is re-read anyway: where the run is, what is done, what is next, how much budget
 # is left. The model writes and updates it with one tool call; when nothing moves for a
@@ -13133,7 +12991,6 @@ _RUNS_LOCK = threading.Lock()
 def derive_plan_from_text(text):
     """The steps a request already contains.
 
-    Measured reason this exists: the plan tool was offered to the model in sixteen graded
     runs with a standing instruction, and it was called ZERO times. A plan the model must
     choose to write is a plan that does not exist. But most multi-part requests already
     list their own steps ("Do all of these: 1. ... 2. ..."), so the harness parses them
@@ -13274,9 +13131,7 @@ def run_block(key):
 
 
 
-# --------------------------------------------------------------------------
 # One place creates sessions/, and it is created on a write, never at import
-# --------------------------------------------------------------------------
 # The rule this file is built on: opening the agent creates NOTHING. A second
 # mkdir of the sessions folder anywhere in the source breaks that, even when the new
 # writer is behaviourally correct, so every writer calls this instead.
@@ -13286,9 +13141,7 @@ def _ensure_sessions_dir():
     SESSIONS_DIR.mkdir(exist_ok=True)
 
 
-# --------------------------------------------------------------------------
 # The event log: what happened, and how it ended
-# --------------------------------------------------------------------------
 # Why, measured on this host 2026-09-19: a tool call is recorded as
 #   shell({...}) -> 4471 chars
 # so the log knows a call happened and how big the result was, and nothing about whether it
@@ -13296,12 +13149,10 @@ def _ensure_sessions_dir():
 # why every rework figure we have is a proxy built on the SHAPE of calls. This is the
 # substrate for the real answer: one append-only JSONL per session, beside the history it
 # describes.
-#
 # Scope, 2026-09-19: SHADOW ONLY. The events are written and nothing
 # reads them - no prompt, no history, no metric derives from this yet. Arguments are SCRUBBED
 # and digested, never stored raw, so a .env read or a command carrying a token cannot land in
 # the file. Off unless a host sets agent.event_log true in its own config.json.
-#
 # Properties, each one paid for by an incident:
 #   never raises            a log that can break a run is worse than no log (2026-09-18: the
 #                           notes guard froze a bot and the batch waiting on it waited for ever)
@@ -13485,11 +13336,8 @@ def prune_events(keep=None):
         log.warning("event retention skipped: %s", e)
     return removed
 
-# --------------------------------------------------------------------------
 # Carrying what the runs learned: tool results outlive their run
-# --------------------------------------------------------------------------
 # The gap, measured on a manager host 2026-09-17:
-#
 #   the session file holds the CONVERSATION only - 11 messages, no tool results at all
 #   _trim_history keeps ~5 exchanges BY DESIGN (prefix-cache economics, see its docstring),
 #     so nothing a tool returned outlives the run that called it
@@ -13498,14 +13346,12 @@ def prune_events(keep=None):
 #     skill reads were repeats of nine skills - each repeat also a whole model round trip
 #   and this is NOT eviction: the box runs a 200,000-token budget and the log holds zero
 #     compaction events, ever
-#
 # A ledger of windows was tried first and missed its declared target (15% against 40%)
 # because it carried a POINTER - "you read lines 1100-1300" - while the next run needed
 # the substance. This carries the substance: bounded, newest first, age-stamped, and marked
 # when a file has been written since the read. Nothing is served from any cache and no call
 # is refused; the model may still read anything it likes, it just stops re-buying what the
 # session already paid for.
-#
 # It rides AFTER the system prompt and BEFORE the conversation, so it is byte-identical for
 # every call of a run: the same reason the plan lives in the trailing block and _trim_history
 # cuts in blocks. A carried block that churned per turn would re-prefill the whole payload.
@@ -13729,9 +13575,7 @@ def tool_carry_begin(key):
     return block
 
 
-# --------------------------------------------------------------------------
 # Buying the same file twice in one run is this harness's own worst habit
-# --------------------------------------------------------------------------
 # Measured on the Windows test box 2026-09-18: 24 of a 55-step run's 40 execute_code calls were a fresh
 # whole-file read of the SAME 8,700-line source, each of them a whole model round trip (87-190 s
 # at the time). A pointer-only ledger was tried on 2026-09-17 and missed its target (15% against
@@ -13740,7 +13584,6 @@ def tool_carry_begin(key):
 # and top-level constant with its line number, bounded. That is what lets the model go straight
 # to the region it wants, or ask every question it still has about the file in ONE call, instead
 # of buying the whole file again.
-#
 # Counted by PATH, however the read arrived (read_file, a shell grep, execute_code printing it),
 # because the metric that matters is "text bought from X", never "calls to tool Y": on the narrow
 # metric a 78% reduction read as no change at all.
@@ -13885,17 +13728,13 @@ def annotate_repeat_read(name, args, out, ctx):
     return out + "\n\n" + "\n\n".join(notes)
 
 
-# --------------------------------------------------------------------------
 # Tool disclosure
-# --------------------------------------------------------------------------
-#
 # Re-measured 2026-10-05: the VISIBLE schemas are 1,758 of the 4,116 static est tokens
 # on a clean unpack (5,860 as this install sends it); the 2026-10-03 census put 79.5%
 # of 2,087 real calls on five primitives (89.2% on the 11 visible tools). The payload therefore
 # carries a small always-visible set and everything else is revealed on demand: by
 # asking (find_tools), or by simply calling it, which the harness honours and keeps in
 # the list WHILE IT STAYS IN USE (agent.reveal_ttl_secs; the clock is idle time).
-#
 # Auto-reveal rather than refusal, deliberately. A refusal costs a step and teaches the
 # model to distrust what it already knows about this box. None of this is a security
 # boundary (one registry either way); it is a token budget, and the rollback for it is
@@ -14135,7 +13974,6 @@ def reveal_tools_named_in(session_key, text, cap=_ORDER_REVEAL_CAP):
 def hidden_inventory_line():
     """One STATIC prompt line naming the tools this box has that its tool list does not.
 
-    Measured on the first operator drive (2026-09-23): asked which tool edits by a fuzzy
     anchor, the model answered `edit_file` (exact match), named 3 of the hidden tools, and
     after being told to get it from a tool call still only called `list_tools` - three
     prompts, one `find_tools`. The hidden names appear NOWHERE in its prompt, and
@@ -14168,17 +14006,13 @@ def _tool_blurb(name):
             .get("function", {}).get("description", "")
     return " ".join(str(desc).split())
 
-# --------------------------------------------------------------------------
 # The tool tree: the prompt carries CATEGORIES + NAMES, one call returns the leaf
-# --------------------------------------------------------------------------
-#
 # Measured 2026-09-25 (tests/tool_index_scale.py): one "name: full description" line per
 # custom tool cost 167.8 ch / 49.4 est-tok in the STATIC prompt, unbounded. 80 custom tools
 # took the prompt from 2,920 to 6,870 est-tok on every call - +16 s of prefill at the LAN
 # box's measured ~240 tok/s (+35 s at 200 tools) before the run does anything. The always-on
 # schemas were already flat (7,828 ch over 14 tools at 0/5/10/20/40/80 tools); a growing
 # tools/ folder was the one surface that moved.
-#
 # The fix is a SKELETON in the prompt and a leaf behind one call. A per-tool decision tree
 # written INTO the prompt would still be O(tools); this one is O(categories) and resolves in
 # one find_tools call, which is the contract the disclosure layer already has. Every NAME
@@ -14187,7 +14021,6 @@ def _tool_blurb(name):
 # echoing the name in the shell, then reported failure). Prose is the cost; names are the
 # recall path. A tool whose name says nothing about what it does is still findable by its
 # description, because _match_tools scores the blurb too.
-#
 # The labels are the operator's own vocabulary on purpose: a category nobody would guess is
 # a tool nobody finds. ORDER MATTERS - the first bucket whose words match wins, so the
 # narrow shelves come first and `other` is last.
@@ -14379,10 +14212,7 @@ def _match_tools(query, limit, session_key=None):
 
 
 
-# --------------------------------------------------------------------------
 # System prompt
-# --------------------------------------------------------------------------
-
 _notes_warned = False
 
 
@@ -14533,7 +14363,6 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
     Sent as a TRAILING message, never baked into the system prompt. The system
     prompt is the first thing in every payload, so a single character changing
     there invalidates the server's prefix cache for the entire conversation:
-    measured on the LAN box, one `memory` write re-prefilled from this
     block onward — 22.6 s on a 6.5k prompt, and the same edit at 120k would
     re-read ~400 s. Trailing placement keeps [system + whole history]
     byte-identical between calls, so only this block is re-read (~250 tokens,
@@ -14953,10 +14782,7 @@ Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restar
 
 
 
-# --------------------------------------------------------------------------
 # The agent loop
-# --------------------------------------------------------------------------
-
 GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 
 
@@ -15071,7 +14897,6 @@ _ABNORMAL_END_MARKERS = (
 # noticed: _INTENT_RX wants a stated intention, and the evidence check's _CHANGE_CLAIM_RE
 # wants a change verb - a measured value is neither, so the fabrication was delivered as
 # the run's report.
-#
 # The fence is the same fence the promise guard uses, and for the same reason: calls == 0.
 # A report that follows real tool work is never touched. The cost of a false positive is
 # one model call; the cost of a miss is an invented measurement delivered as fact.
@@ -15104,14 +14929,13 @@ _RESULT_CLAIM_RX = re.compile(
     re.IGNORECASE | re.MULTILINE)
 
 # The FOURTH shape, and the one a 9B produced twice on two live installs in one afternoon
-# (measured 2026-09-25 driving a macOS install and a Windows install): the whole reply
+# : the whole reply
 # is an ACTION PHRASE and nothing else - "Checking where loft boxes is located on this
 # machine." (53 chars), "Finding \"test junk\" folder:" (27 chars). _INTENT_RX wants a
 # stated intention and there is none ("I'll" never appears); _RESULT_CLAIM_RX wants a
 # measured value and there is none either. Both classified it as an ANSWER, so the run
 # closed at 0 tool calls with a green done line and the operator read a sentence about
 # work that had not started as a finished task, twice, on two hosts.
-#
 # The fences are what keep this out of a capable model's way, and they are the same
 # fences the promise guard already uses: it fires only when the run has made NO tool
 # call, and only once per run.
@@ -15137,7 +14961,7 @@ def _action_only(text):
 
     Deliberately narrow: an action word at the start, nothing measured anywhere in it, no
     question mark, and short. The cost of a false positive is one model call; the cost of a
-    miss is a done line over a task that never ran (measured twice, 2026-09-25).
+    miss is a done line over a task that never ran.
     """
     t = (text or "").strip()
     return bool(t) and len(t) <= _ACTION_ONLY_MAX_CHARS \
@@ -15145,9 +14969,7 @@ def _action_only(text):
         and bool(_ACTION_ONLY_RX.match(t))
 
 
-# --------------------------------------------------------------------------
 # What one turn WAS, as data (added 2026-09-24, logging only)
-# --------------------------------------------------------------------------
 # The fleet's question: "why does the model sometimes write a sentence instead of
 # calling a tool - is it the server, the model, or us?" Nothing in the log could
 # answer it. We recorded the turns that TRIPPED a guard and nothing about the ones
@@ -15418,7 +15240,6 @@ def parse_inline_tool_calls(text):
 
     The qwen template normally converts these, but when it does not the raw XML
     is treated as the answer, posted to chat, and stored in history (seen live
-    2026-09-10: an assistant turn that was nothing but `<tool_call>
     <function=shell>` with a PowerShell command inside). Returns
     [{"name": ..., "arguments": {...}}] — empty when there is nothing to parse.
     """
@@ -15823,7 +15644,6 @@ def _repair_tool_arguments(messages):
 
     A server parses each tool_call's arguments as JSON, and llama.cpp answers HTTP 500 for
     the WHOLE request when one does not parse - measured against a live endpoint
-    2026-09-26: the malformed blob 500'd at "parse error at line 1, column 34" and the
     same call with valid JSON returned 200. A local model emits that sloppiness often
     (`{"name":"web,"topic":"x"}` is one quote away from valid), and the turn it happens in
     is fine: the NEXT one dies, because the blob is replayed as the assistant's own call.
@@ -16060,7 +15880,6 @@ class Agent:
         request at the TOP of the history, so every tool round shifted the whole
         conversation and the server re-prefilled all of it.
 
-        Measured on the LAN box 2026-09-18 against this build's own traffic: a
         mid-run turn's prompt grew 57k -> 67k tokens while the reusable prefix
         stayed pinned at the system prompt (6,993 of 67k = 11% reused), costing
         193-219 s of prefill per call at ~300 tok/s. That is where a long job's
@@ -16830,7 +16649,7 @@ class Agent:
                 payload["stream"] = True
                 if _is_local_url(url):
                     # llama.cpp reports usage AND timings on the final chunk when
-                    # asked (verified: usage + per-second decode rate). A provider
+                    # asked. A provider
                     # that does not know the option answers 400, so it is only
                     # requested where it is known to work.
                     payload["stream_options"] = {"include_usage": True}
@@ -17426,8 +17245,7 @@ class Agent:
         out = annotate_failure(name, args, out)
         # A FAILURE that reads like a wrong path re-attaches the atlas on the next turn.
         # That is the one moment the map is worth its tokens: a guessed path is the most
-        # common tool error this model makes (measured on the eval).
-        #
+        # common tool error this model makes.
         # Gated on the call having actually FAILED (2026-09-29). It ran on every result,
         # so a successful read of a README, a tutorial, or a captured log containing "no such
         # file or directory" or "command not found" re-attached the whole machine map - around
@@ -17584,7 +17402,7 @@ class Agent:
                    # What this run reports THROUGH, and under which source. A tool
                    # that starts another run (delegate_task) hands these down so a
                    # subtask is visible in every lane instead of silent in all of
-                   # them (measured: no callbacks at all until 2026-09-20).
+                   # them.
                    "source": source,
                    "report": {"say": say_cb, "progress": progress_cb,
                               "note": interim_cb, "narration": narration_cb,
@@ -18206,7 +18024,6 @@ class Agent:
                     # results attributed to nobody, so the model could not tell
                     # it had already run them. Ids are normalised here so the
                     # tool results that follow carry exactly the same id.
-                    #
                     # REPLACE the raw reply, never append after it: appending
                     # put every call in the transcript twice (same tool-call id,
                     # content trimmed — dump-verified 2026-09-10), and a
@@ -18869,10 +18686,7 @@ AGENT = Agent()
 SCHEDULER = Scheduler(JOBS_FILE)
 
 
-# --------------------------------------------------------------------------
 # Model catalog / switching — shared by Mattermost and /status
-# --------------------------------------------------------------------------
-
 _MODEL_CACHE = {"at": 0.0, "entries": []}
 
 
@@ -19078,7 +18892,6 @@ def _save_overrides(replace=False):
 
 # --------------------------------------------------------------- reporting ---
 # ONE vocabulary, N destinations.
-#
 # Every interface shows the same run: the status line while it works, a line per
 # tool call with what it ran and what came back, the model's own narration as it
 # streams, a check-in every so often, the questions, and the answer. That used to
@@ -19088,16 +18901,13 @@ def _save_overrides(replace=False):
 # wording (the generator cuts this file between model_command and run_cli, so
 # anything the console needs has to live ABOVE that cut, which is why the helpers
 # below sit here).
-#
 # The split:
-#
 #   RunReporter      what is SAID, once: wording, cadence, caps, scrubbing,
 #                    tool-line merging, the source tag, the done line.
 #   Destination      how a lane LOOKS: four verbs and a cost model. A Mattermost
 #                    post notifies a phone, a terminal line is scrolled away -
 #                    those are the only real differences.
 #   drive_run()      the one place AGENT.run's callbacks are wired.
-#
 # A lane that implements the four verbs gets the whole vocabulary and can never
 # fall behind the others again. tests/test_lane_parity.py drives one scripted run
 # through every destination and asserts the three event streams are identical,
@@ -19162,7 +18972,6 @@ class Destination:
 
         An order to "send it here in chat" had no door at all before this, so a run
         asked to send a file could only hunt for one: measured on a macOS test bed
-        2026-09-24, 21 tool calls looking for a way in (mm_say, tokens, docker,
         the Mattermost API) for a video that had been on disk for three minutes. A
         lane with no attachment transport says so, and the path IS the delivery
         there. Returns one line, which is what the tool hands the model.
@@ -19365,7 +19174,6 @@ def _line_words(text):
 def same_open(a, b):
     """True when two NARRATION lines open with the same words as read.
 
-    Measured on macOS 2026-09-24: one stuck run posted eight lines that
     all opened "The video is already downloaded (9.2 MB ..." and were the same
     sentence to the operator, differing only in the tail - a path, the words
     "from an earlier run", a clause about the chat lane being down. The exact
@@ -19461,7 +19269,6 @@ class RunReporter:
     def scope_note(self, steps, name=None):
         """One line, once per run, when a run is long and the operator has heard nothing else.
 
-        Measured 2026-09-25 driving a live install: five vague orders ran 30-58 tool calls over
         17-20 minutes each, and the only signal the operator got was the tool lines - nothing
         said "this is still going, here is the verb that ends it". The harness already counts
         the calls; this is that count, said out loud. Once per run, only past
@@ -19984,7 +19791,6 @@ class NowhereDestination(Destination):
 # Telegram kept a bare cancel event and nothing else, so a message sent
 # mid-run queued behind the run it was meant to redirect. A new lane inherited
 # none of it.
-#
 # They live here now, keyed by SESSION - the one name every run has - and drive_run
 # opens one for every run it starts, so a lane gets all three by construction. A lane
 # that already runs its own, stronger guard (Mattermost's channel watchdog, which
@@ -20208,7 +20014,6 @@ TUI_PALETTE = {
     # The theme's colour names, one row per TIER. The drawing code never reads these
     # directly: it asks for a SEMANTIC role (see SEMANTIC_ROLES) and this table says what
     # that role's colour is on this terminal. theme.toml (host-owned) overrides them.
-    #
     # gold is the LABEL and SUCCESS colour (headings, results, the answer label); green is
     # only `laurel`, for explicit success marks - never a normal answer ("move the answer
     # away from green", designer 2026-10-03). crimson is the one large decorative accent
@@ -20311,7 +20116,7 @@ def sgr_for(style_value, tier=None):
 
     The tier decides HOW a hex is written: a truecolor terminal gets 24-bit, a 256-colour
     one gets the nearest cube index (38;5;N) instead of a 24-bit code it would render as
-    garbage (measured in the smoke run that prompted this), and the 16-colour tier carries
+    garbage, and the 16-colour tier carries
     names, not hexes.
     """
     codes = []
@@ -20826,7 +20631,7 @@ class TuiScreen:
         A plain screen has no draft region, so the order is just the order. AppScreen
         overrides this because it DOES have one - the model's streamed narration - and the
         reference has to land AFTER that region is dropped or the drop takes it with it
-        (measured: the reply line vanished with the draft it sat inside).
+        .
         """
         if ref:
             self.card("reply", ref)
@@ -21203,7 +21008,7 @@ class CliDestination(Destination):
         print by prefix-matching the draft - which is whitespace-collapsed and
         capped at checkin_note_chars. A markdown answer never matched, so the words
         appeared three times: a dim pipe-flattened line, a mangled card ending
-        `acr…`, and the rendered card (reproduced before this change).
+        `acr…`, and the rendered card.
         A screen cannot unprint the dim draft; the card is unconditional instead,
         and the plain path uses what is recorded here to stay single-print."""
         if ref in self._hold:                 # never decided: the run ended first
@@ -21541,7 +21346,7 @@ class AppScreen(TuiScreen):
 
         The model streams a narration draft into this pane and the answer card is what
         replaces it. Filing the reference before that drop put it INSIDE the region, so the
-        drop deleted the reference along with the draft (measured on a pty, 2026-09-30).
+        drop deleted the reference along with the draft.
         """
         self._drop_narration()
         super().answer_card(ref, answer)
@@ -22202,7 +22007,7 @@ class AppScreen(TuiScreen):
         # submit, the picker's callback or a render task that raises never leaves
         # Application.run(); asyncio hands it to this handler and the app keeps
         # running. So the crash looked like a frozen frame, the report went into the
-        # pane, and the process never ended (measured on a pty, 2026-09-30). Ours
+        # pane, and the process never ended. Ours
         # records the traceback and uses the SAME ONE ask - request_exit() - that
         # every other exit already uses.
         self.app._handle_exception = self._app_exception
@@ -22429,27 +22234,10 @@ def model_command(session_key, arg):
               "conversation now inherit it)")
 
 
-# --------------------------------------------------------------------------
 # Mattermost bot layer (mmpy_bot, imported lazily so --cli needs no extras)
-# --------------------------------------------------------------------------
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # --- color ---------------------------------------------------------------------
 # Mattermost has no text color, but a post can carry Slack-style attachments, which
-# render as a colored left bar (verified against this server before building it). The
+# render as a colored left bar. The
 # bar is what tells the three kinds of line apart at a glance, so a note sandwiched
 # under a tool call is visibly a different thing from the tool call:
 #   green - the model's own narration: what it is about to do
@@ -22498,17 +22286,13 @@ def bar_props(text, color):
     return {"attachments": [{"color": color, "text": text}]}
 
 
-# --------------------------------------------------------------------------
 # The web lane: conversations, live runs, and the browser destination.
-#
 # Ported from the lane removed in 4699bd1 (v1.0.36) and re-aimed: the browser is
 # the DEFAULT surface now, the token is mandatory, and there is no TLS. This
 # block is the state layer - the registry of browser conversations
 # (web-sessions.json), the per-run line logs (sessions/<key>.web.jsonl), the
 # live-run buffers and the Destination that draws a run the way a page wants
 # it. The HTTP server itself (run_webui) lands beside it.
-# --------------------------------------------------------------------------
-
 # -- web conversations: one host, many conversations, a browser owns its own --
 # The web lane used to hardcode the session key "web": every browser, on every
 # device, talked into one conversation, and nothing could list or reopen one.
@@ -22517,7 +22301,6 @@ def bar_props(text, color):
 # file of its own, sessions/<key>.web.jsonl: the ordered line list of each finished
 # run. That file is what lets a reload, a second browser or the same browser
 # tomorrow repaint the conversation instead of starting from a blank page.
-#
 # Ownership, because this build ships to other people: a conversation belongs to
 # the browser that created it (X-Tinycmdr-Client, an id the page makes once and
 # keeps in localStorage), so two people pointed at one host never see each other's
@@ -23362,7 +23145,7 @@ def web_inventory():
     try:
         # skill_index() returns a LIST of records, not a mapping: sorting it
         # directly raises, and a bare except here reported a host with 108 skills
-        # as having none (found on the live box, not in the suite).
+        # as having none.
         skills = sorted(s.get("name") or "?" for s in skill_index())
     except Exception as e:
         log.warning("could not read the skill index for the panel: %s", e)
@@ -23410,15 +23193,11 @@ def _web_ascii_name(name):
 
 
 
-# --------------------------------------------------------------------------
 # The web lane, part 2: the HTTP server and the page it serves.
-#
 # Same recovery source as the block above; re-aimed in place: the token is
 # mandatory, the socket is plain HTTP (no TLS, a declared LAN trust), and the
 # bind is loopback unless web.host says otherwise. Host/Origin, the body cap
 # and its deadline, and the connection cap are unchanged - they were paid for.
-# --------------------------------------------------------------------------
-
 WEB_PAGE = """
 <!doctype html><html><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -25394,7 +25173,6 @@ def run_webui():
             # this box, and a plain compare leaks its prefix through response
             # timing (2026-09-23). Bytes on both sides so a
             # header carrying non-ASCII can never raise here.
-            #
             # The header is what every non-browser caller uses (the probes, curl, the
             # installer). A BROWSER gets an HttpOnly cookie from /api/login instead, so
             # the token stops living in its URL and its localStorage - see the page's
@@ -26169,7 +25947,7 @@ def _firewall_note(port):
                 "or skip the firewall with a tunnel: ssh -N -L %d:127.0.0.1:%d <user>@<box>"
                 % (port, port)]
     def _probe(command):
-        """(found, output) for a shell command - through run_capture, never shutil, because
+        """ for a shell command - through run_capture, never shutil, because
         this module keeps its imports local and a probe must be patchable in a test."""
         try:
             rc, out, _err, _to = run_capture(["sh", "-c", command], 10)
@@ -26389,7 +26167,7 @@ def start_web_surface(open_browser=True, force=False):
     raw_port = web.get("port")
     # 0 is a real value here ("let the OS pick"), not a missing one: `or 8790` turned the
     # suite's port-0 server into a probe of 8790, and on a box whose live install serves
-    # the page that read as "already serving here" (measured 2026-10-04).
+    # the page that read as "already serving here".
     port = int(raw_port) if raw_port is not None else 8790
     if _web_answers(port):
         # The service (or another session) already serves the page: announce it
@@ -26563,7 +26341,6 @@ class MattermostDispatcher:
         """The channels this box was talking in, with the time of the newest post it
         handled, read back from state.json.
 
-        Measured on both test beds 2026-09-24: a restart was armed, the child
         was killed, and the operator's order was posted inside the downtime. No run
         started, no answer was ever posted, and the log said nothing - because the sweep
         that exists for this case had no channel to ask about. The notice that records
@@ -27055,7 +26832,7 @@ class MattermostDispatcher:
                 # use membership in self.workers for that: a worker outlives its
                 # run by up to 10s waiting on an empty queue, so a message
                 # landing in that window was wrongly told it was queued behind a
-                # task that had already finished (seen live 2026-09-10 13:33).
+                # task that had already finished.
                 self.running.add(channel_id)
                 try:
                     self._handle(channel_id, sender, text, msg_id, thread_root,
@@ -27123,7 +26900,7 @@ class MattermostDispatcher:
                     # The run is written off, so it must stop counting as "busy": while
                     # this stayed set, a later plain message was STEERED into a run that
                     # was never going to read it, and a later /new queued behind a task
-                    # the watchdog had already abandoned it (seen live).
+                    # the watchdog had already abandoned it.
                     self.running.discard(channel_id)
                     self.workers.discard(channel_id)
                     q = self.queues.get(channel_id)
@@ -27255,7 +27032,7 @@ class MattermostDispatcher:
         Deliberately NOT "has an unset cancel event": the stall watchdog (and an
         earlier /stop) SETS those events while the wedged run is still unwinding.
         Reading that as "nothing is running" is what made a /stop answer "Nothing
-        is running right now" while the channel was still busy (seen live) - the
+        is running right now" while the channel was still busy - the
         operator reads that as "my stop was ignored".
         """
         return channel_id in self.running or channel_id in self.active
@@ -27738,7 +27515,6 @@ def status_text(key, paused=None):
 # hear anybody. Measured on a live install, 2026-09-28: 510 restarts, a health probe returning
 # {"ok": true}, `tinycmdr health` naming mattermost because a token EXISTED, and nothing
 # anywhere saying the chat lane was dead.
-#
 # Two consequences shape this section:
 #   * a dying process cannot count its own restarts, so the failure record is MIRRORED TO
 #     DISK (logs/state.json, atomic); the next start reads it back and says "attempt 511";
@@ -27793,7 +27569,6 @@ def _lane_reason(exc):
     mattermostautodriver raises `InvalidOrMissingParameters(message)` where `message` is the
     API's empty `message` field for a bad token: str(exc) is "", so the lane recorded "no
     detail", `doctor` printed that, and the log line was blank. Measured on a Windows install,
-    2026-10-02, after 723 failed starts with no visible cause.
     """
     text = str(exc).strip()
     name = type(exc).__name__
@@ -28098,7 +27873,7 @@ def run_bot():
     # client holds the SAME dict, so this reaches the httpx calls.)
     bot.driver.options["request_timeout"] = 60
     # Heartbeat and receive timeout detect dead sockets within 30-60s
-    # instead of blocking indefinitely (measured: a host deaf for 4h).
+    # instead of blocking indefinitely.
     bot.driver.options["websocket_kw_args"] = {"heartbeat": 30.0, "receive_timeout": 60.0}
     dispatcher.attach(bot.driver, bot.driver.users.get_user("me")["username"])
     SCHEDULER.dispatcher = dispatcher    # so long jobs can report progress too
@@ -28115,16 +27890,11 @@ def run_bot():
     bot.run()
 
 
-# --------------------------------------------------------------------------
 # CLI mode (test + terminal use, no Mattermost needed)
-# --------------------------------------------------------------------------
-
 # ------------------------------------------------------------------ telegram lane
 
 # The second messaging door beside Mattermost: the same agent, the same
 # notes/tasks/atlas/skills and the same sessions corpus, reached from a Telegram DM.
-
-#
 
 # The transport is the Bot API over plain HTTPS long polling, so there is no webhook,
 
@@ -29348,7 +29118,7 @@ def cli_banner():
     # The screen is taken FIRST, before anything measures or logs: tui_screen() is
     # what detaches the console log handler, and envelope_facts() logs a line
     # ("context: server reports ...") whose INFO record otherwise lands above the
-    # banner as the very first thing a session shows (measured 2026-09-30 on a pty).
+    # banner as the very first thing a session shows.
     screen = tui_screen()
     f = envelope_facts()
     model = "%s at %s" % (CONFIG["llm"]["model"], CONFIG["llm"]["base_url"])
@@ -30158,7 +29928,7 @@ class ModelPick:
 
         Returns [(style, text)] with a newline between rows: a FormattedTextControl splits
         lines on "\\n" INSIDE a piece, so rows handed over as separate pieces and no newline
-        render as one long line (measured on a pty, 2026-09-30).
+        render as one long line.
         """
         out = [("class:pick.title", " " + self.title)]
         out.append(("class:pick.hint",
@@ -31052,7 +30822,7 @@ def run_cli(once=None, app=False):
     _cli_startup(_CLI.get("app") is not None, once=bool(once))
     # reported for BOTH entry points. It used to live in cli_banner(), which a
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
-    # said nothing about what it could enforce (found after the fleet push).
+    # said nothing about what it could enforce.
     if once:
         try:
             _tty = bool(sys.stdin.isatty())
@@ -31550,13 +31320,10 @@ def user_is_allowed(sender, user_id):
                                  [str(a) for a in allowed])
 
 
-# --------------------------------------------------------------------------
 # Management verbs — `tinycmdr <verb>` (2026-09-22)
-# --------------------------------------------------------------------------
 # The installers left no command behind, so day-two work meant hand-editing
 # config.json and .env, and finding the right restart helper per OS. These are the
 # things an operator actually does between installs. Rules this block holds to:
-#
 #   * A verb NEVER runs the agent loop. `status` and `doctor` ask the endpoint for
 #     METADATA (/v1/models, /props) and nothing else; no verb spends tokens.
 #   * A verb that touches config writes through atomic_write_text - the same writer
@@ -31577,7 +31344,6 @@ VERBS = ("status", "doctor", "health", "model", "reasoning", "config", "setup", 
 def ensure_launcher_executable():
     """Give the folder's launcher its execute bit back after a pull or an adoption.
 
-    Measured 2026-09-25: `tinycmdr` on a macOS install answered
     ".../tinycmdr: Permission denied" - and the same under sudo, because execve wants at
     least one execute bit set for EVERY user, root included. The two-line shim in
     /usr/local/bin was correct; the file it execs was mode 0644. The tree tracks
@@ -31992,7 +31758,7 @@ def _verb_doctor():
             where.append(".env" if name in env else "environment")
         print("    %-20s %s" % (name, ", ".join(where) if where else "not set"))
     # "none" is the shipped PLACEHOLDER, not a key: warning about it made every fresh
-    # install report a secret where there was none (measured on a live install).
+    # install report a secret where there was none.
     _llm_key = str(CONFIG["llm"].get("api_key") or "").strip()
     if _llm_key and _llm_key.lower() != "none":
         notes.append("llm.api_key is set in config.json — .env is the safer home")
@@ -32586,7 +32352,7 @@ def _disk_version():
 
     The running process's VERSION was read at startup, so the OLD build printed its own
     number in the update summary - the operator saw "VERSION 1.0.45" immediately after
-    pulling 1.0.46 (measured 2026-10-03). Report what the tree holds, not what this
+    pulling 1.0.46. Report what the tree holds, not what this
     process remembers.
     """
     try:
@@ -32602,7 +32368,6 @@ def _declared_dev_tree():
 
     The existence of a declaration file is not the question: a two-tree box has one in the
     LIVE tree too, and that tree is exactly the one that wants pruning (measured
-    2026-10-03 - the operator's own ~/tinycmdr is the install, and the file there declared
     "one tree" so nothing ever got cleaned). The question is whether a `dev` role points at
     this folder, or a bare `dev` entry (no path, or a `same_as` alias) describes the tree it
     sits in. Fail SAFE: an unreadable or odd declaration counts as dev, because pruning a
@@ -33913,11 +33678,10 @@ _SECRET_SHAPES = {
 def secret_check(name, value):
     """The value to write, or ValueError saying why it cannot be a working secret.
 
-    Measured on a Windows install, 2026-10-02: a mattermost token of ONE 0x16 byte sat in .env and
     `tinycmdr token` called it "set (.env)" while the lane failed 723 times - nothing had
     looked at the value. The BOM case is not hypothetical either: PowerShell 5.1 prepends
     a UTF-8 BOM to anything piped into a native command, so `"$tok" | tinycmdr token set
-    ...` writes seven bytes nobody can see (reproduced while writing this).
+    ...` writes seven bytes nobody can see.
     """
     text = str(value or "")
     note = ""

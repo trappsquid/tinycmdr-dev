@@ -11,7 +11,7 @@ most if it broke:
      and say why, so the path is dormant unless it is switched on;
   3. an endpoint that reports `modalities.vision = false` is a veto, not a hint;
   4. the token estimate matches what the server actually charges
-     (measured 2026-09-28: 1470x956 -> 1,404 prompt tokens, 2940x1912 -> 4,053).
+     .
 
     python tests/test_tool_images.py
 """

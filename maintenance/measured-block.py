@@ -73,7 +73,6 @@ def _git_ls(pattern):
     own. An EXPORT has no .git and cannot be asked - but a `git archive` export contains exactly
     the tracked files by construction, so the filesystem gives the same answer there.
 
-    Measured 2026-09-29: the git-only version reported 3 shipped tools in a checkout and 0 in an
     export, so the `surface` block contradicted itself and tests/test_measured_doc failed the same
     way on Ubuntu and on Windows, which is what pointed here. It also meant the published numbers
     could not be verified by anyone without a clone.

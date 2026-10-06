@@ -111,7 +111,6 @@ def test_register_shape_loads():
 def test_reload_tool_finds_a_ported_file_by_its_registered_name():
     """A register-shape file answers to the name inside it, which need not be the file name.
 
-    Measured 2026-09-24: a predecessor-harness file dropped in as ported_todo.py registers todo_list, and
     reload_tool("todo_list") answered "no tools/todo_list.py or .tool.json to load" - so an
     imported tool could not be reloaded the way a native one can.
     """
@@ -352,7 +351,7 @@ def test_process_lifecycle():
     out = tool({"action": "wait", "id": "b2", "timeout": 30}, None)
     check("process: wait returns on completion", "exit 0" in out, out)
     # the argv list sent as a JSON STRING: a session that never held this schema guesses
-    # the shape (measured 2026-09-25 on Windows, where the call died inside cmd.exe)
+    # the shape
     tool({"action": "start",
           "command": json.dumps([sys.executable, "-c", "print(7)"])}, None)
     out = tool({"action": "wait", "id": "b3", "timeout": 30}, None)
@@ -366,7 +365,6 @@ def test_process_lifecycle():
     # The harness hands a drop-in tool its own shell and its safety tier (measured
     # 2026-09-25 on that same box: string commands went to cmd.exe while the prompt says the shell
     # is PowerShell, and a .ps1 launched through this tool did what the shell tier refuses).
-    #
     # The context used to hardcode `powershell`, so on a Mac the job never started and both
     # checks read as "ERROR: no job 'b4'" rather than testing what they mean to. The shell
     # is the HOST's - and so is the loop it runs.

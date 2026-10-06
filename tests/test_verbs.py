@@ -102,7 +102,7 @@ def main():
         check("an unknown verb exits 2 and shows the help", rc == 2 and "unknown verb" in err,
               (rc, err[:120]))
 
-        # ---- the door has to be executable (measured 2026-09-25) -------------
+        # ---- the door has to be executable -------------
         # A macOS host answered "/usr/local/bin/tinycmdr: line 2: ... Permission
         # denied" for the user and for sudo: the shim was right, the file it execs was
         # 0644, because git cannot carry the execute bit out of a Windows checkout and
@@ -178,7 +178,7 @@ def main():
         # _apply_package() writes the package over the install. It must SEED a host-owned
         # path and never overwrite one: 1.0.49 protected only soul.md, so an edited
         # tools/patch.py or skills/README.md - tools/ being exactly where the agent is told
-        # to write its own tools - was silently replaced (measured 2026-10-03).
+        # to write its own tools - was silently replaced.
         _ab = fb.BASE_DIR
         _atmp = Path(tempfile.mkdtemp(prefix="fbtest-apply-"))
         _pkg = Path(tempfile.mkdtemp(prefix="fbtest-pkg-"))
@@ -310,7 +310,6 @@ def main():
         def forget_probes():
             """Drop the probe caches the agent holds, whatever this build calls them.
 
-            Measured 2026-09-26: this block cleared _window_cache and _budget_cache, but
             the envelope built from the probe had been renamed to _envelope_cache, so the
             "endpoint answers" checks below graded the PREVIOUS probe's verdict ("assumed",
             i.e. no answer) and went red on a box where the stub answered 131072. The names
@@ -1268,7 +1267,7 @@ def main():
             # os.geteuid does not exist on Windows - there is no uid, and `rights_needed`
             # below short-circuits on os.name == "nt" so it is never called. Reading it
             # unconditionally raised AttributeError and aborted the suite before a single
-            # check ran (measured on Windows 11, 2026-09-29).
+            # check ran.
             if _real_geteuid is not None:
                 os.geteuid = lambda: 0
             rc, out, err = call(fb, ["restart"])
@@ -1340,7 +1339,7 @@ def main():
         check("the Windows restart helper stops the supervisor and the launcher",
               "tinycmdr-supervise.py" in _ps and "tinycmdr-service.vbs" in _ps)
         # -like reads [ ] * ? in a PATH as wildcards: a bracketed install dir matched
-        # nothing, so the scoped clause silently let the old bot live (measured 2026-10-05).
+        # nothing, so the scoped clause silently let the old bot live.
         # The literal OrdinalIgnoreCase compare replaced it in BOTH copies, and the
         # supervisor clause is scoped like the bot clause now (the vbs passes the full
         # path; measured 2026-10-05).
@@ -1524,7 +1523,6 @@ def main():
 def _tail(aborted=""):
     """The suite's own count line, and the ONE contract run_all.py reads for it.
 
-    Measured 2026-09-26: a crash on a helper the suite never staged aborted
     this run mid-file and the checks after it vanished without a word - the runner could
     only print a traceback, so "how much of this suite graded" was unanswerable. `N passed,
     M failed` on the last line is that answer, and it prints on the way out of a crash too.

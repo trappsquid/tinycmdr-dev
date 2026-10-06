@@ -8,7 +8,6 @@
 -rw-r--r-- regardless of what the build recorded, so INSTALL-MACOS.command,
 UNINSTALL-MACOS.command and the extensionless `tinycmdr` launcher landed
 non-executable for exactly the readers with no terminal to chmod them -
-measured 2026-09-26 on the published tinycmdr-macos.zip. Plain `unzip`, which is
 what the one-line curl door uses, rebuilds 0755 from the permission bits, so the
 door the developers used never saw it.
 

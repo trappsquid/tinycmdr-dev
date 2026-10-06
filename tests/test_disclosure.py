@@ -97,11 +97,10 @@ def main():
         # A convention that is not gated does not hold. These schemas ride on EVERY
         # call, so they are paid for before the first tool call of every run, and the
         # prose had crept to 13,898 chars across the registry with nobody watching
-        # (measured 2026-09-19). The numbers below were measured the same day against
+        # . The numbers below were measured the same day against
         # this harness: 7,133 chars over 13 always-visible tools, fattest single
         # schema ask_user at 1,078. It is a ceiling, not a target: when it fires, cut
         # prose or drop a tool - raising the number is a decision, not a fix.
-        #
         # RAISED 2026-09-21, on the record rather than quietly: the experiment ledger
         # tool is always-on BY DESIGN (a run has to know what this box already tested
         # BEFORE it runs an arm), and adding it moved the block from 7,133 over 13 tools
@@ -184,7 +183,6 @@ def main():
         # for another harness names tools no build here has, and the old hint answered
         # every unknown with "find_tools can reveal them" - which is what sent the model
         # looking for a tool that was never on the box.
-        #
         # FIXED 2026-09-28, two bugs in three lines. (a) The three checks below passed
         # their arguments to check() in the wrong order - this file's helper is
         # check(cond, what), and these called check(label, cond), so the "condition" was

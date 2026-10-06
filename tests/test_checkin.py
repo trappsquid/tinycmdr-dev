@@ -114,10 +114,7 @@ def reporter(**cfg):
     return d, rep
 
 
-# --------------------------------------------------------------------------
 # the previews and exit codes the harness reads off a tool call
-# --------------------------------------------------------------------------
-
 def test_tool_preview_takes_first_line():
     prev = fb._tool_preview("shell", {"command": "Get-Item C:/x\nRemove-Item y"})
     check("preview is the first line only", prev == "Get-Item C:/x", prev)
@@ -146,10 +143,7 @@ def test_exit_code_parsing():
     check("None output is safe", fb._exit_code(None) is None)
 
 
-# --------------------------------------------------------------------------
 # the model's own narration
-# --------------------------------------------------------------------------
-
 def test_note_posts_its_own_message():
     d, rep = reporter(checkin_note_min_seconds=0)
     rep.note("Checking what holds the file lock:")
@@ -169,10 +163,7 @@ def test_note_throttle_and_cap():
     check("narration is capped", len(d.posts[0][2]) <= 25, d.posts[0][2])
 
 
-# --------------------------------------------------------------------------
 # the harness-side tool lines
-# --------------------------------------------------------------------------
-
 def test_launch_warning_only_where_a_cap_exists():
     """A model server started as a child joins THIS unit's cgroup, so its load kills
     the agent (a bot account 17:09: 33.4 GiB inside tinycmdr.service)."""
@@ -221,7 +212,7 @@ def test_checkin_shows_memory():
 
 def test_scope_note_past_the_threshold():
     """A vague order can run 30-58 tool calls with no operator-facing signal but the tool
-    lines themselves (measured on a live install, 2026-09-25). One line, once per run,
+    lines themselves. One line, once per run,
     past scope_note_steps - and nothing at all where nobody reads this lane."""
     d, rep = reporter(scope_note_steps=40)
     check("no scope note under the threshold", rep.scope_note(12, "shell") == "")
@@ -359,10 +350,7 @@ def test_switches_silence_everything():
           not d.posts and not d.edits, (d.posts, d.edits))
 
 
-# --------------------------------------------------------------------------
 # wiring: run() hands both callbacks what they need
-# --------------------------------------------------------------------------
-
 def scripted_run(seq, **cfg):
     """Drive Agent.run against a scripted _chat, recording both callbacks."""
     redirect_files()
@@ -417,8 +405,7 @@ def test_run_announces_narration_before_tools():
 
 
 def test_a_zero_step_run_never_reads_as_work_done():
-    """Measured 2026-09-25: a run that made 0 tool calls rendered a green
-    "Done - 0 step(s)" line while its reply only described work that had not started, on
+    """    "Done - 0 step(s)" line while its reply only described work that had not started, on
     two hosts. The line has to carry the fact, so a report can never be read as work.
     """
     d, rep = reporter()
@@ -895,7 +882,6 @@ def test_capability_line_reports_what_this_process_can_enforce():
 def test_a_promise_with_no_tool_call_is_asked_to_act_once():
     """The model says it is about to work and stops there, with no tool call at all.
 
-    Measured on macOS 2026-09-24: four runs in a row, ONE model call each, 0 tool
     calls, every reply a promise ("I'll gather what we did in the MVT session, then
     write and publish the post. Let me start by checking..."). The delivery guard only
     counted announcements that arrive WITH calls queued, so the promise was posted as
@@ -960,7 +946,6 @@ def test_a_report_after_real_work_is_never_nudged():
     """calls > 0 is the fence for a REPORT: results that follow tool work are delivered
     as written, never re-asked.
 
-    2026-09-24, when the promise sibling below was added: this fence stands. What moved
     is only the PROMISE case after work, and it moved because live installs' own transcripts
     showed it was where runs actually stop ("Let me find where." after real tool work,
     with the operator's next message being "wait why didnt you download anything").
@@ -1137,9 +1122,7 @@ def test_the_payload_carries_the_warning_only_after_a_wreck():
     check("clean session: no warning line", "did not finish" not in body2, body2[-200:])
 
 
-# --------------------------------------------------------------------------
 # the copy-paste repeat problem (macOS, 2026-09-24)
-# --------------------------------------------------------------------------
 # One stuck run posted the same sentence EIGHT times in three minutes: eight
 # narration lines that all opened "The video is already downloaded (9.2 MB ..."
 # and differed only after that, every one of them a notification. The guard that

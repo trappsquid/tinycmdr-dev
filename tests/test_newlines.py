@@ -1,4 +1,4 @@
-"""F2: the write path must not translate newlines (measured 2026-09-22).
+"""F2: the write path must not translate newlines.
 
 Windows text mode turns every "\\n" into os.linesep on write, so a CRLF file
 handed back as "\\r\\n" landed as "\\r\\r\\n": one extra blank line per line, and

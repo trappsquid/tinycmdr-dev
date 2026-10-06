@@ -462,7 +462,6 @@ check("--app's input box is labeled 'you', not 'ask'",
 # Data, derived from the badge master by maintenance/make-brand-art.py, drawn as spans:
 # raw ANSI inside a span renders as literal "[38;2;..." text (measured twice in this
 # file), so the artifact is cells + colours and the screen composes the styles.
-#
 # The POLICY decides, not the ambient terminal: this shell's TERM is often `dumb`, where
 # the ASCII mark is the correct output - so the Unicode checks force the policy and the
 # fallback gets a check of its own.
@@ -1108,7 +1107,7 @@ if HAVE_APP:
         # leaving must be asked for ONCE: a second Application.exit() raises "Return
         # value already set", and scheduled through the loop it became prompt_toolkit's
         # "Unhandled exception in event loop" + "Press ENTER to continue..." after a
-        # clean run (measured on a pty, 2026-09-30).
+        # clean run.
         _exits = []
 
         class _FakeApp:
@@ -1131,7 +1130,7 @@ if HAVE_APP:
         # hands it to the loop's exception handler, and prompt_toolkit's own handler
         # printed the traceback with print() - the pane, under --app - then waited
         # for ENTER inside the alternate screen. That is the "crash" that left the
-        # terminal open on a frozen frame (measured on a pty, 2026-09-30), so the app
+        # terminal open on a frozen frame, so the app
         # installs its own handler: record, log, and ask the ONE exit.
         # A 256-colour terminal with no COLORTERM (stock Terminal.app) used to crash
         # `--app` at CONSTRUCTION: the palette's rich-only `color(73)` spelling reached

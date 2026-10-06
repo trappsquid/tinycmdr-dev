@@ -279,7 +279,7 @@ def main():
         fb._ENDPOINT_GAP["at"] = 0.0
         fb._ENDPOINT_GAP["note"] = ""
 
-        # ---- the gate covers LOAD, not just restarts (measured 2026-09-25) -------
+        # ---- the gate covers LOAD, not just restarts -------
         # An operator order about a slow machine made the run send real completion requests
         # to the production model box (~900 generated tokens, 2+ slots of load) while it was
         # itself using that box to think. Reads stay free: gating /props, /metrics or
@@ -335,7 +335,7 @@ def main():
             got = bool(fb._surface_write_gate(path, "write_file", {}))
             check(f"surface path: {path} -> {want}", got == want, f"got {got}")
 
-        # ---- the strict-mode shell is a per-host CHOICE (measured before it was offered) ----
+        # ---- the strict-mode shell is a per-host CHOICE ----
         if fb.IS_WINDOWS:
             fb.CONFIG["agent"]["shell_strict_mode"] = False
             off = fb.tool_shell({"command": "$s = Get-CimInstance Win32_OperatingSystem; "

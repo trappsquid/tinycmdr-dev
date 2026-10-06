@@ -47,7 +47,7 @@ SRC = BASE / "tinycmdr.py"
 # A suite never opens a browser tab - and that has to include a HAND-RUN suite. run_all.py
 # passes TINYCMDR_NO_BROWSER=1 to its children, but running this file directly (which its
 # own header invites) left the guard unset, and the in-process server below auto-opened
-# the operator's browser on every start (measured 2026-10-05, twice). The suite carries
+# the operator's browser on every start. The suite carries
 # the guard itself now, and a check below fails any suite that starts a web surface
 # without it.
 os.environ.setdefault("TINYCMDR_NO_BROWSER", "1")

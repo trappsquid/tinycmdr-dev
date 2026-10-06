@@ -1,6 +1,5 @@
 """The route hint: a shell content search gets pointed at search_files, once per run.
 
-Measured on a live install's first work order (Windows, 2026-09-23): "find every line
 that calls atomic_write_text" became Select-String + a second Select-String for the def lines +
 a python regex in execute_code + a 13,482-char spill + a repeat-read map -- 6 calls and 4.5
 minutes for what ONE search_files call answers, with search_files never called. The hidden
@@ -52,7 +51,7 @@ check("and rides as a HARNESS note, like the other harness verdicts", "[HARNESS:
 
 # ---- twice per run, then quiet; again in the next run ----------------------------
 # A live install repeated the same Select-String four minutes after the first hint and heard
-# nothing (measured 2026-09-23), so the second miss is taught too - and the third is the
+# nothing, so the second miss is taught too - and the third is the
 # loop guard's business, not this line's.
 check("a second miss in the SAME run is taught as well",
       bool(hint(DRIVE_CMD, {"session_key": "r-fire"})))

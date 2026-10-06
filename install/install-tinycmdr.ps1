@@ -864,7 +864,7 @@ if ($SecretsFile) {
 # or answered at the prompt below. "<base_url>;<model>;<alias>;<key>", the last two
 # optional; the key goes to .env under a generated name, never into config.json.
 # A '|' is accepted too, but it CANNOT be used through INSTALL-WINDOWS.cmd: cmd.exe
-# reads it as a pipe and hands the pieces to different processes (measured 2026-09-26).
+# reads it as a pipe and hands the pieces to different processes.
 $script:Fallbacks = @()
 $fbGiven = 0
 foreach ($spec in $AddEndpoint) {
@@ -1105,7 +1105,7 @@ if ($Ask -and -not $KeepConn) {
         }
         # The page's token: set your own here, or take the host's own (a redo keeps it)
         # or a minted one. This question exists because the wizard used to be
-        # mint-or-nothing (measured 2026-10-04).
+        # mint-or-nothing.
         if (-not $WebToken -and $Ask) {
             $WebToken = (Read-Secret "Web UI token (Enter = keep this host's own, or mint one)").Trim()
             if ($WebToken -and $WebToken.Length -lt 12) {
@@ -1187,7 +1187,7 @@ if ($MattermostToken) {
     # $Ask, not -not $NoPause: the .cmd wrapper ALWAYS passes -NoPause (it only means
     # "keep the window open"), so gating this on it never fired for a double-click, and
     # a scripted -NonInteractive run hung here forever waiting for a token nobody was
-    # there to type (measured 2026-09-24: a CI-style install stalled at this line).
+    # there to type.
     if (-not $MattermostToken -and $Ask) {
         $MattermostToken = Read-Secret "Mattermost bot token (blank = set it in .env later): "
         if ($MattermostToken) { $tokenSource = "prompt" }
@@ -1239,7 +1239,7 @@ New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 # update.sh applies. This used to be a hand-written list, and that list is a THIRD mirror
 # of "what ships": the new page design added assets/ to the package, the list was never
 # told, and every fresh install served /page.css as a 404 - the page rendered as raw
-# unstyled markup (measured on a fresh install, 2026-10-04). One rule now.
+# unstyled markup. One rule now.
 $hostFiles = @("config.json", ".env", "soul.md", "notes.md", "notes-authored.json",
                "field-notes.md", "atlas.md", "experiments.jsonl", "web-sessions.json",
                "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl", "tasks.md",
@@ -1353,7 +1353,6 @@ if ($NoPath) {
 # The host field is the HOST alone: a reader pastes what their browser shows
 # ("https://chat.example.com/"), while the scheme and the port are their own keys. Split
 # what came in rather than writing a url no client can build a request from (measured
-# 2026-09-26 on macOS, where the host field came out holding a full URL).
 if ($MattermostUrl) {
     $raw = $MattermostUrl
     $h = ($raw -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', '')
@@ -1545,7 +1544,7 @@ if (Test-Path $envPath) {
             # Only the keys THIS INSTALL owns are withheld. The search keys were in
             # this list too, so a re-run without -SecretsFile dropped a working
             # host's TAVILY/ANYSEARCH keys - the same loss the config writer had,
-            # one file over (measured 2026-09-24 on macOS). The primary's
+            # one file over. The primary's
             # key is withheld only when THIS run resolved one; otherwise the host's
             # own TINYCMDR_LLM_API_KEY line is carried over like any other.
             $managed = @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN")
@@ -1589,7 +1588,7 @@ foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN
     if ($val -match '^\s*<.*>\s*$' -or $val -match '(?i)redacted') {
         # A redacted package or secrets file carries no real key. Writing the
         # placeholder looks like success and then 401s at every search, so leave
-        # the key unset and say so (seen on two Linux hosts, 2026-09-11).
+        # the key unset and say so.
         $refused += $key
         continue
     }

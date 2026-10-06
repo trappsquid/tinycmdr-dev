@@ -1,6 +1,5 @@
 """Tool discovery: a capability question must not be answered with a wrong tool.
 
-Measured on a live install 2026-09-23 (Windows, 35B-A3B, its own log): three find_tools
 calls, each answered "[HARNESS: now callable]" with a tool that does something else -
 
     "send Mattermost message to channel"            -> `schedule`  (the word "channel")
@@ -427,10 +426,9 @@ check("a tool name as the first token of a pipeline is answered as a tool too",
 # this miss SUCCEEDS and the model never self-corrects. Told to build a tool, the run ran
 # `python toolsmith.py "action=new" ...` (which worked), and never made the `toolsmith` TOOL
 # CALL its prompt names.
-#
 # The probe tool is REGISTERED HERE rather than naming a tool that happens to be in this
 # checkout: an earlier version of these checks named toolsmith and passed only while another
-# suite's leftovers sat in the shared staging dir (measured 2026-09-23). A check that depends
+# suite's leftovers sat in the shared staging dir. A check that depends
 # on a sibling suite, or on the repo's tools/ folder, is not a check.
 _keep_custom = dict(fb.REGISTRY.custom)
 fb.REGISTRY.custom["probetool"] = {
@@ -679,7 +677,7 @@ check("and its capability line carries no warning",
 # ---- the tool tree: find_tools {category: ...} is the leaf the prompt points at -----
 # The static prompt carries the SKELETON (a shelf per line, the names on it) and the prose
 # sits behind this call: a description line per custom tool cost 167.8 ch / 49.4 est-tok
-# PER TOOL on every call (measured 2026-09-25, tests/tool_index_scale.py), so the index is
+# PER TOOL on every call, so the index is
 # capped and the leaf is on demand. Three things a shelf has to do: resolve from the label
 # the prompt shows (and from a shorter word for it), name its tools WITH descriptions, and
 # reveal NOTHING - a reveal is per-session schema rent that calling the tool pays anyway.

@@ -18,7 +18,6 @@ function Log([string]$m) { "$((Get-Date).ToString('s')) $m" | Add-Content -Path 
 # Second install's bot on the same box.
 # Everything this install runs carries the install dir in its command line: the
 # bot, the supervisor (the vbs launcher passes the full ...\tinycmdr-supervise.py;
-# measured 2026-10-05 from the vbs template) and the launcher itself. A hand-run
 # bare `python tinycmdr-supervise.py` (no path) is deliberately NOT killed - that
 # is the cost of never touching a second install's watchdog.
 # Caveat: an update replaces FILES, not the supervisor PROCESS. After one that changed
@@ -32,7 +31,7 @@ function Get-TinycmdrProcesses {
           if ($_.Name -like 'python*' -or $_.Name -eq 'wscript.exe') {
               # IndexOf with OrdinalIgnoreCase, never -like: -like reads [ ] * ? in the
               # PATH as WILDCARDS, so a bracketed install dir matched nothing and the old
-              # bot survived the restart (measured 2026-10-05). OrdinalIgnoreCase is a
+              # bot survived the restart. OrdinalIgnoreCase is a
               # literal compare with Windows path semantics.
               return $_.CommandLine.IndexOf($install,
                   [System.StringComparison]::OrdinalIgnoreCase) -ge 0

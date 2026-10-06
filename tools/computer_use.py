@@ -34,7 +34,6 @@ PLATFORM
         does windows and input, AppleScript System Events the accessibility
         tree, `screencapture` the pixels, `pbcopy`/`pbpaste` the clipboard;
       - Windows: a PowerShell engine over UI Automation / Win32 (measured
-        2026-09-28 in a VM, 200% display scaling included);
       - Linux: an X11 engine (xdotool/xwininfo/ffmpeg); Wayland is open work -
         see docs/computer-use.md.
 
@@ -172,11 +171,9 @@ BASE = Path(__file__).resolve().parent.parent
 SCRATCH = BASE / "logs" / "computer-use"
 MAX_SHOTS = 20
 
-# ---------------------------------------------------------------------------
 # Caps. Sized for a text model reading a table, not for exhaustiveness: an AX
 # tree on a full app is thousands of nodes and the model reads the first screen
 # or two anyway. `max` is the knob; the note in the result says when it bit.
-# ---------------------------------------------------------------------------
 MAX_ELEMENTS = 400
 DEFAULT_ELEMENTS = 120
 DEFAULT_DEPTH = 6
@@ -187,7 +184,6 @@ TREE_TIMEOUT = 60
 AX_TIMEOUT = 30
 INPUT_TIMEOUT = 20
 
-# ---------------------------------------------------------------------------
 # Hard blocks. Two classes, both refused outright (no approval door exists in
 # tinycmdr's tool layer, so an unblockable guard is the only honest shape):
 #   - key combos whose only purpose is to end or lock the session, or to
@@ -195,7 +191,6 @@ INPUT_TIMEOUT = 20
 #   - typed text that is a destructive shell one-liner. `type` into a terminal
 #     is a real and useful action (that is how a CLI-only app gets driven), so
 #     the blocklist is about the command, not about the target.
-# ---------------------------------------------------------------------------
 _BLOCKED_COMBOS = (
     frozenset({"cmd", "shift", "backspace"}),          # empty trash
     frozenset({"cmd", "option", "backspace"}),         # force delete
@@ -223,7 +218,7 @@ _BLOCKED_TEXT = (
 )
 # Aliases fold BEFORE the blocklist sees a combo: `ctrl-opt-del` is how Mac users
 # spell force-logout, and without "opt" the parse failed on "two non-modifier keys"
-# instead of folding to option (found by this file's own selftest, 2026-10-05).
+# instead of folding to option.
 _KEY_ALIASES = {"command": "cmd", "control": "ctrl", "alt": "option",
                 "opt": "option", "option": "option",
                 "\u2318": "cmd", "\u2325": "option",
@@ -469,14 +464,12 @@ def _remember(session, snap):
             _SNAPSHOTS.pop(key, None)
 
 
-# ---------------------------------------------------------------------------
 # Screenshot dedup: a capture -> act -> capture loop on a still screen used to
 # resend the same frame (and its ~1,000 tokens) every step. The DELIVERED bytes
 # are hashed; identical bytes for the same session+target omit the image and say
 # so in the text, with a streak cap so full pixels always come back before too
 # long. Adopted from the predecessor harness's measured behaviour (its _screenshot_dedup_check),
 # 2026-10-05 - the one part of their loop economics worth keeping.
-# ---------------------------------------------------------------------------
 _SCREENSHOT_DEDUP_MAX_STREAK = 2
 _SHOT_DEDUP = {}
 
@@ -968,14 +961,12 @@ function run(argv) {
 
 # ===========================================================================
 # Windows: the PowerShell engine.
-#
 # Runs in the USER'S INTERACTIVE SESSION. Measured 2026-09-28 on a fleet Windows box: an
 # ssh session is session 0, where UIA's root has ZERO children and CopyFromScreen
 # has no desktop - so a helper started from a service or ssh context can see
 # nothing at all. Called by the bot (a logon shortcut or an interactive scheduled
 # task in the user's session) it is already in the right place, which is why this
 # backend does not try to relocate itself; it checks where it is instead.
-#
 # DPI: the helper calls SetProcessDPIAware() before anything else. Measured on
 # that box at 150% scaling (dpi 144): without it a process sees a virtualised
 # 1280x720 desktop while the real one is 1920x1080, so a coordinate read off a
@@ -1542,7 +1533,6 @@ def _win_info():
 def _win_session_gate(info):
     """A helper that cannot see a desktop must say so, not return an empty tree.
 
-    Measured 2026-09-28: in session 0 the UIA root has 0 children and a
     screenshot is of a blank service desktop. A tool that reported "no elements"
     there would send the model hunting for an app that is plainly on screen.
     """
@@ -1745,7 +1735,6 @@ def _win_click(args, ctx, count=1, button=None):
 def _win_ensure_foreground(args):
     """Keystrokes go to the FOREGROUND window, so know which that is first.
 
-    Measured 2026-09-28 on a fleet Windows box: SetForegroundWindow from a background
     process fails outright, and with the console locked it cannot succeed at all
     (the foreground is LockApp). So this is a check, never a promise.
     """
@@ -2980,14 +2969,12 @@ def run(args, ctx):
 
 # ===========================================================================
 # Self-test: `python tools/computer_use.py`
-#
 # Nothing here runs at import - the tool loader execs this module under its own
 # name, so __name__ is not "__main__" - and nothing here touches the screen, a
 # permission, an app or the clipboard. It grades the parts that decide whether a
 # LIVE call does the right thing: the argument and key canonicalisation, both
 # blocklists, the wire format between the AppleScript walker and the parser
 # below, element numbering, the coordinate helpers, and the platform gate.
-#
 # WHY IT LIVES IN THIS FILE AND NOT IN tests/: this tool is per-host (macOS
 # only; tools/* is gitignored except the three starters). A per-host file in
 # tests/test_*.py moves the SHIPPED doc's generated suite count -
@@ -3231,7 +3218,6 @@ def _selftest():
 
 # ===========================================================================
 # Linux: the X11 engine (xdotool + xwininfo + ffmpeg).
-#
 # NO WIDGET TREE. X11 has no accessibility tree of its own, and AT-SPI (the
 # layer that would provide one) needs a session bus and the app's cooperation.
 # So on Linux `capture` reports WINDOWS - each one an element that can be clicked
@@ -3239,10 +3225,8 @@ def _selftest():
 # tooling is present; when it is not, this is a pointer-and-keyboard tool, which
 # is what the available tooling can honestly support. Claiming a widget list here
 # would be inventing one.
-#
 # Wayland does not have this at all: xdotool and X grabs do not work there, so the
 # engine refuses by name instead of half-working.
-#
 # Coordinates are screen pixels with the origin at the root window's top-left.
 # One X screen is one coordinate space, so - like Windows and unlike macOS -
 # screenshot pixels and click coordinates are the SAME numbers.

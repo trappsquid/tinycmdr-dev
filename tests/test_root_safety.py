@@ -1,6 +1,5 @@
 """Running tinycmdr under sudo must not wreck a user-owned install.
 
-Measured 2026-09-27 on the Mac, two ways in one evening:
 
   * `sudo tinycmdr config set search.allow_cloud_egress true` - `_write_config` REPLACES
     config.json, and a replacement takes the AUTHOR of the write, so the file came back

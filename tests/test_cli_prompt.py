@@ -198,7 +198,6 @@ def test_4_stop_releases_a_parked_question():
 def test_a_launch_opens_a_fresh_conversation():
     """Typing `tinycmdr` means START: the console must not resume yesterday's transcript.
 
-    Measured 2026-10-03: a brand-new window (and every `--once` run on a box) shared one
     `cli` conversation, so a new question was answered about the previous run's ledger and
     the order census counted a test question across all of them. Older conversations stay
     on disk, are listed by `/tinycmdr sessions`, and are resumed explicitly.
