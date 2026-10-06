@@ -33,13 +33,13 @@ not authority.
   `maintenance/measured-block.py`. Never hand-edit inside a `measured:` block.
 - **A change to `tinycmdr.py` reaches the running bot only on restart**
   (`bash maintenance/restart-tinycmdr-macos.sh`, or the platform's script in `maintenance/`).
-- **`tinycmdr.py` stays one file.** It is what the operator can read end to end, what the update
+- **`tinycmdr.py` stays one file.** It is what you can read end to end, what the update
   verifies (`SHA256SUMS`, then a plain copy - nothing builds on the host) and what the agent reads
   and edits when it works on itself. Parts would have to be assembled at package-build time, never
   install time - that re-architecture needs its own item, not a cleanup.
 - **Commit messages, `STATUS.json` details and comments state what changed and why, in plain
-  facts.** The repo is public and reads as one maintainer's record: no quoted conversations, no
-  first-person plural, no process narration.
+  facts** - no quoted conversations, no process narration, no first-person plural. "Operator"
+  means whoever runs a box, never the maintainer; the maintainer's own decisions say "I".
 - **One way to do each thing.** If you reach for a new script, note or doc, check first whether
   `where.py`, `STATUS.json`, `run_all.py`, `measured-block.py` or `release.sh` already owns it.
 
