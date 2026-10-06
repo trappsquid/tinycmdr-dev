@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.83] - 2026-10-06
+
 > **Hosts that update by `git pull`: read this first.** `theme.toml` and `soul.md` stop being
 > tracked in this release - they are the host's own theme and persona, and an update must never
 > clobber an edited copy. On a host that installs by `git pull`, copy both files aside BEFORE the
@@ -14,50 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > commit no longer carries, so an edited theme or persona would be lost. This step is deliberate
 > and is not scripted around.
 
-### Changed
-- **`theme.toml` and `soul.md` are host state and are no longer tracked:** `.gitignore` carries
-  both; `maintenance/check-hygiene.py` fails when `git ls-files` reports a host-state file, and
-  `maintenance/pre-push.sh` runs it; the package ships `theme.default.toml` and `soul.example.md`
-  instead. A checkout or install that lacks the live files gets them materialized from those
-  defaults at first start (1.0.81), so untracking costs a fresh clone nothing.
-  (tests/test_repo_hygiene.py)
-
 ### Added
 - **Endpoint learning:** whether a remote endpoint takes historical `reasoning_content` is decided by the wire, not by a model name - it is replayed once the endpoint has emitted reasoning, a 400 that says the field must be passed back turns it on, and a 400 that calls it unsupported turns it off; the verdict persists per endpoint in `logs/state.json`. (tests/test_endpoint_learn.py, tests/test_reasoning_replay.py)
 - **`prompt_cache_key`:** remote calls carry a session-stable sticky-routing hint (`llm.prompt_cache_key: auto|off|<literal>`); a host that rejects it with a named 400 is remembered and never asked again. (tests/test_endpoint_learn.py)
 - **Reasoning field aliases:** `reasoning_details[]` (OpenRouter's thought-signature shape) is read like the other aliases, and cache hits are counted from `prompt_cache_hit_tokens` or `prompt_tokens_details.cached_tokens`. (tests/test_endpoint_learn.py)
-
-### Added
 - **The page's version stamp links to release notes:** the header's `vX.Y.Z` opens that build's GitHub release (target `_blank`), derived from `update_url` so a fork or mirror links its own; the lane-down tooltip still wins while a lane is down. Also: `send_file`'s description names the page as a delivery transport, so a page run offers a download card instead of naming a path. (tests/test_webui.py, tests/test_send_file.py)
 - **A tools+reasoning 400 recovers:** when an endpoint answers that tools and a reasoning effort cannot ride together, the effort is dropped for that endpoint and remembered (`_reasoning_400_verdict` -> "none"), and `llm.reasoning_flags` merges a host's documented paired preservation flags where the echo is wanted. (tests/test_endpoint_learn.py)
-
-### Fixed
-- **The composer's resize grip:** the browser's native grip rode the text column's right edge - mid-window, not a corner - and fought the page's content-driven growth; it is off (`resize: none`).
+- **The Responses API is a real wire** (`/responses`): a chat history becomes `input` items with explicit part types, the system message becomes `instructions`, tool schemas flatten, reasoning summaries land in `reasoning_content`, `usage.input_tokens/output_tokens` map onto the existing accounting, and a stream adapter feeds the existing SSE reader. It is used when `base_url` says `/responses`, or when an OpenAI-style 400 naming BOTH `tools` and `reasoning_effort` proves the chat wire cannot carry them - that one escalates once to the `/responses` sibling and the fact is remembered per endpoint. (tests/test_responses_wire.py)
 
 ### Changed
+- **`theme.toml` and `soul.md` are host state and are no longer tracked:** `.gitignore` carries
 - **The installer's door question names the page first** (`INSTALL-WINDOWS.cmd`): the menu is the web page (the default door), Mattermost, Telegram; terminal sessions are described as always available (`tinycmdr --cli` / `--once`) instead of being offered as something to install, and the page's bind/port/token questions are skipped when the menu did not pick it. (tests/test_installer_windows.py)
 
 ### Fixed
+- **The composer's resize grip:** the browser's native grip rode the text column's right edge - mid-window, not a corner - and fought the page's content-driven growth; it is off (`resize: none`).
 - **The never tier was spelling-anchored** (an earlier review run 10, A-75/A-76): `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="..."` executed with no gate because a switch between verb and target missed an order-anchored regex and the quote erasure removed the quoted operand. The built-in never tier is decided on the tokens of each command segment now (quotes consumed, `;`/`&&`/`|`/newlines split, redirects and comments read), so word order and two quote characters cannot dodge it; the mkfs read-only exemption is per-command, not per-line. (tests/test_guard_battery.py)
 - **The confirm tier read only `remove-item`** (A-77): `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question; the command word is read off tokens, so every alias and flag order lands on the same rule. (tests/test_guard_battery.py)
 - **The gate helpers coerced differently** (A-79): `is_blocked(None)` answered while `est_tokens(None)`, `cap_output(name, None)`, `_one_json_object(None)`, `_host_is_local(None)` and `_confirm_hit(None)` raised; each answers a safe default for a non-string now. (tests/test_guard_battery.py)
-
-### Fixed
 - **A file log that cannot write now says so** (A-78): a rollover renames the log, and on Windows an open handle (the running bot) makes that rename fail - the exception died in the listener thread, so a record could vanish from the file while the console kept showing it. A blocked rollover falls back to a plain append and one stderr line names the file and the error. (tests/test_file_log.py)
-
-### Fixed
 - **The auto-approval line names what it is running** (reported 2026-10-06): a later session showed only "approved permanently - running" beside no command, which reads like an ask that approved itself. The line now carries the scrubbed command, the scope, the date the grant was given (stamped at grant time; an older file says "no date recorded") and the undo path (`tinycmdr approvals clear`). (tests/test_guard_battery.py)
-
-### Added
-- **The Responses API is a real wire** (`/responses`): a chat history becomes `input` items with explicit part types, the system message becomes `instructions`, tool schemas flatten, reasoning summaries land in `reasoning_content`, `usage.input_tokens/output_tokens` map onto the existing accounting, and a stream adapter feeds the existing SSE reader. It is used when `base_url` says `/responses`, or when an OpenAI-style 400 naming BOTH `tools` and `reasoning_effort` proves the chat wire cannot carry them - that one escalates once to the `/responses` sibling and the fact is remembered per endpoint. (tests/test_responses_wire.py)
-
-### Fixed
 - **`web.port: 0` is an instruction, not a missing value** (lane/web leftover 2): eight runtime readers collapsed 0 to 8790 and built links to a port the box is not serving. One `web_port_effective()` now answers with the configured port, else the port the page actually BOUND (read back from the persisted lane record), else 8790 as a documented guess; the a2a card, the tunnel hint, doctor, the firewall notes, the setup summary and the token link all use it. (tests/test_webui.py)
-
-### Fixed
 - **a2a: a client's taskId is its retry handle** (lane/web leftover 1): SendMessage stored the task only after the run, so a peer whose read timed out lost the handle and its retry re-executed every tool call. The id is now checked before the run (a known task answers as-is, WORKING or finished), a well-formed `TASK_STATE_WORKING` placeholder is stored under the same lock before the run so GetTask answers while it works, and only a placeholder is ever overwritten by the result. (tests/test_a2a.py)
-
-### Fixed
 - **A suite's import no longer writes host state into the checkout:** with `theme.toml`/`soul.md` untracked, a clone lacks both and the import-time materialization created them in the tree (`test_checkin`'s import, named by the runner's leak report). The gate's children now run with `TINYCMDR_NO_MATERIALIZE=1` (the runner sets it for the same reason it sets `TINYCMDR_NO_BROWSER`), the materialization suite clears the guard because that behaviour is what it grades, and one new check pins the guard's contract. (tests/test_host_file_materialize.py, tests/run_all.py)
 
 ## [1.0.82] - 2026-10-06
