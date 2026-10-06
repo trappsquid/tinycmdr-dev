@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **`web.port: 0` is an instruction, not a missing value** (lane/web leftover 2): eight runtime readers collapsed 0 to 8790 and built links to a port the box is not serving. One `web_port_effective()` now answers with the configured port, else the port the page actually BOUND (read back from the persisted lane record), else 8790 as a documented guess; the a2a card, the tunnel hint, doctor, the firewall notes, the setup summary and the token link all use it. (tests/test_webui.py)
 
+### Fixed
+- **a2a: a client's taskId is its retry handle** (lane/web leftover 1): SendMessage stored the task only after the run, so a peer whose read timed out lost the handle and its retry re-executed every tool call. The id is now checked before the run (a known task answers as-is, WORKING or finished), a well-formed `TASK_STATE_WORKING` placeholder is stored under the same lock before the run so GetTask answers while it works, and only a placeholder is ever overwritten by the result. (tests/test_a2a.py)
+
 ## [1.0.82] - 2026-10-06
 
 ### Changed

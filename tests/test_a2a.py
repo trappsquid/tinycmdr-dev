@@ -2,9 +2,11 @@
 
 The model half sits behind a hook, so everything the mesh depends on is graded
 without an endpoint: the card a peer discovers, SendMessage -> a Task whose state and
-parts follow the spec, the error codes a client will meet (TaskNotFound, NotCancelable,
-UnsupportedOperation, ContentTypeNotSupported, VersionNotSupported), and the client
-tool against a live stub server. The last check group stages a SECOND copy with
+parts follow the spec, the client's taskId as an idempotency key (a WORKING placeholder
+is stored before the run, so a retry is answered and not re-run), the error codes a
+client will meet (TaskNotFound, NotCancelable, UnsupportedOperation,
+ContentTypeNotSupported, VersionNotSupported), and the client tool against a live stub
+server. The last check group stages a SECOND copy with
 `a2a_remotes` set, because the whole rent argument is that a box with no peers
 registers no tool at all.
 
@@ -73,6 +75,82 @@ def test_the_card_is_what_a_peer_discovers():
     check("the bearer scheme is named for the page token",
           "bearer" in (card.get("securitySchemes") or {}), card.get("securitySchemes"))
     check("the card advertises at least one skill", bool(card.get("skills")), card)
+
+
+def test_a_client_task_id_is_its_retry_handle():
+    """A peer whose read timed out resends the same taskId. The id must be stored
+    before the run (so GetTask answers WORKING while the run is up), a retry must
+    return that same stored task, and a run must never happen twice for one id."""
+    calls, seen = [], {}
+
+    def retry_message():
+        return {"messageId": "retry-1", "role": "ROLE_USER",
+                "parts": [{"text": "how full is the disk?"}], "taskId": "client-task-1"}
+
+    def hook(text, ctx):
+        calls.append(text)
+        if len(calls) > 1:
+            # A build without the placeholder re-enters here for the retry; the
+            # check below then sees a second run instead of a stored task.
+            return "one answer", False
+        with OFF._A2A_LOCK:
+            seen["stored"] = OFF._A2A_TASKS.get("client-task-1")
+        seen["gettask"] = OFF.a2a_handle("GetTask", {"id": "client-task-1"})
+        seen["retry"] = OFF.a2a_handle("SendMessage", {"message": retry_message()})
+        return "one answer", False
+
+    saved = OFF._A2A_RUN_HOOK
+    OFF._A2A_RUN_HOOK = hook
+    try:
+        task, err = OFF.a2a_handle("SendMessage", {"message": {
+            "messageId": "first-1", "role": "ROLE_USER",
+            "parts": [{"text": "how full is the disk?"}],
+            "contextId": "ctx-retry", "taskId": "client-task-1"}})
+        check("SendMessage with a client taskId answers under that id",
+              err is None and task["id"] == "client-task-1", err or task)
+        stored = seen.get("stored")
+        check("during the run the id is already stored as a WORKING task",
+              bool(stored) and stored["id"] == "client-task-1"
+              and stored["status"]["state"] == "TASK_STATE_WORKING", stored)
+        check("the placeholder is a well-formed task (timestamp + history)",
+              bool(stored) and bool(stored["status"].get("timestamp"))
+              and stored["history"][0]["messageId"] == "first-1"
+              and stored.get("contextId") == "ctx-retry", stored)
+        got, gerr = seen.get("gettask") or (None, None)
+        check("GetTask during the run answers WORKING, not TaskNotFoundError",
+              gerr is None and got["status"]["state"] == "TASK_STATE_WORKING",
+              gerr or got)
+        again, aerr = seen.get("retry") or (None, None)
+        check("a second SendMessage for the in-flight id answers the stored task",
+              aerr is None and again["id"] == "client-task-1"
+              and again["status"]["state"] == "TASK_STATE_WORKING", aerr or again)
+        check("...and the model half ran exactly once",
+              calls == ["how full is the disk?"], calls)
+        check("the finished task replaces the placeholder",
+              task["status"]["state"] == "TASK_STATE_COMPLETED", task["status"])
+        repeat, rerr = OFF.a2a_handle("SendMessage", {"message": retry_message()})
+        check("a repeat SendMessage after completion returns the finished task",
+              rerr is None and repeat["status"]["state"] == "TASK_STATE_COMPLETED",
+              rerr or repeat)
+        check("...still without running the model half again",
+              calls == ["how full is the disk?"], calls)
+        # A threaded door can have two runs land under one id; the second finished
+        # store must keep the first result rather than clobber it.
+        with OFF._A2A_LOCK:
+            settled = OFF._A2A_TASKS["client-task-1"]
+        OFF._a2a_store({"id": "client-task-1", "history": [],
+                        "status": {"state": "TASK_STATE_FAILED"}})
+        with OFF._A2A_LOCK:
+            after = OFF._A2A_TASKS["client-task-1"]
+        check("a second finished store for the id keeps the first result",
+              after is settled and after["status"]["state"] == "TASK_STATE_COMPLETED",
+              after["status"])
+    finally:
+        OFF._A2A_RUN_HOOK = saved
+        with OFF._A2A_LOCK:
+            OFF._A2A_TASKS.pop("client-task-1", None)
+            if "client-task-1" in OFF._A2A_TASKS_ORDER:
+                OFF._A2A_TASKS_ORDER.remove("client-task-1")
 
 
 def test_send_message_returns_a_task():

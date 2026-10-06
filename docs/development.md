@@ -272,7 +272,11 @@ the envelope and caps, and the page suite's shim the renderer.
   (`_auth_ok` accepts it): `SendMessage` runs one message through this box and returns a
   `Task` (`TASK_STATE_COMPLETED`, or `TASK_STATE_FAILED` when the endpoint never
   answered), `GetTask`/`ListTasks` read the in-memory task ring (`A2A_MAX_TASKS`), and
-  `CancelTask`/streaming/push answer the spec's own errors (-32002/-32004).
+  `CancelTask`/streaming/push answer the spec's own errors (-32002/-32004). A
+  client-supplied `taskId` is the idempotency key: the id is stored as a
+  `TASK_STATE_WORKING` placeholder before the run starts (so `GetTask` answers while the
+  message is in flight), and any later `SendMessage` with that id returns the stored task
+  without running the message again - the retry a timed-out peer sends is safe.
 - The client is a hidden `a2a` tool (list/card/send) that is registered **only** when
   `agent.a2a_remotes` is non-empty - the A2A check lives in `tests/test_a2a.py`.
 

@@ -10251,7 +10251,9 @@ def tool_render_ui(args, ctx):
 #  * the SERVER: `web.a2a` true publishes an AgentCard at /.well-known/agent-card.json
 #    and answers JSON-RPC on POST /a2a. SendMessage runs one message through this box
 #    (blocking, which is the spec's default) and returns a Task; GetTask reads the
-#    stored task back. Streaming and push are declared unsupported, which is true.
+#    stored task back. A client taskId is stored WORKING before the run, so a peer
+#    whose read timed out and retried is answered from the store, never re-executed.
+#    Streaming and push are declared unsupported, which is true.
 #  * the CLIENT: a hidden `a2a` tool that exists ONLY when agent.a2a_remotes is
 #    configured, so a box with no mesh members pays no prompt bytes at all.
 # Auth is the page's own bearer token and the card says so.
@@ -10265,6 +10267,29 @@ _A2A_RUN_HOOK = None          # tests replace the model half
 
 def _a2a_id(prefix):
     return "%s-%s" % (prefix, os.urandom(6).hex())
+
+
+def _a2a_timestamp():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _a2a_state_of(task):
+    return ((task or {}).get("status") or {}).get("state")
+
+
+def _a2a_working_placeholder(task_id, message, context_id):
+    """The task a peer can poll from the moment its message is accepted.
+
+    Stored before the run: a client whose socket timed out resends the same taskId,
+    and without a handle on the in-flight work that retry runs every tool call a
+    second time. GetTask must answer with something while the run is up, too.
+    """
+    task = {"id": task_id,
+            "status": {"state": "TASK_STATE_WORKING", "timestamp": _a2a_timestamp()},
+            "history": [dict(message)]}
+    if context_id:
+        task["contextId"] = context_id
+    return task
 
 
 def a2a_base_url():
@@ -10366,7 +10391,7 @@ def _a2a_task_of(task_id, history_messages, answer, failed, context_id):
         reply["contextId"] = context_id
     task = {"id": task_id,
             "status": {"state": state, "message": reply,
-                       "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+                       "timestamp": _a2a_timestamp()},
             "artifacts": [{"artifactId": _a2a_id("art"), "name": "answer",
                            "parts": [{"text": answer or ""}]}],
             "history": list(history_messages) + [reply]}
@@ -10376,8 +10401,17 @@ def _a2a_task_of(task_id, history_messages, answer, failed, context_id):
 
 
 def _a2a_store(task):
+    """One task per id: a finished task is never replaced, a WORKING one is.
+
+    The WORKING overwrite is the placeholder hand-off after the run; keeping the
+    first finished task is what makes a repeat message with that id return the
+    original result instead of running the tools again.
+    """
     with _A2A_LOCK:
-        if task["id"] not in _A2A_TASKS:
+        old = _A2A_TASKS.get(task["id"])
+        if old is not None and _a2a_state_of(old) != "TASK_STATE_WORKING":
+            return old
+        if old is None:
             _A2A_TASKS_ORDER.append(task["id"])
         _A2A_TASKS[task["id"]] = task
         while len(_A2A_TASKS_ORDER) > A2A_MAX_TASKS:
@@ -10401,6 +10435,14 @@ def a2a_handle(method, params, version=None):
                           "message": "Invalid params: the text part is empty"}
         context_id = str(message.get("contextId") or _a2a_id("ctx"))
         task_id = str(message.get("taskId") or _a2a_id("task"))
+        # The taskId is the client's handle on its own retry: a peer whose read
+        # timed out resends the same id. Answer from the store when the id is
+        # known, WORKING or finished, so no message is ever run twice.
+        with _A2A_LOCK:
+            known = _A2A_TASKS.get(task_id)
+        if known is not None:
+            return known, None
+        _a2a_store(_a2a_working_placeholder(task_id, message, context_id))
         answer, failed = a2a_run(text, context_id)
         return _a2a_store(_a2a_task_of(task_id, [message], answer, failed, context_id)), None
     if method == "GetTask":
