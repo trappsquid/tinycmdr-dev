@@ -326,6 +326,10 @@ DEFAULT_CONFIG = {
         # answering strangers. The token lives in .env as TINYCMDR_TG_TOKEN.
         "token": "",
         "allowed_users": [],
+        # A flood-control 429 carries its own `retry_after`; wait it out, capped
+        # here at N secs (the same shape as llm.retry_after_max). 0 disables the
+        # wait, so a rate-limited answer is dropped as before.
+        "retry_after_max": 60,
     },
     "mattermost": {
         "url": "",                 # CHANGE ME: your Mattermost host (installer sets it)
@@ -3243,7 +3247,7 @@ def _secret_values():
     tool output entering context, an answer posted to chat, notes carried in the
     system prompt, a log line — can be masked first."""
     vals = set()
-    for section in ("mattermost", "search", "web"):
+    for section in ("mattermost", "search", "web", "telegram"):
         for k, v in (CONFIG.get(section) or {}).items():
             # A field NAMED token/key/secret is a secret whatever its length. The 12-char
             # floor here hid the one that leaked (measured 2026-09-25 driving a live install: asked
@@ -29746,36 +29750,61 @@ def tg_html(text):
     were dead text and a table arrived as pipes - while Mattermost rendered the same
     answer (2026-10-04). Telegram's HTML subset has no table element,
     so a pipe table is wrapped in <pre>: columns keep their alignment and nothing is
-    dropped. Code spans are protected FIRST so the emphasis rules cannot reach inside
-    them, and the text is escaped before any tag is added.
+    dropped. Fenced blocks are lifted out FIRST - before the inline-code rule - and
+    their bodies never reach the emphasis, link or autolink rules, so a sample of
+    `**bold**` or a URL written inside a fence stays the code it was written as
+    (A-2026-10-05-187/190). Code spans and the text are escaped before any tag is
+    added.
 
     Tags emitted: <b> <i> <code> <pre> <a> - nothing else, and no attribute is taken
     from the model's text except the sanitized href.
     """
     text = tg_escape(str(text))
-    code = []
+    code = []                       # inline code spans, restored as <code>
+    pre = []                        # fenced blocks, restored as <pre>
+
+    # 1. fenced blocks. ``` and ~~~ both open a block, the same marker closes it, and
+    #    an unclosed fence runs to the end (the shape the renderer always had). Each
+    #    block becomes one placeholder line, so the table pass below still sees whole
+    #    lines. This has to happen BEFORE the inline-code rule: `[^`]+` used to pair
+    #    the opening fence's third backtick with the closing fence's first and hand
+    #    the whole block back as a broken <code> span.
+    lines, kept, i = text.split("\n"), [], 0
+    while i < len(lines):
+        head = lines[i].lstrip()
+        if head.startswith("```") or head.startswith("~~~"):
+            marker = head[:3]
+            i += 1
+            body = []
+            while i < len(lines) and not lines[i].lstrip().startswith(marker):
+                body.append(lines[i])
+                i += 1
+            if i < len(lines):
+                i += 1                              # consume the closing fence
+            pre.append("\n".join(body))
+            kept.append("\x01%d\x01" % (len(pre) - 1))
+            continue
+        kept.append(lines[i])
+        i += 1
+    text = "\n".join(kept)
 
     def _keep(m):
         code.append(m.group(1))
         return "\x00%d\x00" % (len(code) - 1)
 
-    text = re.sub(r"`([^`]+)`", _keep, text)
+    # 2. inline code, then the emphasis and link rules; the placeholders above are
+    #    opaque to every one of them. A code span does not span a line, so the rule
+    #    cannot pair two unrelated backticks across a newline.
+    text = re.sub(r"`([^`\n]+)`", _keep, text)
     text = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<![*\w])\*([^*\n]+)\*(?![*\w])", r"<i>\1</i>", text)
     text = re.sub(r"\[([^\]\n]+)\]\((https?://[^)\s]+)\)", r'<a href="\2">\1</a>', text)
     text = re.sub(r"(?<![\"'=])(https?://[^\s<>\")]+)",
                   lambda m: '<a href="%s">%s</a>' % (m.group(1), m.group(1)), text)
+
+    # 3. a pipe table -> <pre> (Telegram's HTML has no table element)
     lines, out, i = text.split("\n"), [], 0
     while i < len(lines):
-        if lines[i].lstrip().startswith("```"):          # fenced block -> <pre>
-            i += 1
-            body = []
-            while i < len(lines) and not lines[i].lstrip().startswith("```"):
-                body.append(lines[i])
-                i += 1
-            i += 1
-            out.append("<pre>%s</pre>" % "\n".join(body))
-            continue
         if (i + 1 < len(lines) and lines[i].strip().startswith("|")
                 and re.match(r"^[\s:|-]*-[\s:|-]*$", lines[i + 1].strip())):
             body = [lines[i], lines[i + 1]]                # header + separator, kept
@@ -29788,63 +29817,213 @@ def tg_html(text):
         out.append(lines[i])
         i += 1
     text = "\n".join(out)
-    return re.sub(r"\x00(\d+)\x00",
+
+    # 4. put the protected spans back, whole.
+    text = re.sub(r"\x00(\d+)\x00",
                   lambda m: "<code>%s</code>" % code[int(m.group(1))], text)
+    return re.sub(r"\x01(\d+)\x01",
+                  lambda m: "<pre>%s</pre>" % pre[int(m.group(1))], text)
 
 
 
 
 
-def tg_split(text, limit=TG_MAX):
+# The tags tg_html itself emits (and only those): a split has to know which ones a
+# cut left open so it can close them here and re-open them there.
+_TG_TAG_RX = re.compile(r"</?([a-zA-Z][a-zA-Z0-9]*)[^>]*>")
 
-    """Split for Telegram without losing a character.
+# The markdown spans a raw cut must never divide: an inline code span, a link, a bold
+# or italic run, a bare URL. Kept in step with tg_html's own rules, so a construct
+# that renders as one tag is also an atom the splitter refuses to break.
+_TG_SPAN_RX = re.compile(
+    r"`[^`\n]+`"                          # inline code
+    r"|\[[^\]\n]+\]\([^)\s]+\)"           # a markdown link
+    r"|\*\*[^*\n]+\*\*"                   # bold
+    r"|(?<![*\w])\*[^*\n]+\*(?![*\w])"    # italic
+    r"|https?://[^\s<>\")]+")             # a bare URL
 
 
+def _tg_open_tags(html):
+    """The tags `html` leaves open, outermost first."""
+    stack = []
+    for m in _TG_TAG_RX.finditer(html):
+        name = m.group(1).lower()
+        if m.group(0).startswith("</"):
+            if stack and stack[-1] == name:
+                stack.pop()
+        elif not m.group(0).endswith("/>"):
+            stack.append(name)
+    return stack
 
-    Paragraphs first, then lines, then words, then a hard cut: a long answer becomes
 
-    several messages rather than a truncated one.
+def _tg_safe_cut(s, limit):
+    """The largest index <= limit whose position is outside any tag or entity.
 
+    Index k is safe when `s[:k]` does not end in the middle of a <...> tag or an
+    &...; entity: that is the payload Telegram answers with a 400 (A-150)."""
+    window = s[:limit]
+    safe = []
+    i, n = 0, len(window)
+    while i < n:
+        c = window[i]
+        if c == "<":
+            j = window.find(">", i)
+            if j == -1:
+                break                      # an unclosed tag: nothing after it is safe
+            i = j + 1
+            continue
+        if c == "&":
+            j = window.find(";", i)
+            if j == -1:
+                # Rendered text carries no bare '&' (tg_escape makes '&amp;'), so a
+                # '&' with entity characters and no ';' before the window ends is a
+                # truncated entity: nothing after it is a safe cut.
+                if re.match(r"[#0-9a-zA-Z]{0,10}$", window[i + 1:]):
+                    break
+                safe.append(i)
+                i += 1
+                continue
+            if j - i > 12:                 # not an entity shape: ordinary text
+                safe.append(i)
+                i += 1
+                continue
+            i = j + 1
+            continue
+        safe.append(i)
+        i += 1
+    if not safe:
+        return min(limit, len(s))
+    safe_set = set(safe)
+    cut = safe[-1] + 1
+    for sep_len, sep in ((2, "\n\n"), (1, "\n"), (1, " ")):
+        idx = window.rfind(sep)
+        if idx < limit // 3:
+            break
+        end = idx + sep_len
+        while end > limit // 3 and end not in safe_set:
+            end -= 1
+        if end > limit // 3:
+            cut = end
+            break
+    return max(1, min(cut, limit))
+
+
+def tg_html_split(text, limit=TG_MAX):
+    """Split ALREADY-RENDERED HTML without cutting a tag or an entity.
+
+    A cut inside <b> or &amp; is the 400 that loses the rest of the answer
+    (A-2026-10-05-150). Every boundary sits outside every tag and entity, and when a
+    cut lands between an opening and a closing tag the open tags are closed on this
+    message and re-opened on the next, so each message is a balanced document.
     """
-
     text = str(text)
-
     if len(text) <= limit:
-
         return [text]
-
     out, rest = [], text
-
     while len(rest) > limit:
-
-        window = rest[:limit]
-
-        cut = window.rfind("\n\n")
-
-        if cut < limit // 3:
-
-            cut = window.rfind("\n")
-
-        if cut < limit // 3:
-
-            cut = window.rfind(" ")
-
-        if cut < limit // 3:
-
-            cut = limit
-
-        out.append(rest[:cut].rstrip())
-
-        rest = rest[cut:].lstrip("\n")
-
+        cut = _tg_safe_cut(rest, limit)
+        while True:
+            chunk = rest[:cut]
+            open_tags = _tg_open_tags(chunk)
+            closers = "".join("</%s>" % t for t in reversed(open_tags))
+            if len(chunk) + len(closers) <= limit or cut <= 1:
+                break
+            cut = _tg_safe_cut(rest, max(1, limit - len(closers)))
+        carry = "".join("<%s>" % t for t in open_tags)
+        out.append((chunk + closers).rstrip())
+        rest = (carry + rest[cut:]).lstrip("\n")
     if rest:
-
         out.append(rest)
-
     return out
 
 
+def _tg_fits(text, limit):
+    """How many raw chars of `text` render within `limit` rendered chars."""
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(tg_html(text[:mid])) <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
 
+
+def _tg_raw_cut(text, limit):
+    """The raw cut for a rendered limit, on a boundary no construct straddles.
+
+    Fences, code spans and links are atoms: a cut is pulled back to before any one of
+    them it would otherwise divide, and a fence still open at the cut is left whole on
+    the next message (A-2026-10-05-187/190)."""
+    cut = _tg_fits(text, limit)
+    if cut <= 0:
+        return 1                            # one char already renders over: hard cut
+    for m in _TG_SPAN_RX.finditer(text[:cut + 1]):
+        if m.start() < cut < m.end():
+            cut = m.start()
+            break
+    open_at, pos = None, 0
+    for line in text[:cut].split("\n"):
+        s = line.lstrip()
+        if s.startswith("```") or s.startswith("~~~"):
+            open_at = None if open_at is not None else pos
+        pos += len(line) + 1
+    if open_at is not None and open_at > limit // 3:
+        cut = open_at                        # do not cut inside a fence body
+    for sep in ("\n\n", "\n", " "):
+        c = text.rfind(sep, 0, cut)
+        if c >= limit // 3 and len(tg_html(text[:c])) <= limit:
+            cut = c
+            break
+    for m in _TG_SPAN_RX.finditer(text[:cut + 1]):
+        if m.start() < cut < m.end():
+            cut = m.start()
+            break
+    while cut > 1 and len(tg_html(text[:cut])) > limit:
+        cut -= 1
+    return max(1, cut)
+
+
+def tg_render(text, limit=TG_MAX):
+    """Raw markdown -> balanced HTML pieces, each within `limit`.
+
+    Split FIRST, render each piece: the escaping and the tags land per message, so no
+    message can carry half a tag (A-2026-10-05-150), and a cut never lands inside a
+    fence, a code span or a link, so a construct whole in the answer stays whole in one
+    message. This is the order the answer writer uses; text the renderer already
+    produced goes through tg_html_split instead.
+    """
+    text = str(text)
+    if not text:
+        return [""]
+    if len(tg_html(text)) <= limit:
+        return [tg_html(text)]
+    out, rest = [], text
+    while rest:
+        cut = _tg_raw_cut(rest, limit)
+        out.append(tg_html(rest[:cut]).rstrip())
+        rest = rest[cut:].lstrip("\n")
+    return out or [""]
+
+
+def _tg_retry_after(data):
+    """Seconds a Bot API 429 told us to wait, clamped to telegram.retry_after_max.
+
+    0 means "do not wait": no `parameters.retry_after`, or a cap of 0. The same
+    contract as llm.retry_after_max - the endpoint's hint, bounded by config."""
+    if not isinstance(data, dict):
+        return 0.0
+    try:
+        secs = float((data.get("parameters") or {}).get("retry_after") or 0)
+    except (TypeError, ValueError):
+        secs = 0.0
+    if secs <= 0:
+        return 0.0
+    try:
+        cap = float(CONFIG["telegram"].get("retry_after_max", 60) or 0)
+    except (TypeError, ValueError):
+        cap = 60.0
+    return max(0.0, min(secs, cap))
 
 
 class TelegramClient:
@@ -29871,23 +30050,52 @@ class TelegramClient:
 
     def call(self, method, http_timeout=None, **payload):
 
-        r = requests.post(self._base + method, json=payload,
+        """One Bot API call, honouring a 429's own wait.
 
-                          timeout=http_timeout or self.http_timeout)
+        Telegram flood control answers ok:false with `parameters.retry_after`;
+        raising on the first 429 lost the answer instead of waiting out a rate
+        limit that clears by itself (A-2026-10-05-149). ONE retry, bounded by
+        telegram.retry_after_max, is the whole fix: a second 429 is the lane's
+        to report, not to spin on.
+        """
 
-        try:
+        attempts = 0
 
-            data = r.json()
+        while True:
 
-        except Exception:
+            r = requests.post(self._base + method, json=payload,
 
-            raise RuntimeError("%s: HTTP %s and no JSON" % (method, r.status_code))
+                              timeout=http_timeout or self.http_timeout)
 
-        if not data.get("ok"):
+            try:
 
-            raise RuntimeError("%s: %s" % (method, data.get("description") or r.status_code))
+                data = r.json()
 
-        return data.get("result")
+            except Exception:
+
+                raise RuntimeError("%s: HTTP %s and no JSON" % (method, r.status_code))
+
+            if data.get("ok"):
+
+                return data.get("result")
+
+            wait = _tg_retry_after(data)
+
+            if wait and attempts < 1:
+
+                attempts += 1
+
+                log.warning("telegram: %s rate-limited; waiting %ss then retrying once",
+
+                            method, int(wait))
+
+                time.sleep(wait)
+
+                continue
+
+            raise RuntimeError("%s: %s" % (method,
+
+                                           data.get("description") or r.status_code))
 
 
 
@@ -29899,9 +30107,9 @@ class TelegramClient:
 
     def send(self, chat_id, text, buttons=None, reply_to=None):
 
-        """Send, splitting a long body; buttons ride the last piece."""
+        """Send, splitting a long body without breaking a tag; buttons ride the last piece."""
 
-        pieces = tg_split(text)
+        pieces = tg_html_split(text)
 
         sent = []
 
@@ -29929,7 +30137,10 @@ class TelegramClient:
 
         if len(text) > TG_MAX:
 
-            text = text[:TG_MAX - 1] + "..."
+            # A raw character cut left a tag open and Telegram 400'd the edit, so the
+            # live message froze for the rest of the run (A-2026-10-05-151). Cut
+            # outside every tag/entity, close what is still open, then mark it short.
+            text = tg_html_split(text, TG_MAX - 3)[0] + "..."
 
         payload = {"chat_id": chat_id, "message_id": message_id, "text": text,
 
@@ -30002,6 +30213,12 @@ class TelegramDestination(Destination):
     merge_tools = True
 
     shows_calls = True
+
+    # This lane CAN ask: ask() posts the question with one button per option, turns the
+    # typing lamp on, and waits. The base's False meant RunReporter.ask returned None
+    # before ever reaching it, so a human could never be asked here and every
+    # confirm-tier command was declined in silence (A-2026-10-05-139/140).
+    has_human = True
 
 
 
@@ -30157,11 +30374,23 @@ class TelegramDestination(Destination):
 
     def answer(self, text):
 
-        """The answer as its own message, so the chatter never buries it."""
+        """The answer as its own message, so the chatter never buries it.
+
+        Split as RAW markdown, then rendered: the cut never lands inside a fence, a
+
+        code span or a link, and the escaping is applied per message, so no message
+
+        carries a tag the split left open (A-2026-10-05-150)."""
+
+        pieces = tg_render("\u2705 " + str(text))
 
         try:
 
-            self.c.send(self.chat_id, "\u2705 " + tg_html(text), reply_to=self.reply_to)
+            for i, piece in enumerate(pieces):
+
+                self.c.send(self.chat_id, piece,
+
+                            reply_to=self.reply_to if i == 0 else None)
 
         except Exception as exc:
 
@@ -30169,17 +30398,37 @@ class TelegramDestination(Destination):
 
 
 
-    def ask(self, question, options=None, wait=300.0, label=None):
+    def _open_question(self, question, options):
 
-        """Post the question with the options as buttons, and wait for either a press
+        """The row a question parks on. The ask() path and the ask_user door share
 
-        or a typed line. Both land in the same slot: the reporter decides what counts
+        this shape; `ev` is the name ask_operator waits on, so one Event serves both.
 
-        as a yes, exactly as it does in every other lane."""
+        None when a question is already open: a second question used to overwrite the
 
-        row = {"event": threading.Event(), "answer": None}
+        first waiter's slot and leave it parked for its whole window (A-144)."""
+
+        if self._asking:
+
+            return None
+
+        ev = threading.Event()
+
+        row = {"ev": ev, "event": ev, "answer": None, "question": question,
+
+               "options": [str(o) for o in (options or [])]}
 
         self._asking["q"] = row
+
+        return row
+
+
+
+    def _post_question(self, question, options, wait, label=None):
+
+        """Post the question with one button per option, and turn the typing lamp on."""
+
+        del wait, label
 
         body = "\u2753 " + tg_html(question)
 
@@ -30193,19 +30442,93 @@ class TelegramDestination(Destination):
 
                    for i, o in enumerate(options or [])]
 
+        self.c.send(self.chat_id, body, buttons=buttons or None,
+
+                    reply_to=self.reply_to)
+
+        self.c.typing(self.chat_id)
+
+
+
+    # --- ask_user's door: the lane has a human at the other end ---------------
+
+    # Without these the tool answered "nothing in this run can reach a human" on
+
+    # Telegram while the chat, web and console lanes could all ask (A-141).
+
+    def opener(self, question, options, wait, label=None):
+
+        """The row the run parks on. ask_operator owns the waiting; this lane only
+
+        has to release the event when the operator answers."""
+
+        return self._open_question(question, options)
+
+
+
+    def post(self, question, options, wait, label=None):
+
+        """Draw the question; the wait belongs to ask_operator, so a /stop is seen."""
+
+        self._post_question(question, options, wait, label)
+
+
+
+    def post_done(self, text):
+
+        """What happened to the question: answered, stopped or timed out."""
+
+        self.line("checkin", text)
+
+
+
+    def close_question(self, answered=False):
+
+        """The question is over: nothing else typed at this chat is its answer."""
+
+        del answered
+
+        self._asking.pop("q", None)
+
+
+
+    def ask(self, question, options=None, wait=300.0, label=None):
+
+        """Post the question with the options as buttons, and wait for either a press
+
+        or a typed line. Both land in the same slot: the reporter decides what counts
+
+        as a yes, exactly as it does in every other lane.
+
+        The wait is bounded by _ask_wait_cap() (A-146), a question that never reached
+
+        the screen returns at once instead of burning the window (A-145), and a second
+
+        question while one is open is refused rather than allowed to steal the answer
+
+        (A-144)."""
+
+        row = self._open_question(question, options)
+
+        if row is None:
+
+            return None
+
+        wait = min(float(wait), _ask_wait_cap())
+
         try:
 
-            self.c.send(self.chat_id, body, buttons=buttons or None,
-
-                        reply_to=self.reply_to)
-
-            self.c.typing(self.chat_id)
+            self._post_question(question, options, wait, label)
 
         except Exception as exc:
 
             log.warning("telegram: the question could not be posted (%s)", exc)
 
-        answered = row["event"].wait(wait)
+            self._asking.pop("q", None)
+
+            return None
+
+        answered = row["ev"].wait(wait)
 
         self._asking.pop("q", None)
 
@@ -30233,7 +30556,7 @@ class TelegramDestination(Destination):
 
         row["answer"] = text
 
-        row["event"].set()
+        row["ev"].set()
 
         return True
 
@@ -30241,7 +30564,13 @@ class TelegramDestination(Destination):
 
     def button_ask(self, data):
 
-        """A button press: 'opt:<n>'."""
+        """A button press: 'opt:<n>'. Answers with the option's own WORDS, the way
+
+        every other lane's ask does; the confirm gate reads words, not a number, and
+
+        an out-of-range press (a stale keyboard) is refused rather than inventing an
+
+        answer (A-142/147)."""
 
         row = self._asking.get("q")
 
@@ -30251,13 +30580,21 @@ class TelegramDestination(Destination):
 
         try:
 
-            row["answer"] = str(data).split(":", 1)[1]
+            idx = int(str(data).split(":", 1)[1])
 
-        except Exception:
+        except (IndexError, ValueError):
 
             return False
 
-        row["event"].set()
+        opts = row.get("options") or []
+
+        if not 1 <= idx <= len(opts):
+
+            return False
+
+        row["answer"] = opts[idx - 1]
+
+        row["ev"].set()
 
         return True
 
@@ -30483,11 +30820,15 @@ class TelegramPoller:
 
         self.seen.append(seen_key)
 
-        dest = self.live.get(chat_id)
+        # A verb is an order, not an answer. This used to try reply_ask FIRST, so a
 
-        if dest is not None and dest.reply_ask(text):
+        # `/stop` (or `/new`) typed while a question was open was swallowed as the
 
-            return True
+        # answer, the run kept going, and the operator believed it had stopped
+
+        # (A-2026-10-05-143). Verbs are checked before the open question now; anything
+
+        # that is not a verb still falls through to the question.
 
         # `/tinycmdr <cmd>` works here too: a Telegram client hands an unknown command
         # over as ordinary text, so the prefix only has to be understood.
@@ -30495,6 +30836,12 @@ class TelegramPoller:
         if _cmdr != text:
             text = _cmdr
         if text.startswith("/") and self._verb(chat_id, text):
+
+            return True
+
+        dest = self.live.get(chat_id)
+
+        if dest is not None and dest.reply_ask(text):
 
             return True
 
@@ -30662,7 +31009,17 @@ def run_telegram():
 
                 client.typing(chat_id)
 
-                answer = drive_run(key, text, reporter, cancel_event=cancel)
+                answer = drive_run(key, text, reporter, cancel_event=cancel,
+
+                                   # The lane's own destination is the ask_user door:
+
+                                   # it has opener/post/post_done/close_question, so
+
+                                   # ask_user reaches this chat instead of answering
+
+                                   # "nothing in this run can reach a human" (A-141).
+
+                                   ask_door=dest)
 
                 if answer:
 

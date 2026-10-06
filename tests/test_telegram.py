@@ -90,7 +90,10 @@ check("a bold tag in the model's own text cannot inject",
       fb.tg_escape("<b>bold</b>") == "&lt;b&gt;bold&lt;/b&gt;")
 
 long_text = ("paragraph one " * 200) + "\n\n" + ("paragraph two " * 200)
-pieces = fb.tg_split(long_text)
+# tg_render is the live splitter (split raw, then render); a pre-fix build only has
+# the old raw tg_split, so the shared checks below run against whichever is here.
+_split = getattr(fb, "tg_render", None) or fb.tg_split
+pieces = _split(long_text)
 check("a long body becomes several messages",
       len(pieces) > 1, f"{len(pieces)} piece(s)")
 check("...none of them over Telegram's ceiling",
@@ -104,7 +107,7 @@ check("...and nothing was truncated either",
       len(joined) >= int(len(long_text) * 0.95),
       f"{len(joined)} of {len(long_text)} chars kept")
 check("a single oversized word is hard-cut rather than refused",
-      all(len(p) <= fb.TG_MAX for p in fb.tg_split("x" * 9000)))
+      all(len(p) <= fb.TG_MAX for p in _split("x" * 9000)))
 
 client = FakeClient()
 dest = fb.TelegramDestination(client, chat_id=42, session_key="telegram-42", reply_to=7)
@@ -156,7 +159,10 @@ check("...and the options are in the text too, for a client without buttons",
 check("...and the typing indicator is on", client2.typing_calls >= 1)
 check("a button press answers it", d2.button_ask("opt:2") is True)
 t.join(3)
-check("...and the answer lands in the slot the reporter reads", box.get("answer") == "2")
+check("...and the answer lands in the slot the reporter reads, as the option's WORDS",
+      box.get("answer") == "no", repr(box.get("answer")))
+check("...not as the bare number the keyboard carried (A-142)",
+      box.get("answer") != "2", repr(box.get("answer")))
 
 # the question: a typed line answers it too
 box2 = {}
@@ -175,6 +181,288 @@ t2.join(3)
 check("...with the operator's own words", box2.get("answer") == "sdb")
 check("a stray typed line with no question open is not swallowed",
       fb.TelegramDestination(FakeClient(), chat_id=3).reply_ask("hello") is False)
+
+
+# ---- run 12: the ask path, the splitter, the 429, the secret sweep ----------
+# Each was measured against 1.0.84 before the fix; the numbers are in the night
+# audit's Telegram pass. These grade the LOCAL half (the question the lane posts,
+# the pieces the client builds) - no network anywhere.
+
+import re as _re
+
+
+def _open_tags(html):
+    """The tags `html` leaves open - empty means a balanced document."""
+    stack = []
+    for m in _re.finditer(r"</?([a-zA-Z][a-zA-Z0-9]*)[^>]*>", html):
+        name = m.group(1).lower()
+        if m.group(0).startswith("</"):
+            if stack and stack[-1] == name:
+                stack.pop()
+        elif not m.group(0).endswith("/>"):
+            stack.append(name)
+    return stack
+
+
+# A-139: the lane always had an ask() - has_human gated it off, so a run never asked.
+check("A-139: the Telegram destination can reach a human (has_human)",
+      fb.TelegramDestination(FakeClient(), chat_id=90).has_human is True,
+      repr(getattr(fb.TelegramDestination(FakeClient(), chat_id=90), "has_human",
+                   "<missing>")))
+
+# A-140: the confirm question actually posts, and a no-answer is not silence.
+_cf = FakeClient()
+_cfdest = fb.TelegramDestination(_cf, chat_id=91, session_key="t-confirm")
+_crep = fb.RunReporter(_cfdest, "t-confirm")
+_cfok = _crep.confirm("rm -rf /tmp/run12", wait=1)
+check("A-140: a confirm-tier command posts its question on Telegram",
+      any("confirm-pattern" in m["text"] for m in _cf.messages),
+      [m["text"][:50] for m in _cf.messages])
+check("A-140: ...and the command is declined when nobody answers",
+      _cfok is False)
+check("A-140: ...and the operator is told it was skipped, not left guessing",
+      any("skipped" in m["text"] or "no answer" in m["text"]
+          for m in _cf.messages + _cf.edits),
+      [m["text"][:60] for m in _cf.messages + _cf.edits][:3])
+check("A-187: the confirm question's own fence renders as <pre>, not backticks",
+      any("<pre>rm -rf /tmp/run12" in m["text"] for m in _cf.messages),
+      [m["text"][:90] for m in _cf.messages])
+
+# A-141: the destination IS an ask_user door, so the tool can reach this chat.
+_cd = fb.TelegramDestination(FakeClient(), chat_id=92, session_key="t-door")
+_door = fb._ask_door("t-door", {"ask_door": _cd})
+check("A-141: the Telegram destination is a complete ask_user door",
+      _door is not None and callable(_door.get("opener"))
+      and callable(_door.get("post")) and callable(_door.get("post_done"))
+      and callable(_door.get("close_question")), repr(_door))
+_dbox = {}
+_dc = FakeClient()
+_dd = fb.TelegramDestination(_dc, chat_id=93, session_key="t-door2")
+_dth = threading.Thread(
+    target=lambda: _dbox.__setitem__("r", fb.ask_operator(
+        "t-door2", "Ship it?", ctx={"ask_door": _dd}, options=["yes", "no"],
+        timeout=5)), daemon=True)
+_dth.start()
+time.sleep(0.4)
+_dd.button_ask("opt:1")
+_dth.join(3)
+check("A-141: ask_user through the real destination comes back answered",
+      _dbox.get("r", ("", ""))[0] == "answered" and _dbox["r"][1] == "yes",
+      repr(_dbox.get("r")))
+
+# A-144: one question at a time; a second used to steal the first waiter's answer.
+_q = fb.TelegramDestination(FakeClient(), chat_id=94, session_key="t-one")
+_first = _q._open_question("one", ["a", "b"]) if hasattr(_q, "_open_question") else None
+_second = (_q._open_question("two", ["a", "b"])
+           if hasattr(_q, "_open_question") else object())
+check("A-144: a second question while one is open is refused, not queued",
+      hasattr(_q, "_open_question") and _first is not None and _second is None,
+      "first=%s second-refused=%s" % (_first is not None, _second is None))
+if hasattr(_q, "_open_question"):
+    _q.close_question()
+
+
+# A-145: a question that never reached the screen must not burn the whole wait.
+class _BlockedClient(FakeClient):
+    def send(self, *a, **k):
+        raise RuntimeError("bot blocked")
+
+
+_bt0 = time.time()
+_bout = fb.TelegramDestination(_BlockedClient(), chat_id=95,
+                               session_key="t-block").ask("q?", ["yes", "no"],
+                                                          wait=30)
+_bdt = time.time() - _bt0
+check("A-145: a failed post returns at once instead of waiting out the timeout",
+      _bout is None and _bdt < 1.0, "%.3fs" % _bdt)
+
+# A-146: a direct ask() is clamped by _ask_wait_cap, not the caller's number.
+_wsaved = fb.CONFIG["agent"].get("ask_user_wait_seconds")
+_tbox = {}
+
+
+def _cap_ask():
+    _tbox["v"] = fb.TelegramDestination(FakeClient(), chat_id=96,
+                                        session_key="t-cap").ask(
+        "q?", ["yes", "no"], wait=999999)
+
+
+fb.CONFIG["agent"]["ask_user_wait_seconds"] = 1
+_cth = threading.Thread(target=_cap_ask, daemon=True)
+_cth.start()
+_cth.join(8)   # the cap floor is 5s; 8 is enough, 999999 is not
+check("A-146: ask() honours _ask_wait_cap() instead of the caller's wait",
+      not _cth.is_alive() and _tbox.get("v") is None,
+      "still parked" if _cth.is_alive() else repr(_tbox.get("v")))
+if _wsaved is None:
+    fb.CONFIG["agent"].pop("ask_user_wait_seconds", None)
+else:
+    fb.CONFIG["agent"]["ask_user_wait_seconds"] = _wsaved
+
+# A-143: a verb typed while a question is open is an order, not the answer.
+_ac = FakeClient()
+_ad = fb.TelegramDestination(_ac, chat_id=97, session_key="telegram-97")
+_ap = fb.TelegramPoller(_ac, {"123456789"})
+_ap.live[97] = _ad
+_acancel = threading.Event()
+_ap.cancel[97] = _acancel
+_abox = {}
+_ath = threading.Thread(target=lambda: _abox.__setitem__(
+    "v", _ad.ask("Question?", ["yes", "no"], wait=5)), daemon=True)
+_ath.start()
+time.sleep(0.3)
+_ahandled = _ap.handle({"update_id": 1, "message": {
+    "message_id": 1, "text": "/stop", "chat": {"id": 97, "type": "private"},
+    "from": {"id": 123456789, "username": "someone"}}})
+_row = _ad._asking.get("q")
+if _row is not None:
+    _row.get("ev", _row.get("event")).set()
+_ath.join(3)
+check("A-143: /stop with a question open stops the run, it is not the answer",
+      _ahandled and _acancel.is_set(), repr(_abox.get("v")))
+
+# A-150: the answer is split as RAW markdown, then rendered per message.
+LONG = (("**bold** and [link](https://example.com/x) and `code` words " * 25)
+        + "\n\n" + "```\n" + "print('hi')\n" * 40 + "```\n\n"
+        + ("see https://example.com/y now\n" * 25))
+check("A-150: tg_render splits raw markdown, every piece within the ceiling",
+      hasattr(fb, "tg_render") and len(fb.tg_render(LONG)) >= 2
+      and all(len(p) <= fb.TG_MAX for p in fb.tg_render(LONG)),
+      "%d piece(s)" % (len(fb.tg_render(LONG)) if hasattr(fb, "tg_render") else -1))
+check("A-150: ...each piece is a balanced document (no tag left open)",
+      hasattr(fb, "tg_render")
+      and all(not _open_tags(p) for p in fb.tg_render(LONG)),
+      [str(_open_tags(p)) for p in fb.tg_render(LONG)][:3]
+      if hasattr(fb, "tg_render") else "no tg_render")
+check("A-150: ...and the fenced block arrives whole in one message",
+      hasattr(fb, "tg_render")
+      and sum(1 for p in fb.tg_render(LONG) if "<pre>print('hi')" in p) == 1,
+      "no tg_render" if not hasattr(fb, "tg_render") else "")
+check("A-150: tg_html_split closes a tag a cut would leave open",
+      hasattr(fb, "tg_html_split")
+      and all(len(p) <= fb.TG_MAX and not _open_tags(p)
+              for p in fb.tg_html_split("<b>" + "x" * 5000 + "</b>")),
+      "no tg_html_split" if not hasattr(fb, "tg_html_split") else "")
+_ansc = FakeClient()
+_ansd = fb.TelegramDestination(_ansc, chat_id=98, session_key="t-ans")
+_ansd.answer(LONG)
+_ans_texts = [m["text"] for m in _ansc.messages]
+check("A-150: dest.answer() sends several messages, none over the ceiling",
+      len(_ans_texts) >= 2 and all(len(t) <= fb.TG_MAX for t in _ans_texts),
+      "lens=%s" % [len(t) for t in _ans_texts])
+check("A-150: ...and no message carries a tag its neighbours opened",
+      all(not _open_tags(t) for t in _ans_texts),
+      [str(_open_tags(t)) for t in _ans_texts][:3])
+
+
+# A-151: the live message is truncated outside every tag, not mid-tag.
+class _RecClient:
+    def __init__(self):
+        self.payload = {}
+
+    def call(self, method, **payload):
+        self.payload = payload
+        return {"message_id": 1}
+
+
+_rc = _RecClient()
+_rcl = fb.TelegramClient("1:x")
+_rcl.call = _rc.call
+_rcl.edit(1, 2, "<b>" + "x" * 5000)
+_etxt = _rc.payload.get("text", "")
+check("A-151: edit() truncates outside every tag and closes what is open",
+      len(_etxt) <= fb.TG_MAX and not _open_tags(_etxt),
+      "len=%d open=%s" % (len(_etxt), _open_tags(_etxt)))
+
+
+# A-149: a 429's own retry_after is honoured once, bounded by config.
+class _Resp:
+    def __init__(self, payload, code=429):
+        self._p = payload
+        self.status_code = code
+
+    def json(self):
+        return self._p
+
+
+class _FakeRequests:
+    def __init__(self):
+        self.n = 0
+
+    def post(self, url, json=None, timeout=None):
+        self.n += 1
+        if self.n == 1:
+            return _Resp({"ok": False, "error_code": 429,
+                          "description": "Too Many Requests: retry after 30",
+                          "parameters": {"retry_after": 30}})
+        return _Resp({"ok": True, "result": [{"message_id": 1}]}, code=200)
+
+
+_saved_req = fb.requests
+_saved_cap = fb.CONFIG["telegram"].get("retry_after_max")
+try:
+    _fr = _FakeRequests()
+    fb.requests = _fr
+    fb.CONFIG["telegram"]["retry_after_max"] = 0.05
+    _rcl2 = fb.TelegramClient("1:x")
+    try:
+        _got = _rcl2.send(1, "hello")
+    except Exception as _e:                     # pre-fix: raised, answer lost
+        _got = ("raised", _e)
+    check("A-149: a 429 alone does not lose the message (one bounded retry)",
+          _fr.n == 2 and isinstance(_got, list), "%d post(s), %r" % (_fr.n, _got))
+    _fr2 = _FakeRequests()
+    fb.requests = _fr2
+    fb.CONFIG["telegram"]["retry_after_max"] = 0
+    _raised = False
+    try:
+        _rcl2.send(1, "hello")
+    except RuntimeError:
+        _raised = True
+    check("A-149: retry_after_max=0 turns the wait off without spinning",
+          _raised and _fr2.n == 1, "%d post(s)" % _fr2.n)
+finally:
+    fb.requests = _saved_req
+    if _saved_cap is None:
+        fb.CONFIG["telegram"].pop("retry_after_max", None)
+    else:
+        fb.CONFIG["telegram"]["retry_after_max"] = _saved_cap
+
+# A-156: a token in config.json is swept like every other secret section.
+_tsave = dict(fb.CONFIG.get("telegram") or {})
+_ssave = fb._SECRETS
+_tok = "12345:AAVerySecretTokenValueXYZ"
+try:
+    fb.CONFIG.setdefault("telegram", {})["token"] = _tok
+    _vals = fb._secret_values()
+    fb._SECRETS = _vals
+    check("A-156: a telegram token in config.json is in _secret_values",
+          _tok in _vals)
+    check("A-156: ...so scrub masks it before it can reach chat",
+          _tok not in fb.scrub("poll failed: " + _tok),
+          repr(fb.scrub("poll failed: " + _tok)))
+finally:
+    fb.CONFIG["telegram"].clear()
+    fb.CONFIG["telegram"].update(_tsave)
+    fb._SECRETS = _ssave
+
+# A-187/188/190: fences are protected before the inline-code rule.
+check("A-187: a fenced block is one <pre>, not a broken <code> span",
+      fb.tg_html("```\nfoo\n```") == "<pre>foo</pre>",
+      repr(fb.tg_html("```\nfoo\n```")))
+check("A-187: ...with the language line dropped from the body",
+      fb.tg_html("```py\nx = 1\n```") == "<pre>x = 1</pre>",
+      repr(fb.tg_html("```py\nx = 1\n```")))
+check("A-188: a triple-backtick fence reaches <pre> (the branch is live)",
+      "<pre>" in fb.tg_html("```\nfoo\n```"))
+check("A-190: emphasis cannot reach inside a fence",
+      fb.tg_html("```\n**bold** https://e.com\n```")
+      == "<pre>**bold** https://e.com</pre>",
+      repr(fb.tg_html("```\n**bold** https://e.com\n```")))
+check("A-190: ...even when the fence is never closed",
+      "<b>" not in fb.tg_html("```\nnot closed **bold**")
+      and fb.tg_html("```\nnot closed **bold**").startswith("<pre>"),
+      repr(fb.tg_html("```\nnot closed **bold**")))
 
 # the gate
 client3 = FakeClient()
