@@ -115,6 +115,53 @@ _log_queue = queue.Queue(-1)
 # landed inside the cards). The file handler is the record; the screen is the view.
 # Rotating so a long-running bot can't fill the disk (the log grows ~370 KB/day
 # and nothing else prunes it).
+class _LoudRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """A file log that SAYS SO when a record cannot be written - and keeps the record.
+
+    Night audit run 10 (2026-10-06) on a Windows install: a refused secret verb's line
+    reached the console and never the file, three calls in a row, and nothing said why.
+    Two Windows facts explain that shape: a rollover RENAMES the file, and an open handle
+    (the running bot holds this very log) makes the rename fail; the rotate then raises
+    inside the listener thread, which logs nothing about it. So a rollover failure now
+    retries as a plain append - losing the ROTATION is fine, losing the RECORD is what an
+    operator cannot see - and one stderr line names the file and the error either way.
+    """
+
+    _warned = False
+
+    def _warn(self, why, err):
+        if self._warned:
+            return
+        self._warned = True
+        try:
+            sys.stderr.write("WARNING: the file log %s %s (%s: %s); console log lines "
+                             "continue.\n" % (self.baseFilename, why,
+                                              type(err).__name__, err))
+        except Exception:                                     # noqa: BLE001
+            pass
+
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except Exception as e:                                # noqa: BLE001
+            self._warn("could not be written", e)
+            try:
+                if self.stream is None:
+                    self.stream = self._open()
+                self.stream.write(self.format(record) + self.terminator)
+                self.flush()
+            except Exception:                                 # noqa: BLE001
+                pass
+
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except Exception as e:                                # noqa: BLE001
+            self._warn("could not roll over", e)
+            # Plain append: the current file keeps growing past maxBytes until the handle
+            # that blocks the rename goes away. That is the trade this handler makes.
+
+
 _log_console = logging.StreamHandler()
 # Where the file log lands. TINYCMDR_LOG_FILE redirects it, which is what the suites need:
 # every suite that logs otherwise appends into the checkout, and `git status` cannot show it
@@ -125,7 +172,7 @@ _log_path = Path(os.environ.get("TINYCMDR_LOG_FILE") or (BASE_DIR / "tinycmdr.lo
 _log_listener = logging.handlers.QueueListener(
     _log_queue,
     _log_console,
-    logging.handlers.RotatingFileHandler(
+    _LoudRotatingFileHandler(
         _log_path, maxBytes=5 * 1024 * 1024,
         backupCount=3, encoding="utf-8"))
 _log_listener.start()
