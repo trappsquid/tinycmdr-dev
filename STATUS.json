@@ -1869,6 +1869,24 @@
         "expect": "tagged"
       },
       "detail": "2026-10-06. `base_url` pointing at /responses used to send a chat-shaped body; the wire is real now - input items with typed parts, instructions, flat tool schemas, reasoning summaries read into reasoning_content, usage.input_tokens/output_tokens mapped onto the accounting, and a stream adapter feeding the existing SSE reader. An OpenAI-style 400 naming BOTH tools and reasoning_effort escalates once to the /responses sibling and the fact is remembered per endpoint (wire=responses), with the reasoning-field drop kept as the fallback when no sibling exists. tests/test_responses_wire.py: 40 checks, all red pre-fix; a stub-server smoke drove the escalation end to end."
+    },
+    {
+      "id": "patch-bytes-1-0-84",
+      "title": "a patch keeps every byte it did not touch",
+      "state": "shipped",
+      "anchor": {
+        "commit": "cfd56d6"
+      },
+      "detail": "A-2026-10-05-131, an earlier review run 11 (fixed 2026-10-06, cfd56d6). tools/patch.py decoded with errors=\"replace\" and wrote UTF-8, so a Latin-1/CP1252 source lost every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended line (caf\\xe9 became caf\\xef\\xbf\\xbd). Lossless decode (UTF-8 strict, else Latin-1, byte-transparent) + strict re-encode in the SAME encoding; a character that encoding cannot carry is refused by name. tests/test_patch_bytes.py: 4 checks red pre-fix."
+    },
+    {
+      "id": "spill-ids-1-0-84",
+      "title": "spill ids are never reused",
+      "state": "shipped",
+      "anchor": {
+        "commit": "1e9960b"
+      },
+      "detail": "A-2026-10-05-107 and -108, run 11 (fixed 2026-10-06, 1e9960b). With every spill file deleted the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output (measured: two index rows with id==1). The counter advances over every row ever written (file or no file) and the index merge no longer re-persists a row whose file is gone. tests/test_spill_durability.py: 2 checks red pre-fix; simulate_restart now resets the counter, which is what made the bug invisible to the suite before."
     }
   ]
 }
