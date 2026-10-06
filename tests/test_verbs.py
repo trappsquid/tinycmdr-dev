@@ -1367,6 +1367,9 @@ def main():
         check("the one-liner suppresses the installer's press-any-key barrier",
               _nopause != -1 and _call != -1 and _nopause < _call,
               (_nopause, _call))
+        check("the installer refuses an elevated window from a different account",
+              "Win32_ComputerSystem" in _psi
+              and "the desktop session belongs to" in _psi)
         check("...and verifies the supervisor, not only a bot, came back",
               "supervisor(s) $($sup.Count)" in _ps)
         check("...and exits non-zero when its own log records a failed restart",

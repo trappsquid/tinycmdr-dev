@@ -318,6 +318,27 @@ if ($AsService -and -not $elevated -and -not $VerifyOnly -and -not $Uninstall) {
     exit 1
 }
 
+# An elevated window can belong to a DIFFERENT account than the desktop session (UAC asked
+# for another administrator's credentials). An install from there lands entirely in that
+# account's profile - folder, PATH entry, autostart, bot - and the person at the keyboard
+# sees no command and no bot (the shape of a 2026-10-06 report). Nothing about that install
+# can be right, so refuse and name both accounts.
+if ($elevated) {
+    $desktopUser = ""
+    try {
+        $desktopUser = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
+    } catch { }
+    if ($desktopUser -and $env:USERNAME -and
+        (($desktopUser -split '\\')[-1] -ne $env:USERNAME)) {
+        Write-Host "This window runs as '$env:USERNAME', but the desktop session belongs to '$desktopUser'." -ForegroundColor Red
+        Write-Host "An install from here would put the folder, the PATH entry, the autostart and the bot" -ForegroundColor Red
+        Write-Host "in '$env:USERNAME''s profile, and this desktop would see none of them." -ForegroundColor Red
+        Write-Host "Re-run WITHOUT elevation - a normal install needs no administrator rights - or log in" -ForegroundColor Yellow
+        Write-Host "as the account that owns this desktop." -ForegroundColor Yellow
+        exit 2
+    }
+}
+
 # ------------------------------------------------------------------ helpers
 
 # PowerShell 5.1 has no BOM-less UTF8 string encoder for Set-Content, and a BOM
