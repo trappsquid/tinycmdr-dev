@@ -178,6 +178,20 @@ try:
 finally:
     shutil.rmtree(_cli_dir, ignore_errors=True)
 
+# A core tool that is off because its config gate is empty must say so, not blame the
+# build (2026-10-05, a live install: `mcp` with no servers read as "written for a
+# different build" and the run stopped looking; the fix was one config key).
+if "mcp" not in fb.CORE_TOOLS:
+    _name, _args, _out = fb.AGENT._exec_tool(
+        {"function": {"name": "mcp", "arguments": "{}"}}, {"session_key": "doors-gated"})
+    check("a config-gated core tool names its config key, not a wrong build",
+          "agent.mcp_servers" in _out and "different build" not in _out, _out[:240])
+    _name, _args, _out = fb.AGENT._exec_tool(
+        {"function": {"name": "no_such_tool_xyz", "arguments": "{}"}},
+        {"session_key": "doors-gated"})
+    check("...while a genuinely unknown name keeps the build hint",
+          "different build" in _out, _out[:200])
+
 _ported = Path(fb.REGISTRY.tools_dir) / "doors_ported_probe.py"
 _ported.write_text(
     "from tools.registry import registry\n"

@@ -12605,6 +12605,13 @@ CORE_TOOLS = {
             ["action"]),
     },
 }
+# Core tools that exist only while their config gate is on: name -> the config key that
+# registers them. The unknown-tool answer reads this so a gate that is off is not answered
+# as a build that lacks the tool (measured 2026-10-05 on a live install: `mcp` with no
+# servers read as "written for a different build" and the model stopped looking; the real
+# fix was one config key).
+_GATED_CORE_TOOLS = {"a2a": "agent.a2a_remotes", "mcp": "agent.mcp_servers"}
+
 # The A2A client exists only on a box that has remotes configured: a feature that is
 # off registers nothing at all, so the payload is byte-identical to a build that never
 # had it, and its NAME is the only static-prompt byte when it is on.
@@ -17261,6 +17268,20 @@ class Agent:
             args = raw_args
         tool = REGISTRY.get(name)
         if not tool:
+            # A core tool whose config gate is off is IN this build, just not registered:
+            # answer with the key that turns it on instead of the build-mismatch hint.
+            if name in _GATED_CORE_TOOLS:
+                _gate = _GATED_CORE_TOOLS[name]
+                _val = CONFIG
+                for _part in _gate.split("."):
+                    _val = _val.get(_part) if isinstance(_val, dict) else None
+                _state = ("empty" if not _val else
+                          "set, but this process started before it was")
+                return name, args, (
+                    f"ERROR: unknown tool '{name}'. This build has `{name}` but registers "
+                    f"it only when config `{_gate}` has at least one entry; `{_gate}` is "
+                    f"{_state} - add an entry there and restart the bot. No rebuild or "
+                    f"new tool is needed; the tool appears after the restart.")
             # A tool the schema list did not carry (disclosure hides some on purpose)
             # still exists in the registry, so this is a genuine unknown. _match_tools
             # searches HIDDEN tools only, and those are tools this box really has: a hit
