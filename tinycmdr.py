@@ -27505,30 +27505,42 @@ def run_webui():
                                extra=[("Content-Range", "bytes */%d" % size)])
                     return
                 code = 206
-            self.send_response(code)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(end - start + 1))
-            self.send_header("Accept-Ranges", "bytes")
-            if code == 206:
-                self.send_header("Content-Range",
-                                 "bytes %d-%d/%d" % (start, end, size))
-            self.send_header("Content-Disposition",
-                             _web_filename_header(path.name))
-            self.end_headers()
-            if self._head_only:
-                return                  # HEAD: the headers are the whole answer
+            # Open it BEFORE the headers go out: a path that stat()s and then cannot be
+            # read - a directory line in a run log that predates attach() refusing them,
+            # a file that vanishes or loses its mode in the gap - used to be given a
+            # Content-Length with no body, which leaves the operator's fetch hanging and
+            # parks this handler thread on the socket until its 60s timeout. Same shape
+            # A-252/253 fixed in _asset: a failure is ANSWERED, never promised.
             try:
-                with open(path, "rb") as fh:
-                    fh.seek(start)
-                    left = end - start + 1
-                    while left > 0:
-                        chunk = fh.read(min(65536, left))
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-                        left -= len(chunk)
+                fh = open(path, "rb")
+            except OSError as e:
+                self._json({"error": "the file cannot be read", "got": str(e)}, 404)
+                return
+            try:
+                fh.seek(start)
+                self.send_response(code)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(end - start + 1))
+                self.send_header("Accept-Ranges", "bytes")
+                if code == 206:
+                    self.send_header("Content-Range",
+                                     "bytes %d-%d/%d" % (start, end, size))
+                self.send_header("Content-Disposition",
+                                 _web_filename_header(path.name))
+                self.end_headers()
+                if self._head_only:
+                    return              # HEAD: the headers are the whole answer
+                left = end - start + 1
+                while left > 0:
+                    chunk = fh.read(min(65536, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
             except (BrokenPipeError, ConnectionError, OSError):
                 pass
+            finally:
+                fh.close()
 
         def _auth_ok(self):
             # compare_digest, not ==: this token is shell and code execution on

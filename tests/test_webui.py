@@ -611,6 +611,20 @@ def main():
               TOK)[0] == 404,
           "a non-file line is not downloadable")
 
+    # ...and a path that stats but cannot be OPENED is answered, not promised: a
+    # directory line kept in a run log (they were offerable before attach() refused
+    # them) used to get 200 with a Content-Length and no body at all, which hangs the
+    # operator's fetch and parks the handler thread on that socket.
+    run_dir = fb._web_new_run("web")
+    run_dir.add("file", str(STAGE))
+    _st_dir, _bd_dir, _hd_dir = req(
+        "GET", "/api/download?run=%s&uid=%s" % (
+            run_dir.id, urllib.parse.quote(run_dir.lines[-1]["uid"], safe="")),
+        TOK, timeout=3)
+    check(_st_dir == 404,
+          "a file that cannot be opened answers 404, not a Content-Length with no body",
+          (_st_dir, _hd_dir.get("Content-Length"), _bd_dir[:60]))
+
     # ---- attach -------------------------------------------------------------
     dest = fb.WebDestination(run2)
     msg = dest.attach(str(uploaded))
