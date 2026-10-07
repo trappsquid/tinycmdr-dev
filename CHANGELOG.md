@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.86] - 2026-10-07
+
+### Fixed
+- **A tick's save could overwrite a job another process had just added:** `Scheduler._save` wrote its whole in-memory dict back, so a `--once` `schedule add` landing between the tick's reload and its save was gone for good after the operator had been told "OK: scheduled"; `_save(change)` now applies its own delta to the file read under the file lock (tests/test_schedule.py).
+- **A scheduled job's question could not be answered in its channel:** the row was filed only in the scheduler's dict while the Mattermost listener reads the dispatcher's rows keyed by channel, so the operator's reply started a new run and the job's wait expired and it carried on with its own judgment; `_open_in_channel` files the row where answers are read (tests/test_ask_user.py).
+- **One request's body state was the next request's:** the Handler keeps per-request state on `self` while one instance serves every request on a kept-alive connection, so `_body_taken` left set by an earlier GET made the next refusal skip the drain and its body was parsed as the next request line; `handle_one_request` resets every per-request flag (tests/test_webui.py).
+- **The page offered a directory as a download:** `WebDestination.attach` checked only that `stat()` succeeded, so a directory became a download line whose response was a Content-Length with no body and the operator's fetch hung; it requires `is_file()` now, like every other lane (tests/test_webui.py).
+- **A download that cannot be read was promised, not answered:** `_file` sent the status line and Content-Length before opening the path and swallowed the failure, so an unreadable file got 200 with an empty body and parked the handler on the socket; the file is opened first and a failure answers 404 (tests/test_webui.py).
+- **The web conversation registry's `open` map grew without bound:** it is one entry per client id in a file rewritten on every mutation while the aggregate bound covered only `sessions`; an entry whose conversation is gone goes first, then the oldest past `WEB_OPEN_MAX` (tests/test_webui.py).
+- **A refused write was counted as a change, which wiped both repeat guards:** `_is_mutation` read every write-tier result that did not start with "ERROR" as a change, and the branch that records a change clears the dedupe and loop counters, so a model re-issuing a refused write ran the whole step budget and the report claimed a write that never happened; `_NOT_RUN_PREFIXES` answers both questions (tests/test_stall.py).
+- **A peer's `pageSize` crashed the a2a door:** `ListTasks` converted it with a bare `int()`, so a string raised out of `a2a_rpc` and the connection dropped instead of an error the peer can read; it answers -32602 like `pageToken` beside it (tests/test_a2a.py).
+- **A failed install reported success:** `install.sh`'s single `rc=$?` after the handoff read the status of the `exec 3<&-` that closed the borrowed terminal, so an installer exiting 3 gave exit 0 and the success footer; each branch keeps its own installer's code (tests/test_installer_unix.py).
+- **The host-owned rule had six copies and two of them were stale:** `update.sh` and `update.ps1` were still missing `snapshots/` and `tmp/` after 3e8d795 claimed every copy had been updated, and the parity test parsed three of the six; both carry the pair now and the check parses all five script lists and fails when they disagree (tests/test_verbs.py).
+
 ## [1.0.85] - 2026-10-07
 
 ### Fixed
