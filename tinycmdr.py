@@ -12918,6 +12918,24 @@ class Scheduler:
                "options": list(options or [])}
         self.pending_asks[key] = row
         _ASK_PENDING[key] = row
+        if self.dispatcher is not None:
+            # The Mattermost listener is the ONE reader that turns a message in a channel
+            # into an answer, and it reads the DISPATCHER's rows - keyed by CHANNEL, mapped
+            # back to the session key through _session_channel. A job's row filed only in
+            # this dict was never claimed: the operator's reply fell through as a new order
+            # in that channel while the job's wait expired and it carried on with its OWN
+            # judgment on exactly the decision it had asked about (measured 2026-10-07:
+            # SCHEDULER.pending_asks held the row, the dispatcher's dict was empty and
+            # reply_ask answered False). File it where the answer is read - and refuse
+            # rather than take a slot a question is already waiting in, so one reply can
+            # never be handed to two runs.
+            held = self.dispatcher.pending_asks.get(channel_id)
+            if held is not None and not held["ev"].is_set():
+                self.pending_asks.pop(key, None)
+                _ASK_PENDING.pop(key, None)
+                return None
+            self.dispatcher._session_channel[key] = channel_id
+            self.dispatcher.pending_asks[channel_id] = row
         report(channel_id, _ask_format(question, options)
                + "\n_(Answer here — or it waits "
                f"{max(1, int((timeout or 300) / 60))} min and carries on "
@@ -12925,7 +12943,14 @@ class Scheduler:
         return row
 
     def close_question(self, key, answered=False):
-        self.pending_asks.pop(key, None)
+        row = self.pending_asks.pop(key, None)
+        if self.dispatcher is not None:
+            # ...and the row the listener reads, or a spent row sits in that dict for ever
+            # and reads as "a question is already waiting in this channel". Only OUR row
+            # leaves: a chat run that asked in the same channel since owns the slot now.
+            channel = self.dispatcher._session_channel.pop(key, None)
+            if channel and self.dispatcher.pending_asks.get(channel) is row:
+                del self.dispatcher.pending_asks[channel]
         return True
 
     def _fire(self, name, job):

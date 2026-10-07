@@ -267,6 +267,65 @@ def test_a_message_in_the_channel_is_claimed_by_enqueue():
         fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
 
 
+def test_a_scheduled_jobs_question_comes_back_from_its_channel():
+    """A job's ask_user posts into its channel and promises "Answer here" - but the row
+    was filed only in SCHEDULER.pending_asks, while the listener that turns a channel
+    message into an answer reads the DISPATCHER's rows (keyed by channel). Measured
+    2026-10-07: reply_ask answered False, the job's wait expired, and it carried on with
+    its OWN judgment on exactly the decision it had asked about."""
+    saved = fb.CONFIG["agent"].get("ask_user")
+    saved_wait = fb.CONFIG["agent"].get("ask_user_wait_seconds")
+    fb.CONFIG["agent"]["ask_user"] = True
+    fb.CONFIG["agent"]["ask_user_wait_seconds"] = 600
+    d = dispatcher()
+    saved_disp, saved_reporter = fb.SCHEDULER.dispatcher, fb.REPORTER
+    fb.SCHEDULER.dispatcher = d
+    fb.REPORTER = lambda cid, text: d._post(cid, None, text)
+    chan, key = "chan-job", "sched-nightly"
+    # The door _run_job builds for a job that has a reporting channel.
+    door = {"label": "answer in this channel",
+            "opener": lambda q, opts, w, l: fb.SCHEDULER._open_in_channel(
+                chan, key, q, opts, w),
+            "post": lambda q, opts, w, l: True,
+            "post_done": lambda text: None,
+            "close_question": lambda answered: fb.SCHEDULER.close_question(key,
+                                                                          answered)}
+    try:
+        join, box = in_thread(fb.tool_ask_user, {"question": "Restart prod or wait?"},
+                              {"session_key": key, "ask_door": door})
+        check("the job posts its question into its channel",
+              wait_for(lambda: any("Restart prod" in t for _, t in d.posted), 3.0),
+              d.posted)
+        check("the row sits where the listener reads answers",
+              d.pending_asks.get(chan) is not None, list(d.pending_asks))
+        d.enqueue(_FakeMsg(chan, "wait"), "wait")
+        join(5)
+        out = box.get("out", box.get("err", ""))
+        check("the job resumes with the operator's answer, not its own judgment",
+              "OPERATOR ANSWER: wait" in out, out[:200])
+        q = d.queues.get(chan)
+        check("...and the reply did not also land as a new run",
+              q is None or q.empty(), "queue size %s" % (q.qsize() if q else 0))
+        check("...and the channel's slot is free again",
+              d.pending_asks.get(chan) is None, list(d.pending_asks))
+
+        # One reply serves one question: while a CHAT run is waiting in that channel, the
+        # job must not take the slot or post a question that reply cannot serve.
+        chat_door = d.ask_door_factory(chan, "sess-chat")
+        chat_door["opener"]("chat question?", [], 5, "reply here")
+        posted = len(d.posted)
+        refused = fb.SCHEDULER._open_in_channel(chan, "sched-other", "mine?", [], 5)
+        check("a job does not take a channel whose question is still waiting",
+              refused is None and len(d.posted) == posted, (refused, d.posted[posted:]))
+        check("...and the waiting question is untouched",
+              d.pending_asks.get(chan) is not None, list(d.pending_asks))
+        d.reply_ask("sess-chat", "the chat answer")
+    finally:
+        fb.SCHEDULER.dispatcher, fb.REPORTER = saved_disp, saved_reporter
+        fb.CONFIG["agent"]["ask_user"] = saved
+        fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
+
+
 def test_stop_releases_a_parked_run_at_once():
     saved = fb.CONFIG["agent"].get("ask_user")
     saved_wait = fb.CONFIG["agent"].get("ask_user_wait_seconds")
