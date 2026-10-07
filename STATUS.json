@@ -2045,7 +2045,8 @@
       "title": "two state-file defects from an earlier review run 17",
       "state": "shipped",
       "anchor": {
-        "commit": "c7b0efa"
+        "commit": "c7b0efa",
+        "expect": "tagged"
       },
       "detail": "Night-audit run 17 (2026-10-07, Z3 state and files), two commits on main (d044537, c7b0efa) after the v1.0.86 cut. A-2026-10-07-08: jobs.json was the one state file whose reader answered {} for anything it could not parse - no log line, no `.damaged-*` copy - and `_save` re-read the same way, so a corrupt or transiently-locked file lost the schedule with no evidence anywhere; it routes through the shared `_load_json_state`, a valid-but-non-object file is named too, and tests/test_state_damage.py now covers the fourth state path. A-2026-10-07-12: the `atomic_write_text` docstring lost its opening clause; restored from the original wording in 343cefa, since it is the only in-code record of the corruption mode that quarantine exists for. A-2026-10-07-10: the session reload excluded only `.carry.json`, so `.hints.json` and `.question.json` loaded as phantom conversations - and because the hints file is a JSON list, `tinycmdr sessions` listed one too; `_is_session_file()` now answers for the reload and the listing, while search_sessions keeps tolerating sidecar content on purpose. A-2026-10-07-09 was refuted by measurement: with the stat before the read the recorded mtime ends up OLDER than the content parsed, so the change detector fires again instead of missing the write for good. Both fixes landed with a regression test that fails on the pre-fix build and the full gate green (101/0/0); the remaining run-17 findings (the provenance record's fail-open branch and its non-atomic write, the one-second /export name, the overdue-skip log line) are parked in an earlier review.md for a decision."
     }
