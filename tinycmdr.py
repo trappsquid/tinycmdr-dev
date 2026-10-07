@@ -12662,6 +12662,15 @@ def holds_instance_lock():
     return bool(_LOCK_HELD)
 
 
+# A job's name as it is STORED: the words the operator typed, with anything a JSON key
+# cannot carry replaced by `_`. `add` ran this and `remove` did not, so "check disk"
+# became `check_disk` and `remove "check disk"` answered "no job named 'check disk'" -
+# naming a string the operator never typed - while `remove "check_disk"` worked
+# (measured 2026-10-06). Both halves go through here, so one name means one job.
+def _job_name(raw):
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", str(raw or "").strip())
+
+
 class Scheduler:
     def __init__(self, jobs_file):
         self.jobs_file = jobs_file
@@ -12763,11 +12772,23 @@ class Scheduler:
                                  f" (next: {time.strftime('%Y-%m-%d %H:%M', time.localtime(j['next']))})")
                 return "\n".join(lines)
             if action == "add":
-                name = re.sub(r"[^a-zA-Z0-9_-]", "_", args["name"])
+                name = _job_name(args["name"])
                 try:
                     nxt = self._next_run(args["cron"])
                 except Exception as e:
                     return f"ERROR: bad cron expression: {e}"
+                held = self.jobs.get(name)
+                if held is not None and (held.get("cron") != args["cron"]
+                                         or held.get("task") != args["task"]):
+                    # Two different names can sanitise to one key ("check disk" and
+                    # "check.disk" are both `check_disk`), and writing straight over
+                    # the job that was already there lost the first one with no word
+                    # said. Re-adding the SAME job stays allowed - it is how a caller
+                    # restates a job it already has.
+                    return (f"ERROR: a job named '{name}' already runs "
+                            f"('{held.get('cron')}' - {held.get('task')}). Adding "
+                            "never replaces: remove it first, or schedule this one "
+                            "under another name.")
                 self.jobs[name] = {
                     "cron": args["cron"], "task": args["task"],
                     "channel_id": args.get("channel_id") or ctx.get("channel_id"),
@@ -12777,10 +12798,11 @@ class Scheduler:
                 return (f"OK: job '{name}' scheduled ({args['cron']}), next run "
                         f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(nxt))}.")
             if action == "remove":
-                if self.jobs.pop(args["name"], None) is None:
-                    return f"ERROR: no job named '{args['name']}'."
+                name = _job_name(args["name"])
+                if self.jobs.pop(name, None) is None:
+                    return f"ERROR: no job named '{name}'."
                 self._save()
-                return f"OK: job '{args['name']}' removed."
+                return f"OK: job '{name}' removed."
             return f"ERROR: unknown action '{action}' (list|add|remove)."
 
     def _loop(self):

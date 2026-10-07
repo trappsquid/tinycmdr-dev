@@ -144,6 +144,38 @@ finally:
     slow.release.set()
     fb.drive_run, fb.report = saved_drive, saved_report
 
+# ---------------------------------------- the name you typed is the name it has
+# `add` sanitised the name and `remove` did not, and `add` wrote straight over a
+# job that already held the sanitised name: "check disk" and "check.disk" are one
+# job, the second add silently deleted the first, and `remove "check disk"` answered
+# with a name the operator never typed. Measured 2026-10-06.
+sched = _scheduler("jobs-names.json")
+ctx = {"channel_id": "chan-1"}
+added = sched.tool_action({"action": "add", "name": "check disk",
+                           "cron": "0 7 * * *", "task": "df -h"}, ctx)
+check("a job name with a space is accepted", added.startswith("OK:"), added)
+clash = sched.tool_action({"action": "add", "name": "check.disk",
+                           "cron": "30 3 * * *", "task": "tar /var"}, ctx)
+check("a second name that sanitises to the same key is refused, not written over",
+      clash.startswith("ERROR:") and "already" in clash, clash)
+check("...so the job that was there survives",
+      list(sched.jobs) == ["check_disk"]
+      and sched.jobs["check_disk"]["task"] == "df -h", dict(sched.jobs))
+check("...and the refusal names what already runs and what to do about it",
+      "check_disk" in clash and "remove" in clash.lower(), clash)
+again = sched.tool_action({"action": "add", "name": "check disk",
+                           "cron": "0 7 * * *", "task": "df -h"}, ctx)
+check("restating the SAME job is not an error", again.startswith("OK:"), again)
+check("...and still one job", len(sched.jobs) == 1, dict(sched.jobs))
+removed = sched.tool_action({"action": "remove", "name": "check disk"}, ctx)
+check("the job is removed with the name the operator typed",
+      removed.startswith("OK:"), removed)
+check("...and it is really gone", not sched.jobs, dict(sched.jobs))
+check("removing it twice says so, naming the stored spelling",
+      sched.tool_action({"action": "remove", "name": "check disk"}, ctx)
+      == "ERROR: no job named 'check_disk'.",
+      sched.tool_action({"action": "remove", "name": "check disk"}, ctx))
+sched._stop.set()
 # ------------------------------------------- only the bot fires the folder's jobs
 # Every process that imports this module builds a Scheduler with a loop of its own,
 # and the single-instance lock is taken only by the service doors. A `--cli` session
