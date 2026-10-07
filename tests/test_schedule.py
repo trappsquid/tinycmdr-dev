@@ -1,0 +1,146 @@
+"""The scheduler: what a cron job may and may not do to an unattended box.
+
+    python tests/test_schedule.py
+
+The scheduler is the one lane with nobody watching it start, so what matters is
+the properties that keep a box honest while nobody is looking: a job never
+overlaps itself, the name the operator typed is the name the job has, and a job
+that cannot report its answer says so instead of spending tokens on a reply
+nobody reads.
+
+It imports the build from a staged copy (a config.json beside it, the way the
+installer writes one) and replaces the model call and the reporter; nothing here
+reaches a model, a chat server or the clock.
+"""
+import importlib.util
+import logging
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+from pathlib import Path
+
+BASE = Path(__file__).resolve().parent.parent
+SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+
+STAGE = Path(tempfile.mkdtemp(prefix="tinycmdr-test-stage-schedule"))
+shutil.copy2(SRC, STAGE / "tinycmdr.py")
+shutil.copy2(Path(__file__).resolve().parent / "fixture-config.json",
+             STAGE / "config.json")
+spec = importlib.util.spec_from_file_location("tinycmdr_schedule_under_test",
+                                              STAGE / "tinycmdr.py")
+fb = importlib.util.module_from_spec(spec)
+sys.modules["tinycmdr_schedule_under_test"] = fb
+spec.loader.exec_module(fb)
+
+PASSES, FAILS = [], []
+
+
+def check(name, cond, detail=""):
+    (PASSES if cond else FAILS).append(name)
+    print(("ok   " if cond else "FAIL ") + name + ("" if cond else f"   {detail}"))
+
+
+def _until(pred, secs=5.0):
+    """Wait for a background thread to get somewhere, without a fixed sleep."""
+    deadline = time.time() + secs
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.02)
+    return bool(pred())
+
+
+class _LogCapture(logging.Handler):
+    """What the build says to its own log, so a claim to report something is graded."""
+
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+class _SlowModel:
+    """drive_run, replaced: records the session key and blocks until released."""
+
+    def __init__(self):
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.keys = []
+        self.lock = threading.Lock()
+
+    def __call__(self, key, text, rep, **kw):
+        with self.lock:
+            self.keys.append(key)
+        self.started.set()
+        self.release.wait(20)
+        return "done"
+
+
+def _scheduler(name):
+    sched = fb.Scheduler(STAGE / name)
+    sched._stop.set()          # this suite fires jobs by hand, never by the clock
+    sched.dispatcher = None    # no chat layer: the run reports nowhere
+    return sched
+
+
+def _fire(sched, name, wait=True):
+    t = threading.Thread(target=sched._fire,
+                         args=(name, {"task": "check the disk", "channel_id": None}),
+                         daemon=True)
+    t.start()
+    if wait:
+        t.join(10)
+    return t
+
+
+# ------------------------------------------------- a job never overlaps itself
+# A `* * * * *` job whose work takes minutes started one thread per tick: five
+# concurrent runs on the SAME session key (sched-<name>), so they interleaved
+# into one transcript, spent the tokens five times over, and each fire's
+# ask-door row and AGENT.model_overrides entry overwrote the others' (the first
+# to finish popped the override the rest were still running on). Measured
+# 2026-10-06 against this build with a stubbed drive_run and a 0.5s interval:
+# five fires live at once.
+slow = _SlowModel()
+saved_drive, saved_report = fb.drive_run, fb.report
+fb.drive_run = slow
+fb.report = lambda token, text: None
+sched = _scheduler("jobs-overlap.json")
+try:
+    cap = _LogCapture()
+    fb.log.addHandler(cap)
+    first = _fire(sched, "slow-job", wait=False)
+    check("the job reaches the model", slow.started.wait(10),
+          "Scheduler._fire never started the run")
+    overlap = _fire(sched, "slow-job", wait=False)
+    overlap.join(5)
+    check("a fire while the job is still running returns at once",
+          not overlap.is_alive(), "the second fire is still alive")
+    check("...and starts no second run of the same job",
+          len(slow.keys) == 1, slow.keys)
+    check("...and says so in the log, naming the job",
+          any("slow-job" in line and "skip" in line.lower() for line in cap.lines),
+          cap.lines)
+    fb.log.removeHandler(cap)
+    other = _fire(sched, "other-job", wait=False)
+    check("a DIFFERENT job is not serialized behind the one still running",
+          _until(lambda: "sched-other-job" in slow.keys), slow.keys)
+    slow.release.set()
+    first.join(10)
+    other.join(10)
+    _fire(sched, "slow-job")            # joins: the release is already set
+    check("the fire that was skipped leaves the job free to run again",
+          slow.keys.count("sched-slow-job") == 2, slow.keys)
+    check("...and the in-flight bookkeeping is empty once every fire is over",
+          not sched._running, sched._running)
+finally:
+    slow.release.set()
+    fb.drive_run, fb.report = saved_drive, saved_report
+
+print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
+sys.exit(1 if FAILS else 0)

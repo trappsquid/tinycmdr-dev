@@ -12653,6 +12653,10 @@ class Scheduler:
         self.jobs_file = jobs_file
         self.jobs = {}
         self.lock = threading.Lock()
+        # The jobs with a fire in flight. `self.lock` guards this set as well: the
+        # check-and-add below is one step, the same lock the loop already holds while
+        # it decides what is due.
+        self._running = set()
         self._load()
         try:
             import croniter  # noqa: F401
@@ -12806,6 +12810,30 @@ class Scheduler:
         return True
 
     def _fire(self, name, job):
+        """One fire per job, the `flock -n` cron pattern: a job that outlives its own
+        interval is SKIPPED, not queued and not run twice at once.
+
+        Measured 2026-10-06: a `* * * * *` job whose work takes minutes started five
+        threads on five consecutive ticks, all five driving the SAME session key
+        (`sched-<name>`) - so they interleaved into one transcript, spent the tokens
+        five times over, and each one's ask-door row and `AGENT.model_overrides` entry
+        overwrote the others' (the first to finish popped the override the others were
+        still running on). `next` has already advanced by the time the thread starts,
+        so a skip costs one occurrence and never queues a stampede behind it.
+        """
+        with self.lock:
+            if name in self._running:
+                log.warning("job '%s' is still running from its last fire - skipped "
+                            "this one (a job never overlaps itself)", name)
+                return
+            self._running.add(name)
+        try:
+            self._run_job(name, job)
+        finally:
+            with self.lock:
+                self._running.discard(name)
+
+    def _run_job(self, name, job):
         log.info("running scheduled job: %s", name)
         key = f"sched-{name}"
         if job.get("model"):
