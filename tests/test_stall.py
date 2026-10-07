@@ -1116,6 +1116,37 @@ def test_identical_tool_calls_stop_the_run_instead_of_burning_the_budget():
           "ok" not in out[:20].lower(), out[:40])
 
 
+def test_a_refused_write_is_not_a_change_and_cannot_spin():
+    """A refusal from a gate (plan mode, a declined confirmation, a tool_policy deny)
+    answers in the tool result and NOTHING ran - but _is_mutation() read every
+    non-"ERROR" write-tier output as a change, and the branch that records a change also
+    clears both repeat guards. Measured 2026-10-07: eight identical write_file calls
+    refused by plan mode ran the whole scripted budget with no loop-stop, and the answer
+    still said the file was written "with no read-back or re-check after it"."""
+    w = TMP / "refused-write.txt"
+    call = {"role": "assistant", "content": "",
+            "tool_calls": [{"id": "1", "function": {
+                "name": "write_file",
+                "arguments": json.dumps({"path": str(w), "content": "same"})}}]}
+    scripted = ([dict(call) for _ in range(8)]
+                + [{"role": "assistant", "content": "Final: the write was refused."}])
+    fb.CONFIG["agent"]["loop_stop_repeats"] = 4
+    fb.CONFIG["agent"]["max_steps"] = 100
+    fb.CONFIG["agent"]["max_minutes"] = 30
+    fb.plan_mode_set("spin-session", "plan")
+    try:
+        out, calls, _ = _scripted_run(scripted)
+    finally:
+        fb.plan_mode_set("spin-session", "execute")
+    check("a refused write cannot spin: the loop guard still stops the run",
+          "Stopped a loop" in out, out[:200])
+    check("...and it stops before the scripted budget instead of using all of it",
+          calls <= 6, f"model calls used: {calls}")
+    check("...and the run never claims a change that did not happen",
+          "no read-back or re-check" not in out, out[-240:])
+    check("...and the file really was not written", not w.exists(), str(w))
+
+
 def test_a_single_repeat_does_not_trip_the_hard_stop():
     """Two identical calls then real progress must NOT be treated as a spin."""
     probe = TMP / "spin_probe2.txt"

@@ -11591,6 +11591,15 @@ def tool_experiment(args, ctx):
 # wolf is worse than no warning at all.
 MUTATING_TOOLS = {"write_file", "edit_file", "create_tool"}
 
+# Tool results that say the call did NOT RUN: the authority gates (plan mode, a
+# tool_policy deny, the scan budget), the confirmation gate's refusal, the dedupe refusal
+# and the byte-identical no-op STOP all answer BEFORE anything is written. Deliberately
+# not _FAILURE_MARKERS: that one is the display verdict ("this call failed") and includes
+# calls that RAN and came back an error - the opposite question. This one answers
+# _is_mutation and the repeat guards: nothing happened, so nothing changed and nothing
+# was executed.
+_NOT_RUN_PREFIXES = ("NOT RE-EXECUTED", "NOT EXECUTED", "REFUSED", "DECLINED", "STOP.")
+
 _CHANGE_CLAIM_RE = re.compile(
     r"\b(fixed|repaired|updated|upgraded|installed|uninstalled|restarted|"
     r"recreated|changed|created|deleted|removed|wrote|written|patched|"
@@ -11605,8 +11614,16 @@ def _is_mutation(name, args, output):
     custom tools that declare MUTATES = True. shell/execute_code are NOT
     classified — here they are both the main read path and the main write path,
     and guessing from command text would flag real, verified work as
-    unverified."""
-    if str(output).startswith("ERROR"):
+    unverified.
+
+    A call the gates REFUSED never ran, and it says so in its own result
+    (_NOT_RUN_PREFIXES): treating it as a change both puts a write that never
+    happened into the "what I changed" evidence and clears the repeat guards that
+    exist to stop a model re-issuing it for ever (measured 2026-10-07: eight
+    identical write_file calls refused by plan mode ran the whole scripted budget
+    and the answer still claimed the file was written)."""
+    text = str(output)
+    if text.startswith("ERROR") or text.startswith(_NOT_RUN_PREFIXES):
         return False
     if name in MUTATING_TOOLS:
         return True
@@ -20122,8 +20139,7 @@ class Agent:
                         # — in the tool output it reads — that it already has this.
                         key = _call_sig(
                             name, (tc.get("function") or {}).get("arguments", ""))
-                        refused = output.startswith(("NOT RE-EXECUTED",
-                                                     "NOT EXECUTED"))
+                        refused = output.startswith(_NOT_RUN_PREFIXES)
                         if output.startswith("NOT RE-EXECUTED"):
                             # A REFUSAL THAT COMES BACK IS A SPIN. The result text already told
                             # the model that it has this answer, that nothing has changed since,
