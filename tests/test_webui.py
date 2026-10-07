@@ -1680,6 +1680,28 @@ def main():
           and b"\\ud83d" not in _bd261,
           "a JSON reply is sent as UTF-8, not \\u-escaped", _bd261[:60])
 
+    # ---- the registry's OTHER half is bounded too -------------------------------
+    # `open` is one entry per client id, and a client id is a header the caller invents:
+    # a kiosk, a browser with cleared localStorage or a rotating-client script grew it
+    # without bound while `sessions` stayed under its own cap - the file is rewritten
+    # whole on every mutation (measured 2026-10-07: 300 invented ids left 300 entries
+    # and 0 conversations). Run last: the bound drops the oldest entries, which are
+    # this suite's own earlier clients.
+    _openmax = getattr(fb, "WEB_OPEN_MAX", None)
+    for _oi in range(int(_openmax or 0) + 40):
+        fb.web_set_open("kiosk-%d" % _oi, "web")
+    _open_n = len(fb._web_state()["open"])
+    check(bool(_openmax) and _open_n <= _openmax,
+          "the 'last open conversation' map is bounded too, not one entry per client id",
+          (_openmax, _open_n))
+    check(fb.web_open_key("kiosk-%d" % (int(_openmax or 0) + 39)) is not None,
+          "...and the newest client still has its key",
+          fb.web_open_key("kiosk-%d" % (int(_openmax or 0) + 39)))
+    fb.web_set_open("ghost-client", "web-gone-forever")
+    check("ghost-client" not in fb._web_state()["open"],
+          "...while an entry pointing at a conversation that is gone goes with it",
+          sorted(fb._web_state()["open"])[:4])
+
     srv.shutdown()
     srv.server_close()
 

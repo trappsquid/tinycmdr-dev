@@ -24216,6 +24216,13 @@ WEB_REGISTRY_MAX = 200
 # owner to re-create it (see web_resolve_session).
 WEB_REGISTRY_PROTECT = ("web",)
 
+# ...and a bound on the registry's OTHER half, the "last open conversation" map: one
+# entry per client id, and a client id is an invented header, so without this the
+# aggregate bound above left web-sessions.json growing one entry per browser (or per
+# script) for ever. Past it the oldest entries go, and an entry whose conversation is
+# no longer in the registry goes whatever its age (see _web_cap_open).
+WEB_OPEN_MAX = 200
+
 WEB_RUNLOG_KEEP = 60            # finished runs kept per conversation
 
 WEB_RUNLOG_MAX_CHARS = 500_000  # ...and a ceiling on the file itself
@@ -24277,6 +24284,7 @@ def _web_state(mutate=None):
             st["sessions"] = []
         if not isinstance(st.get("open"), dict):
             st["open"] = {}
+        _web_cap_open(st)
         if mutate is None:
             return st
         out = mutate(st)
@@ -24384,6 +24392,31 @@ def _web_cap_registry(st):
     gone = {s.get("key") for s in drop}
     st["sessions"] = [s for s in st["sessions"] if s.get("key") not in gone]
     return sorted(gone)
+
+
+def _web_cap_open(st):
+    """Bound the `open` map, which A-238's bound never covered.
+
+    `open` is one entry per CLIENT id, and a client id is nothing but a header the
+    caller invents, so the aggregate bound on `sessions` left the other half of the
+    same file growing for ever: a kiosk, a browser that clears localStorage, or a
+    script that rotates its id grew it while `sessions` stayed empty (measured
+    2026-10-07: 300 invented ids left 300 entries and 0 conversations, in a file that
+    is rewritten whole on every mutation). Entries pointing at a conversation that is
+    not in the registry go first - the key they remember is not there to reopen - and
+    then the oldest past WEB_OPEN_MAX. A browser that loses its entry lands on the
+    shared conversation and writes a fresh one on its next run."""
+    open_ = st.get("open")
+    if not isinstance(open_, dict):
+        return
+    alive = {s.get("key") for s in st.get("sessions") or [] if isinstance(s, dict)}
+    keep = {c: k for c, k in open_.items()
+            if k in alive or k in WEB_REGISTRY_PROTECT}
+    if len(keep) > WEB_OPEN_MAX:
+        for client in list(keep)[:len(keep) - WEB_OPEN_MAX]:
+            del keep[client]
+    if keep != open_:
+        st["open"] = keep
 
 
 def web_new_session(client, title=""):
