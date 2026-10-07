@@ -707,6 +707,34 @@ def main():
     finally:
         c2.close()
 
+    # ...and that drain is idempotent per REQUEST, not per CONNECTION: one Handler
+    # instance serves every request on a kept-alive socket, so a flag the previous
+    # request set was read as this one's. Measured 2026-10-07: the first GET drains
+    # (and sets `_body_taken`), the next POST is refused 401 without reading its body,
+    # and the third request on that connection was answered with Python's stock 501
+    # for the leftover bytes while the socket closed.
+    c3 = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        c3.connect()
+        c3.auto_open = 0
+        c3.request("GET", "/api/health")
+        _g1 = c3.getresponse()
+        _g1.read()
+        c3.request("POST", "/api/run", body=b'{"message":"hi"}')     # no token -> 401
+        _g2 = c3.getresponse()
+        _g2.read()
+        c3.request("GET", "/api/health")
+        _g3 = c3.getresponse()
+        _g3.read()
+        check(_g1.status == 200 and _g2.status == 401 and _g3.status == 200,
+              "the drain is per request: a refusal after an earlier GET on the same "
+              "connection leaves it usable", (_g1.status, _g2.status, _g3.status))
+    except Exception as e:                                       # noqa: BLE001
+        check(False, "the drain is per request: a refusal after an earlier GET on the "
+                     "same connection leaves it usable", "%s: %s" % (type(e).__name__, e))
+    finally:
+        c3.close()
+
     # A-203: HEAD was Python's stock 501, so `curl -I` read a healthy bot as dead.
     _st, _hd, _bd, _ = probe("HEAD", "/api/health")
     check(_st == 200 and _bd == b"" and int(_hd.get("Content-Length") or 0) > 0,

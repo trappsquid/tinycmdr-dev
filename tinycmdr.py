@@ -27309,6 +27309,27 @@ def run_webui():
         _refuse_why = "host"    # which _origin_ok rule refused this request
         _refuse_origin = ""     # the Origin that did not match, for the 403
 
+        def handle_one_request(self):
+            """Reset the per-REQUEST state the last request on this connection left.
+
+            One Handler instance serves EVERY request on a kept-alive connection
+            (protocol_version above), and every flag here is set on `self`: a flag the
+            previous request set was read as this one's. Measured 2026-10-07: the first
+            GET /api/health drains (and so sets `_body_taken`), the next POST /api/run
+            was refused 401 without reading its body - `_drain` returned at once,
+            believing the body was already accounted for - and the leftover bytes were
+            parsed as the NEXT request line: the third request on that connection got
+            Python's stock 501 and the socket closed, while both earlier ones were
+            healthy."""
+            self._body_taken = False
+            self._head_only = False
+            self._body_got = "no body"
+            self._body_code = 400
+            self._cookie_given = False
+            self._refuse_why = "host"
+            self._refuse_origin = ""
+            super().handle_one_request()
+
         def log_message(self, *a):
             pass
 
