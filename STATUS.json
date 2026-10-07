@@ -2025,7 +2025,8 @@
       "title": "ten bugs from the one-day hunt, each with the test that grades it",
       "state": "shipped",
       "anchor": {
-        "commit": "9939ccd"
+        "commit": "9939ccd",
+        "expect": "tagged"
       },
       "detail": "One-day an earlier review on 2026-10-06, ten commits merged from an earlier review-2026-10-06 (4bc31b3, 0d346d6, 2c8450c, 7499573, 6899f26, 1bdee53, 9f21a34, 46c70af, aa5516a, 9939ccd). Sessions and schedule: `_fire` claims the job name under the scheduler's lock, so a job that takes longer than its interval no longer runs several times over on one session key; only a process holding the state lock fires the folder's cron jobs, so a CLI session alive across a boundary no longer steals a due job, prints its answer to a terminal and advances `next`; `add` and `remove` agree on one name, so the name typed is the name removed and re-adding cannot silently overwrite; a job created where there is no reporting channel says its answer goes to the log only. Mattermost: the streamed draft's post id lives on the destination that owns it, so two runs in one channel no longer edit each other's posts; one open question per channel, so a second prompt no longer drops the first; a long answer is cut on a line and never inside an open code fence; a post the server refuses logs the text it lost. TUI: `--app` starts on the 16-colour tier (a `selection_bg` that is not a colour no longer poisons `Style.from_dict`); Ctrl-W gives the pane its columns back. Every fix landed with a regression test that fails on the pre-fix build (`TINYCMDR_SRC`) and the full gate green after each. Leads from an earlier review runs 14/15 refuted in the same pass: the UTF-16 post-limit premise, the web conversation registry read as a lost update, and a missing tool argument raising out of the door."
     }
