@@ -29289,9 +29289,33 @@ class MattermostDispatcher:
 
     @staticmethod
     def _chunks(text):
-        while text:
-            yield text[:MAX_POST_LEN]
-            text = text[MAX_POST_LEN:]
+        """Split for the post limit, on a line boundary, never inside a code fence.
+
+        A bare slice cut the answer wherever 16,000 characters happened to fall.
+        Measured 2026-10-06 with a long fenced answer: the first post ended
+        `value_1010 = 1010` INSIDE an open ``` block, so Mattermost rendered the rest
+        of the answer as code and the second post began with orphaned markers - and
+        the mid-word cut is what the operator copies out of the channel. So: prefer
+        the last line break in the window; close an open fence at the cut and reopen
+        it on the next post, which costs 4 characters against a limit of 16,383; and
+        never back off past half the window, so one over-long line or block still
+        makes progress instead of looping.
+        """
+        while len(text) > MAX_POST_LEN:
+            cut = text.rfind("\n", 0, MAX_POST_LEN)
+            if cut < MAX_POST_LEN // 2:
+                cut = MAX_POST_LEN            # one long line: cut it anyway
+            if text[:cut].count("```") % 2:
+                lower = text.rfind("\n", 0, MAX_POST_LEN - 4)
+                if lower > MAX_POST_LEN // 2:
+                    cut = lower
+                yield text[:cut] + "\n```"
+                text = "```\n" + text[cut:].lstrip("\n")
+                continue
+            yield text[:cut]
+            text = text[cut:].lstrip("\n")
+        if text:
+            yield text
 
     # -- confirmations (optional; only active if confirm_patterns set) ------
 

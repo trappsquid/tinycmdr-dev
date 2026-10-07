@@ -734,6 +734,36 @@ def test_one_question_at_a_time_per_channel():
           got)
 
 
+def test_a_long_answer_is_cut_on_a_line_and_never_inside_a_fence():
+    """A-263 (2026-10-06): `_chunks` sliced at MAX_POST_LEN with no boundary rule.
+    Measured with a 1,200-line fenced answer: the first post ended
+    `value_1010 = 1010` INSIDE an open ``` block, so Mattermost rendered the rest of
+    the answer as code and the second post began with orphaned markers.
+    """
+    L = fb.MAX_POST_LEN
+    body = "\n".join("value_%d = %d" % (i, i) for i in range(1200))
+    text = "intro\n\n```python\n" + body + "\n```\n\ntrailing note"
+    chunks = list(fb.MattermostDispatcher._chunks(text))
+    check("a long answer is split", len(chunks) > 1, len(chunks))
+    check("every chunk fits the post limit", all(len(c) <= L for c in chunks),
+          [len(c) for c in chunks])
+    check("no chunk ends inside an open fence",
+          all(c.count("```") % 2 == 0 for c in chunks),
+          [c.count("```") for c in chunks])
+    _lines = set(text.splitlines())
+    _joined = set("".join(chunks).splitlines())
+    check("the cut is on a line, never mid-word",
+          all(c.splitlines()[-1] in _lines for c in chunks if c),
+          [c[-24:] for c in chunks[:-1]])
+    check("and no line of the answer is lost", _lines <= _joined,
+          sorted(_lines - _joined)[:3])
+    flat = "x" * (L * 2 + 17)          # one long line: no break to find
+    got = list(fb.MattermostDispatcher._chunks(flat))
+    check("a single long line still terminates and reassembles exactly",
+          "".join(got) == flat and all(len(c) <= L for c in got),
+          [len(c) for c in got])
+
+
 # ------------------------------------------------- scheduled runs are runs too
 # F-11 (review, 2026-09-29): Scheduler._fire called drive_run with no cancel event and
 # registered the run nowhere the watchdog could see it, so a wedged cron job was
