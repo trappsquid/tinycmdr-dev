@@ -78,7 +78,9 @@ class FakeDispatcher(fb.MattermostDispatcher):
         super().__init__()
         self.posted = []
 
-    def _post(self, channel_id, root_id, text, color=None):
+    def _post(self, channel_id, root_id, text, color=None, draft_id=None):
+        if draft_id:
+            return draft_id        # the real door edits the run's own draft in place
         self.posted.append((channel_id, text))
         self._touch(channel_id)
         return "post-%d" % len(self.posted)

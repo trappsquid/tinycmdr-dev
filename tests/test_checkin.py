@@ -84,7 +84,12 @@ class FakeDispatcher:
         self.deletes = []
         self._n = 0
 
-    def _post(self, channel_id, root_id, text, color=None):
+    def _post(self, channel_id, root_id, text, color=None, draft_id=None):
+        if draft_id:
+            # what the real door does with a run's own streamed draft: edit it in place
+            self.edits.append((draft_id, channel_id, text))
+            self.edit_colors.append(color)
+            return draft_id
         self._n += 1
         pid = f"post{self._n}"
         self.posts.append((channel_id, root_id, text))
@@ -602,14 +607,17 @@ def test_streamed_narration_is_dropped_when_it_was_the_answer():
     try:
         rep.narration("Here is the answer, being written out")
         check("a streamed draft exists", rep.narration_live() is True, rep.narration_live())
+        posted = len(d.posts)
         rep.narration_drop()
-        narration_id = d.ids[[i for i, p in enumerate(d.posts)
-                             if p[2].startswith("💬 ")][0]]
-        check("the draft is DELETED (the answer is posted by the caller)",
-              d.deletes == [(narration_id, "chan")], d.deletes)
+        # The Mattermost door never deletes: delete_post leaves a "(message deleted)"
+        # tombstone, so the draft is parked and the run's next line edits it in place
+        # (the destination-level test is test_stall's
+        # test_a_streamed_draft_belongs_to_the_run_that_streamed_it).
+        check("the draft is parked for the answer, never tombstoned",
+              not d.deletes and len(d.posts) == posted, (d.deletes, d.posts))
         check("the reporter forgets it", rep.narration_live() is False, rep.narration_live())
-        rep.narration_drop()          # idempotent: nothing left to delete
-        check("dropping twice deletes nothing more", len(d.deletes) == 1, d.deletes)
+        rep.narration_drop()          # idempotent: nothing left to park
+        check("dropping twice changes nothing", not d.deletes, d.deletes)
     finally:
         fb.CONFIG["agent"].clear()
         fb.CONFIG["agent"].update(saved)
@@ -682,8 +690,8 @@ def test_run_does_not_double_post_a_streamed_line():
         fb.AGENT.run("stream-answer", "do it", interim_cb=lambda t: notes.append(t),
                      narration_cb=rep.narration, narration_drop_cb=rep.narration_drop,
                      progress_cb=None)
-        check("streamed answer: the draft was deleted, not left as a duplicate",
-              len(d.deletes) == 1, d.deletes)
+        check("streamed answer: the draft was neither tombstoned nor duplicated",
+              not d.deletes and len(d.posts) == 1, (d.deletes, d.posts))
         check("streamed answer: nothing was left live",
               rep.narration_live() is False, rep.narration_live())
         check("streamed answer: interim_cb was not used either", not notes, notes)

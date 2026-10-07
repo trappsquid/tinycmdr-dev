@@ -28864,6 +28864,7 @@ class MattermostDestination(Destination):
         self.d = dispatcher
         self.channel_id = channel_id
         self.root_id = root_id
+        self._draft = None       # THIS run's streamed draft, waiting for the answer
 
     @staticmethod
     def _color(kind):
@@ -28874,8 +28875,15 @@ class MattermostDestination(Destination):
                 "error": COLOR_FAIL}.get(kind, COLOR_STATUS)
 
     def line(self, kind, text, src="main"):
-        return self.d._post(self.channel_id, self.root_id, text,
-                            color=want_color(self._color(kind)))
+        colour = want_color(self._color(kind))
+        draft = None if colour else self._draft
+        if draft is not None:
+            # The draft is this run's own post: the next colourless line from HERE is
+            # the answer that replaces it. It used to sit in a channel-wide slot that
+            # the next colourless post from ANYONE took - see `drop`.
+            self._draft = None
+        return self.d._post(self.channel_id, self.root_id, text, color=colour,
+                            draft_id=draft)
 
     def update(self, ref, kind, text, src="main"):
         self.d._edit(ref, self.channel_id, text,
@@ -28883,13 +28891,20 @@ class MattermostDestination(Destination):
         return ref
 
     def drop(self, ref):
-        # Do NOT delete the post: Mattermost delete_post leaves an ugly
-        # "(message deleted)" tombstone in the channel. Instead, retain the
-        # draft post id so the final answer edits it in place seamlessly.
-        if hasattr(self.d, "draft_posts"):
-            self.d.draft_posts[self.channel_id] = ref
-        else:
-            self.d._delete(ref, self.channel_id)
+        """The streamed draft is finished; keep its id for the answer that replaces it.
+
+        Do NOT delete the post: Mattermost delete_post leaves an ugly "(message
+        deleted)" tombstone in the channel. The id stays on THIS destination rather
+        than in a channel-wide slot, because a channel can hold two runs at once - a
+        cron job reporting while a chat run is live - and the old shared slot gave the
+        draft to whichever colourless post came first: the other run's answer was
+        edited into this run's message and this run's own answer went to a new post
+        (measured 2026-10-06 on a colourless terminal: the chat's answer edited
+        `post-1`, the cron job's draft, and the cron answer landed in `post-2`). The
+        dispatcher's own notices - "⏳ Queued", "✅ Got it", a slash-command reply -
+        post without a destination and so can no longer take a draft either.
+        """
+        self._draft = ref
 
     def ask(self, question, options=None, wait=300.0, label=None):
         """Post the question and wait for the reply, as the confirm prompt did.
@@ -28983,7 +28998,6 @@ class MattermostDispatcher:
         self.active = {}           # channel_id -> run bookkeeping
         self.running = set()       # channel_ids with a message ACTUALLY being handled
         self.queued_notice = {}    # channel_id -> post id of the queued notice
-        self.draft_posts = {}      # channel_id -> post id of streamed draft to reuse
         # channel_id (or session key) -> the ask_user row a run is parked on. It lives
         # here, not in the run, because the ANSWER arrives on the listener thread and
         # has to be readable without touching the run.
@@ -29159,7 +29173,7 @@ class MattermostDispatcher:
         msg = str(err).lower()
         return "rootid" in msg or "root id" in msg or "invalid root" in msg
 
-    def _post(self, channel_id, root_id, text, color=None, touch=True):
+    def _post(self, channel_id, root_id, text, color=None, touch=True, draft_id=None):
         """Post text (chunked); returns the new post's id, or None.
 
         `color` (v1.9.30) carries the text inside a colored attachment bar instead of
@@ -29180,7 +29194,8 @@ class MattermostDispatcher:
             self._touch(channel_id)   # output here counts as run progress
         if root_id and self.dead_roots.get(channel_id) == root_id:
             root_id = None  # already known bad — go straight to top-level
-        draft_id = None if color else self.draft_posts.pop(channel_id, None)
+        if color:
+            draft_id = None      # a coloured line is not the answer replacing a draft
         chunks = list(self._chunks(text))
         if draft_id and chunks:
             # Seamlessly transform the streamed draft in place: no tombstone, no dupe

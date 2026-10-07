@@ -313,7 +313,14 @@ class FakeDispatcher(fb.MattermostDispatcher):
         self.edit_colors = []
         self.handled = []          # messages a worker actually picked up
 
-    def _post(self, channel_id, root_id, text, color=None, touch=True):
+    def _post(self, channel_id, root_id, text, color=None, touch=True, draft_id=None):
+        if draft_id:
+            # what the real door does with a run's own streamed draft: edit it in place
+            self.edits.append((draft_id, channel_id, text))
+            self.edit_colors.append(color)
+            if touch:
+                self._touch(channel_id)
+            return draft_id
         self.posted.append((channel_id, text))
         self.colors.append(color)
         if touch:
@@ -762,6 +769,55 @@ def test_a_long_answer_is_cut_on_a_line_and_never_inside_a_fence():
     check("a single long line still terminates and reassembles exactly",
           "".join(got) == flat and all(len(c) <= L for c in got),
           [len(c) for c in got])
+
+
+def test_a_streamed_draft_belongs_to_the_run_that_streamed_it():
+    """A-265 + A-269 (2026-10-06): `drop` parked the streamed draft under the CHANNEL
+    and `_post` gave it to the next colourless post from ANYONE. Measured here with
+    two destinations on one real door (only the network stubbed) and `want_color`
+    stubbed to None - what NO_COLOR and a colourless theme give: the chat run's answer
+    was edited into the cron job's draft post, and the cron job's own answer went to a
+    new post. The operator reads each answer under the other's message.
+    """
+    posted, edited = [], []
+
+    def _create(post):
+        pid = "post-%d" % (len(posted) + 1)
+        posted.append((pid, post["message"]))
+        return {"id": pid}
+
+    class _Door(fb.MattermostDispatcher):
+        """The real `_post` and `_chunks`; only the server is a stub."""
+
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {"posts": type("P", (), {
+                "create_post": staticmethod(_create)})()})()
+
+        def _edit(self, post_id, channel_id, text, color=None):
+            edited.append((post_id, channel_id, text))
+
+    d = _Door()
+    ch = "chan-draft"
+    saved = fb.want_color
+    fb.want_color = lambda c: None
+    try:
+        cron = fb.MattermostDestination(d, ch, None)
+        chat = fb.MattermostDestination(d, ch, None)
+        draft = cron.line("narration", "cron: working on the backup")
+        cron.drop(draft)
+        ref = chat.line("say", "CHAT ANSWER: the logs are clean")
+        check("another run's answer is its own post, not the draft",
+              ref != draft and (draft, ch, "CHAT ANSWER: the logs are clean")
+              not in edited, (ref, edited))
+        own = cron.line("say", "CRON ANSWER: backup done")
+        check("and the draft's owner gets its draft edited in place",
+              own == draft and edited
+              and edited[-1] == (draft, ch, "CRON ANSWER: backup done"),
+              (own, edited))
+    finally:
+        fb.want_color = saved
 
 
 # ------------------------------------------------- scheduled runs are runs too

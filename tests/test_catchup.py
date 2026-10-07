@@ -104,7 +104,7 @@ class FakeDispatcher(fb.MattermostDispatcher):
         super().__init__()
         self.handled = []
 
-    def _post(self, channel_id, root_id, text, color=None):
+    def _post(self, channel_id, root_id, text, color=None, draft_id=None):
         return "post"
 
     def _handle(self, channel_id, sender, text, msg_id, thread_root, is_dm, gen=0):
