@@ -343,6 +343,29 @@ def test_an_infra_failure_is_a_failed_task():
         OFF.AGENT.last_usage.update(saved_usage)
 
 
+def test_a_bad_page_size_is_the_params_error():
+    """pageSize was the one peer field ListTasks converted without a guard: a string
+    ("ten"), a list or a map raised out of a2a_handle - and out of a2a_rpc, so the HTTP
+    door dropped the connection - where pageToken beside it has answered the params
+    error since it was written. Measured 2026-10-07."""
+    try:
+        res, err = OFF.a2a_handle("ListTasks", {"pageSize": "ten"})
+    except Exception as e:                                       # noqa: BLE001
+        res, err = "RAISED", "%s: %s" % (type(e).__name__, e)
+    check("a non-numeric pageSize is a params error, not a crash",
+          res is None and isinstance(err, dict) and err.get("code") == -32602, (res, err))
+    try:
+        status, body = OFF.a2a_rpc({"jsonrpc": "2.0", "id": 4, "method": "ListTasks",
+                                    "params": {"pageSize": ["nope"]}})
+    except Exception as e:                                       # noqa: BLE001
+        status, body = "RAISED", "%s: %s" % (type(e).__name__, e)
+    check("...and the JSON-RPC shim answers it as an error object",
+          status == 200 and body.get("error", {}).get("code") == -32602, (status, body))
+    ok, err2 = OFF.a2a_handle("ListTasks", {"pageSize": 2})
+    check("...while a real number still pages", err2 is None and ok["pageSize"] <= 2,
+          (ok, err2))
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

@@ -10769,7 +10769,16 @@ def a2a_handle(method, params, version=None):
                           "message": "TaskNotFoundError: no task %s" % task_id}
         return task, None
     if method == "ListTasks":
-        size = max(1, min(100, int(params.get("pageSize") or 50)))
+        # pageSize is a field a PEER sends, and this was the one conversion in the method
+        # with no guard: a string ("ten"), a list or a map raised out of a2a_handle - and
+        # therefore out of a2a_rpc, so the HTTP door dropped the connection instead of
+        # answering an error the peer can read. pageToken, the line below, has answered
+        # the params error since it was written (measured 2026-10-07).
+        try:
+            size = max(1, min(100, int(params.get("pageSize") or 50)))
+        except (TypeError, ValueError):
+            return None, {"code": -32602,
+                          "message": "Invalid params: pageSize must be an integer"}
         try:
             start = max(0, int(params.get("pageToken") or 0))
         except (TypeError, ValueError):
