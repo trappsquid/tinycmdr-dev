@@ -87,14 +87,16 @@ cd "$src"
 set +e   # the installer's own exit code is mine to report, not to die on
 if [ ! -t 0 ] && { exec 3</dev/tty; } 2>/dev/null; then
     bash "$installer" "$@" <&3
-    exec 3<&-
-elif [ ! -t 0 ]; then
+    rc=$?                     # the INSTALLER's status, kept before the fd is closed:
+    exec 3<&-                 # `exec 3<&-` succeeds, and a shared `rc=$?` below it
+elif [ ! -t 0 ]; then         # reported a failed install as 0
     printf '    (no terminal here to ask questions on: the installer takes its defaults)\n'
     bash "$installer" "$@"
+    rc=$?
 else
     bash "$installer" "$@"
+    rc=$?
 fi
-rc=$?
 set -e
 if [ "$rc" -ne 0 ]; then
     printf '\n*** the installer exited %d - the unpacked copy is left in %s\n' "$rc" "$src" >&2

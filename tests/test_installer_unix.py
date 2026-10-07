@@ -726,6 +726,83 @@ def case_download_sums(sb, pkg, bindir, user, py):
           "matches SHA256SUMS" in both, both[-300:])
 
 
+def run_on_tty(cmd, env, cwd):
+    """Run a command with a CONTROLLING terminal whose stdin is NOT it - the `curl | bash`
+    shape - so install.sh's `exec 3</dev/tty` branch is the one that runs. Returns
+    (exit code, everything printed). `pty` is imported here on purpose: this suite
+    returns its Windows skip before any case runs, and `pty` does not exist there."""
+    import pty
+    pid, master = pty.fork()
+    if pid == 0:
+        try:
+            os.chdir(str(cwd))
+            fd = os.open(os.devnull, os.O_RDONLY)
+            os.dup2(fd, 0)
+            os.execve(str(cmd[0]), [str(c) for c in cmd], env)
+        except BaseException as e:                               # noqa: BLE001
+            os.write(2, ("exec failed: %r\n" % (e,)).encode())
+            os._exit(99)
+    out = b""
+    try:
+        while True:
+            try:
+                chunk = os.read(master, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            out += chunk
+    finally:
+        os.close(master)
+    _, status = os.waitpid(pid, 0)
+    return os.waitstatus_to_exitcode(status), out.decode("utf-8", "replace")
+
+
+def case_install_sh_reports_failure(sb, pkg, bindir, user, py):
+    """The pipe-to-bash door must report a FAILED install as failed.
+
+    The handoff borrows the terminal for the installer's questions and closes that fd
+    right after; the single `rc=$?` after the whole if/elif/else read the status of
+    `exec 3<&-` - which is 0 - so the door printed its success footer and exited 0 for an
+    installer that exited 3 (measured 2026-10-07: an installer exiting 3 through the real
+    door gave exit code 0). This drives the real door on a pty, so the borrowing branch
+    is the one taken, against a package whose installer fails.
+    """
+    ver = re.search(r'^VERSION = "(.*?)"',
+                    (pkg / "tinycmdr.py").read_text(encoding="utf-8"), re.M).group(1)
+    darwin = os.uname().sysname == "Darwin"
+    asset = "tinycmdr-macos.zip" if darwin else "tinycmdr-linux.tar.gz"
+    installer = "install/install-tinycmdr-macos.sh" if darwin else "install/install-tinycmdr.sh"
+    root = sb / "stage-fail"
+    stage = root / f"tinycmdr-{ver}"
+    (stage / "install").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(pkg / "tinycmdr.py", stage / "tinycmdr.py")
+    (stage / installer).write_text(
+        '#!/bin/sh\necho "the stub installer could not do its job" >&2\nexit 3\n',
+        encoding="utf-8")
+    dist = sb / "dist-fail"
+    dist.mkdir(parents=True, exist_ok=True)
+    if darwin:
+        import zipfile
+        with zipfile.ZipFile(dist / asset, "w") as z:
+            for f in sorted(root.rglob("*")):
+                if f.is_file():
+                    z.write(f, f.relative_to(root).as_posix())
+    else:
+        import tarfile
+        with tarfile.open(dist / asset, "w:gz") as t:
+            t.add(stage, arcname=f"tinycmdr-{ver}")
+    release_sums(dist, asset)
+    env = stub_env(bindir, sb / "logs" / "installsh-fail.log",
+                   {"HOME": str(sb / "home"), "TINYCMDR_URL": f"file://{dist}"})
+    rc, out = run_on_tty(["/bin/bash", pkg / "install.sh"], env, pkg)
+    check("install.sh exits with the installer's own code",
+          rc == 3, f"rc={rc}; out={out[-300:]!r}")
+    check("...and names the failure", "the installer exited 3" in out, out[-300:])
+    check("...and does not print the success footer",
+          "the unpacked folder was temporary" not in out, out[-300:])
+
+
 def case_archive_and_python(sb, pkg, bindir, user, py):
     """In the built archive, and the refusals."""
     got = subprocess.run([sys.executable, str(BASE / "maintenance" / "check-package-modes.py")],
@@ -1075,6 +1152,7 @@ def main():
         case_macos_secrets_lane(sb, pkg, bindir, user, py)
         case_help_and_footer(sb, pkg, bindir, user, py)
         case_download_sums(sb, pkg, bindir, user, py)
+        case_install_sh_reports_failure(sb, pkg, bindir, user, py)
         case_archive_and_python(sb, pkg, bindir, user, py)
         case_installer_probes_endpoint(sb, pkg, bindir, user, py)
         case_macos_probes_endpoint(sb, pkg, bindir, user, py)
