@@ -60,7 +60,8 @@ try {
                    "state.json", "jobs.json", "tasks.json", "tasks.journal.jsonl",
                    "tasks.md", "confirm-allow.json", "tools-provenance.json", "theme.toml",
                    "tinycmdr.log", "tinycmdr.lock")
-    $HostDirs = @("tools", "skills", "sessions", "logs", "spill", "venv", "dist", ".git")
+    $HostDirs = @("tools", "skills", "sessions", "snapshots", "logs", "spill", "venv",
+                  "dist", ".git", "tmp")
     $written = 0
     Push-Location $Src
     try {

@@ -68,7 +68,7 @@ NEW="$("$PY" -c 'import re,pathlib,sys;t=pathlib.Path(sys.argv[1]).read_text(enc
 
 # Host-owned paths: never overwrite, and never delete anything not in the package.
 HOST_FILES="config.json .env soul.md notes.md notes-authored.json field-notes.md atlas.md experiments.jsonl web-sessions.json state.json jobs.json tasks.json tasks.journal.jsonl tasks.md confirm-allow.json tools-provenance.json theme.toml tinycmdr.log tinycmdr.lock"
-HOST_DIRS="tools skills sessions logs spill venv dist .git"
+HOST_DIRS="tools skills sessions snapshots logs spill venv dist .git tmp"
 is_host() {
     for f in $HOST_FILES; do [ "$1" = "$f" ] && return 0; done
     for d in $HOST_DIRS; do case "$1" in "$d"/*) return 0 ;; esac; done

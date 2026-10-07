@@ -259,26 +259,37 @@ def main():
         check("...and the mmpy_bot guard points at requirements.txt, not a module list",
               "pip install requests mmpy_bot croniter" not in _tsrc)
 
-        # The host-owned rule is written out four times (three installers + the update
-        # path) and they ALREADY disagreed once: snapshots/ and tmp/ were the
-        # Installers' and not the updater's. Grade that every
-        # installer dir is covered by _HOST_OWNED_PREFIXES or the by-name skips.
-        _hostdirs = set()
-        for _name in ("install-tinycmdr.sh", "install-tinycmdr-macos.sh"):
+        # The host-owned rule is written out SIX times - the three installers, the two
+        # standalone updaters the launcher falls back to for an old or broken install
+        # (update.sh / update.ps1), and the update path in tinycmdr.py - and they ALREADY
+        # disagreed once: snapshots/ and tmp/ were the installers' and not the updater's.
+        # This parse used to read only the three installers, which is how the two updaters
+        # kept missing that same pair while a commit message claimed every copy had been
+        # updated (measured 2026-10-07, an earlier review run 16 A-2026-10-07-05): grade BOTH
+        # that every dir any copy names is covered here, and that the copies agree.
+        _lists = {}
+        for _rel in ("install/install-tinycmdr.sh", "install/install-tinycmdr-macos.sh",
+                     "update.sh"):
             _m = re.search(r'HOST_DIRS="([^"]+)"',
-                           (BASE / "install" / _name).read_text(encoding="utf-8"))
+                           (BASE / _rel).read_text(encoding="utf-8"))
             if _m:
-                _hostdirs |= set(_m.group(1).split())
-        _m = re.search(r"\$hostDirs\s*=\s*@\(([^)]*)\)",
-                       (BASE / "install" / "install-tinycmdr.ps1")
-                       .read_text(encoding="utf-8"), re.S)
-        if _m:
-            _hostdirs |= set(re.findall(r'"([^"]+)"', _m.group(1)))
+                _lists[_rel] = set(_m.group(1).split())
+        for _rel in ("install/install-tinycmdr.ps1", "update.ps1"):
+            # $hostDirs in the installer, $HostDirs in the updater: PowerShell is
+            # case-insensitive, a python parse is not.
+            _m = re.search(r"\$[Hh]ostDirs\s*=\s*@\(([^)]*)\)",
+                           (BASE / _rel).read_text(encoding="utf-8"), re.S)
+            if _m:
+                _lists[_rel] = set(re.findall(r'"([^"]+)"', _m.group(1)))
+        _hostdirs = set().union(*_lists.values()) if _lists else set()
         _covered = {p.rstrip("/") for p in fb._HOST_OWNED_PREFIXES}
         _covered |= {"dist", ".git"}          # skipped by name in _apply_package
         _missing = sorted(d for d in _hostdirs if d not in _covered)
         check("the update path's host-owned set covers every installer dir",
               bool(_hostdirs) and not _missing, (_missing, sorted(_hostdirs)))
+        check("...and all six copies of that rule name the same directories",
+              len(_lists) == 5 and len({frozenset(v) for v in _lists.values()}) == 1,
+              {k: sorted(v) for k, v in sorted(_lists.items())})
 
         # _dev_tree_reason() decides whether pruning is SAFE here, so grade both
         # directions: a two-tree box declares dev elsewhere and its live tree is prunable,

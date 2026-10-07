@@ -36289,12 +36289,16 @@ _HOST_OWNED_EXACT = frozenset((
     "tasks.journal.jsonl", "tasks.md", "confirm-allow.json", "notes-authored.json",
     "tools-provenance.json", "tinycmdr.log", "tinycmdr.lock",
 ))
-# Four copies of ONE rule live in this tree - this set and the three installers'
+# SIX copies of ONE rule live in this tree: this set, the three installers'
 # HOST_DIRS/hostDirs lists (install-tinycmdr.sh:1159, install-tinycmdr-macos.sh:1014,
-# install-tinycmdr.ps1:1237). They already disagreed once: snapshots/ and tmp/ were
-# the installers' and not the updater's, so a re-install left state an update would
-# Overwrite. tests/test_verbs.py now grades that every installer
-# dir is covered here.
+# install-tinycmdr.ps1:1237) and the two standalone updaters the launcher falls back to
+# for an old or broken install (update.sh, update.ps1). The comment said "four" and
+# tests/test_verbs.py parsed three, which is how the two updaters stayed in their
+# pre-fix state - still missing snapshots/ and tmp/ - while a commit claimed every copy
+# had been updated (measured 2026-10-07, an earlier review run 16 A-2026-10-07-05). They
+# disagreed once before that too: snapshots/ and tmp/ were the installers' and not the
+# updater's, so a re-install left state an update would Overwrite. tests/test_verbs.py
+# now parses all six and fails when they are not the same rule.
 _HOST_OWNED_PREFIXES = ("tools/", "skills/", "sessions/", "snapshots/", "logs/",
                         "spill/", "venv/", "dist/", "tmp/",
                         "maintenance/private_rules.py",
