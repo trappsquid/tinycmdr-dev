@@ -13,6 +13,7 @@ installer writes one) and replaces the model call and the reporter; nothing here
 reaches a model, a chat server or the clock.
 """
 import importlib.util
+import json
 import logging
 import os
 import shutil
@@ -24,6 +25,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
+
 
 STAGE = Path(tempfile.mkdtemp(prefix="tinycmdr-test-stage-schedule"))
 shutil.copy2(SRC, STAGE / "tinycmdr.py")
@@ -142,5 +144,46 @@ finally:
     slow.release.set()
     fb.drive_run, fb.report = saved_drive, saved_report
 
+# ------------------------------------------- only the bot fires the folder's jobs
+# Every process that imports this module builds a Scheduler with a loop of its own,
+# and the single-instance lock is taken only by the service doors. A `--cli` session
+# alive across a cron boundary used to take the job: it ran in a process where
+# SCHEDULER.dispatcher is None (the answer went to print() on a terminal, not the
+# job's channel), as a daemon thread that died when the session closed - and the bot
+# adopted the advanced `next` out of jobs.json and never ran that occurrence at all.
+# Measured 2026-10-06 with a real second process: `cli fired sched-nightly`, next
+# moved a full minute on.
+sched = _scheduler("jobs-owner.json")
+sched.jobs["nightly"] = {"cron": "* * * * *", "task": "say hi",
+                         "channel_id": None, "model": None,
+                         "next": time.time() + 3600}
+sched._save()
+sched._mtime = sched._disk_mtime()      # the file is exactly what memory holds
+saved_next = sched.jobs["nightly"]["next"]
+# The state a running bot reaches when the clock passes a job's `next`.
+sched.jobs["nightly"]["next"] = time.time() - 1
+fired = []
+saved_drive = fb.drive_run
+fb.drive_run = lambda key, text, rep, **kw: (fired.append(key), "done")[1]
+try:
+    check("a process that does not hold the folder's instance lock fires nothing",
+          sched._tick() is False and not fired, fired)
+    check("...and leaves the job due, so the bot still gets it",
+          sched.jobs["nightly"]["next"] <= time.time()
+          and json.loads((STAGE / "jobs-owner.json").read_text())["nightly"]["next"]
+          == saved_next, (sched.jobs["nightly"]["next"], saved_next))
+    got = fb.acquire_single_instance_lock()
+    check("the process holding the folder's instance lock is the one that fires",
+          got and fb.holds_instance_lock() and sched._tick() is True,
+          (got, fb.holds_instance_lock()))
+    check("...and the job runs there", _until(lambda: fired == ["sched-nightly"]),
+          fired)
+    check("...once: the next tick has nothing due", sched._tick() is True
+          and len(fired) == 1, fired)
+finally:
+    fb.drive_run = saved_drive
+    fb._release_lock()
+    check("a process that has released the lock stops firing",
+          fb.holds_instance_lock() is False, fb.holds_instance_lock())
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

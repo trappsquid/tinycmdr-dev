@@ -12648,6 +12648,20 @@ def report(channel_id, text):
 REPORTER = None  # set by run_bot()
 
 
+# True in the process that took this folder's single-instance lock - the bot.
+# acquire_single_instance_lock() sets it much further down; it is DECLARED here because
+# the scheduler's loop thread starts at import, long before that function exists, and a
+# name the loop reads has to exist before the loop runs.
+_LOCK_HELD = False
+
+
+def holds_instance_lock():
+    """True when THIS process took the folder's single-instance lock, i.e. it is the
+    bot. Every process that imports this module builds a Scheduler, and only one of
+    them is the service - see Scheduler._tick."""
+    return bool(_LOCK_HELD)
+
+
 class Scheduler:
     def __init__(self, jobs_file):
         self.jobs_file = jobs_file
@@ -12771,23 +12785,45 @@ class Scheduler:
 
     def _loop(self):
         while not self._stop.is_set():
-            now = time.time()
-            due = []
+            # 5s while this process is not the one that fires, so a bot that takes its
+            # instance lock a moment after import still starts on schedule.
+            self._stop.wait(30 if self._tick() else 5)
+
+    def _tick(self):
+        """Fire what is due; False when this process must not fire at all.
+
+        Only the process holding the folder's instance lock is the bot, and only it
+        fires. Every other process - `--cli`, `--app`, `--once`, a verb - imports this
+        module and so builds a Scheduler with a loop of its own, and a CLI session
+        alive across a cron boundary used to take the job: it ran in a process where
+        `SCHEDULER.dispatcher` is None, so the answer went to `print()` on a terminal
+        instead of the job's channel, the run was a daemon thread that died when the
+        session closed, and the bot adopted the advanced `next` out of jobs.json and
+        never ran that occurrence at all (measured 2026-10-06: a lockless process
+        fired `sched-nightly` and moved its `next` a full minute on). Such a process
+        still adopts another process's edits, so `schedule list` stays honest.
+        """
+        if not holds_instance_lock():
             with self.lock:
                 self._reload_if_changed()
-                for name, job in self.jobs.items():
-                    if job.get("next", float("inf")) <= now:
-                        due.append((name, dict(job)))
-                        try:
-                            job["next"] = self._next_run(job["cron"], now)
-                        except Exception:
-                            job["next"] = now + 3600
-                if due:
-                    self._save()
-            for name, job in due:
-                threading.Thread(target=self._fire, args=(name, job),
-                                 daemon=True).start()
-            self._stop.wait(30)
+            return False
+        now = time.time()
+        due = []
+        with self.lock:
+            self._reload_if_changed()
+            for name, job in self.jobs.items():
+                if job.get("next", float("inf")) <= now:
+                    due.append((name, dict(job)))
+                    try:
+                        job["next"] = self._next_run(job["cron"], now)
+                    except Exception:
+                        job["next"] = now + 3600
+            if due:
+                self._save()
+        for name, job in due:
+            threading.Thread(target=self._fire, args=(name, job),
+                             daemon=True).start()
+        return True
 
     def _open_in_channel(self, channel_id, key, question, options, timeout):
         """A scheduled run's question: post it, hand back the row, do NOT wait.
@@ -35026,7 +35062,7 @@ def acquire_single_instance_lock():
     (Logon shortcut + manual double-click = two bots on one Mattermost
     token = duplicate replies.) Lock is released on process exit, and on
     os.execv (/restart) thanks to PEP 446 non-inheritable fds."""
-    global _LOCK_FH
+    global _LOCK_FH, _LOCK_HELD
     fh = None
     try:
         _kind, fh = _lock_target()
@@ -35044,19 +35080,23 @@ def acquire_single_instance_lock():
     except Exception:
         if fh is not None:
             _lock_release_fd(fh)
-        return True   # lock mechanics failed — never block startup on that
+        _LOCK_HELD = True   # lock mechanics failed - never block startup on that
+        return True
     _LOCK_FH = fh
+    _LOCK_HELD = True
     return True
+
 
 def _release_lock():
     """Drop the single-instance lock so a replacement process can take it."""
-    global _LOCK_FH
+    global _LOCK_FH, _LOCK_HELD
     try:
         if _LOCK_FH:
             _lock_release_fd(_LOCK_FH)
     except Exception:                                            # noqa: BLE001
         pass
     _LOCK_FH = None
+    _LOCK_HELD = False     # released: this process is no longer the bot
 
 def _instance_lock_free():
     """True when no process holds this folder's instance lock.
