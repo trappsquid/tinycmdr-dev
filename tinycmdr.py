@@ -29234,7 +29234,13 @@ class MattermostDispatcher:
                     time.sleep(1.0)   # transient: one retry, same payload
             if err is None:
                 continue
-            log.error("failed to post: %s", err)
+            # A chunk that cannot be posted is an answer the channel never got, and
+            # from the inside the run still looks delivered. Log the LOST TEXT beside
+            # the reason, bounded so a 16,000-character chunk cannot bloat the log:
+            # measured 2026-10-06, a rejected post left `failed to post: <err>` and no
+            # trace anywhere on the box of what had been lost.
+            log.error("failed to post %d chars to %s: %s — lost: %.2000s",
+                      len(chunk), channel_id, err, chunk)
             if not post.get("root_id") or not self._is_root_rejection(err):
                 continue
             # the thread root itself is gone: re-post this chunk top-level
@@ -29245,7 +29251,8 @@ class MattermostDispatcher:
                 post_id = resp.get("id") or post_id
                 root_id = None  # don't re-use the dead root for later chunks
             except Exception as e:
-                log.error("failed to post (top-level retry): %s", e)
+                log.error("failed to post %d chars to %s after the root died: %s"
+                          " — lost: %.2000s", len(chunk), channel_id, e, chunk)
         return post_id
 
     def _delete(self, post_id, channel_id):

@@ -820,6 +820,39 @@ def test_a_streamed_draft_belongs_to_the_run_that_streamed_it():
         fb.want_color = saved
 
 
+def test_a_post_that_cannot_be_delivered_leaves_its_text_behind():
+    """A-296 (2026-10-06): a permanent post failure logged the EXCEPTION only. The
+    answer never reached the channel and was nowhere on the box either - the run
+    looked delivered from the inside and the text was simply gone.
+    """
+    def _refuse(post):
+        raise RuntimeError("403 not enough channels")
+
+    class _Dead(fb.MattermostDispatcher):
+        """A server that refuses every post, twice."""
+
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {"posts": type("P", (), {
+                "create_post": staticmethod(_refuse)})()})()
+
+    d = _Dead()
+    saved_sleep = fb.time.sleep
+    fb.time.sleep = lambda s: None      # the retry waits a second; skip the wait
+    cap, stop = _capture_turns()
+    try:
+        ref = fb.MattermostDestination(d, "chan-dead", None).line(
+            "say", "THE ANSWER TEXT")
+        check("an undeliverable answer yields no post", ref is None, ref)
+        check("and the log carries the lost text with the channel and the reason",
+              any("THE ANSWER TEXT" in m and "chan-dead" in m
+                  and "not enough channels" in m for m in cap), cap[-3:])
+    finally:
+        stop()
+        fb.time.sleep = saved_sleep
+
+
 # ------------------------------------------------- scheduled runs are runs too
 # F-11 (review, 2026-09-29): Scheduler._fire called drive_run with no cancel event and
 # registered the run nowhere the watchdog could see it, so a wedged cron job was
