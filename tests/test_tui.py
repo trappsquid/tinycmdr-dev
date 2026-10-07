@@ -149,6 +149,38 @@ check("a 16-colour console gets a named colour instead of hex",
 check("a no-colour console gets no SGR at all",
       "\x1b[" not in tiers["none"].out.getvalue(),
       tiers["none"].out.getvalue()[:120])
+# The palette's vocabulary and prompt_toolkit's parser are a must-agree pair: a `bg:`
+# slot takes a COLOUR, and the `16`/`none` rows spell the selection as the ATTRIBUTE
+# `reverse`. That one slot raised ValueError out of Style.from_dict for the WHOLE table,
+# so `--app` died at startup on every plain conhost / TERM=xterm session (tier `16` is
+# tui_colour_tier()'s fallback) and the shell's model picker died on a NO_COLOR terminal.
+# Reproduced on a real pty with TERM=xterm, COLORTERM unset.
+def _style_builds(table):
+    from prompt_toolkit.styles import Style
+    try:
+        Style.from_dict(table)
+        return True, ""
+    except Exception as exc:                                    # noqa: BLE001
+        return False, "%s: %s" % (type(exc).__name__, exc)
+
+
+for tier in ("truecolor", "256", "16", "none"):
+    ok, why = _style_builds(fb.model_pick_styles(fb.TUI_PALETTE[tier]))
+    check("the model picker's style table builds on the %s tier" % tier, ok, why)
+    try:
+        built = fb.AppScreen(colour=True, tier=tier).app is not None
+        ok, why = built, ""
+    except Exception as exc:                                    # noqa: BLE001
+        ok, why = False, "%s: %s" % (type(exc).__name__, exc)
+    check("--app builds its frame on the %s tier" % tier, ok, why)
+check("the 16-colour selection rides as an attribute, not a bg: colour",
+      fb.pick_sel_style(fb.TUI_PALETTE["16"]) == "reverse"
+      and fb.pick_sel_style(fb.TUI_PALETTE["truecolor"]).startswith("bg:#"),
+      (fb.pick_sel_style(fb.TUI_PALETTE["16"]),
+       fb.pick_sel_style(fb.TUI_PALETTE["truecolor"])))
+check("a theme that spells its selection colour in words cannot poison the table",
+      _style_builds(fb.model_pick_styles({"selection_bg": "dim red",
+                                          "selection_fg": "white"}))[0])
 n = len(screen.shown)
 screen.card("checkin", "· working · 12s")
 check("the run's own line is text, not a card",

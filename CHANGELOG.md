@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`--app` starts on a 16-colour terminal:** the model picker put the palette's `selection_bg` into a `bg:` style slot, and the `16` and `none` tiers spell that value as the ATTRIBUTE `reverse` - `Style.from_dict` refused the whole table (`ValueError: Wrong color format 'reverse'`), so `tinycmdr --app` died at startup on every plain conhost / `TERM=xterm` session (`16` is `tui_colour_tier()`'s fallback) and the shell's model picker died on a `NO_COLOR` terminal. A `selection_bg` that is not a colour now rides as its own attribute string, so a theme written in words ("dim red") cannot poison the table either. (tests/test_tui.py)
+
 ## [1.0.84] - 2026-10-06
 
 ### Fixed

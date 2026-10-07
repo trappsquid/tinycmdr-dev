@@ -33393,14 +33393,38 @@ def model_pick_rows(entries, current):
     return rows
 
 
+# A `bg:` slot takes a COLOUR. The palette's `16` and `none` rows put the style
+# ATTRIBUTE `reverse` in `selection_bg` (the Basic-ANSI set has no dark red to select
+# with), and a theme.toml written in human words can land there the same way after
+# `_ANSI_WORDS`. prompt_toolkit parses the whole table up front and one bad slot raises
+# ValueError("Wrong color format 'reverse'") out of `Style.from_dict`, which killed
+# `--app` at startup on every plain conhost / `TERM=xterm` session (tier `16` is
+# `tui_colour_tier()`'s fallback) and the shell's model picker on a NO_COLOR terminal -
+# measured on a real pty 2026-10-06. A value that is not a colour rides as attributes.
+_PICK_COLOUR = re.compile(
+    r"^(#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})|ansi(bright)?"
+    r"(black|red|green|yellow|blue|magenta|cyan|white)"
+    r"|(black|red|green|yellow|blue|magenta|cyan|white|default))$")
+
+
+def pick_sel_style(palette):
+    """The selected row's style: `bg:<colour>` when the palette names a COLOUR, the
+    palette's own words when it names an attribute (`reverse` on the 16-colour tier)."""
+    sel = str(palette.get("selection_bg") or "").strip()
+    fg = str(palette.get("selection_fg") or "").strip()
+    if not sel:
+        return "reverse"
+    body = ("bg:" + sel) if _PICK_COLOUR.match(sel.lower()) else sel
+    return ("%s %s" % (body, fg)).strip()
+
+
 def model_pick_styles(palette):
     """The picker's style classes, from the same palette the cards read."""
     return {
         "pick.title": palette.get("gold", ""),
         "pick.hint": palette.get("muted", ""),
         "pick.row": palette.get("text", ""),
-        "pick.sel": (("bg:%s %s" % (palette["selection_bg"], palette.get("selection_fg") or ""))
-                     if palette.get("selection_bg") else "reverse"),
+        "pick.sel": pick_sel_style(palette),
         "pick.cur": palette.get("gold", ""),
         "pick.filter": palette.get("ember", ""),
     }
