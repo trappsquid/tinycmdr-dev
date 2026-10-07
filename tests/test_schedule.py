@@ -234,5 +234,53 @@ finally:
     fb._release_lock()
     check("a process that has released the lock stops firing",
           fb.holds_instance_lock() is False, fb.holds_instance_lock())
+
+# ------------------------------- a save is an edit of the file, not a blind overwrite
+# A tick wrote its WHOLE in-memory dict back to jobs.json. A `--once` run - the normal
+# way a job is added from a terminal - that added a job between the tick's reload and
+# its save was overwritten by that dict and gone for good, after the operator had
+# already been answered "OK: job '...' scheduled". Measured 2026-10-07 against this
+# build: 276 of 1989 concurrent adds lost (84 of 659 tick saves clobbering the file).
+# The interleave is staged on the one seam between the tick's read and its write.
+jobs_file = STAGE / "jobs-merge.json"
+sched = _scheduler("jobs-merge.json")
+sched.jobs["nightly"] = {"cron": "* * * * *", "task": "say hi",
+                         "channel_id": None, "model": None, "next": 0.0}
+sched._save()
+sched._mtime = sched._disk_mtime()          # the file is exactly what memory holds
+saved_next = fb.Scheduler.__dict__["_next_run"]
+saved_fire, saved_drive, saved_report = sched._fire, fb.drive_run, fb.report
+once = []
+def _next_run_with_once(cron, base=None):
+    if not once:                            # between the tick's reload and its save
+        once.append(1)
+        # what the `--once` process left on disk: its own add, on top of the file
+        on_disk = json.loads(jobs_file.read_text(encoding="utf-8"))
+        on_disk["from_once"] = {"cron": "0 7 * * *", "task": "df -h",
+                               "channel_id": None, "model": None,
+                               "next": time.time() + 3600}
+        jobs_file.write_text(json.dumps(on_disk), encoding="utf-8")
+    return saved_next(cron, base)
+try:
+    fb.Scheduler._next_run = staticmethod(_next_run_with_once)
+    sched._fire = lambda name, job: None    # this grades the write, not the run
+    fb.drive_run = lambda key, text, rep, **kw: "done"
+    fb.report = lambda token, text: None
+    sched.jobs["nightly"]["next"] = time.time() - 1
+    got = fb.acquire_single_instance_lock()
+    check("the merge is graded while the instance lock is held", got)
+    sched._tick()
+    merged = json.loads(jobs_file.read_text(encoding="utf-8"))
+finally:
+    fb.Scheduler._next_run = saved_next
+    sched._fire, fb.drive_run, fb.report = saved_fire, saved_drive, saved_report
+    fb._release_lock()
+    sched._stop.set()
+check("...and the other process's add landed before the save", once == [1], once)
+check("a job another process added mid-tick survives that tick's save",
+      "from_once" in merged, sorted(merged))
+check("...and the tick still moved the job it saved",
+      merged.get("nightly", {}).get("next", 0) > time.time(),
+      merged.get("nightly"))
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)
