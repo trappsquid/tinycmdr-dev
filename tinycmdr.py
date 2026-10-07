@@ -17515,6 +17515,20 @@ def _repair_tool_arguments(messages):
     return out
 
 
+# Files that live in sessions/ BESIDE a conversation but are not one: the carry, the
+# hint list and the parked question, each written as <key>.<what>.json. Path.stem leaves
+# "x.carry"/"x.hints" from them, so a plain glob("*.json") reads them as conversations of
+# their own. The reload excluded only the carry sidecar, and search_sessions had already
+# tripped on the same shape (an earlier review run 17, A-2026-10-07-10: the hints list shows as
+# a session in `tinycmdr sessions` today, and all three land in `histories`).
+_SESSION_SIDECAR_SUFFIXES = (".carry.json", ".hints.json", ".question.json")
+
+
+def _is_session_file(path):
+    """True when a file in sessions/ IS a conversation, not one of its sidecars."""
+    return not str(getattr(path, "name", path)).endswith(_SESSION_SIDECAR_SUFFIXES)
+
+
 class Agent:
     def __init__(self):
         self.histories = {}          # session_key -> list[message]
@@ -17534,11 +17548,13 @@ class Agent:
         # No mkdir here: opening the agent creates NOTHING (see _ensure_sessions_dir).
         # glob on a missing directory is empty, so the reload below needs no folder.
         for f in SESSIONS_DIR.glob("*.json"):  # reload persisted sessions
-            # _carry_path writes <key>.carry.json into the SAME folder, and Path.stem
-            # leaves "x.carry" from it - so the glob handed back every carry sidecar as a
-            # session too. Nothing iterates histories today, but search_sessions already
-            # had to special-case this shape of file; keep it out of the map entirely.
-            if f.name.endswith(".carry.json"):
+            # <key>.carry.json, <key>.hints.json and <key>.question.json live in the SAME
+            # folder, and Path.stem leaves "x.carry"/"x.hints"/"x.question" from them - so
+            # the glob handed every sidecar back as a session too. One predicate, because
+            # the exclusion list was already incomplete once (an earlier review run 17,
+            # A-2026-10-07-10). search_sessions keeps tolerating both file shapes on
+            # purpose - it SEARCHES a carry's args/out - so it is not routed here.
+            if not _is_session_file(f):
                 continue
             try:
                 self.histories[f.stem] = json.loads(
@@ -33209,6 +33225,11 @@ def _cli_session_rows():
     for f in files:
         if f.name.startswith("export-"):
             continue        # /save exports, not conversations
+        if not _is_session_file(f):
+            # ...and neither are the carry/hints/question sidecars: the hints file IS a
+            # JSON list, so the shape check below let it list as a conversation called
+            # "x.hints" (an earlier review run 17, A-2026-10-07-10).
+            continue
         try:
             hist = json.loads(f.read_text(encoding="utf-8"))
         except Exception:

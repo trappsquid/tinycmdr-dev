@@ -50,14 +50,37 @@ class TestHarnessRefinements(unittest.TestCase):
         self.assertFalse(carry_file.exists())
 
     def test_session_loader_skips_carry_sidecars(self):
-        """A *carry.json sidecar in sessions/ must not load as a <key>.carry session."""
-        sidecar = _fb.SESSIONS_DIR / "reload-probe.carry.json"
-        sidecar.write_text('{"run": 1, "entries": []}', encoding="utf-8")
+        """A sessions/ sidecar must not load as a conversation of its own.
+
+        Three files live in that folder beside a conversation - the carry, the hint list
+        and the parked question - and Path.stem turns each into a key of its own. The
+        exclusion list named only the carry (an earlier review run 17, A-2026-10-07-10), and
+        the hints file is a JSON LIST, so it also listed as a conversation in the
+        `sessions` verb.
+        """
+        real = _fb.SESSIONS_DIR / "reload-probe.json"
+        real.write_text('[{"role": "user", "content": "hi"}]', encoding="utf-8")
+        sidecars = {suffix: _fb.SESSIONS_DIR / ("reload-probe" + suffix)
+                    for suffix in (".carry.json", ".hints.json", ".question.json")}
+        sidecars[".carry.json"].write_text('{"run": 1, "entries": []}', encoding="utf-8")
+        sidecars[".hints.json"].write_text('["hint-a", "hint-b"]', encoding="utf-8")
+        sidecars[".question.json"].write_text('{"question": "restart?", "options": []}',
+                                              encoding="utf-8")
         try:
             fresh = _fb.Agent()
-            self.assertNotIn("reload-probe.carry", fresh.histories)
+            self.assertIn("reload-probe", fresh.histories)      # the conversation loads
+            for suffix in sidecars:
+                self.assertNotIn("reload-probe" + suffix.split(".")[1],
+                                 fresh.histories)
+            rows = [r["key"] for r in _fb._cli_session_rows()]
+            self.assertIn("reload-probe", rows)
+            for phantom in ("reload-probe.carry", "reload-probe.hints",
+                            "reload-probe.question"):
+                self.assertNotIn(phantom, rows)
         finally:
-            sidecar.unlink(missing_ok=True)
+            real.unlink(missing_ok=True)
+            for p in sidecars.values():
+                p.unlink(missing_ok=True)
 
     def test_reset_reclaims_but_never_steals_session_locks(self):
         """AGENT.reset drops the session's lock, but leaves one a worker still holds."""
