@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.87] - 2026-10-07
+
+### Fixed
+- **A damaged `jobs.json` was forgotten in silence:** the scheduler's own reader answered `{}` for anything it could not parse, with no log line and no `.damaged-*` copy, and `_save` re-read the same way - so a corrupt or transiently-locked file lost every job with no evidence left anywhere; it goes through the shared `_load_json_state` now, which keeps the unreadable file and names it, and the quarantine suite covers the fourth state path (tests/test_state_damage.py).
+- **A `sessions/` sidecar loaded as a conversation:** three files live in that folder beside a conversation and `Path.stem` turned each into a session key of its own, while the reload excluded only the carry sidecar - and because the hints file IS a JSON list, `tinycmdr sessions` listed it as a conversation too; one predicate now answers for both the reload and the listing (tests/test_harness_refinements.py).
+
 ## [1.0.86] - 2026-10-07
 
 ### Fixed
