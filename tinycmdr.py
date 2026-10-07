@@ -12795,8 +12795,19 @@ class Scheduler:
                     "model": args.get("model") or ctx.get("model"),
                     "next": nxt}
                 self._save()
-                return (f"OK: job '{name}' scheduled ({args['cron']}), next run "
-                        f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(nxt))}.")
+                out = (f"OK: job '{name}' scheduled ({args['cron']}), next run "
+                       f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(nxt))}.")
+                if not self.jobs[name]["channel_id"]:
+                    # The promise is that a job reports to the conversation that
+                    # created it. From a terminal, the page or `--once` there is no
+                    # Mattermost channel to record, so the answer lands on report()'s
+                    # print() - the service's log - and nowhere the operator looks:
+                    # a nightly job nobody ever read, with nothing saying why. Say it
+                    # at the one moment they can still act on it.
+                    out += (" It has no channel to report to, so its answer goes to "
+                            "the log only: re-add it with channel_id, or schedule it "
+                            "from a chat.")
+                return out
             if action == "remove":
                 name = _job_name(args["name"])
                 if self.jobs.pop(name, None) is None:

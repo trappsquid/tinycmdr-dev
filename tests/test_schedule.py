@@ -176,6 +176,23 @@ check("removing it twice says so, naming the stored spelling",
       == "ERROR: no job named 'check_disk'.",
       sched.tool_action({"action": "remove", "name": "check disk"}, ctx))
 sched._stop.set()
+
+# ------------------------------------ a job with nowhere to report says so
+# Created from a terminal, the page or `--once` there is no Mattermost channel to
+# record, so the answer lands on report()'s print() - the service's log - and the
+# operator never hears from a job that runs every night.
+sched = _scheduler("jobs-nowhere.json")
+silent = sched.tool_action({"action": "add", "name": "nightly",
+                            "cron": "0 7 * * *", "task": "df -h"}, {})
+check("a job with no reporting channel is still scheduled",
+      silent.startswith("OK:"), silent)
+check("...and says its answer goes to the log only",
+      "no channel to report to" in silent and "log" in silent, silent)
+loud = sched.tool_action({"action": "add", "name": "morning", "cron": "0 7 * * *",
+                          "task": "df -h", "channel_id": "chan-1"},
+                         {"channel_id": "chan-2"})
+check("a job that has a channel gets no warning", "no channel" not in loud, loud)
+sched._stop.set()
 # ------------------------------------------- only the bot fires the folder's jobs
 # Every process that imports this module builds a Scheduler with a loop of its own,
 # and the single-instance lock is taken only by the service doors. A `--cli` session
