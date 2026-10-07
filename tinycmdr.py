@@ -28892,15 +28892,38 @@ class MattermostDestination(Destination):
         Returns the operator's own words, or None if nobody answered in time: the
         reporter decides what counts as a yes, so every lane answers to the same
         words instead of each carrying its own list.
+
+        One open question per channel - the rule the Telegram lane learned in A-144
+        and `ask_operator` states for a session. The wait state is keyed by CHANNEL,
+        so a second question used to overwrite the first: the operator's reply
+        released the NEWER waiter and the first sat out its whole window and came
+        back None, which the reporter reads as "no answer within Ns - that command
+        was skipped" after the answer had already been given (measured 2026-10-06:
+        two asks in one channel, one row, first=None, second='yes'). Claiming the
+        slot BEFORE the post also closes the gap where a reply that landed in the
+        milliseconds between the post and the claim found no row and was taken for a
+        new order.
         """
         if not self.channel_id:
             return None
+        ev = threading.Event()
+        row = {"event": ev, "answer": None}
+        held = self.d.pending.setdefault(self.channel_id, row)   # the atomic claim
+        if held is not row:
+            if not held["event"].is_set():
+                self.line("ask", "❓ A question is already open in this channel - "
+                                 "answer that one first; this one was not asked.")
+                return None
+            self.d.pending[self.channel_id] = row  # the old one is answered: take over
         body = question
         if options:
             body += " — reply " + " / ".join(options)
-        self.line("ask", body)
-        ev = threading.Event()
-        self.d.pending[self.channel_id] = {"event": ev, "answer": None}
+        try:
+            self.line("ask", body)
+        except Exception:
+            if self.d.pending.get(self.channel_id) is row:
+                self.d.pending.pop(self.channel_id, None)
+            raise
         answered = ev.wait(wait)
         row = self.d.pending.pop(self.channel_id, {"answer": None})
         return row.get("answer") if answered else None

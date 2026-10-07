@@ -696,6 +696,44 @@ def test_a_forward_clock_step_does_not_abandon_a_healthy_run():
             d.active.pop(ch, None)
 
 
+def test_one_question_at_a_time_per_channel():
+    """A-267 + A-284 (2026-10-06): the wait state is keyed by CHANNEL, so a second
+    question in one channel overwrote the first. Measured with two threads and the
+    network stubbed: ONE row in the channel, the operator's "yes" released the SECOND
+    waiter, and the first sat out its whole window and came back None - which
+    RunReporter.confirm tells the model is "no answer within Ns - that command was
+    skipped", after the answer had already been given.
+    """
+    d = _dispatcher()
+    ch = "chan-two-asks"
+    got = {}
+
+    def _ask(who, question):
+        got[who] = fb.MattermostDestination(d, ch, None).ask(
+            question, options=["yes", "no"], wait=6)
+
+    t1 = threading.Thread(target=_ask, args=("first", "Delete the log?"), daemon=True)
+    t1.start()
+    time.sleep(0.4)
+    row = d.pending.get(ch)
+    check("the open question holds the channel", row is not None, d.pending)
+    t2 = threading.Thread(target=_ask, args=("second", "Restart the box?"),
+                          daemon=True)
+    t2.start()
+    time.sleep(0.4)
+    check("the first question still holds it", d.pending.get(ch) is row,
+          d.pending.get(ch))
+    check("the second is refused at once, not parked behind it",
+          got.get("second") is None and not t2.is_alive(), got)
+    check("and the operator is told why", any("already open" in t for _, t in d.posted),
+          d.posted)
+    row["answer"] = "yes"
+    row["event"].set()
+    t1.join(8)
+    check("the answer reaches the question that was open", got.get("first") == "yes",
+          got)
+
+
 # ------------------------------------------------- scheduled runs are runs too
 # F-11 (review, 2026-09-29): Scheduler._fire called drive_run with no cancel event and
 # registered the run nowhere the watchdog could see it, so a wedged cron job was
