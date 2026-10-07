@@ -282,5 +282,6 @@ check("a job another process added mid-tick survives that tick's save",
 check("...and the tick still moved the job it saved",
       merged.get("nightly", {}).get("next", 0) > time.time(),
       merged.get("nightly"))
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

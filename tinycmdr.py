@@ -8614,6 +8614,7 @@ def atomic_write_bytes(path, data):
 def atomic_write_text(path, text, encoding="utf-8"):
     """Replace a state file with `text` in one step; see atomic_write_bytes.
 
+    Measured failure this exists for: a state file was found holding a
     complete JSON document followed by a duplicated fragment, so every load
     raised "Extra data", the bot logged "starting fresh" and 20 items
     were silently gone. A plain write_text is one crash, one full disk or one
@@ -12718,12 +12719,21 @@ class Scheduler:
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _read_jobs_file(self):
-        """jobs.json as a dict, or {} when it is absent, damaged or not an object."""
-        try:
-            jobs = json.loads(self.jobs_file.read_text(encoding="utf-8"))
-        except Exception:
+        """jobs.json as a dict, or {} when it is absent, damaged or not an object.
+
+        Damage goes through the shared loader, so the unreadable file is KEPT as
+        `.damaged-<stamp>` and named in the log. This reader answered {} in silence
+        instead - and the next `_save` re-read the same way, so a corrupt or
+        transiently-locked jobs.json lost the whole schedule with no copy and no line to
+        say so (an earlier review run 17, A-2026-10-07-08: the class `_load_json_state` was
+        written for, wired to the other state files and left off this one)."""
+        jobs = _load_json_state(self.jobs_file, "the schedule")
+        if not isinstance(jobs, dict):
+            if jobs:
+                log.warning("%s is a JSON %s, not an object: the schedule starts empty",
+                            self.jobs_file.name, type(jobs).__name__)
             return {}
-        return jobs if isinstance(jobs, dict) else {}
+        return jobs
 
     def _load(self):
         self._mtime = self._disk_mtime()

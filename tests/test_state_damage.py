@@ -1,9 +1,9 @@
 """Damaged state files are kept aside, not silently forgotten.
 
-state.json, logs/state.json (the lane failure record) and web-sessions.json are the
-host's durable memory. Every reader used to turn a corrupt or truncated file into {}
+state.json, logs/state.json (the lane failure record), web-sessions.json and jobs.json
+are the host's durable memory. Every reader used to turn a corrupt or truncated file into {}
 in silence, and the next save overwrote the only evidence. This
-suite stages the module, points the three paths into a temp dir, and grades the
+suite stages the module, points the four paths into a temp dir, and grades the
 quarantine: bytes kept in a `.damaged-*` copy, the document empty, and a healthy file
 untouched.
 
@@ -79,6 +79,24 @@ def main():
               got.get("sessions") == [] and got.get("open") == {}, got)
         check("...and is kept aside",
               len(sorted(work.glob("web-sessions.json.damaged-*"))) == 1)
+
+        # ---- the schedule ----------------------------------------------------
+        # The one state file this suite did not cover, because the scheduler carried its
+        # own silent reader: it answered {} for anything unreadable, with no log line and
+        # no copy, and the next save took the only evidence of every job (an earlier review run
+        # 17, A-2026-10-07-08).
+        jobs = work / "jobs.json"
+        fb.JOBS_FILE = jobs
+        jobs.write_text("}{ not json", encoding="utf-8")
+        sched = fb.Scheduler(jobs)
+        sched._stop.set()
+        check("a corrupt jobs.json reads as an empty schedule", sched.jobs == {},
+              sched.jobs)
+        jcopies = sorted(work.glob("jobs.json.damaged-*"))
+        check("...and its bytes are kept in a .damaged copy", len(jcopies) == 1,
+              [p.name for p in work.iterdir()])
+        check("...with the original content",
+              bool(jcopies) and jcopies[0].read_text(encoding="utf-8") == "}{ not json")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
