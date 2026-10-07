@@ -265,7 +265,7 @@ def main():
         # disagreed once: snapshots/ and tmp/ were the installers' and not the updater's.
         # This parse used to read only the three installers, which is how the two updaters
         # kept missing that same pair while a commit message claimed every copy had been
-        # updated (measured 2026-10-07, an earlier review run 16 A-2026-10-07-05): grade BOTH
+        # updated (measured 2026-10-07 A-2026-10-07-05): grade BOTH
         # that every dir any copy names is covered here, and that the copies agree.
         _lists = {}
         for _rel in ("install/install-tinycmdr.sh", "install/install-tinycmdr-macos.sh",

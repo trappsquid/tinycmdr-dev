@@ -38,7 +38,7 @@ def _lf_map(text):
     sentinel. The maps are what let an edit write the file's own bytes back everywhere
     the match did not reach: a file that mixes endings (line1 CRLF, line2 LF) used to
     come back uniformly the dominant convention, so an edit to one line rewrote every
-    other line's ending too (an earlier review run 11, A-132)."""
+    other line's ending too."""
     folded, start, after = [], [], []
     i, n = 0, len(text)
     while i < n:
@@ -109,7 +109,7 @@ def run(args, ctx):
         # A Latin-1/CP1252 source is a byte stream, not broken text. "replace" turned every
         # non-ASCII byte into U+FFFD and the writer then emitted those replacement
         # characters - bytes the edit never touched were destroyed, under a diff that
-        # showed only the intended line (an earlier review run 11, A-131). latin-1 maps every
+        # showed only the intended line. latin-1 maps every
         # byte 1:1, so anything the edit does not touch round-trips exactly.
         text = raw.decode("latin-1")
         enc = "latin-1"

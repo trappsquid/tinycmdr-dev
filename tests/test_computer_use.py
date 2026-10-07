@@ -164,7 +164,7 @@ def main():
     check("win+L is blocked where cmd IS the Windows key",
           bool(mod.blocked_combo(key, mods)) == mod.IS_WIN, (key, mods, mod.IS_WIN))
 
-    # A-113 (an earlier review run 11): Alt is canonicalised to `option` on the Python side, so
+    # A-113: Alt is canonicalised to `option` on the Python side, so
     # BOTH spellings must hit the table, and the Windows-only entries must not depend on
     # the macOS keycode table (that gate made ctrl+alt+delete unblockable on Windows).
     for spelling in ("alt", "option"):
@@ -202,7 +202,7 @@ def main():
     check("dedup: changed bytes are delivered",
           not mod.dedup_should_omit("s", "d2", ("A", "")))
 
-    # ---- an earlier review run 11: A-115..A-123 ---------------------------------
+    # ---- A-115..A-123 ---------------------------------
     # Each check below is RED on the snapshot this batch fixed (run this suite
     # with TINYCMDR_SRC=/tmp/pre-cu2.py to see it).
 

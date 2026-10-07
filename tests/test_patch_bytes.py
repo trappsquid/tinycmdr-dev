@@ -1,6 +1,6 @@
 """A patch rewrites the line it was given - and nothing else, byte for byte.
 
-Night audit run 11 (A-2026-10-05-131): `tools/patch.py` read with
+`tools/patch.py` read with
 `bytes.decode("utf-8", "replace")` and wrote UTF-8 back, so a Latin-1/CP1252 file lost
 every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended
 line (`caf\\xe9` became `caf\\xef\\xbf\\xbd`). A byte stream is not broken text: the file
@@ -8,7 +8,7 @@ is decoded losslessly (UTF-8 strict, else Latin-1, which maps every byte 1:1), a
 result is re-encoded in the SAME encoding, strictly - a character that encoding cannot
 carry is an error naming the file, never replacement characters.
 
-Night audit run 11, second half:
+second half:
 
   A-132  a file that mixes line endings came back uniformly the dominant convention
          (`line1\\r\\nline2\\n` -> all CRLF), so an edit to one line rewrote every other

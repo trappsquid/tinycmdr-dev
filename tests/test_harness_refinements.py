@@ -54,7 +54,7 @@ class TestHarnessRefinements(unittest.TestCase):
 
         Three files live in that folder beside a conversation - the carry, the hint list
         and the parked question - and Path.stem turns each into a key of its own. The
-        exclusion list named only the carry (an earlier review run 17, A-2026-10-07-10), and
+        exclusion list named only the carry, and
         the hints file is a JSON LIST, so it also listed as a conversation in the
         `sessions` verb.
         """

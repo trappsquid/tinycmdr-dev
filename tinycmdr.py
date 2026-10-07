@@ -119,7 +119,7 @@ _log_queue = queue.Queue(-1)
 class _LoudRotatingFileHandler(logging.handlers.RotatingFileHandler):
     """A file log that SAYS SO when a record cannot be written - and keeps the record.
 
-    Night audit run 10 (2026-10-06) on a Windows install: a refused secret verb's line
+    Measured 2026-10-06 on a Windows install: a refused secret verb's line
     reached the console and never the file, three calls in a row, and nothing said why.
     Two Windows facts explain that shape: a rollover RENAMES the file, and an open handle
     (the running bot holds this very log) makes the rename fail; the rotate then raises
@@ -1415,7 +1415,7 @@ def est_tokens(text):
     wide = other = dense = emoji = 0
     for c in sample:
         o = ord(c)
-        # Emoji are their own class (an earlier review run 11, A-109): a 4-byte codepoint (or a
+        # Emoji are their own class: a 4-byte codepoint (or a
         # VS16/ZWJ sequence) is ~2 real tokens, not one, so the CJK 1.3 divisor under-counted
         # an emoji-heavy result by ~2x. VS16 (U+FE0F) and ZWJ (U+200D) ride with the base
         # emoji, and these ranges sit above CJK, so this arm is tested first.
@@ -3239,7 +3239,7 @@ def _llama_ping_interval():
 _STREAM_UNSUPPORTED = set()
 
 
-# The ONE secret-name vocabulary, shared by both sides (an earlier review run 11, A-110): an
+# The ONE secret-name vocabulary, shared by both sides: an
 # environment variable (below) and a config.json path (_secret_config_path: the `config`
 # verb's refusal and the verb-log scrub) are graded by the SAME shape, so
 # `config set db.password X` is refused exactly like DB_PASSWORD is redacted. The
@@ -3344,7 +3344,7 @@ def truncate_middle(text, limit, label="output"):
 
     `limit <= 1` used to fall through `text[-0:]`, which is the WHOLE text: a 30-char body
     came back in full with a note claiming 10 chars were omitted, and `limit=1` on 500
-    chars returned 547 (an earlier review run 11, A-104). The note now names the chars that are
+    chars returned 547. The note now names the chars that are
     really gone and a limit too small for a head and a tail is refused in words instead of
     handing back the text it claimed to cut.
     """
@@ -3441,7 +3441,7 @@ def _spill_index_save():
                         and (BASE_DIR / str(e["path"])).exists()):
                     # A row whose file is gone is not worth re-persisting: readers drop
                     # it anyway, and keeping it grew the index for ever while holding an
-                    # id hostage (an earlier review run 11, A-108).
+                    # id hostage.
                     merged[str(e["path"])] = e
         except OSError:
             pass
@@ -3485,7 +3485,7 @@ def _spill_load():
         for e in rows[-_SPILLS_MAX:]:
             # The SEQUENCE advances for every row ever written, whether its file still
             # exists or not: reusing an id the index still names made `spill#1` resolve
-            # to a different file than the row the prompt named (an earlier review run 11,
+            # to a different file than the row the prompt named (
             # A-107: with every spill file gone the counter restarted at 1).
             try:
                 _SPILL_SEQ["n"] = max(_SPILL_SEQ["n"], int(e.get("id") or 0))
@@ -3689,7 +3689,7 @@ def _spill_signal(text, lo, hi, budget):
 
     `budget` bounds the WHOLE returned block, header and footer included: charging only for
     the picked lines let a budget of 100 return a 146-char wrapper around them - 215 chars
-    in all (an earlier review run 11, A-105). A budget too small to carry even a one-line note
+    in all. A budget too small to carry even a one-line note
     returns "", and the caller keeps the pointer alone.
     """
     span = text[lo:hi]
@@ -4002,7 +4002,7 @@ def resolve_approval(name, args, ctx):
 
 
 # ---- the never tier reads the COMMAND, not one spelling of it -------------------------
-# Measured 2026-10-06 (an earlier review run 10): the regex tier was anchored to one surface shape
+# Measured 2026-10-06: the regex tier was anchored to one surface shape
 # per command, so canonical spellings of the very commands it exists to stop ran with no gate
 # at all - `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="/dev/sdz9"` all executed
 # live on a Windows box. Two mechanisms: a switch between verb and target missed an
@@ -4207,7 +4207,7 @@ def _confirm_hit(text, kind="confirm_patterns"):
         if pat.search(text):
             return None
     if kind == "confirm_patterns":
-        # Aliases are the confirm tier's blind spot (an earlier review run 10, A-2026-10-05-77):
+        # Aliases are the confirm tier's blind spot:
         # `ri -Recurse -Force` matched nothing because the pattern named `remove-item`,
         # and the delete ran with no question. The command word is read off tokens now,
         # so every alias and any flag order land on the same rule.
@@ -4234,7 +4234,7 @@ def _harness_note_end(text, start):
 
     Bracket DEPTH, not the first `]`: a note whose own text carries a bracketed fragment
     (`[HARNESS: a [nested] b]`) used to be cut at the inner `]`, eating the note's tail and
-    the real output behind it (an earlier review run 11, A-106). The bound keeps a malformed,
+    the real output behind it. The bound keeps a malformed,
     never-closing note from scanning a whole 30k-char result.
     """
     depth = 0
@@ -9197,7 +9197,7 @@ def tools_dir_verdict(path=None):
     """The loader's own answer about a file written into the bot's ./tools/ (or "").
 
     With no `path` it answers for the SHELF itself: what ./tools/ holds and what the loader
-    refuses (an earlier review run 11, A-138: `path` had no default, so a general call raised a
+    refuses (`path` had no default, so a general call raised a
     bare TypeError - the argument is now optional, and the honest general verdict is the
     shelf inventory).
 
@@ -11679,7 +11679,7 @@ def _delete_custom_tool(args, ctx):
 
     Without an action vocabulary every call fell into the create path, so even
     `action=delete` answered "got no code" - a complaint about an argument the caller never
-    owed (an earlier review run 11, A-136).
+    owed.
     """
     raw = str(args.get("name") or "").strip()
     if not raw:
@@ -11764,7 +11764,7 @@ def tool_create_tool(args, ctx):
                 "write_file (shapes: tools/README.md).")
     if name in CORE_TOOL_NAMES:
         return f"ERROR: '{name}' is a core tool name; pick another."
-    # A name already on the CUSTOM shelf is a collision too (an earlier review run 11, A-137): only
+    # A name already on the CUSTOM shelf is a collision too: only
     # the CORE_TOOL_NAMES check existed, so create_tool on a name a register-style file holds
     # (ported_todo.py registers todo_list) wrote a second tools/<name>.py and shadowed the
     # tool. Refuse either collision, naming which shelf holds the name.
@@ -12725,7 +12725,7 @@ class Scheduler:
         `.damaged-<stamp>` and named in the log. This reader answered {} in silence
         instead - and the next `_save` re-read the same way, so a corrupt or
         transiently-locked jobs.json lost the whole schedule with no copy and no line to
-        say so (an earlier review run 17, A-2026-10-07-08: the class `_load_json_state` was
+        say so (the class `_load_json_state` was
         written for, wired to the other state files and left off this one)."""
         jobs = _load_json_state(self.jobs_file, "the schedule")
         if not isinstance(jobs, dict):
@@ -15172,7 +15172,7 @@ def reveal_tools(session_key, names):
     # is the natural way a caller spells a single reveal, and iterating it would register
     # t, a, s and k. Anything else that is not an iterable of names is refused with a
     # message a caller can act on, instead of the bare `'int' object is not iterable`
-    # TypeError this used to raise (an earlier review run 11, A-100).
+    # TypeError this used to raise.
     if isinstance(names, str):
         names = [names]
     elif names is not None and not isinstance(names, (list, tuple, set, frozenset)):
@@ -15192,7 +15192,7 @@ def _reveal_ttl_secs():
 
     One typo in this key used to take the whole conversation down: `float("bogus")` raised
     a ValueError out of revealed_tools -> visible_tool_names -> select_tool_schemas, i.e.
-    out of the REQUEST BUILDER, before a single token was sent (an earlier review run 11, A-99).
+    out of the REQUEST BUILDER, before a single token was sent.
     Guarded like _mcp_timeout: non-numeric -> the shipped default (1800), said once; a real
     0 is kept as 0 and still means "a revealed schema never decays".
     """
@@ -15426,7 +15426,7 @@ def _tool_category(name, desc="", tools=None):
     suite stages one without touching this process's REGISTRY.
     """
     # The pair with _tool_blurb: a name that is not a string files on no shelf instead of
-    # raising AttributeError out of the prompt/index builders (an earlier review run 11, A-101).
+    # raising AttributeError out of the prompt/index builders.
     if not isinstance(name, str) or not name:
         return ""
     shelf = (getattr(REGISTRY, "custom", None) or {}) if tools is None else tools
@@ -15528,7 +15528,7 @@ def _tool_read_answer(name, session):
 
     `name` and `query` used to be the same silent nothing: the handler read `query`,
     `category` and `all` only, so `{"name": "search_files"}` (the most natural way to ask
-    after a tool by name) returned the same bytes as `{}` (an earlier review run 11, A-135). A
+    after a tool by name) returned the same bytes as `{}`. A
     name lookup resolves core and custom tools alike, reveals the one asked for - asking by
     name is the same intent as a query hit - and answers the miss with the closest names
     and the remaining surface rather than a bare "no".
@@ -17260,7 +17260,7 @@ def _tool_pairing_problems(messages):
         if not isinstance(m, dict):
             # A repair pass on a harness-assembled payload can meet a stray non-dict entry
             # (None, a number); skipping it reports no problem for it instead of raising
-            # AttributeError out of the pass (an earlier review run 11, A-102).
+            # AttributeError out of the pass.
             continue
         role = m.get("role")
         if role == "tool":
@@ -17379,7 +17379,7 @@ def _repair_tool_pairing(messages):
     while i < len(messages):
         m = messages[i]
         # A non-dict entry is passed through and i advances, so the skip can never spin
-        # the loop forever (an earlier review run 11, A-102).
+        # the loop forever.
         if not isinstance(m, dict):
             out.append(m)
             i += 1
@@ -17519,7 +17519,7 @@ def _repair_tool_arguments(messages):
 # hint list and the parked question, each written as <key>.<what>.json. Path.stem leaves
 # "x.carry"/"x.hints" from them, so a plain glob("*.json") reads them as conversations of
 # their own. The reload excluded only the carry sidecar, and search_sessions had already
-# tripped on the same shape (an earlier review run 17, A-2026-10-07-10: the hints list shows as
+# tripped on the same shape (A-2026-10-07-10: the hints list shows as
 # a session in `tinycmdr sessions` today, and all three land in `histories`).
 _SESSION_SIDECAR_SUFFIXES = (".carry.json", ".hints.json", ".question.json")
 
@@ -17551,9 +17551,9 @@ class Agent:
             # <key>.carry.json, <key>.hints.json and <key>.question.json live in the SAME
             # folder, and Path.stem leaves "x.carry"/"x.hints"/"x.question" from them - so
             # the glob handed every sidecar back as a session too. One predicate, because
-            # the exclusion list was already incomplete once (an earlier review run 17,
-            # A-2026-10-07-10). search_sessions keeps tolerating both file shapes on
-            # purpose - it SEARCHES a carry's args/out - so it is not routed here.
+            # the exclusion list was already incomplete once. search_sessions keeps
+            # tolerating both file shapes on purpose - it SEARCHES a carry's args/out -
+            # so it is not routed here.
             if not _is_session_file(f):
                 continue
             try:
@@ -33228,7 +33228,7 @@ def _cli_session_rows():
         if not _is_session_file(f):
             # ...and neither are the carry/hints/question sidecars: the hints file IS a
             # JSON list, so the shape check below let it list as a conversation called
-            # "x.hints" (an earlier review run 17, A-2026-10-07-10).
+            # "x.hints".
             continue
         try:
             hist = json.loads(f.read_text(encoding="utf-8"))
@@ -36132,8 +36132,8 @@ def _secret_config_path(path):
     endpoint's key lives in config.json - and the *_api_key arm is for a provider key
     written by hand (`search.anysearch_api_key`), which the old two-name test accepted.
     The vocabulary is _SECRET_NAME_RX, the SAME rule the environment sweep uses, so the
-    config side no longer misses `password|passwd|credential` (an earlier review run 11, A-110:
-    `config set db.password X` was not treated as a secret).
+    config side no longer misses `password|passwd|credential`
+    (`config set db.password X` was not treated as a secret).
     """
     _section, _, key = path.rpartition(".")
     if _section.startswith("llm"):
@@ -36326,7 +36326,7 @@ _HOST_OWNED_EXACT = frozenset((
 # for an old or broken install (update.sh, update.ps1). The comment said "four" and
 # tests/test_verbs.py parsed three, which is how the two updaters stayed in their
 # pre-fix state - still missing snapshots/ and tmp/ - while a commit claimed every copy
-# had been updated (measured 2026-10-07, an earlier review run 16 A-2026-10-07-05). They
+# had been updated (measured 2026-10-07 A-2026-10-07-05). They
 # disagreed once before that too: snapshots/ and tmp/ were the installers' and not the
 # updater's, so a re-install left state an update would Overwrite. tests/test_verbs.py
 # now parses all six and fails when they are not the same rule.

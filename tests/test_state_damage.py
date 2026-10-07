@@ -83,7 +83,7 @@ def main():
         # ---- the schedule ----------------------------------------------------
         # The one state file this suite did not cover, because the scheduler carried its
         # own silent reader: it answered {} for anything unreadable, with no log line and
-        # no copy, and the next save took the only evidence of every job (an earlier review run
+        # no copy, and the next save took the only evidence of every job (run
         # 17, A-2026-10-07-08).
         jobs = work / "jobs.json"
         fb.JOBS_FILE = jobs

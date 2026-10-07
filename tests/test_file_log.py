@@ -1,7 +1,7 @@
 """A file log that cannot write a record says so - and keeps the record when a rollover is
 blocked.
 
-Night audit run 10 (A-2026-10-05-78), on a Windows install: a refused secret verb's line
+on a Windows install: a refused secret verb's line
 appeared on the console and never in the file, three calls in a row, with nothing saying
 why. Two Windows facts make that shape: a rollover RENAMES the log, and an open handle
 (the running bot holds this very file) makes the rename fail - and the exception died in

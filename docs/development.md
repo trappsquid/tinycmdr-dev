@@ -172,7 +172,10 @@ of it.
    line count the same tool's check complains about.
 5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`), `bash maintenance/pre-push.sh`, and
    `bash maintenance/release.sh <notes-file>`. The notes file becomes the release body verbatim, so
-   write it fresh and factual. Afterwards, verify from outside the repo: download the published
+   write it fresh and factual - and write it for a reader who has never seen my private records:
+   no audit or session name, no finding id, no path to a write-up (AGENTS.md, invariants). The
+   changelog and the record are graded for this by tests/test_wording.py; a release body is not in
+   the tree, so that half is on me. Afterwards, verify from outside the repo: download the published
    `SHA256SUMS` and one archive and check the sum. `release.sh` also grades the built archives
    before publishing: `check-readme-assets.py` (every README download name) and
    `check-package-assets.py` (**every asset the page's routes serve**, byte-identical to the tree -

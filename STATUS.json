@@ -19,7 +19,7 @@
     {
       "id": "web-one-run-and-assets-1-0-84",
       "title": "one run per conversation on every route, and the page's assets hold to what they say",
-      "detail": "an earlier review run 13 A-227..A-261: /api/chat drives the conversation the body names, registers its run atomically (_web_claim_run under WEB_RUNS_LOCK; simultaneous POSTs get 409), touches the registry; WEB_REGISTRY_MAX=200 aggregate with the shared conversation protected; the runlog appends one line per checkpoint (compaction past WEB_RUNLOG_COMPACT_AT, view-side dedup/caps); downloads honour Range (206/416) and carry RFC 5987 filename*; one _asset helper with mtime/size ETags (304) serves the five asset routes and survives a vanished file; the CSS themes once per (mtime,size) and revalidates; platform-reserved upload names are rewritten and an unwritable name answers 400 instead of dropping the socket; drop_line keeps uids the page holds; out-of-range edits log a warning; web.port 0 probes the recorded port; JSON replies are UTF-8. 27 checks red on the pre-fix snapshot.",
+      "detail": " /api/chat drives the conversation the body names, registers its run atomically (_web_claim_run under WEB_RUNS_LOCK; simultaneous POSTs get 409), touches the registry; WEB_REGISTRY_MAX=200 aggregate with the shared conversation protected; the runlog appends one line per checkpoint (compaction past WEB_RUNLOG_COMPACT_AT, view-side dedup/caps); downloads honour Range (206/416) and carry RFC 5987 filename*; one _asset helper with mtime/size ETags (304) serves the five asset routes and survives a vanished file; the CSS themes once per (mtime,size) and revalidates; platform-reserved upload names are rewritten and an unwritable name answers 400 instead of dropping the socket; drop_line keeps uids the page holds; out-of-range edits log a warning; web.port 0 probes the recorded port; JSON replies are UTF-8. 27 checks red on the pre-fix snapshot.",
       "state": "shipped",
       "anchor": {
         "commit": "9e88cda",
@@ -29,7 +29,7 @@
     {
       "id": "web-door-statuses-1-0-84",
       "title": "the page's door answers each mistake with its status, and stops mapping the box",
-      "detail": "an earlier review run 13 A-207..A-226: chunked 411 (closed), over-cap 413, stall 408, nonsense Content-Length 411, target cap 414 (WEB_TARGET_MAX 4096), loopback's own connection cap (MAX_CONN_EXEMPT 256), the pre-auth 403 no longer names the port or a tunnel recipe, [::1]/trailing-dot Hosts resolve, the origin-mismatch 403 explains itself, a 401 clears a stale cookie, _query() decodes per the URL spec, first duplicate key wins, upper-case session keys fold, plus the fixes' checks.",
+      "detail": " chunked 411 (closed), over-cap 413, stall 408, nonsense Content-Length 411, target cap 414 (WEB_TARGET_MAX 4096), loopback's own connection cap (MAX_CONN_EXEMPT 256), the pre-auth 403 no longer names the port or a tunnel recipe, [::1]/trailing-dot Hosts resolve, the origin-mismatch 403 explains itself, a 401 clears a stale cookie, _query() decodes per the URL spec, first duplicate key wins, upper-case session keys fold, plus the fixes' checks.",
       "state": "shipped",
       "anchor": {
         "commit": "09a4093",
@@ -1776,7 +1776,7 @@
       "id": "config-set-deep-path-1-0-82",
       "title": "a deep config set nests, or is refused",
       "state": "shipped",
-      "detail": "A-2026-10-05-68, an earlier review run 9 (fixed 2026-10-06, 5c82837). config rpartition'd the path into one section, so `set zz.a.b v2` wrote the literal top-level key \"zz.a\" beside zz={a:v1} - a write that missed the path given and that unset could not reach. The walk now creates each missing intermediate dict and refuses (rc=1, naming the walked path and its value) when an intermediate exists as a scalar. tests/test_verbs.py: 2 of the 4 new checks red on the pre-fix build (TINYCMDR_TEST_APP).",
+      "detail": "Fixed 2026-10-06 (5c82837): config rpartition'd the path into one section, so `set zz.a.b v2` wrote the literal top-level key \"zz.a\" beside zz={a:v1} - a write that missed the path given and that unset could not reach. The walk now creates each missing intermediate dict and refuses (rc=1, naming the walked path and its value) when an intermediate exists as a scalar. tests/test_verbs.py: 2 of the 4 new checks red on the pre-fix build (TINYCMDR_TEST_APP).",
       "anchor": {
         "commit": "5c82837",
         "expect": "tagged"
@@ -1786,7 +1786,7 @@
       "id": "verb-log-secret-1-0-82",
       "title": "the verb log never carries a secret value",
       "state": "shipped",
-      "detail": "A-2026-10-05-69, run 9 (fixed 2026-10-06, 0ae0f59). The verb line is logged before dispatch, so `config set mattermost.token hunter2` put the value in tinycmdr.log in cleartext even though the write itself was refused ('put it in .env instead'). _secret_config_path is now one predicate shared by the refusal and the log scrub; the value logs as <redacted>. tests/test_verbs.py: +1 sentinel check, red on the pre-fix build.",
+      "detail": "run 9 (fixed 2026-10-06, 0ae0f59). The verb line is logged before dispatch, so `config set mattermost.token hunter2` put the value in tinycmdr.log in cleartext even though the write itself was refused ('put it in.env instead'). _secret_config_path is now one predicate shared by the refusal and the log scrub; the value logs as <redacted>. tests/test_verbs.py: +1 sentinel check, red on the pre-fix build.",
       "anchor": {
         "commit": "0ae0f59",
         "expect": "tagged"
@@ -1796,7 +1796,7 @@
       "id": "config-key-near-miss-1-0-82",
       "title": "a case-flipped config key gets a near-miss hint",
       "state": "shipped",
-      "detail": "A-2026-10-05-72, run 9 (fixed 2026-10-06, d568caf). Verbs are case-insensitive but keys are not, and `get AGENT.max_steps` answered (not set) rc=0 - silence that reads as 'no such setting'. One unambiguous case-insensitive match prints the whole corrected path; ambiguity stays silent. tests/test_verbs.py: +3 checks, red on the pre-fix build.",
+      "detail": "run 9 (fixed 2026-10-06, d568caf). Verbs are case-insensitive but keys are not, and `get AGENT.max_steps` answered (not set) rc=0 - silence that reads as 'no such setting'. One unambiguous case-insensitive match prints the whole corrected path; ambiguity stays silent. tests/test_verbs.py: +3 checks, red on the pre-fix build.",
       "anchor": {
         "commit": "d568caf",
         "expect": "tagged"
@@ -1806,7 +1806,7 @@
       "id": "read-past-eof-1-0-82",
       "title": "a read past the end names the file's length",
       "state": "shipped",
-      "detail": "A-2026-10-05-70, run 9 (fixed 2026-10-06, 7154ff0). An offset past EOF printed the phantom range (lines 99999-99999 of 98) with an empty body; it now returns the honest error naming the file's line count and the largest usable offset, while the last real line still reads. tests/test_read_window.py: +2 checks, red on the pre-fix build (the suite also honors TINYCMDR_SRC now).",
+      "detail": "run 9 (fixed 2026-10-06, 7154ff0). An offset past EOF printed the phantom range (lines 99999-99999 of 98) with an empty body; it now returns the honest error naming the file's line count and the largest usable offset, while the last real line still reads. tests/test_read_window.py: +2 checks, red on the pre-fix build (the suite also honors TINYCMDR_SRC now).",
       "anchor": {
         "commit": "7154ff0",
         "expect": "tagged"
@@ -1814,9 +1814,9 @@
     },
     {
       "id": "blank-config-value-refuted-1-0-82",
-      "title": "A-71 (cannot blank a value): refuted on this build",
+      "title": "Cannot blank a config value: refuted on this build",
       "state": "closed",
-      "detail": "A-2026-10-05-71, run 9 (refuted 2026-10-06). Verified against this build in a staged tree: `config set zz.e1 \"\" --str` returns rc=0 and stores the empty string. The audit's rc=2 came from 1.0.80 through a shell (PowerShell strips the empty argument) and the same run's Dismissed list already names that artifact; the probe's 1.0.81 rc=0 measurement matches. No code change.",
+      "detail": "Refuted 2026-10-06. Verified against this build in a staged tree: `config set zz.e1 \"\" --str` returns rc=0 and stores the empty string. The audit's rc=2 came from 1.0.80 through a shell (PowerShell strips the empty argument) and the same run's Dismissed list already names that artifact; the probe's 1.0.81 rc=0 measurement matches. No code change.",
       "anchor": {
         "file": "tinycmdr.py"
       }
@@ -1825,7 +1825,7 @@
       "id": "search-max-results-zero-1-0-82",
       "title": "a non-positive max_results is refused, not defaulted",
       "state": "shipped",
-      "detail": "A-2026-10-05-73, run 9 (fixed 2026-10-06, 9460a3b). The audit measured 'max_results=0 returns 1 hit'; reproduced here as 0 falling through `or 50` and searching anyway (the audit's tree had one match). An explicit 0 or negative now returns the named error, and a non-numeric cap is rejected with the shape. tests/test_search_scope.py: +2 checks, red on the pre-fix build.",
+      "detail": "run 9 (fixed 2026-10-06, 9460a3b). The audit measured 'max_results=0 returns 1 hit'; reproduced here as 0 falling through `or 50` and searching anyway (the audit's tree had one match). An explicit 0 or negative now returns the named error, and a non-numeric cap is rejected with the shape. tests/test_search_scope.py: +2 checks, red on the pre-fix build.",
       "anchor": {
         "commit": "9460a3b",
         "expect": "tagged"
@@ -1835,7 +1835,7 @@
       "id": "write-file-parent-note-1-0-82",
       "title": "write_file names the parent dirs it creates",
       "state": "shipped",
-      "detail": "A-2026-10-05-74, run 9 (fixed 2026-10-06, f235640). A typo'd path built the whole tree silently and the result read as a plain success; the result now names each missing parent it created. tests/test_tool_doors.py: +1 check, red on the pre-fix build (staged pre-fix tree).",
+      "detail": "run 9 (fixed 2026-10-06, f235640). A typo'd path built the whole tree silently and the result read as a plain success; the result now names each missing parent it created. tests/test_tool_doors.py: +1 check, red on the pre-fix build (staged pre-fix tree).",
       "anchor": {
         "commit": "f235640",
         "expect": "tagged"
@@ -1849,7 +1849,7 @@
         "commit": "963beae",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-75 and -76, an earlier review run 10 (fixed 2026-10-06, 963beae). The never tier was anchored to one surface shape per command: `format /FS:NTFS Q:`, `powershell -enc \"...\"` and `dd of=\"/dev/sdz9\"` executed with no gate (a switch between verb and target missed an order-anchored regex; the quote erasure removed the quoted operand), and the mkfs read-only exemption was per-line, so `mkfs.ext4 /dev/sdb # cat` passed. The built-in tier is decided on the tokens of each command segment now - quotes consumed, separators split, redirects and comments read - with the read-only exemption per command. tests/test_guard_battery.py: 16 blocked spellings, 5 allowed mentions, red on the pre-fix build."
+      "detail": "Fixed 2026-10-06 (963beae): The never tier was anchored to one surface shape per command: `format /FS:NTFS Q:`, `powershell -enc \"...\"` and `dd of=\"/dev/sdz9\"` executed with no gate (a switch between verb and target missed an order-anchored regex; the quote erasure removed the quoted operand), and the mkfs read-only exemption was per-line, so `mkfs.ext4 /dev/sdb # cat` passed. The built-in tier is decided on the tokens of each command segment now - quotes consumed, separators split, redirects and comments read - with the read-only exemption per command. tests/test_guard_battery.py: 16 blocked spellings, 5 allowed mentions, red on the pre-fix build."
     },
     {
       "id": "confirm-tier-aliases-1-0-83",
@@ -1859,7 +1859,7 @@
         "commit": "963beae",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-77, run 10 (fixed 2026-10-06, 963beae). The recursive-delete pattern named `remove-item`, so `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question. The command word is read off tokens, so every alias and flag order lands on the same rule. tests/test_guard_battery.py pins five spellings."
+      "detail": "run 10 (fixed 2026-10-06, 963beae). The recursive-delete pattern named `remove-item`, so `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question. The command word is read off tokens, so every alias and flag order lands on the same rule. tests/test_guard_battery.py pins five spellings."
     },
     {
       "id": "gate-helpers-coerce-1-0-83",
@@ -1869,16 +1869,16 @@
         "commit": "963beae",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-79, run 10 (fixed 2026-10-06, 963beae). is_blocked(None) coerced while est_tokens(None), cap_output(name, None), _one_json_object(None), _host_is_local(None) and _confirm_hit(None) raised TypeError/AttributeError. Reachability was never proven; each helper answers a safe default for a non-string now, and tests/test_guard_battery.py pins all six."
+      "detail": "run 10 (fixed 2026-10-06, 963beae). is_blocked(None) coerced while est_tokens(None), cap_output(name, None), _one_json_object(None), _host_is_local(None) and _confirm_hit(None) raised TypeError/AttributeError. Reachability was never proven; each helper answers a safe default for a non-string now, and tests/test_guard_battery.py pins all six."
     },
     {
       "id": "secret-refusal-log-1-0-83",
-      "title": "A-2026-10-05-78: a file log that cannot write must say so",
+      "title": "a file log that cannot write must say so",
       "state": "open",
       "anchor": {
         "file": "tinycmdr.py"
       },
-      "detail": "A-2026-10-05-78, run 10: NOT reproduced on macOS (the verb line IS written there, value redacted), but the target box is Windows and the shape has two Windows-specific mechanisms worth keeping this open for: a rollover RENAMES the log and an open handle (the running bot holds tinycmdr.log) makes the rename fail, and the QueueListener thread reports nothing when a handler raises. Both are now visible instead of silent: _LoudRotatingFileHandler falls back to a plain append when the rollover is blocked (losing the rotation is fine, losing the record is not) and writes one stderr line naming the file and the error (2026-10-06, tests/test_file_log.py). To settle it on that box: run a refused verb and look for the WARNING line, then compare tinycmdr.log against tinycmdr.log.1 - the dropped line may be in the predecessor."
+      "detail": "run 10: NOT reproduced on macOS (the verb line IS written there, value redacted), but the target box is Windows and the shape has two Windows-specific mechanisms worth keeping this open for: a rollover RENAMES the log and an open handle (the running bot holds tinycmdr.log) makes the rename fail, and the QueueListener thread reports nothing when a handler raises. Both are now visible instead of silent: _LoudRotatingFileHandler falls back to a plain append when the rollover is blocked (losing the rotation is fine, losing the record is not) and writes one stderr line naming the file and the error (2026-10-06, tests/test_file_log.py). To settle it on that box: run a refused verb and look for the WARNING line, then compare tinycmdr.log against tinycmdr.log.1 - the dropped line may be in the predecessor."
     },
     {
       "id": "responses-wire-1-0-83",
@@ -1898,7 +1898,7 @@
         "commit": "cfd56d6",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-131, an earlier review run 11 (fixed 2026-10-06, cfd56d6). tools/patch.py decoded with errors=\"replace\" and wrote UTF-8, so a Latin-1/CP1252 source lost every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended line (caf\\xe9 became caf\\xef\\xbf\\xbd). Lossless decode (UTF-8 strict, else Latin-1, byte-transparent) + strict re-encode in the SAME encoding; a character that encoding cannot carry is refused by name. tests/test_patch_bytes.py: 4 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (cfd56d6): tools/patch.py decoded with errors=\"replace\" and wrote UTF-8, so a Latin-1/CP1252 source lost every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended line (caf\\xe9 became caf\\xef\\xbf\\xbd). Lossless decode (UTF-8 strict, else Latin-1, byte-transparent) + strict re-encode in the SAME encoding; a character that encoding cannot carry is refused by name. tests/test_patch_bytes.py: 4 checks red pre-fix."
     },
     {
       "id": "spill-ids-1-0-84",
@@ -1908,7 +1908,7 @@
         "commit": "1e9960b",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-107 and -108, run 11 (fixed 2026-10-06, 1e9960b). With every spill file deleted the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output (measured: two index rows with id==1). The counter advances over every row ever written (file or no file) and the index merge no longer re-persists a row whose file is gone. tests/test_spill_durability.py: 2 checks red pre-fix; simulate_restart now resets the counter, which is what made the bug invisible to the suite before."
+      "detail": "Fixed 2026-10-06 (1e9960b): With every spill file deleted the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output (measured: two index rows with id==1). The counter advances over every row ever written (file or no file) and the index merge no longer re-persists a row whose file is gone. tests/test_spill_durability.py: 2 checks red pre-fix; simulate_restart now resets the counter, which is what made the bug invisible to the suite before."
     },
     {
       "id": "mcp-client-hardening-1-0-84",
@@ -1918,7 +1918,7 @@
         "commit": "2f0af5a",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-80 .. -89, an earlier review run 11 (fixed 2026-10-06, 2f0af5a). A non-map agent.mcp_servers answers an ERROR naming the accepted {command, args?} shape instead of raising; a non-numeric mcp_timeout falls back to 60 with one WARNING and a real 0 stays 0; a failed handshake is remembered on the live entry for a bounded 60s window; a dead server is noticed by polling inside the wait; a spec with no command says exactly that; a JSON-string arguments is parsed; tool names match case-insensitively and go out under the server's spelling; stderr is captured into a bounded 20-line/4KB ring and its tail rides every failure; mismatched replies are parked and server-initiated requests are never consumed as replies. tests/test_mcp.py: 50 checks, 24 red pre-fix."
+      "detail": "Fixed 2026-10-06 (2f0af5a): A non-map agent.mcp_servers answers an ERROR naming the accepted {command, args?} shape instead of raising; a non-numeric mcp_timeout falls back to 60 with one WARNING and a real 0 stays 0; a failed handshake is remembered on the live entry for a bounded 60s window; a dead server is noticed by polling inside the wait; a spec with no command says exactly that; a JSON-string arguments is parsed; tool names match case-insensitively and go out under the server's spelling; stderr is captured into a bounded 20-line/4KB ring and its tail rides every failure; mismatched replies are parked and server-initiated requests are never consumed as replies. tests/test_mcp.py: 50 checks, 24 red pre-fix."
     },
     {
       "id": "computer-use-alt-1-0-84",
@@ -1928,7 +1928,7 @@
         "commit": "d6c448b",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-113, run 11 (fixed 2026-10-06, d6c448b). Python canonicalises Alt to `option` while the PowerShell helper switched only on `alt`, so every Alt combo went out on Windows without Alt held; blocked_combo('f4', ['alt']) slipped the table while the option spelling was refused; and the Windows-only ctrl+alt+delete entry sat behind the macOS keycode gate. Both sides fold alt->option now, the block is decided before the keycode gate, and the helper arms option in all three switches - pinned by a contract check that every modifier the Python half can emit is an arm in the embedded helper. tests/test_computer_use.py: 2 checks red pre-fix."
+      "detail": "run 11 (fixed 2026-10-06, d6c448b). Python canonicalises Alt to `option` while the PowerShell helper switched only on `alt`, so every Alt combo went out on Windows without Alt held; blocked_combo('f4', ['alt']) slipped the table while the option spelling was refused; and the Windows-only ctrl+alt+delete entry sat behind the macOS keycode gate. Both sides fold alt->option now, the block is decided before the keycode gate, and the helper arms option in all three switches - pinned by a contract check that every modifier the Python half can emit is an arm in the embedded helper. tests/test_computer_use.py: 2 checks red pre-fix."
     },
     {
       "id": "memory-okf-hardening-1-0-84",
@@ -1938,7 +1938,7 @@
         "commit": "e912978",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-90 .. -98, an earlier review run 11 (fixed 2026-10-06, e912978). `verified:` reads a bare string as {by}; a caller description is bounded at 160 like the generated one; tags take one string or a list and refuse the rest; `update` refuses a title another concept holds; memory/log.md rotates at 64 KB with one predecessor; an unknown `type` is refused by name; load_config never replaces a shipped dict with a non-dict from the file; stale_after must be an ISO instant at write time; update/set_status keep `generated` and record `touched` instead of re-dating the fact. tests/test_memory_okf.py: 33 checks red pre-fix (120/0 after)."
+      "detail": "Fixed 2026-10-06 (e912978): `verified:` reads a bare string as {by}; a caller description is bounded at 160 like the generated one; tags take one string or a list and refuse the rest; `update` refuses a title another concept holds; memory/log.md rotates at 64 KB with one predecessor; an unknown `type` is refused by name; load_config never replaces a shipped dict with a non-dict from the file; stale_after must be an ISO instant at write time; update/set_status keep `generated` and record `touched` instead of re-dating the fact. tests/test_memory_okf.py: 33 checks red pre-fix (120/0 after)."
     },
     {
       "id": "tools-jobs-patch-1-0-84",
@@ -1948,7 +1948,7 @@
         "commit": "5e304e5",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-124 .. -130 and -132 .. -134, run 11 (fixed 2026-10-06, 5e304e5). tools/process.py: `output` reads through read_job_log() (handle closed, __EXIT__ marker stripped), `start` validates command, an unknown action names the vocabulary, wait_for is validated up front, `kill` says exactly what it confirmed (the wrapper gone), and id allocation + table saves run under one file lock (6 concurrent starts in 6 processes now get 6 distinct ids). tools/patch.py: every existing line keeps its own newline (splice-only rewrite; inserted lines take the dominant one), and a whitespace-only or blank-only anchor is refused. tests/test_job_control.py + tests/test_patch_bytes.py: 22 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (5e304e5): tools/process.py: `output` reads through read_job_log() (handle closed, __EXIT__ marker stripped), `start` validates command, an unknown action names the vocabulary, wait_for is validated up front, `kill` says exactly what it confirmed (the wrapper gone), and id allocation + table saves run under one file lock (6 concurrent starts in 6 processes now get 6 distinct ids). tools/patch.py: every existing line keeps its own newline (splice-only rewrite; inserted lines take the dominant one), and a whitespace-only or blank-only anchor is refused. tests/test_job_control.py + tests/test_patch_bytes.py: 22 checks red pre-fix."
     },
     {
       "id": "prompt-surface-hardening-1-0-84",
@@ -1958,7 +1958,7 @@
         "commit": "e2051ad",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-99 .. -102, -104 .. -106, -135, -136, an earlier review run 11 (fixed 2026-10-06, e2051ad). reveal_ttl_secs is guarded like mcp_timeout (a typo no longer takes the request builder down; a real 0 means never decay); reveal_tools reads a bare string as one name and refuses other non-lists by name; _tool_category coerces like _tool_blurb; the three pairing repairers skip a non-dict entry without spinning; truncate_middle refuses or cuts honestly at limit 0/1; _spill_signal counts its [HARNESS: ...] wrapper against the budget; the stripper scans bracket depth so a nested note does not eat real output; find_tools honours name/topic/action (read name=X answers that tool's blurb and schema, revealing it); create_tool validates the action vocabulary before the arguments. 31 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (e2051ad): reveal_ttl_secs is guarded like mcp_timeout (a typo no longer takes the request builder down; a real 0 means never decay); reveal_tools reads a bare string as one name and refuses other non-lists by name; _tool_category coerces like _tool_blurb; the three pairing repairers skip a non-dict entry without spinning; truncate_middle refuses or cuts honestly at limit 0/1; _spill_signal counts its [HARNESS:...] wrapper against the budget; the stripper scans bracket depth so a nested note does not eat real output; find_tools honours name/topic/action (read name=X answers that tool's blurb and schema, revealing it); create_tool validates the action vocabulary before the arguments. 31 checks red pre-fix."
     },
     {
       "id": "computer-use-platforms-1-0-84",
@@ -1968,7 +1968,7 @@
         "commit": "92e6d19",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-115 .. -123, an earlier review run 11 (fixed 2026-10-06, 92e6d19). blocked_text gained the Windows arm (del <drive:>, Remove-Item -Recurse/-Force, format <drive:>, shutdown) and lost its end anchor (`rm -rf / --no-preserve-root`, `rm -rf /; echo hi` blocked now); a dropped window_id on non-macOS is named; Windows depth=0 means 0 levels; _clamp survives 1e999; prune_shots(0) prunes; `cmd+-` is the minus key; the helper's stdout parses from the LAST JSON object; a timeout kills the child tree; the UIA-invoke path goes through _finish. tests/test_computer_use.py: 19 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (92e6d19): blocked_text gained the Windows arm (del <drive:>, Remove-Item -Recurse/-Force, format <drive:>, shutdown) and lost its end anchor (`rm -rf / --no-preserve-root`, `rm -rf /; echo hi` blocked now); a dropped window_id on non-macOS is named; Windows depth=0 means 0 levels; _clamp survives 1e999; prune_shots(0) prunes; `cmd+-` is the minus key; the helper's stdout parses from the LAST JSON object; a timeout kills the child tree; the UIA-invoke path goes through _finish. tests/test_computer_use.py: 19 checks red pre-fix."
     },
     {
       "id": "accounting-secrets-1-0-84",
@@ -1978,7 +1978,7 @@
         "commit": "30a51fe",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-109/-110/-111/-137/-138, run 11 (fixed 2026-10-06, 30a51fe). est_tokens gives emoji their own class (~2 tokens each; 400 emoji was 307); the config-side secret rule shares the env-side vocabulary (db.password refused, its value never reaches the verb log); scrub redacts percent-encoded secrets (a URL query no longer leaks one; a case-insensitive pass is deliberately not done); create_tool refuses a name an existing custom tool holds; tools_dir_verdict() answers without an argument. A-2026-10-05-112 REFUTED here by measurement (the spill note's omitted-byte arithmetic agrees across CRLF/accent/3001-byte bodies). tests/test_spill.py, test_scrub.py, test_tool_discovery.py: 13 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (30a51fe): est_tokens gives emoji their own class (~2 tokens each; 400 emoji was 307); the config-side secret rule shares the env-side vocabulary (db.password refused, its value never reaches the verb log); scrub redacts percent-encoded secrets (a URL query no longer leaks one; a case-insensitive pass is deliberately not done); create_tool refuses a name an existing custom tool holds; tools_dir_verdict() answers without an argument. one refuted here by measurement (the spill note's omitted-byte arithmetic agrees across CRLF/accent/3001-byte bodies). tests/test_spill.py, test_scrub.py, test_tool_discovery.py: 13 checks red pre-fix."
     },
     {
       "id": "telegram-ask-path-1-0-84",
@@ -1988,7 +1988,7 @@
         "commit": "cef08fe",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-139 .. -151 and -156, an earlier review run 12 (fixed 2026-10-06, cef08fe). TelegramDestination sets has_human (the lane had never asked anything: every confirm-tier command was declined silently, with no line); the confirm question posts with its command as <pre>; run_telegram passes ask_door so ask_user reaches a person; a button answer lands as the option's WORDS; a /stop with a question open stops the run; a second question while one is open is refused; a failed post returns at once (was 30.005s); the caller's wait is capped; the renderer splits first and escapes per chunk (no more tag cut at 4096) and protects fenced blocks; the client honours a 429 retry_after bounded by telegram.retry_after_max; the Telegram token joins the secret sweep. tests/test_telegram.py: 87 checks, 26 red pre-fix."
+      "detail": "Fixed 2026-10-06 (cef08fe): TelegramDestination sets has_human (the lane had never asked anything: every confirm-tier command was declined silently, with no line); the confirm question posts with its command as <pre>; run_telegram passes ask_door so ask_user reaches a person; a button answer lands as the option's WORDS; a /stop with a question open stops the run; a second question while one is open is refused; a failed post returns at once (was 30.005s); the caller's wait is capped; the renderer splits first and escapes per chunk (no more tag cut at 4096) and protects fenced blocks; the client honours a 429 retry_after bounded by telegram.retry_after_max; the Telegram token joins the secret sweep. tests/test_telegram.py: 87 checks, 26 red pre-fix."
     },
     {
       "id": "lane-health-truth-1-0-84",
@@ -1998,7 +1998,7 @@
         "commit": "2a7d522",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-179 .. -186, an earlier review run 12 (fixed 2026-10-06, 2a7d522). lane_down keys the repeat counter on a normalised reason class (a varying message no longer resets it); the lane record merges per lane under the lock (proven with two real processes - a lane this process does not own survives); the poll-failure stamp is monotonic-safe (a backwards clock reports, not hides); _lane_error_permanent requires the HTTP status shape (an id/port containing 401 is not a refused credential); a negative failure count is clamped before the backoff curve; a stale 'up' record is corrected on the exit path and lanes_snapshot can say the pid is dead. A-184's uptime half was REFUTED by measurement (the clamp is behaviour-preserving); the negative-COUNT half was real and is fixed. tests/test_lane_health.py + test_telegram.py: 23 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (2a7d522): lane_down keys the repeat counter on a normalised reason class (a varying message no longer resets it); the lane record merges per lane under the lock (proven with two real processes - a lane this process does not own survives); the poll-failure stamp is monotonic-safe (a backwards clock reports, not hides); _lane_error_permanent requires the HTTP status shape (an id/port containing 401 is not a refused credential); a negative failure count is clamped before the backoff curve; a stale 'up' record is corrected on the exit path and lanes_snapshot can say the pid is dead. the uptime half was refuted by measurement (the clamp is behaviour-preserving); the negative-COUNT half was real and is fixed. tests/test_lane_health.py + test_telegram.py: 23 checks red pre-fix."
     },
     {
       "id": "telegram-files-and-reporting-1-0-84",
@@ -2008,7 +2008,7 @@
         "commit": "2a7d522",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-199 .. -201, run 12 (fixed 2026-10-06, 2a7d522). sendDocument/sendPhoto appear nowhere in the shipped build, so 'send me the report' returned a Windows path - the transport exists now and run_telegram passes send_file_cb into the run; and a Telegram-only box wires SCHEDULER.dispatcher / REPORTER and honours announce_startup, so a scheduled job reports somewhere and a restart says it is back on this lane too. tests/test_telegram.py: 13 checks red pre-fix."
+      "detail": "Fixed 2026-10-06 (2a7d522): sendDocument/sendPhoto appear nowhere in the shipped build, so 'send me the report' returned a Windows path - the transport exists now and run_telegram passes send_file_cb into the run; and a Telegram-only box wires SCHEDULER.dispatcher / REPORTER and honours announce_startup, so a scheduled job reports somewhere and a restart says it is back on this lane too. tests/test_telegram.py: 13 checks red pre-fix."
     },
     {
       "id": "web-door-and-answer-binding-1-0-84",
@@ -2018,37 +2018,37 @@
         "commit": "a065fe5",
         "expect": "tagged"
       },
-      "detail": "A-2026-10-05-202 .. -206 and -235 .. -237, -244 .. -246, an earlier review run 13 (fixed 2026-10-06, a065fe5). HTTP/1.1 with keep-alive (every route Content-Length-framed; an undrained body can no longer poison the next request on the socket); HEAD runs the routing and drops the body (curl -I /api/health used to read 501); OPTIONS/PUT/DELETE/PATCH refuse in JSON with Allow; a non-object JSON body answers a JSON 400 instead of raising and closing with zero bytes. A-244 (HIGH): /api/steer compares the caller with the run's owning client, so a second tab, a LAN peer or a stale script can no longer answer another conversation's parked question - or the confirm gate. The mutate half of the session registry is scoped to the owning client (a foreign delete removed the runlog file); the shared ?all=1 view keeps working with an explicit title; a pruned conversation's runlog is deleted with it; WebRun.answered is a real latch; a timed-out question draws a line. tests/test_webui.py: 50 checks red pre-fix; keep-alive and HEAD verified live with curl."
+      "detail": "Fixed 2026-10-06 (a065fe5): HTTP/1.1 with keep-alive (every route Content-Length-framed; an undrained body can no longer poison the next request on the socket); HEAD runs the routing and drops the body (curl -I /api/health used to read 501); OPTIONS/PUT/DELETE/PATCH refuse in JSON with Allow; a non-object JSON body answers a JSON 400 instead of raising and closing with zero bytes. The steer door (HIGH): `/api/steer` compares the caller with the run's owning client, so a second tab, a LAN peer or a stale script can no longer answer another conversation's parked question - or the confirm gate. The mutate half of the session registry is scoped to the owning client (a foreign delete removed the runlog file); the shared ?all=1 view keeps working with an explicit title; a pruned conversation's runlog is deleted with it; WebRun.answered is a real latch; a timed-out question draws a line. tests/test_webui.py: 50 checks red pre-fix; keep-alive and HEAD verified live with curl."
     },
     {
-      "id": "an earlier review-2026-10-06-1-0-85",
-      "title": "ten bugs from the one-day hunt, each with the test that grades it",
+      "id": "scheduler-and-lanes-fixes-1-0-85",
+      "title": "ten fixes: the scheduler, the chat lanes and the app",
       "state": "shipped",
       "anchor": {
         "commit": "9939ccd",
         "expect": "tagged"
       },
-      "detail": "One-day an earlier review on 2026-10-06, ten commits merged from an earlier review-2026-10-06 (4bc31b3, 0d346d6, 2c8450c, 7499573, 6899f26, 1bdee53, 9f21a34, 46c70af, aa5516a, 9939ccd). Sessions and schedule: `_fire` claims the job name under the scheduler's lock, so a job that takes longer than its interval no longer runs several times over on one session key; only a process holding the state lock fires the folder's cron jobs, so a CLI session alive across a boundary no longer steals a due job, prints its answer to a terminal and advances `next`; `add` and `remove` agree on one name, so the name typed is the name removed and re-adding cannot silently overwrite; a job created where there is no reporting channel says its answer goes to the log only. Mattermost: the streamed draft's post id lives on the destination that owns it, so two runs in one channel no longer edit each other's posts; one open question per channel, so a second prompt no longer drops the first; a long answer is cut on a line and never inside an open code fence; a post the server refuses logs the text it lost. TUI: `--app` starts on the 16-colour tier (a `selection_bg` that is not a colour no longer poisons `Style.from_dict`); Ctrl-W gives the pane its columns back. Every fix landed with a regression test that fails on the pre-fix build (`TINYCMDR_SRC`) and the full gate green after each. Leads from an earlier review runs 14/15 refuted in the same pass: the UTF-16 post-limit premise, the web conversation registry read as a lost update, and a missing tool argument raising out of the door."
+      "detail": "Ten commits (4bc31b3, 0d346d6, 2c8450c, 7499573, 6899f26, 1bdee53, 9f21a34, 46c70af, aa5516a, 9939ccd), each with the regression test that grades it. Sessions and schedule: `_fire` claims the job name under the scheduler's lock, so a job that takes longer than its interval no longer runs several times over on one session key; only a process holding the state lock fires the folder's cron jobs, so a CLI session alive across a boundary no longer steals a due job, prints its answer to a terminal and advances `next`; `add` and `remove` agree on one name, so the name typed is the name removed and re-adding cannot silently overwrite; a job created where there is no reporting channel says its answer goes to the log only. Mattermost: the streamed draft's post id lives on the destination that owns it, so two runs in one channel no longer edit each other's posts; one open question per channel, so a second prompt no longer drops the first; a long answer is cut on a line and never inside an open code fence; a post the server refuses logs the text it lost. TUI: `--app` starts on the 16-colour tier (a `selection_bg` that is not a colour no longer poisons `Style.from_dict`); Ctrl-W gives the pane its columns back. Every fix landed with a regression test that fails on the pre-fix build (`TINYCMDR_SRC`) and the full gate green after each. Also refuted while working: the UTF-16 post-limit premise, the web conversation registry read as a lost update, and a missing tool argument raising out of the door."
     },
     {
-      "id": "an earlier review-2026-10-07-1-0-86",
-      "title": "ten bugs from the one-day hunt, each with the test that grades it",
+      "id": "scheduler-web-guards-fixes-1-0-86",
+      "title": "ten fixes: the scheduler, the page, the guards, the a2a and the install door",
       "state": "shipped",
       "anchor": {
         "commit": "807d115",
         "expect": "tagged"
       },
-      "detail": "One-day an earlier review on 2026-10-07, ten commits merged from an earlier review-2026-10-07 (7312d66, ef1e3e6, c687f39, 8d16d15, 26a4c45, ae58fa3, 28f8189, cdbd83a, 946e2c1, 807d115). Schedule: a tick's save applies its own delta to jobs.json read under the file lock, so a `--once` add landing between the reload and the save is no longer overwritten (276 of 1989 concurrent adds were lost before); a scheduled job's ask_user row is filed where the Mattermost listener reads answers, so the operator's reply reaches the job instead of starting a new run while the job carries on with its own judgment. Web door: per-request handler state is reset per request, so a refusal after an earlier GET no longer desyncs a kept-alive connection (the third request answered 501); `attach()` refuses a directory (a stats-only check offered one, and its download was a Content-Length with no body); `_file` opens the path before it sends headers for the same reason; the conversation registry's `open` map is bounded and drops entries whose conversation is gone. Guards: `_is_mutation` no longer reads a gate refusal as a change, so a refused write cannot wipe the dedupe and loop counters (a model re-issuing one refused write used the whole step budget and the report claimed a write that never happened). a2a: ListTasks answers -32602 for a non-numeric pageSize instead of raising out of the handler. Install and update: install.sh keeps the installer's own exit code (a failed install reported success); the host-owned dir rule is one rule in all six copies, with update.sh/update.ps1 carrying snapshots/ and tmp/ and the parity check parsing every copy. Every fix landed with a regression test that fails on the pre-fix build (TINYCMDR_SRC, or HEAD's script for the shell ones) and the full gate green after each. Night-audit run 16 (2026-10-07) A-2026-10-07-05 is fixed by the last commit; its other findings (the fossil .git in a pruned tree, AGENTS.md neither shipped nor pruned, the update path never removing, the standalone updaters silent about requirements.txt) are parked in an earlier review.md, not fixed here."
+      "detail": "Ten commits, each with a regression test that fails on the pre-fix build and the full gate green after each. Scheduler: a tick's save applies its own delta to jobs.json read under the file lock, so a `--once` add landing between the reload and the save is no longer overwritten (276 of 1989 concurrent adds were lost before); a scheduled job's ask_user row is filed where the Mattermost listener reads answers, so the operator's reply reaches the job instead of starting a new run while the job carries on with its own judgment. Web door: per-request handler state is reset per request, so a refusal after an earlier GET no longer desyncs a kept-alive connection (the third request answered 501); `attach()` refuses a directory, whose download was a Content-Length with no body; `_file` opens the path before it sends headers for the same reason; the conversation registry's `open` map is bounded and drops entries whose conversation is gone. Guards: `_is_mutation` no longer reads a gate refusal as a change, so a refused write cannot wipe the dedupe and loop counters (a model re-issuing one refused write used the whole step budget and the report claimed a write that never happened). a2a: ListTasks answers -32602 for a non-numeric pageSize instead of raising out of the handler. Install and update: install.sh keeps the installer's own exit code (a failed install reported success); the host-owned dir rule is one rule in all six copies, with update.sh/update.ps1 carrying snapshots/ and tmp/ and the parity check parsing every copy."
     },
     {
-      "id": "an earlier review-2026-10-07-1-0-87",
-      "title": "two state-file defects from an earlier review run 17",
+      "id": "state-quarantine-and-sidecars-1-0-87",
+      "title": "a damaged jobs.json is quarantined, and a sessions/ sidecar is not a conversation",
       "state": "shipped",
       "anchor": {
         "commit": "c7b0efa",
         "expect": "tagged"
       },
-      "detail": "Night-audit run 17 (2026-10-07, Z3 state and files), two commits on main (d044537, c7b0efa) after the v1.0.86 cut. A-2026-10-07-08: jobs.json was the one state file whose reader answered {} for anything it could not parse - no log line, no `.damaged-*` copy - and `_save` re-read the same way, so a corrupt or transiently-locked file lost the schedule with no evidence anywhere; it routes through the shared `_load_json_state`, a valid-but-non-object file is named too, and tests/test_state_damage.py now covers the fourth state path. A-2026-10-07-12: the `atomic_write_text` docstring lost its opening clause; restored from the original wording in 343cefa, since it is the only in-code record of the corruption mode that quarantine exists for. A-2026-10-07-10: the session reload excluded only `.carry.json`, so `.hints.json` and `.question.json` loaded as phantom conversations - and because the hints file is a JSON list, `tinycmdr sessions` listed one too; `_is_session_file()` now answers for the reload and the listing, while search_sessions keeps tolerating sidecar content on purpose. A-2026-10-07-09 was refuted by measurement: with the stat before the read the recorded mtime ends up OLDER than the content parsed, so the change detector fires again instead of missing the write for good. Both fixes landed with a regression test that fails on the pre-fix build and the full gate green (101/0/0); the remaining run-17 findings (the provenance record's fail-open branch and its non-atomic write, the one-second /export name, the overdue-skip log line) are parked in an earlier review.md for a decision."
+      "detail": "Two state-file fixes, each with a regression test that fails on the pre-fix build. `jobs.json` was the one state file whose reader answered {} for anything it could not parse - no log line, no `.damaged-*` copy - and `_save` re-read the same way, so a corrupt or transiently-locked file lost the schedule with no evidence anywhere; it routes through the shared `_load_json_state`, a valid-but-non-object file is named too, and tests/test_state_damage.py now covers the fourth state path. The session reload excluded only `.carry.json`, so `.hints.json` and `.question.json` loaded as phantom conversations - and because the hints file IS a JSON list, `tinycmdr sessions` listed one too; `_is_session_file()` answers for the reload and the listing now, while search_sessions keeps tolerating sidecar content on purpose. The `atomic_write_text` docstring, whose opening clause was lost, is restored from the original wording."
     }
   ]
 }

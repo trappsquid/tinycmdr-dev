@@ -747,7 +747,7 @@ check("and its capability line carries no warning",
 # capped and the leaf is on demand. Three things a shelf has to do: resolve from the label
 # the prompt shows (and from a shorter word for it), name its tools WITH descriptions, and
 # reveal NOTHING - a reveal is per-session schema rent that calling the tool pays anyway.
-# A-101 (an earlier review run 11): the A-79 class again - `_tool_category` raised on a
+# A-101: the A-79 class again - `_tool_category` raised on a
 # non-string while `_tool_blurb` beside it coerced. The pair must agree. The calls are
 # wrapped because the PRE-FIX build raises right here, and a crashing suite reports less
 # than a failing check (the rest of the suite never runs).

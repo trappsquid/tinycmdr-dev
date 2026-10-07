@@ -6,7 +6,7 @@ know a service was up), could not answer a prompt (stdin was DEVNULL), and a job
 ended was only discoverable by asking. No broker: the wrapper and the spool are plain
 files under logs/.
 
-Night audit run 11 additions, each graded against the pre-fix tool
+ additions, each graded against the pre-fix tool
 (TINYCMDR_SRC=/tmp/pre-process.py makes the file under test the snapshot; the checks
 below then fail):
 
@@ -178,7 +178,7 @@ def main():
               "wait=true blocks regardless", out[:80])
         fb.CONFIG["agent"]["auto_background_seconds"] = 0
 
-        # =============== an earlier review run 11 (A-124 .. A-130) ===============
+        # =============== (A-124.. A-130) ===============
 
         # ---- A-127: an unusable action names the vocabulary, before any job lookup
         out = safe(run_proc, {"action": "frobnicate"}, ctx)

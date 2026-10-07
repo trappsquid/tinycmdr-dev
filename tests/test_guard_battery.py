@@ -491,7 +491,7 @@ def test_confirm_approval_scopes():
 
 
 def test_the_never_tier_reads_tokens_not_spellings():
-    """Night audit run 10 (A-2026-10-05-75/76): the never tier was anchored to one surface
+    """the never tier was anchored to one surface
     shape per command, so `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="..."`
     ran with no gate at all, and a per-line read-only exemption let `mkfs... # cat`
     through. Word order and quotes must not change the verdict; mentions must stay

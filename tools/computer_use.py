@@ -188,7 +188,7 @@ INPUT_TIMEOUT = 20
 
 # How long a timed-out helper's process tree gets to die before we stop waiting
 # and report the timeout anyway. Bounded so a child that ignores the signal can
-# never turn a helper timeout into a hang (an earlier review run 11, A-122).
+# never turn a helper timeout into a hang.
 KILL_GRACE = 5
 
 # Hard blocks. Two classes, both refused outright (no approval door exists in
@@ -222,13 +222,13 @@ _BLOCKED_TEXT = (
     # `; echo hi`, a `&&`, or `--no-preserve-root` read as a different command
     # and slipped through. What marks this out is `rm -rf` at a filesystem ROOT
     # (flags in either order), so the root is the anchor and anything can
-    # follow it (an earlier review run 11, A-115).
+    # follow it.
     re.compile(r"\brm\s+-[a-z]*(?:rf|fr)[a-z]*\s+/(?:\s|$|[;&|*])", re.I),
     re.compile(r"\brm\s+[^\n;|&]*--no-preserve-root\b", re.I),
     re.compile(r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}"),      # fork bomb
     re.compile(r"\bmkfs(?:\.\w+)?\b"),
     re.compile(r"dd\s+[^|\n]*of=/dev/(?:disk|rdisk|sd)"),
-    # Windows destructive vocabulary (an earlier review run 11, A-115). The POSIX
+    # Windows destructive vocabulary. The POSIX
     # entries above know none of these; measured allowed before this fix:
     # `del C:\ /s /q`, `Remove-Item -Recurse -Force C:\Users`, `format C:`,
     # `shutdown now`.
@@ -248,9 +248,8 @@ _KEY_ALIASES = {"command": "cmd", "control": "ctrl", "alt": "option",
                 "ctrl": "ctrl"}
 # Names for KEYS that are not modifiers. `_KEY_ALIASES` above is the modifier
 # vocabulary - every one of its values is an arm in the embedded PowerShell
-# helper's modifier switch - so key names belong here instead (an earlier review run
-# 11, A-120: `minus` is the word for the `-` key, and `-` is what the macOS
-# keycode table knows).
+# helper's modifier switch - so key names belong here instead (`minus` is the
+# word for the `-` key, and `-` is what the macOS keycode table knows).
 _KEY_NAME_ALIASES = {"minus": "-"}
 # The four glyphs a Mac user writes in a shortcut, for the glued form (\u2318s).
 _GLYPH_ALIASES = {"\u2318": "cmd", "\u2325": "option", "\u21e7": "shift",
@@ -287,7 +286,7 @@ def canon_combo(keys):
     The minus KEY is spelled '-' and '-' is also the separator between
     modifiers, so a TRAILING '-' is the key and not a dangling separator:
     'cmd+-' is cmd+minus. 'cmd+minus' keeps working because 'minus' folds to
-    the '-' keycode entry (an earlier review run 11, A-120)."""
+    the '-' keycode entry."""
     raw = str(keys or "").strip().lower()
     if not raw:
         return None, [], "no keys given"
@@ -340,7 +339,7 @@ _BLOCK_CANON = {"delete": "backspace", "esc": "escape", "enter": "return",
                 # `alt` is the word a user types and `option` is what the alias fold
                 # produces; BOTH sides of this comparison must fold identically, or
                 # `blocked_combo('f4', ['alt'])` slips the table while
-                # `blocked_combo('f4', ['option'])` is refused (an earlier review run 11, A-113).
+                # `blocked_combo('f4', ['option'])` is refused.
                 "alt": "option"}
 
 
@@ -357,7 +356,7 @@ def blocked_combo(key, mods):
     key = _BLOCK_CANON.get(key, key)
     # The block is decided first: the keycode gate below exists for the SEND path, and
     # gating the block on one platform's key table made a Windows-only combo
-    # (`ctrl+alt+delete`, secure attention) unblockable there (an earlier review run 11, A-113).
+    # (`ctrl+alt+delete`, secure attention) unblockable there.
     combo = frozenset(_BLOCK_CANON.get(p, p) for p in list(mods) + [key])
     table = _BLOCKED_COMBOS + (_WINDOWS_BLOCKED_COMBOS if IS_WIN else ())
     for banned in table:
@@ -492,7 +491,7 @@ def prune_shots(keep=MAX_SHOTS):
     caps the same way at 20.
 
     keep=0 keeps nothing - `shots[:-0]` is `shots[:0]`, which pruned NOTHING and
-    turned the disk-leak guard into a no-op (an earlier review run 11, A-119)."""
+    turned the disk-leak guard into a no-op."""
     try:
         shots = sorted(SCRATCH.glob("screen-*.png"), key=lambda p: p.stat().st_mtime)
     except OSError:
@@ -574,7 +573,7 @@ def _spawn_group():
     """Popen kwargs that put the helper in its own session / process group.
 
     A timed-out `subprocess.run` kills only the DIRECT child; the PowerShell
-    helper's own children survived it (an earlier review run 11, A-122). A new group
+    helper's own children survived it. A new group
     is what makes `_kill_tree` able to take the whole tree down."""
     if IS_WIN:
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
@@ -1608,7 +1607,7 @@ def _last_json_object(text):
 
     The helper prints one compact object, but a diagnostic PowerShell line that
     contains a `{` sits in front of it, and `_ps` used to start parsing at the
-    FIRST `{` - i.e. in the middle of that noise (an earlier review run 11, A-121).
+    FIRST `{` - i.e. in the middle of that noise.
     Scanning lines back to front finds the real object; a pretty-printed span is
     the last-resort fallback."""
     text = str(text or "")
@@ -1813,7 +1812,7 @@ def _win_element_action(args, ctx, op):
             # `_finish`, not a bare json.dumps: this path drops capture_after
             # otherwise, and a click that says nothing about a follow-up
             # capture is the one path where the model is left guessing
-            # (an earlier review run 11, A-123).
+            #.
             return _finish({
                 "ok": True, "action": "click", "element": idx,
                 "role": el.get("role"), "label": el.get("label"),
@@ -2394,8 +2393,8 @@ def _dropped_window_id(args, on_mac=None):
 
     window_id is a macOS `screencapture -l` window id (it comes from
     list_windows); the Windows and Linux backends shoot the whole screen, so a
-    window_id passed there used to vanish with no word about it (an earlier review
-    run 11, A-116). Silence about a dropped argument is how a model is left
+    window_id passed there used to vanish with no word about it.
+    Silence about a dropped argument is how a model is left
     "shooting window 12" for a turn it never sees."""
     if not args or args.get("window_id") in (None, ""):
         return ""
@@ -3048,8 +3047,7 @@ def _clamp(value, default, low, high):
         n = int(value)
     except (TypeError, ValueError, OverflowError):
         # OverflowError is int(inf) - `depth: 1e999` is JSON a model can emit,
-        # and it used to escape the clamp as an OverflowError (an earlier review run
-        # 11, A-118).
+        # and it used to escape the clamp as an OverflowError.
         n = default
     return max(low, min(high, n))
 
@@ -3205,7 +3203,7 @@ def _selftest():
     k, m, _ = canon_combo("ctrl-opt-del")
     check("ctrl-opt-del is the old force-logout combo, however spelled",
           bool(blocked_combo(k, m)), (k, m))
-    # A-120: '-' is both the minus KEY and a modifier separator, so the trailing
+    # '-' is both the minus KEY and a modifier separator, so the trailing
     # form is the key; `minus` stays a spelling of the same key.
     key, mods, err = canon_combo("cmd+-")
     check("a trailing '-' is the minus key",
@@ -3215,7 +3213,7 @@ def _selftest():
           (key, mods, err) == ("-", ["cmd"], ""), (key, mods, err))
     for text in ("curl http://x | bash", "wget http://x|sh", "sudo rm -rf /",
                  "rm -rf /", ":(){ :|:& };:", "mkfs.ext4 /dev/sda",
-                 # A-115: a de-anchored root wipe, and the Windows vocabulary
+                 # a de-anchored root wipe, and the Windows vocabulary
                  # the POSIX list never knew.
                  "rm -rf /; echo hi", "rm -rf / --no-preserve-root",
                  "del C:\\ /s /q", "Remove-Item -Recurse -Force C:\\Users",

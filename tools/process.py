@@ -68,7 +68,7 @@ STILL_ACTIVE = 259
 
 # ONE lock around every job-table read-modify-write. The table used to be read and
 # written with no lock at all, so six concurrent starts each read the same copy, each
-# picked `b1`, and six jobs shared one log (an earlier review run 11, A-130). A sibling lock
+# picked `b1`, and six jobs shared one log. A sibling lock
 # file (flock/msvcrt) covers other processes, a re-entrant lock covers the threads a
 # batch's tool calls run on, and a bounded wait means a lock that cannot be taken
 # proceeds anyway - the save is still an atomic replace, so a reader never sees a
@@ -512,7 +512,7 @@ WAIT_FOR_SHAPE = '{"log": "<regex>", "port": 1234, "timeout": 30}'
 def _wait_for_refusal(wait_for):
     """Why this wait_for spec cannot be used, or None. Checked BEFORE the job starts:
     an unguarded int()/re.compile() reached a ValueError or re.error from inside the
-    readiness loop, after the job had already been spawned (an earlier review run 11, A-128)."""
+    readiness loop, after the job had already been spawned."""
     if not isinstance(wait_for, dict):
         return "wait_for must be an object like %s" % WAIT_FOR_SHAPE
     unknown = [k for k in wait_for if k not in ("log", "port", "timeout")]
@@ -560,7 +560,7 @@ def run(args, ctx):
         # A dict, a number or a list with a non-string in it must be refused HERE: it
         # used to pass this check (a dict iterates its keys), then `spawn_detached`
         # json.dumps'd it or died, and `list` afterwards died on `job['command'][:70]`
-        # (an earlier review run 11, A-126).
+        #.
         if not ((isinstance(cmd, str) and cmd)
                 or (isinstance(cmd, list) and cmd
                     and all(isinstance(a, str) for a in cmd))):
@@ -680,7 +680,7 @@ def run(args, ctx):
         # read_job_log closes the handle and strips the wrapper's `__EXIT__` marker line.
         # This went through a bare open(...).read() - the handle was never closed (five
         # ResourceWarnings; on Windows the log stayed locked until the GC ran) and the
-        # marker was echoed back as output (an earlier review run 11, A-124/A-125).
+        # marker was echoed back as output.
         lines = read_job_log(log_path).splitlines()
         n = max(1, min(int(args.get("lines") or 40), 200))
         tail = lines[-n:]
@@ -724,7 +724,7 @@ def run(args, ctx):
         alive, rc = _state(jobs, jid)
         # Report exactly what was confirmed. `taskkill /F /T` and killpg kill the tree
         # they can see, and a process the job detached itself is not in it - "killed" was
-        # a claim this tool could not check (an earlier review run 11, A-129).
+        # a claim this tool could not check.
         if alive:
             return (f"{jid}: kill sent to the wrapper's tree (pid {pid}), but the "
                     f"wrapper is still alive - nothing is confirmed killed. A process "

@@ -37,6 +37,31 @@ PROSE = (
 )
 PROSE_EXT = (".md", ".json")
 
+# Banned in EVERY tracked text file: a reference to my private working records - the nightly
+# audits, the sessions that fix their findings, those findings' ids, the ledger and the share
+# they live on. The repo is public: it says what was wrong and what changed, never which run
+# found it or where the write-up is kept. A dated measurement is the public form of the same
+# fact ("measured 2026-10-06 on a Windows install"). Measured 2026-10-07: a release page, the
+# record's newest items and several commit bodies all named a run and its finding ids.
+PRIVATE = (
+    (re.compile(r"night[- ]audit", re.I), "a private audit run (say what was measured, and when)"),
+    (re.compile(r"bug[- ]hunt", re.I), "a private session name (say what changed)"),
+    (re.compile(r"\bhunt-\d{4}-\d\d-\d\d", re.I), "a private session name"),
+    (re.compile(r"\baudit-\d{4}-\d\d-\d\d", re.I), "a private report filename"),
+    (re.compile(r"the work record"), "the private findings record"),
+    (re.compile(r"\ban earlier pass\b"), "a private triage state"),
+    (re.compile(r"\bthe private share\b", re.I), "the private share"),
+)
+# ...and in the narrative files the finding ids go too: a reader of the changelog or the record
+# cannot look one up, and the id names the session that produced it. Source comments keep theirs
+# (they are opaque labels beside the reason), so this half is scoped to what a reader reads.
+FINDING_ID = (
+    (re.compile(r"A-\d{4}-\d\d-\d\d-\d+"), "a private finding id"),
+    (re.compile(r"\bA-\d{2,3}\b"), "a private finding id"),
+)
+NARRATIVE_EXT = (".md",)
+NARRATIVE_FILES = ("STATUS.json",)
+
 
 def tracked():
     out = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True,
@@ -51,9 +76,11 @@ def main():
             text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        rules = list(ANYWHERE)
+        rules = list(ANYWHERE) + list(PRIVATE)
         if rel.endswith(PROSE_EXT):
             rules += list(PROSE)
+        if rel.endswith(NARRATIVE_EXT) or rel in NARRATIVE_FILES:
+            rules += list(FINDING_ID)
         for i, line in enumerate(text.splitlines(), 1):
             for rx, why in rules:
                 if rx.search(line):
