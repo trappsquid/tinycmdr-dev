@@ -618,6 +618,17 @@ def main():
           "attach() offers the file as a line", msg[:60])
     check(dest.attach("/nope/missing.bin").startswith("NOT SENT"),
           "attach() refuses what is not a file")
+    # ...and "not a file" has to include a DIRECTORY: it stats fine, so an attach that
+    # only stat()s offers it, and /api/download then commits a Content-Length and writes
+    # no body - the operator's fetch never settles (measured 2026-10-07). The other
+    # lanes' attach() already checked is_file().
+    _attach_dir = STAGE / "attach-a-directory"
+    _attach_dir.mkdir(exist_ok=True)
+    _attach_lines = len(run2.lines)
+    check(dest.attach(str(_attach_dir)).startswith("NOT SENT")
+          and len(run2.lines) == _attach_lines,
+          "attach() refuses a directory, not just a missing path",
+          run2.lines[_attach_lines - 1:])
 
     # ---- the door's framing: HTTP/1.1, HEAD, method refusals, body shape ----
     # Every check below drives the real Handler over raw HTTP; none needs a browser.

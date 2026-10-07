@@ -25072,6 +25072,14 @@ class WebDestination(Destination):
             p = Path(str(path)).expanduser().resolve()
             size = p.stat().st_size
         except OSError:
+            size = None
+        # A directory (or a FIFO, or a device) stats fine, and the page's download then
+        # commits a Content-Length and writes no body at all: the operator's fetch never
+        # settles and the handler thread parks on the socket (measured 2026-10-07 - a
+        # directory was offered as "64 bytes", /api/download answered 200 with an empty
+        # body, and the client timed out). Every other lane's attach() already refuses
+        # what is not a file.
+        if size is None or not p.is_file():
             return ("NOT SENT: %s is not a readable file on this box - the page "
                     "cannot offer what is not there." % path)
         if size > SEND_FILE_MAX:
