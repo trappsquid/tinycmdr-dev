@@ -541,6 +541,22 @@ check("a terminal that cannot draw Braille gets the ASCII mark and the wordmark"
       and not any(0x2800 <= ord(c) <= 0x28FF for c in _ascii_txt),
       _ascii_txt)
 fb.CONFIG["agent"]["unicode"] = _saved_unicode
+
+# --------------------------------------------- Ctrl-W gives the columns back
+# The rail is a ConditionalContainer (`VSplit([rail, VerticalLine(), self.body])`), so
+# hiding it is supposed to widen the pane. `_pane_width` subtracted its 26 columns
+# either way, which wrapped every card 26 columns early in exactly the mode that exists
+# to copy the transcript cleanly (measured 2026-10-06: 120 columns, rail hidden, cards
+# built at 91).
+_pane = fb.AppScreen(colour=True, tier="truecolor")
+_pane.app = None                 # no terminal: the helper falls back to self.width
+_pane.width = 120
+check("the rail's columns are taken while it is shown",
+      _pane._pane_width() == 120 - _pane.RAIL_WIDTH - 3, _pane._pane_width())
+_pane.show_rail = False
+check("and come back when Ctrl-W hides it", _pane._pane_width() == 120 - 3,
+      _pane._pane_width())
+_pane.show_rail = True
 check("...with the accepted dot counts (the designer's render)",
       [sum(bin(ord(c[1]) - 0x2800).count("1") for c in row if c)
        for row in _art_cells] == [74, 117, 90, 98, 99, 69, 52, 7, 19],

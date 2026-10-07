@@ -23008,8 +23008,12 @@ class AppScreen(TuiScreen):
             cols = self.app.output.get_size().columns
         except Exception:
             cols = self.width
-        # the window frame (2) + the rail and its rule
-        return max(24, cols - self.RAIL_WIDTH - 3)
+        # the window frame (2) + the rule that divides the pane from the rail, and the
+        # rail itself ONLY while it is shown: Ctrl-W hides it precisely so the
+        # transcript copies at the terminal's full width, and subtracting its 26
+        # columns either way wrapped every card 26 columns early in that mode
+        # (measured 2026-10-06: 120 columns, rail hidden, cards built at 91).
+        return max(24, cols - 3 - (self.RAIL_WIDTH if self.show_rail else 0))
 
     def _pane_height(self):
         try:
@@ -23725,6 +23729,7 @@ class AppScreen(TuiScreen):
             """Hide/show the rail. While it is hidden a drag-select copies the transcript
             alone; the status line says how to bring it back."""
             self.show_rail = not self.show_rail
+            self.width = self._pane_width()   # cards re-wrap for the pane they now have
             self.status = ("rail hidden - Ctrl-W shows it again, then select freely"
                            if not self.show_rail else "rail shown")
             event.app.invalidate()
