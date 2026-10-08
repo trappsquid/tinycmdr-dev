@@ -130,6 +130,12 @@ def main():
                 (BASE / "install.sh").read_text(encoding="utf-8")]
     programs += [q.read_text(encoding="utf-8")
                  for q in sorted((BASE / "maintenance").glob("*.py"))]
+    # ...and the maintenance SHELL scripts, which read their own overrides: release.sh takes
+    # TINYCMDR_SKIP_TREE_CHECK, TINYCMDR_SKIP_CI_GATE and TINYCMDR_SKIP_PRODUCT_CI, and
+    # pre-push.sh drives the gates. Leaving them out made the docs unable to name an override
+    # that really exists (measured 2026-10-08, writing §7 of docs/development.md).
+    programs += [q.read_text(encoding="utf-8")
+                 for q in sorted((BASE / "maintenance").glob("*.sh"))]
     docs_text = "\n".join(p.read_text(encoding="utf-8")
                           for p in sorted((BASE / "docs").glob("*.md"))) \
         + (BASE / "README.md").read_text(encoding="utf-8")

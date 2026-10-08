@@ -154,8 +154,22 @@ the build as `DEFAULT_SOUL`, so a host with no `soul.md` at all still runs a rea
 
 ## 7. Cutting a release (the batch)
 
-`release.sh` ships; it does not decide. The batch is four files and a decision, and this is the whole
-of it.
+`release.sh` ships; it does not decide. A release is **four files, one order, and three gates** — and
+the order is not a style, it is what makes each gate see a true claim.
+
+**Which repository things live in** (this is the part that bites):
+
+| what | where | why |
+|---|---|---|
+| the batch, the tags the ledger is checked against, the ledger itself | `trappsquid/tinycmdr-dev` (this tree) | history and the record |
+| the RELEASE object + its assets, and the generated product tree | `trappsquid/tinycmdr` (the install surface) | every installer and updater in the wild fetches `releases/latest/download/...` from there |
+
+`gh` resolves a repository from the tree it runs in, so `release.sh` sets `GH_REPO` to the install
+surface and pins the CI wait to this tree (`--repo "$TREE_REPO"`). `tests/test_contracts.py` fails
+if the repo a release goes to is not the repo the update path and both installers download from —
+a release published into the source repo is a release nobody can fetch.
+
+### The batch (one commit)
 
 1. **`tinycmdr.py`** - `VERSION = "1.0.4N"`. Byte-exact replacement: the working tree is CRLF, so a
    `sed` anchored with `$` silently misses.
@@ -163,24 +177,66 @@ of it.
    entry under `Added`/`Changed`/`Fixed`, each carrying the mechanism and the test - no summary
    paragraph, no operator quotes, no dates or measurement stories. Leave an empty `## [Unreleased]`
    heading at the top.
-3. **`STATUS.json`** - re-anchor every item this release carries to `{"commit": "<sha>"}` with **no**
-   `expect`. That is the "merged, nobody is claiming a release yet" state, and `release.sh` promotes
-   it to `expect: tagged` + `shipped` once the tag exists (`maintenance/ledger-tag.py`). Do **not**
-   write `expect: untagged` on a commit the cut is about to tag: CI grades that claim while the tag
-   is being created, and it fails. That is precisely the failure this rule prevents.
-4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`, plus the prose
-   line count the same tool's check complains about.
-5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`), `bash maintenance/pre-push.sh`, and
-   `bash maintenance/release.sh <notes-file>`. The notes file becomes the release body verbatim, so
-   write it fresh and factual - and write it for a reader who has never seen my private records:
-   no audit or session name, no finding id, no path to a write-up (AGENTS.md, invariants). The
-   changelog and the record are graded for this by tests/test_wording.py; a release body is not in
-   the tree, so that half is on me. Afterwards, verify from outside the repo: download the published
-   `SHA256SUMS` and one archive and check the sum. `release.sh` also grades the built archives
-   before publishing: `check-readme-assets.py` (every README download name) and
-   `check-package-assets.py` (**every asset the page's routes serve**, byte-identical to the tree -
-   the derivation lives once, in `maintenance/package_assets.py`, because 1.0.68-1.0.70 shipped
-   without `assets/webui.css` at all).
+3. **`STATUS.json`** - one item per change, **`"state": "unreleased"` with
+   `"anchor": {"commit": "<sha>", "expect": "untagged"}`**. That is the only shape the gate accepts
+   before the tag exists: `tests/test_status.py` refuses a `shipped` item whose anchor is not in a
+   tag AND refuses an `unreleased` one whose commit IS, so "no `expect` at all" is not available
+   any more. `release.sh` runs `maintenance/ledger-tag.py`, which promotes the item to
+   `shipped` + `expect: tagged` **after** the tag exists.
+4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`, plus the
+   prose line count the same tool's check complains about. `pre-push` refuses a stale block, so this
+   is not optional even for a one-line change.
+5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`) - the whole gate, not the suite you
+   touched - and commit.
+
+### The cut
+
+```bash
+bash maintenance/release.sh ~/tinycmdr-notes-<version>.md
+```
+
+The notes file becomes the release body **verbatim** (title exactly `v<version>`), so write it
+fresh, factual, one sentence per item, no process narration, no audit or session name, no finding
+id. `release.sh` then runs, in this order (each step exists because skipping it broke a release):
+
+1. the leak gate over the tree **and** over the range it is about to push; the dirty-tree check;
+   a refusal if the tag already exists;
+2. build every published shape, check the README's download names against `dist/`, check the
+   archives against the page's assets, write `SHA256SUMS`;
+3. push `main` (this tree), then **wait for this repo's `gate` on that sha** - a release flows from
+   green CI, and a published number is never rebuilt;
+4. create the tag **locally**, run `ledger-tag.py` to promote the items, commit the promotion, and
+   only then push the tag and `main` together - the pre-push hook grades the WORKING TREE, so an
+   item still saying `unreleased` while a local tag carries its commit blocks the tag's own push;
+5. regenerate the product tree (`publish-product.py --write ../tinycmdr-product --push`, then the
+   force-pushes it prints) and **wait for the install surface's `tests` on that commit** - the
+   workflow a stranger sees, which nothing used to consult;
+6. `gh release create --verify-tag` on the install surface, upload the stable aliases, read the
+   assets back, check the README names against the published release, fetch tags;
+7. `tests/test_status.py` - the record and the tag must agree before the script says `published`.
+
+Two deliberate overrides exist, and each says so in the notes: `TINYCMDR_SKIP_CI_GATE=1` (this
+repo's gate) and `TINYCMDR_SKIP_PRODUCT_CI=1` (the surface's tests).
+
+**Publishing the product tree alone** is a normal operation and needs no "ship it" - it is what a
+reader clones; only cutting a release number does. It is the way a workflow fix, a README fix or a
+product-suite fix reaches the surface without a release.
+
+**The Windows tier.** The install surface runs the whole shipped set on three runners, and its
+`windows-latest` job cannot grade ten suites yet (a console, `os.X_OK`, file modes, a second
+process's lock file...). Those are named in `STATUS.json`'s
+`windows-tier-on-the-install-surface` item and excluded by `--exclude` in
+`maintenance/product-files/tests.yml`; `tests/test_contracts.py` fails when the two lists disagree,
+every name must be a suite that ships, and the item closes only when the list is empty. The DEV
+workflow's own Windows job is a smaller curated `--select` tier, unchanged.
+
+**After a cut, verify from outside the repo**: download the published `SHA256SUMS` and one archive
+and check the sum; `releases/latest/download/install.sh` returns 200; `gh run list` shows the gate
+green on the tagged commit and the surface's tests green on the pushed tree. `release.sh` also
+grades the built archives before publishing: `check-readme-assets.py` (every README download name)
+and `check-package-assets.py` (**every asset the page's routes serve**, byte-identical to the tree -
+the derivation lives once, in `maintenance/package_assets.py`, because 1.0.68-1.0.70 shipped without
+`assets/webui.css` at all).
 
 **The rule for a reported bug.** It lands as the fix PLUS the invariant that grades its class -
 and the invariant lives where the class lives: a must-agree pair in `tests/test_contracts.py`, an
