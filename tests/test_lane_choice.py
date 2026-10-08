@@ -208,7 +208,7 @@ def serve_and_probe(dirpath, port, deadline=45):
 def main():
     work = Path(tempfile.mkdtemp(prefix="fblane-"))
     try:
-        for name in ("cli_only", "both", "mm_only", "tg_only", "health", "fresh"):
+        for name in ("cli_only", "both", "mm_only", "tg_only", "health", "fresh", "once"):
             d = work / name
             d.mkdir(parents=True, exist_ok=True)
             shutil.copy2(SRC, d / "tinycmdr.py")
@@ -293,6 +293,27 @@ def main():
               "A-73: ...and NO page is raised before it refuses", said[-300:])
         check(_dt < 15,
               "A-72: ...and it does not sit 30s on the way out", "took %.1fs" % _dt)
+
+        # -- `--once` takes the TASK, and only the task ----------------------------
+        # A separate flag after `--once` used to be swallowed into the prompt - the model was
+        # asked "--cli hello" (read back from the session the run wrote: run 24,
+        # A-2026-10-07-74) - and `--once` with nothing after it drew a banner and opened a
+        # full interactive session that then ate the script's stdin (A-2026-10-07-75).
+        code, said = run(work / "once", args=("--no-web", "--once", "--cli", "hello"),
+                         timeout=120)
+        check("read as flags" in said and "--cli" in said,
+              "A-74: a flag after --once is named, not swallowed into the prompt", said[-300:])
+        _stored = []
+        for _f in sorted((work / "once" / "sessions").glob("*.json")):
+            try:
+                _msgs = json.loads(_f.read_text(encoding="utf-8"))
+            except Exception:                                    # noqa: BLE001
+                continue
+            for _m in (_msgs if isinstance(_msgs, list) else []):
+                if isinstance(_m, dict) and _m.get("role") == "user":
+                    _stored.append(str(_m.get("content")))
+        check(_stored and all(s == "hello" for s in _stored),
+              "A-74: ...and the prompt the model received is exactly the text", _stored[:3])
 
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -

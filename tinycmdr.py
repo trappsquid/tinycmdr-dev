@@ -38980,7 +38980,17 @@ def main():
                 sys.exit(2)
     if "--once" in sys.argv:
         idx = sys.argv.index("--once")
-        return run_cli(once=" ".join(sys.argv[idx + 1:]))
+        tail = sys.argv[idx + 1:]
+        # A separate token that starts with `-` is a FLAG, not prose: `tinycmdr --once --cli
+        # "hello"` sent the literal string "--cli hello" to the model, silently, and the
+        # model answered a question starting with a flag (run 24, A-2026-10-07-74). A flag
+        # inside a quoted prompt is one token and stays text.
+        _swallowed = [t for t in tail if t.startswith("-")]
+        prompt = " ".join(t for t in tail if not t.startswith("-")).strip()
+        if _swallowed:
+            print("--once takes the task; these read as flags, not text: %s"
+                  % ", ".join(_swallowed), file=sys.stderr)
+        return run_cli(once=prompt)
     # The page starts beside the LONG-LIVED SERVICE modes (bare, the lanes) - the default
     # door whichever one this is. It does NOT start beside a terminal session: `--cli`
     # and `--app` used to raise the browser and the console at once (2026-10-04:
