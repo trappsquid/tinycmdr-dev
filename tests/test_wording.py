@@ -75,6 +75,35 @@ NARRATIVE_EXT = (".md",)
 NARRATIVE_FILES = ("STATUS.json",)
 
 
+# What the scope rule set aside, and why. Printed by main() so the graded set has a
+# denominator: the extension whitelist's sin was an unread file nobody counted, and a bare
+# `continue` on an unreadable or UTF-16 file repeats it in another shape (run 21, A-56).
+NOT_GRADED = {"binary": [], "unreadable": []}
+
+
+def read_tracked(path):
+    """("text"|"binary"|"unreadable", the text or None) for one candidate file.
+
+    The rule is "every tracked file that decodes as UTF-8", so the DENOMINATOR is part of the
+    claim. Splitting the three outcomes out is what lets the exclusion be counted: a file
+    dropped by a bare `continue` (a UTF-16 file, a broken symlink, an odd permission bit)
+    leaves the graded set invisible, which is the same blind spot the extension whitelist had,
+    in another shape (run 21, A-2026-10-07-56). The NUL sniff is the first 4 KB: a binary
+    asset is recognised by its header, and a text file long enough to carry a NUL later is not
+    text anywhere a reader cares about.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return "unreadable", None
+    if b"\0" in raw[:4096]:
+        return "binary", None
+    try:
+        return "text", raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return "binary", None
+
+
 def tracked():
     """Every tracked file that decodes as UTF-8 text - not an extension whitelist.
 
@@ -83,6 +112,9 @@ def tracked():
     share path or a session name would be written, and the gate would not have seen it.
     Reading the bytes and keeping what decodes also covers the extension-less files
     (LICENSE, the `tinycmdr` launcher) without growing a list that goes stale.
+
+    What it leaves out is recorded in NOT_GRADED and printed by main(): a rule that grades
+    "every tracked file that decodes as UTF-8" has to be able to show its denominator.
     """
     out = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True,
                          text=True).stdout
@@ -90,30 +122,55 @@ def tracked():
     for rel in out.splitlines():
         if rel == SELF:
             continue
-        try:
-            raw = (ROOT / rel).read_bytes()
-        except OSError:
-            continue
-        if b"\0" in raw[:4096]:
-            continue                       # a binary asset: not prose, nothing to grade
-        try:
-            raw.decode("utf-8")
-        except UnicodeDecodeError:
-            continue                       # not text either
-        keep.append(rel)
+        kind, _text = read_tracked(ROOT / rel)
+        if kind == "text":
+            keep.append(rel)
+        else:
+            NOT_GRADED[kind].append(rel)
     return keep
 
 
 def main():
     bad = []
-    graded = set(tracked())
+    NOT_GRADED["binary"].clear()
+    NOT_GRADED["unreadable"].clear()
+    graded_files = tracked()
+    graded = set(graded_files)
+
+    # ---- the scope's own arithmetic, exercised on files we control ------------------------
+    # The three outcomes are the whole rule; a classifier that called an unreadable file
+    # "binary" (or a UTF-16 file "text") would grade the wrong set and still print a clean
+    # count. Pre-fix this was one `except OSError: continue` (run 21, A-2026-10-07-56).
+    import tempfile
+    work = Path(tempfile.mkdtemp(prefix="tc-wording-scope-"))
+    try:
+        (work / "text.md").write_text("a rule in the first person\n", encoding="utf-8")
+        (work / "asset.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 16)
+        (work / "utf16.txt").write_bytes("hello".encode("utf-16"))
+        hidden = work / "unreadable.txt"
+        hidden.write_text("x", encoding="utf-8")
+        os.chmod(hidden, 0)
+        got = {"text.md": read_tracked(work / "text.md")[0],
+               "asset.png": read_tracked(work / "asset.png")[0],
+               "utf16.txt": read_tracked(work / "utf16.txt")[0],
+               "unreadable.txt": read_tracked(hidden)[0]}
+        check = {"text.md": "text", "asset.png": "binary", "utf16.txt": "binary",
+                 "unreadable.txt": ("text" if (os.name == "nt" or os.geteuid() == 0)
+                                    else "unreadable")}
+        wrong = {k: (got[k], check[k]) for k in got if got[k] != check[k]}
+        bad += ["read_tracked classified %s as %s, expected %s" % (k, v[0], v[1])
+                for k, v in wrong.items()]
+    finally:
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
+
     # The scope is "every tracked file that decodes as UTF-8", not a list of extensions:
     # these two ship to a user and the whitelist never read them.
     for rel in ("install/com.tinycmdr.agent.plist", "INSTALL-MACOS.command"):
         if rel not in graded:
             bad.append("%s  is not graded (the rule must not be an extension whitelist)"
                        % rel)
-    for rel in tracked():
+    for rel in graded_files:
         try:
             text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -134,8 +191,12 @@ def main():
         print("\n%d line(s): rewrite in the first person ('I', David); 'operator' means "
               "whoever runs a box." % len(bad))
         return 1
-    print("ok   the record speaks in the first person (no maintainer/we-voice stand-ins; "
-          "%d tracked text file(s) read)" % len(graded))
+    print("ok   the record speaks in the first person (%d tracked text file(s) graded; "
+          "%d binary, %d unreadable not graded)"
+          % (len(graded), len(NOT_GRADED["binary"]), len(NOT_GRADED["unreadable"])))
+    for kind in ("binary", "unreadable"):
+        for rel in NOT_GRADED[kind]:
+            print("       not graded (%s): %s" % (kind, rel))
     return 0
 
 
