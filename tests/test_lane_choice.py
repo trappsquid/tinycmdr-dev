@@ -31,6 +31,10 @@ SRC = Path(__file__).resolve().parent.parent / "tinycmdr.py"
 LLM = {"base_url": "http://127.0.0.1:9/v1", "model": "dead"}
 
 PASSES, FAILS = [], []
+# The last child's streams, kept apart: `said` is stdout + stderr + the log, and a log
+# tail then hides what a check is actually about (a card, an answer, on STDOUT - which is
+# what the automation reads). Written by run(), read by the checks that need the split.
+LAST_IO = ["", ""]
 
 
 def check(cond, what, extra=""):
@@ -115,11 +119,13 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None, config
         # dying hides every check after it. The suite's _text() guards the timeout
         # path the same way.
         code, said = r.returncode, (r.stdout or "") + (r.stderr or "")
+        LAST_IO[0], LAST_IO[1] = r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired as e:
         code = "serving"
         # stdout/stderr on a TimeoutExpired are BYTES on some platforms even with
         # text=True (measured: ubuntu CI), and order matters: normalize each part.
         said = _text(e.stdout) + _text(e.stderr)
+        LAST_IO[0], LAST_IO[1] = _text(e.stdout), _text(e.stderr)
     logf = dirpath / "tinycmdr.log"
     if logf.exists():
         said += logf.read_text(encoding="utf-8", errors="replace")
@@ -253,8 +259,9 @@ def main():
         # failure's cause sits further back than the stderr/log tail (measured
         # 2026-10-08: -300 showed only the last log line of a run whose card was
         # missing, which is not enough to tell a skipped card from a broken run).
-        check("did not run" in said,
-              "...and the card still says what happened", said[-1500:])
+        check("did not run" in LAST_IO[0],
+              "...and the card still says what happened",
+              "STDOUT[-400:]=%r  STDERR[-200:]=%r" % (LAST_IO[0][-400:], LAST_IO[1][-200:]))
         check("exit 1: the run did not reach the model" in said,
               "...and stderr names the verb that explains it", said[-300:])
         _srv, _url = stub_llm("stub answer")
@@ -265,7 +272,8 @@ def main():
             _srv.shutdown()
             _srv.server_close()
         check(code == 0, f"...and a delivered answer still exits 0 ({code})", said[-300:])
-        check("stub answer" in said, "with the answer on stdout", said[-1500:])
+        check("stub answer" in LAST_IO[0], "with the answer on stdout",
+              "STDOUT[-400:]=%r  STDERR[-200:]=%r" % (LAST_IO[0][-400:], LAST_IO[1][-200:]))
 
         # -- a box with NO config.json is told so at this door ----------------------
         # The CLI/`--once` door deliberately runs without a config (it is the door that works
