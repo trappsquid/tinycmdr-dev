@@ -145,6 +145,14 @@ def main():
               "the file still ends with a newline", repr(env_text[-40:]))
         check(tokens and ("#token=" + tokens[0].split("=", 1)[1]) in out,
               "the link it prints is built from the token it wrote", out[-200:])
+        # The summary's file count must be a real number: it was incremented inside a
+        # `find | while` pipeline, so the parent shell never saw it and the unix updater
+        # printed no count at all while update.ps1 printed "($written file(s); ...)" - the
+        # one number an operator uses to see the copy loop did anything (run 23,
+        # A-2026-10-07-67).
+        summary = [ln for ln in out.splitlines() if ln.startswith("update: 1.0.0 -> 9.9.9")]
+        check(summary and "(1 file(s);" in summary[0],
+              "the summary reports how many files it wrote", summary)
 
         # A second run must not append another token: the guard the merge defeated.
         proc2 = subprocess.run(["sh", str(SCRIPT), str(inst)], cwd=str(work), env=env,

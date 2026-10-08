@@ -80,17 +80,21 @@ is_host() {
 }
 
 cd "$SRC"
+# The list goes through a temp file, NOT a `find | while` pipeline: a loop in a pipeline runs
+# in a subshell, so COUNT died with it and the summary line could not print one - while
+# update.ps1 has printed `($written file(s); ...)` all along (run 23, A-2026-10-07-67).
+find . -type f | sed 's|^\./||' > "$WORK/filelist"
 COUNT=0
-find . -type f | sed 's|^\./||' | while IFS= read -r rel; do
+while IFS= read -r rel; do
     is_host "$rel" && continue
     dest="$DIR/$rel"
     mkdir -p "$(dirname "$dest")"
     cp -p "$rel" "$dest"
     COUNT=$((COUNT + 1))
-done
+done < "$WORK/filelist"
 chmod +x "$DIR/tinycmdr" "$DIR/install/install-tinycmdr.sh" 2>/dev/null || true
 
-echo "update: $CUR -> $NEW (host-owned files left alone)"
+echo "update: $CUR -> $NEW ($COUNT file(s); host-owned files left alone)"
 if [ "$CUR" = "$NEW" ]; then
     echo "update: already current"
 else
