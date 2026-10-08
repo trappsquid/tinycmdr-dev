@@ -125,6 +125,21 @@ def main():
     check("every file anchor exists", not bad_file, bad_file)
     check("every commit anchor exists", not bad_commit, bad_commit)
     check("every 'shipped'/'unreleased' claim agrees with the tags", not wrong_expect, wrong_expect)
+    # ...and the STATE has to agree with the anchor, or the record contradicts itself: a `shipped`
+    # item whose anchor no tag contains is a claim nobody can check, and an `unreleased` item whose
+    # commit IS tagged says the opposite. This is the check that was missing on 2026-10-07, when 39
+    # shipped items were left with anchors no tag contained and the suite stayed green.
+    mismatched = []
+    for it in items:
+        a = it.get("anchor") or {}
+        if not a.get("commit"):
+            continue
+        want = {"shipped": "tagged", "unreleased": "untagged"}.get(it.get("state"))
+        if want and a.get("expect") != want:
+            mismatched.append("%s is %s but its anchor says expect: %s"
+                              % (it.get("id"), it.get("state"), a.get("expect")))
+    check("a shipped item's anchor is tagged, an unreleased one's is not", not mismatched,
+          mismatched[:6])
     if unverified:
         print("note  %d commit anchor(s) NOT verified: this tree carries no git history" % unverified)
 
