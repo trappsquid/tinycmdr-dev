@@ -11,6 +11,7 @@ wrote the pre-compaction transcript.
     python tests/test_compaction_continuity.py
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -55,7 +56,10 @@ def main():
         ledger = fb._files_ledger(key)
         check("a.py (RW)" in ledger, "a read then a write of one path is RW", ledger)
         check("b.conf (W)" in ledger, "a written-only path is W", ledger)
-        check(str(f1.parent) + "/" in ledger and ledger.count("a.py") == 1,
+        # os.sep: the ledger groups a directory with the separator the platform uses, and
+        # asserting a "/" graded the POSIX spelling on a Windows path (the product appended a
+        # hard-coded "/" until 2deb132, so this check passed there by accident).
+        check(str(f1.parent) + os.sep in ledger and ledger.count("a.py") == 1,
               "paths are grouped by directory and deduped", ledger)
 
         # ---- the elision marker carries it, bounded and once

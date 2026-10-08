@@ -1590,7 +1590,13 @@ def _is_local_url(url):
 
 def _host_is_local(host):
     """One hostname: is it this machine or this LAN?"""
-    host = str(host or "")
+    host = str(host or "").strip()
+    # No host is not this machine. Left to the resolver, this was platform-dependent:
+    # getaddrinfo("") raises on POSIX (so the answer was False) and SUCCEEDS on Windows,
+    # resolving to the local box - so an empty host read as local there (measured
+    # 2026-10-08, windows-latest, tests/test_guard_battery.py).
+    if not host:
+        return False
     if host in ("localhost", "::1", "127.0.0.1", "0.0.0.0") or host.endswith(".local"):
         return True
     parts = host.split(".")
@@ -34106,7 +34112,32 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
 
 
 def run_setup(rest=None):
-    """Guided interactive setup wizard: model endpoint, chat gateways, the page, web search."""
+    """Guided interactive setup wizard: model endpoint, chat gateways, the page, web search.
+
+    A thin wrapper, because the guard below cannot catch one Windows shape: the NUL device
+    reports as a CHARACTER device, so sys.stdin.isatty() is True for a service, a scheduled
+    task or `< NUL`, the wizard took its interactive branch, and the first input() raised
+    EOFError - the verb died with a traceback instead of the sentence this file already has
+    for a stdin that cannot answer (measured 2026-10-08, windows-latest, tests/test_verbs.py:
+    101 checks green, then EOFError).
+    """
+    try:
+        return _run_setup_interactive(rest)
+    except EOFError:
+        log.info("setup: stdin reported a tty but could not answer (EOF)")
+        return _setup_needs_terminal()
+
+
+def _setup_needs_terminal():
+    """The one sentence a door with no answerable stdin gets, and its exit code."""
+    print("tinycmdr setup requires an interactive terminal.\n"
+          "For non-interactive: tinycmdr config set <key> <val> and tinycmdr token set <NAME>",
+          file=sys.stderr)
+    return 1
+
+
+def _run_setup_interactive(rest=None):
+    """The wizard itself; entered only through run_setup (see its wrapper)."""
     if _CLI.get("app") is not None:
         # The app owns stdin as well as the screen, and a raw input() competes with its
         # input box for the same bytes - the prompts and the app's frame scribble over each
@@ -34115,10 +34146,7 @@ def run_setup(rest=None):
                   "not from inside --app."), file=sys.stderr)
         return 1
     if not sys.stdin.isatty():
-        print("tinycmdr setup requires an interactive terminal.\n"
-              "For non-interactive: tinycmdr config set <key> <val> and tinycmdr token set <NAME>",
-              file=sys.stderr)
-        return 1
+        return _setup_needs_terminal()
 
     print(_cli_render_box("tinycmdr Setup Wizard", [
         "Configure model endpoints, Mattermost, Telegram, the page, and web-search consent.",

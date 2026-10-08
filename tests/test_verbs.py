@@ -422,6 +422,28 @@ def _body():
             fb.sys.platform, fb.os.name, fb.run_capture = (_real_platform, _real_osname,
                                                            _real_capture)
 
+        # ---- a stdin that REPORTS a tty and cannot answer -------------------------
+        # The Windows NUL device is a character device, so sys.stdin.isatty() is True for a
+        # service, a scheduled task or `< NUL`: the wizard took its interactive branch and the
+        # first input() raised EOFError, killing the verb with a traceback instead of the
+        # sentence this file already had for a stdin it cannot use (CI, 2026-10-08). The same
+        # shape is built here: isatty says yes, stdin is at EOF.
+        _real_isatty, _real_stdin = fb.sys.stdin.isatty, fb.sys.stdin
+        _eof_handle = open(os.devnull)
+        try:
+            fb.sys.stdin.isatty = lambda: True
+            fb.sys.stdin = _eof_handle
+            _err = io.StringIO()
+            with contextlib.redirect_stderr(_err):
+                _rc = fb.run_setup()
+            check("a stdin that cannot answer gets the sentence, not a traceback",
+                  _rc == 1 and "requires an interactive terminal" in _err.getvalue(),
+                  (_rc, _err.getvalue()[:120]))
+        finally:
+            fb.sys.stdin = _real_stdin
+            fb.sys.stdin.isatty = _real_isatty
+            _eof_handle.close()
+
         # ---- the update path introduces the page --------------------------------
         # The published updaters are the one code that runs on EVERY released version, so
         # the ask lives there: a host with no page token is offered the mint (the default)
