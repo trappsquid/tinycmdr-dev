@@ -35384,13 +35384,19 @@ def run_cli(once=None, app=False):
             # a pty, 2026-09-30). The plain path is unchanged: no screen, no card.
             _draw_answer(screen, once, answer)
         else:
-            print(answer_block(answer))
+            # flush=True: `--once` is a pipeline's door, and a card that only reaches the
+            # pipe at interpreter shutdown is a card a killed/timed-out run never prints.
+            print(answer_block(answer), flush=True)
         _cli_usage_line()
         # The exit code carries what the card says. `--once` is the door cron, ssh and CI
         # use, and it used to return 0 for a run whose endpoint never answered - the
         # composed card ("the task did not run") was the only signal, and the automation
         # reading stdout has no eyes for a card. The verdict is the same one the a2a lane
         # and the chat done-line already read (`infra_failed`), so no string sniffing.
+        try:                                                     # TEMP-DIAG
+            os.write(1, b"[diag-raw] sentinel-bytes\n")
+        except Exception as _e:                                  # noqa: BLE001
+            print("[diag-raw] failed: %r" % (_e,), file=sys.stderr)
         # TEMP-DIAG (windows once-path investigation, remove before any release): the
         # child's stdout is empty on windows-latest while stderr carries everything, and
         # this is the one place that can say WHICH stdout the card went to.
