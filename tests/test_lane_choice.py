@@ -276,8 +276,9 @@ def main():
         # missing, which is not enough to tell a skipped card from a broken run).
         check("did not run" in LAST_IO[0],
               "...and the card still says what happened",
-              "STDOUT head=%r tail=%r STDERR tail=%r"
-              % (LAST_IO[0][:160], LAST_IO[0][-200:], LAST_IO[1][-200:]))
+              "STDOUT head=%r tail=%r STDERR head=%r tail=%r"
+              % (LAST_IO[0][:120], LAST_IO[0][-120:],
+                 LAST_IO[1][:160], LAST_IO[1][-200:]))
         check("exit 1: the run did not reach the model" in said,
               "...and stderr names the verb that explains it", said[-300:])
         _srv, _url = stub_llm("stub answer")
@@ -289,8 +290,9 @@ def main():
             _srv.server_close()
         check(code == 0, f"...and a delivered answer still exits 0 ({code})", said[-300:])
         check("stub answer" in LAST_IO[0], "with the answer on stdout",
-              "STDOUT head=%r tail=%r STDERR tail=%r"
-              % (LAST_IO[0][:160], LAST_IO[0][-200:], LAST_IO[1][-200:]))
+              "STDOUT head=%r tail=%r STDERR head=%r tail=%r"
+              % (LAST_IO[0][:120], LAST_IO[0][-120:],
+                 LAST_IO[1][:160], LAST_IO[1][-200:]))
 
         # -- a box with NO config.json is told so at this door ----------------------
         # The CLI/`--once` door deliberately runs without a config (it is the door that works

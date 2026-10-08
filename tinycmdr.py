@@ -35411,17 +35411,21 @@ def run_cli(once=None, app=False):
         # reading stdout has no eyes for a card. The verdict is the same one the a2a lane
         # and the chat done-line already read (`infra_failed`), so no string sniffing.
         try:                                                     # TEMP-DIAG
-            os.write(1, b"[diag-raw] sentinel-bytes\n")
+            _w = os.write(1, b"[diag-raw after-card] sentinel-bytes\n")
+            print("[diag-raw after-card] wrote %s byte(s) to fd1" % _w, file=sys.stderr)
         except Exception as _e:                                  # noqa: BLE001
-            print("[diag-raw] failed: %r" % (_e,), file=sys.stderr)
+            print("[diag-raw after-card] failed: %r" % (_e,), file=sys.stderr)
         # TEMP-DIAG (windows once-path investigation, remove before any release): the
         # child's stdout is empty on windows-latest while stderr carries everything, and
         # this is the one place that can say WHICH stdout the card went to.
         for _tag in ("after-card",):
             try:
-                print("[diag %s] stdout=%s fileno=%s isatty=%s closed=%s"
+                _st = os.fstat(1)
+                print("[diag %s] stdout=%s fileno=%s isatty=%s closed=%s fd1 fifo=%s chr=%s reg=%s"
                       % (_tag, type(sys.stdout).__name__, sys.stdout.fileno(),
-                         sys.stdout.isatty(), sys.stdout.closed), file=sys.stderr)
+                         sys.stdout.isatty(), sys.stdout.closed,
+                         stat.S_ISFIFO(_st.st_mode), stat.S_ISCHR(_st.st_mode),
+                         stat.S_ISREG(_st.st_mode)), file=sys.stderr)
             except Exception as _e:                              # noqa: BLE001
                 print("[diag %s] probe failed: %r" % (_tag, _e), file=sys.stderr)
 
