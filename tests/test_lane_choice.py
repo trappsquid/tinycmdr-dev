@@ -275,6 +275,23 @@ def main():
         check("no config.json" not in said,
               "a box WITH a config.json gets no such note", said[-300:])
 
+        # -- the STARTUP ORDER on a box that cannot start ---------------------------
+        # The page used to be raised BEFORE the validation, so a new operator got a browser
+        # tab at a port that died a moment later and a tokenized link pointing at nobody
+        # (run 24, A-2026-10-07-73) - and the failed start then slept 30 seconds "for
+        # pythonw" on a box with no console at all, stretching every crash-restart cycle
+        # (A-2026-10-07-72). Both are visible at the process boundary.
+        _port = free_port()
+        _t0 = time.time()
+        code, said = run(work / "fresh",
+                         args=("--mattermost", "--no-browser", "--web-port", str(_port)),
+                         config=False, timeout=90)
+        _dt = time.time() - _t0
+        check(code == 2 and "config.example.json" in said,
+              "a cold --mattermost refuses with the config sentence", (code, said[-200:]))
+        check("page:" not in said and "web UI listening" not in said,
+              "A-73: ...and NO page is raised before it refuses", said[-300:])
+
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -
         # the log listener need not have flushed its last lines when a fast child exits -

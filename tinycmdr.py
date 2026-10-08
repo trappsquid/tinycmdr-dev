@@ -38987,11 +38987,23 @@ def main():
     # "typing tinycmdr opens the webui and the TUI/CLI at once"). `--web`
     # still overrides, because typing it IS the asking; `--once` returns before this.
     _terminal_mode = ("--cli" in sys.argv or "--app" in sys.argv)
-    if _terminal_mode and "--web" not in sys.argv:
-        _srv = None
-    else:
-        _srv = start_web_surface(open_browser=not _web_no_browser,
+    _srv = None
+
+    def _start_page():
+        """The page for a SERVICE door - raised AFTER the preflight, never before.
+
+        It used to start here, ahead of the validation, so a box that cannot start still
+        opened a browser at a port that died a moment later and printed a tokenized link
+        pointing at nobody - the first thing a new operator experiences (run 24,
+        A-2026-10-07-73). `--cli`/`--app` still never raise it, and `--web` overrides because
+        typing it IS the asking; `--once` returns before this. The page starts beside the
+        LONG-LIVED SERVICE modes only, which is the default door.
+        """
+        if _terminal_mode and "--web" not in sys.argv:
+            return None
+        return start_web_surface(open_browser=not _web_no_browser,
                                  force=("--web" in sys.argv))
+
     def _service_preflight():
         """Validation + the single-instance lock, for a SERVICE lane. Exits on refusal.
 
@@ -39033,9 +39045,11 @@ def main():
         run_cli(app=os.environ.get("TINYCMDR_APP") == "1")
     elif "--telegram" in sys.argv:
         _service_preflight()
+        _srv = _start_page()
         lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
     else:
         _service_preflight()
+        _srv = _start_page()
         lanes = lanes_to_serve()
         if "--mattermost" in sys.argv and not _mm_token_configured():
             print("--mattermost was given, but no Mattermost token is configured.",
