@@ -1050,10 +1050,13 @@ if HAVE_APP:
             # install dir rather than anywhere on the box (measured 2026-10-08).
             _mode = _copy_file.stat().st_mode
             if os.name == "nt":
-                check("--app: the fallback file is the reader's own, in the install dir",
+                # Read and rewrite, which is what "the reader's own" means where there are no
+                # group/world bits. NOT the parent: this suite redirects the copy file into its
+                # own temp dir, so its location is the suite's business (measured 2026-10-08,
+                # windows-latest: the location clause failed a correct file).
+                check("--app: the fallback file is the reader's own",
                       os.access(_copy_file, os.R_OK | os.W_OK)
-                      and (_mode & 0o600) == 0o600
-                      and _copy_file.parent == fb.BASE_DIR,
+                      and (_mode & 0o600) == 0o600,
                       (oct(_mode & 0o777), str(_copy_file.parent)))
             else:
                 check("--app: the fallback file is the reader's own, 0600",
