@@ -15485,7 +15485,7 @@ def reveal_tools_named_in(session_key, text, cap=_ORDER_REVEAL_CAP):
     log.info("revealed from the order: %s", ", ".join(chosen))
     return chosen
 
-def hidden_inventory_line():
+def hidden_inventory_line(subagent=False):
     """One STATIC prompt line naming the tools this box has that its tool list does not.
 
     anchor, the model answered `edit_file` (exact match), named 3 of the hidden tools, and
@@ -15493,6 +15493,12 @@ def hidden_inventory_line():
     prompts, one `find_tools`. The hidden names appear NOWHERE in its prompt, and
     `list_tools` answers in one line by design (test_stall pins that under 220 chars), so
     the inventory is either in the prompt or is not known at all.
+
+    `subagent=True` drops the second sentence: the child prompt carries no custom-tool shelf
+    (`custom_block` is gated off for it), so "the custom tools listed at the end of this
+    prompt" pointed at a block that is not there - a dead pointer in the one line whose job is
+    telling the model what it can call (run 22, A-2026-10-07-57). The core names it lists are
+    callable from the child exactly as from the parent, so that half stays.
 
     Generated from the build, never written out here: it names exactly what
     `hidden_tools(None)` reports, and it disappears when disclosure is off (every tool is
@@ -15506,7 +15512,7 @@ def hidden_inventory_line():
         return ""
     line = ("- Also on this box, not in your tool list \u2014 call one by name and it stays "
             "for the session: " + ", ".join(names) + ".")
-    if REGISTRY.custom:
+    if REGISTRY.custom and not subagent:
         line += (" Those are core tools; the custom tools listed at the end of this "
                  "prompt are callable the same way.")
     return line + "\n"
@@ -16309,8 +16315,9 @@ def build_system_prompt(subagent=False):
     native = ("Windows Update, winget, DISM, pnputil" if IS_WINDOWS
               else "the system package manager, systemctl, journalctl, docker")
     custom = REGISTRY.custom_summary()
-    # The hidden-tool inventory rides the static prompt (generated, see below).
-    inventory = hidden_inventory_line()
+    # The hidden-tool inventory rides the static prompt (generated, see below). It is told
+    # whether this is a child's prompt: the child has no custom-tool shelf to point at.
+    inventory = hidden_inventory_line(subagent)
     # The tool index. The header says the two things a bare name list cannot: every name
     # is callable as it stands, and one find_tools call returns a category's descriptions
     # and arguments. It is one line + one line per category, so a box with 500 tools

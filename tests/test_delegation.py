@@ -65,6 +65,33 @@ def main():
               and "No, do not use ask_user" not in sub_prompt,
               "it keeps the no-fabrication rules", sub_prompt[-400:])
 
+        # ---- the child prompt carries no pointer to a block it does not carry -----------
+        # `custom_block` is gated off for a child, and the hidden-tool inventory pointed at it
+        # anyway ("the custom tools listed at the end of this prompt"), on every box with a
+        # drop-in tool - a dead pointer in the one line that tells the model what it can call
+        # (run 22, A-2026-10-07-57).
+        fb.REGISTRY.custom["probe_tool"] = {"schema": {"type": "function", "function": {
+            "name": "probe_tool", "description": "a drop-in probe",
+            "parameters": {"type": "object", "properties": {}}}}}
+        try:
+            main_p = fb.build_system_prompt()
+            sub_p = fb.build_system_prompt(subagent=True)
+        finally:
+            fb.REGISTRY.custom.pop("probe_tool", None)
+        check("More tools on this box, by category" in main_p
+              and "custom tools listed at the end of this prompt" in main_p,
+              "the parent prompt carries the custom shelf and says so",
+              main_p[-600:])
+        check("More tools on this box, by category" not in sub_p,
+              "the child prompt carries no custom shelf",
+              "the child got a custom shelf")
+        check("custom tools listed at the end" not in sub_p,
+              "...and does not point at one",
+              "the child prompt names a block it does not carry")
+        check("Also on this box, not in your tool list" in sub_p,
+              "the child still gets the hidden-name inventory",
+              "the inventory line is gone")
+
         # ---- one child: context rides the prompt, budget and prompt go to run()
         seen = {}
 
