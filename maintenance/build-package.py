@@ -306,8 +306,11 @@ How tinycmdr uses it:
   - every other .md in the skill folder is searchable too;
   - a new folder is live on the NEXT message. No restart, no config, no index.
 
-Two things worth knowing:
+Three things worth knowing:
 
+  - Skills are PER-HOST. This folder is the box's own: an update never
+    overwrites it, and it is not part of any commit, so a runbook you write here
+    lives on this machine. Copy the folder to another box to share it.
   - COPY the folder in. A symlinked skill folder is invisible to the scanner
     (pathlib does not descend into symlinked directories).
   - The format is the one agent skill libraries use, so folders from those load
