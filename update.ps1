@@ -101,7 +101,16 @@ try {
             $Tok = [Convert]::ToBase64String($Bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=')
             $Minted = $true
         }
-        Add-Content -Path $EnvFile -Value "TINYCMDR_WEB_TOKEN=$Tok"
+        # The file must END in a newline before the key is appended: Add-Content adds none
+        # ahead of the value, so an editor-saved .env merged the key into the last line
+        # (`TINYCMDR_MODEL_KEY=abcTINYCMDR_WEB_TOKEN=...`) - the model key corrupted, the
+        # token invisible to the guard above and the page never starting. Read-modify-write,
+        # the way tinycmdr.py's `_env_set` does it (run 23, A-2026-10-07-63). NOT run on this
+        # box (no pwsh) - verified by reading, and by the twin in update.sh, which a suite
+        # now executes.
+        $EnvText = if (Test-Path $EnvFile) { [System.IO.File]::ReadAllText($EnvFile) } else { "" }
+        if ($EnvText.Length -gt 0 -and -not $EnvText.EndsWith("`n")) { $EnvText += "`n" }
+        [System.IO.File]::WriteAllText($EnvFile, $EnvText + "TINYCMDR_WEB_TOKEN=$Tok`n")
         $Port = 8790
         try {
             $cfg = Get-Content (Join-Path $Dir "config.json") -Raw | ConvertFrom-Json

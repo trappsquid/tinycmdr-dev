@@ -33,7 +33,11 @@ case "$(uname -s)" in
     Darwin) ASSET="tinycmdr-macos.zip" ;;
     *)      ASSET="tinycmdr-linux.tar.gz" ;;
 esac
-BASE="https://github.com/$REPO/releases/latest/download"
+# The release base URL. TINYCMDR_UPDATE_URL overrides it the way install.sh's TINYCMDR_URL
+# does: a mirror, and the only way this script can be driven end to end offline (its fetch
+# half is otherwise hard-wired to GitHub, so no suite could execute it - measured
+# 2026-10-07, run 23).
+BASE="${TINYCMDR_UPDATE_URL:-https://github.com/$REPO/releases/latest/download}"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -112,6 +116,15 @@ if [ -f "$ENVF" ] && ! grep -q '^TINYCMDR_WEB_TOKEN=' "$ENVF"; then
     if [ -z "$TOK" ]; then
         TOK="$("$PY" -c 'import secrets; print(secrets.token_urlsafe(32))')"
         MINTED=1
+    fi
+    # The file must END in a newline before appending: `>>` adds none, so an editor-saved
+    # .env (no trailing newline - the common case after a manual edit) merged the key into
+    # the last line: `TINYCMDR_MODEL_KEY=abcTINYCMDR_WEB_TOKEN=...` - the model key's value
+    # corrupted, the token invisible to the guard above (so every later update minted
+    # another) and the page never starting. `_env_set` in tinycmdr.py owns this rule for the
+    # in-app writer; these standalone updaters are its twins (run 23, A-2026-10-07-63).
+    if [ -s "$ENVF" ] && [ "$(tail -c 1 "$ENVF" | wc -l)" -eq 0 ]; then
+        printf '\n' >> "$ENVF"
     fi
     printf 'TINYCMDR_WEB_TOKEN=%s\n' "$TOK" >> "$ENVF"
     chmod 600 "$ENVF" 2>/dev/null || true
