@@ -35271,9 +35271,26 @@ def _resolve_colour():
     return bool(_ansi_enable())
 
 
+def _diag_probe(tag):                                            # TEMP-DIAG
+    """TEMP-DIAG (windows once-path investigation, remove before any release)."""
+    try:
+        st = os.fstat(1)
+        print("[diag %s] fd1 fifo=%s chr=%s reg=%s stdout=%s"
+              % (tag, stat.S_ISFIFO(st.st_mode), stat.S_ISCHR(st.st_mode),
+                 stat.S_ISREG(st.st_mode), type(sys.stdout).__name__), file=sys.stderr)
+    except Exception as e:                                       # noqa: BLE001
+        print("[diag %s] fstat failed: %r" % (tag, e), file=sys.stderr)
+    try:
+        os.write(1, ("[diag-raw %s]\n" % tag).encode())
+    except Exception as e:                                       # noqa: BLE001
+        print("[diag %s] raw write failed: %r" % (tag, e), file=sys.stderr)
+
+
 def run_cli(once=None, app=False):
     global CONFIG
+    _diag_probe("pre-utf8")                                      # TEMP-DIAG
     _console_utf8()
+    _diag_probe("post-utf8")                                     # TEMP-DIAG
     # The conversation this launch opens in: a fresh one, unless --continue/--session (or
     # TINYCMDR_SESSION) says otherwise. Set BEFORE anything reads _cli_key() - the banner,
     # the rail and the reporter all name the session.
