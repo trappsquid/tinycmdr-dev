@@ -274,6 +274,28 @@ def main():
         check("write" in events and events.index("write") > events.index("read"),
               "...and the write still follows the read", events)
 
+        # ---- the index is bounded by the SPILL FOLDER, not by the run (run 21, A-50)
+        # A row survives only while its file does, and _spill_rotate bounds the files; the
+        # docstring used to promise "at most _SPILLS_MAX" while merged was never capped, so
+        # this pins the bound that actually holds instead of the one that was written down.
+        fb.CONFIG["agent"]["spill_keep"] = 3
+        for i in range(20):
+            fb.cap_output("shell", "bounded-%02d-%s" % (i, body), "command output",
+                          session="spb%02d" % i)
+        at20 = len(index_records(fb))
+        for i in range(20, 60):
+            fb.cap_output("shell", "bounded-%02d-%s" % (i, body), "command output",
+                          session="spb%02d" % i)
+        at60 = len(index_records(fb))
+        files = len(list(spill.glob("*.txt")))
+        check(at60 == at20,
+              "40 more spills add no rows: the index is bounded by the folder",
+              (at20, at60, files))
+        check(files <= fb._SPILLS_MAX + int(fb.CONFIG["agent"]["spill_keep"]) + 2,
+              "...and the folder itself is bounded by _SPILLS_MAX + spill_keep",
+              (files, fb._SPILLS_MAX))
+        fb.CONFIG["agent"]["spill_keep"] = 50
+
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

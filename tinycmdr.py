@@ -3418,7 +3418,13 @@ def _spill_index_path():
 
 
 def _spill_index_save():
-    """Persist the in-memory rows (at most `_SPILLS_MAX`) so a restart keeps the promise.
+    """Persist the in-memory rows so a restart keeps the promise.
+
+    Bounded on BOTH axes, and the bound is the SPILL FOLDER, not the run count: a row is
+    re-persisted only while its file exists, and `_spill_rotate` bounds the files (the
+    newest `spill_keep` spares plus the ones live rows name), so the row half cannot
+    outgrow what is on disk; the removal half is capped at `_SPILL_TOMBSTONES_MAX` and
+    expires after `_SPILL_TOMBSTONE_TTL` (run 21, A-2026-10-07-50).
 
     The index used to be process memory only: "the FULL text is on disk - nothing was
     dropped" stopped being true the moment the bot restarted, and the model was left
