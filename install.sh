@@ -34,13 +34,14 @@ curl -fL --retry 3 --connect-timeout 15 -o "$tmp/$asset" "$BASE/$asset" \
     || die "could not download $BASE/$asset"
 
 say "verifying the download"
-# SHA256SUMS covers all eight published files (checked against the v1.0.40 release: the
-# three versioned archives, the three stable alias names, install.sh and install.ps1), so
-# this checks the ONE file this run fetched rather than trusting the transfer. The README
-# documents the same check by hand, but the pipe-to-bash path - the one the README leads
-# with - is where a truncated download does the most damage, and it had none at all
-# (measured 2026-09-29: neither this script nor install/install-tinycmdr.sh mentioned
-# SHA256SUMS, sha256 or shasum anywhere).
+# SHA256SUMS covers every file a downloader can fetch - the versioned archives and their
+# stable aliases, this script, install.ps1 and both updaters - so this checks the ONE file
+# this run fetched rather than trusting the transfer. Deliberately no count here: the list
+# grew when update.sh/update.ps1 were added, and a number in this comment is a claim nobody
+# re-measures (run 23's -I1). The README documents the same check by hand, but the
+# pipe-to-bash path - the one the README leads with - is where a truncated download does the
+# most damage, and it had none at all (measured 2026-09-29: neither this script nor
+# install/install-tinycmdr.sh mentioned SHA256SUMS, sha256 or shasum anywhere).
 sums="$tmp/SHA256SUMS"
 if curl -fL --retry 3 --connect-timeout 15 -o "$sums" "$BASE/SHA256SUMS"; then
     # Pick this asset's own line: "$NF == a" covers a plain name, "*" a binary-mode one.
