@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.88] - 2026-10-07
+
+### Fixed
+- **The updater's page-token line merged into the `.env` line above it:** `update.sh` appended with `>>` and no newline guard, so on an editor-saved `.env` the token concatenated onto the last key - corrupting it, hiding the token from the script's own guard (so every later update asked again) and leaving the page unable to start; both updaters ensure a trailing newline first, and `update.sh` now takes `TINYCMDR_UPDATE_URL` the way `install.sh` takes `TINYCMDR_URL` so a suite can run it end to end (tests/test_update_script.py).
+- **The unix updater printed no file count:** `COUNT` was incremented inside a `find | while` pipeline and died in the subshell, so the summary could not name what the copy loop did while `update.ps1` printed its own count (tests/test_update_script.py).
+- **The spill index's read-merge-write held only a thread lock:** the inter-process lock was taken one level down around the write, so two processes could both read, both merge their own rows, and the last rename win - the clobber the merge was added to stop; `_spill_index_save` now holds `_path_lock` around the whole read-merge-write, and its docstring stops promising a bound it did not have (tests/test_spill_durability.py).
+- **The prompt's own docstring was wrong about what can move it:** the static half is rebuilt from disk on every build, so a `SKILL.md` or an `AGENTS.md` edited between two runs of a session silently rewrote the endpoint's cached prefix and the operator saw only a slow request; all three movers are named now and a move is logged with its size delta (tests/test_tool_discovery.py).
+- **The envelope's "remaining" was not the budget the harness enforces:** it deducted a bare trailing block while compaction deducted the session's own state and the images in flight, so the number an operator reads to decide there is room was optimistic; both use one deduction, and a line with no session says so (tests/test_envelope.py).
+- **A sub-agent was pointed at a tool list its prompt does not carry:** the hidden-tool inventory told the child "the custom tools listed at the end of this prompt" when `custom_block` is gated off for children, on every install with a drop-in tool (tests/test_delegation.py).
+- **Half a rulebook was read as all of it:** the `<file>` block carrying `AGENTS.md`/`CLAUDE.md` truncated at its character budget with no marker and no log line; a cut now lands on a line boundary, names the file and both byte counts, and a file the budget never reached is named as not read (tests/test_plan_and_context.py).
+- **A Python comment was shipping as prompt text:** an indented `#` note about a reverted prompt line rode every request on every box, carrying an anti-instruction and no rule; it moved out of the f-string, and the gate now refuses any `#` line in the rendered prompt outside an injected file block (tests/test_envelope.py).
+- **The skills index was the one prompt budget with no documented knob:** `skills_index_max_chars` bounded what grows with the operator's own runbook collection and appeared in no config file, example or doc, and setting it to 0 silently meant the default; it is in the shipped example and in `DEFAULT_CONFIG` with what 0 means stated, and the unreachable "unlimited" branch is gone (tests/test_tool_discovery.py).
+- **The README's tool-index figure had drifted:** it said ~5.9 characters per tool where the scale gate measures 5.7, and only the generated doc was gated; both documents are now graded against that gate's own run (tests/test_measured_doc.py).
+
+### Changed
+- **A generated skills README now says where a skill lives:** `skills/` is per-host and untracked, so a runbook someone wrote stayed on that box with nothing saying so; the folder's README says it is per-host and how to share one.
+
+### Added
+- **`TINYCMDR_UPDATE_URL`** overrides `update.sh`'s release base URL, the way `TINYCMDR_URL` does for `install.sh` - a mirror, and what lets a suite execute the updater offline.
+
 ## [1.0.87] - 2026-10-07
 
 ### Fixed

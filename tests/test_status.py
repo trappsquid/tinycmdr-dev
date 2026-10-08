@@ -31,7 +31,13 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 LEDGER = BASE / "STATUS.json"
-STATES = ("open", "blocked", "wish", "shipped", "closed")
+# The vocabulary the record, AGENTS.md and `tc-status --legend` share. `unreleased` is work that
+# IS committed and belongs to the next release: its anchor is in no tag, which is exactly what the
+# mismatch check below demands of it. It was missing from this tuple while the anchor requirement
+# (`state in ("shipped", "unreleased")`) and the mismatch map already expected it, so a release
+# batch could not state the truth in the window between its commit and its tag (measured
+# 2026-10-07, cutting 1.0.88).
+STATES = ("open", "blocked", "wish", "unreleased", "shipped", "closed")
 
 PASSES, FAILS = [], []
 

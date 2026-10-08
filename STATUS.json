@@ -2049,6 +2049,16 @@
         "expect": "tagged"
       },
       "detail": "Two state-file fixes, each with a regression test that fails on the pre-fix build. `jobs.json` was the one state file whose reader answered {} for anything it could not parse - no log line, no `.damaged-*` copy - and `_save` re-read the same way, so a corrupt or transiently-locked file lost the schedule with no evidence anywhere; it routes through the shared `_load_json_state`, a valid-but-non-object file is named too, and tests/test_state_damage.py now covers the fourth state path. The session reload excluded only `.carry.json`, so `.hints.json` and `.question.json` loaded as phantom conversations - and because the hints file IS a JSON list, `tinycmdr sessions` listed one too; `_is_session_file()` answers for the reload and the listing now, while search_sessions keeps tolerating sidecar content on purpose. The `atomic_write_text` docstring, whose opening clause was lost, is restored from the original wording."
+    },
+    {
+      "id": "audit-fixes-1-0-88",
+      "title": "eighteen fixes: the updaters, the spill index, the prompt surface and the shipped docs",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "8c47136",
+        "expect": "untagged"
+      },
+      "detail": "Eighteen fix commits from three audit runs, each with a regression test that fails on the pre-fix build, and the full gate (106 suites, 0 skipped) green on the batch. Updaters: the page token no longer merges into the last .env line (update.sh's own guard plus update.ps1's read-modify-write), the unix updater prints the file count it always computed, and update.sh takes TINYCMDR_UPDATE_URL so tests/test_update_script.py can serve a fake release over loopback and run the real script end to end. Storage: the spill index's read-merge-write holds the inter-process lock around the READ too, not only the write. Prompt surface: the static prompt names all three things that can move it (a skill, a repo-rules file, a tool built mid-run) and logs a move with its size delta; envelope_line's \"remaining\" and _compact share one deduction; a sub-agent is no longer told about a custom-tool list its prompt does not carry; a cut AGENTS.md/CLAUDE.md block is marked, cut on a line boundary and logged, and a file the budget never reached is named as not read; a Python comment that had been shipping as prompt text is gone, with a gate that refuses the class; skills_index_max_chars is documented in DEFAULT_CONFIG and the shipped example with what 0 means. Docs: README's chars-per-tool figure is graded against the scale gate, and the generated skills/README.md says a skill is per-host and how to share one."
     }
   ]
 }
