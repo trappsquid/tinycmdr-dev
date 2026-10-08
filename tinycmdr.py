@@ -16340,12 +16340,18 @@ def context_files_block(cwd=None):
 
 
 def build_system_prompt(subagent=False):
-    """The STATIC half of the prompt: identical for every call in a session.
+    """The STATIC half of the prompt: identical for every CALL within one run.
 
     Anything that can change between two calls (notes) lives in
     volatile_context() instead — see the note there on why that matters for
-    prefix caching. The one thing here that can still move is the custom-tool
-    summary, and only when `create_tool` adds a tool mid-run.
+    prefix caching. Three things can still move this text between two runs of a SESSION, and
+    the endpoint's prefix cache is per conversation, so each one costs a full re-prefill (22.6 s
+    on a 6.5k prompt; the same edit at 120k is priced at ~400 s, measured 2026-09-27):
+    a drop-in tool built mid-run, a SKILL.md added or edited under skills/, and an
+    AGENTS.md/CLAUDE.md edited between runs. Both disk-fed blocks are rebuilt on every call -
+    that is cheap (measured 2026-10-07: 2.9 ms with 40 runbooks, against one model call) and it
+    is what keeps a new runbook visible without a restart - and a move is LOGGED, so an
+    operator sees the re-prefill instead of only a slow request (run 22, A-2026-10-07-55).
 
     `subagent=True` is the same contract minus the two things a child cannot do
     (talk to the operator, narrate to a chat) and minus the two blocks that cost
@@ -16465,7 +16471,33 @@ Tools directory: {TOOLS_DIR} (custom tools live here; they persist across restar
     rules = context_files_block()
     if rules:
         text += scrub(rules)
+    if not subagent:
+        _note_prompt_move(text)
     return text
+
+
+# The last static prompt this process built. See _note_prompt_move() for why the two disk-fed
+# blocks (the skills index and the repo-rules files) are allowed to move it at all.
+_LAST_STATIC_PROMPT = {"text": None}
+
+
+def _note_prompt_move(text):
+    """One log line when the static prompt's text changed between two builds.
+
+    The prompt is the FIRST thing in every payload, so a single character changing there
+    invalidates the endpoint's prefix cache for the whole conversation - 22.6 s on a 6.5k
+    prompt, ~400 s for the same edit at 120k (measured 2026-09-27). A SKILL.md or an
+    AGENTS.md edited mid-session moved it silently, because nothing here believed it could;
+    the cost was paid as a slow request with nothing to read (run 22, A-2026-10-07-55).
+    """
+    prev = _LAST_STATIC_PROMPT["text"]
+    _LAST_STATIC_PROMPT["text"] = text
+    if prev is None or prev == text:
+        return
+    log.info("the STATIC prompt moved between two builds of this session (%+d chars): a "
+             "skill, a repo-rules file or a new drop-in tool changed, so the endpoint "
+             "re-prefills the whole conversation on the next call",
+             len(text) - len(prev))
 
 
 

@@ -15,6 +15,7 @@ capability is told so instead of being guessed at.
 """
 import importlib.util
 import json
+import logging
 import os
 import re
 import shutil
@@ -321,11 +322,50 @@ finally:
 # collection) and appeared in no config file, no doc and no example - so an operator who
 # wanted it smaller had nothing to find, and one who set 0 saw no change (run 22,
 # A-2026-10-07-59). The template states the shipped default for every prompt-budget key.
-_example_agent = json.loads((BASE / "config.example.json").read_text(encoding="utf-8"))["agent"]
-for _key in ("skills_index_max_chars", "skills_always_max_chars", "context_files_max_chars"):
-    check("config.example.json states the shipped default for %s" % _key,
-          _example_agent.get(_key) == fb.DEFAULT_CONFIG["agent"].get(_key),
-          (_example_agent.get(_key), fb.DEFAULT_CONFIG["agent"].get(_key)))
+_example_path = BASE / "config.example.json"
+if not _example_path.exists():
+    print("note  no config.example.json beside this suite (a staged pre-fix build): the "
+          "template checks are skipped, they read the tree")
+else:
+    _example_agent = json.loads(_example_path.read_text(encoding="utf-8"))["agent"]
+    for _key in ("skills_index_max_chars", "skills_always_max_chars",
+                 "context_files_max_chars"):
+        check("config.example.json states the shipped default for %s" % _key,
+              _example_agent.get(_key) == fb.DEFAULT_CONFIG["agent"].get(_key),
+              (_example_agent.get(_key), fb.DEFAULT_CONFIG["agent"].get(_key)))
+
+# A SKILL.md edited between two builds MOVES the static prompt, which costs a full
+# re-prefill of the conversation - and the block's docstring claimed it was identical for
+# every call in a session, so nothing said a thing. Cost is not the reason to care
+# (measured 2026-10-07: 2.9 ms per build with 40 runbooks); knowing is (run 22, A-55).
+_skmove = Path(tempfile.mkdtemp(prefix="fbskills-move-"))
+(_skmove / "r1").mkdir()
+(_skmove / "r1" / "SKILL.md").write_text(
+    "---\nname: r1\ndescription: first wording\n---\nbody\n", encoding="utf-8", newline="\n")
+_keep_move_dir = fb.SKILLS_DIR
+_move_log = []
+
+
+class _MoveHandler(logging.Handler):
+    def emit(self, record):
+        _move_log.append(record.getMessage())
+
+
+_move_handler = _MoveHandler()
+try:
+    fb.SKILLS_DIR = _skmove
+    fb.log.addHandler(_move_handler)
+    fb.build_system_prompt()
+    (_skmove / "r1" / "SKILL.md").write_text(
+        "---\nname: r1\ndescription: second wording\n---\nbody\n",
+        encoding="utf-8", newline="\n")
+    fb.build_system_prompt()
+finally:
+    fb.log.removeHandler(_move_handler)
+    fb.SKILLS_DIR = _keep_move_dir
+    shutil.rmtree(_skmove, ignore_errors=True)
+check("a skill edited between two builds is logged as a prefix move",
+      any("STATIC prompt moved" in m for m in _move_log), _move_log)
 
 # Always-runbooks announce a cut and name what the budget skipped: a rule that quietly
 # loses its tail reads as a complete rule.
