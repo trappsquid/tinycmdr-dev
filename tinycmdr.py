@@ -31304,7 +31304,8 @@ def lanes_snapshot():
             # `state`, so the fix belongs here, in the one place that derives it (run 24,
             # A-2026-10-07-69). A record that says failed stays `failed`: a stale failure is
             # still a failure, and that is what the exit codes key on.
-            "state": ("up" if st.get("ok") else "failed") if st else "configured",
+            "state": ("stale" if (st.get("ok") and not alive)
+                      else ("up" if st.get("ok") else "failed")) if st else "configured",
             "detail": st.get("detail") or fail.get("error") or "",
             "since": st.get("since") or fail.get("first"),
             "failed_starts": fail.get("count") or 0,
@@ -36383,6 +36384,12 @@ def _verb_doctor():
             if _i["state"] == "failed":
                 problems.append("%s lane is DOWN (%d failed start(s)): %s"
                                 % (_n, _i["failed_starts"], _i["detail"] or "no detail"))
+            elif _i["state"] == "stale":
+                # A NOTE, not a problem: the record outlives its writer on every clean
+                # restart, so making this red would make `doctor` red on a healthy box.
+                notes.append("%s lane's record is from a process that is gone (pid %s, %s) - "
+                             "it is the last known state, not now"
+                             % (_n, _i.get("from_pid") or "?", _i.get("as_of") or "no timestamp"))
     else:
         print("  lanes     : none configured")
 
@@ -36653,6 +36660,14 @@ def _verb_health():
                                                 "" if _info["failed_starts"] == 1 else "s"))
                      if _info["failed_starts"] else "",
                      _info["detail"] or "no detail"), file=sys.stderr)
+        elif _info["state"] == "stale":
+            # The stdout word is `stale`; this is where the "was up" belongs - and it is the
+            # difference between a lane that IS up and the last record of one whose process
+            # died (A-186 added the flag, no printer read it: run 24, A-2026-10-07-69).
+            print("%s lane: last known state was UP, but the process that wrote that "
+                  "record (pid %s, %s) is gone - it is NOT current"
+                  % (_name, _info.get("from_pid") or "?",
+                     _info.get("as_of") or "no timestamp"), file=sys.stderr)
     return 1 if any(i["state"] == "failed" for i in lanes_state.values()) else 0
 
 

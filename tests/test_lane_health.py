@@ -636,6 +636,30 @@ check("A-186: ...and a live writer's record is not stale",
       T.lanes_snapshot().get("mattermost", {}).get("stale") is False,
       T.lanes_snapshot().get("mattermost"))
 
+# ...and the PRINTERS have to surface it. A-186 computed the flag and no surface read it, so
+# health and /status handed a dead lane's last "up" to the operator as current state - the
+# monitoring line a supervisor polls every minute (run 24, A-2026-10-07-69). The state WORD
+# carries it, because every consumer renders `state`; the "was up" detail belongs in prose.
+T.atomic_write_text(T.LANE_STATE_FILE, json.dumps({
+    "pid": _dead_pid, "updated": 1.0,
+    "lanes": {"mattermost": {"ok": True, "detail": "up once", "since": 1.0}}}))
+T.LANE_STATE.clear()
+T._LANE_FAILS_LOADED = False
+_h_rc, _h_out, _h_err = run_verb(T._verb_health)
+check("A-69: health's lane word is 'stale', never a dead record's 'up'",
+      "lane mattermost=stale" in _h_out and "mattermost=up" not in _h_out, _h_out)
+check("A-69: ...and stderr says it WAS up, whose record it is, and when",
+      "last known state was UP" in _h_err and str(_dead_pid) in _h_err, _h_err)
+_s_rc, _s_out, _s_err = run_verb(T._verb_status)
+check("A-69: /status prints the same word (both read the one derived state)",
+      "mattermost=stale" in _s_out, _s_out[-400:])
+check("A-69: a stale record is not a FAILURE - it does not change health's exit code",
+      _h_rc == (0 if T._verb_running() is True else 1), _h_rc)
+T.atomic_write_text(T.LANE_STATE_FILE, json.dumps({
+    "pid": os.getpid(), "updated": 1.0, "lanes": {}}))
+T.LANE_STATE.clear()
+T._LANE_FAILS_LOADED = False
+
 # ---- the deaf-listener probe sees the state it hunts --------------------------------
 # `_last_msg` is 0 on every FRESH websocket (the driver builds one per connect) and the
 # socket object is None whenever there is no connection at all, so the old
