@@ -36124,7 +36124,17 @@ def _instance_lock_free():
     the fix now locks the FOLDER on POSIX). Raises OSError when the target cannot be
     opened; callers turn that into "unknown".
     """
-    _kind, fh = _lock_target(for_probe=True)
+    try:
+        _kind, fh = _lock_target(for_probe=True)
+    except FileNotFoundError:
+        # Windows locks a FILE and the probe never creates it, so on a box where nothing is
+        # running there is no file to open. That is the answer this function exists to give:
+        # no process holds this folder. It used to propagate, and callers turn OSError into
+        # "unknown" - so `health` on a Windows box with nothing running reported "unknown"
+        # instead of "not running" (measured 2026-10-08, windows-latest, tests/test_verbs.py).
+        # POSIX locks the folder itself, which always exists, so this arm is Windows-only in
+        # practice.
+        return True
     try:
         if os.name == "nt":
             import msvcrt
