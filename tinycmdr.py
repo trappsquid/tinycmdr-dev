@@ -37939,7 +37939,13 @@ def _verb_model_endpoint(args):
         print("\n".join(lines))
         ok = "it answers" in lines[1]
         if not ok and pick_terminal_ready():
-            ans = input("  Set it up now? [Y/n]: ").strip().lower()
+            try:
+                ans = input("  Set it up now? [Y/n]: ").strip().lower()
+            except EOFError:
+                # pick_terminal_ready() reads isatty(), which the Windows NUL device
+                # satisfies; a stdin that then answers EOF must not be read as the empty
+                # answer, which means "yes" here (measured 2026-10-08, windows-latest).
+                ans = "n"
             if ans in ("", "y", "yes"):
                 return _model_setup_wizard()
         return 0 if ok else 1
@@ -38333,13 +38339,29 @@ def _model_setup_wizard():
     It targets the PRIMARY - "change my model" is the one the bot answers with - and is
     reachable three ways, so nobody has to remember a command: `model setup`, the first row
     of the picker, and `model` itself when the endpoint is not usable. A door that cannot
-    host the prompts (a pipe, --app, chat) gets the usage text instead of a hang."""
+    host the prompts (a pipe, --app, chat) gets the usage text instead of a hang.
+
+    The guard below cannot see one Windows shape, so this is a wrapper: the NUL device is a
+    CHARACTER device, so isatty() is True for a service, a scheduled task or `< NUL`, the
+    door took the interactive branch and the first input() raised EOFError - the verb died
+    with a traceback instead of the usage text it already has (measured 2026-10-08 on
+    windows-latest, tests/test_verbs.py).
+    """
     if not (sys.stdin.isatty() and _CLI.get("app") is None):
-        print("model setup needs a terminal to ask on: run `tinycmdr model setup` in a "
-              "shell.", file=sys.stderr)
-        print(MODEL_ADD_HELP, file=sys.stderr)
-        return 2
-    return _verb_model_add_interactive({"primary": True})
+        return _model_setup_needs_terminal()
+    try:
+        return _verb_model_add_interactive({"primary": True})
+    except EOFError:
+        log.info("model setup: stdin reported a tty but could not answer (EOF)")
+        return _model_setup_needs_terminal()
+
+
+def _model_setup_needs_terminal():
+    """The usage text a door with no answerable stdin gets, and its exit code."""
+    print("model setup needs a terminal to ask on: run `tinycmdr model setup` in a "
+          "shell.", file=sys.stderr)
+    print(MODEL_ADD_HELP, file=sys.stderr)
+    return 2
 
 
 def _verb_model(rest):

@@ -439,6 +439,12 @@ def _body():
             check("a stdin that cannot answer gets the sentence, not a traceback",
                   _rc == 1 and "requires an interactive terminal" in _err.getvalue(),
                   (_rc, _err.getvalue()[:120]))
+            # ...and the door CI actually hit: `model setup` has its own guard, its own
+            # usage text and its own exit code, and the same NUL shape walked past the guard.
+            _rc2, _out2, _err2 = call(fb, ["model", "setup"])   # call() captures both streams
+            check("...and the model door says its piece instead of tracing back",
+                  _rc2 == 2 and "needs a terminal to ask on" in _err2,
+                  (_rc2, _err2[:160]))
         finally:
             fb.sys.stdin = _real_stdin
             fb.sys.stdin.isatty = _real_isatty
