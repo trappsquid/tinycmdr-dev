@@ -540,8 +540,12 @@ def main():
                 if not raw.strip().startswith("FAIL"):
                     continue
                 print("      " + raw.strip()[:200])
-                nxt = lines[i + 1] if i + 1 < len(lines) else ""
-                if nxt[:1].isspace() and nxt.strip():
+                # Several continuation lines, not one: a check's evidence is sometimes a
+                # traceback (the CLI's catch-all logs one), and its first line alone says
+                # nothing about the cause.
+                for nxt in lines[i + 1:i + 7]:
+                    if not nxt[:1].isspace() or not nxt.strip():
+                        break
                     print("        " + nxt.strip()[:200])
                 shown += 1
                 if shown >= 8:

@@ -249,8 +249,12 @@ def main():
                          timeout=120)
         check(code == 1, f"--once against a dead endpoint exits 1, not 0 ({code})",
               said[-300:])
+        # -1500, not -300: the card is what this check is about, and a Windows-only
+        # failure's cause sits further back than the stderr/log tail (measured
+        # 2026-10-08: -300 showed only the last log line of a run whose card was
+        # missing, which is not enough to tell a skipped card from a broken run).
         check("did not run" in said,
-              "...and the card still says what happened", said[-300:])
+              "...and the card still says what happened", said[-1500:])
         check("exit 1: the run did not reach the model" in said,
               "...and stderr names the verb that explains it", said[-300:])
         _srv, _url = stub_llm("stub answer")
@@ -261,7 +265,7 @@ def main():
             _srv.shutdown()
             _srv.server_close()
         check(code == 0, f"...and a delivered answer still exits 0 ({code})", said[-300:])
-        check("stub answer" in said, "with the answer on stdout", said[-300:])
+        check("stub answer" in said, "with the answer on stdout", said[-1500:])
 
         # -- a box with NO config.json is told so at this door ----------------------
         # The CLI/`--once` door deliberately runs without a config (it is the door that works
