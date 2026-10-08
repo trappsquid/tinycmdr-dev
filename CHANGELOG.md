@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.89] - 2026-10-08
+
+### Fixed
+- **`--once` exits 1 when the run never reached the model:** a one-shot run whose endpoint did not answer printed the failure card and returned 0, so cron, `ssh` and CI advanced on a run that did nothing; the exit code now carries the verdict the a2a and chat lanes already read, and stderr names `tinycmdr doctor` (tests/test_lane_choice.py).
+- **A dead lane's record is no longer printed as `up`:** `health`, `status` and `/api/health` render a lane whose writing process is gone as `stale` and name the dead pid and the record's age, instead of handing the last known state to the operator as current (tests/test_lane_health.py).
+- **The console door names a missing `config.json`:** `--cli`/`--app` drew a confident banner over the shipped placeholder endpoint with no other mention of config.json anywhere in the run; it now prints the sentence the service path and `doctor` already had (tests/test_lane_choice.py).
+- **`config set` works on a box with no `config.json`:** the documented non-interactive path died with `could not read config.json: [Errno 2]` and refused to write; `set`/`unset` seed the file from the shipped example through the atomic writer, and `get` answers from the example without writing anything (tests/test_verbs.py).
+- **A headless failed start no longer sleeps 30 seconds:** the pause existed for a double-clicked `pythonw` window; on a box with no console it only stretched every crash-restart cycle - 30s of every ~40s under launchd, after the message was already printed (tests/test_lane_choice.py).
+- **The page is raised after the startup check:** a box that could not start still opened a browser at a port that died a moment later and minted a page token into `.env` (tests/test_lane_choice.py).
+- **`--once` keeps flags out of the prompt:** `tinycmdr --once --cli "hello"` asked the model the literal string `--cli hello`; a separate token starting with `-` is dropped and named on stderr, and a flag inside a quoted prompt stays text (tests/test_lane_choice.py).
+- **`--once` with no task is a usage error:** it used to draw a banner and open an interactive session, which then consumed the script's stdin as conversation (tests/test_lane_choice.py).
+- **`config set` refuses a key nothing reads:** `config set llm.baseurl ...` answered `set`, echoed back from `config get`, and left the box on the default; the known names are derived - shipped defaults, the shipped example, and the keys the code itself reads - the nearest real key is named, and a boolean for a string key, which crashed the next start, is refused too (tests/test_verbs.py).
+- **The run footer counts discarded attempts:** a `clamped` answer was counted as retried although it was kept, and a `window` attempt that was thrown away and re-asked was not counted at all; a clamped answer now gets its own word in the footer (tests/test_stall.py).
+- **A tool result that arrives late is attached to its call:** the pairing repair used to invent "no result was recorded ... it did not complete" and leave the real output orphaned, which strict providers refuse and which the model answers by re-running the command (tests/test_payload_ids.py).
+- **The install surface's `tests` workflow is green on Windows:** its job runs every shipped suite minus eleven named ones - ten that are red there and one that cannot run on Windows at all - and `STATUS.json` carries the same list, kept in step by a contract check (tests/test_contracts.py).
+- **A release is published where installers actually fetch from:** `release.sh` names the install surface explicitly, waits for that workflow before attaching a release, tags this tree (which the ledger's anchors are checked against) and regenerates the product tree (tests/test_contracts.py).
+- **The leak scan refuses a tree that is not a git work tree** instead of reporting "clean" after reading no file, and the two suites that depend on a tracked set declare exit 77 there (tests/test_leak_gate.py, tests/test_wording.py).
+- **The gate grades the code, not the shell it was started from:** suites that assert the no-token state now run with the harness's own token variables hidden (tests/test_verbs.py, tests/test_stall.py).
+- **A path whose rendering differs from `str()` is still named by the repo-rules block,** graded on a fixture that reproduces the split on any platform (tests/test_plan_and_context.py).
+
+### Changed
+- **`docs/development.md` §7 states the release flow as it is:** the order inside a cut, which repository a release belongs to, the two tags, the two CI waits and their overrides, and the Windows tier.
+
 ## [1.0.88] - 2026-10-07
 
 ### Fixed
