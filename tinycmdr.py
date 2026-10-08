@@ -35354,6 +35354,13 @@ def run_cli(once=None, app=False):
         threading.Thread(target=_cli_reader, daemon=True).start()
 
     _cli_startup(_CLI.get("app") is not None, once=bool(once))
+    if once:                                                     # TEMP-DIAG
+        try:
+            print("[diag start] stdout=%s fileno=%s isatty=%s"
+                  % (type(sys.stdout).__name__, sys.stdout.fileno(),
+                     sys.stdout.isatty()), file=sys.stderr)
+        except Exception as _e:                                  # noqa: BLE001
+            print("[diag start] probe failed: %r" % (_e,), file=sys.stderr)
     # reported for BOTH entry points. It used to live in cli_banner(), which a
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce.
@@ -35384,6 +35391,17 @@ def run_cli(once=None, app=False):
         # composed card ("the task did not run") was the only signal, and the automation
         # reading stdout has no eyes for a card. The verdict is the same one the a2a lane
         # and the chat done-line already read (`infra_failed`), so no string sniffing.
+        # TEMP-DIAG (windows once-path investigation, remove before any release): the
+        # child's stdout is empty on windows-latest while stderr carries everything, and
+        # this is the one place that can say WHICH stdout the card went to.
+        for _tag in ("after-card",):
+            try:
+                print("[diag %s] stdout=%s fileno=%s isatty=%s closed=%s"
+                      % (_tag, type(sys.stdout).__name__, sys.stdout.fileno(),
+                         sys.stdout.isatty(), sys.stdout.closed), file=sys.stderr)
+            except Exception as _e:                              # noqa: BLE001
+                print("[diag %s] probe failed: %r" % (_tag, _e), file=sys.stderr)
+
         if (AGENT.last_usage.get(_cli_key()) or {}).get("infra_failed"):
             print("(exit 1: the run did not reach the model - `tinycmdr doctor` names "
                   "why)", file=sys.stderr)
