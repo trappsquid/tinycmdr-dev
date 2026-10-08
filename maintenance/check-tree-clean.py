@@ -11,8 +11,12 @@ file created, deleted or changed by a run whose whole job is to report the state
 
 __pycache__ is ignored (a Python import artifact, regenerated at will), .git obviously is,
 and so is a local venv/: it is 3,415 of this checkout's 3,688 files, and a `pip install` in
-another terminal during the run was reported as a write the gate caused. The rule is about
-the SOURCE tree, and "the tree" means what `git status --ignored=matching` sees.
+another terminal during the run was reported as a write the gate caused. That exclusion is
+TOP-LEVEL and only for a real environment (a `pyvenv.cfg` beside it): a bare name match hid a
+`venv/` anywhere in the tree, which is a blind spot in the one tool whose job is finding
+writes - a suite staging a fixture directory of that name was invisible to it (run 21,
+A-2026-10-07-54). The rule is about the SOURCE tree, and "the tree" means what
+`git status --ignored=matching` sees.
 
 Exit 0 = the tree came back unchanged; 1 = the runner failed, or something in the tree moved;
 2 = the run itself could not happen. Run it with the interpreter the suites use (the runner
@@ -25,13 +29,28 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP_DIRS = (".git", "__pycache__", "venv")
+# By NAME, at any depth: Python's own artifacts, plus the repository.
+SKIP_ANY_DEPTH = (".git", "__pycache__")
+# By POSITION, and only when it really is an environment - see the docstring.
+SKIP_ENV_DIRS = ("venv",)
+
+
+def _skipped(p):
+    """True when `p` is one of the artifacts this check must not grade."""
+    try:
+        rel = p.relative_to(ROOT)
+    except ValueError:
+        return False
+    if any(part in SKIP_ANY_DEPTH for part in rel.parts):
+        return True
+    return bool(rel.parts) and rel.parts[0] in SKIP_ENV_DIRS \
+        and (ROOT / rel.parts[0] / "pyvenv.cfg").exists()
 
 
 def snapshot():
     out = {}
     for p in ROOT.rglob("*"):
-        if any(part in SKIP_DIRS for part in p.parts):
+        if _skipped(p):
             continue
         if not p.is_file():
             continue

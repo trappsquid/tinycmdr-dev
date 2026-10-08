@@ -108,6 +108,51 @@ def main():
         check("every extra the manifest ships exists here", not absent, ", ".join(absent))
         print("note  %d of %d suites ship publicly; %d stay here"
               % (len(suites - set(private)), len(suites), len(private)))
+
+    # ---- check-tree-clean.py's exclusions are scoped, not a name match anywhere ---------
+    # The wrapper IS the CI gate for "a suite wrote into the checkout", so a hidden path in
+    # its snapshot is a hidden write. `venv` used to be skipped by NAME at any depth, which
+    # made a fixture directory called venv - exactly the shape a suite stages - invisible to
+    # the one check that hunts writes (run 21, A-2026-10-07-54).
+    import importlib.util
+    import tempfile
+    path = MAINT / "check-tree-clean.py"
+    spec = importlib.util.spec_from_file_location("tc_check_tree_clean", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["tc_check_tree_clean"] = mod
+    spec.loader.exec_module(mod)
+    work = Path(tempfile.mkdtemp(prefix="tc-treeclean-"))
+    try:
+        real_root = mod.ROOT
+        (work / "src.py").write_text("x", encoding="utf-8")
+        (work / "venv").mkdir()
+        (work / "venv" / "pyvenv.cfg").write_text("home = /x", encoding="utf-8")
+        (work / "venv" / "lib" / "site.py").parent.mkdir(parents=True, exist_ok=True)
+        (work / "venv" / "lib" / "site.py").write_text("x", encoding="utf-8")
+        (work / "pycache").mkdir()
+        (work / "pycache" / "__pycache__").mkdir()
+        (work / "pycache" / "__pycache__" / "m.pyc").write_text("x", encoding="utf-8")
+        scratch = work / "tests" / "scratch" / "venv"
+        scratch.mkdir(parents=True)
+        (scratch / "fixture.py").write_text("x", encoding="utf-8")
+        mod.ROOT = work
+        snap = mod.snapshot()
+        check("a top-level environment venv/ is still skipped",
+              "src.py" in snap and not [k for k in snap if k.startswith("venv/")],
+              sorted(snap))
+        check("a venv/ DEEPER in the tree is graded, not hidden",
+              "tests/scratch/venv/fixture.py" in snap, sorted(snap))
+        check("__pycache__ is skipped at any depth",
+              not [k for k in snap if "__pycache__" in k], sorted(snap))
+        # A top-level `venv` that is not an environment is a plain directory: grade it.
+        (work / "venv" / "pyvenv.cfg").unlink()
+        snap = mod.snapshot()
+        check("...and a top-level venv/ with no pyvenv.cfg is graded too",
+              "venv/lib/site.py" in snap, sorted(snap))
+    finally:
+        mod.ROOT = real_root
+        import shutil
+        shutil.rmtree(work, ignore_errors=True)
     print()
 
     if FAILS:
