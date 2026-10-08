@@ -16269,21 +16269,61 @@ def _context_files(cwd=None):
     return out
 
 
+def _clip_at_line(text, budget):
+    """The longest prefix of `text` that fits `budget` chars, ending on a line boundary.
+
+    A byte cut lands mid-word and mid-rule: measured 2026-10-07, this block's own seam read
+    "…A finding that cannot be anchored goes into" and dropped the rest of the clause, so the
+    model read half a rule and believed it had the whole file. A prefix that would end inside
+    the FIRST line is empty and says so instead: the last visible rule must be a whole rule
+    (run 21, A-2026-10-07-61).
+    """
+    if len(text) <= budget:
+        return text
+    cut = text.rfind("\n", 0, budget + 1)
+    return text[:cut] if cut > 0 else ""
+
+
 def context_files_block(cwd=None):
-    """The `<repo-rules>`-style block for the static prompt, or ""."""
+    """The `<repo-rules>`-style block for the static prompt, or "".
+
+    Bounded by `context_files_max_chars`, and the BOUND IS VISIBLE: a file that is cut carries
+    a marker naming it and the byte counts, and one the budget never reached is named as not
+    read - both with a log line to match. The sibling blocks (the notes excerpt, the memory
+    index) have always marked their cuts; this one truncated in silence, so the model read half
+    a rulebook, would not go and look, and the operator debugging "why didn't it follow our
+    convention?" had nothing to find (run 21, A-2026-10-07-61).
+    """
     if not CONFIG["agent"].get("context_files", True):
         return ""
     rows = _context_files(cwd)
     if not rows:
         return ""
-    budget = int(CONFIG["agent"].get("context_files_max_chars") or 4000)
+    limit = int(CONFIG["agent"].get("context_files_max_chars") or 4000)
+    budget = limit
     parts = []
     for p, text in rows:
         if budget <= 0:
-            break
-        piece = text[:budget]
+            log.warning("context file %s not read: the %d-char context_files_max_chars budget "
+                        "was spent by the nearer files above", p, limit)
+            parts.append("<file path=%r>\n<!-- NOT READ: the %d-char budget for context "
+                         "files was spent by the nearer files above - read this path "
+                         "directly if you need it -->\n</file>" % (str(p), limit))
+            continue
+        if len(text) > budget:
+            piece = _clip_at_line(text, budget)
+            log.warning("context file %s cut at %d of %d chars (context_files_max_chars "
+                        "= %d); the rest is on disk and the model is told so",
+                        p, len(piece), len(text), limit)
+            note = ("<!-- %s CUT at %d of %d chars (context_files_max_chars = %d)%s - the "
+                    "rest is on disk; read the path above if you need it -->"
+                    % (p.name, len(piece), len(text), limit,
+                       "" if piece else ": not even one complete line fits"))
+            parts.append("<file path=%r>\n%s\n%s\n</file>" % (str(p), piece, note))
+        else:
+            piece = text
+            parts.append("<file path=%r>\n%s\n</file>" % (str(p), piece))
         budget -= len(piece)
-        parts.append("<file path=%r>\n%s\n</file>" % (str(p), piece))
     if not parts:
         return ""
     return ("\nInstructions found on disk at session start (these are LOCAL conventions; "

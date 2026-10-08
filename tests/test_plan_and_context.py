@@ -125,9 +125,41 @@ def main():
 
         fb.CONFIG["agent"]["context_files_max_chars"] = 20
         block = fb.context_files_block(deep)
-        check(len(block) < 400 and "package rule" not in block,
-              "the block honours the char budget", block)
+        check(len(block) < 900 and "package rule" not in block and "CUT at 0 of" in block,
+              "the block honours the char budget and SAYS it cut", block[-300:])
         fb.CONFIG["agent"]["context_files_max_chars"] = 4000
+
+        # ---- a cut says so, and the cut lands on a line boundary (run 21, A-61) ---------
+        # The block used to truncate in silence at the byte: the model read half a rulebook,
+        # would not go and look for the rest, and nothing in the log said a rule was missing.
+        cut_tree = Path(tempfile.mkdtemp(prefix="fbctx-cut-"))
+        (cut_tree / ".git").mkdir()
+        (cut_tree / "AGENTS.md").write_text("line one is a rule\n" * 40
+                                           + "the very last rule\n", encoding="utf-8")
+        fb.CONFIG["agent"]["context_files_max_chars"] = 120
+        cut_block = fb.context_files_block(cut_tree)
+        check("CUT at" in cut_block and "AGENTS.md" in cut_block
+              and "of %d chars" % len((cut_tree / "AGENTS.md")
+                                      .read_text(encoding="utf-8").strip()) in cut_block,
+              "a cut file is marked in the prompt, by name and counts",
+              cut_block[-260:])
+        check(cut_block.count("line one is a rule") == 6
+              and "the very last rule" not in cut_block
+              and "line one is a rul\n" not in cut_block,
+              "the visible half ends on a line boundary, not mid-rule",
+              cut_block[:400])
+        # A budget the first file spends to the character leaves the next one unreached: it
+        # must be named, not dropped (the old code `break`ed in silence).
+        fb.CONFIG["agent"]["context_files_max_chars"] = len(
+            (cut_tree / "AGENTS.md").read_text(encoding="utf-8").strip())
+        (cut_tree / "pkg").mkdir()
+        (cut_tree / "pkg" / "AGENTS.md").write_text("near rule: keep this\n", encoding="utf-8")
+        starved = fb.context_files_block(cut_tree / "pkg")
+        check("NOT READ" in starved
+              and str((cut_tree / "pkg" / "AGENTS.md").resolve()) in starved,
+              "a file the budget never reached is named as NOT READ", starved[-320:])
+        fb.CONFIG["agent"]["context_files_max_chars"] = 4000
+        shutil.rmtree(cut_tree, ignore_errors=True)
 
         fb.CONFIG["agent"]["context_files"] = False
         check(fb.context_files_block(deep) == "", "context_files=false disables it")
