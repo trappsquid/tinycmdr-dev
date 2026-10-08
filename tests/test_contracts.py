@@ -249,6 +249,18 @@ def main():
           _declared == _all and sum(len(_buckets[k]) for k in _buckets) == len(_all),
           sorted(_all - _declared) + ["twice: %s" % n for n in sorted(_declared)
                                       if sum(n in _buckets[k] for k in _buckets) > 1])
+    # `dev_only` is a QUALIFIER, not a fifth bucket: a suite the product does not ship, so the
+    # install surface's job can read the same tier file without failing on a grader it has no
+    # copy of. It must still be declared runnable above, or it is a name nothing grades.
+    _dev_only = list(_tier.get("dev_only") or [])
+    _dev_expanded = set()
+    for _pat in _dev_only:
+        _hits = {q.relative_to(BASE).as_posix() for q in BASE.glob(_pat)}
+        check("dev_only names %s, which is not in this tree" % _pat, bool(_hits), sorted(_hits))
+        _dev_expanded |= _hits
+    check("...and every dev_only suite is still declared runnable here",
+          _dev_expanded and _dev_expanded <= (_buckets["must"] | _buckets["scheduled"]),
+          sorted(_dev_expanded - (_buckets["must"] | _buckets["scheduled"])))
     for _key in ("excluded", "not_applicable"):
         _reasons = _tier.get(_key) or {}
         check("every %s suite carries a reason" % _key,

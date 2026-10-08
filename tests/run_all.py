@@ -471,10 +471,22 @@ def main():
             patterns.extend(tier.get(key) or [])
         # Every pattern must match: a name that matches nothing is how this repo's windows
         # job carried `tests/test_ledger*.py` for months while the gate reported green.
+        # A pattern that matches nothing is a red run - this repo's windows job carried
+        # `tests/test_ledger*.py` for months while the gate said green. The one exception is a
+        # suite the product tree does not SHIP: `dev_only` names those, so the install surface
+        # can read the same tier file without failing on a grader it has no copy of.
+        _dev_only = list(tier.get("dev_only") or [])
+        _missing = []
         for pat in patterns:
-            if not discover([pat]):
-                sys.exit("tier %s names %s, which matches no suite - fix the tier file "
-                         "(tests/windows-tier.json)" % (args.tier, pat))
+            if discover([pat]):
+                continue
+            if any(fnmatch.fnmatch(pat, q) or fnmatch.fnmatch(q, pat) for q in _dev_only):
+                _missing.append(pat)
+                continue
+            sys.exit("tier %s names %s, which matches no suite - fix the tier file "
+                     "(tests/windows-tier.json)" % (args.tier, pat))
+        if _missing:
+            print("not shipped in this tree, skipped: %s\n" % ", ".join(_missing))
     suites = discover(patterns)
     dropped = []
     if args.exclude:

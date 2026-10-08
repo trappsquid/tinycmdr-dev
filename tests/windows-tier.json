@@ -112,5 +112,19 @@
   },
   "not_applicable": {
     "tests/test_update_script.py": "runs update.sh, a POSIX shell script; it declares exit 77 on Windows"
-  }
+  },
+  "dev_only": [
+    "tests/test_config_example.py",
+    "tests/test_contracts.py",
+    "tests/test_installer_unix.py",
+    "tests/test_installer_windows.py",
+    "tests/test_leak_gate.py",
+    "tests/test_maintenance_kit.py",
+    "tests/test_measured_doc.py",
+    "tests/test_repo_hygiene.py",
+    "tests/test_status.py",
+    "tests/test_webui_page.py",
+    "tests/test_where.py",
+    "tests/test_wording.py"
+  ]
 }
