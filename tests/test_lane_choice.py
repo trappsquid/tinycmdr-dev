@@ -42,7 +42,47 @@ def check(cond, what, extra=""):
         print(f"ok   {what}")
 
 
-def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60):
+def stub_llm(answer="stub answer"):
+    """A live endpoint that answers one chat completion. Returns (server, base_url).
+
+    The one-shot door's exit code has TWO sides - a failed run must not read as success
+    and a delivered answer must not read as failure - and only a live stub can grade the
+    second half (run 25, A-2026-10-07-68). Shut it down with server.shutdown().
+    """
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Stub(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, obj):
+            body = json.dumps(obj).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send({"data": [{"id": "main", "object": "model",
+                                  "max_model_len": 32768}]})
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            self.rfile.read(n)
+            self._send({"id": "c1", "object": "chat.completion", "model": "main",
+                        "choices": [{"index": 0, "finish_reason": "stop",
+                                     "message": {"role": "assistant", "content": answer}}],
+                        "usage": {"prompt_tokens": 8, "completion_tokens": 3,
+                                  "total_tokens": 11}})
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _Stub)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, "http://127.0.0.1:%d/v1" % srv.server_address[1]
+
+
+def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None):
     """Run the harness in `dirpath` and return (exit_code, stdout+stderr+log).
 
     A child that SERVES (the page holds the process open) never exits on its own, so
@@ -51,7 +91,7 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60):
     For a serving child, prefer serve_and_probe(): text from a killed process is
     unreliable, the page answering is not.
     """
-    cfg = {"llm": LLM}
+    cfg = {"llm": llm or LLM}
     if with_mm:
         cfg["mattermost"] = {"url": "chat.invalid", "scheme": "https", "port": 443,
                              "token": "", "allowed_users": ["u1"]}
@@ -191,6 +231,30 @@ def main():
         check("cannot start" not in said, "it is NOT a startup abort")
         check("Serving the page" not in said, "and it does not serve a page it was told to skip",
               said[-300:])
+
+        # -- the one-shot door's EXIT CODE carries what its card says ---------------
+        # `--once` is the door cron, ssh and CI use. A run whose endpoint never answered
+        # printed "the task did not run" and returned 0, so a pipeline advanced on a run
+        # that did nothing (run 24 filed it, run 25 re-verified it on v1.0.88,
+        # A-2026-10-07-68). Both sides are graded, because a code that is always 1 would
+        # break the other half just as quietly.
+        code, said = run(work / "cli_only", args=("--no-web", "--once", "say hi"),
+                         timeout=120)
+        check(code == 1, f"--once against a dead endpoint exits 1, not 0 ({code})",
+              said[-300:])
+        check("did not run" in said,
+              "...and the card still says what happened", said[-300:])
+        check("exit 1: the run did not reach the model" in said,
+              "...and stderr names the verb that explains it", said[-300:])
+        _srv, _url = stub_llm("stub answer")
+        try:
+            code, said = run(work / "cli_only", args=("--no-web", "--once", "say hi"),
+                             timeout=120, llm={"base_url": _url, "model": "main"})
+        finally:
+            _srv.shutdown()
+            _srv.server_close()
+        check(code == 0, f"...and a delivered answer still exits 0 ({code})", said[-300:])
+        check("stub answer" in said, "with the answer on stdout", said[-300:])
 
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -

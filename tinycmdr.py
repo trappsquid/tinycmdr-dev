@@ -31297,6 +31297,13 @@ def lanes_snapshot():
         fail = fails.get(lane) or {}
         alive = _lane_pid_alive(stored.get("pid"))
         out[lane] = {
+            # STATES, and the staleness is one of them: a record whose WRITER is gone is the
+            # LAST known state, not now, so a lane that was `up` when its process died reads
+            # `stale` rather than `up`. The flag below was computed for exactly this (A-186)
+            # and NO printer read it - health, /status, /api/health and doctor all render
+            # `state`, so the fix belongs here, in the one place that derives it (run 24,
+            # A-2026-10-07-69). A record that says failed stays `failed`: a stale failure is
+            # still a failure, and that is what the exit codes key on.
             "state": ("up" if st.get("ok") else "failed") if st else "configured",
             "detail": st.get("detail") or fail.get("error") or "",
             "since": st.get("since") or fail.get("first"),
@@ -35276,7 +35283,16 @@ def run_cli(once=None, app=False):
         else:
             print(answer_block(answer))
         _cli_usage_line()
-        return
+        # The exit code carries what the card says. `--once` is the door cron, ssh and CI
+        # use, and it used to return 0 for a run whose endpoint never answered - the
+        # composed card ("the task did not run") was the only signal, and the automation
+        # reading stdout has no eyes for a card. The verdict is the same one the a2a lane
+        # and the chat done-line already read (`infra_failed`), so no string sniffing.
+        if (AGENT.last_usage.get(_cli_key()) or {}).get("infra_failed"):
+            print("(exit 1: the run did not reach the model - `tinycmdr doctor` names "
+                  "why)", file=sys.stderr)
+            return 1
+        return 0
     return _cli_console_loop()
 
 
@@ -38885,8 +38901,7 @@ def main():
                 sys.exit(2)
     if "--once" in sys.argv:
         idx = sys.argv.index("--once")
-        run_cli(once=" ".join(sys.argv[idx + 1:]))
-        return
+        return run_cli(once=" ".join(sys.argv[idx + 1:]))
     # The page starts beside the LONG-LIVED SERVICE modes (bare, the lanes) - the default
     # door whichever one this is. It does NOT start beside a terminal session: `--cli`
     # and `--app` used to raise the browser and the console at once (2026-10-04:
@@ -39001,4 +39016,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # The return value IS the exit code: `--once` returns 1 when the run never reached the
+    # model (see run_cli), and calling main() bare threw that away - the card said "the task
+    # did not run" while the process exited 0, so cron and CI could not tell (run 25,
+    # A-2026-10-07-68). sys.exit(None) is 0, so every other door is unchanged.
+    sys.exit(main())
