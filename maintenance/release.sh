@@ -195,7 +195,7 @@ else
     done
 fi
 
-say "tag this tree, then publish the generated install surface"
+say "tag this tree, promote the ledger, then push both refs"
 # TWO tags, one version, because they point at different commits: this repo's tag is what
 # `git describe` reads and what the ledger's anchors are checked against, and the install
 # surface's tag points at the tree IT generated (it is one commit per release, regenerated).
@@ -205,7 +205,36 @@ if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
     exit 1
 fi
 git tag "$TAG" "$SHA"
+# The ledger is promoted BEFORE either ref is pushed, and the order is load-bearing: the
+# pre-push hook runs tests/test_status.py against the WORKING TREE, and an item still claiming
+# `unreleased` while a local tag carries its commit is exactly the contradiction that hook
+# refuses - measured 2026-10-07, v1.0.88's first cut, which died on its own tag push seconds
+# after the tag was created here.
+say "promote the ledger for the tag just cut, so the record and the tag agree"
+# A published number is never rebuilt, so a failure here cannot stop the release - but it
+# must not end with the word "published" either. It used to: `|| echo` swallowed the failure,
+# the diff was empty, nothing was committed, and the red arrived minutes later in CI because
+# a ledger item still said its commit was unreleased while that commit sat in the new tag.
+# Say it loudly, and PROVE the record agrees with the tag before claiming success.
+if ! "$PY" maintenance/ledger-tag.py "$TAG"; then
+    # Re-entry is BY HAND and by these two commands: the promotion is idempotent, the tag is
+    # local and NOTHING has been pushed yet, so the cut can be resumed here instead of
+    # re-running release.sh (which re-enters build-package.py and the release creation for a
+    # number this script says is never rebuilt).
+    echo "*** the ledger was NOT promoted for $TAG - nothing has been pushed yet" >&2
+    echo "    recover with these, in this tree, then push $TAG and main:" >&2
+    echo "      $PY maintenance/ledger-tag.py --check $TAG" >&2
+    echo "      $PY maintenance/ledger-tag.py $TAG" >&2
+    echo "      git add STATUS.json && git commit -m 'status: $TAG released, and the ledger says so'" >&2
+    echo "    then: $PY tests/test_status.py" >&2
+    exit 1
+fi
+if ! git diff --quiet -- STATUS.json; then
+    git add STATUS.json
+    git commit -q -m "status: $TAG released, and the ledger says so"
+fi
 git push origin "$TAG"
+git push origin main
 # One commit per release is the install surface's shape, so it is regenerated from scratch: the
 # tree is published FROM this one and is never hand-edited, and a fresh `git init` is what keeps
 # its history to a single commit per version. The README check is the guard against pointing this
@@ -254,36 +283,6 @@ gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
 say "fetch tags, so this tree knows its own release"
 git fetch --tags
 
-# The release commit was pushed BEFORE this tag existed, so its ledger items could not claim
-# `expect: tagged` (no tag yet) and could not claim `untagged` either (this cut falsifies it) -
-# the pushed release commit then failed CI in all three jobs because a ledger item still said
-# its commit was unreleased while that commit sat in the new tag. Now that the tag exists, state
-# the claim while it is checkable.
-say "promote the ledger for the tag just cut, so the record and the release agree"
-# A published number is never rebuilt, so a failure here cannot stop the release - but it
-# must not end with the word "published" either. It used to: `|| echo` swallowed the failure,
-# the diff was empty, nothing was committed, and the red arrived minutes later in CI because
-# a ledger item still said its commit was unreleased while that commit sat in the new tag.
-# Say it loudly, and PROVE the record agrees with the tag before claiming success.
-if ! "$PY" maintenance/ledger-tag.py "$TAG"; then
-    # Re-entry is BY HAND and by these three commands: the tag exists locally by now
-    # (fetched above), the promotion is idempotent, and the last two lines are what the
-    # script itself would have run. Re-running release.sh is NOT the recovery - it
-    # re-enters build-package.py and the release creation for a number this script says is
-    # never rebuilt (run 21, A-2026-10-07-52).
-    echo "*** the ledger was NOT promoted for $TAG. This is what turns CI red on the commit" >&2
-    echo "    this script just pushed. Recover with these, in this tree:" >&2
-    echo "      $PY maintenance/ledger-tag.py --check $TAG" >&2
-    echo "      $PY maintenance/ledger-tag.py $TAG" >&2
-    echo "      git add STATUS.json && git commit -m 'status: $TAG released, and the ledger says so' && git push origin main" >&2
-    echo "    then: $PY tests/test_status.py    (do NOT re-run release.sh - the number is cut)" >&2
-    exit 1
-fi
-if ! git diff --quiet -- STATUS.json; then
-    git add STATUS.json
-    git commit -q -m "status: $TAG released, and the ledger says so"
-    git push origin main
-fi
 # The promotion says it worked; this says the repository agrees, the way the asset check
 # proves the published files rather than trusting the upload.
 "$PY" tests/test_status.py || {
