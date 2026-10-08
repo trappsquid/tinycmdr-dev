@@ -247,6 +247,12 @@ suite in the tree is not declared exactly once, if an exclusion carries no reaso
 that matches no suite. Two lists drifting is what put a Windows-only crash in a suite the surface
 ran and the dev line never did (measured 2026-10-08, tests/test_lane_choice.py).
 
+**The archives are not byte-reproducible across builds** (zip metadata differs; `install.sh` and
+the other plain files are identical). So a re-download is checked against the release's own
+`SHA256SUMS`, never against a local rebuild - what pins the CONTENTS is `check-package-assets.py`,
+which compares every asset inside the archive with the tree byte for byte. Measured 2026-10-08: the
+same tree rebuilt gave different archive sums and identical file sums.
+
 **After a cut, verify from outside the repo**: download the published `SHA256SUMS` and one archive
 and check the sum; `releases/latest/download/install.sh` returns 200; `gh run list` shows the gate
 green on the tagged commit and the surface's tests green on the pushed tree. `release.sh` also
