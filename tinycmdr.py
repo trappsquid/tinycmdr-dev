@@ -1076,6 +1076,14 @@ def load_config():
                                     "kept. Delete the key to say nothing instead.",
                                     section, key)
                         continue
+                    if key not in cfg[section] and not key.startswith("_"):
+                        # A key nothing reads is not fatal - a host may keep its own extras
+                        # in this file - but it must not be silent: a typo'd `base_url`
+                        # looked applied on every surface an operator checks (run 25,
+                        # A-2026-10-07-76). `_`-prefixed keys are the shipped comments.
+                        log.warning("config.json %s.%s is not a key the harness reads - it "
+                                    "is ignored (check the spelling against "
+                                    "config.example.json)", section, key)
                     cfg[section][key] = value
             elif isinstance(cfg.get(section), dict):
                 # A shipped section is a DICT and its readers assume it. A file value that
@@ -36607,6 +36615,92 @@ def _seed_config_from_example():
     return _config_write_raw(raw)
 
 
+_KNOWN_CONFIG_KEYS = {}
+
+
+def _known_config_keys(section):
+    """The key names a write to `section` may carry. DERIVED, never a hand list.
+
+    Three sources, because no single one is the schema:
+      * DEFAULT_CONFIG - what the harness ships a default for;
+      * config.example.json - what the shipped template documents, which is where a host's
+        copy of these keys lives;
+      * the code - `CONFIG["agent"].get("update_url")` and friends read keys that are neither
+        shipped nor documented (measured 2026-10-07: agent.update_url, agent.windows_task_name,
+        agent.send_file_max_bytes, agent.ask_timeout_continues, llm.think_fence), so a
+        name-only check would refuse a key the harness really reads.
+    A key ending in `_extra` is known when its base is: `_merge_guard_extras` folds
+    `<list>_extra` into `<list>`, which is how an operator adds a guard without replacing one.
+    """
+    if not _KNOWN_CONFIG_KEYS:
+        import difflib                                        # noqa: F401 (kept local)
+        src = ""
+        try:
+            src = Path(__file__).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+        # `(CONFIG.get("llm") or {}).get("window_presets")` is the same read as
+        # `CONFIG["llm"].get("window_presets")`: normalize the `or {}` away so both match.
+        flat = re.sub(r'(CONFIG\s*\.\s*get\(\s*["\'][a-z_]+["\']\s*)\)\s*or\s*\{\}', r"\1", src)
+        ex = {}
+        try:
+            ex = json.loads((BASE_DIR / "config.example.json")
+                            .read_text(encoding="utf-8-sig"))
+        except Exception:                                     # noqa: BLE001
+            ex = {}
+        for sec, body in DEFAULT_CONFIG.items():
+            if not isinstance(body, dict):
+                continue
+            keys = {k for k in body if not k.startswith("_")}
+            keys |= {k for k in (ex.get(sec) or {}) if not k.startswith("_")}
+            esc = re.escape('"%s"' % sec)
+            for pat in (r'CONFIG\[\s*%s\s*\]\s*\.\s*get\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
+                        % esc,
+                        r'CONFIG\[\s*%s\s*\]\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']' % esc,
+                        r'CONFIG\.get\(\s*%s\s*,\s*\{\}\s*\)\s*\.\s*get\(\s*'
+                        r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']' % esc,
+                        r'CONFIG\.get\(\s*%s\s*\)\s*\.\s*get\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
+                        % esc,
+                        r'CONFIG\.get\(\s*%s\s*,\s*\{\}\s*\)\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
+                        % esc):
+                keys |= set(re.findall(pat, flat))
+            _KNOWN_CONFIG_KEYS[sec] = keys
+    return _KNOWN_CONFIG_KEYS.get(section, set())
+
+
+def _config_unknown_key(section, key, parts):
+    """A message when nothing would read this key, or "" when the write is fine.
+
+    `config set` used to write any name, answer `set` with rc=0, and echo it back from
+    `config get` while the box kept using the default - a one-letter typo in the setting that
+    decides which model a box talks to, invisible on every path an operator would check (run
+    25, A-2026-10-07-76). Two shapes are refused: a top-level SECTION that is not shipped, and
+    a `section.key` whose key is in none of the derived sources.
+
+    DEEPER paths are allowed and unvalidated on purpose: `agent.mcp_servers.<name>`,
+    `agent.a2a_remotes.<name>`, `agent.tool_policy.<tool>` and `llm.thinking_budgets.<level>`
+    are name -> spec maps, so their keys are the operator's data, not the schema's.
+    """
+    import difflib
+    if parts[0] not in DEFAULT_CONFIG:
+        near = difflib.get_close_matches(parts[0], sorted(DEFAULT_CONFIG), n=1, cutoff=0.5)
+        return ("%s is not a section in the shipped config%s - nothing reads it. Edit %s by "
+                "hand if you keep your own blocks there."
+                % (parts[0], " (did you mean %s?)" % near[0] if near else "",
+                   CONFIG_PATH.name))
+    if len(parts) == 2:
+        known = _known_config_keys(parts[0])
+        if key.endswith("_extra") and key[:-6] in known:
+            return ""
+        if key not in known:
+            near = difflib.get_close_matches(key, sorted(known), n=1, cutoff=0.5)
+            return ("%s.%s is not a key the harness reads%s - setting it would change "
+                    "nothing. Edit %s by hand if it is for something else."
+                    % (parts[0], key,
+                       " (did you mean %s?)" % near[0] if near else "", CONFIG_PATH.name))
+    return ""
+
+
 def _config_write_raw(raw):
     """Write through the agent's own atomic writer. Error string, or None."""
     try:
@@ -36935,6 +37029,21 @@ def _verb_config(rest):
             print("%s is a boolean in the shipped config, so it takes true or false: %s "
                   "would be stored as a string, and every non-empty string reads as true"
                   % (path, json.dumps(value)), file=sys.stderr)
+            return 2
+        if isinstance(value, bool) and isinstance(schema, dict) and key in schema \
+                and not isinstance(schema.get(key), bool):
+            # The mirror of the boolean check above, and a crash rather than a nit:
+            # `config set llm.base_url true` wrote the boolean and the NEXT start died at
+            # import with "'bool' object has no attribute 'rstrip'" (measured while fixing
+            # A-2026-10-07-76).
+            _what = {str: "a string", int: "a number", list: "a list",
+                     dict: "a mapping"}.get(type(schema.get(key)), "something else")
+            print("%s takes %s in the shipped config, not true/false" % (path, _what),
+                  file=sys.stderr)
+            return 2
+        unknown = _config_unknown_key(section, key, parts)
+        if unknown:
+            print(unknown, file=sys.stderr)
             return 2
         node[key] = value
     err = _config_write_raw(raw)

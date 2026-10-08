@@ -964,24 +964,29 @@ def _body():
               rc == 2 and "true or false" in err, (rc, err[:160]))
         call(fb, ["config", "unset", "agent.vision"])
         # A-2026-10-05-68: a 3+ segment path whose parent was missing wrote a LITERAL
-        # top-level dotted key ("zz.a.b" became the key "zz.a"), which unset could not
-        # reach - the write silently missed the path the operator named.
-        rc, out, err = call(fb, ["config", "set", "zz.deep.leaf", "v2"])
+        # top-level dotted key ("agent.mcp_servers.demo.cmd" became the key
+        # "agent.mcp_servers.demo"), which unset could not reach - the write silently missed
+        # the path the operator named. Exercised under a real data map, because a made-up
+        # top-level section is REFUSED now (A-2026-10-07-76).
+        rc, out, err = call(fb, ["config", "set", "agent.mcp_servers.demo.cmd", "run-me"])
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        _mcp = written["agent"]["mcp_servers"]
         check("a deep config set creates the intermediate sections",
-              rc == 0 and written.get("zz", {}).get("deep", {}).get("leaf") == "v2"
-              and "zz.deep" not in written, (rc, written.get("zz"), written.get("zz.deep")))
-        rc, out, err = call(fb, ["config", "get", "zz.deep.leaf"])
-        check("...and reads back at the path that was set", rc == 0 and "v2" in out, out[:80])
-        rc, out, err = call(fb, ["config", "get", "zz.missing.leaf"])
+              rc == 0 and _mcp.get("demo", {}).get("cmd") == "run-me"
+              and "demo.cmd" not in _mcp, (rc, _mcp.get("demo"), sorted(_mcp)[:4]))
+        rc, out, err = call(fb, ["config", "get", "agent.mcp_servers.demo.cmd"])
+        check("...and reads back at the path that was set",
+              rc == 0 and "run-me" in out, out[:80])
+        rc, out, err = call(fb, ["config", "get", "agent.mcp_servers.nope.cmd"])
         check("a deep get on a missing parent says (not set), rc=0",
               rc == 0 and "(not set)" in out, (rc, out[:80]))
-        call(fb, ["config", "set", "zz.a", "scalar"])
-        rc, out, err = call(fb, ["config", "set", "zz.a.b", "v2"])
+        call(fb, ["config", "set", "agent.mcp_servers.demo", "scalar"])
+        rc, out, err = call(fb, ["config", "set", "agent.mcp_servers.demo.cmd", "v2"])
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         check("a scalar in the middle is refused, not shadowed by a flat dotted key",
-              rc == 1 and "is not a section" in err and "zz.a" not in written,
-              (rc, err[:160], written.get("zz", {}).get("a")))
+              rc == 1 and "is not a section" in err
+              and written["agent"]["mcp_servers"]["demo"] == "scalar",
+              (rc, err[:160], written["agent"]["mcp_servers"].get("demo")))
         # A-2026-10-05-69: the verb line is logged BEFORE dispatch, so a refused secret
         # write still put its VALUE in tinycmdr.log in cleartext.
         # Grade what the verb LOGGED, not a file: run_all points every suite at one log
@@ -1013,7 +1018,7 @@ def _body():
         rc, out, err = call(fb, ["config", "get", "zzzz.nope"])
         check("a real miss stays plain (no invented hint)", out.strip() == "(not set)",
               out[:60])
-        rc, out, err = call(fb, ["config", "set", "agent.probe_port", "nope"])
+        rc, out, err = call(fb, ["config", "set", "agent.digest_lines", "nope"])
         check("an unparseable value becomes a string, not a crash", rc == 0, (rc, err[:160]))
         rc, out, err = call(fb, ["config", "set", "mattermost.token", "oops"])
         check("config refuses to put a secret in config.json",
@@ -1023,12 +1028,13 @@ def _body():
         rc, out, err = call(fb, ["config", "get", "nope.nothing"])
         check("config get on a missing key is not an error",
               rc == 0 and "not set" in out, (rc, out[:80]))
-        call(fb, ["config", "set", "agent.tmpprobe", "1"])
-        rc, out, err = call(fb, ["config", "unset", "agent.tmpprobe"])
+        # A REAL key: an invented one is refused now (A-2026-10-07-76).
+        call(fb, ["config", "set", "agent.digest_lines", "77"])
+        rc, out, err = call(fb, ["config", "unset", "agent.digest_lines"])
         written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
         check("config unset removes the key",
-              rc == 0 and "tmpprobe" not in written["agent"], list(written["agent"]))
-        rc, out, err = call(fb, ["config", "unset", "agent.tmpprobe"])
+              rc == 0 and "digest_lines" not in written["agent"], list(written["agent"]))
+        rc, out, err = call(fb, ["config", "unset", "agent.digest_lines"])
         check("...and says so when it was not set", rc == 2, rc)
 
         # ---- a box with NO config.json: the verb CREATES one, and does not write on a read
@@ -1059,6 +1065,33 @@ def _body():
         check("...and it says it created one",
               "created it from config.example.json" in out + err, (out + err)[:200])
         cfg_path.write_bytes(cfg_before)
+
+        # ---- a key NOTHING reads is refused, with the nearest real key named -------------
+        # `config set llm.baseurl ...` used to answer "set" with rc=0, echo back from
+        # `config get`, and leave the box on the default - a one-letter typo in the setting
+        # that decides which model a box talks to, invisible on every path an operator checks
+        # (run 25, A-2026-10-07-76). The known names are DERIVED (shipped defaults, the
+        # shipped example, and the keys the code reads), so a key the harness really reads is
+        # never refused by accident.
+        rc, out, err = call(fb, ["config", "set", "llm.baseurl", "http://x/v1"])
+        check("a key the harness never reads is refused, and the nearest is named",
+              rc == 2 and "not a key the harness reads" in err and "base_url" in err,
+              (rc, err[:160]))
+        check("...and the typo does not reach config.json",
+              "baseurl" not in (workdir / "config.json").read_text(encoding="utf-8"), "")
+        rc, out, err = call(fb, ["config", "set", "bogus.section", "1"])
+        check("an unknown SECTION is refused too",
+              rc == 2 and "not a section" in err, (rc, err[:160]))
+        for _k, _v in (("llm.window_presets", '{"-32768": 8192}'),
+                       ("agent.update_url", "http://example.invalid/x"),
+                       ("agent.confirm_patterns_extra", "rm -rf /tmp/x"),
+                       ("agent.mcp_servers.demo", '{"command": "x"}')):
+            rc, out, err = call(fb, ["config", "set", _k, _v])
+            check("...and %s is still writable (read or documented)" % _k, rc == 0,
+                  (rc, err[:140]))
+        rc, out, err = call(fb, ["config", "set", "llm.base_url", "true"])
+        check("a boolean for a string key is refused (it crashed the next start)",
+              rc == 2 and "not true/false" in err, (rc, err[:160]))
 
         rc, out, err = call(fb, ["proc"])
         check("proc names this install's folder and the instance",
