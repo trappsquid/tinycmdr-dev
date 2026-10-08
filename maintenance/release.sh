@@ -223,8 +223,17 @@ say "promote the ledger for the tag just cut, so the record and the release agre
 # a ledger item still said its commit was unreleased while that commit sat in the new tag.
 # Say it loudly, and PROVE the record agrees with the tag before claiming success.
 if ! "$PY" maintenance/ledger-tag.py "$TAG"; then
+    # Re-entry is BY HAND and by these three commands: the tag exists locally by now
+    # (fetched above), the promotion is idempotent, and the last two lines are what the
+    # script itself would have run. Re-running release.sh is NOT the recovery - it
+    # re-enters build-package.py and the release creation for a number this script says is
+    # never rebuilt (run 21, A-2026-10-07-52).
     echo "*** the ledger was NOT promoted for $TAG. This is what turns CI red on the commit" >&2
-    echo "    this script just pushed: promote STATUS.json for $TAG, commit and push." >&2
+    echo "    this script just pushed. Recover with these, in this tree:" >&2
+    echo "      $PY maintenance/ledger-tag.py --check $TAG" >&2
+    echo "      $PY maintenance/ledger-tag.py $TAG" >&2
+    echo "      git add STATUS.json && git commit -m 'status: $TAG released, and the ledger says so' && git push origin main" >&2
+    echo "    then: $PY tests/test_status.py    (do NOT re-run release.sh - the number is cut)" >&2
     exit 1
 fi
 if ! git diff --quiet -- STATUS.json; then
