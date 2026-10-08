@@ -18,11 +18,19 @@ writes - a suite staging a fixture directory of that name was invisible to it (r
 A-2026-10-07-54). The rule is about the SOURCE tree, and "the tree" means what
 `git status --ignored=matching` sees.
 
+One thing here is NOT the run's: a bot installed in this same folder rewrites its own log,
+sessions and state every minute (the shape `~/tinycmdr` has), and this wrapper used to grade
+those as if a suite had written them - a red job naming no suite, which is how a check stops
+being read. So it probes the same single-instance lock the runner's own report uses, and only
+when a live instance actually holds it are the paths a live bot owns reported instead of
+graded (run 21, A-2026-10-07-55). CI has no live instance, so CI stays strict.
+
 Exit 0 = the tree came back unchanged; 1 = the runner failed, or something in the tree moved;
 2 = the run itself could not happen. Run it with the interpreter the suites use (the runner
 inherits sys.executable).
 """
 import argparse
+import os
 import subprocess
 import sys
 import time
@@ -33,6 +41,11 @@ ROOT = Path(__file__).resolve().parent.parent
 SKIP_ANY_DEPTH = (".git", "__pycache__")
 # By POSITION, and only when it really is an environment - see the docstring.
 SKIP_ENV_DIRS = ("venv",)
+# What a bot RUNNING IN THIS FOLDER rewrites by itself. Graded normally unless the probe
+# below says a live instance is up: a static allowance here would be a hole in the check.
+LIVE_OWNED = ("tinycmdr.log", "sessions/", "logs/", "spill/", "memory/", "state.json",
+              "tools-provenance.json", "web-sessions.json", "jobs.json", "notes.md",
+              "atlas.md", "field-notes.md", "tinycmdr.lock")
 
 
 def _skipped(p):
@@ -62,11 +75,85 @@ def snapshot():
     return out
 
 
+def live_instance_here():
+    """True/False/None: does a LIVE bot hold this folder's single-instance lock?
+
+    A probe, not a claim: take the lock and give it straight back. The target mirrors the
+    harness's `_lock_target()` contract - on POSIX the install FOLDER itself is flocked,
+    because a lock FILE is defeated by `rm`; on Windows it is tinycmdr.lock beside it - and it
+    is mirrored rather than imported, because this wrapper imports nothing from the tree it
+    grades (the same rule tests/run_all.py states for its own copy of the probe).
+    """
+    try:
+        if os.name == "nt":
+            target = ROOT / "tinycmdr.lock"
+            if not target.exists():
+                return False
+            fh = open(target, "a+b")
+        else:
+            fh = os.open(str(ROOT), os.O_RDONLY)
+    except OSError:
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+            fh.seek(0)
+            try:
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                return True
+            msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            return False
+        import fcntl
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return True
+        fcntl.flock(fh, fcntl.LOCK_UN)
+        return False
+    except Exception:                                            # noqa: BLE001
+        return None
+    finally:
+        try:
+            if os.name == "nt":
+                fh.close()
+            else:
+                os.close(fh)
+        except OSError:
+            pass
+
+
+def _live_owned(rel):
+    """True when `rel` is a path a bot running in this folder writes by itself."""
+    rel = str(rel).replace(os.sep, "/")
+    return any(rel == name.rstrip("/") or rel.startswith(name.rstrip("/") + "/")
+               or (name.endswith("/") and rel.startswith(name)) for name in LIVE_OWNED)
+
+
+def classify(moved, live):
+    """Split the moved paths into (graded, excused).
+
+    `excused` is non-empty only when the probe found a live instance: those files are the
+    bot's own, not a suite's, and are reported so the operator can see what was let past.
+    """
+    if not live:
+        return sorted(moved), []
+    excused = sorted(p for p in moved if _live_owned(p))
+    graded = sorted(p for p in moved if not _live_owned(p))
+    return graded, excused
+
+
 def main():
     ap = argparse.ArgumentParser(description="a gate run must not touch the tree")
     ap.add_argument("--select", default="",
                     help="passed through to tests/run_all.py --select (a glob)")
     args = ap.parse_args()
+    live = live_instance_here()
+    if live:
+        print("a LIVE instance holds this folder's lock: the paths it owns by itself "
+              "(%s) are reported, not graded" % ", ".join(LIVE_OWNED))
+    elif live is None:
+        print("could not probe the single-instance lock: every moved path is graded")
     cmd = [sys.executable, "tests/run_all.py"]
     if args.select:
         cmd += ["--select", args.select]
@@ -83,12 +170,15 @@ def main():
     for label, items in (("created", created), ("deleted", deleted), ("changed", changed)):
         for name in items:
             print("  %s: %s" % (label, name))
+    graded, excused = classify(created + deleted + changed, live)
+    for name in excused:
+        print("  reported (a live instance owns this): %s" % name)
     if not (created or deleted or changed):
         print("  the tree came back unchanged")
     if rc != 0:
         print("the RUNNER failed (exit %s) - fix that before reading the rest" % rc)
         return 2 if rc == 2 else 1
-    return 1 if (created or deleted or changed) else 0
+    return 1 if graded else 0
 
 
 if __name__ == "__main__":

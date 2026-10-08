@@ -22,6 +22,8 @@ wait-for-endpoint.py, ...) and exits 1.
 """
 import ast
 import json
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -149,9 +151,46 @@ def main():
         snap = mod.snapshot()
         check("...and a top-level venv/ with no pyvenv.cfg is graded too",
               "venv/lib/site.py" in snap, sorted(snap))
+
+        # ---- a live bot in the checkout is reported, not graded (run 21, A-55) ----------
+        # The same wrapper grades a live bot's own writes (its log, sessions, state) as if a
+        # suite had made them, and a red naming no suite is how a check stops being read.
+        # The excuse is conditional on the probe, so it is not a hole.
+        classify = getattr(mod, "classify", None)
+        check("the wrapper separates what a live bot owns from what a suite did",
+              callable(classify), "no classify() in check-tree-clean.py")
+        if callable(classify):
+            check("with no live instance, every moved path is graded",
+                  classify(["tinycmdr.py", "tinycmdr.log"], False)
+                  == (["tinycmdr.log", "tinycmdr.py"], []),
+                  classify(["tinycmdr.py", "tinycmdr.log"], False))
+            graded, excused = classify(["tinycmdr.py", "tinycmdr.log",
+                                        "sessions/a.json"], True)
+            check("...and with one, only the bot's own paths are excused",
+                  graded == ["tinycmdr.py"]
+                  and excused == ["sessions/a.json", "tinycmdr.log"], (graded, excused))
+        probe = getattr(mod, "live_instance_here", None)
+        check("the wrapper probes the lock rather than assuming a live bot",
+              callable(probe), "no live_instance_here()")
+        if callable(probe) and os.name == "posix":
+            import fcntl
+            empty = Path(tempfile.mkdtemp(prefix="tc-treeclean-nolive-"))
+            try:
+                mod.ROOT = empty
+                check("the probe answers False for a folder nobody holds",
+                      probe() is False, probe())
+                fh = os.open(str(empty), os.O_RDONLY)
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    check("...and True while an instance holds it", probe() is True, probe())
+                finally:
+                    fcntl.flock(fh, fcntl.LOCK_UN)
+                    os.close(fh)
+            finally:
+                mod.ROOT = work
+                shutil.rmtree(empty, ignore_errors=True)
     finally:
         mod.ROOT = real_root
-        import shutil
         shutil.rmtree(work, ignore_errors=True)
     print()
 
