@@ -178,10 +178,13 @@ def _finish(path, raw, before, out, strategy, count, enc="utf-8"):
     try:
         data = out.encode(enc)
     except UnicodeEncodeError as e:
-        # The file's own encoding cannot carry what was just typed. Say that instead of
-        # writing replacement characters or a mojibake re-encode (A-131's sibling risk).
-        return ("ERROR: %s is %s, which cannot carry %r. Convert the file first, or "
-                "write it with write_file." % (path, enc, e.object[e.start:e.end]))
+        # new_string typed a character the file's own encoding cannot carry. Name it by
+        # code point in ASCII - the name survives a console that cannot draw the glyph
+        # (see __main__) - instead of writing replacement characters or a mojibake
+        # re-encode (A-131's sibling risk).
+        points = " ".join("U+%04X" % ord(c) for c in e.object[e.start:e.end])
+        return ("ERROR: %s is %s, which cannot carry %s (new_string). Convert the file "
+                "first, or write it with write_file." % (path, enc, points))
     backup = path.with_name(path.name + ".bak")
     try:
         backup.write_bytes(raw)               # byte-identical, or it is no backup
@@ -210,6 +213,17 @@ if __name__ == "__main__":
     # (shell, send_file, report) is called through the harness.
     import json
     import sys
+    # A Windows console still defaults to a legacy code page (cp1252/cp437), and this
+    # tool's refusal names the character it could not carry while its diff echoes the
+    # file's own bytes. print() of a glyph that page has no byte for raised
+    # UnicodeEncodeError and killed the process - a traceback where a clean refusal and
+    # its exit code were owed. Degrade the unrepresentable glyph to "?" the way the
+    # harness does at import, so the tool always prints its verdict.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:            # not a TextIOWrapper, encoding-less, or closed
+            pass
     args = dict()
     for tok in sys.argv[1:]:
         k, _, v = tok.partition("=")

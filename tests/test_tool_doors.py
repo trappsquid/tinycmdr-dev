@@ -128,8 +128,16 @@ try:
           fb._start_process_warning("echo hi") == "")
 finally:
     fb.IS_WINDOWS = _real_win
-check("off Windows the Start-Process warning never fires",
-      fb._start_process_warning("Start-Process cmd -ArgumentList x") == "")
+# The block above pins IS_WINDOWS True inside its try; this is the other half of the same
+# predicate and it was missing the pin, so on a Windows host it ran with the real platform,
+# asked the function to behave as if it were off Windows, and failed against a correct answer
+# (measured 2026-10-08 on windows-latest).
+try:
+    fb.IS_WINDOWS = False
+    check("off Windows the Start-Process warning never fires",
+          fb._start_process_warning("Start-Process cmd -ArgumentList x") == "")
+finally:
+    fb.IS_WINDOWS = _real_win
 
 # the shell door answers the same way, and so does a tools/ FILE whose stem is not the tool name
 out = fb.tool_shell({"command": "python tools/toolsmith.py action=list", "raw": True}, dict(CTX))

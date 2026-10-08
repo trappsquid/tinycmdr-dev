@@ -371,6 +371,7 @@ def _check_tail(stdout):
       "N passed, M failed[, K skipped]"  most suites
       "N check(s) failed[: names]"       the check()-only suites (22 of them)
       "N failed: names"                  test_cross_process, test_profiles
+      "N checks passed, M failed"        test_tool_doors
       "N FAILED: names" / "FAILED: N"    test_measured_doc, test_installer_parity,
                                          test_llama_extensions, test_shim, test_atlas
     A traceback, or a run that stops after its FAIL lines, still matches nothing.
@@ -380,6 +381,12 @@ def _check_tail(stdout):
         if m:
             skipped = ", %s skipped" % m.group(3) if m.group(3) else ""
             return "%s passed, %s failed%s" % (m.group(1), m.group(2), skipped)
+        # `N checks passed, M failed` - test_tool_doors' spelling. Without it a suite that
+        # FINISHED and went red was reported as "[died before its own summary]", which sends a
+        # reader looking for a crash that never happened (measured 2026-10-08).
+        m = re.match(r"^\s*(\d+) checks? passed, (\d+) failed\s*$", line)
+        if m:
+            return "%s passed, %s failed" % (m.group(1), m.group(2))
         # The colon-less forms carry the failed names inline, so only the head is matched.
         m = re.match(r"^\s*(\d+) check\(s?\) failed\b", line)
         if m:

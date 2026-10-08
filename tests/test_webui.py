@@ -131,8 +131,24 @@ def main():
     check(fb.ENV_FILE.exists()
           and ("TINYCMDR_WEB_TOKEN=%s" % minted) in fb.ENV_FILE.read_text(encoding="utf-8"),
           "it lands in .env (the one file the agent cannot read into a prompt)")
-    check((fb.ENV_FILE.stat().st_mode & 0o077) == 0,
-          "not group- or world-readable", oct(fb.ENV_FILE.stat().st_mode & 0o777))
+    # The token file is the one file the agent never reads into a prompt, so the mode it
+    # is created with is the point: on POSIX the product chmods it 0600 (see _env_set),
+    # and "no group or world bits" IS that claim. Windows has no such bits - st_mode
+    # reports 0o666 for a writable file however it was created, and chmod there carries
+    # only the read-only attribute - so the same claim is graded as what Windows DOES
+    # guarantee: the file stayed the owner's to read AND rewrite (a chmod that landed the
+    # read-only bit on it would break the next token rotation), and it is a file inside
+    # the install dir rather than somewhere else on the box.
+    _env_mode = fb.ENV_FILE.stat().st_mode
+    if os.name == "nt":
+        check(os.access(fb.ENV_FILE, os.R_OK | os.W_OK)
+              and (_env_mode & 0o600) == 0o600
+              and fb.ENV_FILE.parent == fb.BASE_DIR,
+              "the token file is the owner's to read and rewrite, in the install dir",
+              (oct(_env_mode & 0o777), str(fb.ENV_FILE.parent)))
+    else:
+        check((_env_mode & 0o077) == 0,
+              "not group- or world-readable", oct(_env_mode & 0o777))
     check("minted TINYCMDR_WEB_TOKEN" in out0, "and the start says so", out0[:80])
     check("the page is this install's door" in out0 and "tinycmdr setup" in out0,
           "and orients the operator (setup picks LAN vs loopback and the port)")
@@ -575,9 +591,22 @@ def main():
                         TOK, small)
     saved = json.loads(body) if code == 200 else {}
     check(code == 200, "an upload with a token lands", code)
-    check(saved.get("path", "").startswith("uploads/")
-          and ".." not in saved.get("path", ".."),
-          "the stored name cannot escape uploads/", saved.get("path"))
+    # Containment, stated in the platform's own terms: the product builds the stored path
+    # with the OS separator (uploads/x here, uploads\x on Windows - the reply is a path a
+    # local agent hands to read_file), so `startswith("uploads/")` graded the separator
+    # rather than the escape it names. What must hold on every platform: a RELATIVE path,
+    # no .. component, exactly one level deep - a direct child of uploads/ - and a stored
+    # NAME with no separator in it at all (the sanitiser's own promise, and the only thing
+    # an escape ever needs; graded on the reply's `name`, which is a bare base name).
+    _saved_rel = str(saved.get("path", ""))
+    _saved_abs = STAGE / _saved_rel            # resolved the way the product built it
+    _stored = str(saved.get("name", ""))
+    check(_saved_rel and not os.path.isabs(_saved_rel)
+          and ".." not in Path(_saved_rel).parts
+          and _saved_abs.parent.resolve() == (STAGE / "uploads").resolve()
+          and _stored and not _stored.startswith("..")
+          and "/" not in _stored and "\\" not in _stored,
+          "the stored name cannot escape uploads/", (_saved_rel, _stored))
     check((STAGE / saved.get("path", "uploads/missing")).read_bytes() == small,
           "the bytes on disk are the bytes sent")
     check(req("POST", "/api/upload?name=x.bin", None, small)[0] == 401,
@@ -1352,14 +1381,37 @@ def main():
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).
-    _racekey = fb.web_new_session("suiteRace", "race")
+    #
+    # Three REAL requests arriving together is not something this suite can schedule -
+    # on a Windows runner they arrived after the first run had already finished, so each
+    # claimed the now-free conversation and three SEQUENTIAL 200s read as three
+    # simultaneous runs (CI, 2026-10-08, the false red this replaces). So the claim's own
+    # gap is widened instead: a run takes 500ms to construct, which sits INSIDE the
+    # critical section of a one-step claim and BEFORE the registration of a two-step one.
+    # A two-step claim then lets all three callers through (all three hold the run open,
+    # the wait below times out, and the check reads three runs and three 200s) on any
+    # platform and any scheduler - while a one-step claim refuses the two latecomers
+    # however they are scheduled. The winner is held open until the other two have
+    # ANSWERED, so nothing here depends on how fast a request reaches the server.
+    _RealWebRun = fb.WebRun
     _gate2 = threading.Event()
+    _racekey = fb.web_new_session("suiteRace", "race")
     _race_codes = []
+    _race_starts = []
+
+    class _SlowRun(_RealWebRun):
+        """A run that takes a moment to exist: the window a two-step claim leaves open."""
+
+        def __init__(self, *a, **kw):
+            time.sleep(0.5)
+            super().__init__(*a, **kw)
 
     def _stub_race(key, text, *a, **kw):
-        _gate2.wait(5)
+        _race_starts.append(key)
+        _gate2.wait(30)
         return "ok"
 
+    fb.WebRun = _SlowRun
     fb.AGENT.run = _stub_race
 
     def _hit():
@@ -1371,17 +1423,18 @@ def main():
     _ts2 = [threading.Thread(target=_hit) for _ in range(3)]
     for _t2 in _ts2:
         _t2.start()
-    for _ in range(400):
-        if fb._web_active_run(_racekey) is not None:
-            break
-        time.sleep(0.01)
+    _deadline = time.time() + 8           # under the client's own 20s timeout, so a
+    while time.time() < _deadline and len(_race_codes) < 2:   # two-step build answers
+        time.sleep(0.02)                  # 200s rather than timing the callers out
     _gate2.set()
     for _t2 in _ts2:
-        _t2.join(10)
+        _t2.join(30)
     fb.AGENT.run = _real_agent_run
-    check(_race_codes.count(200) == 1 and _race_codes.count(409) == 2,
+    fb.WebRun = _RealWebRun
+    check(_race_codes.count(200) == 1 and _race_codes.count(409) == 2
+          and len(_race_starts) == 1,
           "three simultaneous /api/chat calls in one conversation start exactly one run",
-          _race_codes)
+          (_race_codes, "runs started: %d" % len(_race_starts)))
 
     # ---- A-231: a platform-reserved upload name, and a write that fails ---------
     check("*" not in fb._web_safe_name("report*final.pdf")

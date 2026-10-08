@@ -301,7 +301,15 @@ def test_the_instance_lock_is_not_a_deletable_file():
     # A read-only probe must not CREATE tinycmdr.lock.
     if os.name == "nt":
         (STAGE / "tinycmdr.lock").unlink(missing_ok=True)
-        fb._instance_lock_free()
+        # On Windows the lock is a FILE and the probe opens it r+b, so a probe with no lock
+        # present raises the documented OSError - every production caller catches it
+        # (_verb_running turns it into "unknown" rather than a false "free"). This check is
+        # about CREATION, so it catches it too: unguarded, it was a FileNotFoundError that
+        # killed the suite on windows-latest (measured 2026-10-08).
+        try:
+            fb._instance_lock_free()
+        except OSError:
+            pass
         check(not (STAGE / "tinycmdr.lock").exists(),
               "the lock probe does not create tinycmdr.lock")
     else:

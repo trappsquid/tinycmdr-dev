@@ -1301,6 +1301,12 @@ def test_a_re_read_after_elision_is_served_not_refused():
           fb._elided_note("elide-sess", sig) is False)
     check("...and another session is not affected",
           fb._elided_note("other-sess", sig) is False)
+    # A reset session must not keep the entry: the map is bounded per session, but the sessions
+    # themselves were never dropped, and delegate_task resets one per delegation
+    # (A-2026-10-07-81).
+    fb.AGENT.reset("elide-sess")
+    check("...and a reset session holds none at all",
+          "elide-sess" not in fb._ELIDED_CALLS, sorted(fb._ELIDED_CALLS))
     # The wiring, not just the helper: a dropped exchange records the calls it carried.
     msgs = [
         {"role": "system", "content": "system"},

@@ -96,6 +96,15 @@ if __name__ == "__main__":
     # is called through the harness.
     import json
     import sys
+    # A Windows console still defaults to a legacy code page (cp1252/cp437); a refusal
+    # or a diff that names a glyph that page has no byte for would raise
+    # UnicodeEncodeError and kill the process instead of printing. Degrade the glyph to
+    # "?" (as tinycmdr.py does at import) so this tool always prints its verdict.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:        # not a TextIOWrapper, encoding-less, or closed
+            pass
     args = dict()
     for tok in sys.argv[1:]:
         k, _, v = tok.partition("=")
@@ -384,6 +393,15 @@ if __name__ == "__main__":
     # is called through the harness.
     import json
     import sys
+    # A Windows console still defaults to a legacy code page (cp1252/cp437); a refusal
+    # or a diff that names a glyph that page has no byte for would raise
+    # UnicodeEncodeError and kill the process instead of printing. Degrade the glyph to
+    # "?" (as tinycmdr.py does at import) so this tool always prints its verdict.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(errors="replace")
+        except Exception:        # not a TextIOWrapper, encoding-less, or closed
+            pass
     args = dict()
     for tok in sys.argv[1:]:
         k, _, v = tok.partition("=")

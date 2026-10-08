@@ -378,8 +378,16 @@ def _body():
         # branches need a firewall this bed does not have (the installers carry the same
         # text at install time; `setup`, `doctor` and the startup announce carry it when a
         # running install is switched to the LAN).
-        _real_platform, _real_capture = fb.sys.platform, fb.run_capture
+        _real_platform, _real_osname, _real_capture = (fb.sys.platform, fb.os.name,
+                                                       fb.run_capture)
         try:
+            # Emulating an OS means setting BOTH symbols this function reads: the Windows
+            # branch is `os.name == "nt"` while macOS is `sys.platform == "darwin"`. Setting
+            # sys.platform alone still left os.name "nt" on a Windows runner, so _firewall_note
+            # took the Windows branch and all four mappings below graded Windows Defender
+            # text (CI, 2026-10-08). "posix" is what os.name already is on macOS and Linux,
+            # so the emulation is now the same on every host.
+            fb.os.name = "posix"
             fb.sys.platform = "darwin"
             fb.run_capture = lambda *a, **k: (0, "Firewall is enabled. (State = 1)", "", False)
             mac = fb._firewall_note(8790)
@@ -411,7 +419,8 @@ def _body():
             fb.run_capture = lambda *a, **k: (1, "", "", False)
             check("...and stays quiet with neither", fb._firewall_note(8790) == [])
         finally:
-            fb.sys.platform, fb.run_capture = _real_platform, _real_capture
+            fb.sys.platform, fb.os.name, fb.run_capture = (_real_platform, _real_osname,
+                                                           _real_capture)
 
         # ---- the update path introduces the page --------------------------------
         # The published updaters are the one code that runs on EVERY released version, so

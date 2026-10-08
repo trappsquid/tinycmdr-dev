@@ -68,6 +68,31 @@ if not HAVE:
     print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
     sys.exit(1 if FAILS else SKIP_EXIT)
 
+# --- the console this suite is graded on is an IN-MEMORY one -----------------------
+# prompt_toolkit resolves an Application's default input/output from the AMBIENT app
+# session at CONSTRUCTION time: Application.__init__ does `output or session.output`,
+# and AppSession.output calls create_output(). On a Windows box with no console screen
+# buffer - a CI runner, a redirected job - that raises NoConsoleScreenBufferError
+# ("No Windows console found. Are you running cmd.exe?") and killed this suite before
+# its own summary. Every Application built below is driven through an in-memory screen
+# and a key pipe ANYWAY (a DummyOutput, with app.output/app.input assigned by hand), so
+# the suite states it UP FRONT: the ambient session is the fake console, the product's
+# own construction path is graded identically on every platform, and the app checks are
+# never skipped for being on Windows.
+from prompt_toolkit.application.current import create_app_session as _app_session
+from prompt_toolkit.application.current import get_app_session as _get_app_session
+from prompt_toolkit.input import DummyInput as _DummyInput
+from prompt_toolkit.output import DummyOutput as _DummyOutput
+
+# ...kept in a name for the life of the process: this is a generator-backed context
+# manager, and a temporary falling out of scope would throw GeneratorExit into it and
+# reset the contextvar on the spot.
+_SUITE_CONSOLE = _app_session(input=_DummyInput(), output=_DummyOutput())
+_SUITE_CONSOLE.__enter__()          # this script is a one-shot process: no exit needed
+check("the suite grades --app on an in-memory console, never the host's",
+      isinstance(_get_app_session().output, _DummyOutput)
+      and isinstance(_get_app_session().input, _DummyInput))
+
 # The harness that runs this suite may export NO_COLOR=1 and TERM=dumb (a CI runner,
 # a pipe). The renderer still has to be graded, so the colour environment here is
 # STATED, not inherited - otherwise the tier checks below grade a colourless screen

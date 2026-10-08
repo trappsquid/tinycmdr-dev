@@ -3660,6 +3660,18 @@ _IDEMPOTENT_TOOLS = frozenset(("read_file", "search_files", "search_sessions",
                                "list_tools", "atlas"))
 
 
+def _elided_reset(session):
+    """Drop one session's elided-call memory (reset_read_counts/reset_scan_spend sibling).
+
+    The map is bounded per session but the set of sessions was never pruned, and delegate_task
+    mints and resets a sub-<epoch> session per delegation: every one of them left a permanent
+    entry in a long-lived process (A-2026-10-07-81, measured 2026-10-08: after AGENT.reset the
+    key was still there).
+    """
+    with _SPILLS_LOCK:
+        _ELIDED_CALLS.pop(session or "", None)
+
+
 def _elided_note(session, sig):
     """True once: was this call's result dropped from the payload? Consumes the entry."""
     with _SPILLS_LOCK:
@@ -6385,8 +6397,15 @@ _RECURSIVE_WALK = (
      "a recursive directory walk"),
     (re.compile(r"(?i)\bfind\b[^\n|&;]*(?:-name|-iname|-path|-type|-delete|-exec)\b"),
      "a recursive file search"),
+    # The flag can be BUNDLED: `-r\b` cannot match `-rn` (both are word characters, so there
+    # is no boundary between them) and `-nr` does not contain `-r` at all, so a recursive grep
+    # written the way people write it was not a recursive walk here - no cap, no charge and no
+    # refusal (A-2026-10-07-79, measured 2026-10-08: `grep -rn TODO /` returned None while
+    # `grep -r TODO /` returned the walk). The cluster branch is kept off long options by the
+    # lookbehind, and findstr's own recursive switch is `/s`.
     (re.compile(r"(?i)\b(?:grep|rg|findstr|select-string)\b[^\n|&;]*"
-                r"(?:-r\b|-R\b|--recursive\b|-recurse\b)"),
+                r"(?:(?<![\w-])-[a-zA-Z]*[rR][a-zA-Z]*\b"
+                r"|--recursive\b|-recurse\b|/s\b)"),
      "a recursive content search"),
     # Recursive by DEFAULT, no flag: `tree`, `du`, `rg`/`ag`/`ack`, `rsync`, and `ls -R`
     # walk a whole tree from a root alone, so the flag-gated entries above miss them. The
@@ -6449,8 +6468,16 @@ def _broad_root(tok):
     # C:\Users\<name> likewise. Matched structurally on purpose: resolving the
     # real home would read the operator's environment, and this build's own
     # portability rule (tests/test_cli.py) says the shipped file must not.
-    if parts[0] == "users" or "users" in parts[:2]:
-        return len(parts) <= 3
+    # A drive letter is one extra leading component, so `C:\Users\<name>` and
+    # `/Users/<name>` are the same thing and one level further is a real project. Comparing
+    # the raw part count made /Users/<name>/<project> a whole-tree walk on macOS while
+    # /home/<name>/<project> was left alone on Linux - the same shape judged two ways
+    # (A-2026-10-07-80, measured 2026-10-08). UNC roots (`\\host\Users\<name>`) are no
+    # longer broad by the old loose `"users" in parts[:2]`; one level under a user tree is
+    # what this is for, and that reading is the correct one.
+    tail = parts[1:] if re.fullmatch(r"[a-z]:", parts[0], re.I) else parts
+    if tail and tail[0] == "users":
+        return len(tail) <= 2
     return False
 
 
@@ -7996,12 +8023,29 @@ _SEGMENT_RX = re.compile(r"(?:&&|\|\||[;&|\n])")
 
 
 def _shlex_words(segment):
-    """The words of one shell segment, quote-aware where it can be, .split() where not."""
+    """The words of one shell segment, quote-aware where it can be, .split() where not.
+
+    posix=False on Windows, and it is not a style choice: shlex's POSIX mode treats the
+    backslash as an escape, so `rm -f C:\\Users\\me\\Desktop\\report.docx` tokenised to
+    `C:UsersmeDesktopreport.docx` - a path that does not exist, so `_delete_effect` measured
+    nothing, the effect read as "nothing to lose", and a real document was deleted with NO ask
+    (measured 2026-10-08 on windows-latest, tests/test_guard_battery.py: the ask, when one
+    fired at all, named the mangled path; the drive root `C:\\` lost its slash the same way,
+    which is what the block tier matches on). Non-POSIX mode keeps the backslashes and leaves
+    the quotes ON the word, so they come off here - this is the one place that decides what a
+    word is, and quote handling is what it exists for.
+    """
     import shlex
     try:
-        return shlex.split(segment, comments=False, posix=True)
+        words = shlex.split(segment, comments=False, posix=os.name != "nt")
     except ValueError:
-        return segment.split()
+        words = segment.split()
+    out = []
+    for w in words:
+        if len(w) >= 2 and w[0] == w[-1] and w[0] in "\"'":
+            w = w[1:-1]
+        out.append(w)
+    return out
 
 
 def _ago(secs):
@@ -16978,8 +17022,16 @@ def _touch_files(key, name, args):
     k = _read_supersede_key(path) or str(path)
     with _TOUCHED_LOCK:
         book = _TOUCHED.setdefault(key, {})
-        prev = book.get(k, "")
-        book[k] = "RW" if prev and prev != kind else kind
+        # The KEY is the normalised identity (a Windows key is casefolded, and a temp path can
+        # arrive short-named) and the VALUE carries the first spelling seen, because that is
+        # what the model and the operator are shown. Rendering the key put
+        # `c:\users\runneradmin\appdata\local\temp\...` in front of the model on a box
+        # whose paths are `C:\Users\runneradmin\AppData\Local\Temp\...`, which is a path
+        # that looks edited and does not exist as written (measured 2026-10-08 on
+        # windows-latest, tests/test_compaction_continuity.py).
+        prev = book.get(k)
+        mark = "RW" if prev and prev[0] != kind else kind
+        book[k] = (mark, prev[1] if prev else str(path))
         while len(book) > _TOUCHED_MAX:
             book.pop(next(iter(book)))
 
@@ -16991,13 +17043,17 @@ def _files_ledger(key, cap=_TOUCHED_MAX):
         return ""
     rows = sorted(book.items())[:cap]
     groups = []
-    for path, mark in rows:
-        parent, name = os.path.dirname(path), os.path.basename(path)
+    for path, (mark, shown) in rows:
+        parent, name = os.path.dirname(shown), os.path.basename(shown)
         if groups and groups[-1][0] == parent:
             groups[-1][1].append("%s (%s)" % (name, mark))
         else:
             groups.append((parent, ["%s (%s)" % (name, mark)]))
-    out = ["%s/ %s" % (parent, ", ".join(names)) for parent, names in groups]
+    # os.sep, not a hard-coded "/": appending a POSIX separator to a Windows parent rendered
+    # `C:\...\sub/ a.py (RW)` - a path that is neither spelling (measured 2026-10-08). A bare
+    # file name has no parent to group under, so it is not given a separator it never had.
+    out = [("%s%s %s" % (parent, os.sep, ", ".join(names)) if parent else ", ".join(names))
+           for parent, names in groups]
     if len(book) > len(rows):
         out.append("... +%d more file(s)" % (len(book) - len(rows)))
     return "\n".join(out)
@@ -20905,6 +20961,7 @@ class Agent:
 
     def reset(self, session_key):
         reset_scan_spend(session_key)
+        _elided_reset(session_key)
         self.histories.pop(session_key, None)
         self.model_overrides.pop(session_key, None)
         # A lock key was only ever set (self._lock), never removed, so every session key

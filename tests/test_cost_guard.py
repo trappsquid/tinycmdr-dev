@@ -43,6 +43,12 @@ RISKY = [
     r'''find / -name '*.csv' ''',
     r'''find /home -type f -name '*.log' ''',
     r'''grep -R foo /usr''',
+    # A BUNDLED short flag is how the command is actually written, and it was invisible to the
+    # shape regex (A-2026-10-07-79).
+    r'''grep -rn TODO /''',
+    r'''grep -nr TODO /''',
+    r'''grep -Rn TODO /''',
+    "findstr /s TODO C:\\",
     # A glob is as broad as its fixed prefix, and this one is all of /var.
     r'''grep -r ERROR /var/**/*.log''',
     r'''Get-ChildItem "$HOME" -Recurse''',
@@ -67,6 +73,10 @@ PLAIN = [
     r'''git clone https://github.com/x/y.git D:/tmp/y''',
     r'''ls -la C:\tinycmdr''',
     r'''Get-ChildItem -Recurse''',
+    # One level under the user tree is a PROJECT, whichever platform spells the profile
+    # (/Users/<name>/<project> was judged the whole profile while /home/<name>/<project> was
+    # not: A-2026-10-07-80).
+    r'''grep -r ERROR /Users/x/proj''',
     # A named subdirectory is not a whole tree, so this stays unbounded on purpose.
     r'''grep -r ERROR /var/log''',
     # Recursive by default at a NARROW root: no flag, no budget.
