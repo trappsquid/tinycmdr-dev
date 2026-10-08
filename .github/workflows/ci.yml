@@ -95,7 +95,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      - name: gate (ledger, events, config example, tool discovery + the IS_WINDOWS suites)
+      # The tier grades the suites this line keeps breaking: measured 2026-10-08, a
+      # Windows-only crash in tests/test_lane_choice.py reached the install surface, because
+      # the PRODUCT workflow was the only place these ran on Windows - i.e. after the cut.
+      # A suite that is RED on Windows belongs in STATUS.json's windows tier, not here, and a
+      # POSIX-only one must be left out rather than allowed to skip (run_all counts a skip as
+      # red on purpose).
+      - name: gate (the ledger and tooling suites, the IS_WINDOWS suites, and the ones the release line keeps touching)
         run: >
           python tests/run_all.py
           --select tests/test_ledger*.py
@@ -110,6 +116,19 @@ jobs:
           --select tests/test_endpoint_gate.py
           --select tests/test_installer_windows.py
           --select tests/test_computer_use.py
+          --select tests/test_lane_choice.py
+          --select tests/test_lane_health.py
+          --select tests/test_envelope.py
+          --select tests/test_plan_and_context.py
+          --select tests/test_payload_ids.py
+          --select tests/test_contracts.py
+          --select tests/test_run_all.py
+          --select tests/test_measured_doc.py
+          --select tests/test_config_guards.py
+          --select tests/test_wording.py
+          --select tests/test_maintenance_kit.py
+          --select tests/test_delegation.py
+          --select tests/test_spill_durability.py
 
   # The gate that keeps a leak OUT of the repo, rather than finding it in history later.
   # Same script the pre-push hook runs, over exactly what this push or PR adds: the working

@@ -12,6 +12,7 @@ farther file contained in a nearer one dropped, the block bounded.
     python tests/test_plan_and_context.py
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -140,19 +141,30 @@ def main():
         # from `str()`: a backslash in a name is legal on POSIX and reproduces exactly the split
         # Windows creates for every path, so this fails on ANY platform if the comparison slips
         # back to `str(p)`.
-        odd_tree = Path(tempfile.mkdtemp(prefix="fbctx-odd-"))
-        (odd_tree / ".git").mkdir()
-        (odd_tree / "a\\b").mkdir()
-        (odd_tree / "a\\b" / "AGENTS.md").write_text("odd rule: name the file\n",
-                                                    encoding="utf-8")
-        odd = (odd_tree / "a\\b" / "AGENTS.md").resolve()
-        odd_block = fb.context_files_block(odd_tree / "a\\b")
-        check(str(odd) != repr(str(odd)),
-              "the fixture reproduces the rendering split (a backslash in the path)",
-              (str(odd), repr(str(odd))))
-        check(named(odd_block, odd) and "odd rule" in odd_block,
-              "...and the block names that path too", odd_block[-200:])
-        shutil.rmtree(odd_tree, ignore_errors=True)
+        if os.name == "posix":
+            # A backslash is legal in a POSIX name and reproduces the split on this host. On
+            # Windows it is a SEPARATOR, so the fixture cannot exist there - and it does not
+            # need to: every Windows path has the split already, which is what the check in
+            # the else-branch asserts (this suite runs in the dev Windows tier now, so both
+            # halves have to be true wherever they run).
+            odd_tree = Path(tempfile.mkdtemp(prefix="fbctx-odd-"))
+            (odd_tree / ".git").mkdir()
+            (odd_tree / "a\\b").mkdir()
+            (odd_tree / "a\\b" / "AGENTS.md").write_text("odd rule: name the file\n",
+                                                        encoding="utf-8")
+            odd = (odd_tree / "a\\b" / "AGENTS.md").resolve()
+            odd_block = fb.context_files_block(odd_tree / "a\\b")
+            check(str(odd) != repr(str(odd)),
+                  "the fixture reproduces the rendering split (a backslash in the path)",
+                  (str(odd), repr(str(odd))))
+            check(named(odd_block, odd) and "odd rule" in odd_block,
+                  "...and the block names that path too", odd_block[-200:])
+            shutil.rmtree(odd_tree, ignore_errors=True)
+        else:
+            _win = Path("C:/somewhere/AGENTS.md")
+            check(str(_win) != repr(str(_win)),
+                  "on Windows EVERY path has the str/repr split the named() comparison "
+                  "exists for", (str(_win), repr(str(_win))))
 
         fb.CONFIG["agent"]["context_files_max_chars"] = 20
         block = fb.context_files_block(deep)
