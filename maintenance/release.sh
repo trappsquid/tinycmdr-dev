@@ -51,6 +51,21 @@ say() { printf '\n=== %s\n' "$*"; }
 
 say "version in the tree: $VER"
 
+# ---- the two repos, and which one a RELEASE belongs to ---------------------------------
+# Every installer and updater in the wild fetches `releases/latest/download/...` from the
+# INSTALL SURFACE, so that is where a release object and its assets belong. This tree's origin
+# is the SOURCE: history, tags, and the commits the ledger's anchors are checked against.
+# `gh` resolves a repository from the tree it runs in, so an unflagged `gh release create`
+# here publishes the release into the source repo, where nothing fetches it from (measured
+# 2026-10-07, the first cut after the two were split). Every gh call below therefore targets
+# the install surface through GH_REPO, and the one call that must grade THIS tree's CI names
+# its repo explicitly.
+RELEASE_REPO="${TINYCMDR_RELEASE_REPO:-trappsquid/tinycmdr}"
+TREE_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner)"
+PRODUCT_DIR="${TINYCMDR_PRODUCT_DIR:-../tinycmdr-product}"
+export GH_REPO="$RELEASE_REPO"
+say "release -> $RELEASE_REPO (what users fetch); this tree -> $TREE_REPO; product: $PRODUCT_DIR"
+
 # ---- nothing private in the tree that is about to be shipped --------------------------
 # The same check pre-push runs, on the last path before publish: a host name, a LAN address
 # or a token that reaches main is a problem in git history, where the only repairs are a
@@ -156,10 +171,10 @@ if [ "${TINYCMDR_SKIP_CI_GATE:-0}" = "1" ]; then
     echo "*** TINYCMDR_SKIP_CI_GATE=1: tagging $(git rev-parse --short HEAD) WITHOUT a green gate" >&2
 else
     SHA="$(git rev-parse HEAD)"
-    say "the gate must be green on $SHA before the tag exists"
+    say "the gate must be green on $SHA before the tag exists (repo: $TREE_REPO)"
     tries="${TINYCMDR_CI_WAIT_TRIES:-90}"      # 90 x 20s = 30 minutes
     while :; do
-        rows="$(gh run list --commit "$SHA" --workflow gate --limit 10 \
+        rows="$(gh run list --repo "$TREE_REPO" --commit "$SHA" --workflow gate --limit 10 \
                     --json status,conclusion \
                     --jq '.[] | "\(.status) \(.conclusion // "-")"' 2>/dev/null || true)"
         if printf '%s\n' "$rows" | grep -qE '^completed (failure|cancelled|timed_out|startup_failure|action_required)'; then
@@ -180,6 +195,34 @@ else
     done
 fi
 
+say "tag this tree, then publish the generated install surface"
+# TWO tags, one version, because they point at different commits: this repo's tag is what
+# `git describe` reads and what the ledger's anchors are checked against, and the install
+# surface's tag points at the tree IT generated (it is one commit per release, regenerated).
+SHA="${SHA:-$(git rev-parse HEAD)}"
+if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+    echo "*** $TAG already exists in this tree - a published number is never rebuilt" >&2
+    exit 1
+fi
+git tag "$TAG" "$SHA"
+git push origin "$TAG"
+# One commit per release is the install surface's shape, so it is regenerated from scratch: the
+# tree is published FROM this one and is never hand-edited, and a fresh `git init` is what keeps
+# its history to a single commit per version. The README check is the guard against pointing this
+# at a directory that is not a product tree.
+if [ -e "$PRODUCT_DIR/.git" ]; then
+    [ -f "$PRODUCT_DIR/README.md" ] && [ -f "$PRODUCT_DIR/tinycmdr.py" ] || {
+        echo "*** $PRODUCT_DIR is not a product tree (no README.md/tinycmdr.py) - refusing to remove it" >&2
+        exit 2; }
+    rm -rf "$PRODUCT_DIR"
+fi
+"$PY" maintenance/publish-product.py --write "$PRODUCT_DIR" --push
+git -C "$PRODUCT_DIR" push --force origin main
+git -C "$PRODUCT_DIR" push --force origin "$TAG"
+
+say "create the release on the install surface, at the tag that tree carries"
+# `--verify-tag`: the release attaches to the tag the install surface already has, instead of
+# gh inventing one from that repo's default branch.
 gh release create "$TAG" \
     "dist/tinycmdr-$VER-win.zip" \
     "dist/tinycmdr-$VER-linux.tar.gz" \
@@ -188,7 +231,7 @@ gh release create "$TAG" \
     "dist/install.ps1" \
     "dist/update.sh" \
     "dist/update.ps1" \
-    --title "$TAG" --notes-file "$NOTES"
+    --verify-tag --title "$TAG" --notes-file "$NOTES"
 
 say "attach the stable names the README uses (the versioned files stay)"
 # `gh release upload <tag> <file>#<label>` sets a LABEL, not the asset NAME: the asset
@@ -202,13 +245,13 @@ say "read the release back"
 gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)  \(.name)"'
 "$PY" maintenance/check-readme-assets.py --tag "$TAG"
 
-# The tag is created by gh, on the remote, so without this the tree that cut the release does
-# not know it exists. That has bitten twice: v1.0.37's tag was missing from this clone until a
-# fetch pulled it, and v1.0.38's was missing until the status ledger checked an anchor against
-# it on 2026-09-29.
+# The release object's tag lives on the install surface; THIS tree's tag was created above, so
+# this fetch is belt and braces for a tag that reached the remote another way - v1.0.37's tag was
+# missing from this clone until a fetch pulled it, and v1.0.38's until the ledger checked an
+# anchor against it on 2026-09-29.
 # Every "has this shipped?" question asked of this clone reads the LOCAL tag list - and the
 # ledger's whole job is to answer that - so leave it correct at the end of the cut.
-say "fetch the tag this cut created, so this tree knows its own release"
+say "fetch tags, so this tree knows its own release"
 git fetch --tags
 
 # The release commit was pushed BEFORE this tag existed, so its ledger items could not claim

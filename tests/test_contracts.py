@@ -188,6 +188,33 @@ def main():
     check("...and build-package ships no tools/ file git does not track",
           _packed_tools <= _tracked_tools, sorted(_packed_tools - _tracked_tools))
 
+    # ---- a release goes to the repo every installer and updater FETCHES from -------------
+    # The source tree and the install surface are two repositories, and `gh` resolves one from
+    # the tree it runs in - so an unflagged `gh release create` in the source repo publishes a
+    # release nothing fetches from (measured 2026-10-07, the first cut after the split, before
+    # release.sh named the repo). Side A is the repo release.sh publishes to; side B is the
+    # repo the update path and the two installers download from. A new fetch path that names a
+    # third repo fails here.
+    _rel = (BASE / "maintenance" / "release.sh").read_text(encoding="utf-8")
+    _m = re.search(r'RELEASE_REPO="\$\{TINYCMDR_RELEASE_REPO:-([^}"]+)\}"', _rel)
+    _release_repo = _m.group(1) if _m else None
+    _m = re.search(r'DEFAULT_UPDATE_URL = "https://github\.com/([^/"]+/[^/"]+)/', SRC)
+    _update_repo = _m.group(1) if _m else None
+    _fetch = {}
+    _m = re.search(r'REPO="([^"]+)"', (BASE / "update.sh").read_text(encoding="utf-8"))
+    _fetch["update.sh"] = _m.group(1) if _m else None
+    _m = re.search(r'BASE="\$\{TINYCMDR_URL:-https://github\.com/([^/"]+/[^/"]+)/',
+                   (BASE / "install.sh").read_text(encoding="utf-8"))
+    _fetch["install.sh"] = _m.group(1) if _m else None
+    check("release.sh names the repo a release is published to", bool(_release_repo),
+          _release_repo)
+    check("...and it is the repo the update path downloads from",
+          bool(_update_repo) and _update_repo == _release_repo,
+          "%s vs %s" % (_release_repo, _update_repo))
+    check("...and the repo both installers download from",
+          all(v == _release_repo for v in _fetch.values()),
+          "%s vs %s" % (_release_repo, _fetch))
+
     print("\n%s" % ("all contract checks passed" if not FAILS
                     else "FAILED: %d" % len(FAILS)))
     return 1 if FAILS else 0
