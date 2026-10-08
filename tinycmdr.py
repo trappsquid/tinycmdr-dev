@@ -31298,16 +31298,31 @@ def _lane_pid_alive(pid):
     if pid == os.getpid():
         return True
     if os.name == "nt":
-        # os.kill(pid, 0) is not a liveness probe on Windows; OpenProcess is the documented
-        # one. PROCESS_QUERY_LIMITED_INFORMATION (0x1000) asks without needing full access.
+        # os.kill(pid, 0) is not a liveness probe on Windows - it TERMINATES the process it
+        # probes. OpenProcess is the documented one, but a successful OpenProcess only proves
+        # the process OBJECT still exists: Windows keeps it while any handle (a supervisor's,
+        # a test's Popen) is open, so an exited bot still opened (measured 2026-10-08,
+        # windows-latest: test_lane_health's A-186 checks read a reaped child as alive, and
+        # `health` then reported a dead lane's last "up" as current - the A-186 symptom).
+        # GetExitCodeProcess is the documented liveness test: STILL_ACTIVE (259) means running.
+        # restype/argtypes are declared because ctypes otherwise assumes 32-bit and truncates
+        # the handle. An unreadable exit code counts as NOT alive: the loud direction.
         try:
             import ctypes
             kern = ctypes.windll.kernel32
-            handle = kern.OpenProcess(0x1000, False, pid)
+            kern.OpenProcess.restype = ctypes.c_void_p
+            kern.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+            kern.GetExitCodeProcess.argtypes = [ctypes.c_void_p,
+                                                ctypes.POINTER(ctypes.c_ulong)]
+            handle = kern.OpenProcess(0x1000, False, int(pid))
             if not handle:
                 return False
-            kern.CloseHandle(handle)
-            return True
+            code = ctypes.c_ulong()
+            try:
+                read = kern.GetExitCodeProcess(handle, ctypes.byref(code))
+            finally:
+                kern.CloseHandle(ctypes.c_void_p(handle))
+            return bool(read) and code.value == 259                # STILL_ACTIVE
         except Exception:                                    # noqa: BLE001
             return False
     try:
