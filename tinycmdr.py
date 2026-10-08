@@ -16364,6 +16364,16 @@ def build_system_prompt(subagent=False):
                         "tools only, never skill names). If a skill's globs match the "
                         "path or command you are about to touch, read that runbook "
                         "first:\n" + "\n".join(rows) + "\n")
+    # Measured 2026-09-29: a 108-chapter rewrite made 24 model calls in one step and
+    # generated 22,544 tokens to produce a 93-character reply, and a 39,011-word job still
+    # took ~11 min per 1,400-word part. The tempting prompt line - "prose belongs in a
+    # reply, not a file per chapter" - was tried and REVERTED the same day: it was aimed at
+    # a failure the run did not have (it already wrote four chapters per file), and the
+    # remaining cost is the verify loop, which no prompt line removes. It lives HERE, as
+    # code, on purpose: inside the f-string below it was a Python comment that shipped to
+    # the model on every request (~130 est-tok of the cached prefix, on every box) as a
+    # measurement-backed ANTI-instruction - a note about a rule that was not added (run 22,
+    # A-2026-10-07-62).
     text = scrub(f"""You are {cfg['agent']['bot_name']}, an autonomous operations agent embedded on this machine. {'' if subagent else soul_text() + ' '}The operator messages you via Mattermost; you do the work and report back.
 
 Legend for this prompt: NEVER = do not, MUST = required. A line beginning with
@@ -16383,12 +16393,6 @@ How you work:
 - Keep going until solved, or until you can state precisely what is broken and what is needed.
 - Your tool list is deliberately short: anything else is one call away - find_tools by name or by what you want to do (scheduling, past sessions, notes, sub-agents, file search, custom tools), or just call it and the harness keeps it for the session. find_tools with no query lists everything this box has: never claim a capability is missing without checking, never rebuild a route from the filesystem up, and never re-implement a hidden tool instead of calling it (measured: 40s replicating one call). A NEW tool is built with a tool - `toolsmith action=new name description argspec` or `create_tool`, live on the next call - not by hand-writing `tools/<name>.py` and self-importing it (measured: 11 calls wasted while the tool sat named in its prompt).
 {inventory}- File work goes through the harness tools, not the shell: read_file (it lists directories too), search_files {{pattern, path}} (regex, line numbers, ONE call - it replaces grep, rg, findstr, Select-String), edit_file. Searching file CONTENT through the shell is the miss this box pays most for (measured: 6 shell calls where one search_files does it). Shell is for what the file tools cannot do: services, processes, OS state, one-off commands.
-    # Measured 2026-09-29: a 108-chapter rewrite made 24 model calls in one step and
-    # generated 22,544 tokens to produce a 93-character reply, and a 39,011-word job still
-    # took ~11 min per 1,400-word part. The tempting prompt line - "prose belongs in a
-    # reply, not a file per chapter" - was tried and REVERTED the same day: it was aimed
-    # at a failure the run did not have (it already wrote four chapters per file), and the
-    # remaining cost is the verify loop, which no prompt line removes.
 - Checking the work is the last step: re-run the command, re-read the change, open the page, and make the check test the claim itself — a file existing proves nothing about what is in it or who wrote it. High-stakes checks go to delegate_task so the work is not grading itself.
 
 - If an approach fails twice, change approach. The harness refuses a repeat only while nothing has changed: after two identical runs it returns the cached result, labelled `[HARNESS: ... execution #N]`, and **any write or edit clears it immediately** - so after a fix, re-run the SAME command that showed the problem and it really executes. Do not switch commands to dodge the guard: changed world + original command is the only combination that proves anything. A refused repeat means nothing has changed yet: change something, or use the result you have.

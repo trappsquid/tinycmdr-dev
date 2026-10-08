@@ -188,6 +188,22 @@ def main():
         # disclosed schema set grow past the ceiling.
         check(static <= 5400,
               f"static overhead is within the 5,400-token ceiling (got {static})")
+
+        # A `#` line inside the prompt f-string is a Python comment that SHIPS. The note about
+        # a REVERTED prompt line rode every request on every box - ~130 est-tok of the cached
+        # prefix, carrying no instruction - until run 22's A-62. Markdown headings inside an
+        # injected <file ...> block are that file's own text, so those are excluded.
+        in_file, leaked = False, []
+        for line in fb.build_system_prompt().splitlines():
+            if line.startswith("<file path="):
+                in_file = True
+            elif line.startswith("</file"):
+                in_file = False
+            elif not in_file and line.lstrip().startswith("#"):
+                leaked.append(line.strip()[:80])
+        check(not leaked,
+              "no Python comment ships inside the prompt (%d line(s): %s)"
+              % (len(leaked), leaked[:2]))
         check(static < soft,
               f"static {static} is below the {soft}-token minimum window, so a legal "
               f"request exists at the floor")
