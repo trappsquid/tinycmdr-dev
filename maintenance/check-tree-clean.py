@@ -71,7 +71,13 @@ def snapshot():
             st = p.stat()
         except OSError:                     # vanished under us; the next snapshot decides
             continue
-        out[str(p.relative_to(ROOT))] = (st.st_size, st.st_mtime_ns)
+        # .as_posix(): every other spelling of a tree-relative path here (the LIVE_OWNED
+        # prefixes, run_all's writers inventory, pre-push.sh's git ls-files) is forward-slashed,
+        # and on Windows str() would hand back "sessions\\x.json" - matching no prefix, so a live
+        # bot's own writes read as unexplained, and the inventory matches nothing at all.
+        # Measured 2026-10-08 on windows-latest: test_maintenance_kit's venv/-deeper check
+        # caught it, this file having normalised at the other site (see report_leaks).
+        out[p.relative_to(ROOT).as_posix()] = (st.st_size, st.st_mtime_ns)
     return out
 
 
