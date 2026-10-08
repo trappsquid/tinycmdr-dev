@@ -1031,6 +1031,35 @@ def _body():
         rc, out, err = call(fb, ["config", "unset", "agent.tmpprobe"])
         check("...and says so when it was not set", rc == 2, rc)
 
+        # ---- a box with NO config.json: the verb CREATES one, and does not write on a read
+        # `setup` prints `config set` as its non-interactive path, and that path used to die
+        # with "could not read config.json: [Errno 2] ..." and refuse to write - a dead end on
+        # exactly the box that has none (run 24, A-2026-10-07-71).
+        cfg_path = workdir / "config.json"
+        cfg_before = cfg_path.read_bytes()
+        # The shipped package carries config.example.json (it is in SHIP); this staged tree
+        # does not, so stage it the way an install does - the verb seeds from it.
+        shutil.copy2(BASE / "config.example.json", workdir / "config.example.json")
+        cfg_path.unlink()
+        rc, out, err = call(fb, ["config", "get", "llm.base_url"])
+        check("config get with no config.json answers from the shipped example",
+              rc == 0 and out.strip().startswith("http"), (rc, out[:80], err[:120]))
+        check("...and a READ does not create the file",
+              not cfg_path.exists(), "config.json appeared after a get")
+        rc, out, err = call(fb, ["config", "set", "agent.max_steps", "99"])
+        check("config set with no config.json creates it and applies the value",
+              rc == 0 and cfg_path.exists()
+              and json.loads(cfg_path.read_text(encoding="utf-8"))["agent"]["max_steps"] == 99,
+              (rc, err[:160]))
+        seeded = json.loads(cfg_path.read_text(encoding="utf-8"))
+        check("...and the file it creates is the whole shipped example, not a stub",
+              len(seeded) >= len(json.loads(
+                  (BASE / "config.example.json").read_text(encoding="utf-8"))),
+              (len(seeded), sorted(seeded)[:5]))
+        check("...and it says it created one",
+              "created it from config.example.json" in out + err, (out + err)[:200])
+        cfg_path.write_bytes(cfg_before)
+
         rc, out, err = call(fb, ["proc"])
         check("proc names this install's folder and the instance",
               rc == 0 and "install :" in out and "instance:" in out, out[:200])

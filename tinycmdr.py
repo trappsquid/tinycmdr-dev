@@ -36590,6 +36590,23 @@ def _config_raw():
         return None, "could not read config.json: %s" % e
 
 
+def _seed_config_from_example():
+    """Create config.json from the shipped example. Error string, or None.
+
+    The installer does this with a copy; the verb does it through the agent's own atomic
+    writer, so what lands is a complete file (full defaults, editable) rather than a stub
+    holding one key - and `config set` works on a box that has never been configured, which
+    is the box the documented non-interactive path exists for (run 24, A-2026-10-07-71).
+    """
+    example = BASE_DIR / "config.example.json"
+    try:
+        raw = json.loads(example.read_text(encoding="utf-8-sig"))
+    except Exception as e:                                        # noqa: BLE001
+        return ("no config.json here, and %s could not be read (%s) - copy it to %s by hand"
+                % (example.name, e, CONFIG_PATH.name))
+    return _config_write_raw(raw)
+
+
 def _config_write_raw(raw):
     """Write through the agent's own atomic writer. Error string, or None."""
     try:
@@ -36837,10 +36854,36 @@ def _verb_config(rest):
         print("%s is a secret: put it in %s instead (tinycmdr token set <NAME>)"
               % (path, ENV_FILE.name), file=sys.stderr)
         return 2
-    raw, err = _config_raw()
-    if err:
-        print(err, file=sys.stderr)
-        return 1
+    raw = None
+    if not CONFIG_PATH.exists():
+        # A box that has never been configured is exactly the box this verb exists for:
+        # `setup` prints `config set` as the non-interactive path. It used to answer
+        # "could not read config.json: [Errno 2] ..." and refuse to write - a dead end, and
+        # half of its own printed instruction (run 24, A-2026-10-07-71). Creation is for the
+        # MUTATING verbs, the way every installer seeds it; `get` answers from the shipped
+        # example and writes nothing (a read that creates a file is its own trap).
+        example = BASE_DIR / "config.example.json"
+        if what == "get":
+            try:
+                raw = json.loads(example.read_text(encoding="utf-8-sig"))
+            except Exception as e:                                # noqa: BLE001
+                print("no config.json yet, and %s could not be read (%s)"
+                      % (example.name, e), file=sys.stderr)
+                return 1
+            print("(no config.json yet: reading the shipped %s)" % example.name,
+                  file=sys.stderr)
+        else:
+            seed_err = _seed_config_from_example()
+            if seed_err:
+                print(seed_err, file=sys.stderr)
+                return 1
+            print("(no config.json yet: created it from %s)" % example.name,
+                  file=sys.stderr)
+    if raw is None:
+        raw, err = _config_raw()
+        if err:
+            print(err, file=sys.stderr)
+            return 1
     node = raw
     for i, part in enumerate(parts[:-1]):
         cur = node.get(part)
