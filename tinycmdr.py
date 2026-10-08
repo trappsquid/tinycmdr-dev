@@ -35271,26 +35271,9 @@ def _resolve_colour():
     return bool(_ansi_enable())
 
 
-def _diag_probe(tag):                                            # TEMP-DIAG
-    """TEMP-DIAG (windows once-path investigation, remove before any release)."""
-    try:
-        st = os.fstat(1)
-        print("[diag %s] fd1 fifo=%s chr=%s reg=%s stdout=%s"
-              % (tag, stat.S_ISFIFO(st.st_mode), stat.S_ISCHR(st.st_mode),
-                 stat.S_ISREG(st.st_mode), type(sys.stdout).__name__), file=sys.stderr)
-    except Exception as e:                                       # noqa: BLE001
-        print("[diag %s] fstat failed: %r" % (tag, e), file=sys.stderr)
-    try:
-        os.write(1, ("[diag-raw %s]\n" % tag).encode())
-    except Exception as e:                                       # noqa: BLE001
-        print("[diag %s] raw write failed: %r" % (tag, e), file=sys.stderr)
-
-
 def run_cli(once=None, app=False):
     global CONFIG
-    _diag_probe("pre-utf8")                                      # TEMP-DIAG
-    _console_utf8()
-    _diag_probe("post-utf8")                                     # TEMP-DIAG
+
     # The conversation this launch opens in: a fresh one, unless --continue/--session (or
     # TINYCMDR_SESSION) says otherwise. Set BEFORE anything reads _cli_key() - the banner,
     # the rail and the reporter all name the session.
@@ -35371,13 +35354,6 @@ def run_cli(once=None, app=False):
         threading.Thread(target=_cli_reader, daemon=True).start()
 
     _cli_startup(_CLI.get("app") is not None, once=bool(once))
-    if once:                                                     # TEMP-DIAG
-        try:
-            print("[diag start] stdout=%s fileno=%s isatty=%s"
-                  % (type(sys.stdout).__name__, sys.stdout.fileno(),
-                     sys.stdout.isatty()), file=sys.stderr)
-        except Exception as _e:                                  # noqa: BLE001
-            print("[diag start] probe failed: %r" % (_e,), file=sys.stderr)
     # reported for BOTH entry points. It used to live in cli_banner(), which a
     # one-shot run never reaches, so `--once` - the CLI's most common entry -
     # said nothing about what it could enforce.
@@ -35410,24 +35386,6 @@ def run_cli(once=None, app=False):
         # composed card ("the task did not run") was the only signal, and the automation
         # reading stdout has no eyes for a card. The verdict is the same one the a2a lane
         # and the chat done-line already read (`infra_failed`), so no string sniffing.
-        try:                                                     # TEMP-DIAG
-            _w = os.write(1, b"[diag-raw after-card] sentinel-bytes\n")
-            print("[diag-raw after-card] wrote %s byte(s) to fd1" % _w, file=sys.stderr)
-        except Exception as _e:                                  # noqa: BLE001
-            print("[diag-raw after-card] failed: %r" % (_e,), file=sys.stderr)
-        # TEMP-DIAG (windows once-path investigation, remove before any release): the
-        # child's stdout is empty on windows-latest while stderr carries everything, and
-        # this is the one place that can say WHICH stdout the card went to.
-        for _tag in ("after-card",):
-            try:
-                _st = os.fstat(1)
-                print("[diag %s] stdout=%s fileno=%s isatty=%s closed=%s fd1 fifo=%s chr=%s reg=%s"
-                      % (_tag, type(sys.stdout).__name__, sys.stdout.fileno(),
-                         sys.stdout.isatty(), sys.stdout.closed,
-                         stat.S_ISFIFO(_st.st_mode), stat.S_ISCHR(_st.st_mode),
-                         stat.S_ISREG(_st.st_mode)), file=sys.stderr)
-            except Exception as _e:                              # noqa: BLE001
-                print("[diag %s] probe failed: %r" % (_tag, _e), file=sys.stderr)
 
         if (AGENT.last_usage.get(_cli_key()) or {}).get("infra_failed"):
             print("(exit 1: the run did not reach the model - `tinycmdr doctor` names "
