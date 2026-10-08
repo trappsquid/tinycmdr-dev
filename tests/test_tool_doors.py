@@ -28,7 +28,21 @@ from pathlib import Path
 BASE = Path(__file__).resolve().parent.parent
 SRC = BASE / (os.environ.get("TINYCMDR_TEST_APP") or os.environ.get("TINYCMDR_SRC")
               or "tinycmdr.py")
-spec = importlib.util.spec_from_file_location("tinycmdr_doors_under_test", SRC)
+# STAGED, not loaded out of the checkout: the module resolves sessions/, logs/ and the atlas
+# from its own file's directory, and this suite drives the detail matcher - which keeps a
+# per-session hints file. Loading it in place wrote sessions/-prose.hints.json into the
+# CHECKOUT, so the second run of this suite read the state the first one left and its checks
+# flipped (measured 2026-10-08: 98 checks green on a clean clone, 96 passed/2 failed in a tree
+# it had already run in). A suite grades the build, never the checkout it runs from.
+STAGE = Path(tempfile.mkdtemp(prefix="tinycmdr-doors-stage-"))
+shutil.copy2(SRC, STAGE / "tinycmdr.py")
+# The dropped-in tools are part of what the doors open, so they come with it (the tree's
+# tools/ is 508K). Reading the tree would be fine; resolving the module's own paths is what
+# wrote into it.
+if (BASE / "tools").is_dir():
+    shutil.copytree(BASE / "tools", STAGE / "tools", dirs_exist_ok=True)
+spec = importlib.util.spec_from_file_location("tinycmdr_doors_under_test",
+                                              STAGE / "tinycmdr.py")
 fb = importlib.util.module_from_spec(spec)
 sys.modules["tinycmdr_doors_under_test"] = fb
 spec.loader.exec_module(fb)
