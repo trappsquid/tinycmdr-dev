@@ -45,6 +45,16 @@ def run(rules, mode="--tree"):
 
 
 def main():
+    # Every mode of the gate reads the tree through git, so a tree without a .git has
+    # nothing to grade: this suite would report on an empty set either way. exit 77 is the
+    # project's "graded nothing" (run 23, A-2026-10-07-66 - in an rsync export it used to
+    # report a WRONG verdict instead, "a planted rule makes leak-gate exit 1 <- exit 0").
+    probe = subprocess.run(["git", "-C", str(BASE), "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        print("skip: %s is not a git work tree - the gate scans through git, so there is "
+              "nothing here to grade" % BASE)
+        return 77
     rules = REAL_RULES if REAL_RULES.exists() else EXAMPLE_RULES
     check("a rules file exists to grade with", rules.exists(), str(rules))
     if not rules.exists():
@@ -210,6 +220,22 @@ def main():
               past.returncode == 0, (past.returncode, past.stdout[:160]))
         _run(["git", "reset", "-q", "--hard", "HEAD~1"], work)
 
+    # ---- a tree with no .git must NOT read as clean ----------------------------------
+    # Every mode scans through git (`ls-files`, `rev-list`, `log`), so in an rsync export the
+    # gate printed "clean (N patterns)" having read no file at all - the one outcome this
+    # project refuses. It now refuses instead, and this suite declares exit 77 up top when
+    # the tree it is standing in has no .git (run 23, A-2026-10-07-66).
+    with tempfile.TemporaryDirectory(prefix="tinycmdr-leak-nogit-") as tmp:
+        clone = Path(tmp) / "maintenance"
+        clone.mkdir()
+        shutil.copy2(GATE, clone / "leak-gate.py")
+        done = subprocess.run([sys.executable, str(clone / "leak-gate.py"), "--tree"],
+                              capture_output=True, text=True,
+                              env={**os.environ, "TINYCMDR_LEAK_RULES": str(rules)})
+        check("a git-less tree is refused, not reported clean",
+              done.returncode == 2 and "not a git work tree" in done.stdout
+              and "leak-gate --tree: clean" not in done.stdout,
+              "%s: %s" % (done.returncode, done.stdout.strip()[:200]))
     if FAILS:
         print("\n%d check(s) failed: %s" % (len(FAILS), ", ".join(FAILS)))
         return 1

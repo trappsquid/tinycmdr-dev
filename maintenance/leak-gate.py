@@ -87,6 +87,19 @@ def git(*args: str, text: bool = True):
                           text=text, check=False)
 
 
+def not_a_work_tree() -> bool:
+    """True when `git` cannot list this tree's files.
+
+    EVERY mode below reads the tree through git (`ls-files`, `rev-list`, `log`), so a tree
+    without a `.git` - an rsync export, an unpacked tarball, a machine with no git - made the
+    scan look at NOTHING and still print "clean (N patterns)": a gate reporting success for
+    having read no file, which is the one thing this project refuses. Measured 2026-10-07 in a
+    git-less export (run 23, A-2026-10-07-66).
+    """
+    out = git("rev-parse", "--is-inside-work-tree")
+    return out.returncode != 0 or out.stdout.strip() != "true"
+
+
 def scan_tree() -> list[str]:
     problems = []
     for rel in git("ls-files").stdout.split("\n"):
@@ -208,6 +221,12 @@ def main() -> int:
                  "--pre-push": scan_pre_push}.get(mode)
     if where is None:
         print(__doc__.strip())
+        return 2
+    if not_a_work_tree():
+        # NOT a clean report: every mode scans through git, so this would grade nothing.
+        print(f"leak-gate {mode}: {ROOT} is not a git work tree, so NOTHING would be "
+              "scanned - refusing to report clean (a gate that grades nothing must not "
+              "pass)")
         return 2
     problems = where()
     if not problems:

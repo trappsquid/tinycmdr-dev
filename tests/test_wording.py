@@ -131,6 +131,15 @@ def tracked():
 
 
 def main():
+    # The graded set is "every tracked file", listed by `git ls-files`: without a .git there
+    # is no tracked set at all, so this suite can only grade nothing. exit 77 declares that,
+    # rather than dying mid-suite or reporting a clean sweep of zero files (run 23,
+    # A-2026-10-07-66).
+    probe = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--is-inside-work-tree"],
+                           capture_output=True, text=True)
+    if probe.returncode != 0 or probe.stdout.strip() != "true":
+        print("skip: %s is not a git work tree - there is no tracked set to grade" % ROOT)
+        return 77
     bad = []
     NOT_GRADED["binary"].clear()
     NOT_GRADED["unreadable"].clear()
