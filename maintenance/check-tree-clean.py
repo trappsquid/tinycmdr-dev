@@ -36,6 +36,18 @@ import sys
 import time
 from pathlib import Path
 
+# Windows consoles and CI captures default to a legacy code page (cp1252/cp437), and this
+# runner prints what SUITES hand it: a detail line can carry "·", an em dash or a box glyph.
+# Measured 2026-10-08 on windows-latest: `UnicodeEncodeError: 'charmap' codec can't encode
+# characters in position 118-119` killed the report BEFORE the "what went red" block, so the
+# job failed with no failure list at all. tinycmdr.py hardens its own streams at import for
+# the same reason; the gate has to be at least as robust as the thing it grades.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                                       # not a TextIOWrapper, or closed
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent
 # By NAME, at any depth: Python's own artifacts, plus the repository.
 SKIP_ANY_DEPTH = (".git", "__pycache__")

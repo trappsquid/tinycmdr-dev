@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The elided-call memory kept a session per delegation:** the map is bounded per session but the sessions themselves were never dropped, and delegate_task mints and resets one per call; AGENT.reset drops it now (tests/test_stall.py).
 - **A suite that finished was reported as having died:** the runner did not recognise `N checks passed, M failed`, so a completed red suite was tagged "died before its own summary" and sent a reader looking for a crash that never happened (tests/test_run_all.py).
 
+- **The gate's own report survived a console that cannot encode a suite's line:** the runner prints what suites hand it, and a detail carrying "·" or an em dash raised UnicodeEncodeError on a Windows console - killing the report BEFORE the failure list, so a red job printed no failures at all; the runner and the sweep wrapper harden their streams the way the harness does (tests/test_run_all.py).
+
 ### Changed
 - **Nothing is excluded from the Windows job:** the eight suites it had been told to skip are graded there again, `tests/windows-tier.json`'s `excluded` is empty, and `tests/test_contracts.py` allows an empty list - it had insisted on a non-empty one, so the mechanism was defending its own deletion.
 
