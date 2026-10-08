@@ -1508,6 +1508,12 @@ def fmt_usage(u):
         # tokens burned on discarded attempts were previously invisible, which
         # made the cost line optimistic
         s += f" · {retries} retried/abandoned"
+    clamped = u.get("clamped", 0)
+    if clamped:
+        # Its own word, because it is the opposite kind of news: the answer WAS kept and the
+        # server cut it short, so it says something about the endpoint rather than about
+        # tokens this run threw away (run 25, A-2026-10-07-77).
+        s += f" · {clamped} answer(s) clamped by the server"
     if u.get("ttft_secs") and u.get("streamed"):
         # first-token latency, averaged over the streamed calls in the run: the
         # number that tells you the model was thinking vs the pipe was silent
@@ -2901,7 +2907,15 @@ def _record_attempt(usage, url, outcome, detail="", secs=0.0):
         # footer (and any report built from it) must never carry it.
         "detail": scrub(" ".join(str(detail).split()))[:200],
         "secs": round(secs, 1)})
-    if outcome in ("retry", "error", "abandoned", "fatal", "clamped"):
+    if outcome == "clamped":
+        # A KEPT answer: the server cut it short and what it produced IS the answer, so this
+        # is a statement about the endpoint, not about tokens this run burned (run 25,
+        # A-2026-10-07-77). Counted on its own word in the footer.
+        usage["clamped"] = usage.get("clamped", 0) + 1
+    elif outcome in ("retry", "error", "abandoned", "fatal", "window"):
+        # ...and this counter means "attempts whose output was THROWN AWAY". `window` belongs
+        # here: the prompt filled the endpoint's context and the turn was re-asked, which is
+        # the one outcome that really did waste the call.
         usage["retries"] = usage.get("retries", 0) + 1
     if outcome in ("error", "abandoned"):
         usage["abandoned"] = usage.get("abandoned", 0) + 1

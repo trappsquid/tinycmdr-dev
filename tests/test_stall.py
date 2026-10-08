@@ -1659,6 +1659,23 @@ def test_visible_metrics_for_duplicates_and_sampling():
     check("usage line: reports an allowed repeat", "1 repeat(s) allowed" in allowed,
           allowed)
 
+    # ...and the retry counter means "attempts whose output was THROWN AWAY" - the footer's
+    # own comment says what it is for. A `clamped` answer was KEPT (the server cut it short;
+    # what it produced IS the answer) and a `window` attempt WAS thrown away and re-asked, and
+    # the counter had both backwards: it inflated the first and missed the second (run 25,
+    # A-2026-10-07-77).
+    _u = {}
+    for _outcome in ("retry", "error", "abandoned", "fatal", "window",
+                     "clamped", "clamped"):
+        fb._record_attempt(_u, "http://127.0.0.1:9/v1", _outcome, "x", 0.1)
+    check("the retry counter counts what was discarded, and window is one of them",
+          _u.get("retries") == 5 and _u.get("clamped") == 2, (_u.get("retries"),
+                                                             _u.get("clamped")))
+    _line = fb.fmt_usage({**base, "retries": _u["retries"], "clamped": _u["clamped"]})
+    check("...and a clamped answer gets its own words in the footer",
+          "5 retried/abandoned" in _line and "2 answer(s) clamped by the server" in _line,
+          _line)
+
 def test_sampling_is_always_inherited_never_sent():
     """Standing rule: tinycmdr never defines sampling parameters. It may be
     pointed at a cloud provider or a different local model at any time, and a
