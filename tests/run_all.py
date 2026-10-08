@@ -410,6 +410,12 @@ def main():
     ap.add_argument("--select", action="append", metavar="GLOB",
                     help="suite glob relative to the repo root (repeatable; "
                          "default %s)" % DEFAULT_SELECT)
+    ap.add_argument("--exclude", action="append", metavar="GLOB",
+                    help="drop suites matching this glob (repeatable) and SAY so in the "
+                         "header. The product repo's Windows job uses it for the suites that "
+                         "are red on that platform and are named in STATUS.json's "
+                         "windows-ci-tier2 item; tests/test_contracts.py fails when the two "
+                         "lists disagree, so an exclusion cannot be silent or permanent.")
     ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, metavar="SEC",
                     help="per-suite wall clock (default %g)" % DEFAULT_TIMEOUT)
     ap.add_argument("--allow-skips", action="store_true",
@@ -421,9 +427,18 @@ def main():
 
     patterns = args.select or [DEFAULT_SELECT]
     suites = discover(patterns)
+    dropped = []
+    if args.exclude:
+        def _matches(path):
+            rel = path.relative_to(REPO).as_posix()
+            return any(fnmatch.fnmatch(rel, pat) for pat in args.exclude)
+        dropped = [p for p in suites if _matches(p)]
+        suites = [p for p in suites if p not in dropped]
     if args.list:
         for path in suites:
             print(path.relative_to(REPO).as_posix())
+        for path in dropped:
+            print("excluded: %s" % path.relative_to(REPO).as_posix())
         return 0 if suites else 1
     if not suites:
         sys.exit("no suites match %s - a gate that discovers nothing is a red run"
@@ -451,6 +466,11 @@ def main():
     print("running %d suite(s) under %s (timeout %gs, logs %s)\n"
           % (len(suites), sys.executable, args.timeout, logdir))
     print("grading %s (sha256 %s)\n" % (shown, digest))
+    if dropped:
+        # Named, never silent: an exclusion the run does not state is a quieter gate, and the
+        # contract that keeps this list honest is tests/test_contracts.py against STATUS.json.
+        print("excluded %d suite(s): %s\n"
+              % (len(dropped), ", ".join(p.relative_to(REPO).as_posix() for p in dropped)))
 
     results = []
     leaks = []          # (suite, [paths it wrote into the checkout])

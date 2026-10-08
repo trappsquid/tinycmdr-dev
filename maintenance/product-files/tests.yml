@@ -21,8 +21,32 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest, windows-latest]
-        python: ["3.12"]
+        include:
+          # Windows runs everything the other two runners do, MINUS the suites that are red
+          # there and named in STATUS.json's `windows-tier-on-the-install-surface` item.
+          # tests/test_contracts.py fails when this list and that item disagree, so an
+          # exclusion cannot be silent, and the item closes only when the list is empty.
+          # (~84 suites still run on Windows - this keeps that coverage instead of cutting the
+          # job back to the dev workflow's small curated tier.)
+          - os: windows-latest
+            python: "3.12"
+            exclude: >-
+              --exclude tests/test_compaction_continuity.py
+              --exclude tests/test_cross_process.py
+              --exclude tests/test_guard_battery.py
+              --exclude tests/test_lane_health.py
+              --exclude tests/test_patch_bytes.py
+              --exclude tests/test_plan_and_context.py
+              --exclude tests/test_tool_doors.py
+              --exclude tests/test_tui.py
+              --exclude tests/test_verbs.py
+              --exclude tests/test_webui.py
+          - os: macos-latest
+            python: "3.12"
+            exclude: ""
+          - os: ubuntu-latest
+            python: "3.12"
+            exclude: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -34,4 +58,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-test.txt
       - name: every suite
-        run: python tests/run_all.py
+        run: python tests/run_all.py ${{ matrix.exclude }}

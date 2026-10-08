@@ -250,6 +250,40 @@ git -C "$PRODUCT_DIR" push --force origin main
 git -C "$PRODUCT_DIR" push --force origin "$TAG"
 
 say "create the release on the install surface, at the tag that tree carries"
+# ---- the surface's own CI has to be green before a release is attached to it ----------
+# This is the half that was missing: the wait above grades THIS tree, and the one a stranger
+# sees is the install surface's `tests` workflow, which nobody consulted - so v1.0.88 was
+# published while that surface's Windows job was red (measured 2026-10-08, the operator's
+# question). Refuse a red run on the commit just pushed, with one deliberate override.
+if [ "${TINYCMDR_SKIP_PRODUCT_CI:-0}" = "1" ]; then
+    echo "*** TINYCMDR_SKIP_PRODUCT_CI=1: publishing while $RELEASE_REPO's own tests are not checked" >&2
+else
+    PRODUCT_SHA="$(git -C "$PRODUCT_DIR" rev-parse HEAD)"
+    say "the install surface's tests must be green on $PRODUCT_SHA"
+    tries="${TINYCMDR_PRODUCT_CI_TRIES:-90}"      # 90 x 20s = 30 minutes
+    while :; do
+        rows="$(gh run list --repo "$RELEASE_REPO" --commit "$PRODUCT_SHA" --limit 10 \
+                    --json status,conclusion,name \
+                    --jq '.[] | "\(.status) \(.conclusion // "-")"' 2>/dev/null || true)"
+        if printf '%s\n' "$rows" | grep -qE '^completed (failure|cancelled|timed_out|startup_failure|action_required)'; then
+            echo "*** the install surface's tests are RED on $PRODUCT_SHA - refusing to publish:" >&2
+            printf '%s\n' "$rows" >&2
+            echo "    fix it (a suite the workflow excludes belongs in STATUS.json's windows item)" >&2
+            echo "    or publish deliberately with TINYCMDR_SKIP_PRODUCT_CI=1 and say why in the notes." >&2
+            exit 1
+        fi
+        if printf '%s\n' "$rows" | grep -q '^completed success'; then
+            echo "install surface: green on $PRODUCT_SHA"
+            break
+        fi
+        tries=$((tries - 1))
+        if [ "$tries" -le 0 ]; then
+            echo "*** no completed run for $RELEASE_REPO at $PRODUCT_SHA after the wait - refusing" >&2
+            exit 1
+        fi
+        sleep 20
+    done
+fi
 # `--verify-tag`: the release attaches to the tag the install surface already has, instead of
 # gh inventing one from that repo's default branch.
 gh release create "$TAG" \

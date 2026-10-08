@@ -16,6 +16,7 @@ maintenance/check-package-assets.py for archives) it lives there and is not repe
     python tests/test_contracts.py
 """
 import ast
+import json
 import re
 import sys
 from pathlib import Path
@@ -214,6 +215,34 @@ def main():
     check("...and the repo both installers download from",
           all(v == _release_repo for v in _fetch.values()),
           "%s vs %s" % (_release_repo, _fetch))
+
+    # ---- the install surface's Windows tier names exactly what it drops ------------------
+    # That workflow runs every shipped suite on three runners, and its Windows job excludes the
+    # suites that are red there. Two sides: the workflow's `--exclude` list, and the
+    # `windows_excluded` list on STATUS.json's open item for it. An exclusion nobody can see is
+    # a quieter gate, and this is what makes it visible: a name in one place only fails HERE.
+    _wf = (BASE / "maintenance" / "product-files" / "tests.yml").read_text(encoding="utf-8")
+    _wf_excluded = set(re.findall(r"--exclude\s+(tests/test_[\w]+\.py)", _wf))
+    _items = json.loads((BASE / "STATUS.json").read_text(encoding="utf-8"))["items"]
+    _tier = [it for it in _items
+             if it.get("id") == "windows-tier-on-the-install-surface"]
+    check("the install-surface tier is described by exactly one STATUS.json item",
+          len(_tier) == 1, [it.get("id") for it in _tier])
+    if _tier:
+        _item = _tier[0]
+        _named = set(_item.get("windows_excluded") or [])
+        check("the Windows workflow excludes exactly the suites the item names",
+              _wf_excluded == _named, sorted(_wf_excluded ^ _named))
+        check("every excluded suite is in the tree",
+              all((BASE / n).is_file() for n in _named),
+              sorted(n for n in _named if not (BASE / n).is_file()))
+        _priv = set((json.loads((BASE / "maintenance" / "product-manifest.json")
+                                .read_text(encoding="utf-8")).get("private_suites") or {}))
+        _priv = {"tests/%s.py" % k for k in _priv}
+        check("...and every one of them SHIPS (a private suite is not in the product at all)",
+              not (_named & _priv), sorted(_named & _priv))
+        check("the item is open, so the exclusions are live work and not a settled exclusion",
+              _item.get("state") == "open", _item.get("state"))
 
     print("\n%s" % ("all contract checks passed" if not FAILS
                     else "FAILED: %d" % len(FAILS)))

@@ -67,6 +67,31 @@ def gone(pid, seconds=10.0):
 def main():
     mod = load_runner()
 
+    # (d) --exclude drops a suite and SAYS so. The install surface's Windows job uses it for the
+    # suites that are red there (named in STATUS.json and kept in step by tests/test_contracts.py),
+    # so the mechanism itself is graded: it must drop exactly what it is told, keep everything
+    # else, and print the exclusion instead of shrinking the sweep quietly.
+    def listing(*args):
+        proc = subprocess.run([sys.executable, str(RUN_ALL), "--list", *args],
+                              capture_output=True, text=True, cwd=str(BASE))
+        rows = proc.stdout.splitlines()
+        return (proc.returncode, [r for r in rows if r.startswith("tests/")],
+                [r[len("excluded: "):] for r in rows if r.startswith("excluded: ")])
+
+    rc0, whole, _ = listing()
+    check("--list names every suite and nothing is excluded by default",
+          rc0 == 0 and len(whole) > 50 and not listing()[2], len(whole))
+    rc1, reduced, dropped = listing("--exclude", "tests/test_tui.py")
+    check("--exclude drops exactly the named suite, and says which",
+          rc1 == 0 and dropped == ["tests/test_tui.py"]
+          and "tests/test_tui.py" not in reduced and len(reduced) == len(whole) - 1,
+          (dropped, len(reduced), len(whole)))
+    rc2, globbed, dropped2 = listing("--exclude", "tests/test_st*py")
+    check("a glob drops every match, each one named",
+          rc2 == 0 and len(dropped2) > 1 and all(d.startswith("tests/test_st") for d in dropped2)
+          and len(globbed) == len(whole) - len(dropped2),
+          (dropped2, len(globbed), len(whole)))
+
     # (a) no env pick: the tree's own build, with its digest.
     saved = os.environ.pop("TINYCMDR_SRC", None)
     try:
