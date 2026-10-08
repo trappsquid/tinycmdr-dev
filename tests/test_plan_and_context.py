@@ -34,6 +34,20 @@ def check(cond, what, detail=""):
         print(f"ok   {what}")
 
 
+def named(block, path):
+    """True when `block` names `path` the way context_files_block actually renders it.
+
+    The block writes `<file path=%r>`, and `repr()` DOUBLES every backslash in the string - so
+    `str(p) in block` is false for any Windows path while it passes on POSIX, where a path
+    carries no backslash. That is how this suite's first check failed on windows-latest through
+    every release while passing here, and the cut's own record said one check failed (measured
+    2026-10-08 on the v1.0.88 release's product CI: 1 failing check before that release, 2
+    after, because a new check I added compared `str(p)` too). Compare the rendering, not the
+    path.
+    """
+    return repr(str(Path(path).resolve())) in block
+
+
 def main():
     workdir = Path(tempfile.mkdtemp(prefix="fbplan-"))
     try:
@@ -119,9 +133,26 @@ def main():
               "a shadowed CLAUDE.md is not read", rows)
 
         block = fb.context_files_block(deep)
-        check(str((deep / "AGENTS.md").resolve()) in block and "package rule" in block
+        check(named(block, deep / "AGENTS.md") and "package rule" in block
               and "LOCAL conventions" in block,
               "the block names the paths and labels them", block[-300:])
+        # The class the check above is an instance of, graded on a path whose rendering differs
+        # from `str()`: a backslash in a name is legal on POSIX and reproduces exactly the split
+        # Windows creates for every path, so this fails on ANY platform if the comparison slips
+        # back to `str(p)`.
+        odd_tree = Path(tempfile.mkdtemp(prefix="fbctx-odd-"))
+        (odd_tree / ".git").mkdir()
+        (odd_tree / "a\\b").mkdir()
+        (odd_tree / "a\\b" / "AGENTS.md").write_text("odd rule: name the file\n",
+                                                    encoding="utf-8")
+        odd = (odd_tree / "a\\b" / "AGENTS.md").resolve()
+        odd_block = fb.context_files_block(odd_tree / "a\\b")
+        check(str(odd) != repr(str(odd)),
+              "the fixture reproduces the rendering split (a backslash in the path)",
+              (str(odd), repr(str(odd))))
+        check(named(odd_block, odd) and "odd rule" in odd_block,
+              "...and the block names that path too", odd_block[-200:])
+        shutil.rmtree(odd_tree, ignore_errors=True)
 
         fb.CONFIG["agent"]["context_files_max_chars"] = 20
         block = fb.context_files_block(deep)
@@ -155,8 +186,7 @@ def main():
         (cut_tree / "pkg").mkdir()
         (cut_tree / "pkg" / "AGENTS.md").write_text("near rule: keep this\n", encoding="utf-8")
         starved = fb.context_files_block(cut_tree / "pkg")
-        check("NOT READ" in starved
-              and str((cut_tree / "pkg" / "AGENTS.md").resolve()) in starved,
+        check("NOT READ" in starved and named(starved, cut_tree / "pkg" / "AGENTS.md"),
               "a file the budget never reached is named as NOT READ", starved[-320:])
         fb.CONFIG["agent"]["context_files_max_chars"] = 4000
         shutil.rmtree(cut_tree, ignore_errors=True)
