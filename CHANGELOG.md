@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.90] - 2026-10-08
+
 ### Fixed
 - **A Windows path lost its backslashes before a delete was measured:** the command tokenizer used shlex's POSIX mode, so `rm -f C:\Users\me\report.docx` tokenised to `C:Usersmereport.docx`, the effect came back empty, and the delete ran with no confirmation on the platform whose paths are all backslashes; non-POSIX mode on Windows keeps the path (tests/test_guard_battery.py).
 - **Every door that asks a question now survives a stdin that cannot answer:** the Windows NUL device reports as a character device, so `isatty()` is True for a service, a scheduled task or `< NUL`; `setup`, `model setup` and the endpoint report's "set it up now?" all walked past their guard and died in `input()` with EOFError - each says its own piece now, and the "set it up now?" prompt reads EOF as no rather than as the empty answer, which means yes (tests/test_verbs.py).
