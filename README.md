@@ -164,7 +164,7 @@ tinycmdr web                            # print the tokenized link (opens a brow
 | `tools/<name>.py` or `<name>.tool.json` | callable next call; listed by name and shelf, descriptions one `find_tools` call away |
 | `create_tool` | the agent writes its own |
 
-Flat as it grows: ~5.9 characters of tool index per tool at 80 tools.
+Flat as it grows: ~5.7 characters of tool index per tool at 80 tools.
 
 ## Update
 

@@ -21,6 +21,7 @@ import importlib.util
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -47,6 +48,33 @@ def load_generator():
     sys.modules["tc_measured_block"] = mod
     spec.loader.exec_module(mod)
     return mod
+
+
+SCALE = BASE / "tests" / "tool_index_scale.py"
+# Both documents state this figure, and the generated doc's own gate reads only the doc:
+# README said ~5.9 while the doc said 5.7, and no check could tell (run 22, A-2026-10-07-58).
+PER_TOOL_RX = re.compile(r"([\d.]+) (?:chars|characters)(?:[^\n]{0,40})?per tool"
+                         r"(?:[^\n]{0,20})?at 80 tools")
+
+
+def measured_chars_per_tool():
+    """The index chars per tool at 80 tools, from the scale gate's own run. None on failure.
+
+    The number is measured against a staged tree by `tests/tool_index_scale.py`; asking that
+    tool rather than pinning a constant is what makes this a check on the DOCUMENTS.
+    """
+    out = subprocess.run([sys.executable, str(SCALE), "0", "80"], cwd=str(BASE),
+                         capture_output=True, text=True, timeout=300)
+    if out.returncode != 0:
+        return None
+    for line in out.stdout.splitlines():
+        fields = line.split()
+        if fields and fields[0] == "80" and len(fields) >= 10:
+            try:
+                return float(fields[9])
+            except ValueError:
+                return None
+    return None
 
 
 def _prose(doc):
@@ -188,6 +216,20 @@ def main():
     # skills/ is gitignored, this box holds two, and the doc claimed 43 in three places.
     per_host = re.findall(r"\d+ (?:prose )?skills", prose)
     check("the prose quotes no per-host skill count", not per_host, per_host)
+
+    # ---- the "flat as it grows" figure, in BOTH documents --------------------------------
+    # The generated doc's gate reads only the generated doc, so README's headline number could
+    # rot with nothing failing - and it had, by 0.2 (run 22, A-2026-10-07-58). Both are graded
+    # against the scale gate's own run, so the next tool-name change moves them together.
+    measured = measured_chars_per_tool()
+    check("the scale gate reports chars per tool at 80 tools", measured is not None, measured)
+    if measured is not None:
+        for path in (BASE / "README.md", DOC):
+            text = path.read_text(encoding="utf-8")
+            figures = PER_TOOL_RX.findall(text)
+            check("every 'per tool at 80 tools' figure in %s is measured" % path.name,
+                  bool(figures) and all(abs(float(f) - measured) < 0.05 for f in figures),
+                  "%s states %s; measured %.1f" % (path.name, figures, measured))
 
     print()
     if FAILS:
