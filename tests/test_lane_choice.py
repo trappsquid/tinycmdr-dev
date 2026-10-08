@@ -82,7 +82,7 @@ def stub_llm(answer="stub answer"):
     return srv, "http://127.0.0.1:%d/v1" % srv.server_address[1]
 
 
-def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None):
+def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None, config=True):
     """Run the harness in `dirpath` and return (exit_code, stdout+stderr+log).
 
     A child that SERVES (the page holds the process open) never exits on its own, so
@@ -92,11 +92,14 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None):
     unreliable, the page answering is not.
     """
     cfg = {"llm": llm or LLM}
+    if not config:
+        (dirpath / "config.json").unlink(missing_ok=True)
     if with_mm:
         cfg["mattermost"] = {"url": "chat.invalid", "scheme": "https", "port": 443,
                              "token": "", "allowed_users": ["u1"]}
         cfg["telegram"] = {"token": "", "allowed_users": ["4242"]}
-    (dirpath / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+    if config:
+        (dirpath / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     if tokens:
         (dirpath / ".env").write_text("".join(f"{k}={v}\n" for k, v in tokens),
                                       encoding="utf-8")
@@ -205,7 +208,7 @@ def serve_and_probe(dirpath, port, deadline=45):
 def main():
     work = Path(tempfile.mkdtemp(prefix="fblane-"))
     try:
-        for name in ("cli_only", "both", "mm_only", "tg_only", "health"):
+        for name in ("cli_only", "both", "mm_only", "tg_only", "health", "fresh"):
             d = work / name
             d.mkdir(parents=True, exist_ok=True)
             shutil.copy2(SRC, d / "tinycmdr.py")
@@ -255,6 +258,22 @@ def main():
             _srv.server_close()
         check(code == 0, f"...and a delivered answer still exits 0 ({code})", said[-300:])
         check("stub answer" in said, "with the answer on stdout", said[-300:])
+
+        # -- a box with NO config.json is told so at this door ----------------------
+        # The CLI/`--once` door deliberately runs without a config (it is the door that works
+        # on one) and it used to say nothing: a fresh install's first command drew a confident
+        # banner naming the shipped placeholder endpoint, and the only mention of config.json
+        # in the whole run was an unrelated warning (run 24, A-2026-10-07-70).
+        code, said = run(work / "fresh", args=("--no-web", "--once", "hi"),
+                         config=False, timeout=120)
+        check("config.example.json" in said and "no config.json" in said,
+              "a run with no config.json says so, and names the example to copy",
+              said[-400:])
+        check(code == 1,
+              "...and it still exits 1 (the shipped default endpoint answers nobody)", code)
+        code, said = run(work / "cli_only", args=("--no-web", "--once", "say hi"), timeout=120)
+        check("no config.json" not in said,
+              "a box WITH a config.json gets no such note", said[-300:])
 
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -

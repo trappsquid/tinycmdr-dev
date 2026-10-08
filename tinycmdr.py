@@ -35139,13 +35139,34 @@ def _cli_startup(app_mode, once=False):
         screen = tui_screen()
         if screen is not None:
             screen.status = "ready \u00b7 type a request \u00b7 /help lists the commands"
+        _missing_config_line(once)
         return
     if not once:
         cli_banner()
         print(dim("  type at any time: a line is sent in at the next step, "
                   "%s stop cancels the run,\n  Ctrl-C does the same. Nothing you "
                   "type is lost while it works.\n" % CMDR))
+    _missing_config_line(once)
     print(dim(capability_line("cli")))
+
+
+def _missing_config_line(once=False):
+    """The first-run note for a door that runs WITHOUT config.json, or nothing.
+
+    The console door deliberately does not refuse a box with no config (it is the door that
+    works on one), but it must not stay silent either: a fresh install's first command drew a
+    confident banner naming an endpoint nobody had set, and the only mention of config.json in
+    the whole run was an unrelated warning. The service lanes abort, `doctor` explains, and
+    this is the same sentence for the door most people walk through (run 24,
+    A-2026-10-07-70). On the `--once` path it goes to stderr: stdout is what automation parses.
+    """
+    if CONFIG_PATH.exists():
+        return
+    line = ("no config.json in %s yet: this run uses the shipped defaults, so the model "
+            "endpoint and the chat lanes are placeholders. Copy config.example.json to "
+            "config.json and set llm.base_url (a chat token goes in .env; `tinycmdr setup` "
+            "walks through both)." % BASE_DIR)
+    print(line, file=sys.stderr if once else sys.stdout)
 
 
 def _resolve_colour():
