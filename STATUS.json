@@ -2062,23 +2062,14 @@
     },
     {
       "id": "windows-tier-on-the-install-surface",
-      "title": "the Windows tier is declared in one file, not two lists",
+      "title": "every shipped suite is graded on Windows",
       "state": "open",
       "anchor": {
         "file": "tests/windows-tier.json"
       },
-      "windows_excluded": [
-        "tests/test_compaction_continuity.py",
-        "tests/test_cross_process.py",
-        "tests/test_guard_battery.py",
-        "tests/test_patch_bytes.py",
-        "tests/test_tool_doors.py",
-        "tests/test_tui.py",
-        "tests/test_verbs.py",
-        "tests/test_webui.py"
-      ],
-      "detail": "Repointed 2026-10-08. The tier lived as two hand-kept lists - the product workflow's `--exclude` names and the dev workflow's `--select` names - and they drifted exactly as such lists do: tests/test_lane_choice.py was run on Windows by the product's workflow alone, so a Windows-only crash in it reached the install surface untested. tests/windows-tier.json is now the one statement - `must` (graded on Windows in dev, every push), `scheduled` (the rest of what can run there: nightly and on demand), `excluded` (red there, with the reason), `not_applicable` (cannot run there and says so) - both workflows name `--tier`, and tests/test_contracts.py fails if a suite in the tree is not declared exactly once, if an exclusion carries no reason, or if this item and the file disagree. Two left the list on the strength of the dev Windows job: test_lane_health (the liveness probe was the defect) and test_plan_and_context (its fixture wrote a backslash name a Windows path cannot carry). What remains is a real defect each, not a platform impossibility: test_tui wants a console, test_verbs reads os.X_OK/st_mode/uid, test_cross_process deletes a lock file another process holds, test_patch_bytes refuses a character latin-1 cannot carry and checks file modes, test_guard_battery and test_tool_doors reference the shell without a platform branch, test_compaction_continuity needs a second look, test_webui checks file modes. Separate reason: tests/test_update_script.py cannot run on Windows at all - it executes update.sh, a POSIX shell script, and declares exit 77; run_all.py counts a skip as red on purpose, so it is named there instead.",
-      "gate": "a Windows box: fix them one at a time, drop the name from tests/windows-tier.json, and delete it here - the item closes when `excluded` is empty",
+      "windows_excluded": [],
+      "detail": "Repointed 2026-10-08. The tier now lives in one file (tests/windows-tier.json), read by tests/run_all.py --tier and named by both workflows, and the exclusions came OFF it: eight suites had been hidden from the Windows job by name, which was the fix for a public job that had been red for weeks and is not a fix. What Windows does in those areas was therefore ungraded, not known-broken - seven of the eight assume a POSIX platform (os.X_OK / os.access / os.chmod / st_mode, a POSIX shell, latin-1, a line console) and test_compaction_continuity carries no platform call at all. Each is red on Windows now and passes on its own commit: fix the suite's platform assumption, or the product where the platform is not the problem. The item closes when the Windows job is green with nothing excluded.",
+      "gate": "make each of the eight pass on Windows (the suite's assumption, or the product), one commit each - the item closes when `excluded` is empty and the Windows job is green",
       "windows_not_applicable": [
         "tests/test_update_script.py"
       ]

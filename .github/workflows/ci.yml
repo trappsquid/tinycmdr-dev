@@ -129,29 +129,6 @@ jobs:
       - name: gate (every suite that can run on Windows)
         run: python tests/run_all.py --jobs 3 --tier scheduled
 
-  # TEMPORARY: runs the Windows-excluded suites so each failure can be READ and fixed instead of
-  # hidden. Dispatch-only (it must not gate a push while it is red - that is the state it exists
-  # to clear), and it reads the same tier file as the real jobs, so there is no second list. It
-  # goes away with the last name in `excluded`: the runner says so when it runs empty.
-  windows-triage:
-    name: windows / the excluded suites (temporary, for fixing them)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: install requirements.txt
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-      - name: the suites Windows currently does not grade
-        run: python tests/run_all.py --jobs 2 --tier triage
-
   # The gate that keeps a leak OUT of the repo, rather than finding it in history later.
   # Same script the pre-push hook runs, over exactly what this push or PR adds: the working
   # tree, the blobs it introduces and the commit MESSAGES it introduces. That last half is

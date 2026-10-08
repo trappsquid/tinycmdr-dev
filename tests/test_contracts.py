@@ -236,7 +236,9 @@ def main():
         _val = _tier.get(_key)
         _buckets[_key] = set()
         _pats = _val if isinstance(_val, list) else sorted(_val or {})
-        if not _pats:
+        # `excluded` is the one bucket allowed to be EMPTY, and empty is the goal: a suite that
+        # cannot run on a platform says so in its own output, not in a list here.
+        if not _pats and _key != "excluded":
             check("the tier file declares %r" % _key, False, sorted(_tier))
         for _pat in _pats:
             _hits = {q.relative_to(BASE).as_posix() for q in BASE.glob(_pat)}
@@ -263,6 +265,8 @@ def main():
           sorted(_dev_expanded - (_buckets["must"] | _buckets["scheduled"])))
     for _key in ("excluded", "not_applicable"):
         _reasons = _tier.get(_key) or {}
+        if _key == "excluded" and not _reasons:
+            continue
         check("every %s suite carries a reason" % _key,
               _reasons and all(str(v).strip() for v in _reasons.values()),
               sorted(k for k, v in _reasons.items() if not str(v).strip()))
@@ -301,8 +305,11 @@ def main():
         _priv = {"tests/%s.py" % k for k in _priv}
         check("...and every one of them SHIPS (a private suite is not in the product at all)",
               not ((_named | _na) & _priv), sorted((_named | _na) & _priv))
-        check("the item is open, so the exclusions are live work and not a settled exclusion",
-              _item.get("state") == "open", _item.get("state"))
+        # An exclusion is live work, never a settled one: the item stays open while a name is
+        # listed. With the list empty, the item is the record of what was hidden and why it came
+        # back - and the Windows job is green with nothing excluded.
+        check("an exclusion stays live work (the item is open while one is listed)",
+              _item.get("state") == "open" if _named else True, _item.get("state"))
 
     print("\n%s" % ("all contract checks passed" if not FAILS
                     else "FAILED: %d" % len(FAILS)))

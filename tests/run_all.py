@@ -80,10 +80,6 @@ TIERS = {
     "scheduled": ("scheduled",),
     # what the install surface's windows job runs
     "windows": ("must", "scheduled"),
-    # TEMPORARY, and the only tier allowed to be empty: the suites `excluded` names, so the ones
-    # taken off the Windows gate can be read and fixed instead of hidden. It disappears with the
-    # last name in that list - the workflow's `windows-triage` job says the same thing.
-    "triage": ("excluded",),
 }
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
@@ -506,10 +502,6 @@ def main():
             print("excluded: %s" % path.relative_to(REPO).as_posix())
         return 0 if suites else 1
     if not suites:
-        if args.tier == "triage":
-            print("triage: nothing is excluded on Windows any more - delete the "
-                  "`windows-triage` job and the `triage` tier")
-            return 0
         sys.exit("no suites match %s - a gate that discovers nothing is a red run"
                  % ", ".join(patterns))
 
