@@ -226,6 +226,40 @@ def main():
             check(all(str(n) in raw_line for n in (window, static, reply, budget)),
                   f"w={window}: envelope_line names all five numbers: {line}")
 
+        # --- the "remaining" number must be the deduction the harness enforces -------------
+        # It deducted a bare volatile_context() while _compact deducted the session's own
+        # state AND the pending images, so the operator read a roomier number than the harness
+        # allowed - and the docstring claimed they were the same quantity (run 22, A-56).
+        env_line = at_window(fb, 32768)
+        s_key = "env-state-key"
+        st = fb.run_state(s_key, create=True)
+        st["plan"] = [{"id": 1, "text": "a step that rides every turn", "status": "open",
+                       "note": ""}]
+        _ded = getattr(fb, "_state_deduction", None)
+        check(callable(_ded),
+              "the envelope line and _compact share ONE deduction (A-56)")
+        if callable(_ded):
+            check(_ded(s_key) > _ded(None),
+                  "...and it counts the session's own block (%d vs %d)"
+                  % (_ded(s_key), _ded(None)))
+            check(_ded(s_key)
+                  == (fb.est_tokens(fb.volatile_context(session_key=s_key))
+                      + fb.pending_image_tokens(s_key)),
+                  "...one definition, images included")
+        bare = fb.envelope_line(env_line)
+        check("(no session state counted)" in bare,
+              "a line with no session says so, rather than reading as the enforced budget")
+        import inspect
+        takes_key = "session_key" in inspect.signature(fb.envelope_line).parameters
+        check(takes_key, "...and the line can be given the session the payload will carry")
+        if takes_key:
+            with_key = fb.envelope_line(env_line, session_key=s_key)
+            check("(no session state counted)" not in with_key,
+                  "...so with a key the marker is gone")
+        raw = fb.envelope_line(env_line, raw=True)
+        check("(no session state counted)" not in raw,
+              "the raw, script-facing line stays plain integers")
+
         # 32,768 is the review's worked example: the old 4,000 floor became 19,254.
         env32 = at_window(fb, 32768)
         check(32768 - static - min(reply_cfg, 32768 // 4) > 19000,

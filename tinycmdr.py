@@ -1715,18 +1715,42 @@ def static_prompt_tokens(session_key=None):
     return total
 
 
-def envelope_line(env, raw=False):
+def _state_deduction(session_key=None, atlas=False, shell=False, prior_unfinished=""):
+    """Tokens the trailing state block and the pending images will take off the budget.
+
+    ONE definition, used by `_compact` (which enforces it) and by `envelope_line` (which
+    reports it). They used to be two expressions: the line deducted a bare
+    `volatile_context()` while compaction deducted the session's own state block AND
+    `pending_image_tokens`, so "remaining" read optimistically by the size of a plan, a spill
+    index, an `always` runbook and any image in flight - and the line's docstring said the two
+    were the same deduction, which is why nobody checked (run 22, A-2026-10-07-56).
+    """
+    return (est_tokens(volatile_context(session_key=session_key, atlas=atlas, shell=shell,
+                                        prior_unfinished=prior_unfinished))
+            + pending_image_tokens(session_key))
+
+
+def envelope_line(env, raw=False, session_key=None, atlas=False, shell=False,
+                  prior_unfinished=""):
     """The five numbers an operator needs to see, in one line.
 
-    window / static / clamped reply / messages budget / remaining, where remaining
-    is the budget left once the trailing state block is counted (the same deduction
-    _compact makes). `raw` is for the script-facing `health` verb: plain integers.
+    window / static / clamped reply / messages budget / remaining, where remaining is the
+    budget left once the trailing state block and the pending images are counted - the same
+    `_state_deduction` `_compact` enforces.
+
+    With no `session_key` (the process-level status/health verbs, which have no session to
+    hand) the session-scoped half of that block cannot be counted, so the line SAYS SO rather
+    than printing a bigger number than the harness will allow: read that figure as an upper
+    bound on the room left.
     """
     fmt = (lambda n: str(int(n))) if raw else fmt_tokens
-    rem = max(0, int(env.get("budget") or 0) - est_tokens(volatile_context()))
+    rem = max(0, int(env.get("budget") or 0)
+              - _state_deduction(session_key, atlas, shell, prior_unfinished))
     line = ("window %s · static %s · reply %s · budget %s · remaining %s"
             % (fmt(env.get("window")), fmt(env.get("static")),
                fmt(env.get("reply")), fmt(env.get("budget")), fmt(rem)))
+    if not raw and not session_key:
+        line += " (no session state counted)"
     # Where the window came from, when it was not the endpoint: a guess and a pinned
     # number must not read like a server fact (an assumed window moves with the static
     # prompt, so two readings can disagree and neither is "the model's window").
@@ -18530,12 +18554,11 @@ class Agent:
         """
         # The images riding the next request are not in `messages` (by design),
         # so their cost has to be subtracted here or a session at the edge of its
-        # budget would push the request past the window.
+        # budget would push the request past the window. The same `_state_deduction`
+        # the operator's `envelope_line` reports, so the two cannot drift.
         _unf = self._prior_run_unfinished(key) if key else ""
         budget = (self._context_budget(key)
-                  - est_tokens(volatile_context(session_key=key, atlas=atlas,
-                                                shell=shell, prior_unfinished=_unf))
-                  - pending_image_tokens(key))
+                  - _state_deduction(key, atlas, shell, _unf))
         # 0) incremental reclamation first: blanking a superseded read does not cut the
         # front of history, so on the small-suffix path it is cache-safe and buys turns
         # before the deep cut (which resets the prefix) is needed at all.
