@@ -31,6 +31,7 @@ Runs **on the machine it manages**: you send a task, it uses real tools (`shell`
 | no way to hand files back and forth | page **uploads** (drag-drop/paste) and **downloads** for files the agent offers |
 | upgrade procedures per version | **one update command from every version**; host files never overwritten |
 | infrastructure sprawl | no database, no container, no daemon: one process, plain files |
+| an agent that idles hot, spins, or grows until it is restarted | **no busy-wait**: every long-lived loop waits on a socket, a queue or a timer — and a tool's output is capped, the overflow spilled to disk |
 | secrets leaking into prompts | tokens live in `.env` only; `config.json` never holds one |
 
 ## Doors

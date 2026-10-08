@@ -239,6 +239,10 @@ no framework        the framework it replaced cost 16K+ tokens before the first 
 one file            auditable end to end by one person; you can read the whole agent
 no database         sessions/jobs/notes/tasks are JSON/text next to the bot
 no daemon           the bot IS the process; systemd / launchd / a scheduled task supervises it
+no busy-wait        every long-lived loop waits on a socket, a queue, an event or a timer, so the
+                    process sits at rest between events instead of checking anything in a loop
+bounded growth      a tool's output is capped and the overflow spills to disk; history is trimmed
+                    in blocks; the log rotates, and the event logs roll at a size
 one bot per host    one token, one identity, one machine; DMs are unambiguous
 chat as the UI      Mattermost is the operator's existing tool; a bot account per machine
 prose skills        runbooks the agent reads when relevant, rather than code it must be rebuilt for
