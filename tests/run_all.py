@@ -502,27 +502,40 @@ def main():
         print("\nwhat went red:")
         for rel, status, _s, detail in reds:
             print("  %-5s %-40s %s" % (status, rel, detail))
-        # A suite that DIED carried its traceback on stderr, and the one-line reason above is
-        # only the traceback's LAST line - which hides the frame that matters. Print a bounded
-        # tail of its own log: this is what makes a platform-only crash (measured 2026-10-08:
-        # "TypeError: unsupported operand type(s) for +: 'NoneType' and 'str'", no frame, and
-        # no way to see it from a CI log) diagnosable at all. The per-suite logs live in the
-        # run's temp dir and are never uploaded anywhere, so nothing else can show them.
+        # The one-line reason above is whichever line matched first, which for a suite that
+        # FAILED but finished is often not even a failing check (measured 2026-10-08, on
+        # windows-latest: "27 passed, 2 failed" with the detail being an INFO line - the two
+        # checks were nowhere in the log). A crashed suite has no summary line, so it gets the
+        # tail of its own output instead.
         for rel, status, _s, detail in reds:
-            if "died before its own summary" not in detail:
+            if "died before its own summary" in detail:
+                for suffix in (".err", ".out"):
+                    try:
+                        lines = (logdir / (Path(rel).name + suffix)) \
+                            .read_text(encoding="utf-8", errors="replace").splitlines()
+                    except OSError:
+                        continue
+                    if not lines:
+                        continue
+                    print("\n  --- %s%s (last %d line(s) of its own output)"
+                          % (rel, suffix, min(12, len(lines))))
+                    for line in lines[-12:]:
+                        print("      " + line[:200])
                 continue
-            for suffix in (".err", ".out"):
-                try:
-                    lines = (logdir / (Path(rel).name + suffix)) \
-                        .read_text(encoding="utf-8", errors="replace").splitlines()
-                except OSError:
-                    continue
-                if not lines:
-                    continue
-                print("\n  --- %s%s (last %d line(s) of its own output)"
-                      % (rel, suffix, min(12, len(lines))))
-                for line in lines[-12:]:
-                    print("      " + line[:200])
+            try:
+                lines = (logdir / (Path(rel).name + ".out")) \
+                    .read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            fails = [ln.strip() for ln in lines if ln.strip().startswith("FAIL")]
+            if not fails:
+                continue
+            print("\n  --- %s: %d failing check(s)" % (rel, len(fails)))
+            for line in fails[:8]:
+                print("      " + line[:200])
+            if len(fails) > 8:
+                print("      ... and %d more (see %s)" % (len(fails) - 8,
+                                                          logdir / (Path(rel).name + ".out")))
         print()
 
     # Second half: a suite grades the build, not the checkout it runs from, so anything
