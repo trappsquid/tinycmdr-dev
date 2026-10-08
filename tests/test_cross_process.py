@@ -332,6 +332,36 @@ def test_the_instance_lock_is_not_a_deletable_file():
           "the busy note points at `tinycmdr status`, never at deleting the lock", note)
 
 
+def test_one_path_has_one_lock_whatever_the_case():
+    """A path has ONE lock however it is spelled, and the key folds case exactly where the
+    filesystem folds it.
+
+    normcase folds case on Windows only; macOS's default APFS is case-insensitive too
+    (measured 2026-10-07 on this box: `touch NOTES.md` then `test -e notes.md` answers
+    yes, so one file answers to both names). Two spellings of one file therefore took two
+    locks, two parallel tool calls both reported success, and one write was silently lost
+    - the lost update the per-path lock was added to prevent. The volume is ASKED (no probe
+    file is written), so a case-sensitive volume keeps two distinct keys, correctly.
+    """
+    fb = load()
+    lower = str(STAGE / "notes.md")
+    upper = str(STAGE / "NOTES.md")
+    folding = fb._volume_folds_case(str(STAGE))
+    check((fb._lock_key(lower) == fb._lock_key(upper)) == bool(folding),
+          "the lock key folds case exactly when the volume does",
+          (folding, fb._lock_key(lower)[-20:], fb._lock_key(upper)[-20:]))
+    check(fb._lock_key(lower) == fb._lock_key(str(STAGE / "." / "notes.md")),
+          "one path spelled two ways keys the same lock",
+          (fb._lock_key(lower)[-20:], fb._lock_key(str(STAGE / "." / "notes.md"))[-20:]))
+    check(fb._lock_key("") == "" and fb._lock_key(None) == "",
+          "a path-less caller keeps the empty key")
+    if folding:
+        check(fb._path_lock(lower) is fb._path_lock(upper),
+              "and two spellings of one file share ONE lock object")
+    else:
+        print("  (this volume is case-SENSITIVE: the fold is graded by the check above)")
+
+
 def main():
     stage()
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

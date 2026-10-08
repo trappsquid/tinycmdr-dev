@@ -202,8 +202,30 @@ Traps this project has actually paid for:
   ledger detail is refused before it can reach the remote.
 - **`git add -A` in a live tree takes host state** unless `.gitignore` covers it (that is how
   `*.log.*` got there).
-- The tag is created on the remote; `release.sh` fetches it back, and §1's
-  `N commit(s) past <tag> (UNRELEASED)` line is what tells you afterwards whether the cut landed.
+- **The tag is created on the remote; `release.sh` fetches it back, and §1's
+  `N commit(s) past <tag> (UNRELEASED)` line is what tells you afterwards whether the cut landed.**
+- **Everything I write is the fewest words that carry the fact.** A commit subject is <= 50
+  characters, `scope: what it does`; a body carries the *why*, the measurement or the test that pins
+  it - not an inventory of steps and not a restatement of the diff. A `CHANGELOG.md` entry is one
+  sentence on one line; `STATUS.json` details are one sentence; the release notes carry one sentence
+  per item. The instruction a rule gives is this file's business; the incident behind it is not.
+
+### The leak gate has to be armed
+
+`maintenance/leak-gate.py` grades three surfaces: the working tree, everything a push adds, and
+(`--history`) every reachable commit and blob. Three places publish from this tree and each one
+runs it, so arm the clone once and let the others follow:
+
+```bash
+bash maintenance/install-hooks.sh              # this clone: the full pre-push set
+bash maintenance/install-hooks.sh --leak-only  # just the gate (python3 + stdlib, no venv)
+```
+
+`tinycmdr doctor` prints `leak gate : armed` or `NOT ARMED - run maintenance/install-hooks.sh`.
+CI runs the same gate over exactly what a push or a PR adds (the `leak` job), and `release.sh`
+scans the range it is about to push. The patterns come from this host's private inventory
+(`maintenance/private_rules.py`, gitignored) or, on a runner, from the repository secret
+`TINYCMDR_LEAK_PATTERNS`; with neither, the job grades the shipped example and says so in its log.
 
 ## Looking at the page
 

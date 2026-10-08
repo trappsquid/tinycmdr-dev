@@ -20,10 +20,13 @@ me", and the bot's own log is where a failure is read.
     python  tinycmdr-supervise.py --once                       one lifetime, for tests
 
 A /restart inside the bot exits 75 (RESTART_EXIT_CODE) and is relaunched at once; any
-other exit is a crash and is retried with a growing backoff.
+other exit is a crash and is retried with a growing backoff. An exit 75 the bot made on
+its own carries no marker and is counted, so a self-restart loop stops after a few
+rounds instead of cycling for ever.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -44,6 +47,11 @@ BACKOFF_MAX = 60
 RAPID_EXIT_S = 30               # an exit sooner than this counts as a failed start
 FAILED_STARTS_BEFORE_STOP = 10  # rapid failed starts in a row: stop, make a human look
 STOPPED_EXIT_CODE = 4           # supervisor gave up; nothing will restart the bot
+
+RESTART_MARKER_FILE = LOGS / "restart-requested.json"  # the bot's /restart handover marker
+RESTART_MARKER_FRESH_S = 120    # an older marker is a past cycle, not this exit
+SELF_RESTARTS_BEFORE_STOP = 5   # unrequested 75s in the window below: stop the loop
+SELF_RESTART_WINDOW_S = 30 * 60  # the bound on those: 5 self-restarts per 30 min
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 CHILD_ARGS = []
@@ -126,22 +134,68 @@ def next_backoff(failures):
     return min(BACKOFF_MAX, BACKOFF_START * (2 ** max(0, failures - 1)))
 
 
-def respond_to_exit(code, uptime, failures):
-    """What one lifetime's exit means: (failures, delay_seconds).
+def consume_handover_marker(now=None):
+    """Was this exit 75 ASKED FOR? Reads and deletes logs/restart-requested.json.
 
-    A handover (/restart) is not a failure and is relaunched at once. Another instance
-    holding the bot's lock is not our failure either - wait and look again. A lifetime
-    that ran longer than RAPID_EXIT_S was healthy, so the failure count resets; a
-    shorter one is a failed start and grows the backoff, up to
-    FAILED_STARTS_BEFORE_STOP in a row - after that the ladder STOPS (delay 0) rather
-    than retrying a broken install or an ambiguous config every 60 s for ever.
+    The bot writes that file (with the epoch it left at) only on a handover it was
+    told to make - a /restart inside the bot - and never on the watchdog path that
+    restarts a deaf listener. So a fresh marker is the difference between "a human
+    is watching, relaunch at once for ever" and "the bot restarted itself", which
+    the stop-the-loop ladder below MUST count. The marker is consumed either way so
+    a later cycle cannot read the same request twice; one older than
+    RESTART_MARKER_FRESH_S is a leftover from a past cycle and does not exempt this
+    exit. Never raises: an unreadable or malformed marker just means "not asked".
+    """
+    now = time.time() if now is None else now
+    try:
+        data = json.loads(RESTART_MARKER_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    try:
+        RESTART_MARKER_FILE.unlink()
+    except OSError:
+        pass
+    try:
+        at = int(data["at"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return 0 <= now - at <= RESTART_MARKER_FRESH_S
+
+
+def _bump_self_restart(count, window_start, now=None):
+    """Count a self-restart, or start a fresh window when the last one has run out."""
+    now = time.time() if now is None else now
+    if not window_start or now - window_start > SELF_RESTART_WINDOW_S:
+        return 1, now
+    return count + 1, window_start
+
+
+def respond_to_exit(code, uptime, failures, self_restarts=0, window_start=0.0, now=None):
+    """What one lifetime's exit means: (failures, self_restarts, window_start, delay).
+
+    A handover (/restart) is not a failure and is relaunched at once; it is also the
+    only exit 75 taken on trust, and only while its marker is fresh - it resets both
+    ladders, because a human is watching. An exit 75 with no marker (or a stale one)
+    is the bot restarting itself, and that IS counted, on its own much shorter
+    ladder: SELF_RESTARTS_BEFORE_STOP restarts inside SELF_RESTART_WINDOW_S and the
+    loop STOPS (delay 0) instead of cycling for ever. Another instance holding the
+    bot's lock is not our failure either - wait and look again. A lifetime that ran
+    longer than RAPID_EXIT_S was healthy, so the failure count resets; a shorter one
+    is a failed start and grows the backoff, up to FAILED_STARTS_BEFORE_STOP in a row
+    - after that the ladder STOPS (delay 0) rather than retrying a broken install or
+    an ambiguous config every 60 s for ever.
     """
     if code == RESTART_EXIT_CODE:
-        return 0, 1
+        if consume_handover_marker(now):
+            return 0, 0, 0.0, 1
+        self_restarts, window_start = _bump_self_restart(self_restarts, window_start, now)
+        if self_restarts >= SELF_RESTARTS_BEFORE_STOP:
+            return failures, self_restarts, window_start, 0
+        return failures, self_restarts, window_start, 1
     if code == LOCKED_EXIT_CODE:
-        return failures, 30
+        return failures, self_restarts, window_start, 30
     if uptime > RAPID_EXIT_S and code == 0:
-        return 0, BACKOFF_START
+        return 0, self_restarts, window_start, BACKOFF_START
     failures += 1
     if uptime <= RAPID_EXIT_S and failures >= FAILED_STARTS_BEFORE_STOP:
         # A start that dies at once, over and over, is not a crash to retry: it is a
@@ -149,8 +203,8 @@ def respond_to_exit(code, uptime, failures):
         # reason is printed once in bot-stdout.log and never acted on. The old ladder
         # retried it every 60 s for ever - 5,368 times over four days on a live host
         #. delay 0 means stop; main says why and exits.
-        return failures, 0
-    return failures, next_backoff(failures)
+        return failures, self_restarts, window_start, 0
+    return failures, self_restarts, window_start, next_backoff(failures)
 
 
 def _last_start_words(limit=6):
@@ -181,6 +235,8 @@ def main(argv):
     if once:
         CHILD_ARGS.remove("--once")
     failures = 0
+    self_restarts = 0
+    self_window = 0.0
     while True:
         try:
             code, uptime = run_once()
@@ -190,13 +246,23 @@ def main(argv):
         except Exception as e:                                    # noqa: BLE001
             code, uptime = -1, 0
             log("could not run the bot: %s" % e)
-        failures, delay = respond_to_exit(code, uptime, failures)
+        failures, self_restarts, self_window, delay = respond_to_exit(
+            code, uptime, failures, self_restarts, self_window)
         if once:
             return code if isinstance(code, int) and code >= 0 else 1
         if delay <= 0:
-            log("bot failed to start %d times in a row (last code=%s, uptime=%ds) - "
-                "NOT retrying until a human looks. Last words from the bot:"
-                % (failures, code, uptime))
+            if code == RESTART_EXIT_CODE:
+                # Measured 2026-10-07: a deaf bot restarted itself and went deaf again,
+                # one restart every ~15 min, with the ladder blind to it because every
+                # 75 was treated as a human handover. A self-restart loop is not a
+                # failed start to retry slowly; it is the bot saying it cannot run.
+                log("bot restarted itself without being asked %d times in %d min - "
+                    "a human must look before it runs again. Last words from the bot:"
+                    % (self_restarts, SELF_RESTART_WINDOW_S // 60))
+            else:
+                log("bot failed to start %d times in a row (last code=%s, uptime=%ds) - "
+                    "NOT retrying until a human looks. Last words from the bot:"
+                    % (failures, code, uptime))
             for line in _last_start_words():
                 log("  | %s" % line)
             return STOPPED_EXIT_CODE

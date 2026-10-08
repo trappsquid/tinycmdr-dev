@@ -9,7 +9,10 @@ its journal and its .md mirror, tinycmdr.log, tools-provenance.json, probe files
 tests/sessions/ - and nothing measured it. This measures it at the level that matters: ANY
 file created, deleted or changed by a run whose whole job is to report the state of the code.
 
-__pycache__ is ignored (a Python import artifact, regenerated at will), .git obviously is.
+__pycache__ is ignored (a Python import artifact, regenerated at will), .git obviously is,
+and so is a local venv/: it is 3,415 of this checkout's 3,688 files, and a `pip install` in
+another terminal during the run was reported as a write the gate caused. The rule is about
+the SOURCE tree, and "the tree" means what `git status --ignored=matching` sees.
 
 Exit 0 = the tree came back unchanged; 1 = the runner failed, or something in the tree moved;
 2 = the run itself could not happen. Run it with the interpreter the suites use (the runner
@@ -22,7 +25,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SKIP_DIRS = (".git", "__pycache__")
+SKIP_DIRS = (".git", "__pycache__", "venv")
 
 
 def snapshot():

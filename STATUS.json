@@ -22,7 +22,7 @@
       "detail": " /api/chat drives the conversation the body names, registers its run atomically (_web_claim_run under WEB_RUNS_LOCK; simultaneous POSTs get 409), touches the registry; WEB_REGISTRY_MAX=200 aggregate with the shared conversation protected; the runlog appends one line per checkpoint (compaction past WEB_RUNLOG_COMPACT_AT, view-side dedup/caps); downloads honour Range (206/416) and carry RFC 5987 filename*; one _asset helper with mtime/size ETags (304) serves the five asset routes and survives a vanished file; the CSS themes once per (mtime,size) and revalidates; platform-reserved upload names are rewritten and an unwritable name answers 400 instead of dropping the socket; drop_line keeps uids the page holds; out-of-range edits log a warning; web.port 0 probes the recorded port; JSON replies are UTF-8. 27 checks red on the pre-fix snapshot.",
       "state": "shipped",
       "anchor": {
-        "commit": "9e88cda",
+        "commit": "a57d1b7",
         "expect": "tagged"
       }
     },
@@ -32,7 +32,7 @@
       "detail": " chunked 411 (closed), over-cap 413, stall 408, nonsense Content-Length 411, target cap 414 (WEB_TARGET_MAX 4096), loopback's own connection cap (MAX_CONN_EXEMPT 256), the pre-auth 403 no longer names the port or a tunnel recipe, [::1]/trailing-dot Hosts resolve, the origin-mismatch 403 explains itself, a 401 clears a stale cookie, _query() decodes per the URL spec, first duplicate key wins, upper-case session keys fold, plus the fixes' checks.",
       "state": "shipped",
       "anchor": {
-        "commit": "09a4093",
+        "commit": "eab4452",
         "expect": "tagged"
       }
     },
@@ -41,7 +41,7 @@
       "title": "an offline window costs ~1650 process restarts, one every 10s",
       "state": "shipped",
       "anchor": {
-        "commit": "3d6a653",
+        "commit": "1fd7895",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (3d6a653), merged to main. The lane start is retried in this process on tinycmdr-supervise.py's own curve and reset rule (5/10/20/40/60s, LANE_BACKOFF_START/MAX/RAPID_EXIT_S pinned to the supervisor's constants by tests/test_lane_health.py, so the two policies cannot drift), for both lanes, with one log line per state change and lane_down() kept accurate so health and logs/state.json stay meaningful. SystemExit passes straight through, so a missing token, a broken config and a token the API refused still exit, and /restart still exits 75. The unit and the plist keep a fixed delay as the CRASH backstop, raised 10 -> 60s, with the reason in each file. Audited and fixed: Measured 2026-09-30 on the Mac: the configured Mattermost host stopped resolving at 00:15:33 and the LAN model endpoint was unreachable with it, so run_bot() raised, main() re-raised by design (tinycmdr.py ~22346), and launchd's KeepAlive{SuccessfulExit: false} with ThrottleInterval 10 respawned the process every ~10s until the network returned at ~05:00:21 - 1654 startups of a 22k-line module, each printing the capabilities banner and one lane-down line. The 'one line per STATE, not per attempt' rule at ~22344 is what kept the log to 1654 lines instead of 1654 times N; it did not stop the restarts. Nothing was lost (jobs.json is empty, so no scheduled work was due), but the window is deterministic for this host rather than bad luck, and it repeats nightly.",
@@ -62,7 +62,7 @@
       "title": "tinycmdr.log.1 was not covered by .gitignore",
       "state": "shipped",
       "anchor": {
-        "commit": "0c1c7ab",
+        "commit": "348f26d",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (0c1c7ab). The rules covered logs/ and *.log, but a rotated file keeps a numeric suffix and `*` stops at the dot, so tinycmdr.log.1 (5 MB, rotated 00:08) sat in the live tree as untracked-and-visible and a `git add -A` would have committed a host log - which is why every commit in the 1.0.41 batch had to be path-scoped. *.log.* covers the rotation shapes (tinycmdr.log.1, tinycmdr.log.2026-09-30, logs/x.log.2) and leaves the exact-name rule as it was.",
@@ -73,7 +73,7 @@
       "title": "test_telegram goes red on any box whose .env carries a chat token",
       "state": "shipped",
       "anchor": {
-        "commit": "efadc5d",
+        "commit": "7d6b587",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (efadc5d), merged to main in the 1.0.41 batch. the check neutralises the two token env names it grades, restored afterwards. Audited and fixed: The check 'one door is not a warning' edits CONFIG and asserts both_doors_note() == '', but _mm_token_configured() falls back to os.environ['TINYCMDR_MM_TOKEN'], which a real install's .env supplies and the fixture cannot clear - so the predicate stays true and the refusal note comes back. Measured 2026-09-29: 41 passed, 1 failed; the same suite is 42/42 on a clean clone of HEAD, and on a copy of HEAD with the working diff applied, so the suite grades the host rather than the rule. It is the class tests/hermetic.py was written for.",
@@ -84,7 +84,7 @@
       "title": "a per-host tool with no category is red in test_tool_discovery",
       "state": "shipped",
       "anchor": {
-        "commit": "efadc5d",
+        "commit": "7d6b587",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (efadc5d), merged to main in the 1.0.41 batch. the rule grades the tools THIS repository carries (asked of git) and names the host tools it did not grade. Audited and fixed: The check 'every tool files on a shelf (nothing strays into `other`)' enumerates the REGISTERED tools, which on a real box includes the per-host tools/ drop-ins. Measured 2026-09-29: two of them land in `other` and the suite is 130 passed, 1 failed; a clean clone carries only the shipped example tools, where it is 129/129. The red is host data, not the tree - but it means the gate is not green on a working box, which is what a reader assumes 'the gate' means.",
@@ -95,7 +95,7 @@
       "title": "a 400 naming max_tokens is fatal, and the error blames the key",
       "state": "shipped",
       "anchor": {
-        "commit": "dfc3c55",
+        "commit": "e597fce",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (dfc3c55), merged to main in the 1.0.41 batch. a 400 naming max_tokens is retried once on the same endpoint as max_completion_tokens with the same value (dropping it would remove the envelope clamp); a second 400 is still fatal. Audited and fixed: CONFIRMED 2026-09-29. max_tokens rides whenever cap is set (13008-13009), and cap is >= 1 on every envelope branch; the named-field 400 retry scans only stream_options, chat_template_kwargs, return_progress, sse_ping_interval and stream (13082-13085); an unsupported-parameter body matches no _CONTEXT_OVERFLOW_RE pattern and 400 is in FATAL_STATUS (1369), so the run dies telling the operator to check the key, model id and base_url (13256) - all three of which are right. The reviewer's 13037 was a stale line number.",
@@ -106,7 +106,7 @@
       "title": "Telegram swallows a second chat's message, and can lose a /stop",
       "state": "shipped",
       "anchor": {
-        "commit": "8436501",
+        "commit": "ea62355",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (8436501), merged to main in the 1.0.41 batch. dedupe keyed on (chat_id, message_id); submit() mints the cancel event, the queue item carries it, and the worker adopts it instead of overwriting the slot. Behaviour note: a /stop now also cancels a message already queued behind the live run; each affected run reports stopped, and the slot is popped when the run finishes, so the chat keeps working. Audited and fixed: CONFIRMED 2026-09-29. self.seen is a flat deque of bare message ids (18333) and handle() drops a repeat unconditionally (18459-18463) - Telegram ids are per-chat, so two allowed users' identical ids collide silently. Separately, submit() pre-creates poller.cancel[chat_id] (18634) and the worker overwrites it with a fresh Event (18576-18582), so a /stop landing in that window is discarded. The document's related clause (a /stop while another task is queued stops the RUNNING one) is normal behaviour, not this bug.",
@@ -117,7 +117,7 @@
       "title": "a hard-wedged run keeps the session lock, so the respawned worker blocks forever",
       "state": "shipped",
       "anchor": {
-        "commit": "f9820ba",
+        "commit": "36e9c48",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (f9820ba), merged to main in the 1.0.41 batch. run() takes the session lock with a deadline (Agent._run_lock_wait_secs, 60s) and on expiry ANSWERS with the /tinycmdr restart force guidance instead of blocking; the wedged run's lock is never touched (a plain Lock has no force-release). Key rotation was the alternative and was rejected: it would hand the backlog a different session. Residual: a second run that legitimately shares the session and runs longer than 60s now fails fast with that message rather than waiting. Audited and fixed: CONFIRMED end to end 2026-09-29. run() holds self._lock(session_key) for the whole run (13467); _lock is a bare threading.Lock with no acquire timeout (12404-12405); the abandon path pops active/running and respawns a worker only when the queue is non-empty (17022-17046) and releases nothing, and reset() never pops a lock either. The fresh worker blocks in run() forever, and the message telling the operator it is picking up their queue is false. Two corrections to the finding: the respawn is conditional, and after it new text is STEERED into the dead run (16933-16940) rather than queued, so the operator is never even shown the queued-behind notice. /restart force on the listener thread (16872-16886) is the only real out.",
@@ -128,7 +128,7 @@
       "title": "the 429 retry sleep ignores cancel_event",
       "state": "shipped",
       "anchor": {
-        "commit": "dfc3c55",
+        "commit": "e597fce",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (dfc3c55), merged to main in the 1.0.41 batch. the wait is sliced in 0.25s steps against cancel_event and raises OperatorStop, mirroring _post_watchdog. Audited and fixed: CONFIRMED 2026-09-29 at 13111-13112 (not 13087). One unconditional time.sleep(wait) in _chat, while _post_watchdog promises a /stop lands within a quarter second (1712). cancel_event is already in scope. Nuance the finding misses: wait comes from the Retry-After header, so it is 0 without one, 60 is a cap, and it happens at most once per call.",
@@ -139,7 +139,7 @@
       "title": "one transient mid-stream break blacklists streaming for the process",
       "state": "shipped",
       "anchor": {
-        "commit": "dfc3c55",
+        "commit": "e597fce",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (dfc3c55), merged to main in the 1.0.41 batch. StreamFailed now carries not_a_stream, and only the no-SSE cause blacklists the URL or clears stream_on. Deliberate reading: the SAME-CALL retry is still sent non-streaming (bounded); what the finding was about - the process-lifetime blacklist and the other endpoints in the call - is fixed. Audited and fixed: PARTIAL 2026-09-29. All four StreamFailed raises (1979 no first byte, 1982 idle gap, 2129 mid-stream break, 2138 no SSE data) reach one handler that adds the URL to the process-global _STREAM_UNSUPPORTED and sets stream_on = False (13054-13058), which also suppresses stream for the remaining failover endpoints in that call. Real, but the finding overstates one consequence: cancel latency is unaffected (the watchdog slices at 0.25 s regardless of streaming); what is lost is live progress display and the socket hang-up that stops a trickling server.",
@@ -150,7 +150,7 @@
       "title": "the locality cache never expires, so the egress gates can be stale",
       "state": "shipped",
       "anchor": {
-        "commit": "dc16cd2",
+        "commit": "5bf0c16",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (dc16cd2), merged to main in the 1.0.41 batch. the cache stores (verdict, at) and a hit older than WINDOW_TTL (300s) is a miss. Audited and fixed: CONFIRMED 2026-09-29. _LOCAL_URL_CACHE is read and written with no TTL, eviction or size bound (1288, 1313-1316) and fronts the failover filter (12920, 12929), search and fetch egress (7008, 7087) and the llama.cpp extension decision (2468, 2400). Correction: the trigger is a DNS re-pointing of a HOSTNAME - an IP literal is its own cache key and never re-resolves, so DHCP renumbering of one is inert. Reverse staleness (remote cached, later local) is the harmless direction. WINDOW_TTL = 300 at 1599 is the in-tree precedent.",
@@ -161,7 +161,7 @@
       "title": "a key added after startup is never scrubbed",
       "state": "shipped",
       "anchor": {
-        "commit": "dc16cd2",
+        "commit": "5bf0c16",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (dc16cd2), merged to main in the 1.0.41 batch. _SECRETS is re-derived at the end of _verb_config, _config_take_effect and run_setup; _env_set was deliberately left alone (giving .env keys to os.environ mid-process would widen what an in-process load_config honours). Audited and fixed: PARTIAL 2026-09-29. _SECRETS = _secret_values() runs once at import (2532) and nothing re-derives it: config set ends at CONFIG.update(back) (20857), model add ends at _config_take_effect (20643-20651), run_setup updates CONFIG (19134) and writes .env through _env_set (21378) without touching os.environ. The finding's named vector is wrong, though: model add takes --key-env NAME only and never an inline key. The real vectors are config set llm.api_key <value> and config set llm.fallbacks with an inline key (both allowed because the secret guard skips the llm section), plus setup keys that only ever reach .env.",
@@ -172,7 +172,7 @@
       "title": "run_capture's output directory is world-readable on a shared host",
       "state": "shipped",
       "anchor": {
-        "commit": "f115855",
+        "commit": "3be7e7d",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (f115855), merged to main in the 1.0.41 batch. os.chmod(run_dir, 0o700) right after the mkdir; the test asserts the mode (a plain mkdir is 0755 under umask 022). Audited and fixed: CONFIRMED 2026-09-29 for Linux shared hosts. run_capture makes tempfile.gettempdir()/tinycmdr-runs with mkdir and no mode (4485-4486) and writes .out/.err through plain open (4508), so umask 022 leaves the directory 0755 and the files 0644 under a world-readable /tmp; kept outputs are pruned only by a LATER call, after 86400 s (4562-4565). On macOS gettempdir() is the per-user 0700 $TMPDIR, which neutralises it - the fleet's primary platform is not exposed. The installer's umask 077 does not persist into the launchd-run bot.",
@@ -183,7 +183,7 @@
       "title": "the session loader reads *.carry.json as phantom sessions",
       "state": "shipped",
       "anchor": {
-        "commit": "b122f6c",
+        "commit": "6fcb29a",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (b122f6c), merged to main in the 1.0.41 batch. the loader glob skips *.carry.json. Audited and fixed: CONFIRMED 2026-09-29. Agent.__init__ reloads SESSIONS_DIR.glob('*.json') (12381) into self.histories keyed by f.stem, and a carry sidecar is written as <safe>.carry.json (10739-10741, saved 10766-10769), so histories['x.carry'] holds a dict. No iteration of histories exists today (init, _history, _trim_history, reset all key in), so it is dead memory - and a trap for the next for-k loop, which search_sessions already documents for these same sidecars (8578-8586).",
@@ -194,7 +194,7 @@
       "title": "Agent.locks grows for the life of the process",
       "state": "shipped",
       "anchor": {
-        "commit": "b122f6c",
+        "commit": "6fcb29a",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (b122f6c), merged to main in the 1.0.41 batch. reset() pops the session's lock when it is not held (a held one is left alone - an abandoned worker may still own it). Audited and fixed: CONFIRMED 2026-09-29. _lock does self.locks.setdefault(key, threading.Lock()) (12404-12405) and nothing anywhere removes a key: reset() pops histories, model_overrides, carry, run_state, reveals and spills but not locks (14669-14698). The finding misses the punchline: delegate_task mints sub-<epoch> and calls AGENT.reset(key) on it (8690, 8720) - the throwaway-session call is exactly the one that should reclaim the lock and does not.",
@@ -205,7 +205,7 @@
       "title": "tool_remember carries the notes lock twice",
       "state": "shipped",
       "anchor": {
-        "commit": "b122f6c",
+        "commit": "6fcb29a",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (b122f6c), merged to main in the 1.0.41 batch. one decorator (the existing race suite pins the lock either way). Audited and fixed: CONFIRMED 2026-09-29 at exactly 7394-7395. Harmless by design: _path_lock hands back one cached _FileLock per path (6437, 654) and _FileLock is reentrant per thread, and its own docstring names this incident (6307-6309). Pure cruft - but the cost of leaving it is that a future reader cannot tell the redundancy was intentional.",
@@ -216,7 +216,7 @@
       "title": "ask_user_wait_seconds and stall_abandon_minutes are never compared",
       "state": "shipped",
       "anchor": {
-        "commit": "f115855",
+        "commit": "3be7e7d",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (f115855), merged to main in the 1.0.41 batch. doctor reports the pair when the ask cap exceeds the abandon window, and stays silent with the watchdog disabled. Audited and fixed: CONFIRMED 2026-09-29. The ask cap is min(ask_user_wait_seconds or 120, 900) (9230-9236) and abandon is stall_abandon_minutes or 20 (452), and nothing validates the pair: config set checks only dotted-key shape, secret names and boolean types (20759-20860); validate_startup_config checks chat-lane preconditions only (21584-21700); doctor has no cross-key check (20450-20623). Defaults are safe (120 s vs 20 min). A run parked on a human whose cap exceeds the abandon is cancelled mid-question (17027 sets the run's events, ask_operator returns stopped at 9404-9410). Note for the fix: with the watchdog disabled (stall_abandon_minutes <= 0, 16552) there is nothing to clamp against.",
@@ -227,7 +227,7 @@
       "title": "the doc says execute_code runs in-process; it runs in a subprocess",
       "state": "shipped",
       "anchor": {
-        "commit": "a343f00",
+        "commit": "0144947",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (a343f00), merged to main in the 1.0.41 batch. the table says subprocess; test_measured_doc asserts it in both directions (no in-process claim, and the subprocess call is still there). Audited and fixed: CONFIRMED 2026-09-29. docs/tinycmdr-what-it-is.md:49 advertises 'run Python in-process for parsing, math, log wrangling' while the tool runs [sys.executable, -c, code] (tinycmdr.py:5615) under a timeout. The subprocess is the better design - it is killable and cancel-aware - so the doc undersells it rather than overselling.",
@@ -238,7 +238,7 @@
       "title": "the installers never verify the SHA256SUMS they ship beside",
       "state": "shipped",
       "anchor": {
-        "commit": "c92b750",
+        "commit": "7955568",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (c92b750), merged to main in the 1.0.41 batch. install.sh fetches SHA256SUMS, picks this asset's line and refuses a corrupt or truncated transfer before unpacking; no sums file, or one that omits the asset, is refused too, with TINYCMDR_NO_SUMS=1 as the deliberate way past. Audited and fixed: CONFIRMED 2026-09-29. Neither install.sh nor install/install-tinycmdr.sh mentions SHA256SUMS, sha256 or shasum anywhere, so the curl-into-bash path - the one the README leads with - unpacks whatever arrived while the README's sha256sum -c step stays manual. Releases are unsigned, so the sums only catch corruption or truncation; that is exactly the case the pipe-to-shell path handles worst.",
@@ -249,7 +249,7 @@
       "title": "a zombie batch worker writes into a later turn's results",
       "state": "shipped",
       "anchor": {
-        "commit": "f9820ba",
+        "commit": "36e9c48",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (f9820ba), merged to main in the 1.0.41 batch. the four per-turn buffers ride in as default arguments, so a late worker can only write into its own turn's list. Pinned source-level: the batch deadline is ~440s, so the race cannot be driven in a test; the suite already pins that worker's stop guard the same way. Audited and fixed: CONFIRMED 2026-09-29, narrower than described. work(i, tc) is a nested def in the same frame as the per-turn buffers (14155-14160) and the for-loop creates no scope, so every turn's closure shares one cell; ex.shutdown(wait=False, cancel_futures=True) (14299) deliberately lets a hung worker outlive its batch, and cancel_futures only cancels not-yet-started ones. The later list is live only until its own batch completes (roughly its own duration), and the concrete damage is an orphan tool message plus '[HARNESS: no result was recorded for this call...]' padding for the current call (12203, 12240) - with an IndexError if the stale index exceeds the later list's length.",
@@ -260,7 +260,7 @@
       "title": "prompt assembly can write notes.md (and measurement can too)",
       "state": "shipped",
       "anchor": {
-        "commit": "84bbb4f",
+        "commit": "c74671f",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (84bbb4f), merged to main in the 1.0.41 batch. the read path no longer calls curate_notes: it bounds what the PROMPT sees (newest cap chars, with a marker) and leaves the file byte-identical; the write path is unchanged. Audited and fixed: CONFIRMED 2026-09-29, with reach understated. volatile_context() calls curate_notes('prompt over budget') and re-reads the file when notes exceed the cap (11547-11551); curation is safe today (whole read-modify-write under the notes lock, 7301-7305). What the finding misses is that volatile_context() is also called purely to ESTIMATE: compaction (12818) and status/estimation paths (1447, 18794), so a disk write plus an inter-process flock can fire from measurement, not only assembly. Trigger is abnormal only (notes are bounded at write time).",
@@ -271,7 +271,7 @@
       "title": "a cloud endpoint is driven at an assumed 8k window",
       "state": "shipped",
       "anchor": {
-        "commit": "2f46e9c",
+        "commit": "767e413",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (2f46e9c), merged to main in the 1.0.41 batch. doctor names the lever for a non-LAN endpoint on an assumed window (llm.max_context_tokens, with the provider's documented window), setup says the same thing where it configures such an endpoint, and config.example.json's window_profiles comment now says a band CAPS character budgets and never widens the window. Kept deliberately: no second log warning (the existing one already names the key), and no window_profiles behaviour change - it cannot widen a window. Residual: a genuinely unreachable non-LAN endpoint now gets the window advice instead of the old did-not-answer line; the wording is neutral about which case it is. Audited and fixed: PARTIAL 2026-09-29. Detection fails on OpenAI-style endpoints (no max_model_len, no /props), so the envelope takes budget=8000, reply=min(cfg_max or 2048, 2048) (12638-12639) - the numbers are right. Two corrections: it is not silent (log.warning 12641 names llm.max_context_tokens, and doctor reports the endpoint as NO ANSWER with a problem, 20532-20535), and the suggested fix is misaimed - window_profiles caps character budgets by detected window band and cannot widen the assumed window; only llm.max_context_tokens can. Side effect worth knowing: the example config's 16384 band then applies small-model character caps to a cloud user.",
@@ -282,7 +282,7 @@
       "title": "the envelope is measured against the primary endpoint and reused on failover",
       "state": "shipped",
       "anchor": {
-        "commit": "f1047ea",
+        "commit": "e08909f",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (f1047ea), merged to main in the 1.0.41 batch. _endpoint_window caches per server root with a per-entry TTL, _envelope is valid only for the same session AND endpoint, each failover request is sized to the endpoint that gets it (new _fit_payload, which skips the primary so the server prefix cache is untouched), ContextOverflow carries the endpoint that rejected it, and _force_shrink now targets the FAILING endpoint's window. Merged with F-05 and repaired in 03b8bc4: the TTL moved to the monotonic clock, so the two tests that back-dated a cache entry with time.time() had to be moved to now_mono() (they failed in the gate only, which is the semantic half of a merge no textual conflict shows). Audited and fixed: PARTIAL 2026-09-29, and worse than described. _endpoint_window probes CONFIG['llm']['base_url'] only (12545-12557) and the envelope cache is keyed by session (12582-12583), computed once before the endpoint loop (12863, cap at 12955), so a fallback inherits the primary's window, reply and budget. The self-heal is not reliable: _force_shrink targets self._context_budget(key) * 0.5 (12843-12850) - the PRIMARY budget - and the run loop retries once (13711), so 32k primary to 8k fallback can still die after shrinking.",
@@ -293,7 +293,7 @@
       "title": "watchdog, steering and cancel are per-lane, so a new lane inherits none of them",
       "state": "shipped",
       "anchor": {
-        "commit": "390c46f",
+        "commit": "8e7bba4",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (390c46f), merged to main in the 1.0.41 batch. drive_run now opens a session-keyed run record for EVERY run (RunControl/RunRegistry): watchdog activity, a cancel event and a steering queue come by construction. Telegram steers a mid-run message instead of queueing it and its workers exit after an idle wait; the scheduler needed no change at all - drive_run supplies what it lacked. Mattermost keeps its own watchdog (the stronger guard: it also reclaims the wedged worker) and registers watch=False, so nothing is watched twice. Deliberately kept: Mattermost's own active/_stall_tick/_stop_channel. Residual: a watchdog abandon on a channel-less run (Telegram) logs instead of posting, and surfaces through the run's own stopped answer. Audited and fixed: CONFIRMED structurally 2026-09-29. Mattermost owns the watchdog registration (active at 16622, _stall_tick 17016), the cancel plumbing (16446, 17175) and steering (17449); Telegram calls drive_run with a cancel_event and no steer_cb (18590), so a mid-run message queues instead of steering - which contradicts README:110 and 137; and the scheduler passes neither (9160-9163). Telegram workers also block on q.get() with no timeout (18564) where Mattermost's exit after 10 s idle (16967-16969). One correction: the CLI lane does have steering and cancel (19806-19814), so 'only Mattermost' should read 'only Mattermost and the CLI'. drive_run consolidated the CALLBACK half only (15764-15765); this is the lifecycle half, and F-04b and F-11 are instances of it.",
@@ -304,7 +304,7 @@
       "title": "a scheduled run has no cancel event and never enters the watchdog",
       "state": "shipped",
       "anchor": {
-        "commit": "390c46f",
+        "commit": "8e7bba4",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (390c46f), merged to main in the 1.0.41 batch. closed by F-06 - a scheduled run now has a cancel event and a watchdog record, so a channel /stop reaches it. Scheduler._fire was not touched: it already passes a channel id, and drive_run now supplies the rest. Audited and fixed: CONFIRMED 2026-09-29, harm overstated. Scheduler._fire calls drive_run with no cancel_event and no steer_cb (9160-9163) and never touches dispatcher.active (set only at 16622), so _stall_tick never sees the run and a channel /stop finds nothing (17173-17177). Correction: manifest drop-in tools ARE bounded by their own per-call timeout (10144-10168 through run_capture's deadline, 4513-4531); what is unbounded is a native in-process drop-in (10059-10061) or any other in-process hang, because max_minutes is only tested at turn boundaries (13585, 13876, 13926, 14031, 14495).",
@@ -315,7 +315,7 @@
       "title": "every duration is wall-clock, so a suspend abandons healthy runs",
       "state": "shipped",
       "anchor": {
-        "commit": "ad6562a",
+        "commit": "3f652ff",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (ad6562a), merged to main in the 1.0.41 batch. now_mono()/now_wall() helpers; every ELAPSED calculation moved to monotonic - the stall watchdog and its records, the run budget, _post_watchdog, run_capture, the ask wait, the window/envelope TTLs, the new RunRegistry. Cron fire times, persisted/displayed timestamps and last_seen stay wall-clock, and test_catchup (which pins that) stays green. Falsified before/after: the old code abandoned a healthy run after a simulated 30-minute suspend (wall +1800s, monotonic frozen) and never reached the budget after a backward wall step; the fixed code does neither. Audited and fixed: CONFIRMED 2026-09-29, severity re-scoped. Counts exact: 102 time.time() calls by grep, zero monotonic or perf_counter. Deadlines really are wall clock - _post_watchdog (1707-1723), run_capture (4513-4529), ask waits (9397-9400), WINDOW_TTL (1599 against 1431, 12553, 12581), the run budget (13589 vs 13876/13926/14031/14495) - and _stall_tick's quiet is now minus a wall-clock last (17020-17023, last touched at 16558/16622). But the practical arm is not NTP stepping (slewed, corrected in seconds): it is suspend/resume on this laptop, where one 30-minute sleep makes every active run look wedged and gets it abandoned and cancelled. The fix is a per-site audit, not a helper swap - cron fire times (9100, 9061-9062) and persisted or displayed timestamps (state.json at, last_seen) must stay wall-clock, and test_catchup actively pins that.",
@@ -406,7 +406,7 @@
       "title": "output caps come from a model-name match, not the detected window",
       "state": "shipped",
       "anchor": {
-        "commit": "df4282c",
+        "commit": "df04237",
         "expect": "tagged"
       },
       "detail": "Closed 2026-10-04: this was already solved in two layers, and the wish's text described a gap that no longer exists. mem_limit_chars() (and its one-shot ceiling in df4282c) makes every character cap the tighter of the configured value and window // 8, and lets a ONE-SHOT result cap rise with a big window while the every-turn blocks never inflate - both halves pinned in tests/test_envelope.py. llm.window_profiles gives the operator window-banded overrides, and config.example.json ships the three small-model bands (8192/16384/32768) as the documented starting point. The model-name profile table is then only the FIRST claim on a cap, not the last word: the window bounds whatever it sets. No code changed to close this; the record was wrong about its own system.",
@@ -417,7 +417,7 @@
       "title": "search egress is gated and the provider chain is configurable",
       "state": "shipped",
       "anchor": {
-        "commit": "4b57888",
+        "commit": "fde0faa",
         "expect": "tagged"
       },
       "detail": "Shipped in 1.0.37. The gate defaults to allowing off-LAN search, which was the direction the shipped installers ask about."
@@ -427,7 +427,7 @@
       "title": "a tool can show the model the screen, and the image rides one request",
       "state": "shipped",
       "anchor": {
-        "commit": "f333398",
+        "commit": "7815d1c",
         "expect": "tagged"
       },
       "detail": "Shipped in 1.0.38. Dormant unless the vision flag is on; capped at two images of 4 MB per request."
@@ -437,7 +437,7 @@
       "title": "a *_PASSWORD environment variable is a credential at 6 characters, not 12",
       "state": "shipped",
       "anchor": {
-        "commit": "e96f9fe",
+        "commit": "9925e3d",
         "expect": "tagged"
       },
       "detail": "Shipped in 1.0.38. The old floor missed a ten-character password, so it was never masked."
@@ -447,7 +447,7 @@
       "title": "config set cannot store a truthy string under a boolean key",
       "state": "shipped",
       "anchor": {
-        "commit": "e82c4a0",
+        "commit": "829052c",
         "expect": "tagged"
       },
       "detail": "Shipped in 1.0.38. Covers every key whose shipped default is a boolean."
@@ -457,7 +457,7 @@
       "title": "the doc-drift guard asserts facts, not remembered sentences",
       "state": "shipped",
       "anchor": {
-        "commit": "bb2f4ef",
+        "commit": "a22f545",
         "expect": "tagged"
       },
       "detail": "Shipped in 1.0.38. It caught a stale line count within the hour of being written."
@@ -467,7 +467,7 @@
       "title": "Ollama's context window is detected from /api/ps",
       "state": "shipped",
       "anchor": {
-        "commit": "5d65748",
+        "commit": "f0265f0",
         "expect": "tagged"
       },
       "detail": "Shipped in 1.0.38. Verified against Ollama's documented reply; the failure mode is returning 0."
@@ -477,7 +477,7 @@
       "title": "SGLang's context window is detected from /get_server_info",
       "state": "shipped",
       "anchor": {
-        "commit": "5740200",
+        "commit": "f2c431a",
         "expect": "tagged"
       },
       "detail": "On main, not in a release yet - so the anchor says untagged on purpose, and this suite fails the moment it becomes reachable from a tag without this line changing to match. That is the whole mechanism: 'unshipped' is a claim the repository can refuse."
@@ -487,7 +487,7 @@
       "title": "a Windows profile path with a space truncated two suites (fixed)",
       "state": "shipped",
       "anchor": {
-        "commit": "9b44d84",
+        "commit": "2dfd4a8",
         "expect": "tagged"
       },
       "detail": "Closed 2026-09-29 on main. The shell-write detector captured an optional quote followed by no-whitespace, so a QUOTED path - the only correct way to pass one containing a space - was cut at its first space: on C:\\Users\\Example User it returned C:\\Users\\David, which does not exist, and this module ignores a candidate it cannot find, so write verification verified nothing. It reads a quoted run or a bare one now; the spill messages quote the kept path and test_stall captures to the delimiter; test_verify's fixtures quote. test_verify, test_stall (317 checks) and the gate pass on both platforms.",
@@ -498,7 +498,7 @@
       "title": "a manifest's cmd /c wrapper hid the recursive-delete rule (fixed)",
       "state": "shipped",
       "anchor": {
-        "commit": "9b44d84",
+        "commit": "2dfd4a8",
         "expect": "tagged"
       },
       "detail": "Closed 2026-09-29 on main. A manifest command is wrapped in `cmd /c` on Windows and `sh -c` elsewhere, and the unwrapping stripped flags beginning with a dash - cmd's switch is `/c` - so the verb read as '/c', matched nothing, and both tiers were bypassed for every dropped-in manifest. `/c` and `/k` are stripped too now: `cmd /c rm -rf ./build` confirms and `cmd /c \"rm -rf /\"` blocks.",
@@ -509,7 +509,7 @@
       "title": "the Windows shim exited 127 for everyone (one ')' in an echo)",
       "state": "shipped",
       "anchor": {
-        "commit": "bb2081c",
+        "commit": "65790ea",
         "expect": "tagged"
       },
       "detail": "On main, not in a release yet. cmd parses a ')' inside an echo inside an 'if (...)' block as the END of the block, so the shim's 'exit /b 127' ran unconditionally and the documented entry point (tinycmdr status, tinycmdr --once ...) was dead on Windows while the bot kept working from the installer's scheduled task."
@@ -519,7 +519,7 @@
       "title": "a streamed markdown answer rendered three times, one of them truncated mid-word",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (8abdb49). Reproduced before the fix: streaming an answer containing a markdown table drew a dim whitespace-collapsed pipe line, an 'answer' card made from that draft (flattened pipes, truncated at checkin_note_chars with a trailing ellipsis), and the rendered card. RunReporter.narration collapses whitespace and caps at 400 chars; CliDestination.drop() drew a card from that text; and the console loop's dedupe (answer.startswith(shown), shown.startswith(answer)) can never match an intact answer against the mangled draft. drop() now only records the draft, for the plain path's single-print, and the console loop draws the whole answer exactly once whenever a screen exists. tests/test_tui.py reproduces the table case and asserts one answer card, no flattened copy on the screen and no truncation glyph.",
@@ -530,7 +530,7 @@
       "title": "colours lived per kind, and the answer's frame was ANSI blue (purple on a dark theme)",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (8abdb49). TUI_KINDS carried a literal colour per kind and cli_banner() hardcoded border_style=\"blue\"; rich's named blue is ANSI 4, which dark themes render blue-violet, and the reviewer's own screenshot showed the answer frame as purple while the answer, the tool lines and the narration all competed for the eye. There is now one TUI_PALETTE table (accent #5fbfbf / cyan, result #5fbf7f / green, failure red bold, question magenta bold, answer frame bright_black, ambient dim) and one tui_colour_tier() that picks truecolor/256/16/none once per process from COLORTERM, TERM, WT_SESSION, with NO_COLOR winning and TINYCMDR_COLOR forcing a tier for a screenshot or a test. TUI_KINDS names a ROLE, so a lane or a kind cannot fork the palette again. tests/test_tui.py grades all four tiers by their SGR bytes and asserts no tier paints anything blue.",
@@ -541,7 +541,7 @@
       "title": "the console had no full-screen mode, so a live draft could never be replaced",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-29 (8abdb49). `tinycmdr --app` is the same session in an alternate-screen app: header with model/endpoint/context, a repaintable transcript pane, a status bar, an always-focused input and key hints. No port, no server and no browser (the removed web lane stays removed) and no new dependency - prompt_toolkit already owns smcup/rmcup and the Windows console glue. AppScreen is a TuiScreen subclass, so the palette and the cards are the same code; the streamed draft is one item the answer card REPLACES, which is what makes the three-render defect unreachable there. The console loop runs in a worker thread (the app owns the main thread) and stdout is swapped so the banner, /help and /status become transcript lines; on exit the terminal is restored and the session's last answer is reprinted inline. tests/test_tui.py drives the real Application headlessly (key pipe, dummy output) and asserts one answer card, the draft replaced rather than stacked, no stats in the transcript, /exit leaving both, and no NETWORK socket opened during the run.",
@@ -562,7 +562,7 @@
       "title": "a streamed narration line stair-stepped: one row per delta, never growing",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (44f97d1), found by the round-2 review and reproduced from the bytes. CliDestination._write routes painted text to the screen's raw_ansi, which called print_formatted_text - and that appends a newline per call by default, so a sentence arriving in three deltas landed on three ragged rows instead of growing in one; the old `if text.strip()` guard on the same path also silently dropped the newline that ends the line, so nothing ever closed it. Open-line writes now pass end=\"\" and flush, and the close writes one real newline. tests/test_tui.py renders a three-delta stream and asserts one line with exactly one newline.",
@@ -573,7 +573,7 @@
       "title": "the prompt repainted itself between a draft pulse and its answer card",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (44f97d1). The console loop cleared _CLI[\"stop\"] in its finally, and that flag is exactly what the reader thread gates session.prompt() on - so prompt_toolkit re-entered the prompt while the run's own card had not been drawn, and a bare `you>` landed between the draft pulse and the answer card (reproduced in both turns of the round-2 review). The flag is cleared after the card and the usage line are on screen. tests/test_tui.py records the flag as the final card is drawn and asserts it is still set, then cleared.",
@@ -584,7 +584,7 @@
       "title": "the draft-pulse threshold ran on text already printed, so the prose before a pipe stayed on screen",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (44f97d1). T-02's pulse was gated on a property of text the terminal had ALREADY been given, so any page that turned into a table mid-stream left its opening prose behind for good ('... The' / '... The only Apple machine that hits 800+ GB/s is the **M4 Ultra** - ...' in the round-2 review) - and an inline terminal cannot unprint. The opening of each line (200 characters or 1.5 s, whichever comes first) is now buffered and the decision is made before the first character lands: short chatter commits as prose, a long or structured draft commits as the single dim pulse. Dim previews also drop markdown emphasis; the answer text is never touched. Reviewing this found a gap of its own - a held line interrupted by a tool call was never drawn - so anything about to print commits the hold first, and tests/test_tui.py pins both cases.",
@@ -595,7 +595,7 @@
       "title": "the full-screen mode looked like the same cards in a frame, and the human door still opened the inline lane",
       "state": "shipped",
       "anchor": {
-        "commit": "44f97d1",
+        "commit": "6585f19",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (44f97d1), after the first --app screenshot ('looks the exact same') and the round-3 review. The app is now a window: a frame whose title bar carries the app name, the session and a live clock; a left rail with the session, a context gauge, the last run's calls/tok-s, the model and the keys; cards drawn on a filled surface; a status bar whose spinner and clock tick while a run is in flight; and a labeled `you` composer box. The round-3 items are in the same commit: the transcript opens on the first exchange (the chrome carries the banner, the note and the capability line), an empty draft card is never committed as a stub, the done line and the rail read one run accumulator, no rich Markdown default colour reaches an answer body (magenta headings, cyan lists/table headers and the white `bw` code background were all on screen), the footer carries the run status only, and the input box says `you`. A bare `tinycmdr` now passes --app from both shims on every OS (falling back to inline cards where the app cannot run), and TINYCMDR_APP=1 does the same for a hand-typed --cli. tests/test_tui.py pins the chrome and the six polish behaviours.",
@@ -606,7 +606,7 @@
       "title": "the app filed the model's pre-answer narration above the answer card",
       "state": "shipped",
       "anchor": {
-        "commit": "437f231",
+        "commit": "1694d09",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (437f231), the round-4 residual of P-02. Reproduced from the reporter's own call pattern: RunReporter.narration draws a NEW line (CliDestination.line('narration', ...)) and only then streams deltas into it with update(), so the first draw is a committed transcript item and the deltas are a second. The answer card dropped only the item it believed was the draft, so the model's opening sentence stayed filed above the card with its markdown characters intact - literally the last survivor of the triple-render family the brief opened with. AppScreen now tracks the run's draft region (narration lines and streamed deltas since the last real card) and the answer drops the whole span; a card in between ends the region, so narration a tool call came after stays as history. tests/test_tui.py replays the first-draw-plus-deltas shape and asserts no item mentioning the draft survives the card.",
@@ -617,7 +617,7 @@
       "title": "an answer card carried a two-row blank band around a markdown table",
       "state": "shipped",
       "anchor": {
-        "commit": "437f231",
+        "commit": "1694d09",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (437f231). T-05 again, and the first pass could not have closed it: the band is emitted by the RENDERER, not present in the markup, so stripping blank source lines and collapsing triple newlines left two blank rows between a table and the following paragraph and one before the card's closing border. Measured: 2 rows between the table and a paragraph, 1 row when the answer ended in a table. The answer body now renders through a small renderable that draws the markdown at whatever width the panel gives it (so the wrapping is still rich's own), drops the whole blank run after a table, collapses blank runs elsewhere to one, keeps blank lines inside a code surface (a background style is the giveaway) and crops a line wider than the box - rich's horizontal rule was overflowing by the panel's padding and wrapping onto a second row. tests/test_tui.py asserts a table followed by a paragraph leaves no blank row inside the card.",
@@ -628,7 +628,7 @@
       "title": "a pasted page was invisible in the composer: one row, no size, no review",
       "state": "shipped",
       "anchor": {
-        "commit": "437f231",
+        "commit": "1694d09",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (437f231), after a question about pasting large text. The data path measured clean before any change - bracketed paste (which the app enables) delivers a paste as one event, so 1 KB / 20 KB / 200 KB all arrived complete in the buffer in about 0.1 s, kept their newlines, never triggered a submit mid-paste, and were handed to the loop as ONE request (only the outer whitespace is stripped) - but the composer showed a single horizontally-scrolled row with nothing anywhere reporting the size, so a page could be sent unreviewed. The box is multiline now, its label reports the size and the keys ('you - 12,345 chars - send, Ctrl-J newline'), it grows to six wrapped rows and collapses when sent, Enter sends and Ctrl-J inserts a newline. tests/test_tui.py pins the label and the growth.",
@@ -639,10 +639,10 @@
       "title": "the app advertised scroll keys nothing was bound to, and a wheel that only worked on Windows",
       "state": "shipped",
       "anchor": {
-        "commit": "4daa918",
+        "commit": "9d6ea0c",
         "expect": "tagged"
       },
-      "detail": "Fixed 2026-09-30 (4daa918), merged to main, after 1.0.44 shipped the app's pane could not be scrolled back up - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '\u2191\u2193 PgUp/PgDn scroll' while \u2191 and \u2193 were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: \u2191/\u2193 move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
+      "detail": "Fixed 2026-09-30 (4daa918), merged to main, after 1.0.44 shipped the app's pane could not be scrolled back up - and the app owns an alternate screen, so the terminal's own scrollback is not there while it runs, which makes the app's own keys the way back up. Two of the three were dead. (1) The rail said '↑↓ PgUp/PgDn scroll' while ↑ and ↓ were bound to NOTHING: only the page keys moved the pane. (2) The wheel did nothing on macOS or Linux even with capture on, because prompt_toolkit's Keys.ScrollUp comes from the Win32 driver alone and a POSIX terminal delivers the wheel as a mouse event at a coordinate, which prompt_toolkit hands to the CONTROL under the pointer - so the app's two `<scroll-up>` bindings could never fire there. Measured in a headless Application driven by a key pipe with capture on: the event landed in the rail's cell and the pane never moved, while the same bytes at the body's coordinates did nothing either. Now: ↑/↓ move one line, FILTERED on an empty composer so the arrows stay the caret for a multi-line paste; Ctrl-Home/Ctrl-End are named in the rail; both panes answer the wheel themselves (three lines a notch); and page scroll, line scroll and Ctrl-Home share _scroll_to(), which clamps to the tail, so _top cannot point past the end. Capture stays off by default (native selection and copy without a modifier key) and the rail says what turning it on buys. Pinned in tests/test_tui.py by driving the real Application with a key pipe and real mouse bytes - every check that existed called scroll() DIRECTLY, which is exactly why a key bound to nothing and a wheel that never fired both read as covered. Residual: with capture off the terminal sends no mouse bytes at all, so the wheel stays opt-in; want it by default, start with TINYCMDR_APP_MOUSE=1.",
       "gate": "done - merged to main; the README documents the keys; release.sh states the tagged claim on this anchor when the next tag exists"
     },
     {
@@ -650,7 +650,7 @@
       "title": "test_plan's staleness fixture was a literal date, so the suite went red by itself",
       "state": "shipped",
       "anchor": {
-        "commit": "97e9346",
+        "commit": "2dc00c2",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (97e9346), merged to main. The ledger-staleness check built its fixture around 'updated': '2026-09-26 15:48' and then demanded the literal '(3d, stale)', so the check graded the calendar rather than the rule: at 15:48 on 2026-09-30 the age became four days and it went red - permanently, on every host, forever. Measured: this tree was green in CI at 13:45Z and red at 21:21Z the same day (run 36778872020, both platforms), and the red is the one that started the failed-run mail. The stamp is now computed 74h back from now - tests/test_ledger.py's idiom for the same claim ('30 * 3600' against '(1d') - and the two hours over three days absorb both the truncation to the minute and a DST step, so the rendered age is '(3d' in any zone on any day; verified in UTC+14, UTC-11 and this host's own. Nuance: run_all.py the red read as a crash: 'died before its own summary: no count line' - that parser gap is its own item (runall-misreads-check-suites).",
@@ -661,7 +661,7 @@
       "title": "a red suite was reported as having died before its own summary",
       "state": "shipped",
       "anchor": {
-        "commit": "2037f12",
+        "commit": "09acbba",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (66abc30, extended in 2037f12), merged to main. run_all.py's _check_tail() recognised one spelling of a suite's summary, 'N passed, M failed', and annotated every other red '[died before its own summary: no count line]' - which says the suite aborted mid-run and left checks ungraded. Measured: every failure branch in this tree spells the summary one of five ways (grep), so the annotation was wrong for all of these: 'N check(s) failed[: names]' (22 check()-only suites - test_plan, test_digest, test_envelope, test_verify, test_guard_battery, ...), 'N failed: names' (test_cross_process, test_profiles), 'N FAILED: names' (test_measured_doc, test_installer_parity, test_llama_extensions), 'FAILED: N' (test_shim, test_atlas), 'failed: names' (test_ledger_journal, which prints no count at all). Two real reds read exactly that way and cost a detour each: test_plan's date-rot (CI run 36778872020) and test_measured_doc's stale numbers (the first clone gate of this batch). All five are recognised as the summary now; the negative cases still return '' - a traceback, an empty run, and a check's own continuation line that merely says 'failed to start' (the colon separates the two).",
@@ -672,7 +672,7 @@
       "title": "the app's context-gauge check graded this box's session history, not the chrome",
       "state": "shipped",
       "anchor": {
-        "commit": "391bd1a",
+        "commit": "65c5528",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (391bd1a), merged to main, found while answering 'is everything green?'. The check '--app draws a rail with a live context gauge' asserted a filled cell, and the fill is read from the LIVE session (AGENT.stats) and the detected window - so on a clean clone, which is exactly what CI grades, usage is zero, the bar is all shade and the check is red, while the same tree was green here because this box had run a session (7.7K of 110.1K). Measured: red on macOS and Ubuntu from its first full CI run (36782281132, 36784022014) and green here; reproduced by running the suite in a clone of HEAD. The two numbers the gauge reads are pinned for the check and restored afterwards, so the fill is graded as arithmetic (4.1K / 8.2K -> half the bar, the other half shade) with a second arm for a session with no usage, and the rail's fixed 26 columns are pinned too (a longer line is silently cut, never wrapped). Same shape as the two host-graded checks the 1.0.41 batch fixed (telegram-suite-grades-the-box, host-tools-no-shelf).",
@@ -683,7 +683,7 @@
       "title": "there was no way to get a card's own text out of the app",
       "state": "shipped",
       "anchor": {
-        "commit": "b42553c",
+        "commit": "7488d8e",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (b42553c), merged to main: each transcript item (answer, call, result) should be individually copyable. Native selection could not do it: the pane paints frames (box drawing, wrap points, the rail beside them) and the alternate screen has no scrollback, so what a terminal can select is not what a reader wants to paste. Ctrl-Y now copies the newest transcript item as its own text - the answer's markdown before the renderer touched it, a tool call, a tool result, a question - and pressing it again walks back one item per press, with the status line naming what landed and where it sits ('copied answer 3/9 - 39 chars, pbcopy + OSC 52 + file:...'); any new item resets the walk; Ctrl-B copies the whole transcript in order. The raw text rides with the item that drew it (_draw/_put/_panel/_card carry it down from card(kind, text)) rather than being re-derived from the painted frame, and consecutive printed lines (help, status, /tinycmdr tools) coalesce into ONE item, so a command's output is one step of the walk. Delivery tries every door the host has, because each fails somewhere: the host's own tool (pbcopy / clip.exe / wl-copy / xclip / xsel, the first installed), the terminal over OSC 52 (the only clipboard reachable with no helper, and it travels over ssh - but Terminal.app and tmux without set-clipboard on ignore it silently), and COPY_FILE (gettempdir()/tinycmdr-copy.txt, 0600), which always lands and is named in the status line. Measured on a real pty 2026-09-30: Ctrl-Y over the /help block put 1,377 chars on the host clipboard (pbpaste read them back), the log said 'via pbcopy, OSC 52, file:tinycmdr-copy.txt', and the file was -rw-------. Pinned in tests/test_tui.py by driving the real Application with a key pipe and a recording output whose OSC 52 bytes are decoded and compared, with the host's own tool stubbed so a test run cannot clobber the developer's clipboard. Residual: Ctrl-Y/Ctrl-B shadow an emacs binding in the composer (yank, backward-char) - the composer's paste is bracketed paste and its caret is the arrow keys - and the OSC 52 payload is capped at 100,000 chars, with the file taking everything.",
@@ -694,7 +694,7 @@
       "title": "bare `model` printed a Commands box instead of a list you move through",
       "state": "shipped",
       "anchor": {
-        "commit": "c0cc99f",
+        "commit": "bb2e2d0",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (c0cc99f), merged to main. Measured before the change, in the app: `/tinycmdr model` drew a `Model Status` card whose body was a Commands list - to switch you retyped the whole command with an exact name you had to already know - and the shell printed a wall of catalog text. This is that picker: `ModelPick` (state machine: cursor starts ON the model in use, visible() filters name and detail, move/typed/backspace/tail markers) with ONE renderer and TWO hosts, because `--app` cannot run a second prompt_toolkit Application on the terminal it already owns. The app draws it in the composer's row (ConditionalContainer, its own key bindings filtered on `picking`, so the transcript's up/down/PgUp/PgDn/Home/End/Enter/Escape/c-j/c-c are filtered out while it is open) and hands the picked name to the same code path a typed name takes. The shell runs `run_model_pick()` as its own Application - only a lane that OWNS the terminal may call it, so the inline console's reader thread and `--app` never do. ENTER on a filter that matches nothing does nothing (ESC leaves), any new item cancels a copy walk, and a pipe (a script, a cron job, CI) still gets the plain list it greps. `model add <url>` with several advertised ids and `run_setup`'s model step use the same list, and the setup wizard refuses to run inside `--app`, where its raw input() competes with the app's input box. Pinned in tests/test_verbs.py (state machine, the status box on a door that cannot host the picker, a fake screen proving `--app` opens it, the app-door refusal) and tests/test_tui.py (both hosts driven by real key bytes: typing filters without reaching the composer, ENTER hands over the filtered model, ESC leaves the app running).",
@@ -705,7 +705,7 @@
       "title": "a mis-typed endpoint could only be fixed by editing config.json by hand",
       "state": "shipped",
       "anchor": {
-        "commit": "c0cc99f",
+        "commit": "bb2e2d0",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (c0cc99f), merged to main: a wrongly entered endpoint should be editable from the picker. Before this there were exactly two ways to correct llm.base_url: hand-edit config.json, or know that `model add <url> --primary` exists (and its hosted-key caveat). Now `model endpoint` reads the primary endpoint and whether it answers (`_probe_model_ids`: one /v1/models GET, never a completion), naming the fix in the same breath; `model endpoint <url>` validates the scheme, PROBES, and REFUSES a URL that does not answer (naming --force for a server that is not up yet), writes llm.base_url, takes effect without a restart, prints what the endpoint advertises, and then offers those models in the picker (the shell door) or hands the app the same list - one command from a wrong endpoint to the model it actually serves. The picker itself now says where to go when the catalog cannot be reached (`/tinycmdr model endpoint <url>`) instead of only reporting the error. Pinned in tests/test_verbs.py: the read form and its exit code, a URL that answers is written and its ids listed, a URL that does not answer is refused and NOT written, --force writes it and says unverified, a URL without a scheme is refused before anything is probed, and the app door opens the picker over the new endpoint's ids. Residual: `model add <url> --primary` still exists for adding an endpoint together with a key - it is the key-carrying door, and it keeps its own hosted-endpoint caveat.",
@@ -716,7 +716,7 @@
       "title": "the interactive installers asked for the endpoint and wrote it without one request",
       "state": "shipped",
       "anchor": {
-        "commit": "c0cc99f",
+        "commit": "bb2e2d0",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (c0cc99f), merged to main: the installer should probe the endpoint for reachability before continuing. Both Unix doors asked for the model endpoint and the model id as free text and wrote both with no probe at all, so a typo (wrong host, wrong port) stayed invisible until the first request - on a box whose installer had just reported success. Now `probe_endpoint()` (python the installer already resolved, one GET /models, 8s, metadata only) runs at that prompt, `reachable - it advertises: ...` is printed, and a TYPED URL that fails is re-asked up to three times (check the host and port) and then kept with the command that fixes it later (`tinycmdr model endpoint <url>`) - the retry loop is for someone correcting a typo, not a wall in front of a box whose server is not up yet, and pressing Enter on the stored URL warns once and moves on. The model id is then offered as a NUMBERED list of what the endpoint advertised (`ask_model_id`: a number picks, anything else is taken as typed, no list keeps the plain prompt), because typing an id from memory is how a box ends up configured for a model it does not serve. `tinycmdr setup` gets the same loop in python (probe, warn, re-ask typed URLs three times, keep with the pointer; the picker over the advertised ids, gated on a real terminal; and a refusal to run inside `--app`, where its input() competes with the app's input box for the terminal). Pinned: tests/test_installer_unix.py runs both installers with TINYCMDR_ASK=1 against a live stub /v1/models on loopback (reachable is reported, the model id is chosen by NUMBER, config.json ends with it) and against a dead port (three 'no answer from' lines, 'keeping it anyway' naming the fix, and the install still completes); tests/test_setup.py drives the python wizard through a fake tty for the same three cases. Residual: the Windows installer asks the same question without a probe - it verifies AFTER the install instead ('NOT VERIFIED: no answer from the model endpoint', exit code 3), which is a check but not this one.",
@@ -727,7 +727,7 @@
       "title": "a session answered a shell verb with \"not a command\", and its help lists none of them",
       "state": "shipped",
       "anchor": {
-        "commit": "cb32056",
+        "commit": "806b729",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (cb32056), merged to main. The trap: a session answered a bare management verb with \"not a command\", and the help it points at lists none of them. The console router (_cli_command) implements a fixed set - /stop /exit /help /new /setup /model /sessions /resume /status /tasks /notes /skills /tools /usage - and everything else fell through to that line, including every verb in VERBS that the SHELL and the chat lane do have. Measured in a session on a pty, 2026-09-30. Now a management verb the session cannot run says which door has it: update names both steps (tinycmdr update pulls the build, then tinycmdr restart starts running it - it is the verb an update question lands on), restart names its own, and the rest (doctor, logs, version, clean, config, token, health, proc) get \"a shell verb on this host: run tinycmdr <v> there, or /tinycmdr <v> from chat\". An unknown word keeps the plain \"not a command\" answer, and chat's refusal for a terminal-only verb (verb_from_chat) is unchanged. Deliberately NOT changed: the session still cannot update or restart itself - pulling a build under a running session, and replacing the process, are the shell's and chat's verbs on purpose. Pinned in tests/test_tinycmdr_prefix.py: update in a session names the shell and both steps and never says \"not a command\", doctor names itself the same way, and an unknown verb still gets the old line.",
@@ -738,7 +738,7 @@
       "title": "in --app an answer card said nothing about what it was answering",
       "state": "shipped",
       "anchor": {
-        "commit": "6ade905",
+        "commit": "c4840a1",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-09-30 (6ade905), merged to main: the answer card should show the question it answers, the way a reply does. The gap was the app: the composer clears when it sends, so the request was NOWHERE on the transcript - it held cards and nothing else - and the answer card said nothing about what it answered (measured on a pty; the inline `you>` prompt line and the chat message both already show it, which is why only the console lanes change). A dim card of a new kind, `reply`, is filed immediately above the answer card: \"re: <your question>\", flattened to ONE line and capped at 100 chars with the screen's own ellipsis, because an app pane does not wrap - an uncapped pasted page would be cut mid-word with no marker and push the answer out of the pane. It is an ordinary transcript item, so Ctrl-Y copies it: the question itself became copyable, which the copy walk could not reach before (it walks items, and the question was not one). The ordering is the trick: the model streams a narration draft into the pane and the answer card is what replaces it, so filing the reference before that drop put it INSIDE the region and the drop deleted the reference along with the draft (found by the suite's own T-01 check: one answer card, no stacked draft). AppScreen.answer_card() drops the draft FIRST, then files the reference and the answer; TuiScreen's version is the plain order and `_draw_answer()` is the one entry both console lanes call - including `--once`, whose argv prompt was never on screen either. Pinned in tests/test_tui.py: one capped, flattened line; no reference for an empty question; the screen's own ellipsis when the terminal is not ascii-only; the card filed before the answer is the question; and the reference is copyable.",
@@ -749,7 +749,7 @@
       "title": "a clean stream close and a byte-identical edit are no longer silent successes",
       "state": "shipped",
       "anchor": {
-        "commit": "cfe0594",
+        "commit": "561cdf5",
         "expect": "tagged"
       },
       "detail": "_stream_chat accepted a stream that ended with content but neither a finish_reason nor [DONE] (a server killed mid-answer returned a truncated prefix as the model's final word, invisible to the length/window checks); tool_edit_file wrote the file's own bytes back and returned OK over an empty diff (refused now, escalated on the 3rd identical payload, cleared by any real mutation); reasoning under `reasoning`/`reasoning_text` was dropped and a leaked leading <think> fence counted as the answer (aliases fold; a leading fence splits to reasoning across deltas, llm.think_fence=false disables).",
@@ -760,7 +760,7 @@
       "title": "search_files returns a bounded, reproducible page and says what it skipped",
       "state": "shipped",
       "anchor": {
-        "commit": "a1b1f29",
+        "commit": "b25ab0c",
         "expect": "tagged"
       },
       "detail": "Path-ordered walk, a per-file cap (agent.search_max_per_file, default 5, overridable per call), and notes naming a capped file and a cap-terminated walk.md:91-117).",
@@ -771,7 +771,7 @@
       "title": "duplicate tool_call_ids are split before a strict endpoint can 400 on them",
       "state": "shipped",
       "anchor": {
-        "commit": "6b035ca",
+        "commit": "2ec65fd",
         "expect": "tagged"
       },
       "detail": "A local server or proxy that re-emits a call id collapsed two calls onto one id in every pairing structure; the payload shipped two tool_calls with one id and one result. Copied-in id lists are rewritten (the k-th result keeps its call's id in order) and the pairing report names duplicates.ts:131-235.",
@@ -782,7 +782,7 @@
       "title": "an empty stop completion is re-sent once instead of costing a nudge turn",
       "state": "shipped",
       "anchor": {
-        "commit": "7e9bf83",
+        "commit": "3bf70e7",
         "expect": "tagged"
       },
       "detail": "A clean `stop` with no content, no tool call and <= 1 completion token now re-sends the identical payload on the same endpoint before the agent-level empty-answer path spends a whole nudge turn (a full prompt re-read on a prefill-bound local box).ts:21-22,91-170.",
@@ -793,7 +793,7 @@
       "title": "a re-read blanks the older copy when the prompt cache can take it",
       "state": "shipped",
       "anchor": {
-        "commit": "bde1b5f",
+        "commit": "f1ecc6d",
         "expect": "tagged"
       },
       "detail": "A read->edit->read loop kept every version of a file until the whole conversation compacted (46% of reads of its own source were re-acquisitions, measured here). The older copy becomes [Superseded by a newer read of this file] when a newer full read of the same path exists - and only when the messages after it cost <= agent.prune_suffix_tokens, or after the session idled past the cache lifetime. The three drop loops also keep a running total instead of re-serializing the conversation per pass (O(N^2)); _drop_oldest_block returns the net tokens removed.ts.",
@@ -804,7 +804,7 @@
       "title": "the elision marker carries the file ledger and names the transcript",
       "state": "shipped",
       "anchor": {
-        "commit": "69a5c31",
+        "commit": "5f71084",
         "expect": "tagged"
       },
       "detail": "After compaction the marker now carries a cumulative, deduped, capped ledger of what the run read and changed ('dir/ a.py (RW)'), rebuilt from live state so compacting twice does not stack two copies, plus the path of the pre-compaction transcript when one exists. _force_shrink - the path that drops the most context - now writes the transcript before evicting.md).",
@@ -815,7 +815,7 @@
       "title": "the spill index survives a restart, dedupes content and respects a byte cap",
       "state": "shipped",
       "anchor": {
-        "commit": "8b55628",
+        "commit": "6a7c32c",
         "expect": "tagged"
       },
       "detail": "Files are content-addressed (sha1 of the text), so the same output spills once; the index is persisted to spill/index.jsonl and rewritten when /new drops a session's rows; agent.spill_max_bytes (8 MiB) keeps head+tail with an explicit omitted-bytes marker.md.",
@@ -826,7 +826,7 @@
       "title": "a revealed tool schema expires when the tool is not used",
       "state": "shipped",
       "anchor": {
-        "commit": "9232dff",
+        "commit": "cd4a537",
         "expect": "tagged"
       },
       "detail": "Reveal-on-demand was monotonic per session; agent.reveal_ttl_secs (default 1800, 0 = old behaviour) expires a schema after that long without a call. Names stay listed and a by-name call re-reveals - only the schema rent stops. Correction 2026-10-03 (9232dff): the stamp only moved on a REVEAL, so the clock expired tools that were in use (seven days: 36 expiry re-reveals, 2 mid-run, 5 with a call under 1,800s earlier); every executed non-core call now touches it, the banner states the expiry, and the event ledger records reveal/eject transitions.",
@@ -837,7 +837,7 @@
       "title": "408/5xx/transport failures retry the same endpoint before any failover",
       "state": "shipped",
       "anchor": {
-        "commit": "e0c3bf4",
+        "commit": "1e51470",
         "expect": "tagged"
       },
       "detail": "agent.same_endpoint_retries (3), retry_base_ms/retry_max_ms/retry_jitter_pct, honoring a longer Retry-After/X-RateLimit-Reset hint, in abortable 0.25s slices. 4xx stays terminal, context overflow still goes to compaction, 0 restores immediate failover.md:55-140.",
@@ -848,7 +848,7 @@
       "title": "reasoning_content is replayed to local endpoints so the prefix cache holds",
       "state": "shipped",
       "anchor": {
-        "commit": "b0b30e5",
+        "commit": "cb037f6",
         "expect": "tagged"
       },
       "detail": "A llama.cpp/vLLM template rebuilds its <think> block from reasoning_content; a replayed turn without it renders a different token sequence and the prefix KV-cache diverges from there. Assistant turns carry it to LOCAL endpoints, capped by agent.replay_reasoning_max_chars (4000), never to a remote one; llm.replay_reasoning=false disables.md:68-69.",
@@ -859,7 +859,7 @@
       "title": "per-tool tiers, a policy map and an allow tier under the confirm gate",
       "state": "shipped",
       "anchor": {
-        "commit": "8ce4e81",
+        "commit": "3019bbc",
         "expect": "tagged"
       },
       "detail": "Every core tool has a tier (read/write/exec), anything unlisted - any drop-in - is exec so a stricter mode fails closed, agent.tool_policy denies or prompts individual tools by name whatever the mode, and agent.approval_mode is a ceiling ('auto' default = no new prompts; 'write' gates exec; 'ask' gates write+exec). The confirm tier gains allow_patterns/allow_content_patterns, checked before it; blocked_patterns still wins.md.",
@@ -870,7 +870,7 @@
       "title": "delegate_task gains a shared context, a child prompt, a budget and a cost line",
       "state": "shipped",
       "anchor": {
-        "commit": "599792e",
+        "commit": "0f1e4ad",
         "expect": "tagged"
       },
       "detail": "build_system_prompt(subagent=True) keeps the tool/verification/no-fabrication rules and drops operator framing, narration, ask_user, scheduling/delegation and the skill/custom-tool blocks (with an explicit completion rule); delegate_task accepts `context` (shared Goal + Contract) and `tasks` (parallel, sized to the endpoint's slots, ordered results); the child gets agent.subagent_timeout_seconds (900) and a crash returns the same typed envelope; its usage rides back as a cost line.md, subagent-system-prompt.md.",
@@ -881,7 +881,7 @@
       "title": "background jobs carry a real exit code, readiness, stdin, and tell the run when done",
       "state": "shipped",
       "anchor": {
-        "commit": "97c5fd8",
+        "commit": "25bedb4",
         "expect": "tagged"
       },
       "detail": "A wrapper writes __EXIT__<rc> into the job log (status/list report the real code after a restart); start accepts wait_for {log, port, timeout}; send answers a prompt through a spool; agent.auto_background_seconds (60) hands a slow shell command to the table with an in-memory probe so a fast one leaves no row or file, and wait:true opts out; a settled job is announced once in the trailing block.md.",
@@ -892,7 +892,7 @@
       "title": "plan mode is a hard read-only gate; AGENTS.md rides the cached prefix",
       "state": "shipped",
       "anchor": {
-        "commit": "11fd4c9",
+        "commit": "fe12017",
         "expect": "tagged"
       },
       "detail": "plan_mode is enforced at the dispatch point (drop-ins included): write/exec tools refuse while it is on, reads and the plan tool stay open, agent.plan_requires_approval starts sessions read-only, /plan on|off|apply is the operator's door, and recording a plan asks the in-band door when one exists. AGENTS.md/CLAUDE.md are discovered from the run's cwd up to the project root at session start - one per depth (AGENTS.md wins), far-to-near, containment-dropped, bounded by agent.context_files_max_chars, labelled as local conventions below the operator's instruction.ts, docs/context-files.md.",
@@ -903,7 +903,7 @@
       "title": "text tool calls, conflicts, note policy, receipts, verify regions, skills, fork",
       "state": "shipped",
       "anchor": {
-        "commit": "5a6aa7a",
+        "commit": "8272dec",
         "expect": "tagged"
       },
       "detail": "A tool call written as text gets a one-shot retry naming the mistake and the prompt defines NEVER/MUST/[HARNESS]; an unresolved merge conflict is named on read; field notes gain repeat: once|gap:N and doctor ranks unmatched signatures with a draft matcher; remember passes the scrubber; shown-hints persist per session; read receipts let a failed edit say the file changed since it was read; a verify failure shows the region plus the pre-image from the .bak; skills parse globs/always/hide (triggers in the index, always bodies in the trailing block, hidden readable but not indexed); /fork copies a conversation and the picker marks unfinished ones.ts, auto-repair.ts, docs/skills.md, session ops.",
@@ -914,7 +914,7 @@
       "title": "an edit to a CRLF file was told 'this file changed since you read it'",
       "state": "shipped",
       "anchor": {
-        "commit": "7f8fc87",
+        "commit": "c5fab56",
         "expect": "tagged"
       },
       "detail": "The read side recorded the raw bytes and the edit side compared its LF-normalized copy, so the receipt never matched on a CRLF file; the post-edit receipt also stored the new_string FRAGMENT instead of the resulting file. Both sides now hash an LF canonical view and count lines from it, and the post-edit receipt stores new_lf. Found by the box's own agent while it was being driven, 2026-10-03.",
@@ -925,7 +925,7 @@
       "title": "a piped --once run parked a question for the full 120s and then stopped",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9",
+        "commit": "2f0dc25",
         "expect": "tagged"
       },
       "detail": "The CLI mounted its console ask door even when stdin was a pipe (cron, `ssh host --once`), so ask_user published the question, waited 120s and ended the run - contradicting the documented rule that a lane without a door refuses. The caller now declares whether a human is reachable: run_cli passes has_human=sys.stdin.isatty() and mounts no door when it is false, and a human-less destination takes the doorless confirm path. Observed live twice on Windows (173s and 141s runs, both stopped).",
@@ -936,7 +936,7 @@
       "title": "doctor's unmatched-failure draft said `match: everything`",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9",
+        "commit": "2f0dc25",
         "expect": "tagged"
       },
       "detail": "The draft picked the longest word of a signature; on a real box that was 'everything' from a timeout signature - a matcher that would fire everywhere. Drafts now skip a stopword list and pick the longest distinctive token ('timeout').",
@@ -947,7 +947,7 @@
       "title": "a read miss that shares a tool name hid the file that exists",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9",
+        "commit": "2f0dc25",
         "expect": "tagged"
       },
       "detail": "`read_file .../notes` answered with the tool lecture ('notes is a TOOL') while notes.md sat beside it, and the model was sent elsewhere (reported). The sibling file is named first (`Did you mean .../notes.md?`); the tool note stays second; a plain miss still reads `does not exist.`",
@@ -958,7 +958,7 @@
       "title": "an older host-owned tools/process.py silently disabled auto-background",
       "state": "shipped",
       "anchor": {
-        "commit": "28ceff9",
+        "commit": "2f0dc25",
         "expect": "tagged"
       },
       "detail": "update never overwrites host-owned files by design, so a pre-1.0.54 tools/process.py survived a 1.0.54 update and the features that call into it (auto-background, cross-restart exit codes) degraded with no note anywhere: a 75s command blocked the whole turn. dropin_gaps() now logs once and doctor prints `drop-ins: tools/process.py is an older copy (...)` with the remedy (refresh from the release, or delete to inherit the packaged seed). Verified on the box: refreshing the file made a 75s command background at 60.1s (`started b8`).",
@@ -969,7 +969,7 @@
       "title": "a question a stopped run left unanswered nagged every later run",
       "state": "shipped",
       "anchor": {
-        "commit": "d28cddf",
+        "commit": "3d123a4",
         "expect": "tagged"
       },
       "detail": "The sidecar that carries the question was re-surfaced on every run until the operator answered or stopped it; measured 2026-10-03, five consecutive runs on a live install restated the same assumption and paid the tokens each time. Reading it now consumes it (the NEXT run is the one that gets told, which was the original intent), and one older than agent.ask_question_ttl_hours (default 24; 0 disables) is dropped rather than surfaced. The example config documents the key.",
@@ -980,7 +980,7 @@
       "title": "`restart` reported a healthy handover as a failure",
       "state": "shipped",
       "anchor": {
-        "commit": "d28cddf",
+        "commit": "3d123a4",
         "expect": "tagged"
       },
       "detail": "The helper returns as soon as it has launched the replacement, and the replacement takes the lock ~60s later on the Windows task lane (measured twice on a live install, 2026-10-03); the verb looked once and printed 'nothing holds the lock yet - check logs' at ~5s, which reads as a failed restart, and `status` in between said 'not running'. It now looks until the outcome is known, bounded at 90s, and says 'back up after Ns'.",
@@ -991,7 +991,7 @@
       "title": "every `update` left a stamped copy of every file it replaced",
       "state": "shipped",
       "anchor": {
-        "commit": "35b5699",
+        "commit": "c2a4841",
         "expect": "tagged"
       },
       "detail": "A `.bak-update-<stamp>` per file per update is how an install grows by gigabytes: one live install carried three tinycmdr.py copies from three updates in a single day (3.6 MB) and only `clean` ever removed them. Both update paths replace in place now; the release you came from stays downloadable. The bounded soul.md persona copies (3, one per distinct persona) and the single write_file/edit_file undo copy - the verify pre-image - stay.",
@@ -1002,7 +1002,7 @@
       "title": "the shell timeout was ignored for commands shorter than the auto-background window",
       "state": "shipped",
       "anchor": {
-        "commit": "35b5699",
+        "commit": "c2a4841",
         "expect": "tagged"
       },
       "detail": "`timeout=5` on a 45-second command returned `exit_code=0` after the full 45s: the auto-background wait ran on its own clock (agent.auto_background_seconds) and never read the timeout the model asked for (measured on a live install, 2026-10-03). The requested timeout is passed into that wait and kills the tree; the blocking path's `TIMEOUT after Ns` answer comes back with partial output. Field-verified: the same call returned TIMEOUT after 5s.",
@@ -1013,7 +1013,7 @@
       "title": "a scheduled job added or removed from a --once/CLI run never took effect",
       "state": "shipped",
       "anchor": {
-        "commit": "35b5699",
+        "commit": "c2a4841",
         "expect": "tagged"
       },
       "detail": "The scheduler loads jobs.json once at process start and the bot is the only process that fires jobs, so a job added from another lane said 'next run HH:MM' and never ran (field: no fire, no log line, no output file), and a removal made there was fired anyway and written back by the bot's next save. The scheduler re-reads the file when its mtime changes, in the firing loop and before every schedule action; the overdue-skip makes a mid-session adopt safe. The list line also elides instead of cutting a task mid-word. Field-verified both ways: add -> the bot fired it; remove -> no fire, no resurrection.",
@@ -1024,7 +1024,7 @@
       "title": "`update <file>` answered 'is that a build?' about a valid build under a different name",
       "state": "shipped",
       "anchor": {
-        "commit": "e535b6b",
+        "commit": "2064920",
         "expect": "tagged"
       },
       "detail": "A file passed directly to `update` must be named tinycmdr.py; the message never said so (it cost a deploy cycle on 2026-10-03). The refusal names the rule and the file; the folder/zip path keeps 'is that a build?'.",
@@ -1035,7 +1035,7 @@
       "title": "the brand assets live in the repository and on its surfaces",
       "state": "shipped",
       "anchor": {
-        "commit": "2f232ee",
+        "commit": "da47105",
         "expect": "tagged"
       },
       "detail": "Three 1024x1024 masters (badge, chibi, helm) under assets/branding/; the README opens with the chibi (190px) - also the image a link preview falls back to - the what-it-actually-is doc carries the helm, and assets/social-preview.png is the 1280x640 badge letterboxed with its own corner colour for the Social preview setting (GitHub exposes no API for that one; it is a two-click upload). The package ships the two derived sizes so an unzipped README renders as authored.",
@@ -1046,7 +1046,7 @@
       "title": "the --app rail carries the brand as braille cells",
       "state": "shipped",
       "anchor": {
-        "commit": "51864e9",
+        "commit": "c8675c1",
         "expect": "tagged"
       },
       "detail": "The designer's render of the badge (24x9 characters, each a 2x4 dot cell, 48x36 effective) sits one blank row under KEYS in the --app left rail. The art is data - assets/tui-rail-badge.json, cells plus hex colours - never ANSI: an escape byte inside a prompt_toolkit span renders as literal '[38;2;...' text. Truecolor and 256-colour terminals get the per-cell colours, a 16-colour terminal gets the dots in one accent, an ASCII-only terminal gets no art, and a pruned install shows none. maintenance/make-brand-art.py re-derives an equivalent from the badge master with the stdlib alone (no PIL/numpy in this runtime); the shipped cells are the designer's own, whose LANCZOS keeps lower detail a box filter drops (19 lit dots in the last row against 3).",
@@ -1057,7 +1057,7 @@
       "title": "the rail's CONTEXT gauge divided by the messages budget, not the window",
       "state": "shipped",
       "anchor": {
-        "commit": "cafadfd",
+        "commit": "76b4ef2",
         "expect": "tagged"
       },
       "detail": "On a 1M model the --app rail read 'used / 1028.0K' - the messages budget (window minus static prompt minus reply reserve) - while the model's window is 1048.6K, so the gauge could never reach 100% however full the window got. The rail divides by the window now and counts the static prompt in what is occupied, which is what the next request carries; the messages budget stays in `status` and the startup banner, where it is labelled 'usable per turn'. Reported 2026-10-03.",
@@ -1068,7 +1068,7 @@
       "title": "the rail art was rendered from a crop that cut the emblem's bottom",
       "state": "shipped",
       "anchor": {
-        "commit": "cafadfd",
+        "commit": "76b4ef2",
         "expect": "tagged"
       },
       "detail": "The art's crop was (225, 80, 900, 850) while the badge master's content box at max(rgb)>=45 is x 58..912, y 5..939: the emblem's lower ~90px were discarded and the helmet read as cut off too early. Re-rendered from the master with the designer's framing extended to y=940, and the art block is captioned `tinycmdr` underneath. maintenance/make-brand-art.py now states the measured box and refuses to overwrite the shipped designer render without --force.",
@@ -1079,7 +1079,7 @@
       "title": "a re-read whose result was elided was refused, then the run was stopped as a loop",
       "state": "shipped",
       "anchor": {
-        "commit": "8818e28",
+        "commit": "000a2be",
         "expect": "tagged"
       },
       "detail": "The spill index advertises payload ids (spill#N); compaction drops an older result from the payload; the model re-reads the id because it can no longer see the content; the duplicate refusal answered 'NOT RE-EXECUTED ... nothing has changed since' - a false premise when the result is gone - and the loop guard then read the re-issue as a spin and forced the final report, 'detecting a loop almost every turn' while driving a live install (2026-10-03). _drop_oldest_block now records which calls lost their results, keyed by session, and a repeat of one of them is SERVED (one elision buys one re-run).",
@@ -1090,7 +1090,7 @@
       "title": "a refused read-only repeat no longer forces the final report",
       "state": "shipped",
       "anchor": {
-        "commit": "8818e28",
+        "commit": "000a2be",
         "expect": "tagged"
       },
       "detail": "Repeating read_file / search_files / search_sessions / list_tools / atlas cannot damage anything and the model may legitimately need it again; the refusal and its nudge stay, the forced stop does not. Repeats of calls that ACT still end the run - that is the shape the guard exists for.",
@@ -1101,7 +1101,7 @@
       "title": "a failed context probe was cached as a window",
       "state": "shipped",
       "anchor": {
-        "commit": "8818e28",
+        "commit": "000a2be",
         "expect": "tagged"
       },
       "detail": "Each endpoint's answer is kept for WINDOW_TTL (300s); a probe that came back EMPTY (a busy llama.cpp box timing out one GET) was cached as 0 for the whole TTL, so every call in that window took the assumed branch - budget 8000 + static + reply = 14,205 tokens with a 4157-token prompt, 17,680 with a 7632-token one - against a server serving 131,072. That guess MOVED with the prompt, which is why it read as unexplainable. An empty answer now expires in WINDOW_MISS_TTL (20s) and is re-asked; a route that RAISED is retried once inside the probe.",
@@ -1112,7 +1112,7 @@
       "title": "a guessed or pinned window no longer reads like a server fact",
       "state": "shipped",
       "anchor": {
-        "commit": "8818e28",
+        "commit": "000a2be",
         "expect": "tagged"
       },
       "detail": "status and the --app rail name the source - (assumed) with the remedy, (pinned) for llm.context_window, (capped) when llm.max_context_tokens is the ceiling - and the startup banner says 'window ASSUMED' when the endpoint did not report one. llm.context_window ('auto' by default) pins the window over detection, while max_context_tokens still caps the messages payload on top: two numbers with two jobs, both named. Documented in config.example.json.",
@@ -1123,7 +1123,7 @@
       "title": "the palette is a host-owned theme file with a resolution order",
       "state": "shipped",
       "anchor": {
-        "commit": "17844bf",
+        "commit": "8e7d533",
         "expect": "tagged"
       },
       "detail": "theme.toml carries the designer's colours (background #0F1114, panel #171A1F, ivory #E9E2D6, muted #A79B88, gold #D7A94A, ember #D9782D, bronze #75654D, crimson #C43A32, error #E05245, selection #3A2524, laurel #8FAE6B) with a row per tier: truecolor hexes, the exact xterm-256 codes, the Basic-ANSI words. Resolution: --theme NAME > TINYCMDR_THEME > agent.theme in config.json > the file's default > the built-in roman-night. `update` seeds the file once (host-owned) and never overwrites it.",
@@ -1134,7 +1134,7 @@
       "title": "the drawing code names semantic roles, never colours",
       "state": "shipped",
       "anchor": {
-        "commit": "17844bf",
+        "commit": "8e7d533",
         "expect": "tagged"
       },
       "detail": "A call site asks for heading / value / call / result / border / error / mark_success / decorative / progress_fill ... and SEMANTIC_ROLES maps a role to a palette colour, so a retheme never touches a card. Gold carries labels and success, laurel appears only for explicit success states, crimson only on large decorative elements (the banner), and errors are the brighter red with an ERROR label; green is gone from answers.",
@@ -1145,7 +1145,7 @@
       "title": "one SGR conversion, no raw escapes in the renderer",
       "state": "shipped",
       "anchor": {
-        "commit": "17844bf",
+        "commit": "8e7d533",
         "expect": "tagged"
       },
       "detail": "sgr_for/tui_sgr turn a palette style into escape parameters: the tier decides how a colour is written (24-bit, 38;5;N, an ANSI name, or nothing) and the palette decides which. The reporter's tone table maps tones to roles instead of raw SGR numbers, and the verb helpers (green/amber/red) name roles too.",
@@ -1156,7 +1156,7 @@
       "title": "colour resolves through a documented chain",
       "state": "shipped",
       "anchor": {
-        "commit": "17844bf",
+        "commit": "8e7d533",
         "expect": "tagged"
       },
       "detail": "--color always|never|auto > TINYCMDR_COLOR (which also still forces a tier) > NO_COLOR > auto-detection: COLORTERM=truecolor -> 24-bit, TERM=*256color* -> xterm-256, otherwise 16; NO_COLOR -> monochrome. Windows enables VT processing and the UTF-8 console code page at startup, with the mode flags named instead of the bare 7.",
@@ -1167,7 +1167,7 @@
       "title": "a terminal that cannot draw Braille gets the ASCII mark",
       "state": "shipped",
       "anchor": {
-        "commit": "17844bf",
+        "commit": "8e7d533",
         "expect": "tagged"
       },
       "detail": "agent.unicode (auto|always|never) decides; auto keeps the environment test (TERM=dumb, a Windows console without VT). When Braille cannot render, the rail shows the designer's gold `>_` and the wordmark instead of boxes - and the same policy decides the box-drawing set for the whole screen.",
@@ -1178,7 +1178,7 @@
       "title": "reasoning effort, in the shape each endpoint takes",
       "state": "shipped",
       "anchor": {
-        "commit": "044b258",
+        "commit": "9618b62",
         "expect": "tagged"
       },
       "detail": "Levels auto (default - no field at all) / off / minimal / low / medium / high / xhigh / max, with the wire shape from the provider's own catalog: reasoning_effort for an OpenAI-compatible /chat/completions, reasoning.effort for /responses, thinking.budget_tokens for an Anthropic-style endpoint (per-level table 1000/1000/4000/10000/32000/64000, overridable). llm.reasoning_mode forces a shape, llm.reasoning_wire remaps a level's spelling, llm.thinking_budgets overrides the table, an unknown level sends nothing and is named in the log. Chosen with `tinycmdr reasoning <level>` or `/reasoning <level>` per conversation, persisted like /model; the rail shows the level under MODEL. Verified live against a local llama.cpp box (reasoning_effort: high -> a reasoning_content block came back).",
@@ -1189,7 +1189,7 @@
       "title": "the console opens a fresh conversation per launch",
       "state": "shipped",
       "anchor": {
-        "commit": "044b258",
+        "commit": "9618b62",
         "expect": "tagged"
       },
       "detail": "The console lane's key was the constant `cli`, so every launch - and every --once run on a box - resumed one shared transcript: a brand-new window answered a new question about the previous run's ledger, and a test question accumulated an order count across all of them. A launch gets its own key now (cli-<stamp>-<pid>-<n>); older conversations stay on disk, `/tinycmdr sessions` lists them, `--continue` / `/tinycmdr resume N` resumes one, and `--session NAME` / TINYCMDR_SESSION names one exactly (which is how the suites pin a key).",
@@ -1200,7 +1200,7 @@
       "title": "a question never enters the order census",
       "state": "shipped",
       "anchor": {
-        "commit": "044b258",
+        "commit": "9618b62",
         "expect": "tagged"
       },
       "detail": "The census spots repeated ORDERS; a test question ('what is the date today?') was counted as one, so eight runs later the harness offered to mint a tool for it and the model answered about that instead of the date - 'the harness's repetition nag'. A trailing '?' or a leading what/when/where/who/why/how/which/is/are/do/does/can/tell me/show me/list never enters the census; work still does.",
@@ -1211,7 +1211,7 @@
       "title": "the unfinished-run note rides only a continuation",
       "state": "shipped",
       "anchor": {
-        "commit": "044b258",
+        "commit": "9618b62",
         "expect": "tagged"
       },
       "detail": "The note is context when the operator picks up last run's work and noise when they ask something new (measured: a brand-new question opened with 'the previous run did not finish' and the model answered about the previous run's ledger). The note asked the model to judge; the harness judges now - it rides an order matching the continuation cues (continue, resume, carry on, finish it, pick it up, the last task, ...) or a nearly-new conversation (the checkin suite's wreck case).",
@@ -1222,7 +1222,7 @@
       "title": "Ctrl-W hides the rail so a drag-select copies cleanly",
       "state": "shipped",
       "anchor": {
-        "commit": "044b258",
+        "commit": "9618b62",
         "expect": "tagged"
       },
       "detail": "With mouse capture off, a drag is the TERMINAL's selection and cannot know where the panes are, so it spilled into the sidebar and copied its keys along with the code. Ctrl-W hides the rail (the transcript takes the width) and the status line says so; Ctrl-W brings it back. A true in-app selection mode is the deeper fix and is not in this release.",
@@ -1233,7 +1233,7 @@
       "title": "the 16-colour tier read as one colour",
       "state": "shipped",
       "anchor": {
-        "commit": "df9ad3f",
+        "commit": "711a4c6",
         "expect": "tagged"
       },
       "detail": "A 16-colour terminal cannot show four neighbouring warm hues, and the theme's ANSI column mapped gold, ember, bronze and the label gold all to yellow - so a Windows console drew everything yellow while a truecolor one on macOS showed the palette ('all yellow and almost no variation'). The tier now uses the closest DISTINCT members of the 16-colour set, one per role: gold bright yellow, ember red, bronze dark yellow, crimson magenta, error bright red, muted dim, text white, laurel green. The app-style table is built from the palette on every tier now, instead of a second hardcoded table - which is how the ANSI column drifted at all.",
@@ -1244,7 +1244,7 @@
       "title": "one update command, from any version",
       "state": "shipped",
       "anchor": {
-        "commit": "6defe10",
+        "commit": "08cbefc",
         "expect": "tagged"
       },
       "detail": "The rule (docs/development.md + README): every user, on every released version, types /tinycmdr update in chat or `tinycmdr update` in a terminal and it works. The command fetches the latest release package and SHA256SUMS, verifies the download BEFORE touching the install, applies it leaving every host-owned path alone, and never shells out to git (a dirty/pruned/gitless checkout is not a blocker). It is reachable from chat (_CHAT_VERB_SET), runs in an interactive session instead of printing a hint, and a chat update that changed the version RESTARTS onto it. tests/test_verbs.py pins the verb, the published updaters, the release attachments, the launcher fallbacks and the restart; tests/test_tinycmdr_prefix.py grades the door with the verb stubbed.",
@@ -1255,7 +1255,7 @@
       "title": "update.sh / update.ps1 ship with every release",
       "state": "shipped",
       "anchor": {
-        "commit": "6defe10",
+        "commit": "08cbefc",
         "expect": "tagged"
       },
       "detail": "A version-independent updater attached beside install.sh/install.ps1 (and listed in SHA256SUMS): fetch the package for this host, verify it, extract, copy over the install while skipping the host-owned set, print the version it moved from and to. It is what repairs an install whose own updater is missing, broken or git-based. Proven end to end on a real 1.0.44 install planted on a Windows host: 27 files written, 1.0.44 -> 1.0.64, config.json / tools/mine.py / theme.toml / notes.md byte-identical.",
@@ -1266,7 +1266,7 @@
       "title": "the launcher repairs an install whose own updater predates the package path",
       "state": "shipped",
       "anchor": {
-        "commit": "941e9a8",
+        "commit": "4ddbf2a",
         "expect": "tagged"
       },
       "detail": "The tinycmdr launchers (sh and cmd) probe the local code for the CAPABILITY (releases/latest/download), not the verb name: measured against a real 1.0.44 payload, that version HAS an `update` verb - git-pull based, which dead-ends on the dirty checkout its installer leaves - and zero occurrences of the release URL. When the probe fails, the launcher fetches and runs the published updater. Verified end to end on the box: a 1.0.44 payload with the current launcher, `tinycmdr update` -> 'this install predates the packaged updater - using the published one' -> 1.0.44 -> 1.0.65 (27 files, host-owned left alone).",
@@ -1277,7 +1277,7 @@
       "title": "a host-owned file whose shipped default moved is reported",
       "state": "shipped",
       "anchor": {
-        "commit": "6defe10",
+        "commit": "08cbefc",
         "expect": "tagged"
       },
       "detail": "update never overwrites host-owned files by design, which is how the 16-colour fix inside theme.toml reached only new installs while existing ones kept the all-yellow ANSI column (same shape as the drop-in gap, one release later). The release now ships theme.default.toml beside theme.toml, and update prints - and doctor reports - the pair with the remedy, once per process.",
@@ -1288,7 +1288,7 @@
       "title": "no mint offer for a procedure that already ran through a tool",
       "state": "shipped",
       "anchor": {
-        "commit": "6defe10",
+        "commit": "08cbefc",
         "expect": "tagged"
       },
       "detail": "A computer-use runbook executed by hand produced 'say mint it and I will turn it into a tool' - but those calls were already tool calls, so wrapping the runbook changes nothing (reported: 'seems very stupid'). A run whose calls include a computer/GUI-shaped tool name (computer, gui, screen, screenshot, vision, desktop, mouse, keyboard, pyautogui) gets no offer and no report-time line.",
@@ -1299,7 +1299,7 @@
       "title": "the v1.0.68 page batch is published",
       "state": "shipped",
       "anchor": {
-        "commit": "0982d65",
+        "commit": "ad1ad89",
         "expect": "tagged"
       },
       "detail": "main carried the whole batch as of 0249e7f (the page redesign, the theme-bound palette and art, the one-time token handover, the update path's introduction of the page, the privilege/firewall handling), and the cut was held after the push until the page had been looked at. Closed 2026-10-04: the visual pass landed (02f7708), the local gate went green on 0982d65 (85 suites, 0 failed, 0 skipped), CI agreed on the same sha, and maintenance/release.sh published v1.0.68 - all three archives, install.sh/install.ps1, update.sh/update.ps1, SHA256SUMS and the stable aliases; the README's download names all resolve. The ledger-tag promotion rode the same cut (b9cf7f7).",
@@ -1310,7 +1310,7 @@
       "title": "the page's look needs a pass from a session that can see it",
       "state": "shipped",
       "anchor": {
-        "commit": "02f7708",
+        "commit": "fd052c1",
         "expect": "tagged"
       },
       "detail": "The page design is ported and gated (the stylesheet, the colonnade SVG, the four bundled fonts, the inlined lucide icons, the markup shell, the hero/chibi, the two banners), but the port was done by a TEXT session: it can measure an image, not look at one. The remaining work is visual - spacing, contrast, the mascot, the pending chibi modification - and belongs to a session running the harness's vision model. How to look: docs/development.md, 'Looking at the page'. Closed 2026-10-04: the vision pass ran (commit 02f7708). Every surface was looked at and the defects it found are fixed - icons take the design's sizes, the banner/version class-store wipes and the missing hidden state, the shell is the viewport, the rail's list scrolls, the palette is frosted, Stop is a header pill, copy and delete affordances sit at a resting opacity - the design's states are implemented (empty -> welcome+mascot, first line -> brand mark, active chat -> the stage, colonnade 0.22, the command box pinned), the provided chibi is the brand art everywhere, and the 1.0.68 cut followed.",
@@ -1321,7 +1321,7 @@
       "title": "the harness's memory is an OKF bundle, and the notes.md write path is gone",
       "state": "shipped",
       "anchor": {
-        "commit": "a189366",
+        "commit": "bc6e82a",
         "expect": "tagged"
       },
       "detail": "2026-10-04 brief: redesign the memory system to work off Google Cloud's Open Knowledge Format. Landed: memory/ holds one markdown concept per durable fact with YAML frontmatter (type, title, description, tags; provenance via sources; trust via generated/verified and a derived tier; lifecycle via status/stale_after), plus index.md and log.md; ONE `memory` tool (add, update, deprecate, forget, read, search, list) under one lock, so the concept, the index and the log move together; volatile_context carries the capped, flagged index and never the concepts; notes.md stays on disk and in the prompt, read-only (no migration - a deliberate call); the curator, the archive and the authored-hash sidecar are deleted with their five write-time config keys; attestation (type: Attested Computation) is reserved for a later phase. Rent: the schema declares six fields so the all-revealed worst case is 5,386 est against the 5,400 ratchet, while the default static state is ~4.3K est. tests/test_memory_okf.py (52 checks) pins the format contract; the authorship-guard suite retired with its subject.",
@@ -1332,7 +1332,7 @@
       "title": "A2UI cards in the page, the A2A mesh door and the MCP client - all on the rent rule",
       "state": "shipped",
       "anchor": {
-        "commit": "a189366",
+        "commit": "bc6e82a",
         "expect": "tagged"
       },
       "detail": "2026-10-04 brief: implement Google's agent formats while keeping the revolving prompt budget low (~5k). Landed: (A2UI) a hidden render_ui tool emitting A2UI v1.0 createSurface envelopes against the catalog this page declares (Card/Column/Row/Text/Divider; {\"path\": ...} bindings against createSurface.dataModel), refused by name when malformed; the payload rides the transcript line and never the prompt, and a lane with no surface answers honestly; (A2A) web.a2a publishes an AgentCard at /.well-known/agent-card.json (public, no token) and answers the v1.0 JSON-RPC binding on POST /a2a with the page token as a Bearer - SendMessage runs one message through this box and returns a Task (TASK_STATE_COMPLETED, or TASK_STATE_FAILED when the endpoint never answered), GetTask/ListTasks read a bounded task ring, cancel and streaming and push answer the spec's own errors - plus a hidden a2a client tool (list/card/send) registered ONLY when agent.a2a_remotes is set; (MCP) a hidden mcp tool driving stdio servers from agent.mcp_servers: the stateless 2026-07-28 revision (version and client identity in each request's _meta, resultType tolerated either way) with a one-time initialize fallback for older servers, processes reused across calls. Verified live: the harness's own a2a client called this box's door and read the Task back, and an A2UI card was rendered in a browser with its bindings resolved. Suites: test_a2ui (24), test_a2a (47), test_mcp (19), each ending in the on/off registration check that a box without the feature is byte-identical.",
@@ -1343,7 +1343,7 @@
       "title": "1.0.68/1.0.69 served /page.css as a 404 - every install rendered unstyled",
       "state": "shipped",
       "anchor": {
-        "commit": "2385279",
+        "commit": "0096f05",
         "expect": "tagged"
       },
       "detail": "2026-10-04, on the updated live install: The page redesign (0118cd8, 1.0.68) added assets/webui.css and assets/fonts/cinzel-600.woff2; maintenance/build-package.py's SHIP manifest was never told, and tinycmdr.py's WEB_FONTS never gained the 600 face - so every package from those tags carried neither, the page loaded its markup without a stylesheet, and /fonts/cinzel-600.woff2 404'd even from a source tree. Found by opening a published install in a browser, not by a suite: the release gate checked README download names, and the web suites run against the source tree where the file exists. Fixed (2385279): SHIP carries both, WEB_FONTS serves the 600 face, and tests/test_webui_page.py derives every asset the routes serve - from the code and the stylesheet, never a hand list - and fails when SHIP misses one; falsified against the released manifest, which it names exactly. The live install was repaired in place and the packages rebuilt.",
@@ -1354,7 +1354,7 @@
       "title": "a bare `tinycmdr` opened the page and the app at once; `tinycmdr cli` is the console now",
       "state": "shipped",
       "anchor": {
-        "commit": "2385279",
+        "commit": "0096f05",
         "expect": "tagged"
       },
       "detail": "2026-10-04: a bare tinycmdr opened the page and the TUI/CLI at once, where the page should be the default and the console a deliberate choice. Two layers: both shims added --app for the bare case (2026-09-30), and main() raised the page beside every long-lived mode, so the app and the page started together. Fixed (2385279): the shims add nothing (the build's bare start is the page, with the chat lanes beside it when a box has any), `tinycmdr cli` is handled before the verb dispatch and normalised to --cli, and --cli/--app no longer raise the page unless --web is given; tests/test_shim.py pins the shim mapping and both main() rules.",
@@ -1365,7 +1365,7 @@
       "title": "the wizard minted the page token but never let the reader set one",
       "state": "shipped",
       "anchor": {
-        "commit": "2385279",
+        "commit": "0096f05",
         "expect": "tagged"
       },
       "detail": "2026-10-04: the config wizard could not set a web-ui token. run_setup section 4 minted a token or kept the host's own; an operator holding a token from a password manager had to hand-edit .env afterwards. Fixed (2385279): the wizard asks (Enter keeps the host's own or mints one; a typed value goes through _env_set_safe, whose 20+ character shape is enforced and a refused value is re-asked, not swallowed), retires a stale config.json web.token so nothing silently outranks .env, and prints the link the new token makes; `--web-token <t>` does the same at install, on all three installers. tests/test_setup.py covers save/use/retire; test_installer_parity.py carries the flag row.",
@@ -1376,7 +1376,7 @@
       "title": "the page's 'Open archives' button was a dead link",
       "state": "shipped",
       "anchor": {
-        "commit": "2385279",
+        "commit": "0096f05",
         "expect": "tagged"
       },
       "detail": "Reported 2026-10-04: 'the open archives button doesnt do anything at all in the webui. it is a dead link... it can be removed or renamed and a different feature added there.' Its handler only un-hid the rail - already visible on a desktop. Fixed (2385279): the hero's second action is 'Resume the last campaign' - the newest session with exchanges, the same call a rail row makes - and it hides itself when there is none. The first cut opened the empty conversation New Campaign had just made and looked as dead as the button it replaced; that was caught by clicking it live, and the fix resumes by exchanges instead of row order. Verified in a real browser: the click opens the transcript, the hero closes, the rail row goes active.",
@@ -1387,7 +1387,7 @@
       "title": "the skill frontmatter switch hid a runbook from the prompt but not from the skill tool",
       "state": "shipped",
       "anchor": {
-        "commit": "2385279",
+        "commit": "0096f05",
         "expect": "tagged"
       },
       "detail": "The frontmatter hide switch (hide: true; disable-model-invocation: true accepted as-is) trimmed the prompt index while skill{list} still served the name and skill{read} the body. Fixed (2385279): the flag binds the tool - list/search omit, read refuses, name-miss lists do not leak, the A2A card skips - and the OPERATOR naming the runbook in an order grants it for that session (grant_named_skills; word-bounded on the frontmatter or folder name; cleared by /new); a granted read carries a HARNESS line saying why it opened. tests/test_tool_discovery.py + tests/test_harness_extras.py; falsified against 142207e (kebab unparsed, body served, names leaked).",
@@ -1398,7 +1398,7 @@
       "title": "every installer copied a hand list that never gained assets/ - fresh installs served the page unstyled",
       "state": "shipped",
       "anchor": {
-        "commit": "7fdb61f",
+        "commit": "0e94bba",
         "expect": "tagged"
       },
       "detail": "Reported 2026-10-04, on a fresh install: the page rendered as raw unstyled markup - the same symptom as the 1.0.68/1.0.69 packages, from a second cause. All three installers copied a HAND-WRITTEN list of names and the page redesign's assets/webui.css was never added to any of them, so even a correct package produced an install with no stylesheet, no mascot and no colonnade; the installer suite could not see it because its own package_tree() kept a fourth list that omitted assets/ too - four mirrors of 'what ships', none tied to what the page fetches, and every check graded the source tree where the file exists. Fixed (7fdb61f): the installers copy the package minus host-owned paths (the rule update.sh already used, so no list is left to drift), maintenance/package_assets.py derives the page's asset set from the code once, tests/test_webui_page.py grades SHIP against it, tests/test_installer_unix.py grades an INSTALLED tree (staged from SHIP), and maintenance/check-package-assets.py - wired into release.sh - grades the built archives byte-for-byte. Both halves falsified: the released installer goes red naming the missing assets; a doctored archive goes red naming webui.css.",
@@ -1409,7 +1409,7 @@
       "title": "the hero's SPQR pill removed; the page's mascot is the new chibi",
       "state": "shipped",
       "anchor": {
-        "commit": "7fdb61f",
+        "commit": "0e94bba",
         "expect": "tagged"
       },
       "detail": "Reported 2026-10-04: the SPQR pill on the hero read as a clickable control and did nothing ('remove that too'), and a new chibi arrived in the web-ui design import to be used everywhere ('I want it replaced everywhere with that one tinycmdr-chibi-new.png'). The pill (HTML plus its two CSS rules) is gone (7fdb61f); the chibi master was replaced and both shipped figures re-derived with the stdlib pipeline - page-chibi.png 512x512 for the hero, tinycmdr-chibi.png 512x759 for the README (23fd603), verified live in a browser (cold load; the art is cached warm) and copied into the live install's assets/.",
@@ -1420,7 +1420,7 @@
       "title": "the stage's backdrop is a photo (roman-temple-spring.jpg)",
       "state": "shipped",
       "anchor": {
-        "commit": "f3835b5",
+        "commit": "7f512b4",
         "expect": "tagged"
       },
       "detail": "Reported 2026-10-04: a new photo, 'the permanent background replacement for the dark pillars background of the webUI'. The drawn colonnade (assets/roman-colonnade.svg, themed gold and bronze) is gone - SVG, route and substitution deleted; the photo is served at /temple.jpg (image/jpeg, cached a day, read per request so a host can swap it at the same path) and the backdrop element is emitted only when the file exists. The CSS was tuned by LOOKING at the rendered page: cover/bottom anchoring, a vertical feather mask, opacity .6 in the hero and .28 with a chat open, plus a left scrim in .stage-vignette so the copy stays legible over the bright marble. tests/test_webui.py pins the no-photo absence, the element's aria-hidden, and the route's bytes and JPEG signature; the asset-set derivation covers the file with no list, so the manifest, install and archive checks do too.",
@@ -1431,7 +1431,7 @@
       "title": "the wizard asks the link before its key, the window at the endpoint, and the page stops prompting when the cookie authenticates",
       "state": "shipped",
       "anchor": {
-        "commit": "ac2bd17",
+        "commit": "2724386",
         "expect": "tagged"
       },
       "detail": "2026-10-04, on a fresh install: the api key was asked for before the endpoint link, a config entry was asked for long after the thing it configures, and the web-ui token was re-entered repeatedly - later, on the live install, every page read unauthorized. Fixed (ac2bd17): _ask_model_target asks the endpoint LINK before the key (cloud only; the 401 re-ask stays where its reason is visible) and a hosted endpoint that reports no context window is ASKED for llm.max_context_tokens at that moment (128k or a number; the 2048 reply floor is refused) instead of leaving it as homework - the link order in `setup` and `model add`, the window in `setup`. The page no longer prompts for its token when the handover cookie already authenticates: the boot probes GET /api/login (200 = cookie good, 401 = fresh browser) and asks only then; and any 401 on a GET/HEAD clears the stale token, asks once (the retry prompt names `tinycmdr web` as the way back) and retries that call, instead of stranding the page on a bare 'unauthorized' note. The page suite never saw the prompt bug because its /api/log prefix branch swallowed /api/login; the branch order is fixed and both behaviors are graded in test_webui_page/test_webui, plus test_model_setup for the model-add order.",
@@ -1442,7 +1442,7 @@
       "title": "versioned art URLs, and one status chip with four real states",
       "state": "shipped",
       "anchor": {
-        "commit": "e13cee4",
+        "commit": "4cb50bc",
         "expect": "tagged"
       },
       "detail": "Reported 2026-10-04, live page: 'new background but old chibi' and 'is the server idle and ready? ... remove pointless things or actually make them useful'. (1) Every artifact carried the right bytes - the tree, the published archive, the live install and the live service's /chibi.png all hashed to the same new 295,131-byte file - but /page.css and the HTML revalidate on an ordinary reload while the ART routes cache for a day, so an update could show a new stylesheet beside the old mascot until a hard reload. The art URLs now carry ?v=<version> (chibi/mark/icon in the page, the manifest icon, the backdrop URL in the stylesheet; the handlers match with startswith so the query is inert), so a release invalidates exactly the art it changed. (2) The app bar and the stage header each carried a status pill for the same state machine - 'idle' beside 'ready' - neither dot changed colour, and nothing reset the stage chip when a run ended. One chip now, in the stage header: ready (green) / working (gold, pulsing) / stopping (gold) / trouble (red), each with a tooltip, all writers through one setStage(); the app bar pill and its CSS are gone. Verified live in all four states. tests/test_webui.py pins the versioned URLs; tests/test_webui_page.py reports the chip and asserts a finished run leaves it ready.",
@@ -1453,7 +1453,7 @@
       "title": "markdown renders (page and Telegram), search inside conversations, the rail toggle, and a nudge budget instead of one ask",
       "state": "shipped",
       "anchor": {
-        "commit": "a4890b7",
+        "commit": "22de28b",
         "expect": "tagged"
       },
       "detail": "Live-box reports 2026-10-04, in one batch. (1) 'A model tried to use a markdown table but in the webui it looks all stupid. And in mattermost it shows as a normal table' - the page had NO markdown renderer; it renders now (DOM nodes, never innerHTML: tables, fences, lists, emphasis, links, bare URLs, images as links) and Telegram's tg_html grew the same class (it converted only backticks; now the HTML subset, code protected, tables in <pre>). (2) a request that search reach inside conversations, not just the parent session - the rail's box filtered titles only; /api/search?q= reads the model tool's own corpus (session_search_hits()) and the matches render with title, snippet and a click that opens the conversation. (3) the far-left menu icon left a broken layout - hiding the rail left the grid's 292px track, pushing the stage into the sidebar column; a body class re-tracks it, one writer, aria-expanded. (4) 'the harness keeps allowing the model to stop... It has stopped 2x this run now' - both no-progress guards were one-shot booleans; they now spend agent.nudge_retries (default 3) asks, logged with counters, delivery annotation kept for the give-up. (5) the GET /api/login probe was being served by /api/log's prefix match; it has its own branch above it, payload asserted.",
@@ -1464,7 +1464,7 @@
       "title": "the contracts suite, the built-package page gate, and the rule for reported bugs",
       "state": "shipped",
       "anchor": {
-        "commit": "ab9286e",
+        "commit": "1a6bf7a",
         "expect": "tagged"
       },
       "detail": "2026-10-04: one-off fixes kept appearing where the class needed a check. Landed as three structural pieces: tests/test_contracts.py derives every must-agree pair from BOTH sides (page ids vs the harness DOM, placeholders vs substitutions, referenced assets vs the docs route table, .env keys installers write vs what the code reads, docs' env names vs the tree's programs, and each router chain's prefix ordering - the class that hid the login probe behind /api/log; it found real drift on its first run, including the prefix that would have swallowed /api/login in the page harness). maintenance/check-package-page.py, wired into release.sh beside the other package checks, unpacks each built archive, serves it on a scratch port and fetches the page the way a browser does (no placeholders left, every referenced asset 200, the API reporting the built version) - the artifact no gate had ever loaded. development.md 7 states the rule: a bug lands as the fix PLUS the invariant that grades its class, named with where it is checked.",
@@ -1475,7 +1475,7 @@
       "title": "a hosted endpoint that reports no window gets its DOCUMENTED window (and the caps wish was already solved)",
       "state": "shipped",
       "anchor": {
-        "commit": "f037120",
+        "commit": "999b6f5",
         "expect": "tagged"
       },
       "detail": "2026-10-04: an endpoint pointed at api.deepseek.com ran at the assumed 8,000-token window instead of its 1M, unless 1000000 was written explicitly. Landed (f037120): llm.window_presets (host-substring -> tokens) is consulted before a small built-in table of providers' documented windows (api.openai.com 128k, api.anthropic.com 200k, api.deepseek.com 128k), matched by HOST ONLY (F-19's no-name-guessing rule kept); the envelope resolves pinned -> server -> preset -> explicit ceiling -> assumed 8000, so llm.max_context_tokens still caps a preset, the log names the source and envelope_line reads 'window from api.deepseek.com (documented; ...)'; with a window the reply cap follows it instead of the assumed branch's hard 2048. tests/test_endpoint_window.py pins all four behaviors. In the same pass the ledger's caps-from-window wish was found to be already solved (mem_limit_chars' window//8 tightening plus its one-shot ceiling, df4282c; window_profiles bands with the example's three seeds) and was closed with that record rather than re-implemented.",
@@ -1486,7 +1486,7 @@
       "title": "a schema-legal tool call answered `No skill named ''` and stopped a run",
       "state": "shipped",
       "anchor": {
-        "commit": "92b3def",
+        "commit": "22d98c4",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-05 (92b3def). A live Linux install's run, stuck on a Mattermost-token question, asked `skill{\"action\":\"search\",\"topic\":\"mattermost token mmctl ...\"}` with no skill name, was answered `No skill named ''` - an empty name and nothing to try - and re-issued its last shell call until the loop guard wrapped the run up (14 steps, 310s). The skill tool resolved the skill BEFORE dispatching the verb, so that shape could never work: a bare topic now searches every runbook the session may see (hits labelled `runbook :: file :: heading`), `read` without a name says a name is needed, verbs are lower-cased (Search/Read fell through the dispatch into the search tail), show|get|open are read aliases, an unhandled verb names the three it has, the topic scan lower-cases first (an all-caps topic answered 'nothing to look up'), and an empty topic says what to pass. Sweeping every tool with the minimal arguments its own schema permits found four more answers of the class: write_file without `content` returned `ERROR writing <path>: 'content'`, memory/experiment/plan answered id-less read/update/step verbs with `no concept ''` / `no experiment #None` / `No plan step with id None`, and search_sessions with an empty query returned a dangling colon. All now come back through the shared missing-argument answer or an explicit needs-`id`/`query`. Audited and left alone: schedule's add/remove (name, cron and task are declared, so the KeyError path already answers well), ask_user's timeout (guarded), the drop-in tools in tools/, and find_tools' category (the static prompt teaches that call).",
@@ -1497,7 +1497,7 @@
       "title": "memory promotion is event-driven and dismissible, and a restatement is refused",
       "state": "shipped",
       "anchor": {
-        "commit": "b05ffde",
+        "commit": "66435b8",
         "expect": "tagged"
       },
       "detail": "Self-audit 2026-10-04: five ranked failure modes in how the harness prompts a model to save what it learns - the judgment was made at WRITE TIME (a fact's freshest moment, which tracks effort just spent rather than future value), nothing deduped a restatement, a replacement had no way to say so, the index line was a truncated prefix rather than the operative token, and the failure was silent by construction. Landed (b05ffde): remember_offer fires on the run's own hand-call count (snapshotted at run start; the counters are session-cumulative) and asks save-or-dismiss once per session; offer_after_run keeps ONE offer per run in priority order (lookup-memory -> mint -> event-memory), because the event ask otherwise took the mint offer's turn on every long run; a bare 'dismiss' is a control order, recorded for the shape by the census's overlap rule and answered with no model call; add refuses a near-duplicate body (Jaccard, >=10 shared words - containment scores two different facts about one subsystem as one) and names the update path plus the supersedes escape hatch; supersedes deprecates the replaced concept with the reason in the same call; _memory_description prefers the complete unit naming a flag/identifier from the title and marks any cut with an ellipsis; and every index line states its verification tier, unverified included. Schema rent settled by the gates, twice: the first cut declared all six new fields and tripped test_disclosure's 1200-char per-tool cap (memory 1426) with the static overhead at 5662 local; the cut keeping only `description` measured 5395 here but 5412 on the macOS runner against the 5400 ceiling, so NO new field is declared - `supersedes` rides the refusal text, and `description` and `stale_after` one once-per-session hint on the model's own first add. Legacy notes.md stays frozen (surface-write gated); its tie-break against memory/ is still prose, and the index now at least says unverified.",
@@ -1508,7 +1508,7 @@
       "title": "a failover request no longer truncates the live session's tool results",
       "state": "shipped",
       "anchor": {
-        "commit": "bd1414f",
+        "commit": "c74913f",
         "expect": "tagged"
       },
       "detail": "Audit finding: `_fit_payload` documented 'Cut a COPY' but copied only the list; the trim loop wrote through the caller's message dicts, so one failover to a smaller-window endpoint shortened every >500-char tool result in the LIVE session to 200 chars, with no transcript written. Now `[dict(m) for m in messages]`: the request shrinks, the stored history does not. Regression in tests/test_envelope.py asserts the caller's history is byte-identical and the payload really was cut; falsified against the pre-fix build.",
@@ -1519,7 +1519,7 @@
       "title": "tool-call repair: doubled names, id overflow, and copy-on-write",
       "state": "shipped",
       "anchor": {
-        "commit": "db3e41e",
+        "commit": "76f5f15",
         "expect": "tagged"
       },
       "detail": "Three audit findings, one choke point. A doubled tool name (`shellshell`) was halved only when the arguments were also doubled, so the no-argument doors (`memory`, `list_tools`) were skipped entirely; the halving now runs on registry evidence and is safe on its own. `_uniquify_tool_call_ids` indexed the replacement list positionally and raised IndexError when a payload carried more results for one id than calls; it clamps. `_repair_tool_arguments` rewrote unparseable arguments to `{}` IN PLACE in the live history, so the model later read its own past turn as a call with no arguments; it now rewrites copies. Commits 45b6666, 2708d28, db3e41e.",
@@ -1530,7 +1530,7 @@
       "title": "scan budget: backgrounded walks pay, spaced quoted roots stay whole, recursive-default verbs count",
       "state": "shipped",
       "anchor": {
-        "commit": "61b46da",
+        "commit": "a368a7f",
         "expect": "tagged"
       },
       "detail": "The auto-background return skipped `charge_scan`, so the slowest walks (the ones that ran past the window) cost the run's budget nothing; the hand-off now charges the time it held the turn. The root scan read the quote-stripped command, truncating a quoted path with a space at the first space into a broad profile root; it now reads quoted paths whole and flattens quotes only for a re-executor. `tree`, `du`, `rg`/`ag`/`ack`, `rsync` and `ls -R` recurse without a flag and were invisible to the flag-gated shapes; they are shapes now, `Path.walk()` joins the code shapes, and the broad-root condition still keeps narrow work unbilled. Commits cc011c7, 724432d, 61b46da.",
@@ -1541,7 +1541,7 @@
       "title": "the stall watchdog's clock and the segment reset are honest",
       "state": "shipped",
       "anchor": {
-        "commit": "36ebbe5",
+        "commit": "a178413",
         "expect": "tagged"
       },
       "detail": "`_post` counted the watchdog's own warning as run progress, resetting the clock it watches - the abandon stretched by the warn interval, and with warn >= abandon it could never fire; the warning posts with touch=False and doctor fails on warn >= abandon. The continuation segment reset `steps` but not `progress_at`, so the plan-drift delta went negative and the guard was dead after segment 1; it resets with the counters, and the runway line names the segment. The caps are per segment by design, so the config comments and config.example.json now say so (llm.max_turns bounds the run). Doctor reports a request budget longer than the abandon window (a note - the shipped defaults trip it at 1230s vs 20m). Commits 36ebbe5, 0409fc1.",
@@ -1552,7 +1552,7 @@
       "title": "a start that never runs stops being retried",
       "state": "shipped",
       "anchor": {
-        "commit": "e4f5a28",
+        "commit": "a09aebf",
         "expect": "tagged"
       },
       "detail": "The supervisor retried a permanent config error for ever at the 60s ceiling - 5,368 restarts over four days on a live install, every one at uptime=0s, with the reason printed once in bot-stdout.log and nobody listening. Ten rapid failed starts in a row now stop the ladder, write the bot's last words into supervisor.log, and exit 4; a bot that RAN before each crash still retries on the normal backoff.",
@@ -1563,7 +1563,7 @@
       "title": "published claims measured from the tree again; checkout-only notes",
       "state": "shipped",
       "anchor": {
-        "commit": "3eca558",
+        "commit": "7004b1d",
         "expect": "tagged"
       },
       "detail": "The README's '~3.5K-token fixed prompt' and the doc's 4,145/4,374 table were releases stale, and the measured-block generator hardcoded one of the figures inside its own 'rendered from the tree' block. Measured 2026-10-05: 4,116 est on a clean unpack, 5,860 est as the live install sends it; the generator no longer carries a figure, measure-prompt.py measures each leg from its own directory and prints the context-file cost. The README says one import at startup (six installable). The Develop section says it is a git checkout, not an installed tree. Doctor's python floor is 3.10. The streaming-failure warning says the endpoint stays off streaming for the rest of the process. Commits 6ba4d71, 42d589c, c15e869, 92812c6, 3eca558.",
@@ -1574,7 +1574,7 @@
       "title": "a computer_use starter ships for macOS, Windows and Linux",
       "state": "shipped",
       "anchor": {
-        "commit": "0a8b920",
+        "commit": "b49ebb1",
         "expect": "tagged"
       },
       "detail": "The GUI tool is a shipped starter now: capture the screen or a window, list apps and windows, and click, type, scroll by numbered element or point - three native backends, no third-party driver (macOS System Events/JXA + screencapture, Windows UI Automation/Win32, Linux X11 xdotool + a grabber). action=doctor reports the macOS Accessibility and Screen Recording grants with the exact interpreter path to grant, the Windows session/DPI facts and the missing Linux tools; screenshots attach to the model when agent.vision is on. The file is tracked, carries both package lists and is seeded by the installer copy; tools/README and docs/computer-use.md are the shape and host docs.",
@@ -1585,7 +1585,7 @@
       "title": "the web door compares Origin host AND port; a saturated server answers 503",
       "state": "shipped",
       "anchor": {
-        "commit": "040664e",
+        "commit": "2a10fe0",
         "expect": "tagged"
       },
       "detail": "The Origin gate compared hostnames only, so a page served from another port of the same name rode the session cookie and could drive the token-authenticated API (the same request to /api/chat is shell access). The compare is (host, port) now. Separately, reaching the connection cap closed the socket with no HTTP status, so a health probe could not tell a busy page from a dead box: loopback callers are exempt from the cap and an over-cap LAN peer gets 503 + Retry-After. The origin docstring states the token-mandatory premise again.",
@@ -1596,7 +1596,7 @@
       "title": "the page lane is reported by health and doctor",
       "state": "shipped",
       "anchor": {
-        "commit": "f9817f9",
+        "commit": "843d85d",
         "expect": "tagged"
       },
       "detail": "run_webui recorded a lane (lane_up on bind, lane_down on a bind or token failure) and lanes_snapshot iterated a hardcoded chat pair, so /api/health, `tinycmdr health` and doctor could not tell \"page up\" from \"page never started\". A RECORDED web lane is reported now, gated by web.enabled; no record is no news, so a CLI-only box still reports no lane; lane_up names the port actually bound.",
@@ -1607,7 +1607,7 @@
       "title": "tool doors read execution; gated tools name their config key; shipped tools are runnable",
       "state": "shipped",
       "anchor": {
-        "commit": "55848ed",
+        "commit": "af3a3d4",
         "expect": "tagged"
       },
       "detail": "execute_code refused code that merely named a <tool>.py path - a comment, a string, a print or a read - and the source is parsed now, so a mention counts only when it is imported or fed to a call that runs it. The script door tokenizes with quote awareness, so `python \"C:\\Program Files\\...\\toolsmith.py\"` (the only spelling Windows accepts) reaches it. The shipped tools carry a key=value __main__ again, so running one as a script works. A config-gated tool (mcp/a2a) answers with the config key that registers it instead of blaming the build, and create_tool/the system prompt point at `memory` (there is no `remember` tool).",
@@ -1618,7 +1618,7 @@
       "title": "prompt surfaces: scrub, caps and honest cuts",
       "state": "shipped",
       "anchor": {
-        "commit": "11331bc",
+        "commit": "a12fe03",
         "expect": "tagged"
       },
       "detail": "The trailing state block (notes, memory index, spill, run state) is scrubbed like every other prompt path, so a secret that landed on disk no longer rides every request. The skills index is bounded like its siblings: descriptions drop before names, and the tail counts what was dropped (skills_index_max_chars). An always-runbook cut lands on a line boundary with a marker and a skipped runbook is named. The compaction budget and the envelope line use the same volatile block the payload sends (session, atlas/shell flags, prior-unfinished). find_tools' schema declares `category`, the call the prompt teaches. memory action=search matches an AND of the query's words.",
@@ -1629,7 +1629,7 @@
       "title": "restart helpers: literal path matching, scoped filters, real exit codes",
       "state": "shipped",
       "anchor": {
-        "commit": "885ecb4",
+        "commit": "8f604c3",
         "expect": "tagged"
       },
       "detail": "The PowerShell kill filters used -like, which reads [ ] * ? in a PATH as wildcards - a bracketed install folder matched nothing and the scoped clause silently let the old bot live. Both copies (installer and restart helper) compare literally (OrdinalIgnoreCase) and every clause is install-scoped, so a second install's watchdog is never touched. The Windows helper exits non-zero when processes survive the kill or none come back. The macOS helper's start accepts an already-loaded agent, stop says when nothing was loaded, and logs survives a fresh install with neither log present.",
@@ -1640,7 +1640,7 @@
       "title": "a hand-run suite never opens a browser",
       "state": "shipped",
       "anchor": {
-        "commit": "b62e8cc",
+        "commit": "e2d0841",
         "expect": "tagged"
       },
       "detail": "run_all.py guards its children with TINYCMDR_NO_BROWSER=1, but running a suite the way its own header says (python tests/test_webui.py) started the page surface in-process with the ambient environment, and the auto-open fired. The suites that start a surface carry the guard themselves now, and test_webui fails any tests/test_*.py that starts one without it.",
@@ -1651,7 +1651,7 @@
       "title": "theme.toml and soul.md materialize from the shipped defaults on start",
       "state": "shipped",
       "anchor": {
-        "commit": "bdc4347",
+        "commit": "69ceae7",
         "expect": "tagged"
       },
       "detail": "Both files are host state. A checkout or install that lacks one gets a copy of theme.default.toml / soul.example.md at startup (logged once); an existing file is never touched, so an edited theme or persona survives every start. soul.example.md is the shipped twin of soul.md; DEFAULT_SOUL stays as the read fallback.",
@@ -1662,7 +1662,7 @@
       "title": "community standards files and templates",
       "state": "shipped",
       "anchor": {
-        "commit": "cee8c28",
+        "commit": "113cf0c",
         "expect": "tagged"
       },
       "detail": "CODE_OF_CONDUCT.md (Contributor Covenant 2.1, contact via my GitHub profile), CONTRIBUTING.md (the real flow: gate, pre-push, commit shape), SECURITY.md (GitHub private vulnerability reporting as the sole channel), .github/ISSUE_TEMPLATE and PULL_REQUEST_TEMPLATE. No email addresses in any of them.",
@@ -1673,7 +1673,7 @@
       "title": "untrack theme.toml and soul.md, and wire check-hygiene.py",
       "state": "shipped",
       "anchor": {
-        "commit": "d52fdd0",
+        "commit": "6d6f882",
         "expect": "tagged"
       },
       "detail": "Landed 2026-10-06 (d52fdd0). theme.toml and soul.md are host state and are untracked: .gitignore carries both, the package ships theme.default.toml / soul.example.md (a missing host copy is seeded at first start), the SHIP manifest no longer names a host file, and maintenance/check-hygiene.py fails when any of 21 host-state names is tracked (it runs in pre-push.sh and as tests/test_repo_hygiene.py in the gate; red until the untracking, green after). The human step for git-pull hosts - copy theme.toml and soul.md aside BEFORE the pull, then compare and restore - is a prominent blockquote at the top of the Unreleased CHANGELOG entry, deliberately not scripted around. Follow-up landed e4c68a2: with the files untracked, a clone lacks both and the import-time materialization wrote them into the checkout (test_checkin was named by the runner's leak report); the gate's children now run with TINYCMDR_NO_MATERIALIZE=1, the materialization suite clears the guard because that is the behaviour it grades, and a new check pins it.",
@@ -1684,7 +1684,7 @@
       "title": "the lane doors report honestly and never double-listen",
       "state": "shipped",
       "anchor": {
-        "commit": "a7b271e",
+        "commit": "abe5633",
         "expect": "tagged"
       },
       "detail": "--telegram takes startup validation and the single-instance lock like every other service lane, so a second poller can no longer split DMs with a running service. The Telegram lane reports itself down after five minutes of failed polls (a lane that started and went deaf never raised, so health said up for ever) and comes back up when polls recover. A caption is read as the question, and a message with no text gets a one-line reply and a log line instead of silence. The Mattermost catch-up sweep calls the shared user_is_allowed check rather than its own membership test (a bare-string allowlist made that test always true, silently dropping every recovered post; null raised every cycle). The dead first assignment in reply_ask is gone.",
@@ -1695,7 +1695,7 @@
       "title": "ListTasks hands out a real continuation token",
       "state": "shipped",
       "anchor": {
-        "commit": "519837c",
+        "commit": "edf89b9",
         "expect": "tagged"
       },
       "detail": "An empty nextPageToken while tasks remained told a spec-following client the page was the last, so everything past page one was unreachable; the token is now the next offset.",
@@ -1716,7 +1716,7 @@
       "title": "the Windows install's PATH entry is broadcast, and the one-liner does not pause",
       "state": "shipped",
       "anchor": {
-        "commit": "925f685",
+        "commit": "2abb394",
         "expect": "tagged"
       },
       "detail": "The user-PATH write never broadcast WM_SETTINGCHANGE, so a window opened right after a fresh install kept Explorer's stale environment and answered \"'tinycmdr' is not recognized\" until logoff; both PATH writes (install and the uninstall revert) broadcast now, and the installer also refreshes its own session so the verb works in the window that ran it. The hosted one-liner runs inside the caller's terminal, so it sets FB_NOPAUSE=1 before handing to INSTALL-WINDOWS.cmd: the press-any-key barrier is for the double-click window, which really does close.",
@@ -1748,7 +1748,7 @@
       "state": "shipped",
       "detail": "Fixed 2026-10-06 (93dfa82; test 99ac80a, doc re-measure 281c681). The update narrated its own policy: the .git-checkout notice (a 1.0.46-1.0.48 failure mode), the dev-kit keep line (it named a maintenance/where-roles.json a clone may not have - _declared_dev_tree() conflated 'declared' with checkout evidence), and the host-default note ('this release's default differs' for a theme.default.toml the release never touched). All silent now, except a host default this package actually moved, which prints one action line; _dev_tree_reason() returns declared/checkout/None; the kept-files report is one plain line. tests/test_update_notes.py fails on the pre-fix build; tests/test_verbs.py grades the reason.",
       "anchor": {
-        "commit": "93dfa82",
+        "commit": "d7ba68a",
         "expect": "tagged"
       }
     },
@@ -1758,7 +1758,7 @@
       "state": "shipped",
       "detail": "Removed 2026-10-06 (5e205a3). Contributor Covenant 2.1 boilerplate (added cee8c28 for 1.0.81) promised enforcement by 'community leaders' for a project I maintain alone, with no community, and nothing in the tree referenced it. CONTRIBUTING.md and SECURITY.md stay - both state rules this project follows. Restore: git checkout v1.0.81 -- CODE_OF_CONDUCT.md",
       "anchor": {
-        "commit": "5e205a3",
+        "commit": "a9829e7",
         "expect": "tagged"
       }
     },
@@ -1768,7 +1768,7 @@
       "state": "shipped",
       "detail": "Recorded 2026-10-06 (f51cd01) in AGENTS.md Invariants, after a review of the single-file shape - especially the agent reading and editing itself. tinycmdr.py stays one file: what can be read end to end, what SHA256SUMS verifies and the update copies (nothing builds on the host), and what the agent edits when it works on itself. Parts would be assembled at package-build time at the earliest; that re-architecture needs its own item, not a cleanup.",
       "anchor": {
-        "commit": "f51cd01",
+        "commit": "66faba9",
         "expect": "tagged"
       }
     },
@@ -1778,7 +1778,7 @@
       "state": "shipped",
       "detail": "Fixed 2026-10-06 (5c82837): config rpartition'd the path into one section, so `set zz.a.b v2` wrote the literal top-level key \"zz.a\" beside zz={a:v1} - a write that missed the path given and that unset could not reach. The walk now creates each missing intermediate dict and refuses (rc=1, naming the walked path and its value) when an intermediate exists as a scalar. tests/test_verbs.py: 2 of the 4 new checks red on the pre-fix build (TINYCMDR_TEST_APP).",
       "anchor": {
-        "commit": "5c82837",
+        "commit": "f7fdcf4",
         "expect": "tagged"
       }
     },
@@ -1788,7 +1788,7 @@
       "state": "shipped",
       "detail": "run 9 (fixed 2026-10-06, 0ae0f59). The verb line is logged before dispatch, so `config set mattermost.token hunter2` put the value in tinycmdr.log in cleartext even though the write itself was refused ('put it in.env instead'). _secret_config_path is now one predicate shared by the refusal and the log scrub; the value logs as <redacted>. tests/test_verbs.py: +1 sentinel check, red on the pre-fix build.",
       "anchor": {
-        "commit": "0ae0f59",
+        "commit": "c37289e",
         "expect": "tagged"
       }
     },
@@ -1798,7 +1798,7 @@
       "state": "shipped",
       "detail": "run 9 (fixed 2026-10-06, d568caf). Verbs are case-insensitive but keys are not, and `get AGENT.max_steps` answered (not set) rc=0 - silence that reads as 'no such setting'. One unambiguous case-insensitive match prints the whole corrected path; ambiguity stays silent. tests/test_verbs.py: +3 checks, red on the pre-fix build.",
       "anchor": {
-        "commit": "d568caf",
+        "commit": "d8c93c6",
         "expect": "tagged"
       }
     },
@@ -1808,7 +1808,7 @@
       "state": "shipped",
       "detail": "run 9 (fixed 2026-10-06, 7154ff0). An offset past EOF printed the phantom range (lines 99999-99999 of 98) with an empty body; it now returns the honest error naming the file's line count and the largest usable offset, while the last real line still reads. tests/test_read_window.py: +2 checks, red on the pre-fix build (the suite also honors TINYCMDR_SRC now).",
       "anchor": {
-        "commit": "7154ff0",
+        "commit": "2389731",
         "expect": "tagged"
       }
     },
@@ -1827,7 +1827,7 @@
       "state": "shipped",
       "detail": "run 9 (fixed 2026-10-06, 9460a3b). The audit measured 'max_results=0 returns 1 hit'; reproduced here as 0 falling through `or 50` and searching anyway (the audit's tree had one match). An explicit 0 or negative now returns the named error, and a non-numeric cap is rejected with the shape. tests/test_search_scope.py: +2 checks, red on the pre-fix build.",
       "anchor": {
-        "commit": "9460a3b",
+        "commit": "44737bf",
         "expect": "tagged"
       }
     },
@@ -1837,7 +1837,7 @@
       "state": "shipped",
       "detail": "run 9 (fixed 2026-10-06, f235640). A typo'd path built the whole tree silently and the result read as a plain success; the result now names each missing parent it created. tests/test_tool_doors.py: +1 check, red on the pre-fix build (staged pre-fix tree).",
       "anchor": {
-        "commit": "f235640",
+        "commit": "4cf7d9e",
         "expect": "tagged"
       }
     },
@@ -1846,7 +1846,7 @@
       "title": "the never tier reads tokens, not one spelling",
       "state": "shipped",
       "anchor": {
-        "commit": "963beae",
+        "commit": "e745045",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (963beae): The never tier was anchored to one surface shape per command: `format /FS:NTFS Q:`, `powershell -enc \"...\"` and `dd of=\"/dev/sdz9\"` executed with no gate (a switch between verb and target missed an order-anchored regex; the quote erasure removed the quoted operand), and the mkfs read-only exemption was per-line, so `mkfs.ext4 /dev/sdb # cat` passed. The built-in tier is decided on the tokens of each command segment now - quotes consumed, separators split, redirects and comments read - with the read-only exemption per command. tests/test_guard_battery.py: 16 blocked spellings, 5 allowed mentions, red on the pre-fix build."
@@ -1856,7 +1856,7 @@
       "title": "the confirm tier reads the aliases",
       "state": "shipped",
       "anchor": {
-        "commit": "963beae",
+        "commit": "e745045",
         "expect": "tagged"
       },
       "detail": "run 10 (fixed 2026-10-06, 963beae). The recursive-delete pattern named `remove-item`, so `ri -Recurse -Force`, `del /s /q`, `erase /s /q` and `rmdir /s /q` matched nothing and ran with no question. The command word is read off tokens, so every alias and flag order lands on the same rule. tests/test_guard_battery.py pins five spellings."
@@ -1866,7 +1866,7 @@
       "title": "the gate helpers coerce instead of raising",
       "state": "shipped",
       "anchor": {
-        "commit": "963beae",
+        "commit": "e745045",
         "expect": "tagged"
       },
       "detail": "run 10 (fixed 2026-10-06, 963beae). is_blocked(None) coerced while est_tokens(None), cap_output(name, None), _one_json_object(None), _host_is_local(None) and _confirm_hit(None) raised TypeError/AttributeError. Reachability was never proven; each helper answers a safe default for a non-string now, and tests/test_guard_battery.py pins all six."
@@ -1885,7 +1885,7 @@
       "title": "the Responses API is a wire, not a renamed field",
       "state": "shipped",
       "anchor": {
-        "commit": "9387bf0",
+        "commit": "b9482b1",
         "expect": "tagged"
       },
       "detail": "2026-10-06. `base_url` pointing at /responses used to send a chat-shaped body; the wire is real now - input items with typed parts, instructions, flat tool schemas, reasoning summaries read into reasoning_content, usage.input_tokens/output_tokens mapped onto the accounting, and a stream adapter feeding the existing SSE reader. An OpenAI-style 400 naming BOTH tools and reasoning_effort escalates once to the /responses sibling and the fact is remembered per endpoint (wire=responses), with the reasoning-field drop kept as the fallback when no sibling exists. tests/test_responses_wire.py: 40 checks, all red pre-fix; a stub-server smoke drove the escalation end to end."
@@ -1895,7 +1895,7 @@
       "title": "a patch keeps every byte it did not touch",
       "state": "shipped",
       "anchor": {
-        "commit": "cfd56d6",
+        "commit": "6a8fcc6",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (cfd56d6): tools/patch.py decoded with errors=\"replace\" and wrote UTF-8, so a Latin-1/CP1252 source lost every non-ASCII byte to U+FFFD - silently, under a diff that showed only the intended line (caf\\xe9 became caf\\xef\\xbf\\xbd). Lossless decode (UTF-8 strict, else Latin-1, byte-transparent) + strict re-encode in the SAME encoding; a character that encoding cannot carry is refused by name. tests/test_patch_bytes.py: 4 checks red pre-fix."
@@ -1905,7 +1905,7 @@
       "title": "spill ids are never reused",
       "state": "shipped",
       "anchor": {
-        "commit": "1e9960b",
+        "commit": "6d2f724",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (1e9960b): With every spill file deleted the id counter restarted at 1 while the index still carried the old id-1 row, so `spill#1` in a prompt resolved to a different tool's output (measured: two index rows with id==1). The counter advances over every row ever written (file or no file) and the index merge no longer re-persists a row whose file is gone. tests/test_spill_durability.py: 2 checks red pre-fix; simulate_restart now resets the counter, which is what made the bug invisible to the suite before."
@@ -1915,7 +1915,7 @@
       "title": "the MCP client validates, remembers failures and reads its server",
       "state": "shipped",
       "anchor": {
-        "commit": "2f0af5a",
+        "commit": "9dba490",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (2f0af5a): A non-map agent.mcp_servers answers an ERROR naming the accepted {command, args?} shape instead of raising; a non-numeric mcp_timeout falls back to 60 with one WARNING and a real 0 stays 0; a failed handshake is remembered on the live entry for a bounded 60s window; a dead server is noticed by polling inside the wait; a spec with no command says exactly that; a JSON-string arguments is parsed; tool names match case-insensitively and go out under the server's spelling; stderr is captured into a bounded 20-line/4KB ring and its tail rides every failure; mismatched replies are parked and server-initiated requests are never consumed as replies. tests/test_mcp.py: 50 checks, 24 red pre-fix."
@@ -1925,7 +1925,7 @@
       "title": "the Windows helper holds Alt",
       "state": "shipped",
       "anchor": {
-        "commit": "d6c448b",
+        "commit": "98ebd15",
         "expect": "tagged"
       },
       "detail": "run 11 (fixed 2026-10-06, d6c448b). Python canonicalises Alt to `option` while the PowerShell helper switched only on `alt`, so every Alt combo went out on Windows without Alt held; blocked_combo('f4', ['alt']) slipped the table while the option spelling was refused; and the Windows-only ctrl+alt+delete entry sat behind the macOS keycode gate. Both sides fold alt->option now, the block is decided before the keycode gate, and the helper arms option in all three switches - pinned by a contract check that every modifier the Python half can emit is an arm in the embedded helper. tests/test_computer_use.py: 2 checks red pre-fix."
@@ -1935,7 +1935,7 @@
       "title": "the OKF bundle validates at the door and keeps its provenance",
       "state": "shipped",
       "anchor": {
-        "commit": "e912978",
+        "commit": "b6ed546",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (e912978): `verified:` reads a bare string as {by}; a caller description is bounded at 160 like the generated one; tags take one string or a list and refuse the rest; `update` refuses a title another concept holds; memory/log.md rotates at 64 KB with one predecessor; an unknown `type` is refused by name; load_config never replaces a shipped dict with a non-dict from the file; stale_after must be an ISO instant at write time; update/set_status keep `generated` and record `touched` instead of re-dating the fact. tests/test_memory_okf.py: 33 checks red pre-fix (120/0 after)."
@@ -1945,7 +1945,7 @@
       "title": "jobs lock and answer honestly; patch keeps every line's ending",
       "state": "shipped",
       "anchor": {
-        "commit": "5e304e5",
+        "commit": "15b861f",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (5e304e5): tools/process.py: `output` reads through read_job_log() (handle closed, __EXIT__ marker stripped), `start` validates command, an unknown action names the vocabulary, wait_for is validated up front, `kill` says exactly what it confirmed (the wrapper gone), and id allocation + table saves run under one file lock (6 concurrent starts in 6 processes now get 6 distinct ids). tools/patch.py: every existing line keeps its own newline (splice-only rewrite; inserted lines take the dominant one), and a whitespace-only or blank-only anchor is refused. tests/test_job_control.py + tests/test_patch_bytes.py: 22 checks red pre-fix."
@@ -1955,7 +1955,7 @@
       "title": "the request builder survives a typo, and the tools do what they say",
       "state": "shipped",
       "anchor": {
-        "commit": "e2051ad",
+        "commit": "b2fc3c7",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (e2051ad): reveal_ttl_secs is guarded like mcp_timeout (a typo no longer takes the request builder down; a real 0 means never decay); reveal_tools reads a bare string as one name and refuses other non-lists by name; _tool_category coerces like _tool_blurb; the three pairing repairers skip a non-dict entry without spinning; truncate_middle refuses or cuts honestly at limit 0/1; _spill_signal counts its [HARNESS:...] wrapper against the budget; the stripper scans bracket depth so a nested note does not eat real output; find_tools honours name/topic/action (read name=X answers that tool's blurb and schema, revealing it); create_tool validates the action vocabulary before the arguments. 31 checks red pre-fix."
@@ -1965,7 +1965,7 @@
       "title": "computer_use: the typed-text guard sees Windows, and nothing leaks or hangs",
       "state": "shipped",
       "anchor": {
-        "commit": "92e6d19",
+        "commit": "4a2a456",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (92e6d19): blocked_text gained the Windows arm (del <drive:>, Remove-Item -Recurse/-Force, format <drive:>, shutdown) and lost its end anchor (`rm -rf / --no-preserve-root`, `rm -rf /; echo hi` blocked now); a dropped window_id on non-macOS is named; Windows depth=0 means 0 levels; _clamp survives 1e999; prune_shots(0) prunes; `cmd+-` is the minus key; the helper's stdout parses from the LAST JSON object; a timeout kills the child tree; the UIA-invoke path goes through _finish. tests/test_computer_use.py: 19 checks red pre-fix."
@@ -1975,7 +1975,7 @@
       "title": "emoji cost, the secret vocabulary, and the config-side guard",
       "state": "shipped",
       "anchor": {
-        "commit": "30a51fe",
+        "commit": "ddf3894",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (30a51fe): est_tokens gives emoji their own class (~2 tokens each; 400 emoji was 307); the config-side secret rule shares the env-side vocabulary (db.password refused, its value never reaches the verb log); scrub redacts percent-encoded secrets (a URL query no longer leaks one; a case-insensitive pass is deliberately not done); create_tool refuses a name an existing custom tool holds; tools_dir_verdict() answers without an argument. one refuted here by measurement (the spill note's omitted-byte arithmetic agrees across CRLF/accent/3001-byte bodies). tests/test_spill.py, test_scrub.py, test_tool_discovery.py: 13 checks red pre-fix."
@@ -1985,7 +1985,7 @@
       "title": "the Telegram lane can ask, and its answers arrive whole",
       "state": "shipped",
       "anchor": {
-        "commit": "cef08fe",
+        "commit": "4efd69c",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (cef08fe): TelegramDestination sets has_human (the lane had never asked anything: every confirm-tier command was declined silently, with no line); the confirm question posts with its command as <pre>; run_telegram passes ask_door so ask_user reaches a person; a button answer lands as the option's WORDS; a /stop with a question open stops the run; a second question while one is open is refused; a failed post returns at once (was 30.005s); the caller's wait is capped; the renderer splits first and escapes per chunk (no more tag cut at 4096) and protects fenced blocks; the client honours a 429 retry_after bounded by telegram.retry_after_max; the Telegram token joins the secret sweep. tests/test_telegram.py: 87 checks, 26 red pre-fix."
@@ -1995,7 +1995,7 @@
       "title": "lane health tells the truth about a lane that keeps failing",
       "state": "shipped",
       "anchor": {
-        "commit": "2a7d522",
+        "commit": "f4e7902",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (2a7d522): lane_down keys the repeat counter on a normalised reason class (a varying message no longer resets it); the lane record merges per lane under the lock (proven with two real processes - a lane this process does not own survives); the poll-failure stamp is monotonic-safe (a backwards clock reports, not hides); _lane_error_permanent requires the HTTP status shape (an id/port containing 401 is not a refused credential); a negative failure count is clamped before the backoff curve; a stale 'up' record is corrected on the exit path and lanes_snapshot can say the pid is dead. the uptime half was refuted by measurement (the clamp is behaviour-preserving); the negative-COUNT half was real and is fixed. tests/test_lane_health.py + test_telegram.py: 23 checks red pre-fix."
@@ -2005,7 +2005,7 @@
       "title": "the Telegram lane can carry a file and report its own work",
       "state": "shipped",
       "anchor": {
-        "commit": "2a7d522",
+        "commit": "f4e7902",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (2a7d522): sendDocument/sendPhoto appear nowhere in the shipped build, so 'send me the report' returned a Windows path - the transport exists now and run_telegram passes send_file_cb into the run; and a Telegram-only box wires SCHEDULER.dispatcher / REPORTER and honours announce_startup, so a scheduled job reports somewhere and a restart says it is back on this lane too. tests/test_telegram.py: 13 checks red pre-fix."
@@ -2015,7 +2015,7 @@
       "title": "the page's door speaks HTTP/1.1, and an answer belongs to its conversation",
       "state": "shipped",
       "anchor": {
-        "commit": "a065fe5",
+        "commit": "6b2b91d",
         "expect": "tagged"
       },
       "detail": "Fixed 2026-10-06 (a065fe5): HTTP/1.1 with keep-alive (every route Content-Length-framed; an undrained body can no longer poison the next request on the socket); HEAD runs the routing and drops the body (curl -I /api/health used to read 501); OPTIONS/PUT/DELETE/PATCH refuse in JSON with Allow; a non-object JSON body answers a JSON 400 instead of raising and closing with zero bytes. The steer door (HIGH): `/api/steer` compares the caller with the run's owning client, so a second tab, a LAN peer or a stale script can no longer answer another conversation's parked question - or the confirm gate. The mutate half of the session registry is scoped to the owning client (a foreign delete removed the runlog file); the shared ?all=1 view keeps working with an explicit title; a pruned conversation's runlog is deleted with it; WebRun.answered is a real latch; a timed-out question draws a line. tests/test_webui.py: 50 checks red pre-fix; keep-alive and HEAD verified live with curl."
@@ -2025,7 +2025,7 @@
       "title": "ten fixes: the scheduler, the chat lanes and the app",
       "state": "shipped",
       "anchor": {
-        "commit": "9939ccd",
+        "commit": "6cadf7c",
         "expect": "tagged"
       },
       "detail": "Ten commits (4bc31b3, 0d346d6, 2c8450c, 7499573, 6899f26, 1bdee53, 9f21a34, 46c70af, aa5516a, 9939ccd), each with the regression test that grades it. Sessions and schedule: `_fire` claims the job name under the scheduler's lock, so a job that takes longer than its interval no longer runs several times over on one session key; only a process holding the state lock fires the folder's cron jobs, so a CLI session alive across a boundary no longer steals a due job, prints its answer to a terminal and advances `next`; `add` and `remove` agree on one name, so the name typed is the name removed and re-adding cannot silently overwrite; a job created where there is no reporting channel says its answer goes to the log only. Mattermost: the streamed draft's post id lives on the destination that owns it, so two runs in one channel no longer edit each other's posts; one open question per channel, so a second prompt no longer drops the first; a long answer is cut on a line and never inside an open code fence; a post the server refuses logs the text it lost. TUI: `--app` starts on the 16-colour tier (a `selection_bg` that is not a colour no longer poisons `Style.from_dict`); Ctrl-W gives the pane its columns back. Every fix landed with a regression test that fails on the pre-fix build (`TINYCMDR_SRC`) and the full gate green after each. Also refuted while working: the UTF-16 post-limit premise, the web conversation registry read as a lost update, and a missing tool argument raising out of the door."
@@ -2035,7 +2035,7 @@
       "title": "ten fixes: the scheduler, the page, the guards, the a2a and the install door",
       "state": "shipped",
       "anchor": {
-        "commit": "807d115",
+        "commit": "a167f3a",
         "expect": "tagged"
       },
       "detail": "Ten commits, each with a regression test that fails on the pre-fix build and the full gate green after each. Scheduler: a tick's save applies its own delta to jobs.json read under the file lock, so a `--once` add landing between the reload and the save is no longer overwritten (276 of 1989 concurrent adds were lost before); a scheduled job's ask_user row is filed where the Mattermost listener reads answers, so the operator's reply reaches the job instead of starting a new run while the job carries on with its own judgment. Web door: per-request handler state is reset per request, so a refusal after an earlier GET no longer desyncs a kept-alive connection (the third request answered 501); `attach()` refuses a directory, whose download was a Content-Length with no body; `_file` opens the path before it sends headers for the same reason; the conversation registry's `open` map is bounded and drops entries whose conversation is gone. Guards: `_is_mutation` no longer reads a gate refusal as a change, so a refused write cannot wipe the dedupe and loop counters (a model re-issuing one refused write used the whole step budget and the report claimed a write that never happened). a2a: ListTasks answers -32602 for a non-numeric pageSize instead of raising out of the handler. Install and update: install.sh keeps the installer's own exit code (a failed install reported success); the host-owned dir rule is one rule in all six copies, with update.sh/update.ps1 carrying snapshots/ and tmp/ and the parity check parsing every copy."
@@ -2045,7 +2045,7 @@
       "title": "a damaged jobs.json is quarantined, and a sessions/ sidecar is not a conversation",
       "state": "shipped",
       "anchor": {
-        "commit": "c7b0efa",
+        "commit": "9784ecc",
         "expect": "tagged"
       },
       "detail": "Two state-file fixes, each with a regression test that fails on the pre-fix build. `jobs.json` was the one state file whose reader answered {} for anything it could not parse - no log line, no `.damaged-*` copy - and `_save` re-read the same way, so a corrupt or transiently-locked file lost the schedule with no evidence anywhere; it routes through the shared `_load_json_state`, a valid-but-non-object file is named too, and tests/test_state_damage.py now covers the fourth state path. The session reload excluded only `.carry.json`, so `.hints.json` and `.question.json` loaded as phantom conversations - and because the hints file IS a JSON list, `tinycmdr sessions` listed one too; `_is_session_file()` answers for the reload and the listing now, while search_sessions keeps tolerating sidecar content on purpose. The `atomic_write_text` docstring, whose opening clause was lost, is restored from the original wording."

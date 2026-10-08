@@ -69,11 +69,29 @@ import sys
 # form is not a pathspec - `git rm -- "<that>"` answers "did not match any files".
 raw = subprocess.run(["git", "ls-files", "-z"], capture_output=True).stdout
 paths = [q.decode("utf-8", "surrogateescape") for q in raw.split(b"\0") if q]
+# The other two classes that fail at checkout on Windows, and this check did not cover
+# either: a reserved device name (NUL.md, CON, COM1.txt, ... - git refuses the path) and a
+# component ending in a dot or a space (Windows strips it, so the file lands under another
+# name or not at all). Both are legal on macOS and Linux, which is how they get written.
+RESERVED = {"CON", "PRN", "AUX", "NUL", "CLOCK$"} \
+    | {"COM%d" % i for i in range(1, 10)} | {"LPT%d" % i for i in range(1, 10)}
 bad = [p for p in paths if any(ch in p for ch in ' %()"\';|&')]
+reserved = []
+for p in paths:
+    for part in p.split("/"):
+        if part.endswith(".") or part.endswith(" "):
+            reserved.append((p, "ends with a dot or a space"))
+            break
+        if part.split(".")[0].upper() in RESERVED:
+            reserved.append((p, "a Windows reserved device name"))
+            break
 for p in bad:
     print("  %s" % p)
-print("tracked paths: %d, carrying a space or a shell character: %d" % (len(paths), len(bad)))
-sys.exit(1 if bad else 0)
+for p, why in reserved:
+    print("  %s (%s)" % (p, why))
+print("tracked paths: %d, breaking a Windows checkout: %d"
+      % (len(paths), len(bad) + len(reserved)))
+sys.exit(1 if (bad or reserved) else 0)
 PYEOF
 then
     fail=1

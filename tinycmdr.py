@@ -1055,7 +1055,20 @@ def load_config():
             user = {}
         for section, values in user.items():
             if isinstance(values, dict) and isinstance(cfg.get(section), dict):
-                cfg[section].update(values)
+                for key, value in values.items():
+                    if value is None:
+                        # `.get(key, default)` supplies the default only for a MISSING key,
+                        # never for one that is present and null: `"max_minutes": null`
+                        # reached `None * 60` and raised TypeError from inside the run loop,
+                        # naming neither the key nor the file (measured 2026-10-07). The
+                        # section-level guard below stops a non-dict SECTION; this is the
+                        # same class one level down. A null is not how you say "unset" here
+                        # - the shipped default is - so drop it and say which key.
+                        log.warning("config.json %s.%s is null - the shipped default is "
+                                    "kept. Delete the key to say nothing instead.",
+                                    section, key)
+                        continue
+                    cfg[section][key] = value
             elif isinstance(cfg.get(section), dict):
                 # A shipped section is a DICT and its readers assume it. A file value that
                 # is not one (a null, a list, a string) must never REPLACE it:
@@ -3426,8 +3439,9 @@ def _spill_index_save():
         # --once run) never saw this process's rows and used to clobber the whole index
         # on its next save. `path` is content-addressed, so it is a safe union key and
         # the newer `at` wins; atomic_write_text buys the inter-process lock and never
-        # Truncates the destination.
+        # truncates the destination.
         merged = {}
+        removed = {}                       # path -> the epoch second it was removed at
         try:
             for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
                 line = line.strip()
@@ -3437,28 +3451,55 @@ def _spill_index_save():
                     e = json.loads(line)
                 except ValueError:
                     continue
-                if (isinstance(e, dict) and e.get("path")
-                        and (BASE_DIR / str(e["path"])).exists()):
+                if not isinstance(e, dict):
+                    continue
+                if e.get("removed"):
+                    # A removal recorded by ANY process. The protection a tombstone gives
+                    # has to outlive the process that made it: the resurrection comes from
+                    # the OTHER process's memory (`rows` below), not from the file, so an
+                    # in-memory-only tombstone was exactly the one the concurrent --once
+                    # run could not see.
+                    removed[str(e["removed"])] = float(e.get("at") or 0)
+                    continue
+                if e.get("path") and (BASE_DIR / str(e["path"])).exists():
                     # A row whose file is gone is not worth re-persisting: readers drop
                     # it anyway, and keeping it grew the index for ever while holding an
                     # id hostage.
                     merged[str(e["path"])] = e
         except OSError:
             pass
+        for _gone in _SPILL_TOMBSTONES:
+            if _gone:
+                removed[_gone] = time.time()
         for e in rows:
-            old = merged.get(str(e.get("path")))
+            key = str(e.get("path"))
+            if key in removed:
+                # A deliberate removal (a /new reset) beats this process's memory of the
+                # row; see the disk half above for why the disk copy is the load-bearing one.
+                continue
+            old = merged.get(key)
             if old is None or float(e.get("at") or 0) >= float(old.get("at") or 0):
-                merged[str(e.get("path"))] = e
-        # A deliberate removal (a /new reset) wins over the merge for one save, then
-        # the tombstone is spent: the file no longer carries the row, so nothing can
-        # Resurrect it.
-        for _gone in list(_SPILL_TOMBSTONES):
+                merged[key] = e
+        for _gone in removed:
             merged.pop(_gone, None)
+        # Bound the removals the way the rows are bounded: expire them, then keep the newest.
+        now = time.time()
+        removed = {p: at for p, at in removed.items()
+                   if now - at <= _SPILL_TOMBSTONE_TTL and p}
+        if len(removed) > _SPILL_TOMBSTONES_MAX:
+            removed = dict(sorted(removed.items(), key=lambda kv: kv[1],
+                                  reverse=True)[:_SPILL_TOMBSTONES_MAX])
+        payload = [json.dumps(e, ensure_ascii=False) for e in merged.values()]
+        payload += [json.dumps({"removed": p, "at": int(at)}, ensure_ascii=False)
+                    for p, at in removed.items()]
+        atomic_write_text(path, "".join(line + "\n" for line in payload))
+        # Spent only NOW that the write has returned. Clearing them first meant a failed
+        # save lost the removal AND its protection in one go, and /new quietly stopped
+        # holding on the next save - the prompt grew its pointers back.
         _SPILL_TOMBSTONES.clear()
-        atomic_write_text(path, "".join(
-            json.dumps(e, ensure_ascii=False) + "\n" for e in merged.values()))
     except Exception as e:                  # noqa: BLE001 - an index is never worth a run
-        log.debug("spill index save: %s", e)
+        log.warning("spill index not saved (%s) - the previous index still stands and "
+                    "this run's removals are not on disk yet", e)
 
 
 def _spill_load():
@@ -3572,11 +3613,14 @@ def _remember_elided(session, sig):
 
 
 _SPILLS = []
-# Paths removed ON PURPOSE in this process (a /new reset). The save merges the disk
-# rows back in, so a deliberate removal must be excluded from that merge or it
-# resurrects - the suite caught exactly that when the merge first landed
-#. Spent on the save that persists the removal.
+# Paths removed ON PURPOSE (a /new reset). The save merges the disk rows back in, so a
+# deliberate removal must be excluded from that merge or it resurrects - the suite caught
+# exactly that when the merge first landed. Written to the index as `{"removed": path}`
+# lines and spent only once that write has returned, so the protection is not lost by a
+# failed save and is visible to the OTHER process on this install too.
 _SPILL_TOMBSTONES = set()
+_SPILL_TOMBSTONE_TTL = 6 * 3600     # how long a removal keeps beating a stale memory row
+_SPILL_TOMBSTONES_MAX = 64          # ...and how many of them the index carries at most
 _SPILLS_LOCK = threading.Lock()
 _SPILLS_MAX = 12
 _SPILL_SEQ = {"n": 0}
@@ -8344,34 +8388,84 @@ _PATH_LOCKS = {}
 _PATH_LOCKS_GUARD = threading.Lock()
 
 
+_CASE_FOLD_CACHE = {}          # st_dev -> does that volume treat Notes.md as notes.md?
+
+
+def _volume_folds_case(dirpath):
+    """True when the filesystem holding `dirpath` treats notes.md and Notes.md as one file.
+
+    Asked of the volume, not guessed from the platform: os.path.normcase folds case only
+    on Windows, and macOS's default APFS/HFS+ is case-INsensitive too (measured 2026-10-07
+    on this box: `touch NOTES.md` then `test -e notes.md` answers yes, so one file answers
+    to both names). Writes nothing - it asks the kernel for the same directory under a
+    case-flipped name and compares the inode - and caches the verdict per device.
+    """
+    probe = str(dirpath or "")
+    while probe and not os.path.isdir(probe):
+        parent = os.path.dirname(probe)
+        if parent == probe:
+            return False
+        probe = parent
+    try:
+        dev = os.stat(probe).st_dev
+    except OSError:
+        return False
+    if dev in _CASE_FOLD_CACHE:
+        return _CASE_FOLD_CACHE[dev]
+    folded = False
+    flipped = probe.swapcase()
+    if flipped != probe:
+        try:
+            a, b = os.stat(probe), os.stat(flipped)
+            folded = (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino)
+        except OSError:
+            folded = False
+    _CASE_FOLD_CACHE[dev] = folded
+    return folded
+
+
 def _lock_key(path):
     """One key per FILE, whatever the string looked like.
 
-    different locks, so two edits in one batch both reported success and one was silently
-    overwritten - the same lost-update the per-path lock was added to prevent, one level
-    down: there the key was missing, here it was unnormalised. normcase folds case on
-    Windows (where those ARE the same file); realpath resolves ~, "..", separators and
-    symlinks. A path-less caller keeps the empty key it always had.
+    Two spellings of one path used to take two locks, so two edits in one batch both
+    reported success and one was silently overwritten - the same lost-update the per-path
+    lock was added to prevent, one level down: there the key was missing, here it was
+    unnormalised. realpath resolves ~, "..", separators and symlinks; normcase folds case
+    on Windows, and the volume probe folds it wherever the filesystem does. macOS is the
+    one that went unnoticed - its default APFS is case-insensitive, so `notes.md` and
+    `Notes.md` in one turn took two locks and lost an update even though the comment here
+    made it look out of scope. A path-less caller keeps the empty key it always had.
     """
     text = str(path or "").strip()
     if not text:
         return ""
     try:
-        return os.path.normcase(os.path.realpath(os.path.expanduser(text)))
+        real = os.path.normcase(os.path.realpath(os.path.expanduser(text)))
     except Exception:                                            # noqa: BLE001
         return text
+    return real.casefold() if _volume_folds_case(os.path.dirname(real)) else real
 
 
 # The lock namespace is keyed on the INSTALL FOLDER, not the caller. It used to be
 # "...-<getuid()>", so two processes at different uids writing one install - the Linux
 # system-install shape: the service runs as User=$RUN_USER, install/update run under sudo -
-# Took different files and never serialized (a lost read-modify-write,
-# invisible because each write is atomic on its own). One digest of BASE_DIR puts every
-# process pointed at this install in one namespace; the dir is 1777 (sticky: the usual
-# shared-lock answer - anyone may create/enter, only the owner may delete) and the lock
-# files are 0666 so the second uid can open them at all. The tradeoff is stated in
-# _ip_lock_file: a local user who knows a path can take its lock; O_NOFOLLOW keeps a
-# pre-created symlink from redirecting the open.
+# took different files and never serialized (a lost read-modify-write, invisible because
+# each write is atomic on its own). One digest of BASE_DIR puts every process pointed at
+# this install in one namespace; the dir is 1777 (sticky: the usual shared-lock answer -
+# anyone may create/enter, only the owner may delete) and the lock files are 0666 so the
+# second uid can open them at all. The tradeoff is stated in _ip_lock_file: a local user
+# who knows a path can take its lock; O_NOFOLLOW keeps a pre-created symlink from
+# redirecting the open.
+#
+# The temp dir is NOT sacred, and an earlier comment here claimed no `clean` glob or
+# uninstaller touches it. macOS reaps it: measured 2026-10-07, this user's $TMPDIR held
+# 2,368 tinycmdr-locks-* directories and 9,114 lock files, the oldest lock file dated the
+# previous day and none of the sampled directories older than about 3 days. Nothing in the
+# tree removes them either; the churn is the test suite, where every staged checkout binds
+# BASE_DIR to a fresh temp dir and mints a namespace. A lock file unlinked while a process
+# still holds it means the next opener creates a NEW inode and flocks that - two holders,
+# no serialization, no log line. The window is narrow (a lock is held for milliseconds and
+# reaping needs days of non-access), which is why this is stated rather than fixed here.
 LOCK_DIR = Path(tempfile.gettempdir()) / ("tinycmdr-locks-%s" % hashlib.sha1(
     str(BASE_DIR).encode("utf-8", "replace")).hexdigest()[:12])
 _IP_TIMEOUT = 20.0        # bounded, and never fatal (see _ip_take)
@@ -8385,8 +8479,9 @@ def _ip_lock_file(key):
 
     Not a sibling of the target on purpose: _path_lock() also guards a user's own files
     (edit_file, write_file), and dotfile litter beside somebody's source is not ours to
-    leave. The temp dir is also the one place no `clean` glob and no uninstaller touches.
-    The namespace is the install (LOCK_DIR), so every uid pointed at this install takes
+    leave. The temp dir is not untouched by anything - see LOCK_DIR above for what macOS
+    reaping does to a lock file that is still held. The namespace is the install
+    (LOCK_DIR), so every uid pointed at this install takes
     the same file; the dir's sticky mode plus O_NOFOLLOW in _ip_take is what makes a
     shared dir safe to use, and the one cost of sharing is that a local user who knows a
     path can hold its lock (denial of one write, never a lost one - _ip_take times out and
@@ -11017,7 +11112,30 @@ def _mcp_park(ent, msg):
         del parked[next(iter(parked))]
 
 
-def _mcp_open(name):
+def _mcp_risk_error(name, spec):
+    """None, or the ERROR for an MCP command that matches the absolute tier.
+
+    The manifest loader for a dropped-in tool refuses this exact shape at load time
+    ("the manifest's command matches safety pattern %r, which cannot be approved in-band -
+    a dropped-in tool must not carry one"), because that file arrives from OUTSIDE the bot.
+    agent.mcp_servers is the same kind of file - the agent's own write tools can edit
+    config.json - and its command reached subprocess.Popen with no tier at all: no
+    is_blocked, no shell_guard, no confirm, and no line anywhere saying the guard had been
+    consulted (measured 2026-10-07). One rule, reused, at the read that feeds the spawn.
+    """
+    if not isinstance(spec, dict):
+        return None
+    cmd = " ".join([str(spec.get("command") or "")]
+                   + [str(a) for a in (spec.get("args") or [])])
+    blocked = is_blocked(cmd)
+    if blocked:
+        return ("ERROR: MCP server %r runs %r, which matches safety pattern %r - a command "
+                "that cannot be approved in-band must not be configured as an MCP server."
+                % (name, cmd, blocked))
+    return None
+
+
+def _mcp_open(name, ctx=None):
     """(entry, error): the live stdio server, started on first use."""
     servers = _mcp_servers()
     key = str(name or "")
@@ -11035,11 +11153,20 @@ def _mcp_open(name):
         return None, ("ERROR: MCP server %r is configured WITHOUT a command; this client "
                       "speaks stdio only, so give it {\"command\": \"<executable>\", "
                       "\"args\": [...]}." % (name,))
+    risk = _mcp_risk_error(key, spec)
+    if risk:
+        return None, risk
     with _MCP_LOCK:
         ent = _MCP_PROCS.get(name)
         if ent and ent["proc"].poll() is None:
             return ent, ""
         cmd = [str(spec["command"])] + [str(a) for a in (spec.get("args") or [])]
+        # The confirm tier runs at the spawn, where a door exists to ask the operator: the
+        # absolute tier above is already answered at read time, so what is left is the
+        # question this text would raise from the shell tool.
+        refusal = shell_guard(" ".join(cmd), ctx, subject="mcp server %r: " % key)
+        if refusal:
+            return None, refusal
         env = dict(os.environ)
         env.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
         try:
@@ -11219,10 +11346,15 @@ def tool_mcp(args, ctx):
         servers = _mcp_servers()
         if not servers:
             return "ERROR: no MCP servers are configured (agent.mcp_servers)."
-        return ("configured MCP servers:\n"
-                + "\n".join(_mcp_spec_line(n, c) for n, c in sorted(servers.items())))
+        lines = []
+        for n, c in sorted(servers.items()):
+            lines.append(_mcp_spec_line(n, c))
+            risk = _mcp_risk_error(n, c)
+            if risk:
+                lines.append("    REFUSED: " + risk.split(" - ", 1)[0][7:])
+        return "configured MCP servers:\n" + "\n".join(lines)
     name = str(args.get("server") or "")
-    ent, err = _mcp_open(name)
+    ent, err = _mcp_open(name, ctx)
     if err:
         return err
     timeout = _mcp_timeout()
@@ -16265,7 +16397,51 @@ GLOBAL_STATE_FILE = BASE_DIR / "state.json"
 
 # Serialization for the state file lives in _state() itself: one _path_lock around the
 # whole read-modify-write. A module-level threading.RLock used to sit here, declared as
-# That guard and acquired nowhere.
+# the state file's guard and acquired nowhere - a lock nobody takes reads like
+# protection, so it is gone rather than left as decoration.
+
+
+_DAMAGED_KEEP = 5     # how many quarantined copies of one state file are kept
+
+
+def _damaged_dest(path):
+    """A quarantine name nothing else can take in the same second.
+
+    `<name>.damaged-<stamp>` alone collides: the stamp has one-second resolution and
+    copy2 overwrites, so two readers hitting the same corrupt file within a second (the
+    service and a --once run both load state.json at start) left one copy - and it was
+    whichever reader ran second. The suffix makes the name unique instead.
+    """
+    base = path.name + ".damaged-" + time.strftime("%Y%m%d-%H%M%S")
+    dest = path.with_name(base)
+    n = 1
+    while dest.exists():
+        n += 1
+        dest = path.with_name("%s-%d" % (base, n))
+    return dest
+
+
+def _prune_damaged(path, keep=_DAMAGED_KEEP):
+    """Keep the newest `keep` quarantined copies of one state file; delete the rest.
+
+    Retention was unbounded in the other direction: nothing in the tree ever removed a
+    `.damaged-*` file, so a state file that corrupts on every start would quietly grow
+    the folder for ever. Bounded at birth, named here.
+    """
+    prefix = path.name + ".damaged-"
+    try:
+        # (mtime, name): the name carries the stamp AND the collision counter, so on a
+        # filesystem with coarse timestamps two copies in one second still order correctly.
+        olds = sorted((p for p in path.parent.iterdir()
+                       if p.name.startswith(prefix) and p.is_file()),
+                      key=lambda p: (p.stat().st_mtime_ns, p.name))
+    except OSError:
+        return
+    for old in olds[:-keep]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
 
 
 def _load_json_state(path, what):
@@ -16281,11 +16457,11 @@ def _load_json_state(path, what):
     except FileNotFoundError:
         return {}
     except Exception as exc:                                 # noqa: BLE001
-        stamp = time.strftime("%Y%m%d-%H%M%S")
-        dest = path.with_name(path.name + ".damaged-" + stamp)
+        dest = _damaged_dest(path)
         try:
             shutil.copy2(path, dest)
             kept = "a copy is kept at %s" % dest.name
+            _prune_damaged(path)
         except OSError as copy_exc:
             kept = "and the copy could not be written (%s)" % copy_exc
         try:
@@ -20363,8 +20539,19 @@ class Agent:
                         if _announced >= _deliver_after and not spun:
                             log.warning("[%s] not continuing: completion announced %d time(s) "
                                         "without a report", session_key, _announced)
+                        # The TURN budget cannot be refilled: the counter behind `turn` is
+                        # the loop variable of `range(max_turns)`, so a new segment inherits
+                        # what is left while the notice used to promise "a fresh budget"
+                        # (measured 2026-10-07: with one call per turn, 100 turns bind long
+                        # before 250 steps, and a segment entered at turn 99 is a checkpoint
+                        # with nothing behind it). Continue only when a segment can actually
+                        # be used, and say the remaining turns out loud in the same words the
+                        # model reads. `_turn_no` is the 1-based number the loop keeps for
+                        # exactly this reason - `turn` itself is reused below for the
+                        # assistant message dict.
+                        _turns_left = max(0, max_turns - _turn_no + 1)
                         if (not spun and depth == 0 and _segments < _seg_cap
-                                and _announced < _deliver_after
+                                and _announced < _deliver_after and _turns_left > 0
                                 and CONFIG["agent"].get("auto_continue", True)
                                 and (_open or not _st.get("plan"))):
                             _segments += 1
@@ -20389,12 +20576,15 @@ class Agent:
                                     log.debug("continuation notice failed", exc_info=True)
                             messages.append({"role": "user", "content": (
                                 "SYSTEM: that cap is a CHECKPOINT, not the end of the job. "
-                                "This run continues now in a new segment with a fresh "
-                                "budget, and your plan and the carried results "
-                                "from earlier runs are all intact. Do NOT re-plan from "
-                                "scratch and do NOT write a status report: carry on with the "
-                                "next unfinished step and keep going until the task is "
-                                "actually done."
+                                "This run continues now in a new segment. The STEP and TIME "
+                                "budgets are fresh, and your plan and the carried results "
+                                "from earlier runs are all intact - but the TURN budget "
+                                "belongs to the whole run and %d turn(s) of it remain, so "
+                                "budget your remaining work against that number. Do NOT "
+                                "re-plan from scratch and do NOT write a status report: "
+                                "carry on with the next unfinished step and spend the turns "
+                                "you have on the work that matters most."
+                                % _turns_left
                                 + (" Open steps: "
                                    + "; ".join(f"{i}. {t}" for i, t in _open[:4])
                                    + "." if _open else ""))})
@@ -25052,6 +25242,90 @@ class WebRun:
         return [("web", m) for m in out]
 
 
+def _web_stall_minutes(kind):
+    """agent.stall_<kind>_minutes - the same key and default the chat lane reads."""
+    default = 8 if kind == "warn" else 20
+    return float((CONFIG.get("agent") or {}).get("stall_%s_minutes" % kind, default) or 0)
+
+
+class _QuietReporter:
+    """The watchdog's stand-in for a run that hung before its reporter existed."""
+
+    def finish(self, ok=True):
+        return None
+
+
+_WEB_STALL_SEEN = {}       # run id -> {"rev", "since", "warned", "our_rev"}
+
+
+def _web_stall_tick(warn_m=None, kill_m=None, now=None):
+    """One watchdog pass over WEB_RUNS: a WEDGED browser run must not hold its conversation.
+
+    The chat lane's guard iterates self.active, which only that lane fills, so a browser run
+    lived in WEB_RUNS where nothing ever timed out. A CRASH was fine - _finish_web_run runs in
+    a finally - but a HANG was not: a tool call that ignores cancel_event, a subprocess that
+    will not die or a stream that never closes left done=False, and from then on every
+    /api/run and /api/chat in that conversation was answered "busy" with no timeout and no
+    warning, while the shared check-in cadence kept printing "still on it" (measured
+    2026-10-07). Progress is measured the way the chat lane measures it - output - and here
+    that is the run's own line revision, which no heartbeat inflates.
+
+    `now` is monotonic seconds (now_mono()), like the chat lane's tick: these clocks are only
+    ever compared with each other.
+    """
+    warn_m = _web_stall_minutes("warn") if warn_m is None else warn_m
+    kill_m = _web_stall_minutes("abandon") if kill_m is None else kill_m
+    now = now_mono() if now is None else now
+    live = set()
+    for run_id, run in list(WEB_RUNS.items()):
+        if run.done:
+            _WEB_STALL_SEEN.pop(run_id, None)
+            continue
+        live.add(run_id)
+        seen = _WEB_STALL_SEEN.get(run_id)
+        rev = run.rev
+        if seen is None:
+            _WEB_STALL_SEEN[run_id] = {"rev": rev, "since": now, "warned": False,
+                                       "our_rev": -1}
+            continue
+        if rev != seen["rev"] and rev != seen["our_rev"]:
+            # Real progress: the clock starts again and the warning can be paid once more.
+            seen.update(rev=rev, since=now, warned=False)
+        quiet = now - seen["since"]
+        if kill_m and quiet > kill_m * 60:
+            log.error("stall: abandoning web run %s after %.0f min without progress",
+                      run_id, quiet / 60)
+            run.cancel.set()
+            run.add("system",
+                    "⚠️ No output for %d min — that run is wedged, so I'm abandoning it "
+                    "and freeing this conversation. (`/tinycmdr status` for state.)"
+                    % int(quiet / 60))
+            _finish_web_run(run, getattr(run, "reporter", None) or _QuietReporter(), "",
+                            failed=True)
+            _WEB_STALL_SEEN.pop(run_id, None)
+        elif (warn_m and quiet > warn_m * 60 and not seen["warned"]):
+            seen["warned"] = True
+            log.warning("stall: no output in web run %s for %.0f min", run_id, quiet / 60)
+            run.add("system", "⏳ Still on it — nothing new here for %d min."
+                    % int(quiet / 60))
+            # Our own line bumps the revision; the clock must not restart because of it.
+            seen["our_rev"] = run.rev
+    for gone in [k for k in _WEB_STALL_SEEN if k not in live]:
+        _WEB_STALL_SEEN.pop(gone, None)
+
+
+def _web_stall_loop():
+    """The web lane's watchdog thread: the chat lane's shape, for the other door."""
+    warn_m = _web_stall_minutes("warn")
+    kill_m = _web_stall_minutes("abandon")
+    while True:
+        time.sleep(30)
+        try:
+            _web_stall_tick(warn_m, kill_m)
+        except Exception:
+            log.exception("web stall watchdog tick failed")
+
+
 def _web_register_run(run):
     """Put a run in WEB_RUNS and keep the table at its bound.
 
@@ -25244,6 +25518,9 @@ def _web_drive(run, text):
     failed = False
     run.turn_start = time.time()
     reporter = RunReporter(WebDestination(run), run.session_key)
+    # Kept on the run so the stall watchdog can end a wedged run through the same door
+    # every other finish uses (the Done line and the on-disk record then agree).
+    run.reporter = reporter
     try:
         answer = drive_run(run.session_key, text, reporter,
                            # who this run is, for anything that has to report
@@ -28544,6 +28821,10 @@ def run_webui():
                      port, attempt + 1)
             time.sleep(1)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
+    # ...and the guard that lets a wedged run go: without it a hang held its conversation
+    # for ever (see _web_stall_tick).
+    if _web_stall_minutes("warn") or _web_stall_minutes("abandon"):
+        threading.Thread(target=_web_stall_loop, daemon=True, name="web-stall").start()
     log.info("web UI listening on http://%s:%d", host, srv.server_address[1])
     # The BOUND port, not the configured one: web.port 0 means "any free port", and the
     # record is what health/doctor read back.
@@ -29179,6 +29460,12 @@ class MattermostDispatcher:
         self.seen = deque(maxlen=5000)  # message ids already handled
         self.driver = None
         self.bot_username = None
+        # Listener liveness. The vendor's websocket object is rebuilt per connect and its
+        # `_last_msg` starts at 0, so the probe needs the bot's own clock as well: when the
+        # socket was last seen here, and since when it has been gone.
+        self._ws_probe_warned = False
+        self._ws_missing_since = None
+        self._ws_attach_time = time.time()
         self.dead_roots = {}       # channel_id -> root_id the server rejected
         self.bot_user_id = None
         # channel_id -> unix time of newest handled post. CARRIED across a restart:
@@ -29353,6 +29640,8 @@ class MattermostDispatcher:
 
     def attach(self, driver, bot_username):
         self.driver = driver
+        self._ws_attach_time = time.time()
+        self._ws_missing_since = None
         self.bot_username = bot_username
         try:
             me = driver.users.get_user_by_username(bot_username) or {}
@@ -29905,18 +30194,83 @@ class MattermostDispatcher:
                     self._catch_up_once()
                 except Exception:
                     log.exception("catch-up sweep failed")
-                # Listener liveness check (item F): if the websocket listener has been
-                # silent for >15m while the process is alive, exit 75 to let the
-                # supervisor cleanly relaunch us rather than staying silently deaf.
+                # Listener liveness check (item F): a bot that stays silently deaf must
+                # restart rather than sit there. The probe reads the VENDOR's object, so it
+                # has to know what that object means - and the old `last_msg > 0` test
+                # skipped exactly the deafness it exists for: `_last_msg` is 0 on every
+                # fresh websocket (the driver builds one per connect) and `ws` is None
+                # whenever there is no connection at all, so a reconnect that never
+                # completes, an expired token or a server refusing the upgrade all read as
+                # "no data yet" for the life of the process (measured 2026-10-07).
                 try:
                     ws = getattr(self.driver, "websocket", None)
-                    last_msg = getattr(ws, "_last_msg", 0.0) if ws else 0.0
-                    if last_msg > 0 and (time.time() - last_msg > 900):
-                        log.critical("websocket listener dead (no message for %ds) - restarting",
-                                     int(time.time() - last_msg))
-                        os._exit(RESTART_EXIT_CODE)
+                    last_msg = getattr(ws, "_last_msg", None) if ws is not None else None
+                    deaf = self._listener_deaf(ws, last_msg)
+                    if deaf:
+                        self._restart_deaf(deaf)
                 except Exception:
                     pass
+
+    def _listener_deaf(self, ws, last_msg, now=None):
+        """A reason string when the websocket listener is deaf, else "".
+
+        Three states, and the vendor's semantics decide each (all read in
+        mattermostautodriver/websocket.py and driver.py, 2026-10-07):
+
+          ws is None       the driver sets this before a connect and rebuilds the object
+                           per connect, so it means "not connected" - a dead server, a
+                           refused upgrade, or the connection gone. Deaf. The two-minute
+                           dwell keeps an ordinary reconnect from looking like one.
+          no `_last_msg`   the object is not the class this probe knows (mmpy_bot may wrap
+                           it): say so ONCE rather than reading it as healthy for ever.
+          `_last_msg` old  the socket received something once and has been quiet since;
+                           the rule the watchdog was written for.
+
+        `now` is injectable so the suite can grade three states without sleeping.
+        """
+        now = time.time() if now is None else now
+        if ws is None:
+            if self._ws_missing_since is None:
+                self._ws_missing_since = now
+            elif (now - self._ws_missing_since > 120
+                  and now - self._ws_attach_time > 120):
+                return ("the websocket object has been gone for %ds"
+                        % int(now - self._ws_missing_since))
+            return ""
+        self._ws_missing_since = None
+        if last_msg is None:
+            if not self._ws_probe_warned:
+                self._ws_probe_warned = True
+                log.warning("listener liveness: %s carries no `_last_msg` to read - the "
+                            "deaf-listener watchdog is blind on this driver (it still "
+                            "restarts when the socket object is gone)", type(ws).__name__)
+            return ""
+        if last_msg and now - float(last_msg) > 900:
+            return "no message for %ds" % int(now - float(last_msg))
+        return ""
+
+    def _restart_deaf(self, why):
+        """Leave for a deaf listener the way /restart does - through restart_owner().
+
+        This path used to call os._exit(RESTART_EXIT_CODE) and log "restarting" whatever
+        the owner was. On a hand-started bot (Terminal, launch-tinycmdr.sh, a logon task
+        with no supervisor) that turned a recoverable condition into a DEAD process with no
+        relaunch and a log line asserting an outcome nobody had checked - the class
+        /restart already paid for once.
+        """
+        owner = restart_owner()
+        log.critical("websocket listener deaf (%s) - restarting (owner: %s)", why, owner)
+        if owner == "self":
+            try:
+                _spawn_replacement()
+            except Exception as e:                               # noqa: BLE001
+                log.exception("could not start a replacement process: %s", e)
+                return
+            time.sleep(0.5)
+            os._exit(0)
+        _release_lock()
+        time.sleep(0.5)
+        os._exit(RESTART_EXIT_CODE)
 
     def _drain(self, channel_id):
         q = self.queues.get(channel_id)
@@ -34348,7 +34702,10 @@ def _cli_command(text):
         budget = AGENT._context_budget()
         notes = 0
         if NOTES_FILE.exists():
-            notes = len(NOTES_FILE.read_text(encoding="utf-8", errors="replace"))
+            # stat(), not read_text(): this line reports a SIZE, and the read path is the
+            # one the prompt builder insists must stay a read (the whole file was pulled
+            # into memory to print a number another site already gets from st_size).
+            notes = NOTES_FILE.stat().st_size
         concepts = len(memory_scan())
         index_chars = (len(MEMORY_INDEX.read_text(encoding="utf-8", errors="replace"))
                        if MEMORY_INDEX.exists() else 0)
@@ -34362,7 +34719,7 @@ def _cli_command(text):
                  100 * s["est_tokens"] // max(1, budget), s["exchanges"]))
         print("  last run   %s" % (fmt_usage(u) if u.get("calls") else "nothing yet"))
         print("  session    %s (%d exchange(s))" % (_cli_key(), s["exchanges"]))
-        print("  notes      %d chars in notes.md (legacy)" % notes)
+        print("  notes      %d bytes in notes.md (legacy)" % notes)
         print("  memory     %d concept%s, index %d chars"
               % (concepts, "" if concepts == 1 else "s", index_chars))
         print("  skills     %d runbooks" % len(skill_index()))
@@ -35221,6 +35578,27 @@ def _spawn_replacement():
     log.info("replacement process started: %s", " ".join(args))
 
 
+RESTART_MARKER_FILE = BASE_DIR / "logs" / "restart-requested.json"
+
+
+def _write_restart_marker(by):
+    """`logs/restart-requested.json`: this exit 75 was ASKED FOR.
+
+    A handover (/restart) and a restart the bot decided on itself both leave as
+    RESTART_EXIT_CODE, and the supervisor cannot tell them apart - so its
+    stop-the-loop ladder cannot see a restart loop the bot began on its own
+    (measured 2026-10-07). This file is the difference: written only on a
+    handover, read and consumed once by the supervisor, and never written by the
+    watchdog paths.
+    """
+    try:
+        RESTART_MARKER_FILE.parent.mkdir(exist_ok=True)
+        atomic_write_text(RESTART_MARKER_FILE,
+                          json.dumps({"at": int(time.time()), "by": str(by or "operator")}))
+    except Exception as e:                                   # noqa: BLE001
+        log.debug("restart marker not written: %s", e)
+
+
 def perform_restart(channel_id=None, root_id=None, by="operator"):
     """Restart the bot, whoever owns its lifecycle. Does not return."""
     owner = restart_owner()
@@ -35239,6 +35617,10 @@ def perform_restart(channel_id=None, root_id=None, by="operator"):
         os._exit(0)
     # Someone else owns the lifecycle, so hand over by exiting. Spawning here is
     # exactly what made two bots exist at once.
+    if owner == "supervisor":
+        # Only the supervisor reads this, and it is what keeps a human's /restart out of
+        # the failed-start count.
+        _write_restart_marker(by)
     log.info("exiting %d — %s will start me again", RESTART_EXIT_CODE, owner)
     time.sleep(0.5)          # let that last log line reach the file
     os._exit(RESTART_EXIT_CODE)
@@ -35573,6 +35955,63 @@ def _verb_status():
     return 0
 
 
+def leak_gate_armed():
+    """("yes"|"no"|"n/a", hook path) - will a push from THIS clone be scanned?
+
+    The leak gate is only as good as its arming: the hook is not tracked by git, so a
+    hand-typed install is the step that gets skipped. A package install is not a clone and
+    carries no installer, so it answers n/a rather than naming a script it does not have -
+    the state is reported, never left to memory.
+    """
+    script = BASE_DIR / "maintenance" / "install-hooks.sh"
+    if not script.is_file() or not (BASE_DIR / ".git").is_dir():
+        return "n/a", str(script)
+    hook = BASE_DIR / ".git" / "hooks" / "pre-push"
+    try:
+        if hook.is_file() and os.access(str(hook), os.X_OK):
+            return "yes", str(hook)
+    except OSError:
+        pass
+    return "no", str(hook)
+
+
+def guard_tier_lines():
+    """One line per guard tier: (name, state, the config key that changes it).
+
+    Six mechanisms carry this harness's refusals and each has its own key and its own
+    off-switch, and doctor reported none of them - so "why did the harness refuse that?"
+    was answered by reading a 38k-line file (measured 2026-10-07). Every key named here is
+    the one the reader actually reads, so `tinycmdr config set <key> <value>` is the
+    answer the line hands over.
+    """
+    ag = CONFIG.get("agent") or {}
+    llm = CONFIG.get("llm") or {}
+    return [
+        ("absolute", "on, %d pattern(s)" % len(_patterns("blocked_patterns")),
+         "agent.blocked_patterns - cannot be approved in-band"),
+        ("confirm", "on, %d command + %d content pattern(s)"
+         % (len(_patterns("confirm_patterns")),
+            len(ag.get("confirm_content_patterns") or ())),
+         "asked through the lane's confirm door"),
+        ("cost", "%s, search_timeout %ss"
+         % ("on" if ag.get("command_cost_guard", True) else "OFF",
+            int(ag.get("search_timeout") or 0)),
+         "agent.command_cost_guard, agent.search_timeout"),
+        ("segments", "%s, +%s segment(s) of %s steps / %s min"
+         % ("on" if ag.get("auto_continue", True) else "OFF",
+            ag.get("auto_continue_max"), ag.get("max_steps"), ag.get("max_minutes")),
+         "agent.auto_continue, agent.auto_continue_max"),
+        ("turns", "%s turn(s) for the whole run" % llm.get("max_turns"),
+         "llm.max_turns - shared by every segment"),
+        ("stall", "warn %s min, abandon %s min"
+         % (ag.get("stall_warn_minutes"), ag.get("stall_abandon_minutes")),
+         "agent.stall_warn_minutes, agent.stall_abandon_minutes (0 = off)"),
+        ("web stall", "warn %s min, abandon %s min"
+         % (ag.get("stall_warn_minutes", 8), ag.get("stall_abandon_minutes", 20)),
+         "the same two keys, for the page's runs (WEB_RUNS)"),
+    ]
+
+
 def _verb_doctor():
     problems, notes = [], []
     print("tinycmdr %s doctor — %s" % (VERSION, BASE_DIR))
@@ -35634,6 +36073,23 @@ def _verb_doctor():
         problems.append(guard_drift_note(drift))
     else:
         print("  guards    : shipped lists intact (v%d)" % GUARD_LIST_VERSION)
+
+    # ...and the tiers those lists arm, each with the key that moves it: a refusal with no
+    # visible switch reads as a bug in the harness rather than as a guard doing its job.
+    for _name, _state, _key in guard_tier_lines():
+        print("  guard %-9s: %s  [%s]" % (_name, _state, _key))
+
+    _armed, _hook = leak_gate_armed()
+    if _armed == "yes":
+        print("  leak gate : armed - the pre-push hook will scan a push from this clone")
+    elif _armed == "n/a":
+        print("  leak gate : n/a - not a development clone (nothing is pushed from this folder)")
+    else:
+        print("  leak gate : NOT ARMED - run `bash maintenance/install-hooks.sh`")
+        notes.append("this clone's push is NOT scanned for private strings: "
+                     "maintenance/install-hooks.sh installs the pre-push hook the leak gate "
+                     "runs from (it is what would have refused the token that reached the "
+                     "public repo in a commit message)")
 
     _gaps = dropin_gaps()
     if _gaps:
@@ -36296,12 +36752,22 @@ DEFAULT_UPDATE_URL = "https://github.com/trappsquid/tinycmdr/releases/latest/dow
 _DEV_ONLY_PATHS = ("/tests/", "/.github/", "/docs/", "/STATUS.json", "/CHANGELOG.md")
 # maintenance/ ships only its restart helpers; these names are the maintenance kit. Deleted
 # BY NAME and never by "anything not shipped" - that folder also holds a host's own files
-# (private_rules.py, where-roles.json) which must never be touched.
-_DEV_MAINTENANCE_DROP = ("atlas-merge.py", "build-package.py", "check-package-modes.py",
-                         "check-readme-assets.py", "check-tree-clean.py", "leak-gate.py",
-                         "ledger-tag.py", "measure-prompt.py", "measured-block.py",
-                         "pre-push.sh", "private_rules.example.py", "release.sh",
-                         "smoke-install.py", "smoke-install.sh", "where.py")
+# (private_rules.py, where-roles.json) which must never be touched. The list drifted once
+# (2026-10-07: 10 of the 29 scripts were in no list at all, so an updated checkout-install
+# kept them and still looked like a dev tree); tests/test_maintenance_kit.py now fails when
+# a file in the folder is classified nowhere, so the name list cannot fall behind again.
+_DEV_MAINTENANCE_DROP = ("atlas-merge.py", "build-package.py", "check-hygiene.py",
+                         "check-package-assets.py", "check-package-modes.py",
+                         "check-package-page.py", "check-readme-assets.py",
+                         "check-tree-clean.py", "drive-web-cases.py", "install-hooks.sh",
+                         "leak-gate.py",
+                         "ledger-tag.py", "make-brand-art.py", "measure-prompt.py",
+                         "measured-block.py", "package_assets.py", "pre-push.sh", "product-manifest.json",
+                         "publish-product.py",
+                         "private_rules.example.py", "probe-web-sessions.py",
+                         "probe-web-surface.py", "release.sh", "smoke-install.py",
+                         "smoke-install.sh", "stub-openai-endpoint.py",
+                         "wait-for-endpoint.py", "where.py")
 _NARROW_NOTE = ("  dropped the project's own kit (tests/, .github/, docs/, changelog, "
                 "maintenance scripts): a package does not carry them. `tinycmdr update "
                 "--full` keeps everything instead.")

@@ -636,6 +636,41 @@ check("A-186: ...and a live writer's record is not stale",
       T.lanes_snapshot().get("mattermost", {}).get("stale") is False,
       T.lanes_snapshot().get("mattermost"))
 
+# ---- the deaf-listener probe sees the state it hunts --------------------------------
+# `_last_msg` is 0 on every FRESH websocket (the driver builds one per connect) and the
+# socket object is None whenever there is no connection at all, so the old
+# `last_msg > 0` test skipped exactly the deafness the watchdog exists for - a reconnect
+# that never completes, an expired token, a server refusing the upgrade (measured
+# 2026-10-07). The probe's three states, graded with an injected clock.
+_D = T.MattermostDispatcher()
+
+
+class _Ws:
+    """A stand-in for the vendor's websocket object (it is not this module's class)."""
+
+    def __init__(self, last):
+        if last is not None:
+            self._last_msg = last
+
+
+_now = 1000.0
+_D._ws_attach_time = _now - 600
+_D._ws_missing_since = None
+check("websocket liveness: a socket that just spoke is not deaf",
+      _D._listener_deaf(_Ws(_now - 5), _now - 5, now=_now) == "")
+check("...a socket quiet for 15+ minutes is",
+      "no message" in _D._listener_deaf(_Ws(_now - 901), _now - 901, now=_now),
+      _D._listener_deaf(_Ws(_now - 901), _now - 901, now=_now))
+_D._ws_missing_since = None
+check("...and a socket object that is GONE counts as deaf, not as unknown",
+      _D._listener_deaf(None, None, now=_now) == ""
+      and _D._listener_deaf(None, None, now=_now + 200) != "",
+      (_D._ws_missing_since, _D._listener_deaf(None, None, now=_now + 200)))
+_warned_before = _D._ws_probe_warned
+check("a driver with no `_last_msg` to read is named once, not passed off as healthy",
+      _D._listener_deaf(_Ws(None), None, now=_now) == "" and _D._ws_probe_warned
+      and not _warned_before, _D._ws_probe_warned)
+
 print()
 if FAILS:
     print("%d check(s) failed: %s" % (len(FAILS), ", ".join(FAILS)))

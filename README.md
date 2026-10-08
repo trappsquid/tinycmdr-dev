@@ -192,21 +192,25 @@ Tokens**.
 
 ## Develop
 
-```bash
-python3.12 -m venv venv && venv/bin/pip install -r requirements.txt -r requirements-test.txt
-venv/bin/python tests/run_all.py     # the gate; non-zero if any suite fails
-bash maintenance/pre-push.sh         # cheap pre-push: leak gate, regenerated numbers, ledger anchors
-```
+This repository is the runtime - `tinycmdr.py`, the installers, the examples and the assets.
+Development happens in [`trappsquid/tinycmdr-dev`](https://github.com/trappsquid/tinycmdr-dev),
+which carries the full history, the release tooling and the suites that grade it; from this
+checkout `python3 tinycmdr.py doctor` is the check you have, and `tinycmdr doctor` on an installed
+box is the same command.
 
-This section is for a **git checkout**. An installed host ships the runtime only — no
-`tests/`, `docs/`, `CHANGELOG.md` or maintenance scripts — so those commands do not exist
-there; `tinycmdr doctor` is the installed tree's own check.
+What it is, measured — surface, budgets, failure handling, comparisons:
+[`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md). The GUI tool's host notes (TCC
+grants and the stale case, Windows/Linux pitfalls, image routing):
+[`docs/computer-use.md`](docs/computer-use.md).
 
-Release flow, tree roles (`maintenance/where.py`), and what is deliberately not in git:
-[`docs/development.md`](docs/development.md). Longer version — measured surface, budgets, failure
-handling, comparisons: [`docs/tinycmdr-what-it-is.md`](docs/tinycmdr-what-it-is.md).
-The GUI tool's host notes — TCC grants and the stale case, Windows/Linux pitfalls, image
-routing: [`docs/computer-use.md`](docs/computer-use.md).
+## History
+
+This repository is the install surface: it starts at the tree released as **v1.0.87**, and its
+release carries the artifacts. The project's full history, its tags, its development tree and the
+note explaining the 2026-10-07 sanitisation of that history live in
+[`trappsquid/tinycmdr-dev`](https://github.com/trappsquid/tinycmdr-dev) — including how to check
+that the sanitisation did not touch shipped code (the v1.0.87 archives are byte-identical to the
+ones published before it). Releases are unsigned.
 
 ## License
 

@@ -50,6 +50,41 @@ TAG="v$VER"
 say() { printf '\n=== %s\n' "$*"; }
 
 say "version in the tree: $VER"
+
+# ---- nothing private in the tree that is about to be shipped --------------------------
+# The same check pre-push runs, on the last path before publish: a host name, a LAN address
+# or a token that reaches main is a problem in git history, where the only repairs are a
+# rewrite or a permanent exception. Measured 2026-10-07: 1.2s over this tree.
+"$PY" maintenance/leak-gate.py --tree || {
+    echo "*** refusing to cut: the tree carries something private (listed above)" >&2; exit 2; }
+
+# ---- nothing private in what this push is about to publish ----------------------------
+# --tree above grades the working tree; this grades the commits and blobs the push itself
+# carries - the half that would have caught a token typed into a commit MESSAGE, which is
+# how one reached the public repo (measured 2026-10-07). Range = everything not on
+# origin/main yet, so a stale remote-tracking ref only ever scans MORE than gets pushed.
+"$PY" maintenance/leak-gate.py --range origin/main..HEAD || {
+    echo "*** refusing to cut: this push adds something private (listed above)" >&2; exit 2; }
+
+# ---- the tree doing the cutting must be the tree that gets tagged ---------------------
+# build-package.py reads the WORKING TREE while the push and the tag describe HEAD, so an
+# uncommitted edit to a tracked file ships inside the release and exists in no commit:
+# SHA256SUMS then describes bytes nobody can regenerate from the tag, and the green gate the
+# script waits for graded the commit rather than the archive. Measured 2026-10-07 (twice in
+# one afternoon): 19 tracked files were dirty one commit after a cut, and this path had no
+# check at all - where.py --check guards the tree declared `live`, which this is not.
+# Override deliberately with TINYCMDR_SKIP_TREE_CHECK=1 and say why in the notes.
+if [ "${TINYCMDR_SKIP_TREE_CHECK:-0}" = "1" ]; then
+    echo "*** TINYCMDR_SKIP_TREE_CHECK=1: cutting from a tree that may differ from HEAD" >&2
+else
+    dirty="$(git status --porcelain --untracked-files=no)"
+    if [ -n "$dirty" ]; then
+        echo "*** refusing to cut: these tracked files differ from $(git rev-parse --short HEAD):" >&2
+        printf '%s\n' "$dirty" >&2
+        echo "    commit (or revert) them first, so the artifact matches the tag it ships under." >&2
+        exit 2
+    fi
+fi
 if gh release view "$TAG" >/dev/null 2>&1; then
     echo "*** $TAG already exists - a published number is never rebuilt" >&2
     exit 1
@@ -176,11 +211,25 @@ git fetch --tags
 # its commit was unreleased while that commit sat in the new tag. Now that the tag exists, state
 # the claim while it is checkable.
 say "promote the ledger for the tag just cut, so the record and the release agree"
-"$PY" maintenance/ledger-tag.py "$TAG" || echo "  (the ledger was not promoted - fix STATUS.json by hand)" >&2
+# A published number is never rebuilt, so a failure here cannot stop the release - but it
+# must not end with the word "published" either. It used to: `|| echo` swallowed the failure,
+# the diff was empty, nothing was committed, and the red arrived minutes later in CI because
+# a ledger item still said its commit was unreleased while that commit sat in the new tag.
+# Say it loudly, and PROVE the record agrees with the tag before claiming success.
+if ! "$PY" maintenance/ledger-tag.py "$TAG"; then
+    echo "*** the ledger was NOT promoted for $TAG. This is what turns CI red on the commit" >&2
+    echo "    this script just pushed: promote STATUS.json for $TAG, commit and push." >&2
+    exit 1
+fi
 if ! git diff --quiet -- STATUS.json; then
     git add STATUS.json
     git commit -q -m "status: $TAG released, and the ledger says so"
     git push origin main
 fi
+# The promotion says it worked; this says the repository agrees, the way the asset check
+# proves the published files rather than trusting the upload.
+"$PY" tests/test_status.py || {
+    echo "*** STATUS.json and $TAG still disagree (above) - fix that before announcing" >&2
+    exit 1; }
 
 say "$TAG is published"

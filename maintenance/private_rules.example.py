@@ -11,3 +11,8 @@ PUBLIC_FORBIDDEN = (
 )
 
 SECRET_LABELS = ("mattermost token", "allowed user id")
+
+# Words that must never appear in a public tree: this host's own working records (session names,
+# report filenames, wherever the write-ups are kept). tests/test_wording.py reads them from here
+# when this file is present, or from TINYCMDR_LEAK_PATTERNS.
+PRIVATE_WORDS = ()

@@ -1,0 +1,33 @@
+{
+  "why": "The public product tree = the runtime a user installs and runs, plus what a reader needs to check it. Everything else is this dev tree's own machinery. publish-product.py builds from this file; tests/test_maintenance_kit.py refuses a file or a suite that is in neither list.",
+  "extra": [
+    "LICENSE",
+    ".gitignore",
+    ".gitattributes",
+    "README.md",
+    "install.sh",
+    "install.ps1",
+    "update.sh",
+    "update.ps1",
+    "requirements-test.txt",
+    "docs/tinycmdr-what-it-is.md",
+    "docs/computer-use.md"
+  ],
+  "product_only": [
+    "maintenance/product-files/tests.yml:.github/workflows/tests.yml"
+  ],
+  "private_suites": {
+    "test_config_example": "grades the packaging example against DEFAULT_CONFIG",
+    "test_contracts": "grades docs/development.md, which is this tree's process doc",
+    "test_installer_unix": "needs maintenance/package_assets.py",
+    "test_installer_windows": "needs maintenance/package_assets.py",
+    "test_leak_gate": "grades maintenance/leak-gate.py and its private inventory",
+    "test_maintenance_kit": "grades the maintenance/ classification lists",
+    "test_measured_doc": "needs maintenance/measured-block.py",
+    "test_repo_hygiene": "needs maintenance/check-hygiene.py",
+    "test_status": "grades STATUS.json, this tree's ledger",
+    "test_webui_page": "needs maintenance/build-package.py for the asset manifest",
+    "test_where": "grades maintenance/where.py and this box's tree declarations",
+    "test_wording": "grades this tree's private working-record words"
+  }
+}

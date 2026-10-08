@@ -177,6 +177,35 @@ def test_a_legacy_server_gets_the_handshake():
         ON.CONFIG["agent"]["mcp_servers"].pop("old", None)
 
 
+def test_a_configured_command_is_screened_before_it_is_spawned():
+    """The absolute tier, over agent.mcp_servers.
+
+    The manifest loader for a dropped-in tool refuses a command that matches an
+    absolute-tier pattern at load time, because that file arrives from outside the bot.
+    config.json is the same kind of file - the agent's own write tools edit it - and its
+    command reached subprocess.Popen with no tier at all (measured 2026-10-07). The
+    refusal names the server and the pattern, and nothing is spawned.
+    """
+    # The command is blocked by the never tier AND the binary does not exist on any test
+    # host, so the falsification run (pre-fix, where nothing screens it) cannot do damage:
+    # Popen raises and the refusal is only about the pattern.
+    ON.CONFIG["agent"]["mcp_servers"]["blocked"] = {
+        "command": "mkfs.ext4", "args": ["/dev/sda1"]}
+    try:
+        out = ON.tool_mcp({"action": "call", "server": "blocked", "tool": "echo"}, {})
+        check("an MCP command that matches the absolute tier is refused",
+              out.startswith("ERROR") and "blocked" in out, out)
+        check("...by the same rule the drop-in loader uses, and it says so",
+              "safety pattern" in out and "in-band" in out, out)
+        check("...and nothing was spawned for it", "blocked" not in ON._MCP_PROCS,
+              sorted(ON._MCP_PROCS))
+        out = ON.tool_mcp({"action": "list"}, {})
+        check("the server list marks it REFUSED rather than offering it",
+              "REFUSED" in out and "blocked" in out, out)
+    finally:
+        ON.CONFIG["agent"]["mcp_servers"].pop("blocked", None)
+
+
 def test_the_errors_are_honest():
     out = ON.tool_mcp({"action": "tools", "server": "ghost"}, {})
     check("an unknown server is refused by name",

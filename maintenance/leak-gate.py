@@ -13,40 +13,59 @@ so it must stay shape-only.
 
     python maintenance/leak-gate.py                 # the working tree (default)
     python maintenance/leak-gate.py --history       # every commit + every reachable blob
-    python maintenance/leak-gate.py --pre-push      # the commits a push would add (hook mode)
+    python maintenance/leak-gate.py --range A..B    # what one push/release adds (CI, release.sh)
+    python maintenance/leak-gate.py --pre-push      # hook mode: the same check, fed by git
 
 Exit 0 = clean. Exit 1 = something private is reachable; the report names the file or
 the commit so it can be fixed before it reaches the remote.
 
-Install the hook once per clone (hooks are not tracked by git):
-
-    printf '#!/bin/sh\nexec python "$(git rev-parse --show-toplevel)/maintenance/leak-gate.py" --pre-push\n' \\
-      > .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+Arm it in a clone with maintenance/install-hooks.sh: hooks are not tracked by git, and a
+hand-typed "install it once" is the step that gets skipped. `tinycmdr doctor` reports
+whether this clone is armed.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-RULES = ROOT / "maintenance" / "private_rules.py"
+# The inventory lives in a gitignored file on the host that owns this fleet. The override
+# exists for two callers: tests/test_leak_gate.py, which grades this gate on a clone (where
+# private_rules.py is absent) against the shipped example, and a host whose rules live
+# somewhere other than this folder. Without it the gate is unrunnable wherever the private
+# inventory is not, which is every clone and every CI runner.
+RULES = Path(os.environ.get("TINYCMDR_LEAK_RULES")
+             or ROOT / "maintenance" / "private_rules.py")
 
 # Only what a leak report needs: the pattern and its label.
 _PATTERNS: list[tuple[str, str]] = []
 
 
 def load_patterns() -> list[tuple[str, str]]:
-    """Every pattern the packager refuses, plus the doc-rewrite host rules."""
-    if not RULES.exists():
+    """Every pattern the packager refuses, plus the doc-rewrite host rules.
+
+    The inventory is maintenance/private_rules.py (gitignored, local-only). When that file is
+    absent - every clone, every CI runner - the same SOURCE TEXT may arrive as
+    TINYCMDR_LEAK_PATTERNS instead, which is how a repository secret can arm the CI job
+    without the list ever being written to a runner's disk or to the repo. No list at all is a
+    refusal, never a clean report: a gate that grades nothing must not answer 0.
+    """
+    if RULES.exists():
+        label, text = str(RULES), RULES.read_text(encoding="utf-8", errors="replace")
+    else:
+        label = "TINYCMDR_LEAK_PATTERNS"
+        text = os.environ.get(label) or ""
+    if not text.strip():
         raise SystemExit(
-            "maintenance/private_rules.py is missing (%s).\n"
-            "It holds the fleet's private inventory and the pattern lists; copy\n"
-            "private_rules.example.py to private_rules.py and fill it in."
-            % RULES)
+            "no pattern list: %s is missing and %s is unset.\n"
+            "It holds the fleet's private inventory; copy private_rules.example.py to\n"
+            "private_rules.py and fill it in, or set the environment variable."
+            % (RULES, label))
     ns: dict = {}
-    exec(compile(RULES.read_text(encoding="utf-8", errors="replace"), str(RULES), "exec"), ns)
+    exec(compile(text, label, "exec"), ns)
     out = [(p, "forbidden string") for p in ns.get("PUBLIC_FORBIDDEN", ())]
     for pat, label in ns.get("PUBLIC_RULES", ()):
         out.append((pat, label))
@@ -122,6 +141,37 @@ def scan_history() -> list[str]:
     return problems
 
 
+def scan_range(ranges: list[str]) -> list[str]:
+    """The gate over what a set of rev ranges ADDS: the tree, their blobs, their messages.
+
+    One implementation for the two callers that ask "is what I am about to publish clean?" -
+    the pre-push hook (ranges parsed from git's stdin) and `--range` (ranges named on the
+    command line, which is what CI and release.sh can supply). It deliberately does not say
+    anything about commits this range does not touch: that is what makes it usable on a repo
+    whose older history is already a closed, documented exposure.
+    """
+    problems = scan_tree()
+    # A bare rev means THAT COMMIT (`rev^!`), not everything it can reach: a caller that
+    # wants a whole lineage says so with a range. Without this, "scan the tip" walked all of
+    # history, which on a repo with an older, closed exposure is both slow (measured 2m07s)
+    # and noisy, so nobody could arm it on the push path.
+    ranges = [r if (".." in r or r.endswith("^!")) else r + "^!" for r in ranges]
+    shas: set[str] = set()
+    for rng in ranges:
+        for line in git("rev-list", "--objects", rng).stdout.split("\n"):
+            if line.strip():
+                shas.add(line.split(" ")[0])
+    problems += scan_blobs(sorted(shas))
+    for rng in ranges:
+        for line in git("log", "--format=%H%x09%s", rng).stdout.split("\n"):
+            if not line.strip():
+                continue
+            sha, _, subject = line.partition("\t")
+            for h in hits(git("log", "-1", "--format=%B", sha).stdout):
+                problems.append(f"commit {sha[:8]} ({subject[:60]}): {h}")
+    return problems
+
+
 def scan_pre_push() -> list[str]:
     """Hook mode: scan the commits (messages + blobs) this push would add."""
     problems = []
@@ -137,29 +187,25 @@ def scan_pre_push() -> list[str]:
                       else local)
     if not ranges:
         return scan_tree()
-    shas: set[str] = set()
-    for rng in ranges:
-        out = git("rev-list", "--objects", rng)
-        for line in out.stdout.split("\n"):
-            if line.strip():
-                shas.add(line.split(" ")[0])
-    problems += scan_tree()
-    problems += scan_blobs(sorted(shas))
-    for rng in ranges:
-        for line in git("log", "--format=%H%x09%s", rng).stdout.split("\n"):
-            if not line.strip():
-                continue
-            sha, _, subject = line.partition("\t")
-            for h in hits(git("log", "-1", "--format=%B", sha).stdout):
-                problems.append(f"commit {sha[:8]} ({subject[:60]}): {h}")
-    return problems
+    return scan_range(ranges)
 
 
 def main() -> int:
     global _PATTERNS
     _PATTERNS = load_patterns()
     mode = sys.argv[1] if len(sys.argv) > 1 else "--tree"
-    where = {"--tree": scan_tree, "--history": scan_history, "--pre-push": scan_pre_push}.get(mode)
+    if mode == "--range":
+        ranges = [a for a in sys.argv[2:] if a.strip()]
+        if not ranges:
+            # Naming no range must not read as clean: an unarmed check that answers 0 is
+            # worse than no check at all (the same rule the pre-push mode follows).
+            print("leak-gate --range needs at least one <before>..<after> or <rev>; "
+                  "refusing to report clean")
+            return 2
+        where = lambda: scan_range(ranges)                            # noqa: E731
+    else:
+        where = {"--tree": scan_tree, "--history": scan_history,
+                 "--pre-push": scan_pre_push}.get(mode)
     if where is None:
         print(__doc__.strip())
         return 2

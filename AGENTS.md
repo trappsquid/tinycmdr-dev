@@ -51,6 +51,14 @@ not authority.
   same rule is on me when I cut one (docs/development.md §7).
 - **One way to do each thing.** If you reach for a new script, note or doc, check first whether
   `where.py`, `STATUS.json`, `run_all.py`, `measured-block.py` or `release.sh` already owns it.
+- **The gate must be armed, not merely present.** `bash maintenance/install-hooks.sh` in every
+  clone (`tinycmdr doctor` says whether this one is armed); CI's `leak` job covers what a push
+  adds; `release.sh` scans the range it is about to push.
+- **Write the fewest words that carry the fact.** A commit subject is <= 50 characters,
+  `scope: what it does`. A body carries the *why*, the measurement or the test that pins it - not
+  an inventory of steps, not a restatement of the diff. Release notes and record details are one
+  sentence per item. A rule stated here is the instruction; the incident behind it is not this
+  file's business.
 
 ## Flow
 

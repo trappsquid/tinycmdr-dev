@@ -1,17 +1,10 @@
 """Inputs a suite must STAGE, because a clean clone does not carry them.
 
-Two gitignored files are load-bearing for suites, and both made a clean clone red
-:
-
-  maintenance/private_rules.py   the fleet's private inventory. maintenance/build-package.py
-                                 refuses to import without it, so tests/test_config_example.py
-                                 could not even reach its first check.
-  field-notes.md                 the operator's own failure library. tests/test_digest.py
-                                 read it from the repo root and died with FileNotFoundError.
-
-Neither check was wrong; the suite just never staged the input the code looks for, so
-"green on the author's box" and "green on a clone" were different claims. Everything here
-writes into a temp dir (never the checkout — run_all.py reports any suite that does).
+Two gitignored files are load-bearing for suites that grade a host-owned input, and both made a
+clean clone red: a fleet inventory the packager imports, and the operator's own failure library.
+Neither check was wrong; the suite just never staged the input the code looks for, so "green on
+the author's box" and "green on a clone" were different claims. Everything here writes into a temp
+dir (never the checkout - the runner reports any suite that does).
 
     python -c "import sys; sys.path.insert(0, 'tests'); import hermetic"
 """

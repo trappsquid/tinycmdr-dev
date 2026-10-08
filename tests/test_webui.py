@@ -1702,6 +1702,37 @@ def main():
           "...while an entry pointing at a conversation that is gone goes with it",
           sorted(fb._web_state()["open"])[:4])
 
+    # ---- a WEDGED web run must not hold its conversation for ever ---------------
+    # The chat lane's stall guard walks its own table; a browser run lives in WEB_RUNS,
+    # where nothing timed out. A crash released the conversation (_finish_web_run runs in
+    # a finally); a HANG did not - done stayed False, so every later /api/run and /api/chat
+    # in that conversation was answered "busy" with no warning while the check-in cadence
+    # kept saying "still on it" (measured 2026-10-07).
+    _st_run = fb._web_new_run("stallsuite")
+    _t0 = fb.now_mono()
+    fb._web_stall_tick(warn_m=1, kill_m=5, now=_t0)          # first sighting: no verdict
+    check(not _st_run.done and not _st_run.lines,
+          "a just-seen web run is not touched by the watchdog", _st_run.lines)
+    fb._web_stall_tick(warn_m=1, kill_m=5, now=_t0 + 61)
+    check(not _st_run.done and any("Still on it" in l["text"] for l in _st_run.lines),
+          "a quiet run is warned in its own transcript, not just in the log",
+          [l["text"] for l in _st_run.lines])
+    fb._web_stall_tick(warn_m=1, kill_m=5, now=_t0 + 122)
+    check(sum(1 for l in _st_run.lines if "Still on it" in l["text"]) == 1,
+          "...once, not on every tick",
+          [l["text"] for l in _st_run.lines])
+    _st_run.add("tool", "still working")
+    fb._web_stall_tick(warn_m=1, kill_m=5, now=_t0 + 200)
+    check(not _st_run.done and fb._web_active_run("stallsuite") is _st_run,
+          "output resets the clock, so a working run is never abandoned")
+    fb._web_stall_tick(warn_m=1, kill_m=5, now=_t0 + 200 + 301)
+    check(_st_run.done and _st_run.cancel.is_set()
+          and any("wedged" in l["text"] for l in _st_run.lines),
+          "a wedged run is abandoned: cancelled, ended, and said so where the page looks",
+          ([l["text"] for l in _st_run.lines], _st_run.done))
+    check(fb._web_active_run("stallsuite") is None,
+          "...which frees the conversation it was holding", fb.WEB_RUNS.keys())
+
     srv.shutdown()
     srv.server_close()
 

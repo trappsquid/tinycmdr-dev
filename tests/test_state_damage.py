@@ -97,6 +97,40 @@ def main():
               [p.name for p in work.iterdir()])
         check("...with the original content",
               bool(jcopies) and jcopies[0].read_text(encoding="utf-8") == "}{ not json")
+        # ---- two corruptions inside one second do not share a copy -------------
+        # The stamp has one-second resolution and copy2 overwrites, so two readers hitting
+        # the same corrupt file in the same second (the service and a --once run both load
+        # state.json at start) left ONE copy - whichever ran second, which is the least
+        # interesting one when a restart loop keeps re-reading a wedged file.
+        collide = work / "state-collide.json"
+        fb.GLOBAL_STATE_FILE = collide
+        collide.write_text("{first", encoding="utf-8")
+        fb._state()
+        collide.write_text("{second", encoding="utf-8")
+        fb._state()
+        kept = sorted(work.glob("state-collide.json.damaged-*"))
+        held = {p.read_text(encoding="utf-8") for p in kept}
+        check("a second corruption in the same second gets its own copy",
+              len(kept) == 2, [p.name for p in kept])
+        check("...and neither copy overwrote the other",
+              "{first" in held and "{second" in held, held)
+
+        # ---- retention is bounded, newest kept --------------------------------
+        many = work / "state-many.json"
+        fb.GLOBAL_STATE_FILE = many
+        for i in range(fb._DAMAGED_KEEP + 3):
+            many.write_text("{bad%d" % i, encoding="utf-8")
+            fb._state()
+        all_copies = sorted(work.glob("state-many.json.damaged-*"))
+        check("quarantine retention is bounded (at most %d per state file)"
+              % fb._DAMAGED_KEEP, len(all_copies) == fb._DAMAGED_KEEP,
+              [p.name for p in all_copies])
+        check("...and it is the newest copies that are kept",
+              [p.name for p in all_copies] == [p.name for p in
+                                               sorted(all_copies)[-fb._DAMAGED_KEEP:]],
+              [p.name for p in all_copies])
+        check("...so the oldest is the one dropped",
+              not any("{bad0" in p.read_text(encoding="utf-8") for p in all_copies))
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

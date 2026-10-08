@@ -44,6 +44,30 @@ def simulate_restart(fb):
     fb._SPILL_SEQ["n"] = 0
 
 
+def index_records(fb):
+    """The index's lines as dicts - rows AND `removed` records (see _spill_index_save)."""
+    out = []
+    path = fb._spill_index_path()
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def index_rows(fb):
+    return [e for e in index_records(fb) if isinstance(e, dict) and e.get("path")]
+
+
+def index_removals(fb):
+    return [e for e in index_records(fb) if isinstance(e, dict) and e.get("removed")]
+
+
 def main():
     workdir = Path(tempfile.mkdtemp(prefix="fbspill-"))
     try:
@@ -82,9 +106,63 @@ def main():
         # ---- /new's removal is persistent too
         fb.AGENT.reset("sp1")
         check(fb._spill_rows("sp1") == [], "reset drops this session's rows")
+        check([r for r in index_removals(fb) if r["removed"].startswith("spill/")],
+              "the removal itself is written into the index (not just process memory)",
+              index_removals(fb))
         simulate_restart(fb)
         check(fb._spill_rows("sp1") == [],
               "and they do not come back on the next restart", fb._spill_rows("sp1"))
+
+        # ---- a STALE memory row in the other process cannot resurrect a removal
+        # The merge's `rows` half reads THIS process's memory, so the process that never
+        # saw the /new (the concurrent --once run) is the one that used to write the row
+        # straight back. Only the DISK record can stop it - an in-memory tombstone cannot,
+        # and it is spent by the very save that made it.
+        stale = [r for r in index_removals(fb)]
+        gone = stale[0]["removed"]
+        holder = fb.BASE_DIR / gone
+        check(holder.exists(), "the removed row's file stays on disk (nothing was dropped)",
+              gone)
+        fb._SPILLS.append({"id": 7777, "tool": "shell", "path": gone, "first": "x",
+                           "chars": 1, "at": time.time() - 120, "session": "sp1"})
+        fb._spill_index_save()
+        back = [r.get("path") for r in index_rows(fb)]
+        check(gone not in back,
+              "a second process holding the stale row cannot put it back", back)
+        fb._SPILLS[:] = [r for r in fb._SPILLS if r.get("path") != gone]
+
+        # ---- a FAILED save neither loses the removal nor spends its protection
+        # The order used to be: drop the tombstones, then write. A write that raised
+        # therefore lost the removal and the thing guarding it in one go, and the next save
+        # re-persisted what /new had just deleted - /new quietly stopped holding.
+        fb.cap_output("shell", "tombstone-me-" + body, "command output", session="sp9")
+        check(bool(fb._spill_rows("sp9")), "a row for /new to remove", fb._spill_rows("sp9"))
+        rows_now = index_rows(fb)
+        removed_now = {r["removed"] for r in index_removals(fb)}
+        real_write = fb.atomic_write_text
+
+        def boom(*_a, **_k):
+            raise OSError("disk full (simulated)")
+
+        fb.atomic_write_text = boom
+        try:
+            fb.AGENT.reset("sp9")                  # its own save is the one that fails
+            check(fb._spill_rows("sp9") == [],
+                  "the removal still applies in this process")
+            check(bool(fb._SPILL_TOMBSTONES),
+                  "and a failed save KEEPS the tombstones for the retry",
+                  fb._SPILL_TOMBSTONES)
+        finally:
+            fb.atomic_write_text = real_write
+        check(index_rows(fb) == rows_now and
+              {r["removed"] for r in index_removals(fb)} == removed_now,
+              "the index on disk still holds the previous state, unmangled")
+        fb._spill_index_save()                     # the retry
+        check(not fb._SPILL_TOMBSTONES, "the retry spends what the failure kept")
+        check(all(r.get("path") not in {x["removed"] for x in index_removals(fb)}
+                  for r in index_rows(fb)),
+              "...and the removal is on disk, so the merge can never put the row back",
+              index_removals(fb))
 
         # ---- a runaway command is capped, honestly
         fb.CONFIG["agent"]["spill_max_bytes"] = 4000
@@ -133,8 +211,7 @@ def main():
         simulate_restart(fb)
         fb._spill_rows()                       # the load advances the sequence
         fb.cap_output("shell", "after-the-wipe-" + body, "command output", session="sp5")
-        rows = [json.loads(l) for l in fb._spill_index_path().read_text(
-            encoding="utf-8").splitlines() if l.strip()]
+        rows = index_rows(fb)
         ids = [int(e["id"]) for e in rows]
         check(len(ids) == len(set(ids)) and min(ids) > max_id,
               "an id is never reused after its file is deleted (A-107)", (max_id, ids))
@@ -149,9 +226,7 @@ def main():
             fh.write(json.dumps({"id": 9999, "path": dead, "at": time.time() + 60,
                                  "session": "sp6", "tool": "shell"}) + "\n")
         fb.cap_output("shell", "saves-again-" + body, "command output", session="sp6")
-        paths = {str(e.get("path")) for e in
-                 (json.loads(l) for l in idx.read_text(encoding="utf-8").splitlines()
-                  if l.strip())}
+        paths = {str(e.get("path")) for e in index_rows(fb)}
         check(dead not in paths, "a row whose file is gone is not re-persisted (A-108)",
               sorted(paths))
 

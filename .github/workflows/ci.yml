@@ -55,8 +55,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-test.txt
-      - name: gate
-        run: python tests/run_all.py
+      - name: gate (and prove the sweep left the tree byte-identical)
+        # The runner is the gate; this wrapper is the same sweep with a before/after
+        # fingerprint, so "a suite writes into the checkout" is a red job rather than a
+        # line in a log nobody reads. It was called by nothing before 2026-10-07.
+        run: python maintenance/check-tree-clean.py
 
   # Windows: the suites that are known to pass here, plus the ones that branch on the platform.
   #
@@ -107,6 +110,56 @@ jobs:
           --select tests/test_endpoint_gate.py
           --select tests/test_installer_windows.py
           --select tests/test_computer_use.py
+
+  # The gate that keeps a leak OUT of the repo, rather than finding it in history later.
+  # Same script the pre-push hook runs, over exactly what this push or PR adds: the working
+  # tree, the blobs it introduces and the commit MESSAGES it introduces. That last half is
+  # not hypothetical - a fleet bot token reached the public repo in a commit message
+  # (measured 2026-10-07) because nothing ran this on the path that publishes.
+  #
+  # The fleet's real pattern list is gitignored, so it arrives as the repository secret
+  # TINYCMDR_LEAK_PATTERNS. Without it this job grades with the shipped EXAMPLE patterns and
+  # says so in the log - a public mirror cannot carry the inventory, and a job that silently
+  # graded with placeholders would be worse than none.
+  #
+  # After a republish with a clean history this step can be promoted from --range to
+  # --history: then the whole history is graded on every push, not just the new part.
+  leak:
+    name: leak gate (what this change adds)
+    runs-on: ubuntu-latest
+    env:
+      TINYCMDR_LEAK_PATTERNS: ${{ secrets.TINYCMDR_LEAK_PATTERNS }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: arm the patterns this runner has
+        run: |
+          if [ -n "${TINYCMDR_LEAK_PATTERNS:-}" ]; then
+            # leak-gate reads the source text straight from this variable when
+            # maintenance/private_rules.py is absent, so the list never touches the disk.
+            echo "the fleet's own pattern list is armed on this runner"
+          else
+            echo "TINYCMDR_LEAK_RULES=$GITHUB_WORKSPACE/maintenance/private_rules.example.py" >> "$GITHUB_ENV"
+            echo "::notice::TINYCMDR_LEAK_PATTERNS is unset: this job graded with the shipped"
+            echo "::notice::EXAMPLE patterns. Set the secret to enforce the real inventory."
+          fi
+      - name: scan what this change adds, plus the whole tree
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request) RANGE="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" ;;
+            *) BEFORE="${{ github.event.before }}"; AFTER="${{ github.event.after }}"
+               if [ -z "${BEFORE//0/}" ] || [ "$BEFORE" = "null" ]; then
+                 RANGE="${AFTER:-HEAD}"      # a new branch: just that commit, not its lineage
+               else
+                 RANGE="$BEFORE..$AFTER"
+               fi ;;
+          esac
+          echo "range: $RANGE"
+          python maintenance/leak-gate.py --range "$RANGE"
 
   # The one loop no suite closes: build the package, install FROM the artifact it produces,
   # and run it. tests/test_installer_*.py install from a tree the suite assembles itself, so

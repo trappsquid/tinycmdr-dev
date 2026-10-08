@@ -25,13 +25,18 @@ could not grade its subject on this host - which this runner prints as SKIP and 
 as red.
 
 The envelope hook (static overhead <= budget, payload <= window, prefix reuse
->= 90 %, every must_gate verb gated) is owned by the envelope change, not by this
-runner. When tests/test_envelope.py lands it is discovered like any other suite and
-its non-zero exit fails the gate; --require-envelope makes its absence a failure too,
-for the commit that flips the switch. Until then the summary prints it as pending.
+>= 90 %, every must_gate verb gated) lives in tests/test_envelope.py and runs like any
+other suite. It is not optional any more: a run that cannot find that file in the tree
+exits red, so the assertions cannot be dropped by deleting them.
+
+Which build the suites grade is printed in the header, and an explicitly-set
+TINYCMDR_SRC is honoured rather than dropped: that variable is how a fix is falsified
+against the pre-fix build, and swallowing it made such a run report green for a file the
+caller had not asked about.
 """
 import argparse
 import fnmatch
+import hashlib
 import os
 import re
 import signal
@@ -55,7 +60,9 @@ SLOW_SUITES = {}
 # so CI would have called an ungraded run green - and did.
 SKIP_EXIT = 77
 
-# The envelope hook (see module docstring): the envelope assertions arrive as their own suite.
+# The envelope assertions live in their own suite (see module docstring). It is discovered
+# like any other suite; the constant only exists so a run can say the file is MISSING, which
+# is a red gate rather than a quiet reduction of what the gate covers.
 ENVELOPE_SUITE = "tests/test_envelope.py"
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
@@ -85,9 +92,12 @@ def _status_path(line):
 def tree_state():
     """Tracked status plus ignored/untracked files, as a set of lines.
 
-    Used to REPORT the leak: the suites still write sessions/, tinycmdr.log and
-    friends into the checkout. This runner must not fail on that - it is
-    a measurement for the batch that makes them hermetic.
+    Used to REPORT the leak rather than to fail on it: a live bot in the checkout rewrites its
+    own tinycmdr.log and sessions/ every minute (see live_instance_here), so a red gate here
+    would name innocent suites. Measured 2026-10-07: a full sweep leaves the tree alone - every
+    suite writes in its own temp dir - so a line below is a regression in the suite named beside
+    it. A tree with no `.git`, or no development tooling beside it, simply has nothing to
+    fingerprint and reports nothing.
 
     Ignored/untracked entries also carry a size+mtime fingerprint, because `git status`
     alone cannot see a file that is REWRITTEN without changing its status: an ignored
@@ -182,13 +192,39 @@ def _leak_path(line):
     return _status_path(line)
 
 
+def graded_source():
+    """The build these suites actually grade, plus its sha256 ("" if it is not there).
+
+    Every suite that imports the app picks its file with
+    `BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")` - that is the handle a fix is
+    falsified through against the pre-fix build. This runner used to pop TINYCMDR_SRC out
+    of the child environment as "a stale pick from the caller's shell", so
+    `TINYCMDR_SRC=… python tests/run_all.py` reported green for the checkout's own
+    tinycmdr.py while the caller read it as a verdict on the build they had pointed at:
+    the answer came back "the suite passes", which reads as "the test does not reproduce
+    the bug" rather than "you handed it the wrong file".
+
+    Honouring the pick is safe only because it is VISIBLE, so the header names the path
+    and its digest.
+    """
+    pick = os.environ.get("TINYCMDR_SRC") or ""
+    path = Path(pick) if pick else REPO / "tinycmdr.py"
+    if not path.is_absolute():
+        path = REPO / path
+    try:
+        return path, hashlib.sha256(path.read_bytes()).hexdigest()[:12]
+    except OSError:
+        return path, ""
+
+
 def child_env(path, logdir):
     """The environment a suite runs in. The no-browser guard lives here, not per suite."""
     env = dict(os.environ)
     env["TINYCMDR_NO_BROWSER"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"    # no __pycache__ in the checkout
     env.pop("TINYCMDR_TEST_APP", None)      # a stale pick from the caller's shell
-    env.pop("TINYCMDR_SRC", None)
+    # TINYCMDR_SRC is NOT popped: it is how a caller points the gate at another build, and
+    # main() prints the file it resolved so a wrong pick is visible in every report.
     # The app attaches its rotating log handler to <repo>/tinycmdr.log at import, before any
     # suite code runs, so this is the runner's job (the app honours the override for exactly
     # this reason). Without it, every suite that logs appends into the checkout and git
@@ -259,8 +295,31 @@ def run_one(path, timeout, logdir, verbose):
     return FAIL, seconds, detail
 
 
+def _windows_kill_argv(pid):
+    """Windows tree kill: `taskkill /T` walks the child's own children too.
+
+    CREATE_NEW_PROCESS_GROUP - what run_one spawns with - only decides where Ctrl+Break
+    is routed; it does not make a grandchild die with its parent. So on Windows a
+    timed-out suite that had spawned a helper left it holding a loopback port, and the
+    NEXT suite to bind that port went red with a bind error naming the wrong suite.
+    /T kills the tree, /F makes it a kill rather than a request.
+    """
+    return ["taskkill", "/T", "/F", "/PID", str(pid)]
+
+
 def _kill_tree(proc):
-    """Kill the suite and anything it spawned (a child process, a stub server)."""
+    """Kill the suite and anything it spawned (a child process, a stub server).
+
+    POSIX: one killpg on the session run_one started. Windows: taskkill /T, because
+    proc.kill() reaches the direct child only (see _windows_kill_argv) and the runner's
+    own docstring promises the helper dies with its suite.
+    """
+    if os.name != "posix":
+        try:
+            subprocess.run(_windows_kill_argv(proc.pid), capture_output=True, timeout=30)
+            return
+        except (OSError, subprocess.SubprocessError):
+            pass
     try:
         if os.name == "posix":
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
@@ -355,8 +414,6 @@ def main():
                     help="per-suite wall clock (default %g)" % DEFAULT_TIMEOUT)
     ap.add_argument("--allow-skips", action="store_true",
                     help="a SKIP suite does not make the run red (developer use)")
-    ap.add_argument("--require-envelope", action="store_true",
-                    help="fail if %s is absent (envelope switch)" % ENVELOPE_SUITE)
     ap.add_argument("--verbose", action="store_true",
                     help="stream every suite's output instead of folding it into logs")
     ap.add_argument("--list", action="store_true", help="print what would run, then exit")
@@ -372,14 +429,28 @@ def main():
         sys.exit("no suites match %s - a gate that discovers nothing is a red run"
                  % ", ".join(patterns))
 
-    have_envelope = (REPO / ENVELOPE_SUITE).is_file()
-    if args.require_envelope and not have_envelope:
-        sys.exit("--require-envelope: %s is not in the tree (hook not filled in)"
-                 % ENVELOPE_SUITE)
+    # The envelope suite is not a future hook any more: it is in the tree, discover() picks
+    # it up like any other suite, and a tree that has LOST it is a red gate rather than a
+    # quiet decrease in what the gate covers.
+    if not (REPO / ENVELOPE_SUITE).is_file():
+        sys.exit("%s is not in the tree - the envelope assertions must never be dropped "
+                 "from what the gate covers" % ENVELOPE_SUITE)
+
+    src, digest = graded_source()
+    if not digest:
+        sys.exit("nothing to grade: %s does not exist (an explicitly-set TINYCMDR_SRC "
+                 "names no file - refusing to report a green gate for a build that is "
+                 "not there)" % src)
+    shown = src
+    try:
+        shown = src.relative_to(REPO)
+    except ValueError:
+        pass
 
     logdir = Path(tempfile.mkdtemp(prefix="tinycmdr-runall-"))
     print("running %d suite(s) under %s (timeout %gs, logs %s)\n"
           % (len(suites), sys.executable, args.timeout, logdir))
+    print("grading %s (sha256 %s)\n" % (shown, digest))
 
     results = []
     leaks = []          # (suite, [paths it wrote into the checkout])
@@ -441,10 +512,9 @@ def main():
         print("\nrepo-tree writes during the run: none - every suite stayed in its "
               "own temp dir")
 
-    print("\nEnvelope gate: %s" % (
-        "%s is in the tree and runs like any other suite" % ENVELOPE_SUITE
-        if have_envelope else
-        "pending - the hook is here; drop %s in and it gates" % ENVELOPE_SUITE))
+    if (REPO / ENVELOPE_SUITE) not in suites:
+        print("\nnote: %s is in the tree but not in this run's --select - a full run "
+              "includes it" % ENVELOPE_SUITE)
     print("logs: %s" % logdir)
 
     if failed or (skipped and not args.allow_skips):
