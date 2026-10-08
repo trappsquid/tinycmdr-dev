@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The gate's own report survived a console that cannot encode a suite's line:** the runner prints what suites hand it, and a detail carrying "·" or an em dash raised UnicodeEncodeError on a Windows console - killing the report BEFORE the failure list, so a red job printed no failures at all; the runner and the sweep wrapper harden their streams the way the harness does (tests/test_run_all.py).
 
+- **Three `--app` checks graded the POSIX spelling of a Windows run:** the answer-card marker was matched on the heavy rule around it (the box set follows the console), the socket census counted asyncio's own event-loop wakeup, which CPython builds out of AF_INET on Windows, and the transcript fallback file was graded on POSIX mode bits; each now asserts its claim where it lives (tests/test_tui.py).
+
 ### Changed
 - **Nothing is excluded from the Windows job:** the eight suites it had been told to skip are graded there again, `tests/windows-tier.json`'s `excluded` is empty, and `tests/test_contracts.py` allows an empty list - it had insisted on a non-empty one, so the mechanism was defending its own deletion.
 
