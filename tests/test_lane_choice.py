@@ -236,6 +236,21 @@ def main():
         _env = (work / "cli_only" / ".env").read_text(encoding="utf-8")
         check("TINYCMDR_WEB_TOKEN=" in _env, "the minted token lands in .env", _env[-120:])
 
+        # -- every door's line must reach STDOUT -----------------------------
+        # stdout is what cron, ssh and CI parse; a run that prints only to stderr is
+        # invisible to all three. Measured 2026-10-08 on windows-latest: a piped child's
+        # stdout was EMPTY for the whole once-path while its stderr carried the turn logs
+        # and the exit-1 line - so a delivered answer looked exactly like a silent failure.
+        # The bare-python figure in the evidence is the control: it says whether the
+        # platform captured stdout at all.
+        code, _ = run(work / "cli_only", args=("--version",))
+        _bare = subprocess.run([sys.executable, "-c", "print('x')"],
+                               capture_output=True, text=True).stdout
+        check(LAST_IO[0].strip() != "",
+              "a verb's line reaches stdout, not just stderr",
+              "STDOUT=%r STDERR=%r bare-python-stdout=%r"
+              % (LAST_IO[0][-200:], LAST_IO[1][-200:], _bare))
+
         # -- the CLI-only end state: no chat lane and the page OFF ----------------
         code, said = run(work / "cli_only", args=("--no-web",))
         check(code == 0, f"no token and --no-web stops cleanly, exit 0 ({code})")
