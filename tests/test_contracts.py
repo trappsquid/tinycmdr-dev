@@ -237,16 +237,27 @@ def main():
     if _tier:
         _item = _tier[0]
         _named = set(_item.get("windows_excluded") or [])
+        _na = set(_item.get("windows_not_applicable") or [])
         check("the Windows workflow excludes exactly the suites the item names",
-              _wf_excluded == _named, sorted(_wf_excluded ^ _named))
+              _wf_excluded == (_named | _na), sorted(_wf_excluded ^ (_named | _na)))
         check("every excluded suite is in the tree",
-              all((BASE / n).is_file() for n in _named),
-              sorted(n for n in _named if not (BASE / n).is_file()))
+              all((BASE / n).is_file() for n in (_named | _na)),
+              sorted(n for n in (_named | _na) if not (BASE / n).is_file()))
+        check("...and the two reasons do not overlap (red here vs cannot run here)",
+              not (_named & _na), sorted(_named & _na))
+        # A suite in the "cannot run here" list must SAY so: run_all.py counts a skip as red, so
+        # excluding one is only honest when the suite itself declares the platform it cannot grade
+        # (tests/test_update_script.py runs update.sh, a POSIX shell script). A name that fails on
+        # Windows without declaring anything belongs in windows_excluded instead.
+        _undeclared = sorted(n for n in _na
+                             if 'os.name != "posix"' not in (BASE / n).read_text(encoding="utf-8"))
+        check("every 'cannot run here' suite declares its platform",
+              _na and not _undeclared, _undeclared)
         _priv = set((json.loads((BASE / "maintenance" / "product-manifest.json")
                                 .read_text(encoding="utf-8")).get("private_suites") or {}))
         _priv = {"tests/%s.py" % k for k in _priv}
         check("...and every one of them SHIPS (a private suite is not in the product at all)",
-              not (_named & _priv), sorted(_named & _priv))
+              not ((_named | _na) & _priv), sorted((_named | _na) & _priv))
         check("the item is open, so the exclusions are live work and not a settled exclusion",
               _item.get("state") == "open", _item.get("state"))
 

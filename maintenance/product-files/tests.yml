@@ -41,6 +41,7 @@ jobs:
               --exclude tests/test_tui.py
               --exclude tests/test_verbs.py
               --exclude tests/test_webui.py
+              --exclude tests/test_update_script.py
           - os: macos-latest
             python: "3.12"
             exclude: ""
