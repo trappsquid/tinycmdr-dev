@@ -14,6 +14,7 @@ capability is told so instead of being guessed at.
     python tests/test_tool_discovery.py
 """
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -296,6 +297,17 @@ try:
               if l.startswith("- runbook-") or "more skills" in l]
     check("...and names how many were dropped when even names overflow",
           len(_lines) < 8 and "more skills" in _sp, _lines)
+    # An explicit 0 is the shipped DEFAULT, not an unreachable "unlimited" mode: the cap
+    # getter folds 0 into the default and floors at 512, so the old `cap <= 0` branch was
+    # dead code advertising a mode no config value could enter (run 22, A-2026-10-07-59).
+    fb.CONFIG["agent"]["skills_index_max_chars"] = 0
+    _sp0 = fb.build_system_prompt()
+    _lines0 = [l for l in _sp0.splitlines()
+               if l.startswith("- runbook-") or "more skills" in l]
+    check("an explicit 0 means the shipped default, not an unlimited index",
+          "long description" not in _sp0
+          and sum(len(l) + 1 for l in _lines0) <= 2000,
+          (_lines0[:1], len(_lines0)))
 finally:
     fb.SKILLS_DIR = _keep_cap_dir
     if _keep_index_cap is None:
@@ -303,6 +315,17 @@ finally:
     else:
         fb.CONFIG["agent"]["skills_index_max_chars"] = _keep_index_cap
     shutil.rmtree(_skcap, ignore_errors=True)
+
+# The knob a reader can move must be in the file a reader opens: `skills_index_max_chars`
+# bounded the skills index (the one prompt budget that grows with the operator's OWN
+# collection) and appeared in no config file, no doc and no example - so an operator who
+# wanted it smaller had nothing to find, and one who set 0 saw no change (run 22,
+# A-2026-10-07-59). The template states the shipped default for every prompt-budget key.
+_example_agent = json.loads((BASE / "config.example.json").read_text(encoding="utf-8"))["agent"]
+for _key in ("skills_index_max_chars", "skills_always_max_chars", "context_files_max_chars"):
+    check("config.example.json states the shipped default for %s" % _key,
+          _example_agent.get(_key) == fb.DEFAULT_CONFIG["agent"].get(_key),
+          (_example_agent.get(_key), fb.DEFAULT_CONFIG["agent"].get(_key)))
 
 # Always-runbooks announce a cut and name what the budget skipped: a rule that quietly
 # loses its tail reads as a complete rule.

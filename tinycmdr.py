@@ -486,6 +486,14 @@ DEFAULT_CONFIG = {
         # prefill per session, not per call.
         "context_files": True,
         "context_files_max_chars": 4000,
+        # The skills index that rides the static prompt: one line per runbook (`hidden`,
+        # `always` and parked ones excluded). Bounded like every sibling surface - the
+        # descriptions go before the names, because a NAME is what the `skill` tool is asked
+        # for. Unset or 0 means this default; the effective cap is the tighter of it and
+        # window // 8, and never below 512 (mem_limit_chars). Measured 2026-09-25: a
+        # description line per runbook cost the prompt for a collection that a one-line
+        # index carries for free.
+        "skills_index_max_chars": 2000,
         # Bodies of skills whose frontmatter says `always: true` ride the trailing block
         # (not the cached system prompt); bounded here.
         "skills_always_max_chars": 3000,
@@ -16379,7 +16387,10 @@ def build_system_prompt(subagent=False):
             return head + (": %s" % s["desc"] if with_desc else "")
 
         def _fits(rows):
-            return cap <= 0 or sum(len(r) + 1 for r in rows) <= cap
+            # A plain comparison: mem_limit_chars floors at 512 and never returns 0, so the
+            # old `cap <= 0 or ...` branch advertised an "unlimited" mode that no config
+            # value could reach (run 22, A-2026-10-07-59).
+            return sum(len(r) + 1 for r in rows) <= cap
 
         rows = [_row(s) for s in skills]
         if not _fits(rows):
