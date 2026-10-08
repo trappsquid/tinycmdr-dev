@@ -39020,7 +39020,14 @@ def main():
             try:
                 input("Press Enter to close...")  # keep console readable
             except (EOFError, OSError):
-                time.sleep(30)  # pythonw: no console; log has the details
+                # Nobody is attached: `input` raised because stdin is not a console (a
+                # service, cron, or ssh without a tty), so there is no window to keep
+                # readable and nothing to wait for. The 30s sleep was for a double-clicked
+                # pythonw window; on the boxes this actually runs on it only stretched every
+                # crash-restart cycle - under launchd (KeepAlive, ThrottleInterval 10) that
+                # is 30s of every ~40s asleep after the message is already printed, which is
+                # also written to tinycmdr.log (run 24, A-2026-10-07-72).
+                pass
             sys.exit(2)
         if not acquire_single_instance_lock():
             log.critical("STARTUP ABORTED: another tinycmdr is already "

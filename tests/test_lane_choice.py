@@ -291,6 +291,8 @@ def main():
               "a cold --mattermost refuses with the config sentence", (code, said[-200:]))
         check("page:" not in said and "web UI listening" not in said,
               "A-73: ...and NO page is raised before it refuses", said[-300:])
+        check(_dt < 15,
+              "A-72: ...and it does not sit 30s on the way out", "took %.1fs" % _dt)
 
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -
