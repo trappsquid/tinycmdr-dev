@@ -531,10 +531,23 @@ def main():
             if not fails:
                 continue
             print("\n  --- %s: %d failing check(s)" % (rel, len(fails)))
-            for line in fails[:8]:
-                print("      " + line[:200])
-            if len(fails) > 8:
-                print("      ... and %d more (see %s)" % (len(fails) - 8,
+            # The suites print the failing check and its DETAIL on the next line
+            # (check()'s "FAIL <what>\n <detail>"): without that line a Windows-only
+            # failure reads the same as a hundred others (measured 2026-10-08: two
+            # checks in test_lane_choice.py whose whole evidence is ``said[-300:]``).
+            shown = 0
+            for i, raw in enumerate(lines):
+                if not raw.strip().startswith("FAIL"):
+                    continue
+                print("      " + raw.strip()[:200])
+                nxt = lines[i + 1] if i + 1 < len(lines) else ""
+                if nxt[:1].isspace() and nxt.strip():
+                    print("        " + nxt.strip()[:200])
+                shown += 1
+                if shown >= 8:
+                    break
+            if len(fails) > shown:
+                print("      ... and %d more (see %s)" % (len(fails) - shown,
                                                           logdir / (Path(rel).name + ".out")))
         print()
 
