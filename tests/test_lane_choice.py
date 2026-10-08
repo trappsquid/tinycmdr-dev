@@ -110,7 +110,11 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None, config
         r = subprocess.run([sys.executable, str(dirpath / "tinycmdr.py"), *args],
                            cwd=str(dirpath), env=env, capture_output=True, text=True,
                            timeout=timeout, stdin=subprocess.DEVNULL)
-        code, said = r.returncode, r.stdout + r.stderr
+        # `or ""`: seen on windows-latest, where one of the two came back None
+        # (measured 2026-10-08: TypeError: ... +: 'NoneType' and 'str'), and the suite
+        # dying hides every check after it. The suite's _text() guards the timeout
+        # path the same way.
+        code, said = r.returncode, (r.stdout or "") + (r.stderr or "")
     except subprocess.TimeoutExpired as e:
         code = "serving"
         # stdout/stderr on a TimeoutExpired are BYTES on some platforms even with
@@ -345,9 +349,10 @@ def main():
         r = subprocess.run([sys.executable, str(work / "health" / "tinycmdr.py"), "health"],
                            cwd=str(work / "health"), env=env, capture_output=True,
                            text=True, timeout=60)
-        check("lane none" in (r.stdout + r.stderr),
+        _hsaid = (r.stdout or "") + (r.stderr or "")
+        check("lane none" in _hsaid,
               "and `health` reports no lane, not a placeholder one",
-              (r.stdout + r.stderr)[-200:])
+              _hsaid[-200:])
 
         # -- both tokens: BOTH lanes are served --------------------------------
         # Graded in-process: actually RUNNING this would open a Mattermost connection and
