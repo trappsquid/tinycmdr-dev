@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A Windows path lost its backslashes before a delete was measured:** the command tokenizer used shlex's POSIX mode, so `rm -f C:\Users\me\report.docx` tokenised to `C:Usersmereport.docx`, the effect came back empty, and the delete ran with no confirmation on the platform whose paths are all backslashes; non-POSIX mode on Windows keeps the path (tests/test_guard_battery.py).
+- **The file ledger showed a Windows path with a mixed separator and the casefolded key:** `C:\...\sub/ a.py (RW)` is neither spelling, and the model was handed a lowercase identity key for a path that exists in mixed case; the key stays normalised and the first spelling seen is what is displayed (tests/test_compaction_continuity.py).
+- **`patch.py` and the toolsmith crashed instead of refusing:** the refusal itself was right, but printing it raised UnicodeEncodeError on a console that cannot carry the glyph, so a refused patch read as a crash (tools/patch.py, tools/toolsmith.py, tests/test_patch_bytes.py).
+- **The Windows lock probe's documented OSError killed test_cross_process:** every production caller catches it, and the suite called it on the file it had just unlinked (tests/test_cross_process.py).
+- **`test_tool_doors`' off-Windows check ran with the real platform:** it asserts a Windows-only predicate must not fire and then restored IS_WINDOWS before asking, so on Windows it failed against a correct answer (tests/test_tool_doors.py).
+- **`--app` was ungraded on a console-less host:** the suite built prompt_toolkit Applications against the ambient console, which raises NoConsoleScreenBufferError on a Windows runner; it installs an in-memory session up front, so the app checks run everywhere instead of dying (tests/test_tui.py).
+- **Four firewall checks graded Windows Defender text:** the emulation set `sys.platform` alone, so on a Windows host `os.name` stayed "nt" and the product took its Windows branch; both symbols are emulated now (tests/test_verbs.py).
+- **The token-file and upload-path claims are stated in the platform's terms:** Windows has no group/world bits and stores the upload path with its own separator, so the suite grades what Windows does guarantee there and keeps the POSIX assertions on POSIX (tests/test_webui.py).
+- **The atomic-claim race was a race against the scheduler:** three simultaneous requests arrived sequentially on a Windows runner and read as three simultaneous runs; a run that takes 500ms to construct now widens the claim's own critical section, so a two-step claim fails every time while a one-step claim refuses the latecomers however they are scheduled (tests/test_webui.py).
+- **The cost guard could not see a bundled short flag:** `-r\b` cannot match `-rn`, so `grep -rn TODO /` and `findstr /s TODO C:\` were neither capped nor charged nor refused, and findstr's own recursive switch was not recognised at all (tests/test_cost_guard.py).
+- **One level under a user tree is a project on every platform:** the users branch compared the raw part count, so `/Users/<name>/<project>` was a whole-tree walk on macOS while `/home/<name>/<project>` was left alone (tests/test_cost_guard.py).
+- **The elided-call memory kept a session per delegation:** the map is bounded per session but the sessions themselves were never dropped, and delegate_task mints and resets one per call; AGENT.reset drops it now (tests/test_stall.py).
+- **A suite that finished was reported as having died:** the runner did not recognise `N checks passed, M failed`, so a completed red suite was tagged "died before its own summary" and sent a reader looking for a crash that never happened (tests/test_run_all.py).
+
+### Changed
+- **Nothing is excluded from the Windows job:** the eight suites it had been told to skip are graded there again, `tests/windows-tier.json`'s `excluded` is empty, and `tests/test_contracts.py` allows an empty list - it had insisted on a non-empty one, so the mechanism was defending its own deletion.
+
 ## [1.0.89] - 2026-10-08
 
 ### Fixed

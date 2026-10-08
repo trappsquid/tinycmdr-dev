@@ -2083,6 +2083,17 @@
         "expect": "tagged"
       },
       "detail": "Eleven fixes from two audit runs plus the release-path and CI work they exposed, each with a regression test that fails on the pre-fix build and the full gate (106 suites, 0 skipped) green on the batch. The one-shot door: --once returns 1 when the run never reached the model (the a2a lane's own infra_failed verdict) instead of 0, refuses an empty task, and keeps flags out of the prompt; the console and --app name a missing config.json. Lane state: a record whose writer is gone reads `stale`, never `up`, and health names the dead pid and the record's age. The config verbs: set/unset seed a config.json from the shipped example on a box that has none, get answers from the example without writing, a key nothing reads is refused with the nearest real key named (the known names are derived from the defaults, the example and the code's own reads, so a key the harness really reads is never refused), and a boolean for a string key - which crashed the next start - is refused too. Startup: a headless failed start no longer sleeps 30s, and the page is raised only after validation and the instance lock. The loop: the footer counts discarded attempts (window in, clamped out, with clamped answers named separately) and a tool result that arrives after a later block is attached to its call instead of orphaned beside a fabricated placeholder. Release path: release.sh publishes where installers fetch from and waits for that repository's own workflow, this tree's tag is what the ledger's anchors are checked against, the leak scan refuses a tree that is not a git work tree, the gate hides the harness's own token variables (it was grading the operator's shell), and the install surface's Windows job runs every shipped suite minus eleven named ones, with STATUS.json and a contract check keeping the two lists in step."
+    },
+    {
+      "id": "windows-graded-and-audit-79-81",
+      "title": "the Windows gate grades everything again, and three cost-guard defects",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "2deb132",
+        "expect": "untagged"
+      },
+      "detail": "The eight suites hidden from the Windows job are graded there again and each one is fixed rather than listed: two were real Windows defects in the product (the command tokenizer ate every backslash, so a delete of a real document was measured as nothing and asked nothing; the file ledger rendered a path with a mixed separator and the casefolded identity key), one was a tool crashing on a console that cannot carry the glyph it was refusing, and five were suites assuming POSIX (an in-memory console for --app, both platform symbols in the firewall emulation, the documented OSError on the lock probe, the platform restored under an off-Windows assertion, permission bits and separators graded in Windows' own terms). The atomic-claim race check is deterministic now instead of racing the scheduler. From the audit record: the cost guard could not see a bundled short flag (`grep -rn`, `findstr /s`), one level under a user tree was judged the whole profile on macOS but not on Linux, and the elided-call map kept a session per delegation. The runner also stopped reporting a suite that finished as one that died.",
+      "gate": "the Windows job green on the eight, tests/test_cost_guard.py and tests/test_stall.py green for the three audit fixes"
     }
   ]
 }
