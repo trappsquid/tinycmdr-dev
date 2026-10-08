@@ -110,10 +110,18 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None, config
     env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
     env["HOME"] = str(dirpath)
     env["TINYCMDR_NO_BROWSER"] = "1"          # a test never opens a browser tab
+    # FILES, not pipes: a piped child's stdout came back EMPTY on windows-latest while its
+    # stderr carried the whole run (measured 2026-10-08, with fd 1 confirmed a FIFO and the
+    # raw sentinel write reporting success) - so the pipe itself was the broken half. Files
+    # also cannot deadlock on a full pipe buffer, which a run that prints a card can fill.
+    out_f, err_f = dirpath / "child.out", dirpath / "child.err"
     try:
-        r = subprocess.run([sys.executable, str(dirpath / "tinycmdr.py"), *args],
-                           cwd=str(dirpath), env=env, capture_output=True, text=True,
-                           timeout=timeout, stdin=subprocess.DEVNULL)
+        with open(out_f, "wb") as _o, open(err_f, "wb") as _e:
+            r = subprocess.run([sys.executable, str(dirpath / "tinycmdr.py"), *args],
+                               cwd=str(dirpath), env=env, stdout=_o, stderr=_e,
+                               timeout=timeout, stdin=subprocess.DEVNULL)
+        r.stdout = out_f.read_text(encoding="utf-8", errors="replace")
+        r.stderr = err_f.read_text(encoding="utf-8", errors="replace")
         # `or ""`: seen on windows-latest, where one of the two came back None
         # (measured 2026-10-08: TypeError: ... +: 'NoneType' and 'str'), and the suite
         # dying hides every check after it. The suite's _text() guards the timeout
@@ -122,10 +130,14 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None, config
         LAST_IO[0], LAST_IO[1] = r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired as e:
         code = "serving"
-        # stdout/stderr on a TimeoutExpired are BYTES on some platforms even with
-        # text=True (measured: ubuntu CI), and order matters: normalize each part.
-        said = _text(e.stdout) + _text(e.stderr)
-        LAST_IO[0], LAST_IO[1] = _text(e.stdout), _text(e.stderr)
+        # The FILES are this run's output; a TimeoutExpired only carries bytes when the
+        # stream was a pipe (measured: ubuntu CI) and None when it was one.
+        out_t = out_f.read_text(encoding="utf-8", errors="replace") if out_f.exists() \
+            else _text(e.stdout)
+        err_t = err_f.read_text(encoding="utf-8", errors="replace") if err_f.exists() \
+            else _text(e.stderr)
+        said = out_t + err_t
+        LAST_IO[0], LAST_IO[1] = out_t, err_t
     logf = dirpath / "tinycmdr.log"
     if logf.exists():
         said += logf.read_text(encoding="utf-8", errors="replace")
