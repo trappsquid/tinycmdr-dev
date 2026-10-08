@@ -9,6 +9,8 @@ dir (never the checkout - the runner reports any suite that does).
     python -c "import sys; sys.path.insert(0, 'tests'); import hermetic"
 """
 import atexit
+import contextlib
+import os
 import shutil
 import sys
 import tempfile
@@ -16,6 +18,28 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 TESTS = REPO / "tests"
+
+
+# The harness's own secrets sit in the environment of every shell a running bot is started
+# from, and a suite that calls the config code in-process - or launches the CLI - inherits
+# them: the CLI then finds a token and never mints one, and doctor reports a token state the
+# box does not have, so the suite grades the operator's box instead of the code. Measured
+# 2026-10-07 on a configured box: test_verbs FAIL + abort, test_stall 2 FAILs; with the two
+# vars hidden, 249/249 and 385/385. CI never sees it, because CI has no tokens (run 23,
+# A-2026-10-07-65). A suite that WANTS a token sets it itself.
+def _is_harness_secret(key):
+    return key.startswith("TINYCMDR_") and "TOKEN" in key
+
+
+@contextlib.contextmanager
+def no_bot_tokens():
+    """Hide the harness's token vars for the duration of a suite's checks, then restore."""
+    saved = {k: os.environ.pop(k)
+             for k in [k for k in os.environ if _is_harness_secret(k)]}
+    try:
+        yield
+    finally:
+        os.environ.update(saved)
 
 # Repo-root data files tinycmdr.py writes next to itself. A suite that imports the tree's
 # own tinycmdr.py inherits BASE_DIR = the checkout, so its notes, its sessions and its

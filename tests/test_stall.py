@@ -31,6 +31,8 @@ import time
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(BASE / "tests"))          # the shared staging helpers
+import hermetic  # noqa: E402
 
 # This suite imports the bot build.
 SRC = BASE / os.environ.get("TINYCMDR_SRC", "tinycmdr.py")
@@ -1959,7 +1961,19 @@ def test_an_inline_tool_call_is_executed_not_posted_as_the_answer():
 
 def test_startup_validation_catches_an_unconfigured_host():
     """The first thing a fresh install hits. It must fail with a sentence a human
-    can act on, not a traceback from inside the Mattermost driver."""
+    can act on, not a traceback from inside the Mattermost driver.
+
+    Run with the harness's own token vars hidden: `validate_startup_config` reads them
+    (`_mm_token_configured`), so a box running a bot would find the operator's token in the
+    environment and this suite would grade THAT instead of the code - measured 2026-10-07:
+    two checks fail with TINYCMDR_MM_TOKEN exported, 383/383 without (run 23,
+    A-2026-10-07-65).
+    """
+    with hermetic.no_bot_tokens():
+        _startup_validation_body()
+
+
+def _startup_validation_body():
     if importlib.util.find_spec("mmpy_bot") is None:
         # validate_startup_config() reports the missing driver BEFORE it reads any
         # config value, so not one of the messages below can be produced here.

@@ -29,6 +29,7 @@ BASE = Path(__file__).resolve().parent.parent
 TESTS = BASE / "tests"
 sys.path.insert(0, str(TESTS))
 
+import hermetic  # noqa: E402
 import run_scenario  # noqa: E402
 
 PASSES = []
@@ -65,7 +66,7 @@ def call(fb, argv, stdin=None, tty=False):
     return rc, out.getvalue(), err.getvalue()
 
 
-def main():
+def _body():
     workdir = Path(tempfile.mkdtemp(prefix="fbtest-verbs-"))
     try:
         run_scenario.stage_install(workdir, 24000)
@@ -1636,6 +1637,19 @@ def _tail(aborted=""):
     print(line)
     if aborted:
         print("ABORTED after %d check(s): %s" % (len(PASSES) + len(FAILS), aborted))
+
+
+def main():
+    """Run the checks with the harness's own secrets hidden.
+
+    The gate grades the CODE, not the shell a running bot was started from: TINYCMDR_*TOKEN*
+    is exported on every configured box, and both the CLI's mint (`web`) and doctor's
+    page-token line read it - so this suite failed outright with one set and passed scrubbed
+    (measured 2026-10-07: FAIL + abort before, 249/249 after - run 23, A-2026-10-07-65). CI
+    never sees it, because CI has no tokens. A suite that WANTS a token sets it itself.
+    """
+    with hermetic.no_bot_tokens():
+        return _body()
 
 
 if __name__ == "__main__":
