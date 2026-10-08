@@ -186,13 +186,18 @@ def test_oversized_output_is_capped_not_held():
 
 
 def test_small_output_passes_through_untouched():
+    # tinycmdr-runs is the harness's SHARED spill directory, so "did the file count grow" is not
+    # a property this suite can grade: any other suite running at the same moment writes its own
+    # spill file there, and under `--jobs N` this check then failed for a run that spilled
+    # nothing (measured 2026-10-08, the parallel gate). Grade the CONTENT: the marker can only be
+    # in a file there if THIS result was spilled.
     runs = Path(tempfile.gettempdir()) / "tinycmdr-runs"
-    before = {p.name for p in runs.glob("*.out")} if runs.exists() else set()
     rc, out, err, timed_out = fb.run_capture([PY, "-c", "print('tiny-output')"], 30)
     check("a small result is unchanged", "tiny-output" in out
           and "HARNESS" not in out, out[:120])
-    after = {p.name for p in runs.glob("*.out")} if runs.exists() else set()
-    check("a small result is not kept on disk", after == before, sorted(after - before))
+    spilled = sorted(p.name for p in (runs.glob("*.out") if runs.exists() else [])
+                     if "tiny-output" in p.read_text(errors="replace"))
+    check("a small result is not kept on disk", not spilled, spilled)
 
 
 def test_run_capture_directory_is_private():

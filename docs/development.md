@@ -253,6 +253,19 @@ the other plain files are identical). So a re-download is checked against the re
 which compares every asset inside the archive with the tree byte for byte. Measured 2026-10-08: the
 same tree rebuilt gave different archive sums and identical file sums.
 
+**What a push costs, measured 2026-10-08** (so the next person shortens the right thing): the
+suite run IS the job - 391s of a 399s ubuntu job, 15.1 min for the surface's 85-suite Windows job,
+6.2 min for the dev tier's 24 - which is why every job now passes `--jobs` (4 on ubuntu, 3 on
+windows and macOS: 8.1 min -> ~2.5, 15.1 -> ~6). Everything else is noise: `checkout` 1s (a
+`fetch-depth: 0` clone is not the problem), `setup-python` + pip 8s, the leak job 0.2 min, the two
+`install from the built package` jobs 0.6-0.8 min each, and `maintenance/pre-push.sh` 4.4s locally.
+**Pushing twice while a run is in flight is the expensive habit**: the workflows are per-ref
+`cancel-in-progress`, so the second push kills the first run's remaining jobs - and a cancelled job
+marks the whole RUN failed, which is what `release.sh`'s surface wait refuses on. Measured: nine
+pushes in three hours, every earlier run's macOS job cancelled at its 15th minute, macOS never
+graded at all after 13:55, and runs reading `failure` for jobs that never finished. `pre-push.sh`
+now warns when a run for the branch is still going; batch the next change instead.
+
 **After a cut, verify from outside the repo**: download the published `SHA256SUMS` and one archive
 and check the sum; `releases/latest/download/install.sh` returns 200; `gh run list` shows the gate
 green on the tagged commit and the surface's tests green on the pushed tree. `release.sh` also

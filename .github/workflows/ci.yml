@@ -63,7 +63,7 @@ jobs:
         # The runner is the gate; this wrapper is the same sweep with a before/after
         # fingerprint, so "a suite writes into the checkout" is a red job rather than a
         # line in a log nobody reads. It was called by nothing before 2026-10-07.
-        run: python maintenance/check-tree-clean.py
+        run: python maintenance/check-tree-clean.py --jobs 4
 
   # Windows: the suites that are known to pass here, plus the ones that branch on the platform.
   #
@@ -105,7 +105,7 @@ jobs:
       # tests/test_lane_choice.py reached the surface, because only the PRODUCT workflow ran it
       # on Windows). The rest of what can run on Windows runs in the nightly job below.
       - name: gate (the declared Windows tier)
-        run: python tests/run_all.py --tier must
+        run: python tests/run_all.py --jobs 3 --tier must
 
   # Everything else that can run on Windows: nightly, and on demand. The install surface runs
   # the same set on every push of its own tree (--tier windows), so a suite that drifts is
@@ -127,7 +127,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
       - name: gate (every suite that can run on Windows)
-        run: python tests/run_all.py --tier scheduled
+        run: python tests/run_all.py --jobs 3 --tier scheduled
 
   # The gate that keeps a leak OUT of the repo, rather than finding it in history later.
   # Same script the pre-push hook runs, over exactly what this push or PR adds: the working

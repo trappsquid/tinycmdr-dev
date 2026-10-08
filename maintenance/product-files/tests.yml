@@ -29,12 +29,15 @@ jobs:
           # exclusion cannot be silent.
           - os: windows-latest
             python: "3.12"
+            jobs: 3
             gate: --tier windows
           - os: macos-latest
             python: "3.12"
+            jobs: 3
             gate: ""
           - os: ubuntu-latest
             python: "3.12"
+            jobs: 4
             gate: ""
     steps:
       - uses: actions/checkout@v4
@@ -46,5 +49,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-test.txt
+      # --jobs: the suite run is the whole job (measured 2026-10-08: 391s of a 399s ubuntu
+      # job), and macOS never finished inside the run's concurrency window without it.
       - name: every suite
-        run: python tests/run_all.py ${{ matrix.gate }}
+        run: python tests/run_all.py --jobs ${{ matrix.jobs }} ${{ matrix.gate }}

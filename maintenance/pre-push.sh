@@ -97,6 +97,27 @@ then
     fail=1
 fi
 
+# ---- an advisory, not a check: this push CANCELS a run that is still grading --------------
+# The workflows' concurrency group is per-ref with `cancel-in-progress`, so a second push while a
+# run is in flight kills that run's remaining jobs - and a cancelled job marks the whole RUN
+# failed, which is what release.sh's install-surface wait refuses on. Measured 2026-10-08: nine
+# pushes in three hours, every earlier run's macOS job cancelled at its 15th minute, and the runs
+# read `failure` for a job that never got to finish. Warnings only: pushing twice is legitimate.
+if command -v gh >/dev/null 2>&1; then
+    _repo="$(git remote get-url origin 2>/dev/null \
+             | sed -E 's#.*github\.com[:/]([^/]+/[^/.]+)(\.git)?$#\1#')"
+    _br="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    if [ -n "$_repo" ] && [ -n "$_br" ] && [ "$_br" != "HEAD" ]; then
+        _live="$(gh run list --repo "$_repo" --branch "$_br" --limit 5 --json status \
+                    --jq '[.[] | select(.status != "completed")] | length' 2>/dev/null || true)"
+        if [ -n "${_live:-}" ] && [ "$_live" != "0" ]; then
+            echo "pre-push: $_live run(s) for $_br are still going - this push cancels their"
+            echo "          remaining jobs, and a cancelled job marks the run failed. Batch the"
+            echo "          next change into one push instead of pushing again."
+        fi
+    fi
+fi
+
 if [ "$fail" != 0 ]; then
     echo
     echo "pre-push: REFUSED. Fix the above, or override deliberately with --no-verify." >&2

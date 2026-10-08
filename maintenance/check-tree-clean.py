@@ -153,6 +153,11 @@ def main():
     ap = argparse.ArgumentParser(description="a gate run must not touch the tree")
     ap.add_argument("--select", default="",
                     help="passed through to tests/run_all.py --select (a glob)")
+    ap.add_argument("--jobs", "-j", type=int, default=1,
+                    help="passed through to tests/run_all.py --jobs. The sweep IS the job: "
+                         "measured 2026-10-08, the suites are 391s of a 399s ubuntu job. The "
+                         "before/after fingerprint below is global, so parallelism costs this "
+                         "wrapper nothing (what it grades is whether the TREE moved at all).")
     args = ap.parse_args()
     live = live_instance_here()
     if live:
@@ -163,6 +168,8 @@ def main():
     cmd = [sys.executable, "tests/run_all.py"]
     if args.select:
         cmd += ["--select", args.select]
+    if args.jobs > 1:
+        cmd += ["--jobs", str(args.jobs)]
     print("running: %s" % " ".join(cmd))
     before = snapshot()
     t0 = time.time()
