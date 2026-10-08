@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-- **The cost table names what the runtime does not spend:** the README and the doc state it as a shape rather than a number - no busy-wait (every long-lived loop waits on a socket, a queue or a timer), a tool's output capped with the overflow spilled to disk, history trimmed in blocks - because a footprint figure differs per box, Python build and lane and would rot.
-
 ## [1.0.90] - 2026-10-08
 
 ### Fixed
