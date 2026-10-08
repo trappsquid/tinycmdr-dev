@@ -74,6 +74,12 @@ say "version in the tree: $VER"
 # one afternoon): 19 tracked files were dirty one commit after a cut, and this path had no
 # check at all - where.py --check guards the tree declared `live`, which this is not.
 # Override deliberately with TINYCMDR_SKIP_TREE_CHECK=1 and say why in the notes.
+#
+# `--untracked-files=no` is deliberate, not a blind spot: build-package.py stages the SHIP
+# WHITELIST (named files, and `skills/` only in a non-public build), so a file that is not
+# in SHIP cannot reach the archive however untracked it is - measured 2026-10-07 for run
+# 21's A-51, whose untracked suites the packager never looks at. The shipped set is what
+# SHIP names, and every SHIP name is a tracked path here.
 if [ "${TINYCMDR_SKIP_TREE_CHECK:-0}" = "1" ]; then
     echo "*** TINYCMDR_SKIP_TREE_CHECK=1: cutting from a tree that may differ from HEAD" >&2
 else
