@@ -35,14 +35,17 @@ against the pre-fix build, and swallowing it made such a run report green for a 
 caller had not asked about.
 """
 import argparse
+import concurrent.futures
 import fnmatch
 import hashlib
+import json
 import os
 import re
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -64,6 +67,20 @@ SKIP_EXIT = 77
 # like any other suite; the constant only exists so a run can say the file is MISSING, which
 # is a red gate rather than a quiet reduction of what the gate covers.
 ENVELOPE_SUITE = "tests/test_envelope.py"
+
+# The ONE place the Windows tier is stated. Both workflows - this repo's windows job, and the
+# install surface's, which is generated - name a TIER here instead of carrying a suite list,
+# because two hand-kept lists drift: a suite that only the product's workflow ran on Windows
+# reached the surface untested (measured 2026-10-08, tests/test_lane_choice.py).
+WINDOWS_TIER = TESTS / "windows-tier.json"
+TIERS = {
+    # graded on Windows in the dev CI, every push
+    "must": ("must",),
+    # everything else that can run on Windows: nightly, and on demand
+    "scheduled": ("scheduled",),
+    # what the install surface's windows job runs
+    "windows": ("must", "scheduled"),
+}
 
 PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
@@ -421,11 +438,43 @@ def main():
     ap.add_argument("--allow-skips", action="store_true",
                     help="a SKIP suite does not make the run red (developer use)")
     ap.add_argument("--verbose", action="store_true",
-                    help="stream every suite's output instead of folding it into logs")
+                    help="stream every suite's output instead of folding it into logs "
+                         "(forces --jobs 1: two streams at once is not a stream)")
+    ap.add_argument("--jobs", "-j", type=int, default=1, metavar="N",
+                    help="run N suites at once (default 1). Isolation is unchanged - every "
+                         "suite already gets its own temp dir, its own process group and a "
+                         "port the OS picked - but the repo-tree write report degrades from "
+                         "per-suite attribution to ONE union, because two suites writing at "
+                         "the same moment cannot be told apart. Use the default when that "
+                         "attribution is what you are looking at; use -j4 or more when you "
+                         "want the gate in a fraction of the wall clock.")
+    ap.add_argument("--tier", choices=sorted(TIERS), metavar="NAME",
+                    help="select the suites tests/windows-tier.json declares for a tier "
+                         "(%s) instead of naming globs. The file is the single source of "
+                         "truth for what runs on Windows, so neither workflow can drift "
+                         "from it; a pattern in it that matches nothing is a red run."
+                         % "/".join(sorted(TIERS)))
     ap.add_argument("--list", action="store_true", help="print what would run, then exit")
     args = ap.parse_args()
 
+    if args.tier and args.select:
+        sys.exit("--tier and --select name the suites two different ways; pick one")
     patterns = args.select or [DEFAULT_SELECT]
+    if args.tier:
+        try:
+            tier = json.loads(WINDOWS_TIER.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            sys.exit("%s is unreadable (%s) - the Windows tier is stated there and nowhere "
+                     "else, so a run cannot fall back to a guess" % (WINDOWS_TIER, e))
+        patterns = []
+        for key in TIERS[args.tier]:
+            patterns.extend(tier.get(key) or [])
+        # Every pattern must match: a name that matches nothing is how this repo's windows
+        # job carried `tests/test_ledger*.py` for months while the gate reported green.
+        for pat in patterns:
+            if not discover([pat]):
+                sys.exit("tier %s names %s, which matches no suite - fix the tier file "
+                         "(tests/windows-tier.json)" % (args.tier, pat))
     suites = discover(patterns)
     dropped = []
     if args.exclude:
@@ -475,20 +524,47 @@ def main():
     results = []
     leaks = []          # (suite, [paths it wrote into the checkout])
     started = time.time()
-    for path in suites:
+    jobs = 1 if args.verbose else max(1, min(args.jobs, len(suites)))
+    order = {path.relative_to(REPO).as_posix(): i for i, path in enumerate(suites)}
+    out_lock = threading.Lock()
+
+    def _report(rel, status, seconds, detail):
+        with out_lock:
+            print("%-40s ... %-5s %6.1fs%s"
+                  % (rel, status, seconds, "  " + detail if detail else ""))
+
+    def _one(path):
+        """Run one suite and report it the moment it lands (order is completion order)."""
         rel = path.relative_to(REPO).as_posix()
-        sys.stdout.write("%-40s ... " % rel)
-        sys.stdout.flush()
-        before = tree_state()
+        before = tree_state() if jobs == 1 else None
         status, seconds, detail = run_one(path, SLOW_SUITES.get(rel, args.timeout),
-                                             logdir, args.verbose)
-        after = tree_state()
-        results.append((rel, status, seconds, detail))
-        if before is not None and after is not None:
-            wrote = sorted({_leak_path(ln) for ln in (after - before)})
-            if wrote:
-                leaks.append((rel, wrote))
-        print("%-5s %6.1fs%s" % (status, seconds, "  " + detail if detail else ""))
+                                          logdir, args.verbose)
+        after = tree_state() if jobs == 1 else None
+        with out_lock:
+            results.append((rel, status, seconds, detail))
+            if before is not None and after is not None:
+                wrote = sorted({_leak_path(ln) for ln in (after - before)})
+                if wrote:
+                    leaks.append((rel, wrote))
+        _report(rel, status, seconds, detail)
+
+    if jobs == 1:
+        for path in suites:
+            _one(path)
+    else:
+        # One union snapshot for the whole batch: `before`/`after` around EACH suite is what
+        # buys per-suite attribution, and it cannot survive two suites at once.
+        print("running %d suite(s) at once - the repo-tree write report below is ONE union, "
+              "not per-suite attribution (use --jobs 1 for that)\n" % jobs)
+        union_before = tree_state()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            list(pool.map(_one, suites))
+        union_after = tree_state()
+        if union_before is not None and union_after is not None:
+            union = sorted({_leak_path(ln) for ln in (union_after - union_before)})
+            if union:
+                leaks.append((None, union))
+    results.sort(key=lambda r: order.get(r[0], 0))
 
     elapsed = time.time() - started
     reds = [r for r in results if r[1] in (FAIL, SKIP)]
@@ -565,19 +641,30 @@ def main():
         # usually written by many suites, and a reader needs the path first, the culprits
         # second.
         by_path = {}
+        attributed = True
         for rel, paths in leaks:
+            if rel is None:                 # the --jobs > 1 union: no suite to name
+                attributed = False
             for one in paths:
                 by_path.setdefault(one, []).append(rel)
-        print("\nrepo-tree writes during the run: %d path(s), written by %d suite(s) "
-              "- each suite must own its own temp dir"
-              % (sum(len(v) for v in by_path.values()), len(leaks)))
+        if attributed:
+            print("\nrepo-tree writes during the run: %d path(s), written by %d suite(s) "
+                  "- each suite must own its own temp dir"
+                  % (sum(len(v) for v in by_path.values()), len(leaks)))
+        else:
+            print("\nrepo-tree writes during the run: %d path(s), NOT attributed to a suite "
+                  "(-j > 1 cannot tell two writers apart; re-run with --jobs 1 to name them)"
+                  % sum(len(v) for v in by_path.values()))
         if live_instance_here():
             print("  NOTE: a live bot is running in this checkout. It rewrites "
                   "tinycmdr.log and sessions/ itself, so the suite "
                   "names below are NOT reliable - stop the bot (or grade a copy of the "
                   "tree) to read this as suite isolation.")
         for one in sorted(by_path):
-            who = sorted(by_path[one])
+            who = sorted({w for w in by_path[one] if w is not None})
+            if not who:
+                print("  %-38s  (this batch)" % one)
+                continue
             print("  %-38s %2d suite(s): %s"
                   % (one, len(who), ", ".join(who[:4]) + (", ..." if len(who) > 4 else "")))
     else:

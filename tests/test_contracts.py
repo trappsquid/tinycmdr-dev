@@ -222,33 +222,64 @@ def main():
           all(v == _release_repo for v in _fetch.values()),
           "%s vs %s" % (_release_repo, _fetch))
 
-    # ---- the install surface's Windows tier names exactly what it drops ------------------
-    # That workflow runs every shipped suite on three runners, and its Windows job excludes the
-    # suites that are red there. Two sides: the workflow's `--exclude` list, and the
-    # `windows_excluded` list on STATUS.json's open item for it. An exclusion nobody can see is
-    # a quieter gate, and this is what makes it visible: a name in one place only fails HERE.
-    _wf = (BASE / "maintenance" / "product-files" / "tests.yml").read_text(encoding="utf-8")
-    _wf_excluded = set(re.findall(r"--exclude\s+(tests/test_[\w]+\.py)", _wf))
+    # ---- the Windows tier is stated in ONE file, and it is complete ---------------------
+    # tests/windows-tier.json is the single place this is declared: `must` (graded on Windows
+    # in the dev CI on every push), `scheduled` (the rest of what can run there: nightly and on
+    # demand), `excluded` (red on Windows, each with the reason it is not fixed), and
+    # `not_applicable` (cannot run there at all, and says so itself). Both workflows name a
+    # TIER - run_all.py --tier - instead of carrying a suite list, because two hand-kept lists
+    # drift: a suite that only the product's workflow ran on Windows reached the install
+    # surface untested (measured 2026-10-08, tests/test_lane_choice.py).
+    _tier = json.loads((BASE / "tests" / "windows-tier.json").read_text(encoding="utf-8"))
+    _buckets = {}
+    for _key in ("must", "scheduled", "excluded", "not_applicable"):
+        _val = _tier.get(_key)
+        _buckets[_key] = set()
+        _pats = _val if isinstance(_val, list) else sorted(_val or {})
+        if not _pats:
+            check("the tier file declares %r" % _key, False, sorted(_tier))
+        for _pat in _pats:
+            _hits = {q.relative_to(BASE).as_posix() for q in BASE.glob(_pat)}
+            check("tier %r names %s, which matches no suite" % (_key, _pat),
+                  bool(_hits), sorted(_hits))
+            _buckets[_key] |= _hits
+    _all = {q.relative_to(BASE).as_posix() for q in (BASE / "tests").glob("test_*.py")}
+    _declared = set().union(*_buckets.values())
+    check("every suite in the tree is declared in the Windows tier exactly once",
+          _declared == _all and sum(len(_buckets[k]) for k in _buckets) == len(_all),
+          sorted(_all - _declared) + ["twice: %s" % n for n in sorted(_declared)
+                                      if sum(n in _buckets[k] for k in _buckets) > 1])
+    for _key in ("excluded", "not_applicable"):
+        _reasons = _tier.get(_key) or {}
+        check("every %s suite carries a reason" % _key,
+              _reasons and all(str(v).strip() for v in _reasons.values()),
+              sorted(k for k, v in _reasons.items() if not str(v).strip()))
+    _wf_dev = (BASE / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    _wf_prod = (BASE / "maintenance" / "product-files" / "tests.yml").read_text(
+        encoding="utf-8")
+    check("both Windows jobs name a TIER, not a suite list",
+          "--tier must" in _wf_dev and "--tier windows" in _wf_prod
+          and "--exclude tests/" not in _wf_prod,
+          [_ln.strip() for _ln in _wf_prod.splitlines() if "--exclude" in _ln][:4])
     _items = json.loads((BASE / "STATUS.json").read_text(encoding="utf-8"))["items"]
-    _tier = [it for it in _items
-             if it.get("id") == "windows-tier-on-the-install-surface"]
-    check("the install-surface tier is described by exactly one STATUS.json item",
-          len(_tier) == 1, [it.get("id") for it in _tier])
-    if _tier:
-        _item = _tier[0]
+    _tier_items = [it for it in _items
+                   if it.get("id") == "windows-tier-on-the-install-surface"]
+    check("the tier is described by exactly one STATUS.json item",
+          len(_tier_items) == 1, [it.get("id") for it in _tier_items])
+    if _tier_items:
+        _item = _tier_items[0]
         _named = set(_item.get("windows_excluded") or [])
         _na = set(_item.get("windows_not_applicable") or [])
-        check("the Windows workflow excludes exactly the suites the item names",
-              _wf_excluded == (_named | _na), sorted(_wf_excluded ^ (_named | _na)))
-        check("every excluded suite is in the tree",
-              all((BASE / n).is_file() for n in (_named | _na)),
-              sorted(n for n in (_named | _na) if not (BASE / n).is_file()))
+        check("the item names exactly the suites the tier excludes",
+              _named == _buckets["excluded"], sorted(_named ^ _buckets["excluded"]))
+        check("...and exactly the ones it cannot run here",
+              _na == _buckets["not_applicable"], sorted(_na ^ _buckets["not_applicable"]))
         check("...and the two reasons do not overlap (red here vs cannot run here)",
               not (_named & _na), sorted(_named & _na))
         # A suite in the "cannot run here" list must SAY so: run_all.py counts a skip as red, so
         # excluding one is only honest when the suite itself declares the platform it cannot grade
         # (tests/test_update_script.py runs update.sh, a POSIX shell script). A name that fails on
-        # Windows without declaring anything belongs in windows_excluded instead.
+        # Windows without declaring anything belongs in `excluded` instead.
         _undeclared = sorted(n for n in _na
                              if 'os.name != "posix"' not in (BASE / n).read_text(encoding="utf-8"))
         check("every 'cannot run here' suite declares its platform",

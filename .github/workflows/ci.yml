@@ -26,6 +26,10 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # The rest of the Windows-capable tier (run_all.py --tier scheduled): a suite outside the
+    # per-push `must` set cannot sit ungraded on Windows for a release cycle.
+    - cron: "17 9 * * *"
 
 concurrency:
   group: gate-${{ github.ref }}
@@ -95,40 +99,35 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-      # The tier grades the suites this line keeps breaking: measured 2026-10-08, a
-      # Windows-only crash in tests/test_lane_choice.py reached the install surface, because
-      # the PRODUCT workflow was the only place these ran on Windows - i.e. after the cut.
-      # A suite that is RED on Windows belongs in STATUS.json's windows tier, not here, and a
-      # POSIX-only one must be left out rather than allowed to skip (run_all counts a skip as
-      # red on purpose).
-      - name: gate (the ledger and tooling suites, the IS_WINDOWS suites, and the ones the release line keeps touching)
-        run: >
-          python tests/run_all.py
-          --select tests/test_ledger*.py
-          --select tests/test_events.py
-          --select tests/test_config_example.py
-          --select tests/test_tool_discovery.py
-          --select tests/test_status.py
-          --select tests/test_route_hint.py
-          --select tests/test_stall.py
-          --select tests/test_stop_now.py
-          --select tests/test_checkin.py
-          --select tests/test_endpoint_gate.py
-          --select tests/test_installer_windows.py
-          --select tests/test_computer_use.py
-          --select tests/test_lane_choice.py
-          --select tests/test_lane_health.py
-          --select tests/test_envelope.py
-          --select tests/test_plan_and_context.py
-          --select tests/test_payload_ids.py
-          --select tests/test_contracts.py
-          --select tests/test_run_all.py
-          --select tests/test_measured_doc.py
-          --select tests/test_config_guards.py
-          --select tests/test_wording.py
-          --select tests/test_maintenance_kit.py
-          --select tests/test_delegation.py
-          --select tests/test_spill_durability.py
+      # The suites, from tests/windows-tier.json - the one place the tier is stated. `must` is
+      # graded here on every push, so a platform break is caught before a cut rather than by the
+      # install surface afterwards (measured 2026-10-08: a Windows-only crash in
+      # tests/test_lane_choice.py reached the surface, because only the PRODUCT workflow ran it
+      # on Windows). The rest of what can run on Windows runs in the nightly job below.
+      - name: gate (the declared Windows tier)
+        run: python tests/run_all.py --tier must
+
+  # Everything else that can run on Windows: nightly, and on demand. The install surface runs
+  # the same set on every push of its own tree (--tier windows), so a suite that drifts is
+  # named here first.
+  windows-full:
+    name: windows / the whole declared tier (nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: install requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: gate (every suite that can run on Windows)
+        run: python tests/run_all.py --tier scheduled
 
   # The gate that keeps a leak OUT of the repo, rather than finding it in history later.
   # Same script the pre-push hook runs, over exactly what this push or PR adds: the working
