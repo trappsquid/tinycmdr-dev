@@ -161,6 +161,25 @@ if command -v cygpath >/dev/null 2>&1; then
 fi
 git push origin main
 
+# ---- the install surface goes out NOW, so its CI runs DURING the wait below --------------
+# Its workflow runs on a push to its main, and the two gates are independent: different
+# repositories, the same tree. Waiting for one and then the other made every cut ~30 minutes
+# of wall clock for no gate that the order protected (measured 2026-10-08). This tree's gate
+# still gates the TAG, and the surface's gate still gates the RELEASE OBJECT, below.
+# The tree is regenerated from scratch, so publishing it here is byte-identical to publishing
+# it after the tag: the batch is committed, and the only commit left (the ledger promotion)
+# touches STATUS.json, which the product does not ship.
+if [ -e "$PRODUCT_DIR/.git" ]; then
+    [ -f "$PRODUCT_DIR/README.md" ] && [ -f "$PRODUCT_DIR/tinycmdr.py" ] || {
+        echo "*** $PRODUCT_DIR is not a product tree (no README.md/tinycmdr.py) - refusing to remove it" >&2
+        exit 2; }
+    rm -rf "$PRODUCT_DIR"
+fi
+"$PY" maintenance/publish-product.py --write "$PRODUCT_DIR" --push
+git -C "$PRODUCT_DIR" push --force origin main
+PRODUCT_SHA="$(git -C "$PRODUCT_DIR" rev-parse HEAD)"
+say "the install surface's tests started on $PRODUCT_SHA (waiting for them after the tag)"
+
 # ---- the gate must be GREEN on this exact commit before it becomes a release ----------
 # Doctrine (docs/development.md §7): a release flows from green CI, and a published number
 # is never rebuilt. This script used to push and tag in one breath, so a commit whose gate
@@ -237,16 +256,9 @@ git push origin "$TAG"
 git push origin main
 # One commit per release is the install surface's shape, so it is regenerated from scratch: the
 # tree is published FROM this one and is never hand-edited, and a fresh `git init` is what keeps
-# its history to a single commit per version. The README check is the guard against pointing this
-# at a directory that is not a product tree.
-if [ -e "$PRODUCT_DIR/.git" ]; then
-    [ -f "$PRODUCT_DIR/README.md" ] && [ -f "$PRODUCT_DIR/tinycmdr.py" ] || {
-        echo "*** $PRODUCT_DIR is not a product tree (no README.md/tinycmdr.py) - refusing to remove it" >&2
-        exit 2; }
-    rm -rf "$PRODUCT_DIR"
-fi
-"$PY" maintenance/publish-product.py --write "$PRODUCT_DIR" --push
-git -C "$PRODUCT_DIR" push --force origin main
+# its history to a single commit per version. The tree itself went out with `main` above (so
+# its CI has been running through this whole cut); here it is only the TAG that follows, and the
+# wait is for the run that is already in flight - normally over by now.
 git -C "$PRODUCT_DIR" push --force origin "$TAG"
 
 say "create the release on the install surface, at the tag that tree carries"
@@ -258,7 +270,6 @@ say "create the release on the install surface, at the tag that tree carries"
 if [ "${TINYCMDR_SKIP_PRODUCT_CI:-0}" = "1" ]; then
     echo "*** TINYCMDR_SKIP_PRODUCT_CI=1: publishing while $RELEASE_REPO's own tests are not checked" >&2
 else
-    PRODUCT_SHA="$(git -C "$PRODUCT_DIR" rev-parse HEAD)"
     say "the install surface's tests must be green on $PRODUCT_SHA"
     tries="${TINYCMDR_PRODUCT_CI_TRIES:-90}"      # 90 x 20s = 30 minutes
     while :; do

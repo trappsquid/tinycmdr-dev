@@ -186,8 +186,10 @@ a release published into the source repo is a release nobody can fetch.
 4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`, plus the
    prose line count the same tool's check complains about. `pre-push` refuses a stale block, so this
    is not optional even for a one-line change.
-5. **Then**: `python3 tests/run_all.py` (green, `0 skipped`) - the whole gate, not the suite you
-   touched - and commit.
+5. **Then**: `python3 tests/run_all.py --jobs 6` (green, `0 skipped`) - the whole gate, not the suite you
+   touched - and commit. `--jobs` keeps each suite's own temp dir and process group; what it gives up is
+   per-suite attribution in the tree-write report, which becomes one union line and says so (106 suites
+   here: 71s against 346s serial).
 
 ### The cut
 
@@ -203,32 +205,47 @@ id. `release.sh` then runs, in this order (each step exists because skipping it 
    a refusal if the tag already exists;
 2. build every published shape, check the README's download names against `dist/`, check the
    archives against the page's assets, write `SHA256SUMS`;
-3. push `main` (this tree), then **wait for this repo's `gate` on that sha** - a release flows from
-   green CI, and a published number is never rebuilt;
-4. create the tag **locally**, run `ledger-tag.py` to promote the items, commit the promotion, and
+3. push `main` (this tree) and **regenerate and push the product tree's `main` in the same breath**
+   (`publish-product.py --write ../tinycmdr-product --push`, then the force-push it prints) - its
+   workflow runs on a push to its `main`, and the two gates are independent: different repositories,
+   the same tree. Their WAITS then overlap, which is what a cut's wall clock is made of (before this
+   it was ~30 minutes of waiting for two runs that never depended on each other; measured 2026-10-08);
+4. **wait for this repo's `gate` on that sha** - a release flows from green CI, and a published
+   number is never rebuilt. The surface's TAG is not pushed yet: it follows this tree's;
+5. create the tag **locally**, run `ledger-tag.py` to promote the items, commit the promotion, and
    only then push the tag and `main` together - the pre-push hook grades the WORKING TREE, so an
    item still saying `unreleased` while a local tag carries its commit blocks the tag's own push;
-5. regenerate the product tree (`publish-product.py --write ../tinycmdr-product --push`, then the
-   force-pushes it prints) and **wait for the install surface's `tests` on that commit** - the
-   workflow a stranger sees, which nothing used to consult;
-6. `gh release create --verify-tag` on the install surface, upload the stable aliases, read the
+6. push the surface's tag, then **wait for the install surface's `tests` on the commit pushed in
+   step 3** - the workflow a stranger sees, which nothing used to consult. That run has been going
+   since step 3, so this wait is normally already over;
+7. `gh release create --verify-tag` on the install surface, upload the stable aliases, read the
    assets back, check the README names against the published release, fetch tags;
-7. `tests/test_status.py` - the record and the tag must agree before the script says `published`.
+8. `tests/test_status.py` - the record and the tag must agree before the script says `published`.
 
 Two deliberate overrides exist, and each says so in the notes: `TINYCMDR_SKIP_CI_GATE=1` (this
 repo's gate) and `TINYCMDR_SKIP_PRODUCT_CI=1` (the surface's tests).
+
+**A cut that dies after the tag is finished by name, not by memory**:
+`bash maintenance/finish-release.sh [<notes-file>] [--dry-run]` - the release body comes from the
+version's own CHANGELOG section when no file is given. `release.sh` refuses to re-enter once its tag
+exists (a published number is never rebuilt), so this is the tail on its own: build every shape,
+check it, attach it to the release on the install surface, read the result back. `--dry-run` stops
+before the two `gh release` calls.
 
 **Publishing the product tree alone** is a normal operation and needs no "ship it" - it is what a
 reader clones; only cutting a release number does. It is the way a workflow fix, a README fix or a
 product-suite fix reaches the surface without a release.
 
-**The Windows tier.** The install surface runs the whole shipped set on three runners, and its
-`windows-latest` job cannot grade ten suites yet (a console, `os.X_OK`, file modes, a second
-process's lock file...). Those are named in `STATUS.json`'s
-`windows-tier-on-the-install-surface` item and excluded by `--exclude` in
-`maintenance/product-files/tests.yml`; `tests/test_contracts.py` fails when the two lists disagree,
-every name must be a suite that ships, and the item closes only when the list is empty. The DEV
-workflow's own Windows job is a smaller curated `--select` tier, unchanged.
+**The Windows tier is one declared file**: `tests/windows-tier.json`, read by
+`tests/run_all.py --tier <must|scheduled|windows>` and named by both workflows instead of a
+hand-kept list in each. `must` is graded on Windows in the dev CI on every push, `scheduled` is the
+rest of what can run there (nightly, and on demand), `excluded` is red there and carries its reason,
+`not_applicable` cannot run there at all, and `dev_only` marks the suites the product does not ship
+(the surface reads the same file and skips them out loud). `tests/test_contracts.py` fails if a
+suite in the tree is not declared exactly once, if an exclusion carries no reason, or if
+`STATUS.json`'s `windows-tier-on-the-install-surface` item disagrees; the runner refuses a pattern
+that matches no suite. Two lists drifting is what put a Windows-only crash in a suite the surface
+ran and the dev line never did (measured 2026-10-08, tests/test_lane_choice.py).
 
 **After a cut, verify from outside the repo**: download the published `SHA256SUMS` and one archive
 and check the sum; `releases/latest/download/install.sh` returns 200; `gh run list` shows the gate
