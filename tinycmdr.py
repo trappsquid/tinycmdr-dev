@@ -38990,6 +38990,12 @@ def main():
         if _swallowed:
             print("--once takes the task; these read as flags, not text: %s"
                   % ", ".join(_swallowed), file=sys.stderr)
+        if not prompt:
+            # `--once "$VAR"` with an empty variable used to draw a banner and open a full
+            # interactive session, which then consumed the script's stdin as conversation
+            # (run 24, A-2026-10-07-75).
+            print('--once needs the task: tinycmdr --once "<task>"', file=sys.stderr)
+            return 2
         return run_cli(once=prompt)
     # The page starts beside the LONG-LIVED SERVICE modes (bare, the lanes) - the default
     # door whichever one this is. It does NOT start beside a terminal session: `--cli`

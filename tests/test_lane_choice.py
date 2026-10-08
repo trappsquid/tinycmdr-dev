@@ -314,6 +314,11 @@ def main():
                     _stored.append(str(_m.get("content")))
         check(_stored and all(s == "hello" for s in _stored),
               "A-74: ...and the prompt the model received is exactly the text", _stored[:3])
+        code, said = run(work / "once", args=("--no-web", "--once"), timeout=60)
+        check(code == 2 and "needs the task" in said,
+              "A-75: --once with no task is a usage error, not a session", (code, said[-200:]))
+        check("type at any time" not in said and "Type /tinycmdr" not in said,
+              "A-75: ...and it does not fall through to the interactive banner", said[-300:])
 
         # -- the shipped placeholders are not a lane -----------------------------
         # Asserted in-process. Grepping the child's LOG for "CLI-only install" was a race -
