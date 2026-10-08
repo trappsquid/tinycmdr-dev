@@ -89,6 +89,43 @@ def main():
           and [tc["id"] for tc in repaired[0]["tool_calls"]] == ["x", "x_dup1"],
           repaired)
 
+    # ---- a result that arrived AFTER a later block is still that call's answer -----------
+    # The repair used to invent "no result was recorded for this call; it did not complete"
+    # and leave the real output orphaned at the end - a lie the model acts on (re-run the
+    # command, possibly a mutating one) plus the strict-provider 400 the function exists to
+    # prevent (run 25, A-2026-10-07-78). Before inventing a placeholder it now looks for the
+    # result anywhere later in the history and lifts it to where the provider needs it.
+    late = [
+        {"role": "assistant", "content": "", "tool_calls": [_call("c1", "shell")]},
+        {"role": "assistant", "content": "", "tool_calls": [_call("c2", "shell")]},
+        {"role": "tool", "tool_call_id": "c2", "content": "real-c2"},
+        {"role": "tool", "tool_call_id": "c1", "content": "REAL-C1 the actual output"},
+    ]
+    fixed = fb._repair_tool_pairing([dict(m) for m in late])
+    check("a late real result is attached to its own call, not orphaned",
+          fb._tool_pairing_problems(fixed) == [], fb._tool_pairing_problems(fixed))
+    check("...and no placeholder is invented for it",
+          not any("no result was recorded" in str(m.get("content")) for m in fixed),
+          [m.get("content") for m in fixed])
+    check("...with the real output still present, once",
+          sum(1 for m in fixed if "REAL-C1" in str(m.get("content"))) == 1,
+          [m.get("tool_call_id") for m in fixed])
+    check("...and the result follows the call that owns it",
+          [m.get("tool_call_id") for m in fixed if m.get("role") == "tool"]
+          == ["c1", "c2"], [m.get("tool_call_id") for m in fixed])
+    # A call with no result ANYWHERE still gets the placeholder: the lift must not turn a
+    # genuinely missing answer into a silently unanswered call.
+    gone = [
+        {"role": "assistant", "content": "", "tool_calls": [_call("c1", "shell")]},
+        {"role": "assistant", "content": "", "tool_calls": [_call("c2", "shell")]},
+        {"role": "tool", "tool_call_id": "c1", "content": "real-c1"},
+    ]
+    kept = fb._repair_tool_pairing([dict(m) for m in gone])
+    check("a call with no result anywhere still gets the placeholder",
+          fb._tool_pairing_problems(kept) == []
+          and any("no result was recorded" in str(m.get("content")) for m in kept),
+          fb._tool_pairing_problems(kept))
+
     # A healthy payload is returned object-identical: the pass must cost nothing.
     clean = [
         {"role": "assistant", "content": "",

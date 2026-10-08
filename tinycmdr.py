@@ -17692,6 +17692,25 @@ def _uniquify_tool_call_ids(messages):
     return fixed
 
 
+def _find_late_result(messages, start, tid, consumed):
+    """The index of the `tool` result for `tid` at or after `start`, or None.
+
+    A result that arrived AFTER a later assistant tool-call block is still this call's
+    answer: the shape is real (a session written by an older build, or a nudge appended
+    mid-batch), and the placeholder the repair used to invent for it was a lie the model acts
+    on - "it did not complete" means re-run the command, possibly a mutating one - while the
+    real output rode along as an orphan no call owned (run 25, A-2026-10-07-78).
+    """
+    for k in range(start, len(messages)):
+        if k in consumed:
+            continue
+        m = messages[k]
+        if isinstance(m, dict) and m.get("role") == "tool" \
+                and (m.get("tool_call_id") or "") == tid:
+            return k
+    return None
+
+
 def _repair_tool_pairing(messages):
     """Return the payload with every tool_calls block made contiguous.
 
@@ -17707,8 +17726,12 @@ def _repair_tool_pairing(messages):
         return messages
     messages = _uniquify_tool_call_ids(messages)
     out = []
+    consumed = set()          # results lifted forward out of a later run (see below)
     i = 0
     while i < len(messages):
+        if i in consumed:
+            i += 1
+            continue
         m = messages[i]
         # A non-dict entry is passed through and i advances, so the skip can never spin
         # the loop forever.
@@ -17727,6 +17750,11 @@ def _repair_tool_pairing(messages):
         deferred = []
         j = i + 1
         while j < len(messages):
+            if j in consumed:
+                # already lifted forward as its caller's answer: emitting it again here is
+                # the orphan the lift exists to prevent (run 25, A-2026-10-07-78).
+                j += 1
+                continue
             nxt = messages[j]
             if not isinstance(nxt, dict):
                 deferred.append(nxt)  # non-dict entry: defer as-is, j advances (A-102)
@@ -17744,10 +17772,19 @@ def _repair_tool_pairing(messages):
             deferred.append(nxt)
             j += 1
         for tid in want:
-            if tid not in answered:
-                out.append({"role": "tool", "tool_call_id": tid,
-                            "content": "[HARNESS: no result was recorded for "
-                                       "this call; it did not complete.]"})
+            if tid in answered:
+                continue
+            late = _find_late_result(messages, j, tid, consumed)
+            if late is not None:
+                # The real answer exists, later in the history: attach it here (where the
+                # provider needs a tool result to follow its call) instead of inventing a
+                # placeholder and leaving the output orphaned.
+                out.append(messages[late])
+                consumed.add(late)
+                continue
+            out.append({"role": "tool", "tool_call_id": tid,
+                        "content": "[HARNESS: no result was recorded for "
+                                   "this call; it did not complete.]"})
         out.extend(deferred)
         i = j
     before = _tool_pairing_problems(messages)
