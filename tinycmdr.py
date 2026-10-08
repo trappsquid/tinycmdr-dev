@@ -3422,81 +3422,91 @@ def _spill_index_save():
 
     The index used to be process memory only: "the FULL text is on disk - nothing was
     dropped" stopped being true the moment the bot restarted, and the model was left
-    reading a relative path whose row no longer existed. Called with the lock HELD.
+    reading a relative path whose row no longer existed. Called with the in-memory lock
+    HELD (`_SPILLS_LOCK`, which serializes THREADS); the read-merge-write below takes
+    `_path_lock` as well, so a second PROCESS cannot interleave its own read between this
+    one's read and its write.
     """
     try:
-        rows = [e for e in _SPILLS if (BASE_DIR / str(e.get("path") or "")).exists()]
         path = _spill_index_path()
-        if not rows and not path.exists():
-            # Nothing to persist and nothing to erase: do not mkdir spill/ or drop an
-            # empty file into a tree that never spilled (run_all's check caught the
-            # mkdir from an idle session reset). Nothing to protect either, so a
-            # pending tombstone is spent here rather than leaking into a later save.
+        rows = [e for e in _SPILLS if (BASE_DIR / str(e.get("path") or "")).exists()]
+        # The WHOLE read-merge-write, not just the write: atomic_write_text takes the
+        # inter-process lock one level down, which left the READ outside it. Two processes
+        # then both read, both merged their own rows, and the last rename won - the exact
+        # clobber the merge below exists to stop (run 21, A-2026-10-07-49). `_path_lock` is
+        # reentrant per thread, so the write's own acquisition nests rather than deadlocks.
+        with _path_lock(str(path)):
+            if not rows and not path.exists():
+                # Nothing to persist and nothing to erase: do not mkdir spill/ or drop an
+                # empty file into a tree that never spilled (run_all's check caught the
+                # mkdir from an idle session reset). Nothing to protect either, so a
+                # pending tombstone is spent here rather than leaking into a later save.
+                _SPILL_TOMBSTONES.clear()
+                return
+            _spill_dir()
+            # MERGE, don't replace: a second process on this install (the service plus a
+            # --once run) never saw this process's rows and used to clobber the whole index
+            # on its next save. `path` is content-addressed, so it is a safe union key and
+            # the newer `at` wins; the write never truncates the destination.
+            merged = {}
+            removed = {}                   # path -> the epoch second it was removed at
+            try:
+                for line in path.read_text(encoding="utf-8",
+                                          errors="replace").splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(e, dict):
+                        continue
+                    if e.get("removed"):
+                        # A removal recorded by ANY process. The protection a tombstone
+                        # gives has to outlive the process that made it: the resurrection
+                        # comes from the OTHER process's memory (`rows` below), not from
+                        # the file, so an in-memory-only tombstone was exactly the one the
+                        # concurrent --once run could not see.
+                        removed[str(e["removed"])] = float(e.get("at") or 0)
+                        continue
+                    if e.get("path") and (BASE_DIR / str(e["path"])).exists():
+                        # A row whose file is gone is not worth re-persisting: readers drop
+                        # it anyway, and keeping it held an id hostage.
+                        merged[str(e["path"])] = e
+            except OSError:
+                pass
+            for _gone in _SPILL_TOMBSTONES:
+                if _gone:
+                    removed[_gone] = time.time()
+            for e in rows:
+                key = str(e.get("path"))
+                if key in removed:
+                    # A deliberate removal (a /new reset) beats this process's memory of
+                    # the row; see the disk half above for why the disk copy is the
+                    # load-bearing one.
+                    continue
+                old = merged.get(key)
+                if old is None or float(e.get("at") or 0) >= float(old.get("at") or 0):
+                    merged[key] = e
+            for _gone in removed:
+                merged.pop(_gone, None)
+            # Bound the removals the way the rows are bounded: expire them, then keep the
+            # newest.
+            now = time.time()
+            removed = {p: at for p, at in removed.items()
+                       if now - at <= _SPILL_TOMBSTONE_TTL and p}
+            if len(removed) > _SPILL_TOMBSTONES_MAX:
+                removed = dict(sorted(removed.items(), key=lambda kv: kv[1],
+                                      reverse=True)[:_SPILL_TOMBSTONES_MAX])
+            payload = [json.dumps(e, ensure_ascii=False) for e in merged.values()]
+            payload += [json.dumps({"removed": p, "at": int(at)}, ensure_ascii=False)
+                        for p, at in removed.items()]
+            atomic_write_text(path, "".join(line + "\n" for line in payload))
+            # Spent only NOW that the write has returned. Clearing them first meant a
+            # failed save lost the removal AND its protection in one go, and /new quietly
+            # stopped holding on the next save - the prompt grew its pointers back.
             _SPILL_TOMBSTONES.clear()
-            return
-        _spill_dir()
-        # MERGE, don't replace: a second process on this install (the service plus a
-        # --once run) never saw this process's rows and used to clobber the whole index
-        # on its next save. `path` is content-addressed, so it is a safe union key and
-        # the newer `at` wins; atomic_write_text buys the inter-process lock and never
-        # truncates the destination.
-        merged = {}
-        removed = {}                       # path -> the epoch second it was removed at
-        try:
-            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(e, dict):
-                    continue
-                if e.get("removed"):
-                    # A removal recorded by ANY process. The protection a tombstone gives
-                    # has to outlive the process that made it: the resurrection comes from
-                    # the OTHER process's memory (`rows` below), not from the file, so an
-                    # in-memory-only tombstone was exactly the one the concurrent --once
-                    # run could not see.
-                    removed[str(e["removed"])] = float(e.get("at") or 0)
-                    continue
-                if e.get("path") and (BASE_DIR / str(e["path"])).exists():
-                    # A row whose file is gone is not worth re-persisting: readers drop
-                    # it anyway, and keeping it grew the index for ever while holding an
-                    # id hostage.
-                    merged[str(e["path"])] = e
-        except OSError:
-            pass
-        for _gone in _SPILL_TOMBSTONES:
-            if _gone:
-                removed[_gone] = time.time()
-        for e in rows:
-            key = str(e.get("path"))
-            if key in removed:
-                # A deliberate removal (a /new reset) beats this process's memory of the
-                # row; see the disk half above for why the disk copy is the load-bearing one.
-                continue
-            old = merged.get(key)
-            if old is None or float(e.get("at") or 0) >= float(old.get("at") or 0):
-                merged[key] = e
-        for _gone in removed:
-            merged.pop(_gone, None)
-        # Bound the removals the way the rows are bounded: expire them, then keep the newest.
-        now = time.time()
-        removed = {p: at for p, at in removed.items()
-                   if now - at <= _SPILL_TOMBSTONE_TTL and p}
-        if len(removed) > _SPILL_TOMBSTONES_MAX:
-            removed = dict(sorted(removed.items(), key=lambda kv: kv[1],
-                                  reverse=True)[:_SPILL_TOMBSTONES_MAX])
-        payload = [json.dumps(e, ensure_ascii=False) for e in merged.values()]
-        payload += [json.dumps({"removed": p, "at": int(at)}, ensure_ascii=False)
-                    for p, at in removed.items()]
-        atomic_write_text(path, "".join(line + "\n" for line in payload))
-        # Spent only NOW that the write has returned. Clearing them first meant a failed
-        # save lost the removal AND its protection in one go, and /new quietly stopped
-        # holding on the next save - the prompt grew its pointers back.
-        _SPILL_TOMBSTONES.clear()
     except Exception as e:                  # noqa: BLE001 - an index is never worth a run
         log.warning("spill index not saved (%s) - the previous index still stands and "
                     "this run's removals are not on disk yet", e)

@@ -230,6 +230,50 @@ def main():
         check(dead not in paths, "a row whose file is gone is not re-persisted (A-108)",
               sorted(paths))
 
+        # ---- the merge's READ is inside the inter-process lock (run 21, A-49)
+        # atomic_write_text takes that lock one level down, which covers the WRITE only:
+        # two processes could both read, both merge, and the last rename wins - the
+        # clobber the merge above exists to stop. Recorded, not argued: the lock must be
+        # entered BEFORE the index is read.
+        idx = fb._spill_index_path()
+        guard = spill / "aaaa0000aaaa0000.txt"
+        guard.write_text("a row to save", encoding="utf-8")
+        events = []
+        real_lock, real_write = fb._path_lock, fb.atomic_write_text
+        real_path_fn = fb._spill_index_path
+
+        class _RecordingPath(type(Path())):
+            def read_text(self, *a, **k):
+                events.append("read")
+                return super().read_text(*a, **k)
+
+        def _spy_lock(p):
+            events.append("lock")
+            return real_lock(p)
+
+        def _spy_write(p, t, **k):
+            events.append("write")
+            return real_write(p, t, **k)
+
+        try:
+            fb._path_lock = _spy_lock
+            fb.atomic_write_text = _spy_write
+            fb._spill_index_path = lambda: _RecordingPath(str(idx))
+            fb._SPILLS.append({"id": 8888, "tool": "shell",
+                               "path": "spill/%s" % guard.name, "first": "x",
+                               "chars": 1, "at": time.time(), "session": "lock-probe"})
+            fb._spill_index_save()
+        finally:
+            fb._path_lock, fb.atomic_write_text = real_lock, real_write
+            fb._spill_index_path = real_path_fn
+            fb._SPILLS[:] = [r for r in fb._SPILLS if r.get("id") != 8888]
+        # events: lock (the save's own), read, lock (atomic_write_bytes'), write
+        check(events and events[0] == "lock" and "read" in events
+              and events.index("read") > events.index("lock"),
+              "the index READ happens under the inter-process lock (A-49)", events)
+        check("write" in events and events.index("write") > events.index("read"),
+              "...and the write still follows the read", events)
+
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
