@@ -10739,7 +10739,6 @@ def tool_memory(args, ctx):
                     "or add a differently titled one." % (title, e, e))
         except ValueError as e:
             return "ERROR: %s" % e
-        memory_index_update()
         _memory_log_append("Creation", "[%s](%s.md)" % (title, made["id"]))
         note = ""
         if sup:
@@ -10747,6 +10746,11 @@ def tool_memory(args, ctx):
                               reason="superseded by %s (%s)" % (made["id"], title),
                               actor=actor)
             note = " | supersedes memory/%s (now deprecated)" % sup
+        # AFTER the supersede: the deprecation above rewrites the old concept, and the
+        # index is the prompt-facing view of the bundle - rendered before it, the old
+        # entry kept riding every consumer unflagged next to its replacement until some
+        # later mutation happened to re-render (A-2026-10-08-143).
+        memory_index_update()
         out = _memory_report("wrote", made, len(body)) + note
         if made.get("description_cut"):
             out += (" | description cut to %d chars (the index is the whole prompt; put "

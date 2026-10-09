@@ -406,6 +406,30 @@ def test_add_refuses_a_restatement_and_supersedes_replaces():
           "(deprecated, unverified)" in index, index)
 
 
+def test_a_superseding_add_re_renders_the_index_after_the_deprecation():
+    """A-2026-10-08-143: the add path rendered index.md BEFORE deprecating the concept it
+    supersedes, so the browse copy kept the old concept unflagged next to its replacement
+    until some later mutation happened to re-render. The tool's own report renders fresh,
+    so the reply looked right while the artifact did not."""
+    _fresh()
+    ok = fb.tool_memory({"action": "add", "title": "Ports in use",
+                         "body": "The web UI listens on the configured port only."},
+                        {"session_key": "mem-sup"})
+    check("the first add lands", ok.startswith("OK"), ok[:120])
+    sup = fb.tool_memory({"action": "add", "title": "Ports in use (v2)",
+                          "body": "The web UI listens on 8787 unless web.port says "
+                                  "otherwise; the old port is free afterwards.",
+                          "supersedes": "ports-in-use"}, {"session_key": "mem-sup"})
+    check("the superseding add lands", sup.startswith("OK"), sup[:160])
+    on_disk = fb.MEMORY_INDEX.read_text(encoding="utf-8")
+    check("index.md flags the superseded concept deprecated in the same mutation",
+          re.search(r"\[Ports in use\]\(ports-in-use\.md\)[^\n]*\([^)]*\bdeprecated\b",
+                    on_disk) is not None, on_disk)
+    check("...and the prompt's index says so too",
+          re.search(r"\[Ports in use\]\(ports-in-use\.md\)[^\n]*\([^)]*\bdeprecated\b",
+                    fb.volatile_context(session_key="mem-sup")) is not None)
+
+
 def test_nothing_rides_as_permanently_true():
     """The tier is stated even when it is the default: an unstated stance reads as
     authority, and the index is the only part of memory the model actually sees."""
