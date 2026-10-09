@@ -80,6 +80,7 @@ try {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "`n    the unpacked folder was temporary. The installed copy carries its own installer and"
     Write-Host "    uninstaller (%USERPROFILE%\tinycmdr by default), so later:"
+    Write-Host "      double-click `"$env:USERPROFILE\tinycmdr\UNINSTALL-WINDOWS.cmd`""
     Write-Host "      `"$env:USERPROFILE\tinycmdr\install\install-tinycmdr.cmd`" -Uninstall -Force"
     Write-Host "      (or: powershell -ExecutionPolicy Bypass -File `"$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1`" -Force)"
     Write-Host "    A -InstallDir install needs -InstallDir <that folder> on either form - the .ps1"

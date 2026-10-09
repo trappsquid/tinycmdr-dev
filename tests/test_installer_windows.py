@@ -231,6 +231,44 @@ def main():
     check("the uninstaller uses the retrying removal",
           "Remove-TinycmdrFolder -Dir $InstallDir" in install and
           "Remove-Item $InstallDir -Recurse -Force\n" not in install)
+    check("the sweep kills the matches' children too (a tool child holds the folder)",
+          "ParentProcessId" in stop_code)
+    check("...while sparing the shell the removal runs from",
+          "$PID" in stop_code and "$self" in stop_code)
+    check("...and it sweeps until nothing matches, bounded, not one snapshot",
+          "while ($true)" in stop_code and "AddSeconds" in stop_code
+          and "Start-Sleep" in stop_code)
+
+    print("\n== a removal that cannot finish fails loudly, and runs from anywhere ==")
+    check("the uninstaller steps its own shell out of the folder before deleting it",
+          "Set-Location $env:TEMP" in install and
+          0 <= install.find("Set-Location $env:TEMP") <
+               install.find("Remove-TinycmdrFolder -Dir $InstallDir"))
+    check("a shell that was cd'd into the folder is stepped out too (the wrapper)",
+          "for %%A in (%*)" in cmd and 'if defined UNINSTALLING cd /d "%TEMP%"' in cmd,
+          "the wrapper leaves its own shell standing in the folder it is asked to delete")
+    fail_tail = install[install.find("Remove-TinycmdrFolder -Dir $InstallDir"):][:900]
+    check("a failed removal exits non-zero and names what is left (not 'done')",
+          'Say "left    : $InstallDir' in fail_tail and "exit 2" in fail_tail,
+          "tail: %r" % fail_tail[:200])
+
+    print("\n== the removal door a double-click can run ==")
+    door = source("UNINSTALL-WINDOWS.cmd")
+    with open(os.path.join(ROOT, "UNINSTALL-WINDOWS.cmd"), "rb") as fh:
+        door_bytes = fh.read()
+    check("the package ships UNINSTALL-WINDOWS.cmd",
+          '"UNINSTALL-WINDOWS.cmd"' in source("maintenance/build-package.py"))
+    check("the door acts on the folder it sits in, by absolute path",
+          'set "HERE=%~dp0"' in door and '-InstallDir "%HERE%"' in door)
+    check("the door asks first, and 'no' removes nothing",
+          'set /p "ANS=Remove it? (y/N) "' in door and "Nothing was removed." in door)
+    check("the door is ASCII with CRLF line endings (what cmd.exe wants)",
+          door_bytes.isascii() and door_bytes.count(b"\n") == door_bytes.count(b"\r\n"))
+    check("the door reports the exit code and keeps the window open",
+          'if not "%RC%"=="0"' in door and "pause" in door
+          and door.rstrip().endswith("exit /b %RC%"))
+    check("the installer summary and the one-liner both name the door",
+          "UNINSTALL-WINDOWS.cmd" in install and "UNINSTALL-WINDOWS.cmd" in one_line)
 
     print("\n== tinycmdr.cmd refuses the Microsoft Store python stub ==")
     check("the shim looks python up with where + findstr",

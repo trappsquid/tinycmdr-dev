@@ -106,6 +106,9 @@ SHIP = [
     # script execution policy is Restricted there, so that window closes before it can be
     # read). A root-level .cmd is what a person double-clicks.
     "INSTALL-WINDOWS.cmd",
+    # Its removal twin, for the same reason: the uninstall switch lives on a wrapper a
+    # reader has to know, and only a .cmd survives a double-click on stock Windows.
+    "UNINSTALL-WINDOWS.cmd",
     # The macOS equivalents, and why they exist: Finder RUNS a .command on double-click
     # and opens a .sh in TextEdit, so the Windows door had no Mac counterpart until
     # 2026-09-25.
@@ -243,7 +246,8 @@ ALLOWED_MAINTENANCE = {"restart-tinycmdr.ps1", "restart-tinycmdr.sh",
 ENV_PREFIX = "env "
 # Ships-as-code files must be neutral too: a host value here would be baked into
 # every install, which is exactly how this box's endpoint ended up in the code.
-APP_FILES = ("INSTALL-WINDOWS.cmd", "INSTALL-MACOS.command", "UNINSTALL-MACOS.command",
+APP_FILES = ("INSTALL-WINDOWS.cmd", "UNINSTALL-WINDOWS.cmd",
+             "INSTALL-MACOS.command", "UNINSTALL-MACOS.command",
              "tinycmdr.py", "tinycmdr-supervise.py", "config.example.json",
              "soul.example.md",
              ".env.example", "README.md",

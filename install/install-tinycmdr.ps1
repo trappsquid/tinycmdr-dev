@@ -41,11 +41,13 @@
                            mmpy_bot is the last release that connects on 3.13+
         -VerifyOnly        is this install working? (no reinstall)
         -Uninstall [-Force] stop it, remove the folder and the autostart entry
+                           (double-clicking UNINSTALL-WINDOWS.cmd, shipped in the
+                           install folder, does the same to the folder it sits in)
 
     Exit codes:
         0  installed and verified
         1  bad input or missing prerequisite
-        2  install failed
+        2  install failed (or a removal that could not finish)
         3  installed, but the model endpoint did not answer (a config gap)
 #>
 [CmdletBinding()]
@@ -418,9 +420,10 @@ function Invoke-Probe {
 
 function Stop-TinycmdrProcesses {
     <#
-        Kill the bot AND its supervisor for this install. Needed before a -Force copy
-        and before an uninstall: the running bot holds tinycmdr.log and tinycmdr.lock,
-        so overwriting in place either fails or leaves a stale process alive.
+        Kill the bot AND its supervisor for this install, and wait until they are
+        really gone. Needed before a -Force copy and before an uninstall: the running
+        bot holds tinycmdr.log, its lock and this folder's interpreter image open, so
+        overwriting in place either fails or leaves a stale process alive.
 
         The bot, its supervisor and the launcher all carry the install dir in their
         command lines: the vbs launcher passes the full ...\tinycmdr-supervise.py path
@@ -430,24 +433,70 @@ function Stop-TinycmdrProcesses {
         bracketed install dir matched nothing (measured 2026-10-05) and the scoped
         clause silently let the old bot live. A hand-run bare
         `python tinycmdr-supervise.py` (no path) is deliberately not killed.
+
+        The matches' CHILDREN die too. The bot runs its tools as child processes, a
+        child can hold the folder as its working directory (Windows refuses to delete
+        a directory that is a live process's current directory) or a file inside it,
+        and the child carries no install dir in its own command line - the name match
+        alone misses it. The shell this runs from, and its ancestors, are spared.
+
+        And it sweeps until nothing matches instead of once: killing the bot makes its
+        supervisor start a fresh one (5 s backoff), and Windows releases a killed
+        process's handles a moment later, so one snapshot leaves a fresh child holding
+        the folder. The loop is bounded (20 s); a stop that finds nothing returns at
+        once.
     #>
     param([string] $Dir)
     $killed = 0
+    $deadline = (Get-Date).AddSeconds(20)
+    # A CIM hiccup must not abort a removal: it ends the sweep with whatever is
+    # already killed, the way the one-shot sweep used to swallow its errors.
     try {
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-            Where-Object {
+        while ($true) {
+            $procs = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+            $roots = @($procs | Where-Object {
                 if (-not $_.CommandLine) { return $false }
                 if ($_.Name -like 'python*' -or $_.Name -eq 'wscript.exe') {
                     return $_.CommandLine.IndexOf($Dir,
                         [System.StringComparison]::OrdinalIgnoreCase) -ge 0
                 }
                 return $false
-            } |
-            ForEach-Object {
-                try { Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop; $killed++ } catch { }
+            })
+            if (-not $roots.Count) { return $killed }
+            # Our own ancestor chain (this shell, the wrapper, the terminal) is off
+            # limits: a removal run from a shell the bot itself launched must not
+            # kill that shell.
+            $byId = @{}
+            foreach ($p in $procs) { $byId[[int]$p.ProcessId] = $p }
+            $self = @()
+            $walk = [int]$PID
+            while ($byId.ContainsKey($walk)) {
+                $self += $walk
+                $walk = [int]$byId[$walk].ParentProcessId
             }
-    } catch { }
-    return $killed
+            $ids = @{}
+            foreach ($r in $roots) { $ids[[int]$r.ProcessId] = $true }
+            $added = $true
+            while ($added) {
+                $added = $false
+                foreach ($p in $procs) {
+                    if ($ids.ContainsKey([int]$p.ParentProcessId) -and
+                        -not $ids.ContainsKey([int]$p.ProcessId)) {
+                        $ids[[int]$p.ProcessId] = $true
+                        $added = $true
+                    }
+                }
+            }
+            foreach ($id in @($ids.Keys)) {
+                if ($self -contains $id) { continue }
+                try { Stop-Process -Id $id -Force -ErrorAction Stop; $killed++ } catch { }
+            }
+            if ((Get-Date) -ge $deadline) { return $killed }
+            Start-Sleep -Milliseconds 500
+        }
+    } catch {
+        return $killed
+    }
 }
 
 function Remove-TinycmdrFolder {
@@ -674,6 +723,18 @@ if ($Uninstall) {
     # verb. And an entry only goes once its folder is really gone, so a removal that
     # failed (still held by a process) does not orphan the verb either.
     if (Test-Path $InstallDir) {
+        # Windows refuses to delete a directory that any live process has as its
+        # current directory - this shell included, and `cd %USERPROFILE%\tinycmdr`
+        # before running the removal is a natural thing to do. Step out first;
+        # install-tinycmdr.cmd does the same for its own shell on an uninstall.
+        try {
+            $here = (Get-Location).Path
+            if ($here -and ($here.TrimEnd('\') -eq $InstallDir -or
+                    $here.StartsWith($InstallDir + '\',
+                        [System.StringComparison]::OrdinalIgnoreCase))) {
+                Set-Location $env:TEMP
+            }
+        } catch { }
         if (-not $Force) {
             if ($NoPause) { Fail "refusing to delete $InstallDir without -Force (or run interactively to confirm)" }
             $ans = Read-Host "Delete $InstallDir and everything in it? (y/N)"
@@ -684,7 +745,18 @@ if ($Uninstall) {
                 exit 0
             }
         }
-        if (Remove-TinycmdrFolder -Dir $InstallDir) { Say "removed : $InstallDir" }
+        if (Remove-TinycmdrFolder -Dir $InstallDir) {
+            Say "removed : $InstallDir"
+        } else {
+            # This used to fall through to "done" and exit 0 with the folder still
+            # there, so a half-removal read exactly like a clean one. Name what is
+            # left and fail; the PATH entry above stays for the same reason.
+            Say "left    : $InstallDir - something still holds it"
+            Say "          a shell or editor sitting in that folder blocks the delete on"
+            Say "          Windows; close it, then run the removal again"
+            try { Stop-TranscriptRedacted } catch { }
+            exit 2
+        }
     }
     # undo the user-Path entry the install added (the verb surface)
     if ((-not (Test-Path $InstallDir)) -and (Test-UserPathHas $InstallDir)) {
@@ -2049,8 +2121,10 @@ Say "redo   : install-tinycmdr.cmd -Force"
 # The wrapper is the line to give a reader: a stock Restricted execution
 # policy refuses the -File form, and the -File form used to hardcode the default folder
 # so a -InstallDir install could not be removed with it at all. Both wrappers pass
-# -InstallDir through, and both are in the install folder / the package.
-Say ("uninstall: {0}\install\install-tinycmdr.cmd -Uninstall -Force" -f $InstallDir)
+# -InstallDir through, and both are in the install folder / the package. The door comes
+# first because it is the one a reader can double-click.
+Say ("uninstall: double-click {0}\UNINSTALL-WINDOWS.cmd" -f $InstallDir)
+Say ("           (or: {0}\install\install-tinycmdr.cmd -Uninstall -Force)" -f $InstallDir)
 Say "           (from an extracted package: INSTALL-WINDOWS.cmd -Uninstall -Force)"
 Say ('           (or: powershell -ExecutionPolicy Bypass -File "' + $InstallDir +
      '\install\uninstall-tinycmdr.ps1" -InstallDir "' + $InstallDir + '" -Force)')

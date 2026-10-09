@@ -27,6 +27,8 @@ rem  uninstaller without a second download. -InstallDir is honoured (the uninsta
 rem  own default is %USERPROFILE%\tinycmdr and cannot find a custom folder on its own),
 rem  and so is -Force (delete without asking):
 rem      install-tinycmdr.cmd -Uninstall [-InstallDir D:\tinycmdr] -Force
+rem  The install folder also carries UNINSTALL-WINDOWS.cmd, the same removal as a
+rem  double-click.
 rem =====================================================================
 setlocal
 set "HERE=%~dp0"
@@ -42,6 +44,14 @@ if not exist "%PS1%" (
     pause
     exit /b 1
 )
+
+rem Windows refuses to delete a directory that is a live process's current directory,
+rem and that includes this wrapper's own shell when it was run after a cd into the
+rem install folder. Step out for an uninstall only: a relative -SecretsFile keeps the
+rem shell's own directory on the install path.
+set "UNINSTALLING="
+if not "%~1"=="" for %%A in (%*) do if /i "%%~A"=="-Uninstall" set "UNINSTALLING=1"
+if defined UNINSTALLING cd /d "%TEMP%"
 
 echo Running the tinycmdr installer. Log: %LOG%
 echo.

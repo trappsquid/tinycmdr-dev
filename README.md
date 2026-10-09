@@ -183,7 +183,7 @@ An old or broken install updates with the same command (the launcher falls back 
 
 | OS | Command |
 | :--- | :--- |
-| Windows | `INSTALL-WINDOWS.cmd -Uninstall -Force` (+ `-InstallDir <folder>` if not default) |
+| Windows | `UNINSTALL-WINDOWS.cmd` (double-click it in the install folder), or `INSTALL-WINDOWS.cmd -Uninstall -Force` (+ `-InstallDir <folder>` if not default) |
 | Linux | `sudo bash ~/tinycmdr/install/install-tinycmdr.sh --uninstall` (+ `--mode user`) |
 | macOS | `UNINSTALL-MACOS.command`, or `bash ~/tinycmdr/install/uninstall-tinycmdr-macos.sh --uninstall` |
 

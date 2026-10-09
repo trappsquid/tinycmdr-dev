@@ -10,7 +10,10 @@
 # and the task all follow the folder, not this default.
 #
 # Stock Windows blocks .ps1 files outright (execution policy Restricted), so the
-# documented form is a wrapper. Both of these take -InstallDir/-Force as well:
+# documented form is a wrapper. UNINSTALL-WINDOWS.cmd, in the install folder (and in the
+# package root), is that same removal as a double-click - it asks once and acts on the
+# folder it sits in, so a custom -InstallDir install needs no switches.
+# Both of these take -InstallDir/-Force as well:
 #
 #   install\install-tinycmdr.cmd -Uninstall -Force [-InstallDir <folder>]
 #   powershell -ExecutionPolicy Bypass -File install\uninstall-tinycmdr.ps1 -Force

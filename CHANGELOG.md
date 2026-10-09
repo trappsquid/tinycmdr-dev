@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A Windows removal could end as "done" with the folder still there:** the uninstaller now steps its own shell out of the folder before deleting it, stops and waits for the bot's child processes too, fails non-zero naming what is left, and ships UNINSTALL-WINDOWS.cmd - a double-click door the script execution policy cannot cut short (tests/test_installer_windows.py).
+
 ## [1.0.93] - 2026-10-08
 
 - **A failed forget answered OK:** tool_memory ignored memory_forget's None, so a file held open (a Windows PermissionError, a permissions problem anywhere) was announced as forgotten while it stayed on disk and in the index - the failure is reported by name now (tests/test_memory_okf.py).
