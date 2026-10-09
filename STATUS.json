@@ -1734,13 +1734,14 @@
     },
     {
       "id": "search-provider-declared-next",
-      "title": "the installers declare the web-search provider, and egress follows from it",
-      "state": "open",
+      "title": "the web-search provider is a url you enter, never a menu",
+      "state": "unreleased",
       "anchor": {
-        "file": "config.example.json"
+        "commit": "5ab03f3",
+        "expect": "untagged"
       },
-      "detail": "the installers never ask WHICH search provider a box uses - they only ask 'May the bot's web search send queries off this machine?' (install-tinycmdr.ps1 ~1118, .sh ~998, `setup` ~29916) while search.providers keeps whatever config.example.json shipped (anysearch, tavily, ...). A searxng entry pointing at a box on the LAN is the only shape whose traffic stays on this network, and nothing at install time says that or lets the operator pick it. The ask mirrors the model-endpoint flow: choose the kind (searxng on this network / a cloud provider / none), then ask ONLY what that kind needs - a URL for searxng (no key ever), or an API key (hidden, written to the provider's api_key_env in .env) for a keyed provider. The runtime already supports the keyless cloud case (_search_key: \"Empty is legitimate: anysearch's anonymous tier answers without one\"), so the installer must offer 'anonymous, no key' for anysearch instead of demanding one. No provider MENU: dozens exist and none belongs hardcoded in the ask. Mirror the model-endpoint questions instead - ask for the search API's URL, an optional API key (hidden; blank = a provider that answers anonymously, which the runtime supports), and an optional label - then offer to add another entry; the entries in order are the primary-then-fallback chain (_search_providers tries them in order). Egress is derived from the chain: an entry whose endpoint is off this network needs the explicit allow, and the summary names the entries that would be refused while it is off. Runtime side: an entry with an unknown or absent kind but its own url must be accepted and called with a generic JSON POST (known kinds keep their adapters); today _search_providers refuses any kind outside _SEARCH_DEFAULT_URL, and that refusal is what makes an open-ended ask impossible. Name the active chain in the install summary and doctor. .env TINYCMDR_SEARCH_PROVIDERS stays the unattended door.",
-      "gate": "pending - next release; no code change yet"
+      "detail": "search.providers shipped anysearch and tavily - and tavily refuses keyless calls, so a fresh box carried a dead entry nobody asked for, while the installers' one yes/no was the only search question there was. anysearch is the ONE shipped provider now (its anonymous tier answers with no key) and tavily is gone entirely. A provider of your own is a URL: the installers, `tinycmdr setup` and `tinycmdr search add <url>` ask for the url, an optional key (hidden on a console; blank = an endpoint that answers anonymously) and an optional label, then 'add another?' - the entries in order ARE the chain, and an added entry is tried first. The wire contract is open: a JSON POST of {query, max_results} (the key as Authorization: Bearer; a 405 retries as searxng's GET ?q=&format=json) answered with a results list, so a search API this build has never heard of needs a url, not a code change - anysearch and searxng keep their exact adapters when their kind is named. `tinycmdr search` lists every entry's state, `search test` runs one query through the chain, and `search allow` is the egress door the BLOCKED line names.",
+      "gate": "closes at the next release"
     },
     {
       "id": "update-notes-1-0-82",
@@ -2160,6 +2161,17 @@
       },
       "detail": "config.example.json's allowlist ships its own placeholder (REPLACE_WITH_YOUR_MATTERMOST_USER_ID) and the Windows installer copied it verbatim, so the harness read a Mattermost lane nobody chose and bare `tinycmdr` aborted with 'no Mattermost bot token' - the page, the chosen door, never came up (a fresh Windows install of v1.0.93). The placeholder is not intent in either spelling now, the installer empties the example's list on a fresh install, the bot-token prompt waits for the chat lane to be chosen, the closing summary counts the page, and the load-time unknown-key warning uses the same derived known-key rule as `config set` - which also ends the twelve warnings a fresh start printed about the example's own keys. The package drops two removal doors that had no caller (install/uninstall-tinycmdr.sh, install/uninstall-tinycmdr.ps1).",
       "gate": "targeted suites green (tests/test_lane_choice.py: the example's config serves the page, no abort, no unknown-key warning; tests/test_installer_windows.py); the full gate runs before the push"
+    },
+    {
+      "id": "windows-doors-hold-their-window",
+      "title": "the Windows doors hold their window, and a removal cannot kill their tail",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "b939f77",
+        "expect": "untagged"
+      },
+      "detail": "A double-clicked UNINSTALL-WINDOWS.cmd lives in the folder the removal deletes, and cmd.exe reads a batch file while it runs - the deletion took the tail with it, so the exit code, the error line and the closing pause never appeared and the window vanished with no message. The door re-runs itself from %TEMP% (which the removal cannot reach), steps its own shell out of the folder first, and ends every path behind 'Press any key to close this window.'; INSTALL-WINDOWS.cmd owns the same barrier when it is the double-clicked window, and none when a caller already holds one. tests/test_installer_windows.py now RUNS both doors on Windows against staged folders with a stub wrapper - refusals, no, yes, a wrapper's exit code, the barrier, and a wrapper that deletes the door's own file - where the previous checks only parsed text.",
+      "gate": "closes at the next release"
     }
   ]
 }
