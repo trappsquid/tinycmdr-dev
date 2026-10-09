@@ -1435,6 +1435,35 @@ def main():
     check(_kw111.get("ask_door") is None and _kw111.get("confirm_cb") is None,
           "...while a scripted caller still gets no ask or confirm door",
           (_kw111.get("ask_door"), _kw111.get("confirm_cb")))
+
+    # ---- A-112: a Stop releases a parked question, and says so ----------------
+    # WebDestination.ask waited its full wait (300 s) and then drew "no answer within
+    # 300s", which misdescribes an operator's Stop as silence. The wait now polls the
+    # run's cancel (the chat lane's ask_operator does the same every 3 s).
+    _run112 = fb._web_new_run("suite112", "")
+    _dest112 = fb.WebDestination(_run112)
+    _asked112 = {}
+
+    def _ask112():
+        _t0 = time.time()
+        _asked112["answer"] = _dest112.ask("confirm this?", ["yes", "no"], wait=30)
+        _asked112["took"] = time.time() - _t0
+
+    _t112 = threading.Thread(target=_ask112, daemon=True)
+    _t112.start()
+    time.sleep(0.3)
+    _run112.cancel.set()
+    _t112.join(5)
+    _texts112 = [l.get("text") or "" for l in _run112.lines]
+    check(not _t112.is_alive() and _asked112.get("took", 99) < 1.5
+          and _asked112.get("answer") is None,
+          "a parked question returns at once when the run is stopped, not after the wait",
+          (_t112.is_alive(), _asked112))
+    check(any("stopped" in t.lower() for t in _texts112)
+          and not any("no answer within" in t for t in _texts112),
+          "...and the closing line says stopped, not 'no answer within 30s'",
+          _texts112[-3:])
+    _run112.done = True
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

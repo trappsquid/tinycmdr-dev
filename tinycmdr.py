@@ -23058,6 +23058,11 @@ class RunReporter:
             list(_CONFIRM_CHOICES),
             wait, "this conversation")
         if answer is None:
+            if getattr(self.dest, "wait_outcome", "") == "stopped":
+                # The door already drew "stopped": a stop is not the operator's
+                # silence, and "no answer within Ns — that command was skipped"
+                # misdescribed it (A-2026-10-08-112).
+                return False
             # Asked, and nobody said anything: that is a verdict, and the operator
             # finds out by reading it rather than by wondering why nothing ran.
             self._draw("system", f"⏱ no answer within {int(wait)}s — that "
@@ -26761,15 +26766,30 @@ class WebDestination(Destination):
         numbered = [f"{i}. {o}" for i, o in enumerate(options or [], 1)]
         tail = (" — " + " · ".join(numbered)) if numbered else ""
         self.run.add("ask", "❓ " + str(question) + tail)
-        answered = row["ev"].wait(wait)
+        # A stop releases the question. This used to wait the full 300 s and then draw
+        # "no answer within 300s", which reads as the operator's silence when it was
+        # their Stop (A-2026-10-08-112). The wait polls the run's cancel every half
+        # second (the chat lane's ask_operator polls its own every 3 s; a page Stop is
+        # a click and should land like one), and the line says which one happened.
+        answered = False
+        deadline = time.time() + wait
+        while True:
+            if row["ev"].wait(min(0.5, max(0.05, deadline - time.time()))):
+                answered = True
+                break
+            if self.run.cancel.is_set() or time.time() >= deadline:
+                break
         self.run.close_question(answered=bool(row.get("answer")))
+        self.wait_outcome = "answered" if answered else (
+            "stopped" if self.run.cancel.is_set() else "timeout")
         if not answered:
             # A question that times out left NO trace: the ❓ line stayed with
             # nothing after it, so a reload could not tell "still waiting" from
             # "closed, nobody answered" (A-246). The wait is named so the reader
             # knows how long the door was held open.
-            self.run.add("system", "⌛ no answer within %ds — the question is "
-                                   "closed" % int(wait))
+            self.run.add("system", "🛑 stopped — the question is closed"
+                         if self.wait_outcome == "stopped" else
+                         "⌛ no answer within %ds — the question is closed" % int(wait))
         return row.get("answer") if answered else None
 
 def _web_drive(run, text, scripted=False):
