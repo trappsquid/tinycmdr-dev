@@ -2105,6 +2105,17 @@
       },
       "detail": "Two gate inversions the whole-harness review found, each with a regression test that fails on the pre-fix build. The confirm gate's answer parser read the whole sentence for a scope word but only its first word for a no, and 'never' meant 'always' there, so a refusal phrased as a sentence ('please never run that') approved the command and wrote the permanent allow-all; a refusal word anywhere is a no now, and an answer that mixes yes and no fails closed. Every guard read a segment's first token as the command's verb, so any wrapper or prefix it did not know (sudo, nice, env X=1, LC_ALL=C, a subshell, then, cmd /c, Start-Process) hid the real command and 19 measured spellings - wipefs, dd of=, mkfs, rm -rf / and whole-tree deletes - ran ungated; one unwrap rule peels wrappers (with the values their switches take), shell keywords, assignments and interpreter payloads for the never tier, the delete rule and the alias arm.",
       "gate": "tests/test_guard_battery.py red on the pre-fix build and green on the batch; the full gate green"
+    },
+    {
+      "id": "audit-fixes-1-0-92",
+      "title": "a parked question reaches the payload, and the index flags are never frozen",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "951d945",
+        "expect": "untagged"
+      },
+      "detail": "Four findings from the whole-harness review's second batch, each with a regression test that fails on the pre-fix build. The run loop's budget measurement read the sidecar of a question an unanswered ask_user run had parked and consumed it before any payload was built, so the question never reached the next run at all; the same sidecar survived /new, which would have let it ride a conversation the operator had just abandoned. The measurement now weighs the line without taking delivery (open_question consume=False), the payload build consumes it, and reset clears it. The prompt carried index.md as last written, so a concept whose stale_after instant passed while the bundle was otherwise quiet kept riding every prompt with no (stale) flag - the prompt now renders the index from the concepts at prompt time, and the file stays the mutation-written browse copy for humans and the other consumers. The add path rendered that index before deprecating the concept it supersedes, so the superseded entry rode unflagged next to its replacement until a later mutation re-rendered.",
+      "gate": "tests/test_ask_user.py and tests/test_memory_okf.py red on the pre-fix build (6 and 3 FAILs) and green on the batch; the full gate green"
     }
   ]
 }
