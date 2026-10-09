@@ -18957,6 +18957,15 @@ def _repair_tool_arguments(messages):
 # a session in `tinycmdr sessions` today, and all three land in `histories`).
 _SESSION_SIDECAR_SUFFIXES = (".carry.json", ".hints.json", ".question.json")
 
+# Every file that belongs to ONE conversation, beside its history: the page's run log,
+# the transcript, the event stream and the three sidecars above. ONE tuple, because
+# _web_forget_files, Agent.reset and Agent.fork each kept a hand-written subset and they
+# had drifted apart: the web door forgot the hints and the parked question (a deleted or
+# pruned conversation left them on disk for ever) and /new forgot everything but the
+# transcript and the page log (A-2026-10-08-118).
+_CONVERSATION_FILE_SUFFIXES = (".json", ".web.jsonl", ".transcript.jsonl",
+                               ".events.jsonl") + _SESSION_SIDECAR_SUFFIXES
+
 
 def _is_session_file(path):
     """True when a file in sessions/ IS a conversation, not one of its sidecars."""
@@ -19017,7 +19026,13 @@ class Agent:
         try:
             _ensure_sessions_dir()
             (SESSIONS_DIR / f"{stem}.json").write_bytes(src.read_bytes())
-            for suffix in (".carry.json", ".transcript.jsonl", ".hints.json"):
+            for suffix in _CONVERSATION_FILE_SUFFIXES:
+                if suffix in (".json", ".question.json"):
+                    # The history is copied above, and a parked question belongs to the
+                    # RUN that asked it, not to the conversation (the copy has no run).
+                    # Everything else the source owns rides along - the ONE list, so a
+                    # new sidecar cannot be silently left out of a fork.
+                    continue
                 side = SESSIONS_DIR / (src.stem + suffix)
                 if side.exists():
                     (SESSIONS_DIR / (stem + suffix)).write_bytes(side.read_bytes())
@@ -22041,7 +22056,11 @@ class Agent:
         except Exception:
             pass
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", session_key or "unknown")
-        for suffix in (".transcript.jsonl", ".web.jsonl"):
+        for suffix in _CONVERSATION_FILE_SUFFIXES:
+            # Everything the conversation owned, from the ONE list: /new used to drop
+            # only the transcript and the page log, so the carry, the hints, the parked
+            # question and the events survived into the fresh conversation
+            # (A-2026-10-08-118).
             try:
                 (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
             except Exception:
@@ -26045,12 +26064,13 @@ def _web_forget_files(key):
     """Every file that belongs to one conversation key.
 
     The registry entry is the index; these are the data - the session history, the
-    run log the page repaints from, the carry, the transcript and the event stream.
-    One helper, so "forget a conversation" means the same thing whether the
-    operator deleted it or the per-client bound pruned it (A-237)."""
+    run log the page repaints from, the carry, the hint list, the parked question, the
+    transcript and the event stream, from ONE list (_CONVERSATION_FILE_SUFFIXES), so
+    "forget a conversation" means the same thing whether the operator deleted it or the
+    per-client bound pruned it (A-237) - and nothing a hand-written subset forgot
+    (A-2026-10-08-118: the hints and the parked question stayed behind)."""
     safe = re.sub(r"[^A-Za-z0-9_.-]", "_", key)
-    for suffix in (".json", ".web.jsonl", ".carry.json", ".transcript.jsonl",
-                   ".events.jsonl"):
+    for suffix in _CONVERSATION_FILE_SUFFIXES:
         try:
             (SESSIONS_DIR / f"{safe}{suffix}").unlink(missing_ok=True)
         except Exception as e:

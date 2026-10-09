@@ -82,6 +82,66 @@ class TestHarnessRefinements(unittest.TestCase):
             for p in sidecars.values():
                 p.unlink(missing_ok=True)
 
+    def test_every_session_file_goes_on_forget_and_reset(self):
+        """Forgetting a conversation (delete or prune) and /new drop ALL of its files.
+
+        _web_forget_files kept a hand-written suffix list that missed the hint list and
+        the parked question, and AGENT.reset dropped only the transcript and the page
+        log - so a deleted conversation left sidecars behind for ever and /new carried
+        the old carry, hints, question and events into the fresh one
+        (A-2026-10-08-118). One list now (_CONVERSATION_FILE_SUFFIXES)."""
+        key = "forget-probe"
+        suffixes = (".json", ".web.jsonl", ".carry.json", ".hints.json",
+                    ".question.json", ".transcript.jsonl", ".events.jsonl")
+
+        def make():
+            _fb.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+            for s in suffixes:
+                (_fb.SESSIONS_DIR / (key + s)).write_text("x", encoding="utf-8")
+
+        try:
+            make()
+            _fb._web_forget_files(key)
+            self.assertEqual([s for s in suffixes
+                              if (_fb.SESSIONS_DIR / (key + s)).exists()], [],
+                             "the web door left sidecars behind")
+            make()
+            AGENT.reset(key)
+            self.assertEqual([s for s in suffixes
+                              if (_fb.SESSIONS_DIR / (key + s)).exists()], [],
+                             "/new left sidecars behind")
+        finally:
+            for s in suffixes:
+                (_fb.SESSIONS_DIR / (key + s)).unlink(missing_ok=True)
+
+    def test_fork_copies_the_state_but_not_the_parked_question(self):
+        """A fork carries the conversation's sidecars - and not a run's question.
+
+        The fork's suffix list was hand-written too; it now walks the ONE list, so a
+        sidecar added later cannot be silently left out, and the two exclusions (the
+        history, copied above, and the parked question, which belongs to the run that
+        asked it) are stated in the code."""
+        src, dst = "fork-src-118", "fork-dst-118"
+        _fb.SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            (_fb.SESSIONS_DIR / (src + ".json")).write_text("[]", encoding="utf-8")
+            for s in (".carry.json", ".hints.json", ".question.json",
+                      ".transcript.jsonl", ".events.jsonl"):
+                (_fb.SESSIONS_DIR / (src + s)).write_text("x", encoding="utf-8")
+            made = AGENT.fork(src, dst)
+            self.assertTrue(made)
+            for s in (".json", ".carry.json", ".hints.json", ".transcript.jsonl",
+                      ".events.jsonl"):
+                self.assertTrue((_fb.SESSIONS_DIR / (made + s)).exists(),
+                                "fork left out %s" % s)
+            self.assertFalse((_fb.SESSIONS_DIR / (made + ".question.json")).exists(),
+                             "a fork copied a RUN's parked question")
+        finally:
+            for s in (".json", ".web.jsonl", ".carry.json", ".hints.json",
+                      ".question.json", ".transcript.jsonl", ".events.jsonl"):
+                (_fb.SESSIONS_DIR / (src + s)).unlink(missing_ok=True)
+                (_fb.SESSIONS_DIR / (dst + s)).unlink(missing_ok=True)
+
     def test_reset_reclaims_but_never_steals_session_locks(self):
         """AGENT.reset drops the session's lock, but leaves one a worker still holds."""
         key = "test-reset-lock-key"
