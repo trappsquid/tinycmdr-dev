@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.94] - 2026-10-08
+
 ### Fixed
+- **A fresh, page-only install could not start:** config.example.json's allowlist placeholder read as a Mattermost lane, so `tinycmdr` aborted "no Mattermost bot token" and the page never opened; the placeholder is not intent in either spelling, a fresh install empties the example's list, the bot-token prompt waits for the chosen lane, and the load warning uses the same known-key rule as `config set` (tests/test_lane_choice.py, tests/test_installer_windows.py).
 - **A Windows removal could end as "done" with the folder still there:** the uninstaller now steps its own shell out of the folder before deleting it, stops and waits for the bot's child processes too, fails non-zero naming what is left, and ships UNINSTALL-WINDOWS.cmd - a double-click door the script execution policy cannot cut short (tests/test_installer_windows.py).
 - **A removal could take another install's autostart:** the task and the Startup shortcut are one name per user, not per folder, so the uninstaller removed whichever one was registered - it now removes only the ones whose launcher points at the folder being removed, and the door refuses a folder that is not an install (tests/test_installer_windows.py).
 - **Two removal doors nothing used:** `install/uninstall-tinycmdr.sh` had no caller at all and `install/uninstall-tinycmdr.ps1` was kept alive only by two printed hint lines - the `.cmd` wrapper and `UNINSTALL-WINDOWS.cmd` cover the same ground, so the package drops both (tests/test_installer_windows.py).
