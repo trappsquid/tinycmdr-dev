@@ -4142,7 +4142,8 @@ def resolve_approval(name, args, ctx):
 # quoted operand lives. So the built-in never tier is decided on the TOKENS of each command
 # segment - word order and quoting cannot dodge a token rule - and the operator's regexes
 # keep running beside it (a host that replaces blocked_patterns cannot lose these, the same
-# way destructive_risk() is kept out of the list).
+# way destructive_risk() is kept out of the list). The tokens are read after
+# _guard_unwrap(), so a prefix cannot become the verb either (2026-10-08).
 _GUARD_NEVER_VERBS = ("format", "diskpart", "fdisk", "sgdisk", "wipefs", "clear-disk",
                       "initialize-disk", "format-volume", "mke2fs", "shred")
 _GUARD_ROOT_TARGETS = {"/", "/*", "/.", "/..", "//", "c:", "c:\\", "\\",
@@ -4229,16 +4230,177 @@ def _guard_verb(token):
     return base.lower()
 
 
+# ---- one prefix rule for every guard (2026-10-08) ------------------------------------
+# A guard reads the VERB off a command's tokens, and "which words can sit in FRONT of the
+# verb" was answered in three places that had drifted (_CMD_LEAD for the digest shapes,
+# _SHELL_LAUNCHERS for the delete rule, and nothing at all for the never tier). A wrapper
+# none of them knew became the verb and every arm was skipped, so the verdict changed
+# with a prefix - measured 2026-10-08, every tier returned None for `sudo wipefs -a
+# /dev/sdb`, `nice rm -rf /etc`, `LC_ALL=C rm -rf ~`, `env X=1 rm -rf /home/bob`,
+# `(rm -rf ~)`, `if true; then rm -rf /etc; fi`, `cmd /c format /FS:NTFS /Q D:` and
+# `Start-Process powershell -ArgumentList '-enc',…`. The definition lives here ONCE and
+# every guard reads a verb through _guard_unwrap()/_guard_segments().
+#
+# A wrapper runs the command that follows it, and its own switches sit between - some of
+# them taking a value, which is why the value list is part of the definition: without it
+# `sudo -u root rm` read `root` as the verb, the same bug one level down.
+_GUARD_WRAPPERS = {
+    "sudo": ("-u", "-g", "-p", "-C", "-h", "-t", "-r", "-T", "-U", "--user", "--group",
+             "--host", "--prompt", "--chdir", "--role", "--type", "--other-user",
+             "--close-from"),
+    "doas": ("-u", "-C", "-a"),
+    "env": ("-u", "--unset", "-C", "--chdir", "-S", "--split-string"),
+    "nice": ("-n", "--adjustment"),
+    "timeout": ("-s", "--signal", "-k", "--kill-after"),
+    "ionice": ("-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid"),
+    "stdbuf": ("-i", "-o", "-e", "--input", "--output", "--error"),
+    "xargs": ("-I", "-n", "-L", "-s", "-P", "-d", "-a", "-E", "--replace", "--max-args",
+              "--max-lines", "--max-chars", "--max-procs", "--delimiter", "--arg-file"),
+    "time": ("-f", "--format", "-o", "--output"),
+    "exec": ("-a",),
+    "command": (), "builtin": (), "nohup": (), "setsid": (), "busybox": (),
+}
+# An interpreter asked to run a STRING hides the command one level in (`sh -c`, `cmd /c`,
+# `powershell -Command`), and it unwraps into that string only when its run-the-rest switch
+# is really there: `bash script.sh` runs a FILE whose contents are not in this line. The
+# bool is whether the switch can be BUNDLED with others (`sh -lc 'x'`); PowerShell cannot
+# (a stray 'c' in `-ExecutionPolicy` is not `-Command`).
+_GUARD_INTERPRETERS = {
+    "sh": (("-c",), True), "bash": (("-c",), True), "zsh": (("-c",), True),
+    "dash": (("-c",), True), "ksh": (("-c",), True),
+    "cmd": (("/c", "/k"), False), "cmd.exe": (("/c", "/k"), False),
+    "powershell": (("-c", "-command"), False), "pwsh": (("-c", "-command"), False),
+}
+# PowerShell's spawners: the first word after their own switches is the program they start.
+_GUARD_SPAWNERS = ("start-process", "start", "saps")
+# The shell's own words. `;` splits them off the command, so `then rm -rf /etc` reaches a
+# guard as the tokens [then, rm, ...] and would otherwise read `then` as the verb.
+_GUARD_KEYWORDS = frozenset((
+    "if", "then", "elif", "else", "elseif", "do", "while", "until", "fi", "done",
+    "foreach", "try", "catch", "finally", "trap", "switch", "!", "{", "}", "(", ")"))
+_GUARD_ASSIGNMENT_RX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_GUARD_DURATION_RX = re.compile(r"^(?:\.?\d+(?:\.\d+)?)[smhd]?$")
+# `(rm`, `{rm`, `$(rm`, `` `rm ``: the punctuation that glues a subshell or a substitution
+# to the command word inside it.
+_GUARD_GLUE_RX = re.compile(r"^(?:\$\(|[({!`]+)")
+
+
+def _guard_strip_glue(token):
+    """A token with the leading subshell/brace/substitution punctuation removed."""
+    while True:
+        m = _GUARD_GLUE_RX.match(token)
+        if not m:
+            return token
+        token = token[m.end():]
+
+
+def _guard_skip_wrapper_args(out, value_switches, run_switches=(), bundles=False):
+    """Drop a wrapper's own switches (and the values they take) from the front of `out`.
+
+    Returns True when one of `run_switches` was among them - the switch that makes an
+    interpreter run the rest of the line as its command (`sh -c`, `cmd /c`). With
+    `bundles` a short form written together with other switches counts too (`sh -lc`),
+    and a bare duration always does (`timeout 30`, `nice 5`).
+    """
+    values = tuple(s.lower() for s in value_switches)
+    runs = tuple(s.lower() for s in run_switches)
+    short_runs = {s.lstrip("-") for s in runs
+                  if s.startswith("-") and not s.startswith("--")}
+    ran = False
+    while out:
+        t = str(out[0])
+        low = t.lower()
+        if _GUARD_ASSIGNMENT_RX.match(t):
+            out.pop(0)          # env's own VAR=value prefixes
+            continue
+        if _GUARD_DURATION_RX.match(t):
+            out.pop(0)          # `timeout 30 rm`, `nice 5 rm`
+            continue
+        if not (t.startswith("-") or low in ("/c", "/k")):
+            break
+        name = low.split("=", 1)[0]
+        core = name.lstrip("-")
+        if name in runs or (bundles and not name.startswith("--") and core.isalpha()
+                            and any(s in core for s in short_runs)):
+            ran = True
+        out.pop(0)
+        if name in values and out:
+            out.pop(0)          # the switch's value: `-u root`, `-n 5`
+    return ran
+
+
+def _guard_unwrap(toks):
+    """(the command's tokens, the string an interpreter would run) for one segment.
+
+    Peels, from the front and in a loop, everything that can sit between the start of a
+    segment and the command it would actually RUN: subshell/brace glue (`(rm`, `$(rm`), a
+    shell keyword (`then rm`), a bare `VAR=value` (`LC_ALL=C rm`), and the wrapper words
+    with their switches and switch values (`sudo -u root rm`, `nice -n 5 rm`,
+    `timeout 30 rm`, `env X=1 rm`). An interpreter with its run-the-rest switch is returned
+    as the STRING it would run, for the caller to read as a command of its own; without
+    that switch (`bash script.sh`) the interpreter IS the command and nothing is peeled.
+    """
+    out = [str(t) for t in (toks or [])]
+    while out:
+        head = _guard_strip_glue(out[0])
+        if not head:
+            out.pop(0)          # a bare `(` or `!`
+            continue
+        out[0] = head
+        word = _guard_verb(head)
+        if word in _GUARD_KEYWORDS or _GUARD_ASSIGNMENT_RX.match(head):
+            out.pop(0)
+            continue
+        if word in _GUARD_SPAWNERS:
+            out.pop(0)
+            while out and str(out[0]).startswith("-"):
+                out.pop(0)
+            continue
+        if word in _GUARD_WRAPPERS:
+            out.pop(0)
+            _guard_skip_wrapper_args(out, _GUARD_WRAPPERS[word])
+            continue
+        if word in _GUARD_INTERPRETERS:
+            runs, bundles = _GUARD_INTERPRETERS[word]
+            rest = out[1:]
+            if _guard_skip_wrapper_args(rest, (), runs, bundles):
+                payload = " ".join(rest).strip()
+                return [], (payload or None)
+            break
+        break
+    return out, None
+
+
+def _guard_segments(command, _depth=0):
+    """Every segment's unwrapped tokens, an interpreter's payload expanded as segments.
+
+    One line can hide the command that runs (`sh -c 'wipefs -a /dev/sdb'`, `cmd /c "…"`),
+    so the hidden string is tokenized and unwrapped exactly like the line that carried it.
+    Bounded at three levels - deeper than a command that means to hide gets.
+    """
+    segs = []
+    for toks in _guard_tokens(command):
+        if not toks:
+            continue
+        toks, payload = _guard_unwrap(toks)
+        if toks:
+            segs.append(toks)
+        if payload and _depth < 3:
+            segs.extend(_guard_segments(payload, _depth + 1))
+    return segs
+
+
 def _guard_device(token):
     """Is this token a raw device (not /dev/null, the measuring stick)?"""
     t = str(token or "").strip().lower().replace("//", "/")
+    t = t.rstrip(")}")     # the closing `)` of `(dd of=/dev/sda)` is glue, not the path
     if t.startswith("/dev/"):
         return t != "/dev/null"
     return t.startswith("\\\\.\\physicaldrive") or t.startswith("\\\\?\\")
 
 
 def _guard_root_target(token):
-    t = str(token or "").strip().lower().replace("//", "/")
+    t = str(token or "").strip().lower().replace("//", "/").rstrip(")}")
     return t in _GUARD_ROOT_TARGETS
 
 
@@ -4255,9 +4417,7 @@ def _guard_never_verdict(command):
         `--no-preserve-root`);
       * a redirect into a device (`> "/dev/sda"`).
     """
-    for toks in _guard_tokens(command):
-        if not toks:
-            continue
+    for toks in _guard_segments(command):
         verb = _guard_verb(toks[0])
         lows = [t.lower() for t in toks]
         if verb in _GUARD_NEVER_VERBS or verb.startswith("mkfs"):
@@ -4277,6 +4437,7 @@ def _guard_never_verdict(command):
                             % tok[3:])
         if verb in ("powershell", "pwsh"):
             for tok in lows[1:]:
+                tok = tok.split(",", 1)[0]   # PowerShell's array comma: '-enc','blob'
                 if tok in _GUARD_ENCODED_SWITCHES or tok.startswith("-encodedcommand"):
                     return ("an encoded powershell command is opaque by design: "
                             "never-tier")
@@ -4341,11 +4502,10 @@ def _confirm_hit(text, kind="confirm_patterns"):
     if kind == "confirm_patterns":
         # Aliases are the confirm tier's blind spot:
         # `ri -Recurse -Force` matched nothing because the pattern named `remove-item`,
-        # and the delete ran with no question. The command word is read off tokens now,
-        # so every alias and any flag order land on the same rule.
-        for toks in _guard_tokens(text):
-            if not toks:
-                continue
+        # and the delete ran with no question. The command word is read off unwrapped
+        # tokens now, so every alias, any flag order and any prefix (`nice rm -r …`)
+        # land on the same rule.
+        for toks in _guard_segments(text):
             _verb = _guard_verb(toks[0])
             if (_verb in ("remove-item", "ri", "rm", "rd", "rmdir", "del", "erase")
                     and any(t.lower() in ("-recurse", "-r", "--recursive", "/s")
@@ -4506,10 +4666,12 @@ _DIGEST_SHAPES = (
     ("log file", re.compile(r"\.(log|out|err)$", re.I), "signal"),
 )
 
-# A quoted argument, and the wrappers that can sit in front of the real verb.
+# A quoted argument, and the wrapper words that can sit in front of the real verb - the
+# list IS _GUARD_WRAPPERS, so the digest shapes and the guards cannot drift apart on what
+# a wrapper is (they had: this regex knew seven of them, the delete rule eleven).
 _QUOTED_ARG = re.compile(r"'[^']*'|\"[^\"]*\"|'[^']*$|\"[^\"]*$")
 _CMD_LEAD = re.compile(
-    r"(?:^|[;&|])\s*(?:(?:sudo|doas|env|time|nice|nohup|command)\s+)*")
+    r"(?:^|[;&|])\s*(?:(?:%s)\s+)*" % "|".join(sorted(_GUARD_WRAPPERS)))
 
 
 def _digest_shape(subject):
@@ -6451,6 +6613,7 @@ def _path_tokens(command):
 def _broad_root(tok):
     """True when this token is a whole tree rather than a directory in it."""
     t = tok.strip().strip("\"'").lower()
+    t = t.rstrip(")}")      # the closing `)` of `(rm -rf ~)` rides on the target token
     # A glob is as broad as its fixed prefix: /var/**/*.log walks all of /var, so
     # the pattern's trailing wildcards must not decide the answer.
     t = re.split(r"[*?\[]", t, 1)[0]
@@ -8022,9 +8185,6 @@ def _prompt_surface_write(command):
 
 _DELETE_VERBS = ("rm", "unlink", "shred", "rmdir", "rd", "del", "erase",
                  "ri", "remove-item")
-_SHELL_LAUNCHERS = ("bash", "sh", "zsh", "dash", "ksh", "powershell", "pwsh",
-                    "cmd", "cmd.exe", "env", "nohup", "time", "xargs", "sudo",
-                    "doas")
 _SEGMENT_RX = re.compile(r"(?:&&|\|\||[;&|\n])")
 
 
@@ -8164,7 +8324,8 @@ def destructive_risk(command, _depth=0):
     (`rm file` is ordinary work, and refusing it pace-limits real ops), so this reads the
     FLAGS in any order and spelling, then the TARGET: a whole tree (`_broad_root`) goes to
     the absolute tier, a named directory to confirm. `find` recurses without saying so, and
-    a shell launcher (`bash -c ...`) is unwrapped so the same rule reaches one level in.
+    a launcher or a wrapper (`bash -c …`, `sudo -u root …`, `env X=1 …`) is peeled off by
+    the same _guard_unwrap() the never tier reads through.
     """
     if _depth > 3:
         return None
@@ -8172,28 +8333,14 @@ def destructive_risk(command, _depth=0):
         argv = _shlex_words(segment)
         if not argv:
             continue
-        launched = False
-        while argv and os.path.basename(argv[0].lower()) in _SHELL_LAUNCHERS:
-            argv = argv[1:]
-            launched = True
-        if launched:
-            # `bash -c 'rm -rf /'`, `cmd /c "rm -rf /"`: the flag belongs to the launcher and
-            # the command is what is left, so recurse into THAT rather than reading the
-            # launcher's own argv as the verb (this is how a command hidden one level down
-            # reaches the same rule).
-            # cmd spells its switch with a SLASH, not a dash, and only dashes were stripped -
-            # so on Windows `cmd /c rm -rf ./build` read as the verb "/c", matched nothing,
-            # and the whole POSIX recursive-delete rule was bypassed. A manifest tool's
-            # command is wrapped in exactly that on Windows (`["cmd", "/c", command]`), so
-            # every dropped-in manifest escaped the confirm tier there, and the same text
-            # escaped the block-tier check at load. Measured 2026-09-29 by running the gate on
-            # a Windows box; on macOS and Linux the wrapper is `sh -c`, whose flag is a dash,
-            # which is why only Windows showed it.
-            while argv and (argv[0].startswith("-") or argv[0].lower() in ("/c", "/k")):
-                argv = argv[1:]
-            if not argv:
-                continue
-            sub = destructive_risk(" ".join(argv), _depth + 1)
+        argv, payload = _guard_unwrap(argv)
+        if payload is not None:
+            # an interpreter asked to run a string (`sh -c 'rm -rf /'`, `cmd /c "rm -rf /"`)
+            # hides the command one level in - the string IS the command, so the same rule
+            # reads it, and `cmd`'s SLASH switch is the shared rule's business now (a
+            # manifest tool's command is wrapped in exactly that on Windows, and the flag
+            # used to be read as the verb because only dashes were stripped).
+            sub = destructive_risk(payload, _depth + 1)
             if sub:
                 return sub
             continue

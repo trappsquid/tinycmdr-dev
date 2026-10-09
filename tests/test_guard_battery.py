@@ -94,6 +94,19 @@ MUST_GATE = [
     # An encoded command, in all three spellings, with a base64 argument
     "powershell -e SQBFAFgA", "pwsh -ec SQBFAFgA",
     "powershell -EncodedCommand SQBFAFgA",
+    # a PREFIX must not change the verdict (2026-10-08): every one of these came back None
+    # from is_blocked, destructive_risk and _confirm_hit, because the wrapper word became
+    # the "verb" and every arm was skipped
+    "sudo wipefs -a /dev/sdb", "sudo -u root wipefs -a /dev/sdb",
+    "echo $SUDO_PASSWORD | sudo -S sgdisk --zap-all /dev/sdb",
+    "nice wipefs -a /dev/sdb", "doas wipefs -a /dev/sdb",
+    'sudo dd of="/dev/sda"', "sudo mkfs.ext4 /dev/sdb1 && file -s /dev/sdb1",
+    "nice rm -rf /etc", "nice -n 5 rm -rf /etc", "timeout 30 rm -rf /etc",
+    "LC_ALL=C rm -rf ~", "env X=1 rm -rf /home/bob", "(rm -rf ~)",
+    "if true; then rm -rf /etc; fi",
+    "cmd /c format /FS:NTFS /Q D:", 'cmd /c "powershell -enc SQBFAFgA"',
+    "Start-Process powershell -ArgumentList '-enc','SQBFAFgA'",
+    "sudo sh -c 'wipefs -a /dev/sdb'", "sh -c 'wipefs -a /dev/sdb'",
 ]
 
 MUST_ALLOW = [
@@ -113,6 +126,14 @@ MUST_ALLOW = [
     "Select-String encodedcommand",
     "powershell -NoProfile -Command 'Get-Date'",
     "python tinycmdr.py --version",
+    # a wrapper is transparent for ordinary work, and an interpreter handed a FILE is not
+    # running the words after it (the mirror of the prefix block above, 2026-10-08)
+    "sudo ls -la /", "sudo -u root systemctl status nginx", "sudo -n true",
+    "nice -n 5 ls -la", "timeout 30 ls /tmp", "env X=1 ls", "LC_ALL=C ls -la",
+    "xargs ls", "bash scripts/cleanup.sh", "sh -c 'ls -la'",
+    "if true; then ls; fi", "echo 'then rm -rf /'",
+    "cmd /c dir", "cmd /c echo hi", "Start-Process notepad",
+    "sudo rm -f /nonexistent-xyz",
 ]
 
 
@@ -540,12 +561,24 @@ def test_the_never_tier_reads_tokens_not_spellings():
         '> "/dev/sda"',
         "mkfs.ext4 /dev/sdb # cat", "find / -xdev; mkfs.ext4 /dev/sdb",
         "diskpart", "clear-disk -Number 1",
+        # a wrapper word is not a verb (2026-10-08): each of these read the wrapper as
+        # the verb and the whole tier returned None
+        "sudo wipefs -a /dev/sdb", "sudo -u root wipefs -a /dev/sdb",
+        "nice wipefs -a /dev/sdb", "env X=1 wipefs -a /dev/sdb",
+        "nice rm -rf /", "sudo rm -rf /", "timeout 30 rm -rf /",
+        'sudo dd of="/dev/sda"', "env X=1 dd of=/dev/sda",
+        "cmd /c format /FS:NTFS /Q D:",
+        'cmd /c "powershell -enc SQBFAFgA"',
+        "Start-Process powershell -ArgumentList '-enc','SQBFAFgA'",
+        "sh -c 'wipefs -a /dev/sdb'", "(rm -rf /)", "{ rm -rf /; }",
     ]
     must_allow = [
         "format the paragraph as markdown",
         r"C:\tools\format-report.ps1 -Path x",
         "ls /sbin/mkfs*", "grep -rn mkfs /sbin",
         "dd if=/dev/zero of=/dev/null bs=1M count=100",
+        "sudo ls -la /", "bash scripts/cleanup.sh", "sh -c 'ls -la'",
+        "cmd /c dir", "Start-Process notepad",
     ]
     for c in must_block:
         check("never-tier: %s" % c, fb.is_blocked(c), c)
@@ -555,9 +588,11 @@ def test_the_never_tier_reads_tokens_not_spellings():
 
 def test_the_confirm_tier_reads_aliases():
     """A-2026-10-05-77: the pattern named `remove-item`, so `ri -Recurse -Force` ran with
-    no question. Every alias and any flag order lands on the same rule now."""
+    no question. Every alias and any flag order lands on the same rule now - and a prefix
+    no longer hides the verb (2026-10-08)."""
     for c in ("ri -Recurse -Force C:\\x", "del C:\\x /s /q", "erase /s /q C:\\x",
-              "rmdir /s /q C:\\x", "Remove-Item -Recurse -Force C:\\x"):
+              "rmdir /s /q C:\\x", "Remove-Item -Recurse -Force C:\\x",
+              "nice ri -Recurse -Force C:\\x", "env X=1 rm -r -f C:\\x"):
         check("confirm: %s" % c, fb._confirm_hit(c, "confirm_patterns"), c)
 
 
