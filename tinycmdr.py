@@ -8032,6 +8032,40 @@ def _unwrap_redundant_powershell(command):
 _AUTOBG_GAP_WARNED = False
 
 
+def _autobg_timeout_answer(child, state, command, ctx, discard, limit):
+    """The TIMEOUT answer: kill the tree, drain what it wrote, shape it like the
+    blocking path. ONE copy, because the ceiling is checked twice now - inside the
+    wait and at its exit, which is the tie case (A-2026-10-08-100)."""
+    _kill_tree(child)
+    state["done"].wait(timeout=2.0)
+    with state["lock"]:
+        body = bytes(state["buf"]).decode("utf-8", "replace")
+    discard(state)
+    body = re.sub(r"\n?__EXIT__-?\d+\s*$", "", body).strip()
+    body = digest_output("shell", {"command": command}, body)
+    body = body + verify_shell_writes(command)
+    body = cap_output("shell", body, "command output",
+                      session=(ctx or {}).get("session_key"))
+    return ("TIMEOUT after %ds — the command and everything it started were "
+            "killed. Partial output:\n%s" % (int(limit), body or "(no output)"))
+
+
+def _autobg_reap_at(child, at, jid, limit):
+    """Kill a PROMOTED job's tree at its ceiling. Never raises.
+
+    The background table has no timeout for adopted jobs, so a scan promoted at
+    auto_background_seconds ran to completion while the run was charged only the
+    window (A-2026-10-08-100): this daemon is the ceiling, and it says so in the log."""
+    try:
+        time.sleep(max(0.0, at - time.time()))
+        if child.poll() is None:
+            _kill_tree(child)
+            log.info("background job %s hit its %ds ceiling and was killed",
+                     jid, int(limit))
+    except Exception:                                        # noqa: BLE001
+        log.debug("background deadline for %s failed", jid, exc_info=True)
+
+
 def _shell_autobg(command, ctx, threshold, limit=None):
     """Background this shell command if it outlives `threshold` seconds; else None.
 
@@ -8070,7 +8104,14 @@ def _shell_autobg(command, ctx, threshold, limit=None):
         return None
     deadline = time.time() + float(threshold)
     kill_at = (time.time() + float(limit)) if limit else None
-    while time.time() < deadline:
+    # The wait ends at the EARLIER of the two clocks. It used to end at the threshold
+    # only, so with limit == threshold - the default for every cost-guarded scan
+    # (scan_limits caps one at search_timeout=60 and auto_background_seconds is 60) - the
+    # kill check sat one tick past the exit and the scan was PROMOTED to the background
+    # table instead of hitting its ceiling (A-2026-10-08-100: the run was charged 60s and
+    # the scan ran to completion).
+    end = deadline if kill_at is None else min(deadline, kill_at)
+    while time.time() < end:
         stop = (ctx or {}).get("cancel_event")
         if stop is not None and stop.is_set():
             # The shared killer, not a second copy: the taskkill written inline here
@@ -8098,27 +8139,28 @@ def _shell_autobg(command, ctx, threshold, limit=None):
                        _launch_warning(command), _start_process_warning(command),
                        route_hint(command, ctx)))
         if kill_at is not None and time.time() >= kill_at:
-            _kill_tree(child)                      # the shared killer (see above)
-            state["done"].wait(timeout=2.0)
-            with state["lock"]:
-                body = bytes(state["buf"]).decode("utf-8", "replace")
-            discard(state)
-            body = re.sub(r"\n?__EXIT__-?\d+\s*$", "", body).strip()
-            body = digest_output("shell", {"command": command}, body)
-            body = body + verify_shell_writes(command)
-            body = cap_output("shell", body, "command output",
-                              session=(ctx or {}).get("session_key"))
-            return ("TIMEOUT after %ds — the command and everything it started were "
-                    "killed. Partial output:\n%s" % (int(limit), body or "(no output)"))
+            return _autobg_timeout_answer(child, state, command, ctx, discard, limit)
         time.sleep(0.25)
+    if kill_at is not None and time.time() >= kill_at:
+        # ...and again at the exit: a limit that landed exactly on the boundary (or a
+        # tick before it) must still be a ceiling, not a promotion.
+        return _autobg_timeout_answer(child, state, command, ctx, discard, limit)
     jid = nxt()
     log_path, _spool = promote(jid, child, state, command)
+    if kill_at is not None:
+        # A promoted command still answers to the ceiling the model asked for: the
+        # background table has no timeout for adopted jobs, so this daemon is it
+        # (A-2026-10-08-100).
+        threading.Thread(target=_autobg_reap_at, args=(child, kill_at, jid, limit),
+                         daemon=True, name="bg-deadline-%s" % jid).start()
     return ("started %s (pid %s)\nlog: %s\n[HARNESS: this command ran longer than "
             "agent.auto_background_seconds=%ds, so it was handed to the background "
-            "table instead of holding this turn. Keep working; the harness will tell "
+            "table instead of holding this turn%s. Keep working; the harness will tell "
             "you when it finishes, or poll it with process {\"action\": \"status\", "
             "\"id\": \"%s\"} and {\"action\": \"output\", \"id\": \"%s\"}.]"
-            % (jid, child.pid, log_path, int(threshold), jid, jid))
+            % (jid, child.pid, log_path, int(threshold),
+               " - it will be killed at its %ds ceiling" % int(limit) if kill_at else "",
+               jid, jid))
 
 
 def tool_shell(args, ctx):

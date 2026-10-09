@@ -324,18 +324,6 @@ def main():
             fb._HOST_DEFAULT_GAPS.update({"checked": False, "gaps": []})
             shutil.rmtree(_work, ignore_errors=True)
 
-        # ---- a timeout shorter than the auto-background window must still kill
-        # A Windows install, 2026-10-03: shell timeout=5 on a 45-second command came back
-        # exit_code=0 after 45s - the auto-background wait ran on its own clock (60s) and
-        # never read the timeout the model asked for.
-        _slow = '%s -c "import time; time.sleep(30)"' % sys.executable
-        _t0 = time.time()
-        _r = fb._shell_autobg(_slow, {}, 60, 2)
-        _dt = time.time() - _t0
-        check("a timeout shorter than the auto-background window still kills",
-              isinstance(_r, str) and _r.startswith("TIMEOUT after 2s") and _dt < 20,
-              (round(_dt, 1), str(_r)[:200]))
-
         # ---------------------------------------------------------- memory scrubbing
         fb._SECRETS.add("hunter2secret")
         try:

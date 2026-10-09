@@ -302,6 +302,47 @@ def main():
         check(out.startswith("STOPPED") and killed,
               "a cancelled autobg command is killed through _kill_tree", out[:120])
 
+        # ---- A-2026-10-08-100: a limit AT the window is a ceiling, not a promotion
+        # The wait ended at the threshold only, so with limit == threshold - the default
+        # for every cost-guarded scan (search_timeout 60 == auto_background_seconds 60) -
+        # the kill check sat one tick past the exit: the scan was promoted to the
+        # background table, whose adopted jobs had no timeout, and the run was charged
+        # only the window. A promoted job carries its ceiling now.
+        _slow100 = '"%s" -u -c "import time; time.sleep(30)"' % py
+        _t0_100 = time.time()
+        _r_short = fb._shell_autobg(_slow100, {}, 60, 2)
+        check(isinstance(_r_short, str) and _r_short.startswith("TIMEOUT after 2s")
+              and time.time() - _t0_100 < 20,
+              "a timeout shorter than the window still kills", str(_r_short)[:160])
+        _t0_100 = time.time()
+        _r_tie = fb._shell_autobg(_slow100, {}, 2, 2)
+        check(isinstance(_r_tie, str) and _r_tie.startswith("TIMEOUT after 2s")
+              and time.time() - _t0_100 < 8,
+              "a limit equal to the window is enforced, not promoted", str(_r_tie)[:160])
+        _t0_100 = time.time()
+        _r_pr = fb._shell_autobg(_slow100, {}, 1, 4)
+        _jid_pr = (_r_pr.split("started ", 1)[1].split(" ", 1)[0]
+                   if isinstance(_r_pr, str) and "started " in _r_pr else "")
+        _gone_pr = False
+        _deadline_pr = time.time() + 9
+        while _jid_pr and time.time() < _deadline_pr:
+            if "running" not in str(run_proc({"action": "status", "id": _jid_pr}, ctx)):
+                _gone_pr = True
+                break
+            time.sleep(0.25)
+        try:
+            check(bool(_jid_pr) and _gone_pr
+                  and "killed at its 4s ceiling" in str(_r_pr)
+                  and time.time() - _t0_100 < 12,
+                  "a promoted command is killed at its ceiling too",
+                  (str(_r_pr)[:140], _jid_pr, _gone_pr))
+        finally:
+            if _jid_pr and not _gone_pr:
+                try:
+                    run_proc({"action": "kill", "id": _jid_pr}, ctx)
+                except Exception:                            # noqa: BLE001
+                    pass
+
         for j in ("b99",) + tuple(ids) + tuple(pids6):
             run_proc({"action": "kill", "id": j}, ctx)
 
