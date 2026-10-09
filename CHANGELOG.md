@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A refusal phrased as a sentence granted approval:** the parser read the whole answer for a scope word but only its first word for a no, and `never` meant `always` there, so "please never run that" approved the command and wrote the permanent allow-all - a refusal word anywhere in the answer is a no now, and an answer that mixes yes and no fails closed (tests/test_guard_battery.py).
+- **A wrapper word became the command's verb, so the guards read nothing:** `sudo wipefs -a /dev/sdb`, `nice rm -rf /etc`, `LC_ALL=C rm -rf ~`, `env X=1 rm -rf /home/bob`, `(rm -rf ~)`, `if true; then rm -rf /etc; fi`, `cmd /c format /FS:NTFS /Q D:` and `Start-Process powershell -ArgumentList '-enc','SQBFAFgA'` all returned None from every tier - one unwrap rule now peels wrappers (with the values their switches take), shell keywords, `VAR=` assignments and interpreter payloads before any guard reads a verb (tests/test_guard_battery.py).
+
 ## [1.0.90] - 2026-10-08
 
 ### Fixed
