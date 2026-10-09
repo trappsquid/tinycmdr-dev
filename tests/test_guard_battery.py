@@ -160,6 +160,7 @@ MUST_ALLOW = [
     "echo one \\\ntwo", "ls /sbin/newfs*",
     "powershell -ExecutionPolicy Bypass -File setup.ps1",
     "cat confirm-allow.json",
+    "python -c \"print(open('confirm-allow.json').read())\"",
 ]
 
 

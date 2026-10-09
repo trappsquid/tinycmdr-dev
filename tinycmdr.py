@@ -8245,10 +8245,13 @@ _SURFACE_WRITE_RX = re.compile(
 # `tinycmdr approvals` (or by hand, as the root of their own box); nothing here may.
 _APPROVAL_STORE_NAME = "confirm-allow.json"
 _APPROVAL_WRITE_RX = re.compile(
-    r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:confirm-allow\.json)"
+    r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?confirm-allow\.json"
     r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"
-    r"[^|;\n]{0,140}?(?:confirm-allow\.json)"
-    r"|\b(?:open|write_text|write_bytes)\s*\([^)\n]{0,140}?(?:confirm-allow\.json)")
+    r"[^|;\n]{0,140}?confirm-allow\.json"
+    # the code spellings, WRITE modes only: a python READ of the file is as harmless as
+    # `cat`, and the arm must not refuse it (the mode string after the name decides)
+    r"|\bopen\s*\([^)\n]{0,140}?confirm-allow\.json[^)\n]{0,40}?[\"'][wax]\+?[\"']"
+    r"|confirm-allow\.json[^)\n]{0,60}?\)\s*\.\s*write_(?:text|bytes)\s*\(")
 
 
 def _approval_store_write(text):
