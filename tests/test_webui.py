@@ -1464,6 +1464,48 @@ def main():
           "...and the closing line says stopped, not 'no answer within 30s'",
           _texts112[-3:])
     _run112.done = True
+    # ---- A-113: a request may only NAME a page conversation ------------------
+    # A sidecar stem ("web-abc.carry" - what the search panel shows for
+    # sessions/web-abc.carry.json) and another lane's session key both passed
+    # WEB_KEY_RX and were ADOPTED: the run wrote its history list over whatever the
+    # name held on disk, and the rail owned it from then on.
+    check(fb.web_resolve_session("", "web-abc.carry") == "web",
+          "a sidecar stem is not adopted as a page conversation",
+          fb.web_resolve_session("", "web-abc.carry"))
+    check(fb.web_resolve_session("", "mattermost-chan-7") == "web",
+          "...and neither is another lane's session key",
+          fb.web_resolve_session("", "mattermost-chan-7"))
+    check(fb.web_resolve_session("", "web") == "web",
+          "the shared conversation is still nameable")
+    _made113 = fb.web_new_session("suite113", "s113")
+    check(fb.web_resolve_session("suite113", _made113) == _made113,
+          "...and so is a registered page conversation",
+          (fb.web_resolve_session("suite113", _made113), _made113))
+    _real_run113 = fb.AGENT.run
+    _keys113 = []
+
+    def _stub113(key, text, *a, **kw):
+        _keys113.append(key)
+        return "stub 113 answer"
+
+    fb.AGENT.run = _stub113
+    try:
+        _st113, _bd113, _hd113 = req("POST", "/api/run",
+                                     {**TOK, "X-Tinycmdr-Client": "suite113",
+                                      "Content-Type": "application/json"},
+                                     json.dumps({"message": "hello",
+                                                 "session": "web-abc.carry"}).encode())
+        for _ in range(400):
+            if _keys113:
+                break
+            time.sleep(0.01)
+    finally:
+        fb.AGENT.run = _real_run113
+    check(_keys113 == [_made113] and fb.web_entry("web-abc.carry") is None,
+          "a run asked to start in a sidecar name runs in this browser's own "
+          "conversation and registers nothing under that name",
+          (_keys113, _made113, fb.web_entry("web-abc.carry"), _st113, _bd113[:200]))
+
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

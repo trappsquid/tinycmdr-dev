@@ -26067,10 +26067,22 @@ def web_resolve_session(client, requested):
 
     A requested key is folded to lower case first: keys are minted lowercase, so a
     shift-key slip ("WEB") used to resolve to a SECOND, empty conversation that did
-    not exist, instead of reaching "web" (A-225, measured 2026-10-06)."""
+    not exist, instead of reaching "web" (A-225, measured 2026-10-06).
+
+    ...and it is honoured only when it names a PAGE conversation: the shared "web"
+    or one the registry knows. Any other well-formed key - a sidecar stem like
+    "web-abc.carry" (the search panel offers those as session keys), another lane's
+    key from the same panel, a leftover from a pruned conversation - used to be
+    ADOPTED: the run then wrote a history LIST over whatever that name held on disk
+    (a carry dict, a chat lane's transcript) and the rail owned it from then on
+    (A-2026-10-08-113, measured 2026-10-09). The fall-through is the same
+    substitution the case-fold already makes, and `web_touch`/the rail are what
+    REGISTER a conversation, never a request body.
+    """
     if isinstance(requested, str):
         requested = requested.lower()
-    if requested and _web_key_ok(requested):
+    if requested and _web_key_ok(requested) and (
+            requested == "web" or web_entry(requested) is not None):
         return requested
     return web_open_key(client) or "web"
 
