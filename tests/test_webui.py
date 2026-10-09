@@ -1544,6 +1544,50 @@ def main():
             fb._WEB_HOSTS_CACHE.update(_cache114)
 
 
+    # ---- A-115: a hand-edited web.port cannot kill the start -------------------
+    # int() on the value raised ValueError ("nope"), TypeError (null) and
+    # OverflowError (a JSON 1e999) out of main() before any other lane started, and
+    # 70000 passed int() and then failed the bind with OverflowError - which the bind
+    # retry's `except OSError` never caught.
+    _pint115 = getattr(fb, "_web_port_int", None)
+    check(callable(_pint115) and _pint115("nope") == 8790,
+          "a non-numeric web.port falls back to 8790", _pint115 and _pint115("nope"))
+    check(callable(_pint115) and _pint115(None) == 8790,
+          "...a null does too", _pint115 and _pint115(None))
+    check(callable(_pint115) and _pint115(float("inf")) == 8790,
+          "...and an overflowing one", _pint115 and _pint115(float("inf")))
+    check(callable(_pint115) and _pint115(70000) == 8790,
+          "...and one outside the port range", _pint115 and _pint115(70000))
+    check(callable(_pint115) and _pint115(0) == 0 and _pint115("8791") == 8791,
+          "...while 0 (let the OS pick) and a numeric string are honoured",
+          (_pint115 and _pint115(0), _pint115 and _pint115("8791")))
+    # and the START path itself survives one: the real server may bind 8790, so the
+    # check accepts None (a genuinely held port) as long as nothing raised.
+    _saved_web115 = json.loads(json.dumps(fb.CONFIG.get("web") or {}))
+    _saved_stall115 = fb._web_stall_minutes
+    fb._web_stall_minutes = lambda kind: 0
+    fb.CONFIG["web"] = {"enabled": True, "host": "127.0.0.1", "port": "nope",
+                        "token": token}
+    _bad115, _err115 = None, ""
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            _bad115 = fb.run_webui()
+    except BaseException as e:                      # the pre-fix shape: it raised out
+        _bad115, _err115 = None, "%s: %s" % (type(e).__name__, e)
+    finally:
+        fb._web_stall_minutes = _saved_stall115
+        fb.CONFIG["web"] = _saved_web115
+    check(_err115 == "" and (_bad115 is None
+                             or _bad115.server_address == ("127.0.0.1", 8790)),
+          "a start with a hand-edited web.port binds the default instead of dying",
+          (_bad115 and _bad115.server_address, _err115))
+    if _bad115 is not None:
+        try:
+            _bad115.shutdown()
+            _bad115.server_close()
+        except Exception:                                        # noqa: BLE001
+            pass
+
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

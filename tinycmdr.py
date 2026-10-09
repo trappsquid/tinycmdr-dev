@@ -30111,13 +30111,23 @@ def run_webui():
     # box and writes web.host 0.0.0.0, where the token rides in cleartext on a LAN
     # the operator has declared trusted. There is deliberately NO TLS.
     host = str(web.get("host") or "127.0.0.1").strip() or "127.0.0.1"
-    port = int(web.get("port", 8790))
+    port = _web_port_int(web.get("port", 8790), 8790, field="web.port")
     srv = None
     for attempt in range(6):
         try:
             srv = QuietServer((host, port), Handler)
             break
         except OSError as e:
+            if isinstance(e, socket.gaierror):
+                # A host this box cannot resolve is NOT a busy port: say so on the
+                # first attempt instead of retrying six times and ending with
+                # "another process holds the port" (A-2026-10-08-116 - that is what
+                # web.host "::" reported before the v6 family was set).
+                log.error("web UI disabled: cannot bind %s:%d (%s). web.host does not "
+                          "resolve on this box - use a local address (127.0.0.1, "
+                          "0.0.0.0, ::1) or a name this box answers to.", host, port, e)
+                lane_down("web", "cannot bind %s:%d (%s)" % (host, port, e))
+                return None
             if getattr(e, "errno", None) in (1, 13):          # EPERM / EACCES
                 # A privilege boundary, not a busy port: nothing will change by waiting.
                 # (Ports below 1024 need root; a host that asked for 80 gets told why.)
@@ -30168,6 +30178,31 @@ def web_port_recorded():
     return None
 
 
+def _web_port_int(raw, default=8790, field=""):
+    """web.port as a usable port number, NEVER raising.
+
+    config.json is hand-editable, and this value used to be fed straight to int():
+    "nope" raised ValueError, null TypeError and a JSON 1e999 OverflowError - each out
+    of main() before any other lane started, against the rule that a broken port must
+    never kill the bot (A-2026-10-08-115). A value outside 0..65535 falls back too:
+    70000 passed int() and then failed the bind with OverflowError, which the bind
+    retry's `except OSError` never caught. A bool is refused (True is 1, a privileged
+    port). `field` names the config key in one warning; readers pass "" and stay quiet.
+    """
+    if isinstance(raw, bool):
+        raw = None
+    try:
+        port = int(raw)
+    except (TypeError, ValueError, OverflowError):
+        port = None
+    if port is None or not (0 <= port <= 65535):
+        if field:
+            log.warning("config.json %s is not a usable port (%r) - using %d",
+                        field, raw, default)
+        return default
+    return port
+
+
 def web_port_effective():
     """The port the page is on, which is what a reader must NAME.
 
@@ -30192,10 +30227,7 @@ def web_port_effective():
     Never raises: config.json is hand-editable and `int("nope")` is not this function's
     problem to report (doctor owns that complaint).
     """
-    try:
-        configured = int((CONFIG.get("web") or {}).get("port"))
-    except (TypeError, ValueError):
-        configured = 0
+    configured = _web_port_int((CONFIG.get("web") or {}).get("port"), 0)
     if configured:
         return configured
     recorded = web_port_recorded()
@@ -30665,7 +30697,7 @@ def start_web_surface(open_browser=True, force=False):
     # 0 is a real value here ("let the OS pick"), not a missing one: `or 8790` turned the
     # suite's port-0 server into a probe of 8790, and on a box whose live install serves
     # the page that read as "already serving here".
-    port = int(raw_port) if raw_port is not None else 8790
+    port = _web_port_int(raw_port, 8790, field="web.port")
     # With web.port 0 the live page's port was chosen by the OS at bind time and only the
     # lane record knows it, so probing 0 - which can never answer - made a SECOND process
     # bind another port and announce a second, independent page instance (A-260, measured
@@ -35429,7 +35461,7 @@ def _run_setup_interactive(rest=None):
         # `web` above is the dict being written; the helper reads the LIVE config, which
         # does not carry a port typed in this wizard run yet. So the typed value wins,
         # and anything falsy (0, absent) means "ask the helper".
-        page_port = int(web.get("port") or web_port_effective())
+        page_port = _web_port_int(web.get("port"), 0) or web_port_effective()
         cur_tok = _web_token()
         # The write path enforces the shape (`token set`'s rule: 20+ of letters, digits,
         # _ or -), and a refused value must come back as a question, not as a link that
