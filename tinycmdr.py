@@ -27077,10 +27077,17 @@ def _web_safe_name(name):
     raised EINVAL straight out of the handler, so the browser got ZERO bytes and the
     log got a traceback (A-231, measured 2026-10-06). They are kept out of the stored
     name on EVERY platform, so one upload has one name whichever OS serves it (`:` is
-    also how `os.path.basename` reads "a:b.txt" as drive `a:`)."""
+    also how `os.path.basename` reads "a:b.txt" as drive `a:`). The 120 cut counts
+    BYTES - NAME_MAX does - and never keeps half a character (A-2026-10-08-123)."""
     base = os.path.basename(str(name or "").replace("\\", "/"))
     base = re.sub(r"[\x00-\x1f\x7f/\\\"*?<>|:]", "_", base)
-    return base.strip(" .")[:120] or "upload.bin"
+    base = base.strip(" .")
+    if len(base.encode("utf-8")) > 120:
+        # 120 characters of Han is 360 bytes, so with the "%d_" prefix the write
+        # failed ENAMETOOLONG on Linux instead of being cut. errors="ignore" drops
+        # a multibyte character the cut landed inside.
+        base = base.encode("utf-8")[:120].decode("utf-8", "ignore").strip(" .")
+    return base or "upload.bin"
 
 
 def _web_ascii_name(name):
@@ -30040,14 +30047,15 @@ def run_webui():
                                  "inspect it]" % rel}
                 # The stored base is not always the requested one: separators, controls
                 # and the platform-reserved characters are replaced, and the base is cut
-                # at 120. Say so, so a caller that asked for a 300-character name learns
-                # which file it got instead of finding out by listing uploads/ (A-232).
+                # at 120 bytes. Say so, so a caller that asked for a 300-character name
+                # learns which file it got instead of finding out by listing uploads/
+                # (A-232).
                 want = os.path.basename(str(raw).replace("\\", "/")).strip(" .")
                 if want and want != safe:
                     reply["name_note"] = ("stored as %s: the requested name was "
                                           "rewritten (separators, controls and the "
                                           "platform-reserved characters are replaced, "
-                                          "and the base name is cut at 120)"
+                                          "and the base name is cut at 120 bytes)"
                                           % safe)
                 self._json(reply)
                 return

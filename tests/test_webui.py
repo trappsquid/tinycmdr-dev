@@ -1845,6 +1845,21 @@ def main():
           "a rewritten/truncated upload name is named in the reply",
           (_st232, _j232.get("name"), _j232.get("name_note")))
 
+    # ---- A-123: the upload-name cut counts BYTES, not characters -----------------
+    # NAME_MAX counts bytes, and 120 characters of Han is 360 of them: with the
+    # "%d_" prefix the write failed ENAMETOOLONG on Linux instead of being cut.
+    _cjk123 = "\u6f22" * 100
+    _safe123 = fb._web_safe_name(_cjk123)
+    check(0 < len(_safe123.encode("utf-8")) <= 120,
+          "a long non-ASCII upload name is cut to 120 BYTES",
+          (len(_safe123), len(_safe123.encode("utf-8"))))
+    _st123, _hd123, _bd123, _ = probe(
+        "POST", "/api/upload?name=" + urllib.parse.quote(_cjk123), TOK, b"cjk")
+    _j123 = json.loads(_bd123) if _st123 == 200 else {}
+    check(_st123 == 200 and _j123.get("bytes") == 3,
+          "an upload with that name lands instead of failing ENAMETOOLONG",
+          (_st123, _bd123[:120]))
+
     # ---- A-238: the registry as a whole is bounded ------------------------------
     _regmax = getattr(fb, "WEB_REGISTRY_MAX", None)
     # the shared conversation, as a header-less script makes it - and OLD, so a bound
