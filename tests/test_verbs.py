@@ -1484,36 +1484,59 @@ def _body():
         _qcfg_saved = _qcfg_path.read_text(encoding="utf-8")
         _qenv_path = workdir / ".env"
         _qenv_saved = _qenv_path.read_text(encoding="utf-8") if _qenv_path.exists() else None
-        # No chat lane on purpose: a fixture lane that cannot connect retries and then
-        # exits, taking the page with it; a lane-less box HOLDS the page (the shape the
-        # lane suite's holder uses).
-        _qcfg_path.write_text(json.dumps({
-            "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "main"},
-            "web": {"enabled": True, "host": "127.0.0.1", "port": _qport},
-        }), encoding="utf-8")
-        _qenv = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
-        _qenv["HOME"] = str(workdir)
-        _qenv["TINYCMDR_NO_BROWSER"] = "1"
-        # Through the install's own (resolved) path: the sweep matches command lines, and
-        # a child started via the temp dir's /var spelling while BASE_DIR is /private/var
-        # is exactly the shape that is invisible to it.
-        _qchild = subprocess.Popen(
-            [sys.executable, str(workdir.resolve() / "tinycmdr.py")],
-            cwd=str(workdir.resolve()), env=_qenv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _qout = workdir / "quit-child.out"
+        _qerr = workdir / "quit-child.err"
+        _qfh = {"out": open(_qout, "wb"), "err": open(_qerr, "wb")}
+        _qchild = None
+        _up = False
         try:
-            _up = False
-            _t0 = time.time()
-            while time.time() - _t0 < 30 and _qchild.poll() is None:
-                try:
-                    with urllib.request.urlopen(
-                            "http://127.0.0.1:%d/api/health" % _qport, timeout=1):
-                        _up = True
+            # Two attempts, a fresh port each: a portable CI runs four suites at once and
+            # an ephemeral port picked before the child starts can be taken by another
+            # suite's child by the time this one binds (measured 2026-10-09 on
+            # macos-latest). The child's streams go to files so a failure names WHY.
+            for _attempt in range(2):
+                _qsock = socket.socket()
+                _qsock.bind(("127.0.0.1", 0))
+                _qport = _qsock.getsockname()[1]
+                _qsock.close()
+                # No chat lane on purpose: a fixture lane that cannot connect retries and
+                # then exits, taking the page with it; a lane-less box HOLDS the page (the
+                # shape the lane suite's holder uses).
+                _qcfg_path.write_text(json.dumps({
+                    "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "main"},
+                    "web": {"enabled": True, "host": "127.0.0.1", "port": _qport},
+                }), encoding="utf-8")
+                if _qchild is not None and _qchild.poll() is None:
+                    _qchild.kill()
+                    _qchild.wait(timeout=10)
+                # Through the install's own (resolved) path: the sweep matches command
+                # lines, and a child started via the temp dir's /var spelling while
+                # BASE_DIR is /private/var is exactly the shape that is invisible to it.
+                _qchild = subprocess.Popen(
+                    [sys.executable, str(workdir.resolve() / "tinycmdr.py")],
+                    cwd=str(workdir.resolve()),
+                    env={**{k: v for k, v in os.environ.items()
+                             if not k.startswith("TINYCMDR_")},
+                         "HOME": str(workdir), "TINYCMDR_NO_BROWSER": "1"},
+                    stdin=subprocess.DEVNULL,
+                    stdout=_qfh["out"], stderr=_qfh["err"])
+                _t0 = time.time()
+                while time.time() - _t0 < 40 and _qchild.poll() is None:
+                    try:
+                        with urllib.request.urlopen(
+                                "http://127.0.0.1:%d/api/health" % _qport, timeout=1):
+                            _up = True
+                        break
+                    except Exception:                            # noqa: BLE001
+                        time.sleep(0.4)
+                if _up:
                     break
-                except Exception:                                # noqa: BLE001
-                    time.sleep(0.4)
-            check("quit: a live child from this folder serves", _up, _qport)
+            _qsaid = ""
+            for _p in (_qout, _qerr):
+                if _p.exists():
+                    _qsaid += _p.read_text(encoding="utf-8", errors="replace")[-250:]
+            check("quit: a live child from this folder serves", _up,
+                  (_qchild.poll(), _qsaid) if _qsaid else _qchild.poll())
             rc, out, err = call(fb, ["quit"])
             check("quit stops what runs from this folder, and names the missing helper",
                   rc == 0 and "stopped" in out and "no stop helper here" in out,
@@ -1530,9 +1553,11 @@ def _body():
             check("...and 'kill' is the same door (a second quit is safe)",
                   rc == 0 and "nothing was running" in out, (rc, out[:160]))
         finally:
-            if _qchild.poll() is None:
+            if _qchild is not None and _qchild.poll() is None:
                 _qchild.kill()
                 _qchild.wait(timeout=10)
+            for _f in _qfh.values():
+                _f.close()
             _qcfg_path.write_text(_qcfg_saved, encoding="utf-8")
             if _qenv_saved is None:
                 _qenv_path.unlink(missing_ok=True)
