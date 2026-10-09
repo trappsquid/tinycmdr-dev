@@ -286,6 +286,22 @@ def main():
         check(after_rows == before_rows + 12,
               "...and each start is a row of its own", (before_rows, after_rows))
 
+        # ---- A-2026-10-08-108: the autobg wait kills through the ONE helper
+        # (_kill_tree), whose Windows taskkill carries hidden_proc_kwargs() - the two
+        # inline copies had drifted from it and flashed a console window under pythonw.
+        killed = []
+        real_kill = fb._kill_tree
+        fb._kill_tree = lambda p: (killed.append(p.pid), real_kill(p))[1]
+        cancel = threading.Event()
+        threading.Timer(0.6, cancel.set).start()
+        try:
+            out = fb._shell_autobg(('"%s" -u -c "import time; time.sleep(30)"' % py),
+                                   {"cancel_event": cancel}, 3.0)
+        finally:
+            fb._kill_tree = real_kill
+        check(out.startswith("STOPPED") and killed,
+              "a cancelled autobg command is killed through _kill_tree", out[:120])
+
         for j in ("b99",) + tuple(ids) + tuple(pids6):
             run_proc({"action": "kill", "id": j}, ctx)
 

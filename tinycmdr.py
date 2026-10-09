@@ -8008,15 +8008,11 @@ def _shell_autobg(command, ctx, threshold, limit=None):
     while time.time() < deadline:
         stop = (ctx or {}).get("cancel_event")
         if stop is not None and stop.is_set():
-            try:
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)],
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=20)
-                else:
-                    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
-            except (OSError, subprocess.SubprocessError):
-                child.kill()
+            # The shared killer, not a second copy: the taskkill written inline here
+            # omitted hidden_proc_kwargs() and brought back the console-window flash it
+            # exists to prevent, and the copies had drifted from _kill_tree
+            # (A-2026-10-08-108).
+            _kill_tree(child)
             discard(state)
             return ("STOPPED by the operator (`/tinycmdr stop`): this command and "
                     "everything it started were killed. Do not retry it.")
@@ -8037,15 +8033,7 @@ def _shell_autobg(command, ctx, threshold, limit=None):
                        _launch_warning(command), _start_process_warning(command),
                        route_hint(command, ctx)))
         if kill_at is not None and time.time() >= kill_at:
-            try:
-                if os.name == "nt":
-                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)],
-                                   stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=20)
-                else:
-                    os.killpg(os.getpgid(child.pid), signal.SIGKILL)
-            except (OSError, subprocess.SubprocessError):
-                child.kill()
+            _kill_tree(child)                      # the shared killer (see above)
             state["done"].wait(timeout=2.0)
             with state["lock"]:
                 body = bytes(state["buf"]).decode("utf-8", "replace")
