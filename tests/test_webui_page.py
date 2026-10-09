@@ -27,6 +27,16 @@ import sys
 import tempfile
 from pathlib import Path
 
+# The ok/FAIL lines quote what the PAGE rendered, and the offer line carries the
+# paperclip; a legacy console (cp1252) refused it and the suite died printing its own
+# ok-line (measured 2026-10-09 on windows-latest). Same hardening as tinycmdr.py and
+# run_all.py, so a standalone run on that console cannot crash either.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:                                       # not a TextIOWrapper, or closed
+        pass
+
 BASE = Path(__file__).resolve().parent.parent
 HARNESS = Path(__file__).resolve().parent / "webui_page_harness.js"
 NODE = shutil.which("node") or shutil.which("node.exe")

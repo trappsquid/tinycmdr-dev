@@ -251,6 +251,13 @@ def child_env(path, logdir):
     env = dict(os.environ)
     env["TINYCMDR_NO_BROWSER"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"    # no __pycache__ in the checkout
+    # Suites print what they GRADED, and that text carries glyphs (the page's own offer
+    # line has the paperclip). A child's stdio defaults to the legacy console code page
+    # (cp1252 on Windows), where such a glyph raised UnicodeEncodeError INSIDE the
+    # suite's own check - measured 2026-10-09 on the nightly: test_webui_page died
+    # printing an ok-line. The same hardening this file applies to its own streams,
+    # for the children; a suite that GRADES a legacy code page overrides it per child.
+    env["PYTHONIOENCODING"] = "utf-8:replace"
     env.pop("TINYCMDR_TEST_APP", None)      # a stale pick from the caller's shell
     # TINYCMDR_SRC is NOT popped: it is how a caller points the gate at another build, and
     # main() prints the file it resolved so a wrong pick is visible in every report.

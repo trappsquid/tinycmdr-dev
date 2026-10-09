@@ -32,7 +32,11 @@ FAILS = []
 
 
 def check(what, ok, detail=""):
-    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % detail))
+    # `(detail,)`: a check that hands a tuple as its detail (they all do) crashed the
+    # SUITE with "not all arguments converted during string formatting" instead of
+    # printing the FAIL it had just decided - measured 2026-10-09 on the Windows
+    # nightly, where the crash hid the reason the hook check went red.
+    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % (detail,)))
     if not ok:
         FAILS.append(what)
 
@@ -156,8 +160,12 @@ def main():
                           "--leak-only"], work,
                          {**os.environ, "TINYCMDR_HOOK_ROOT": str(work)})
         hook = work / ".git" / "hooks" / "pre-push"
+        # The execute bit is a POSIX claim: on Windows os.access(X_OK) asks PATHEXT, so a
+        # no-extension file like `pre-push` reads as not executable while git runs hooks by
+        # name regardless (measured 2026-10-09, the nightly's Windows job).
         check("install-hooks.sh arms the clone", installed.returncode == 0 and hook.is_file()
-              and os.access(str(hook), os.X_OK), (installed.returncode, installed.stdout[:120]))
+              and (os.name == "nt" or os.access(str(hook), os.X_OK)),
+              (installed.returncode, installed.stdout[:120]))
         before_bytes = hook.read_bytes()
         again = _run(["bash", str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only"],
                      work, {**os.environ, "TINYCMDR_HOOK_ROOT": str(work)})
