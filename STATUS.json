@@ -2138,6 +2138,17 @@
       },
       "detail": "The rest of the whole-harness review's ordered list, each verified against the code first and graded by a check that fails on the pre-fix build. Memory: a failed forget answered OK while the file stayed on disk and in the index; add scrubbed only title and body, leaving description/tags/sources raw in the concept and the prompt-carried index; the add door checked the title only at the same slug. Web: tavily/searxng never checked the HTTP status, so a JSON error body read as 'No results' and the chain stopped; and a byte cut landing inside a <script> returned the script source as the page text. Offers and census: a pending remember offer had no TTL and nothing cleared it on /new or on 'save it', so a bare 'no thanks' days later was swallowed; the repeat mint offer posted on every run and counted the session's lifetime hand calls; the procedure census's signature keys were unbounded and a damaged census was replaced by an empty one with no copy kept. Scheduler and plan: a mid-session jobs.json adopt ran the start-up overdue-skip and dropped a due occurrence; the tick fired jobs even with croniter missing, re-arming each an hour out; a listed request step over 200 chars vanished from the derived plan, and model-set steps had no cap at all. Reporting: the check-in line posted raw tool arguments, and a third identical tool card reset the batch to the folded card alone. Files: edit_file wrote UTF-8 over cp1252/Latin-1/Shift-JIS files (every non-ASCII byte became U+FFFD); atomic writes replaced a symlink with a regular file instead of following it; read_file/search_files decoded everything as UTF-8, so PowerShell's UTF-16 redirects never matched a content search. Platform: Ctrl-C at the prompt_toolkit prompt killed the console's stdin reader; the supervisor's failure count reset only on exit 0, so a crash after a long healthy run counted as a failed start; and every launchd domain used `id -u`, which under sudo is gui/0. One commit for the batch (the mechanisms share files and helper blocks; per-finding hunks were not separable without a non-buildable middle state), with the ledger naming each id's mechanism.",
       "gate": "21 checks/suites red on the pre-fix build (76c27ce) and green on the batch; the full gate green"
+    },
+    {
+      "id": "windows-removal-finishes",
+      "title": "a Windows removal finishes, or names what is left",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "e9d47df",
+        "expect": "untagged"
+      },
+      "detail": "The removal a Windows user runs could end as 'done' with the folder still there: the sweep took one process snapshot and no children (the supervisor respawns the bot, a tool child can hold the folder), and a shell standing in the folder - the natural way to run it - makes the delete impossible on Windows. It steps its own shell out of the folder, stops and waits for the matched processes and their children, fails non-zero naming what is left, and the package ships UNINSTALL-WINDOWS.cmd, the double-click door the script execution policy cannot cut short (tests/test_installer_windows.py).",
+      "gate": "red on the pre-fix build (b777721: 6 FAILs, then the door section dies on the missing file) and green on the batch; the full gate green (106 suites, 0 skipped)"
     }
   ]
 }
