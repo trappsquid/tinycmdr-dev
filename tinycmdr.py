@@ -6210,7 +6210,11 @@ def verify_shell_writes(command):
     for cand in shell_written_files(command):
         path = Path(cand)
         if not path.is_absolute():
-            path = Path.cwd() / cand
+            # The shell runs with cwd=BASE_DIR (run_capture, and tools/process.py's
+            # spawn), so a relative target of `echo x > out.txt` is the INSTALL's
+            # out.txt; Path.cwd() here was the process cwd, which verified nothing or a
+            # same-named stranger (A-2026-10-08-105).
+            path = Path(BASE_DIR) / cand
         if path.is_file():
             notes += verify_note(path)
     return notes
@@ -9465,6 +9469,22 @@ def _win_reserved_name(name):
     return stem if stem in _WIN_RESERVED_NAMES else ""
 
 
+def _tool_path(raw):
+    """A file tool's path: `~` expanded, and a RELATIVE path resolved against BASE_DIR.
+
+    The shell runs in BASE_DIR (run_capture's default, and tools/process.py's spawn),
+    so `python check.py report.md` reads the install's report.md; the file tools
+    resolved against the PROCESS cwd, which is wherever the launcher was exec'd from -
+    the `tinycmdr` shim never cds. `write_file report.md` from ~/proj therefore landed
+    in ~/proj while the next `shell` call looked in the install: one path spelled twice,
+    two files (A-2026-10-08-105). Tool paths mean what shell paths mean now.
+    """
+    p = Path(str(raw or "")).expanduser()
+    if not p.is_absolute():
+        p = Path(BASE_DIR) / p
+    return Path(_win_long_path(p))
+
+
 @serialized_by_path
 def tool_edit_file(args, ctx):
     """Surgical string replacement in a file (the predecessor harness's patch equivalent).
@@ -9474,7 +9494,7 @@ def tool_edit_file(args, ctx):
     convention is preserved, the write is atomic, and the result carries a diff so a wrong
     edit is visible at the moment it happens.
     """
-    path = Path(_win_long_path(Path(args["path"]).expanduser()))
+    path = _tool_path(args["path"])
     if not path.exists():
         return f"ERROR: {path} does not exist"
     refusal = confirm_gate(args.get("new_string") or "",
@@ -9806,7 +9826,7 @@ def tool_read_file(args, ctx):
             return (f"ERROR: no {want} in this process. The spill index in the prompt "
                     f"lists the ones that exist, and the files are under spill/.")
         want = resolved
-    path = Path(_win_long_path(Path(want).expanduser()))
+    path = _tool_path(want)
     if not path.exists():
         # The THIRD door of one miss (drive, 2026-09-23): the model looks for a core tool's
         # code on disk - `read_file tools/delegate_task.py`, then `read_file
@@ -10007,7 +10027,7 @@ def tools_dir_verdict(path=None):
 
 @serialized_by_path
 def tool_write_file(args, ctx):
-    path = Path(_win_long_path(Path(args["path"]).expanduser()))
+    path = _tool_path(args["path"])
     _content = args.get("content") or ""
     refusal = confirm_gate(_content, "write_file %s" % path, ctx)
     if refusal:

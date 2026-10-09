@@ -48,6 +48,40 @@ def main():
               or "NEVER = do not" in fb.build_system_prompt(),
               "the prompt defines its own vocabulary")
 
+        # ---------------------------------------------------------- tool paths are install paths
+        # A-2026-10-08-105: the shell runs in BASE_DIR, so a RELATIVE tool path has to
+        # mean the install's file. It used to resolve against the PROCESS cwd - wherever
+        # the launcher was exec'd from - so `write_file report.md` and the next
+        # `shell` call disagreed about the same spelling. Pre-fix these land in cwd;
+        # both spots are cleaned up below either way.
+        relname = "relcheck-extras.txt"
+        inst_copy = Path(fb.BASE_DIR) / relname
+        cwd_copy = Path.cwd() / relname
+
+        def _text(p):
+            try:
+                return p.read_text(encoding="utf-8")
+            except OSError:
+                return ""
+        out = fb.tool_write_file({"path": relname, "content": "installed here\n"},
+                                 dict(ctx))
+        check(out.startswith("OK") and _text(inst_copy) == "installed here\n",
+              "a relative write_file path lands in the install dir", out[:140])
+        check(not cwd_copy.exists(), "...not beside the process cwd", str(cwd_copy))
+        back = fb.tool_read_file({"path": relname}, dict(ctx))
+        check("installed here" in back,
+              "a relative read_file path reads it back", back[:140])
+        out = fb.tool_edit_file({"path": relname, "old_string": "installed",
+                                 "new_string": "INSTALLED"}, dict(ctx))
+        check(out.startswith("OK") and "INSTALLED" in _text(inst_copy),
+              "a relative edit_file path edits the install's file", out[:140])
+        for leftover in (inst_copy, cwd_copy):
+            try:
+                if leftover.exists():
+                    leftover.unlink()
+            except OSError:
+                pass
+
         # ---------------------------------------------------------- read miss with a sibling
         # Operator report (2026-10-03): `read_file .../notes` got the tool lecture while
         # `notes.md` sat next to it — the model wanted the FILE and was sent elsewhere.

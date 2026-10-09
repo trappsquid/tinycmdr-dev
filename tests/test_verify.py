@@ -294,6 +294,15 @@ def main():
         check("[HARNESS verify: valid JSON]" in out,
               "a good file written via shell gets its verdict too")
 
+        # A-2026-10-08-105: the shell runs in BASE_DIR, so a RELATIVE redirect target is
+        # the install's file - Path.cwd() here verified the wrong file or none at all.
+        rel = workdir / "rel-verify-target.json"
+        rel.write_text('{"a": 1', encoding="utf-8")
+        out = fb.verify_shell_writes(write_cmd(Path("rel-verify-target.json"), '{"a": 1'))
+        check("[HARNESS verify FAILED:" in out,
+              "a relative redirect target is verified where the shell ran")
+        rel.unlink()
+
         # ---- off switch ----------------------------------------------------
         fb.CONFIG["agent"]["verify_after_write"] = False
         check(fb.verify_note(badj) == "", "verify_after_write=false silences it")
