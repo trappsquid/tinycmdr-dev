@@ -76,15 +76,19 @@ def main():
             stage = work / f"tinycmdr-{ver}"
             bp.stage(stage)
             zip_path = work / f"tinycmdr-{ver}-macos.zip"
-            bp.write_zip(stage, zip_path)
-            print(f"     built {zip_path.name} ({zip_path.stat().st_size / 1024:.0f} KB) "
-                  f"from {sum(1 for _ in stage.rglob('*') if _.is_file())} staged files")
-
-            # The day-two helper must be IN the package, not merely permitted by a list.
-            member = f"tinycmdr-{ver}/maintenance/restart-tinycmdr-macos.sh"
+            # The real container's prune, so this grades the artifact a macos reader
+            # gets: a MUST_BE_RUNNABLE file the platform list wrongly claims elsewhere
+            # would drop out of the extracted zip and fail below.
+            bp.write_zip(stage, zip_path, skip=bp.platform_skip("macos"))
             import zipfile
             with zipfile.ZipFile(zip_path) as z:
                 names = set(z.namelist())
+            print(f"     built {zip_path.name} ({zip_path.stat().st_size / 1024:.0f} KB) "
+                  f"from {sum(1 for _ in stage.rglob('*') if _.is_file())} staged files, "
+                  f"{sum(1 for n in names if not n.endswith('/'))} in the zip")
+
+            # The day-two helper must be IN the package, not merely permitted by a list.
+            member = f"tinycmdr-{ver}/maintenance/restart-tinycmdr-macos.sh"
             if member in names:
                 print("ok   the package carries maintenance/restart-tinycmdr-macos.sh")
             else:

@@ -54,9 +54,13 @@ def wants_exec_bit(path):
     return p.name in EXEC_NAMES or p.suffix in (".sh", ".command")
 
 
-def write_zip(stage_dir, zip_path):
+def write_zip(stage_dir, zip_path, skip=()):
     """Write one staged tree as a zip with real Unix file modes. ONE writer, called by
     both the Windows/Linux zip and the macOS zip.
+
+    `skip` names the package-relative paths this container must not carry (the
+    per-platform prune: PLATFORM_FILES / platform_skip()). Empty means the whole tree,
+    which is what a caller grading the writer rather than one container passes.
 
     The file-TYPE bits are load-bearing. `external_attr = mode << 16` carries permission
     bits only, so a reader who expands the package with Finder (Archive Utility is
@@ -69,9 +73,12 @@ def write_zip(stage_dir, zip_path):
     carrying those modes. Do not "simplify" either line; maintenance/check-package-modes.py
     extracts the built zip with ditto and fails when the doors are not -rwxr-xr-x.
     """
+    skip = set(skip)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
         for f in sorted(stage_dir.rglob("*")):
             if not f.is_file():
+                continue
+            if f.relative_to(stage_dir).as_posix() in skip:
                 continue
             arc = f.relative_to(stage_dir.parent).as_posix()
             mode = 0o755 if wants_exec_bit(f) else 0o644
@@ -190,6 +197,49 @@ SHIP = [
     # so one host's retheme cannot reach another (an update moves this default).
     "theme.default.toml",
 ]
+
+# Files that belong to ONE platform's kit. The three archives are per-platform downloads
+# (tinycmdr-<v>-win.zip, -macos.zip, -linux.tar.gz), so each one carries only its own set:
+# another OS's doors have no reader there, and every installer copies the package tree into
+# the install folder, so foreign doors used to land on every host's disk too (measured
+# 2026-10-09 on the built public win zip: 9 files / 194.1 KB of the other two OSes -
+# 103.3 KB macOS, 90.8 KB Linux).
+#
+# This is a small hand-kept list of the kind the stage() walk deleted once, kept deliberately
+# because the alternative (every container carries every door) was measured and rejected.
+# Keep it beside SHIP, and when a SHIP file becomes platform-native, add it here in the same
+# batch - a name this list misses rides in all three containers again. platform_drift() below
+# refuses a name SHIP does not carry (the skip would be a no-op) and a name two platforms
+# claim (both containers would drop it).
+PLATFORM_FILES = {
+    "win": (
+        "INSTALL-WINDOWS.cmd",
+        "UNINSTALL-WINDOWS.cmd",
+        "tinycmdr.cmd",
+        "install/install-tinycmdr.ps1",
+        "install/install-tinycmdr.cmd",
+        "maintenance/restart-tinycmdr.ps1",
+    ),
+    "macos": (
+        "INSTALL-MACOS.command",
+        "UNINSTALL-MACOS.command",
+        "install/install-tinycmdr-macos.sh",
+        "install/uninstall-tinycmdr-macos.sh",
+        "install/com.tinycmdr.agent.plist",
+        "install/README-macos.md",
+        "maintenance/restart-tinycmdr-macos.sh",
+    ),
+    "linux": (
+        "install/install-tinycmdr.sh",
+        "maintenance/restart-tinycmdr.sh",
+    ),
+}
+
+
+def platform_skip(keep):
+    """The package-relative names the `keep` container must leave out."""
+    return {rel for plat, names in PLATFORM_FILES.items() if plat != keep
+            for rel in names}
 
 # A backup/file that must never be staged, whatever it is called: ".bak" anywhere
 # (x.py.bak, x.py.bak-pre256-20260914), "pre" immediately followed by a version
@@ -694,6 +744,30 @@ def maintenance_drift():
     return problems
 
 
+def platform_drift():
+    """Problems with the per-container platform lists (PLATFORM_FILES).
+
+    Both ways the list rots are silent, so both are refused at build time: a name SHIP
+    does not carry makes the skip a no-op (the file rides in all three containers), and a
+    name two platforms claim is skipped from BOTH containers' kits even though one of them
+    owns it. The hand-kept list is the deliberate cost; see PLATFORM_FILES.
+    """
+    problems = []
+    known = set(SHIP)
+    seen = {}
+    for plat in sorted(PLATFORM_FILES):
+        for rel in PLATFORM_FILES[plat]:
+            if rel not in known:
+                problems.append(f"PLATFORM_FILES[{plat}] names {rel}, which SHIP does not "
+                                f"list - the skip would be a no-op and it would ship in "
+                                f"every container")
+            if rel in seen and seen[rel] != plat:
+                problems.append(f"{rel} is platform-native for both {seen[rel]} and {plat} "
+                                f"- each container would drop it as foreign")
+            seen.setdefault(rel, plat)
+    return problems
+
+
 def tier_drift():
     """Problems where config.example.json disagrees with DEFAULT_CONFIG's safety tiers.
 
@@ -863,6 +937,7 @@ def main():
         problems += syntax_floor(stage_dir)
         problems += tier_drift()
         problems += maintenance_drift()
+        problems += platform_drift()
         if problems:
             print("\nBUILD REFUSED — the package would carry secrets or host data:")
             for p in problems:
@@ -901,13 +976,18 @@ def main():
         DIST.mkdir(exist_ok=True)
         suffix = "" if public else "-fleet"
         zip_path = DIST / f"tinycmdr-{ver}-win{suffix}.zip"
-        write_zip(stage_dir, zip_path)
+        win_skip = platform_skip("win")
+        write_zip(stage_dir, zip_path, skip=win_skip)
 
         # verify the zip itself, not just the staging dir
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
             bad = [n for n in names
                    if pathlib.PurePosixPath(n).name in FORBIDDEN_NAMES]
+            # The prune is graded on the ARTIFACT, not on the list: a container that
+            # still carries another platform's door is refused like a leak.
+            wforeign = sorted(rel for rel in (n.split("/", 1)[1] for n in names
+                                              if "/" in n) if rel in win_skip)
             leak, soft = [], []
             for n in names:
                 if n.endswith("/"):
@@ -935,8 +1015,8 @@ def main():
                             if n.endswith("/tinycmdr")), 0)
 
         live_inner = hashlib.sha256((ROOT / "tinycmdr.py").read_bytes()).hexdigest()
-        ok = (not bad and not leak and inner == live_inner and bool(guarded)
-              and bool(zlaunch & 0o111))
+        ok = (not bad and not leak and not wforeign and inner == live_inner
+              and bool(guarded) and bool(zlaunch & 0o111))
         print(f"\nzip: {zip_path}")
         print(f"  {len(names)} entries, {zip_path.stat().st_size / 1024:.0f} KB")
         print(f"  tinycmdr.py in zip matches the live file: {inner == live_inner}")
@@ -944,8 +1024,11 @@ def main():
         print(f"  the launcher itself (what the shim execs): {oct(zlaunch)} "
               f"(executable: {bool(zlaunch & 0o111)})")
         print(f"  no forbidden filenames: {not bad}")
+        print(f"  no other platforms' doors: {not wforeign}")
         print(f"  no secrets/ids anywhere: {not leak}")
         print(f"  fleet hostnames in skills (informational): {len(soft)}")
+        for f in wforeign:
+            print(f"    ! {f}")
         if leak:
             for l in leak:
                 print(f"    ! {l}")
@@ -955,8 +1038,12 @@ def main():
         # filesystem has no exec bit at all, so set the modes explicitly rather
         # than trusting st_mode.
         tar_path = DIST / f"tinycmdr-{ver}-linux{suffix}.tar.gz"
+        linux_skip = platform_skip("linux")
 
         def _modes(ti):
+            rel = ti.name.split("/", 1)[1] if "/" in ti.name else ""
+            if rel in linux_skip:
+                return None                          # tarfile drops the member
             if ti.isdir():
                 ti.mode = 0o755
             elif wants_exec_bit(ti.name):
@@ -972,13 +1059,15 @@ def main():
             tbad = [m.name for m in tfiles
                     if pathlib.PurePosixPath(m.name).name in FORBIDDEN_NAMES
                     or BACKUP_RE.search(pathlib.PurePosixPath(m.name).name)]
+            tforeign = sorted(rel for rel in (m.name.split("/", 1)[1] for m in tfiles
+                                              if "/" in m.name) if rel in linux_skip)
             tinner = hashlib.sha256(
                 t.extractfile(f"{stage_dir.name}/tinycmdr.py").read()).hexdigest()
             tmode = next((m.mode for m in tfiles
                           if m.name.endswith("install/install-tinycmdr.sh")), 0)
             tlaunch = next((m.mode for m in tfiles
                             if m.name.endswith("/tinycmdr")), 0)
-        tar_ok = (not tbad and tinner == live_inner and tmode & 0o111
+        tar_ok = (not tbad and not tforeign and tinner == live_inner and tmode & 0o111
                   and tlaunch & 0o111)
         print(f"\ntarball: {tar_path}")
         print(f"  {len(tfiles)} files, {tar_path.stat().st_size / 1024:.0f} KB")
@@ -987,6 +1076,9 @@ def main():
         print(f"  the launcher itself (what the shim execs): {oct(tlaunch)} "
               f"(executable: {bool(tlaunch & 0o111)})")
         print(f"  no forbidden filenames: {not tbad}")
+        print(f"  no other platforms' doors: {not tforeign}")
+        for f in tforeign:
+            print(f"    ! {f}")
         # macOS: the same staged tree as a zip (Finder extracts it), with the exec bits
         # written explicitly because the build host has no exec bit to copy. The launchd
         # Every file the INSTALLER requires must be in the package. Dropping `tests` from the
@@ -1012,11 +1104,14 @@ def main():
         mac_ok = True
         if args.macos:
             mac_path = DIST / f"tinycmdr-{ver}-macos{suffix}.zip"
-            write_zip(stage_dir, mac_path)
+            mac_skip = platform_skip("macos")
+            write_zip(stage_dir, mac_path, skip=mac_skip)
             with zipfile.ZipFile(mac_path) as z:
                 mac_names = z.namelist()
                 macbad = [n for n in mac_names
                           if pathlib.PurePosixPath(n).name in FORBIDDEN_NAMES]
+                macforeign = sorted(rel for rel in (n.split("/", 1)[1] for n in mac_names
+                                                    if "/" in n) if rel in mac_skip)
                 macinner = hashlib.sha256(z.read(f"tinycmdr-{ver}/tinycmdr.py")).hexdigest()
                 rendered = (z.read(f"tinycmdr-{ver}/install/com.tinycmdr.agent.plist")
                             .decode("utf-8")
@@ -1055,9 +1150,9 @@ def main():
                         # documentation about this fleet and ships as-is.
                         hard = (label in SECRET_LABELS or rel in APP_FILES)
                         (mleak if hard else msoft).append(f"{label} in {rel}")
-            mac_ok = (not macbad and not mleak and macinner == live_inner
-                      and plist_ok and bool(macmode & 0o111)
-                      and bool(maclaunch & 0o111))
+            mac_ok = (not macbad and not macforeign and not mleak
+                      and macinner == live_inner and plist_ok
+                      and bool(macmode & 0o111) and bool(maclaunch & 0o111))
             print(f"\nmacos zip: {mac_path}")
             print(f"  {len(mac_names)} entries, {mac_path.stat().st_size / 1024:.0f} KB")
             print(f"  tinycmdr.py matches the live file: {macinner == live_inner}")
@@ -1067,8 +1162,11 @@ def main():
                   f"(executable: {bool(maclaunch & 0o111)})")
             print(f"  launchd plist parses and is complete: {plist_ok}")
             print(f"  no forbidden filenames: {not macbad}")
+            print(f"  no other platforms' doors: {not macforeign}")
             print(f"  no secrets/ids anywhere: {not mleak}")
             print(f"  fleet hostnames in skills (informational): {len(msoft)}")
+            for f in macforeign:
+                print(f"    ! {f}")
             for l in mleak:
                 print(f"    ! {l}")
 
