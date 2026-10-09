@@ -2147,8 +2147,19 @@
         "commit": "e9d47df",
         "expect": "untagged"
       },
-      "detail": "The removal a Windows user runs could end as 'done' with the folder still there: the sweep took one process snapshot and no children (the supervisor respawns the bot, a tool child can hold the folder), and a shell standing in the folder - the natural way to run it - makes the delete impossible on Windows. It steps its own shell out of the folder, stops and waits for the matched processes and their children, fails non-zero naming what is left, and the package ships UNINSTALL-WINDOWS.cmd, the double-click door the script execution policy cannot cut short (tests/test_installer_windows.py).",
-      "gate": "red on the pre-fix build (b777721: 6 FAILs, then the door section dies on the missing file) and green on the batch; the full gate green (106 suites, 0 skipped)"
+      "detail": "The removal a Windows user runs could end as 'done' with the folder still there: the sweep took one process snapshot and no children (the supervisor respawns the bot, a tool child can hold the folder), and a shell standing in the folder - the natural way to run it - makes the delete impossible on Windows. It steps its own shell out of the folder, stops and waits for the matched processes and their children, takes only the task and Startup link that point at its own folder, fails non-zero naming what is left, and the package ships UNINSTALL-WINDOWS.cmd, the double-click door the script execution policy cannot cut short (tests/test_installer_windows.py).",
+      "gate": "red on the pre-fix builds (b777721: 6 FAILs then the door section dies on the missing file; e9d47df: 2 FAILs for the autostart scoping) and green on the batch; the full gate runs before the push"
+    },
+    {
+      "id": "fresh-install-starts",
+      "title": "a fresh, page-only install starts, and only its own keys are known",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4c8ac12",
+        "expect": "untagged"
+      },
+      "detail": "config.example.json's allowlist ships its own placeholder (REPLACE_WITH_YOUR_MATTERMOST_USER_ID) and the Windows installer copied it verbatim, so the harness read a Mattermost lane nobody chose and bare `tinycmdr` aborted with 'no Mattermost bot token' - the page, the chosen door, never came up (a fresh Windows install of v1.0.93). The placeholder is not intent in either spelling now, the installer empties the example's list on a fresh install, the bot-token prompt waits for the chat lane to be chosen, the closing summary counts the page, and the load-time unknown-key warning uses the same derived known-key rule as `config set` - which also ends the twelve warnings a fresh start printed about the example's own keys. The package drops two removal doors that had no caller (install/uninstall-tinycmdr.sh, install/uninstall-tinycmdr.ps1).",
+      "gate": "targeted suites green (tests/test_lane_choice.py: the example's config serves the page, no abort, no unknown-key warning; tests/test_installer_windows.py); the full gate runs before the push"
     }
   ]
 }
