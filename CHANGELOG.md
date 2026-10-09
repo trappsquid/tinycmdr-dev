@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.93] - 2026-10-08
+
 - **A failed forget answered OK:** tool_memory ignored memory_forget's None, so a file held open (a Windows PermissionError, a permissions problem anywhere) was announced as forgotten while it stayed on disk and in the index - the failure is reported by name now (tests/test_memory_okf.py).
 - **Memory add did not scrub the description, tags or sources:** only title and body went through the scrubber, so a secret in any of the other three fields landed in the concept file and in the prompt-carried index (tests/test_memory_okf.py).
 - **A duplicate title could be taken at another id:** the add door checked only the concept at the same slug, so a renamed concept (its id kept), a '-2' slug or a foreign file could hold a title a second concept then took; the rule is now the update path's - every concept (tests/test_memory_okf.py).
