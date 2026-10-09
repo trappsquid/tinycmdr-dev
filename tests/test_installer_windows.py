@@ -1,9 +1,11 @@
-"""Structural checks on the Windows installer.
+"""Structural checks on the Windows installer - and, on Windows, the doors run.
 
-The test bed is macOS, so nothing here executes PowerShell or cmd - these checks
-parse the shipped text and assert the SHAPE of each fix, so a later edit cannot quietly
-revert one. Every claim in this file is [READ]; the runtime proof has to come from a
-Windows host and is listed as outstanding in CHANGELOG/README.
+The test bed is macOS, so most checks here parse the shipped text and assert the SHAPE of
+each fix, so a later edit cannot quietly revert one. The two double-click doors
+(INSTALL-WINDOWS.cmd, UNINSTALL-WINDOWS.cmd) additionally RUN on Windows: the CI Windows
+job executes them against staged folders with a stub wrapper, because a door that parses
+perfectly can still close its window before its tail runs (measured 2026-10-09, a
+double-clicked UNINSTALL-WINDOWS.cmd).
 
 Run:  python tests/test_installer_windows.py
 """
@@ -280,7 +282,14 @@ def main():
     check("the package ships UNINSTALL-WINDOWS.cmd",
           '"UNINSTALL-WINDOWS.cmd"' in source("maintenance/build-package.py"))
     check("the door acts on the folder it sits in, by absolute path",
-          'set "HERE=%~dp0"' in door and '-InstallDir "%HERE%"' in door)
+          '-InstallDir "%HERE%"' in door and '"%~dp0"' in door)
+    check("the door re-runs itself from %TEMP%, so the removal cannot kill its tail",
+          'copy /y "%~f0" "%SELF%"' in door
+          and 'call "%SELF%" --removing "%~dp0"' in door
+          and ":removing" in door,
+          "a door living in the folder it deletes dies mid-run: no exit code, no pause")
+    check("...and steps its own shell out of the folder first",
+          'cd /d "%TEMP%"' in door)
     check("the door asks first, and 'no' removes nothing",
           'set /p "ANS=Remove it? (y/N) "' in door and "Nothing was removed." in door)
     check("the door refuses a folder that is not an install (no config.json, no venv)",
@@ -293,6 +302,132 @@ def main():
           and door.rstrip().endswith("exit /b %RC%"))
     check("the installer summary and the one-liner both name the door",
           "UNINSTALL-WINDOWS.cmd" in install and "UNINSTALL-WINDOWS.cmd" in one_line)
+
+    print("\n== the install door holds its own window ==")
+    install_door = source("INSTALL-WINDOWS.cmd")
+    check("the door owns the closing barrier when nobody else does",
+          'if not defined FB_NOPAUSE (' in install_door
+          and 'set "OWNS_PAUSE=1"' in install_door
+          and 'call "%HERE%install\\install-tinycmdr.cmd" %*' in install_door
+          and "Press any key to close this window." in install_door,
+          "a double-clicked window closes before the summary can be read")
+    with open(os.path.join(ROOT, "INSTALL-WINDOWS.cmd"), "rb") as fh:
+        install_door_bytes = fh.read()
+    check("...and the install door is ASCII with CRLF line endings too",
+          install_door_bytes.isascii()
+          and install_door_bytes.count(b"\n") == install_door_bytes.count(b"\r\n"))
+
+    # The runtime proof, on the platform that owns it. Everything above parses text; a
+    # door that parses perfectly can still close its window before the tail runs
+    # (measured 2026-10-09: a double-clicked UNINSTALL-WINDOWS.cmd did exactly that).
+    # On POSIX the structural checks stand and these are not attempted.
+    if os.name == "nt":
+        import tempfile
+        print("\n== the doors, run (windows) ==")
+        work = tempfile.mkdtemp(prefix="tc-doors-")
+        try:
+            def staged(install_like=True, wrapper=("exit /b 2",)):
+                """A folder shaped like an install, with a stub wrapper that RECORDS
+                instead of removing (so the door's own logic is what is graded)."""
+                n = len(os.listdir(work))
+                d = os.path.join(work, "d%d" % n)
+                os.makedirs(os.path.join(d, "install"))
+                shutil.copy2(os.path.join(ROOT, "UNINSTALL-WINDOWS.cmd"),
+                             os.path.join(d, "UNINSTALL-WINDOWS.cmd"))
+                if install_like:
+                    open(os.path.join(d, "tinycmdr.py"), "w").close()
+                    open(os.path.join(d, "config.json"), "w").close()
+                lines = (["@echo off", "echo stub: removal ran", "echo args %*"]
+                         + list(wrapper))
+                with open(os.path.join(d, "install", "install-tinycmdr.cmd"),
+                          "w", newline="", encoding="utf-8") as fh:
+                    fh.write("\r\n".join(lines) + "\r\n")
+                return d
+
+            def run_door(name, folder, stdin_text):
+                return subprocess.run(
+                    ["cmd.exe", "/c", os.path.join(folder, name)], cwd=folder,
+                    input=stdin_text, capture_output=True, text=True, timeout=180)
+
+            package = staged(install_like=False)
+            r = run_door("UNINSTALL-WINDOWS.cmd", package, "")
+            out = (r.stdout or "") + (r.stderr or "")
+            check("a package folder is refused with its message, and the window holds",
+                  r.returncode == 2 and "does not look like a tinycmdr install" in out
+                  and "Press any key to close this window." in out,
+                  (r.returncode, out[-300:]))
+
+            d = staged()
+            r = run_door("UNINSTALL-WINDOWS.cmd", d, "n\n\n")
+            out = (r.stdout or "") + (r.stderr or "")
+            check("answering no removes nothing, exits 0, and the window holds",
+                  r.returncode == 0 and "Nothing was removed." in out
+                  and "stub: removal ran" not in out
+                  and "Press any key to close this window." in out,
+                  (r.returncode, out[-300:]))
+
+            d = staged(wrapper="exit /b 2")
+            r = run_door("UNINSTALL-WINDOWS.cmd", d, "y\n\n")
+            out = (r.stdout or "") + (r.stderr or "")
+            check("a y reaches the wrapper, its exit code comes back, the tail prints",
+                  r.returncode == 2 and "stub: removal ran" in out
+                  and "The removal exited with code 2" in out
+                  and "Press any key to close this window." in out,
+                  (r.returncode, out[-400:]))
+
+            d = staged(wrapper=('del /f /q "%~dp0..\\UNINSTALL-WINDOWS.cmd" >nul 2>&1',
+                                'exit /b 0'))
+            r = run_door("UNINSTALL-WINDOWS.cmd", d, "y\n\n")
+            out = (r.stdout or "") + (r.stderr or "")
+            check("a removal that deletes the door's own file still ends with the barrier",
+                  r.returncode == 0 and "Press any key to close this window." in out,
+                  (r.returncode, out[-300:]))
+
+            # The install door: the barrier when it owns the window, none when the
+            # caller does (the network one-liner sets FB_NOPAUSE and keeps its shell).
+            d = staged()
+            shutil.copy2(os.path.join(ROOT, "INSTALL-WINDOWS.cmd"),
+                         os.path.join(d, "INSTALL-WINDOWS.cmd"))
+            r = run_door("INSTALL-WINDOWS.cmd", d, "\n\n")
+            out = (r.stdout or "") + (r.stderr or "")
+            check("a double-clicked install ends with the barrier",
+                  r.returncode == 2 and "Press any key to close this window." in out,
+                  (r.returncode, out[-300:]))
+            env = dict(os.environ)
+            env["FB_NOPAUSE"] = "1"
+            r = subprocess.run(["cmd.exe", "/c", os.path.join(d, "INSTALL-WINDOWS.cmd")],
+                               cwd=d, input="", capture_output=True, text=True,
+                               timeout=180, env=env)
+            out = (r.stdout or "") + (r.stderr or "")
+            check("...and no barrier when the caller owns the window (FB_NOPAUSE)",
+                  "Press any key to close this window." not in out,
+                  out[-300:])
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    print("\n== the installer takes web-search providers of your own ==")
+    check("the switch is declared and parsed",
+          "[string[]] $AddSearch" in install and "foreach ($spec in $AddSearch)" in install)
+    check("an unknown kind at the switch is refused, naming what is accepted",
+          "-AddSearch: kind must be anysearch or searxng" in install)
+    check("the web-search step is a menu, not one yes/no",
+          "4) add your own provider now" in install
+          and "keep search on this machine only" in install)
+    check("tavily is GONE - no built-in option, no prompt line, no key name",
+          "tavily" not in install.lower())
+    check("the interactive add asks kind, url and label; a key where the kind takes one",
+          "provider: 1) searxng (your own box; no key)" in install
+          and "API key (Enter = none)" in install
+          and "its url" in install and "label [" in install)
+    check("the rows reach search.providers, this run's first",
+          "$cfg.search | Add-Member -NotePropertyName providers" in install
+          and '("providers"\\s*:\\s*)\\[\\s*\\]' in install)
+    check("a search key goes to .env under a generated name, never config.json",
+          "TINYCMDR_SEARCH${sn}_API_KEY" in install
+          and 'Say "search provider added' in install
+          and "(search provider)" in install)
+    check("the summary names what was added, tried first",
+          "you added {0} (tried first)" in install)
 
     print("\n== tinycmdr.cmd refuses the Microsoft Store python stub ==")
     check("the shim looks python up with where + findstr",
@@ -415,7 +550,7 @@ def main():
           and '$cfg.llm.PSObject.Properties.Remove("api_key")' in install,
           "config.json still carries llm.api_key")
     check("it goes to .env as TINYCMDR_LLM_API_KEY, replacing any older line",
-          '"TINYCMDR_LLM_API_KEY", "TAVILY_API_KEY"' in install
+          '"TINYCMDR_LLM_API_KEY", "ANYSEARCH_API_KEY"' in install
           and '$managed += "TINYCMDR_LLM_API_KEY"' in install,
           "the .env writer never carries the primary key")
 

@@ -156,15 +156,15 @@ def capturing(fn):
 
 
 # ------------------------------------------------------------------- the defaults
-check("the shipped chain is the two built-ins, in order",
-      [p["kind"] for p in fb.DEFAULT_CONFIG["search"]["providers"]] == ["anysearch", "tavily"],
+check("the shipped chain is ONE built-in (anysearch) - nothing ships that needs a key",
+      [p["kind"] for p in fb.DEFAULT_CONFIG["search"]["providers"]] == ["anysearch"],
       fb.DEFAULT_CONFIG["search"]["providers"])
 check("egress is ON by default - a configured chain that refuses every lookup reads as broken",
       fb.DEFAULT_CONFIG["search"]["allow_cloud_egress"] is True,
       fb.DEFAULT_CONFIG["search"]["allow_cloud_egress"])
 check("the default chain names each key's .env variable",
       [p.get("api_key_env") for p in fb.DEFAULT_CONFIG["search"]["providers"]]
-      == ["ANYSEARCH_API_KEY", "TAVILY_API_KEY"])
+      == ["ANYSEARCH_API_KEY"])
 
 # ------------------------------------------------------------ what is on this LAN
 check("a name that resolves nowhere is REMOTE (the pessimistic branch)",
@@ -223,8 +223,8 @@ out = fb.tool_web_search({"query": "anything"}, {})
 check("with egress off, an off-LAN provider is REFUSED",
       out.startswith("BLOCKED:"), out[:120])
 check("...and nothing was sent to it", _Stub.calls == [], _Stub.calls)
-check("...and the refusal names the flag that would allow it",
-      "search.allow_cloud_egress" in out, out[:200])
+check("...and the refusal names the door that would allow it",
+      "tinycmdr search allow true" in out, out[:400])
 usable, withheld, problems = fb._search_chain_in_use()
 check("...the chain in use is empty and the withheld list is not",
       usable == [] and len(withheld) == 1 and problems == [], (usable, withheld))
@@ -259,18 +259,18 @@ check("...and the call carried the query and max_results",
       _Stub.calls and _Stub.calls[0][2] == {"query": "first wins", "max_results": 5},
       _Stub.calls[:1])
 
-os.environ.pop("TAVILY_API_KEY", None)
-search_config([{"kind": "tavily"}, {"kind": "searxng", "url": BASE_URL}], False)
+search_config([{"kind": "searxng", "url": "http://127.0.0.1:9"},
+               {"kind": "searxng", "url": BASE_URL}], False)
 out = fb.tool_web_search({"query": "fall through"}, {})
-check("a provider with no key set falls through to the next",
+check("a provider that cannot answer falls through to the next",
       "Stub SearxNG hit" in out, out[:200])
 
-# A LOCAL url on purpose: an off-LAN one is refused by the gate before the missing key is
-# ever read, so this would grade the gate instead of the fallback.
-search_config([{"kind": "tavily", "url": BASE_URL}], False)
+# A LOCAL url on purpose: an off-LAN one is refused by the gate before the failure is
+# ever seen, so this would grade the gate instead of the fallback.
+search_config([{"kind": "searxng", "url": "http://127.0.0.1:9"}], False)
 out = fb.tool_web_search({"query": "all fail"}, {})
 check("when every provider fails the error names them",
-      out.startswith("ERROR:") and "tavily" in out, out[:200])
+      out.startswith("ERROR:") and "searxng" in out, out[:200])
 
 search_config([{"kind": "nope"}, {"kind": "searxng"}], False)
 out = fb.tool_web_search({"query": "typo"}, {})
@@ -299,6 +299,71 @@ check("a search key left in config.json is IGNORED, with a warning that names .e
       "IGNORED" in said and "ANYSEARCH_API_KEY" in said, said[:300])
 check("...and the loaded config carries no such field",
       "anysearch_api_key" not in (cfg.get("search") or {}), cfg.get("search"))
+
+# ------------------------------------------- an entry's state: would it answer?
+# Every supported kind answers without a key (anysearch's anonymous tier; a searxng box),
+# so the only thing that makes an entry unable is the off-LAN consent.
+_anon = {"kind": "anysearch", "url": REMOTE, "label": "anysearch",
+         "api_key_env": "ANYSEARCH_API_KEY"}
+check("anysearch with no key IS ready (the anonymous tier)",
+      fb._search_entry_ready(_anon, True) is True
+      and "anonymous" in fb._search_entry_state(_anon, True),
+      fb._search_entry_state(_anon, True))
+check("a LAN provider is ready with egress off",
+      fb._search_entry_ready({"kind": "searxng", "url": BASE_URL, "label": "x",
+                              "api_key_env": ""}, False) is True)
+check("an off-LAN provider is not ready with egress off",
+      fb._search_entry_ready(_anon, False) is False
+      and fb._search_entry_state(_anon, False) == "off-LAN, refused",
+      fb._search_entry_state(_anon, False))
+
+# tavily was a built-in alongside anysearch; it is GONE (its API refused keyless calls,
+# so it shipped as dead weight). An old config that still names it must be REPORTED, not
+# silently half-working, and the kind must not come back through a typo-tolerance path.
+check("tavily is no longer a kind",
+      "tavily" not in fb._SEARCH_DEFAULT_URL
+      and "tavily" not in fb._SEARCH_PROVIDERS_BY_KIND
+      and "tavily" not in fb._SEARCH_DEFAULT_KEY_ENV,
+      sorted(fb._SEARCH_PROVIDERS_BY_KIND))
+search_config([{"kind": "tavily", "url": REMOTE}], False)
+_chain, _problems = fb._search_providers()
+check("a config still naming tavily is reported as an unknown kind",
+      _chain == [] and _problems and "unknown kind" in _problems[0]
+      and "tavily" in _problems[0], (_chain, _problems))
+out = fb.tool_web_search({"query": "retired kind"}, {})
+check("...and the refusal a run prints names it too",
+      out.startswith("BLOCKED:") and "unusable entr" in out and "tavily" in out,
+      out[:300])
+
+# The BLOCKED line is what the MODEL relays, so it must name doors the operator can
+# actually type - "web search is disabled" and nothing else is not an answer.
+search_config([{"kind": "anysearch", "url": REMOTE}], False)
+out = fb.tool_web_search({"query": "doors"}, {})
+check("the refusal names the allow door by its verb",
+      "tinycmdr search allow true" in out, out[:400])
+check("...and the add-your-own door",
+      "tinycmdr search add <url>" in out, out[:400])
+
+# ------------------------------------------- building an entry: the key's home is .env
+envp = STAGE / ".env"
+envp.unlink(missing_ok=True)
+entry, err = fb._search_entry_build("tavily", REMOTE, "t", "", "")
+check("building a retired kind is refused, naming what is accepted",
+      entry is None and "kind must be one of" in err and "tavily" not in err.split(":")[1],
+      err)
+entry, err = fb._search_entry_build("searxng", BASE_URL + "/", "mybox", "", "")
+check("a searxng entry needs no key and its url is trimmed",
+      err == "" and entry == {"kind": "searxng", "url": BASE_URL, "label": "mybox"},
+      entry)
+entry2, err2 = fb._search_entry_build("anysearch", REMOTE, "", "", "sekret-key")
+check("a typed key lands in .env under a GENERATED name, and only NAMED in the entry",
+      err2 == "" and entry2["api_key_env"] == "TINYCMDR_SEARCH1_API_KEY"
+      and "sekret-key" not in json.dumps(entry2)
+      and "TINYCMDR_SEARCH1_API_KEY=sekret-key" in envp.read_text(encoding="utf-8"),
+      (entry2, envp.read_text(encoding="utf-8")[-120:] if envp.exists() else ""))
+entry3, _err3 = fb._search_entry_build("anysearch", REMOTE, "", "", "second-key")
+check("...and a second keyed provider gets its own name",
+      entry3["api_key_env"] == "TINYCMDR_SEARCH2_API_KEY", entry3)
 
 # ------------------------------------------------------------------ the .env doors
 os.environ["TINYCMDR_SEARCH_PROVIDERS"] = '[{"kind": "searxng", "url": "http://127.0.0.1:9"}]'

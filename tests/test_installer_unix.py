@@ -262,7 +262,7 @@ def fake_venv(inst, py):
 def fleet_env(path, extra=""):
     path.write_text("# planted by tests/test_installer_unix.py\n"
                     "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789\n"
-                    "TAVILY_API_KEY=tvly-planted-by-the-test\n" + extra, encoding="utf-8")
+                    "ANYSEARCH_API_KEY=anys-planted-by-the-test\n" + extra, encoding="utf-8")
     return path
 
 
@@ -424,7 +424,7 @@ def case_linux_secrets_lane(sb, pkg, bindir, user, py):
           and "TINYCMDR_MM_TOKEN=abcdef0123456789abcdef0123456789" in env_text,
           f"lines: {[l for l in env_text.splitlines() if 'MM_TOKEN' in l]}")
     check("the shared search key rides along",
-          "TAVILY_API_KEY=tvly-planted-by-the-test" in env_text,
+          "ANYSEARCH_API_KEY=anys-planted-by-the-test" in env_text,
           "the fleet key never reached .env")
 
 
@@ -1168,6 +1168,23 @@ def main():
           "a configured reinstall walked the whole wizard and read as a reset")
     check("a configured re-run is detected from config.json + a token in .env",
           "this install is already configured" in _sh)
+    print("\n== the web-search step takes a provider of your own ==")
+    for _label, _path in (("Linux", BASE / "install" / "install-tinycmdr.sh"),
+                          ("macOS", BASE / "install" / "install-tinycmdr-macos.sh")):
+        _src = _path.read_text(encoding="utf-8")
+        check("%s: the web-search step is a menu, not one yes/no" % _label,
+              "4) add your own provider now" in _src
+              and "keep search on this machine only" in _src,
+              "one question was the only option")
+        check("%s: the add asks kind, url and label; a key where the kind takes one" % _label,
+              "provider: 1) searxng (your own box; no key)" in _src
+              and "API key (Enter = none)" in _src)
+        check("%s: tavily is GONE - no built-in option, no prompt line, no key name" % _label,
+              "tavily" not in _src.lower())
+        check("%s: the provider rows reach config.json, this run's first" % _label,
+              "SEARCH_SPECS" in _src and '_search["providers"] = _rows' in _src)
+        check("%s: a typed key goes to .env, and only its NAME reaches config" % _label,
+              "SEARCH_ENV_LINES" in _src and "TINYCMDR_SEARCH1_API_KEY" in _src)
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed:")

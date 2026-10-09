@@ -225,7 +225,7 @@ FLEET_FILE = "install/fleet-defaults.json"
 # the installer writes them into .env. Per-bot keys (Mattermost token, DeepSeek) are
 # NOT here - those come from -MattermostToken/-SecretsFile/an existing .env/prompt.
 SECRETS_FILE = "install/fleet-secrets.env"
-FLEET_WIDE_KEYS = ("TAVILY_API_KEY", "ANYSEARCH_API_KEY")
+FLEET_WIDE_KEYS = ("ANYSEARCH_API_KEY",)
 FLEET_MAY_CARRY = ("mattermost url", "allowed user id", "llm base url")
 
 # What in maintenance/ is generic enough to ship: the restart helpers an install needs.
@@ -533,7 +533,7 @@ def sanitize(target, host_vals):
         if rel == SECRETS_FILE:
             # This file exists to carry the fleet-wide keys, so it must not go
             # through env-value redaction: doing so replaced every key with the
-            # literal "<redacted: TAVILY_API_KEY>" and both installers wrote that
+            # literal "<redacted: ANYSEARCH_API_KEY>" and both installers wrote that
             # into the new host's .env as if it were a key (seen 2026-09-11 on
             # the LAN model box and the Linux test box: search dead, HTTP 401 from the provider).
             # audit() and the zip verifier already exempt it the same way.

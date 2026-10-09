@@ -129,6 +129,8 @@ SEARCH_EGRESS=""       # --search-egress true|false ("" = leave the host's own);
                        # off-LAN search provider is refused, not called, while false
 # Extra endpoints (llm.fallbacks).
 FALLBACK_SPECS=""; FB_ENV_LINES=""
+# Extra web-search providers (search.providers).
+SEARCH_SPECS=""; SEARCH_ENV_LINES=""
 
 usage() {
     sed -n '3,/^set -/p' "${BASH_SOURCE[0]}" | sed '/^set -/d' | sed 's/^# \{0,1\}//'
@@ -307,6 +309,13 @@ ask_model_id() {   # ask_model_id "<ids>" [default] -> the id, or its NUMBER in 
     done
     warn "no model numbered $a - keeping what you typed"
     printf '%s' "$a"
+}
+
+is_lan_url() {   # a heuristic for THIS installer's advice only; the harness decides for real
+    case "$1" in
+        *://127.0.0.1*|*://localhost*|*://10.*|*://192.168.*|*://172.1[6-9].*|*://172.2[0-9].*|*://172.3[01].*|*://169.254.*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 ask_yes() {   # ask_yes <question> [y|n] -> 0 = yes
@@ -925,17 +934,60 @@ if [ "$ASK" = 1 ]; then
     done
 fi
 
-# ---- web search: may it leave this machine? ----
-# Off unless asked. Both built-in providers are third parties, and the keyless anonymous
-# tier used to send the model's query with nobody asked and nothing on screen saying so
-# (2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
-# "no" here still leaves a working search if one is configured.
+# ---- web search: which providers, and may they leave this machine? ----
+# The old step asked ONE yes/no about a fixed pair of cloud providers; a provider of
+# the operator's own - a searxng box on this network (no key), or a keyed API - can be
+# entered here. `tinycmdr search add` is the same door later. The consent line stays the
+# point: a provider off this machine sees the model's query (2026-09-27), and
+# --search-egress still skips the question entirely.
 if [ "$ASK" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
-    if ask_yes "May the bot's web search send queries off this machine?" y; then
-        SEARCH_EGRESS="true"
-    else
-        SEARCH_EGRESS="false"
-    fi
+    say "web search"
+    info "web search   : a provider off this machine sees the model's query; a searxng box"
+    info "               on this network needs no key and never leaves it."
+    info "  1) keep this host's setup"
+    info "  2) allow providers off this machine (anysearch sees the query)"
+    info "  3) keep search on this machine only (off-LAN providers are refused)"
+    info "  4) add your own provider now"
+    case "$(ask_text 'web search' 1)" in
+        2) SEARCH_EGRESS="true" ;;
+        3) SEARCH_EGRESS="false" ;;
+        4)
+            info "provider: 1) searxng (your own box; no key)  2) anysearch (no key needed)"
+            case "$(ask_text 'choice' 1)" in
+                2) _sk="anysearch"; _skey_q="API key (Enter = none)" ;;
+                *) _sk="searxng";   _skey_q="" ;;
+            esac
+            case "$_sk" in
+                anysearch) _sdurl="https://api.anysearch.com/v1/search" ;;
+                *)         _sdurl="" ;;
+            esac
+            if [ -n "$_sdurl" ]; then
+                _su="$(ask_text "its url [$_sdurl]" "$_sdurl")"
+            else
+                _su="$(ask_text 'its url (the base; /search is added)')"
+            fi
+            _sl="$(ask_text 'label' "$_sk")"
+            _skey=""
+            if [ -n "$_skey_q" ]; then
+                _skey="$(ask_secret "$_skey_q")"
+            fi
+            if [ -n "$_su" ]; then
+                _sname=""
+                if [ -n "$_skey" ]; then
+                    _sname="TINYCMDR_SEARCH1_API_KEY"
+                    SEARCH_ENV_LINES="${SEARCH_ENV_LINES}${_sname}=${_skey}
+"
+                fi
+                SEARCH_SPECS="${SEARCH_SPECS}${_su}|${_sk}|${_sl}|${_sname}
+"
+                info "added (tried first): $_sl $_su"
+                if ! is_lan_url "$_su" && [ -z "$SEARCH_EGRESS" ]; then
+                    SEARCH_EGRESS="true"
+                    info "$_su is off this machine, so off-LAN providers are now allowed"
+                fi
+            fi
+            ;;
+    esac
 fi
 
 if [ "$ASK" = 1 ]; then
@@ -961,10 +1013,13 @@ if [ "$ASK" = 1 ]; then
     if [ -n "$TG_TOKEN" ]; then
         info "telegram     : on, DMs from $TG_IDS"
     fi
+    if [ -n "$SEARCH_SPECS" ]; then
+        info "web search   : you added $(printf '%s\n' "$SEARCH_SPECS" | grep -c .) provider(s) (tried first)"
+    fi
     if [ "${SEARCH_EGRESS:-false}" = "true" ]; then
         info "web search   : on, and may leave this machine"
     else
-        info "web search   : LAN only (an off-LAN provider is refused until allowed)"
+        info "web search   : LAN only (own providers work; off-LAN ones are refused until allowed)"
     fi
     if ! ask_yes "Install now?"; then
         info "nothing was changed"
@@ -1246,6 +1301,7 @@ MODEL_BASE_URL="$MODEL_BASE_URL" MODEL="$MODEL" \
 MODEL_BASE_GIVEN="$MODEL_BASE_GIVEN" MODEL_GIVEN="$MODEL_GIVEN" \
 MODEL_KEY="$MODEL_KEY" \
 FALLBACK_SPECS="$FALLBACK_SPECS" FB_ENV_LINES="$FB_ENV_LINES" \
+SEARCH_SPECS="$SEARCH_SPECS" \
 MM_PORT_ARG="$MM_PORT_ARG" \
 WEB_ON="$WEB_ON" WEB_HOST="$WEB_HOST" WEB_HOST_GIVEN="$WEB_HOST_GIVEN" WEB_PORT="$WEB_PORT" \
 "$VPY" - "$SRC/config.example.json" "$INSTALL_DIR/config.json" <<'PY'
@@ -1342,6 +1398,30 @@ elif fresh:
     # variable nobody has): a fresh install must not inherit an endpoint that does not
     # exist. An update keeps whatever the host already had.
     llm["fallbacks"] = []
+# Extra web-search providers, only when this run was told about them. THIS run's entries
+# go FIRST - a provider the operator adds on purpose must not sit behind the shipped ones
+# - and the ones the config already had are carried over, minus a duplicate url.
+_needs = [s for s in os.environ.get("SEARCH_SPECS", "").splitlines() if s.strip()]
+if _needs:
+    _rows = []
+    for _spec in _needs:
+        _parts = [_p.strip() for _p in (_spec.split("|") + ["", "", "", ""])[:4]]
+        _url, _kind, _label, _ename = _parts
+        if not _url:
+            continue
+        _kind = _kind or "searxng"
+        _e = {"kind": _kind, "url": _url, "label": _label or _kind}
+        if _ename:
+            _e["api_key_env"] = _ename
+        _rows.append(_e)
+    _search = cfg.setdefault("search", {})
+    _have = _search.get("providers")
+    if isinstance(_have, list):
+        for _p in _have:
+            if isinstance(_p, dict) and _p.get("url") \
+                    and not any(r["url"] == _p.get("url") for r in _rows):
+                _rows.append(_p)
+    _search["providers"] = _rows
 with open(dst, "w", encoding="utf-8", newline="\n") as f:
     json.dump(cfg, f, indent=2)
     f.write("\n")
@@ -1361,10 +1441,10 @@ umask 077
 # from a shared secrets file (that is how several hosts ended up sharing one key).
 # NO PROVIDER IS NAMED HERE on purpose - the key is whatever the endpoint issued,
 # and its variable name is the fallback entry's "api_key_env".
-SHARED_KEYS='^(TINYCMDR_MM_TOKEN|TAVILY_API_KEY|ANYSEARCH_API_KEY)='
+SHARED_KEYS='^(TINYCMDR_MM_TOKEN|ANYSEARCH_API_KEY)='
 # Only the keys THIS INSTALL owns are withheld from the carry-over. The search keys
 # are the host's own too: they were in this list, so an update without a
-# --secrets-file dropped a working host's TAVILY/ANYSEARCH keys - the same loss the
+# --secrets-file dropped a working host's ANYSEARCH key - the same loss the
 # config writer had, one file over. A secrets file still supplies them when the host
 # has none, and wins when it does (it is the fleet's canonical copy).
 MANAGED_ALT='TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN'
@@ -1374,6 +1454,9 @@ MANAGED_ALT='TINYCMDR_MM_TOKEN|TINYCMDR_TG_TOKEN|TINYCMDR_WEB_TOKEN'
 # same way - a redo with no key keeps the host's own TINYCMDR_LLM_API_KEY line.
 if [ -n "$FB_ENV_LINES" ]; then
     MANAGED_ALT="$MANAGED_ALT|TINYCMDR_ENDPOINT[0-9]+_API_KEY"
+fi
+if [ -n "$SEARCH_ENV_LINES" ]; then
+    MANAGED_ALT="$MANAGED_ALT|TINYCMDR_SEARCH[0-9]+_API_KEY"
 fi
 if [ -n "$MODEL_KEY" ]; then
     MANAGED_ALT="$MANAGED_ALT|TINYCMDR_LLM_API_KEY"
@@ -1429,6 +1512,9 @@ fi
     fi
     if [ -n "$FB_ENV_LINES" ]; then
         printf '%s' "$FB_ENV_LINES"
+    fi
+    if [ -n "$SEARCH_ENV_LINES" ]; then
+        printf '%s' "$SEARCH_ENV_LINES"
     fi
     # Only when this run set it (the switch, or the answer): an empty value is "leave
     # this host's own", and KEEP_ENV below already carries that line over. It goes

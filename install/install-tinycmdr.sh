@@ -117,6 +117,8 @@ MODEL_KEY=""              # the model endpoint's key, when the reader gives one
 CLOUD_FALLBACK=false      # may automatic failover use an off-LAN endpoint?
 FALLBACK_SPECS=""         # extra endpoints, one "url|model|alias|env-name" per line
 FB_ENV_LINES=""           # their keys, as KEY=VALUE lines for .env
+SEARCH_SPECS=""           # extra web-search providers, one "url|kind|label|env-name" per line
+SEARCH_ENV_LINES=""       # their keys, as KEY=VALUE lines for .env
 SEARCH_EGRESS=""          # --search-egress true|false ("" = leave the host's own); an
                           # off-LAN search provider is refused, not called, while false
 # What the questions propose when the package says nothing: the usual local
@@ -677,6 +679,13 @@ ask_model_id() {   # ask_model_id "<ids>" [default] -> the id, or its NUMBER in 
     printf '%s' "$a"
 }
 
+is_lan_url() {   # a heuristic for THIS installer's advice only; the harness decides for real
+    case "$1" in
+        *://127.0.0.1*|*://localhost*|*://10.*|*://192.168.*|*://172.1[6-9].*|*://172.2[0-9].*|*://172.3[01].*|*://169.254.*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 ask_yes() {   # ask_yes <question> [y|n] -> 0 = yes
     local a="" dflt="${2:-y}"
     case "$dflt" in y|Y) printf '    %s [Y/n] ' "$1" >&2 ;; *) printf '    %s [y/N] ' "$1" >&2 ;; esac
@@ -989,17 +998,60 @@ if [ "$ASK_Q" = 1 ]; then
     done
 fi
 
-# ---- web search: may it leave this machine? ----
-# Off unless asked. Both built-in providers are third parties, and the keyless anonymous
-# tier used to send the model's query with nobody asked and nothing on screen saying so
-# (2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
-# "no" here still leaves a working search if one is configured.
+# ---- web search: which providers, and may they leave this machine? ----
+# The old step asked ONE yes/no about a fixed pair of cloud providers; a provider of
+# the operator's own - a searxng box on this network (no key), or a keyed API - can be
+# entered here. `tinycmdr search add` is the same door later. The consent line stays the
+# point: a provider off this machine sees the model's query (2026-09-27), and
+# --search-egress still skips the question entirely.
 if [ "$ASK_Q" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
-    if ask_yes "May the bot's web search send queries off this machine?" y; then
-        SEARCH_EGRESS="true"
-    else
-        SEARCH_EGRESS="false"
-    fi
+    say "web search"
+    info "web search   : a provider off this machine sees the model's query; a searxng box"
+    info "               on this network needs no key and never leaves it."
+    info "  1) keep this host's setup"
+    info "  2) allow providers off this machine (anysearch sees the query)"
+    info "  3) keep search on this machine only (off-LAN providers are refused)"
+    info "  4) add your own provider now"
+    case "$(ask_text 'web search' 1)" in
+        2) SEARCH_EGRESS="true" ;;
+        3) SEARCH_EGRESS="false" ;;
+        4)
+            info "provider: 1) searxng (your own box; no key)  2) anysearch (no key needed)"
+            case "$(ask_text 'choice' 1)" in
+                2) _sk="anysearch"; _skey_q="API key (Enter = none)" ;;
+                *) _sk="searxng";   _skey_q="" ;;
+            esac
+            case "$_sk" in
+                anysearch) _sdurl="https://api.anysearch.com/v1/search" ;;
+                *)         _sdurl="" ;;
+            esac
+            if [ -n "$_sdurl" ]; then
+                _su="$(ask_text "its url [$_sdurl]" "$_sdurl")"
+            else
+                _su="$(ask_text 'its url (the base; /search is added)')"
+            fi
+            _sl="$(ask_text 'label' "$_sk")"
+            _skey=""
+            if [ -n "$_skey_q" ]; then
+                _skey="$(ask_secret "$_skey_q")"
+            fi
+            if [ -n "$_su" ]; then
+                _sname=""
+                if [ -n "$_skey" ]; then
+                    _sname="TINYCMDR_SEARCH1_API_KEY"
+                    SEARCH_ENV_LINES="${SEARCH_ENV_LINES}${_sname}=${_skey}
+"
+                fi
+                SEARCH_SPECS="${SEARCH_SPECS}${_su}|${_sk}|${_sl}|${_sname}
+"
+                info "added (tried first): $_sl $_su"
+                if ! is_lan_url "$_su" && [ -z "$SEARCH_EGRESS" ]; then
+                    SEARCH_EGRESS="true"
+                    info "$_su is off this machine, so off-LAN providers are now allowed"
+                fi
+            fi
+            ;;
+    esac
 fi
 
 if [ "$ASK_Q" = 1 ]; then
@@ -1025,10 +1077,13 @@ if [ "$ASK_Q" = 1 ]; then
     if [ -n "$TG_TOKEN" ]; then
         info "telegram     : on, DMs from $TG_IDS_CLEAN"
     fi
+    if [ -n "$SEARCH_SPECS" ]; then
+        info "web search   : you added $(printf '%s\n' "$SEARCH_SPECS" | grep -c .) provider(s) (tried first)"
+    fi
     if [ "${SEARCH_EGRESS:-false}" = "true" ]; then
         info "web search   : on, and may leave this machine"
     else
-        info "web search   : LAN only (an off-LAN provider is refused until allowed)"
+        info "web search   : LAN only (own providers work; off-LAN ones are refused until allowed)"
     fi
     if ! ask_yes "Install now?"; then
         info "nothing was changed"
@@ -1330,14 +1385,14 @@ TINYCMDR_CLOUD_FALLBACK="$CLOUD_FALLBACK" "$PY" - "$INSTALL_DIR" "$SRC/config.ex
         "$BOT_NAME" "$MODEL_BASE_URL" "$MODEL" "$FORCE" \
         "$MM_HOST" "$MM_PORT" "$ALLOWED_USER" "$TG_IDS_CLEAN" \
         "$MODEL_BASE_GIVEN" "$MODEL_GIVEN" "$MODEL_KEY" \
-        "$FALLBACK_SPECS" "$FB_ENV_LINES" \
+        "$FALLBACK_SPECS" "$FB_ENV_LINES" "$SEARCH_SPECS" \
         "$WEB_ON" "$WEB_HOST" "$WEB_PORT" "$WEB_HOST_GIVEN" <<'PY'
 import json, os, sys
 (inst, example, bot, base, model,
  force, mm_host, mm_port, allowed, tg_ids,
  base_given, model_given, model_key,
- fallback_specs, fb_env,
- web_on, web_host, web_port, web_host_given) = sys.argv[1:21]
+ fallback_specs, fb_env, search_specs,
+ web_on, web_host, web_port, web_host_given) = sys.argv[1:22]
 cfg_path = os.path.join(inst, "config.json")
 # The HOST's own config is the base whenever there is one, --force included: an
 # update carries the host's settings forward and changes only what this run was
@@ -1426,6 +1481,30 @@ elif fresh:
     # variable nobody has): a fresh install must not inherit an endpoint that does not
     # exist. An update keeps whatever the host already had.
     llm["fallbacks"] = []
+# Extra web-search providers, only when this run was told about them. THIS run's entries
+# go FIRST - a provider the operator adds on purpose must not sit behind the shipped ones
+# - and the ones the config already had are carried over, minus a duplicate url.
+_needs = [s for s in (search_specs or "").splitlines() if s.strip()]
+if _needs:
+    _rows = []
+    for _spec in _needs:
+        _row = [x.strip() for x in (_spec.split("|") + ["", "", "", ""])[:4]]
+        _url, _kind, _label, _ename = _row
+        if not _url:
+            continue
+        _kind = _kind or "searxng"
+        _e = {"kind": _kind, "url": _url, "label": _label or _kind}
+        if _ename:
+            _e["api_key_env"] = _ename
+        _rows.append(_e)
+    _search = cfg.setdefault("search", {})
+    _have = _search.get("providers")
+    if isinstance(_have, list):
+        for _p in _have:
+            if isinstance(_p, dict) and _p.get("url") \
+                    and not any(r["url"] == _p.get("url") for r in _rows):
+                _rows.append(_p)
+    _search["providers"] = _rows
 with open(cfg_path, "w", encoding="utf-8", newline="\n") as fh:
     json.dump(cfg, fh, indent=2)
     fh.write("\n")
@@ -1441,7 +1520,8 @@ chmod 600 "$INSTALL_DIR/config.json"
 
 # --------------------------------------------------------------------- .env ---
 "$PY" - "$INSTALL_DIR/.env" "$TOKEN" "${SECRETS_FILE:-$SRC/install/fleet-secrets.env}" "$TG_TOKEN" \
-        "$FB_ENV_LINES" "${SEARCH_EGRESS:-}" "$MODEL_KEY" "${WEB_TOKEN_ARG:-}" <<'PY'
+        "$FB_ENV_LINES" "${SEARCH_EGRESS:-}" "$MODEL_KEY" "${WEB_TOKEN_ARG:-}" \
+        "$SEARCH_ENV_LINES" <<'PY'
 import os, pathlib, re, sys
 import secrets as _secrets
 envp, tok, secrets, tgtok = (pathlib.Path(sys.argv[1]), sys.argv[2],
@@ -1450,6 +1530,7 @@ fb_env = sys.argv[5] if len(sys.argv) > 5 else ""
 egress = sys.argv[6] if len(sys.argv) > 6 else ""
 model_key = sys.argv[7] if len(sys.argv) > 7 else ""
 web_arg = sys.argv[8] if len(sys.argv) > 8 else ""
+search_env = sys.argv[9] if len(sys.argv) > 9 else ""
 # The extra-endpoint keys are managed only when THIS run wrote them: a scripted update
 # must carry the host's own lines over, or it drops keys its config.json points at.
 # TINYCMDR_LLM_API_KEY (the primary's key) is managed the same way - a redo with no key
@@ -1463,7 +1544,7 @@ web_tok = web_arg.strip()   # a token set here (--web-token or the answer) repla
 
 def placeholder(val):
     """True for a redacted stand-in rather than a real key. A package built
-    without the fleet keys carries "<redacted: TAVILY_API_KEY>"; writing that
+    without the fleet keys carries "<redacted: ANYSEARCH_API_KEY>"; writing that
     into .env looks like success and then 401s at every search."""
     v = val.strip()
     return (v.startswith("<") and v.endswith(">")) or "redacted" in v.lower()
@@ -1480,8 +1561,8 @@ if envp.exists():
             continue          # kept below: a re-run never rotates it silently
         if key in _managed or key in have:
             continue          # installer-managed: written below, never carried over
-        if fb_env.strip() and re.match(r"^TINYCMDR_ENDPOINT[0-9]+_API_KEY$", key):
-            continue          # this run's own extra-endpoint key: written below
+        if fb_env.strip() and re.match(r"^TINYCMDR_(ENDPOINT|SEARCH)[0-9]+_API_KEY$", key):
+            continue          # this run's own managed keys: written below
         if placeholder(line.split("=", 1)[1]):
             refused.append(key)
             continue
@@ -1502,7 +1583,7 @@ if os.path.exists(secrets):
             continue
         if key == "TINYCMDR_WEB_TOKEN":
             continue          # never from a shared secrets file
-        if key not in ("TAVILY_API_KEY", "ANYSEARCH_API_KEY"):
+        if key != "ANYSEARCH_API_KEY":
             # A model key is per bot: never deploy one from a shared secrets file.
             # Hosts that took theirs from here all shared one key, and the provider's
             # dashboard showed every per-bot key as unused afterwards.
@@ -1529,6 +1610,7 @@ out = ["# tinycmdr secrets - per-host tokens + fleet-wide search keys.",
       + [f"TINYCMDR_WEB_TOKEN={web_tok}"] \
       + ([f"TINYCMDR_LLM_API_KEY={model_key}"] if model_key else []) \
       + [l for l in (fb_env or "").splitlines() if "=" in l] \
+      + [l for l in (search_env or "").splitlines() if "=" in l] \
       + ([f"TINYCMDR_SEARCH_EGRESS={egress}"] if egress else []) \
       + lines + [""]
 envp.write_text("\n".join(out), encoding="utf-8")

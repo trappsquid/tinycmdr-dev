@@ -17,40 +17,55 @@ rem
 rem  Why a .cmd: stock Windows refuses a double-clicked .ps1 (the script
 rem  execution policy), and that window closes before the error can be
 rem  read - the same reason INSTALL-WINDOWS.cmd exists.
+rem
+rem  Why it re-runs itself from %TEMP%: this door LIVES in the folder the
+rem  removal deletes, and cmd.exe reads a batch file while it runs - a
+rem  deletion under it kills the tail, so the exit code, the error line and
+rem  the closing pause never appear (measured 2026-10-09: a double-clicked
+rem  door closed its window instantly with no message at all). The %TEMP%
+rem  copy cannot be deleted by the removal, so its tail always runs.
 rem =====================================================================
 setlocal
-set "HERE=%~dp0"
+rem Step out of the folder first: a live shell whose current directory is
+rem the install folder blocks the delete on Windows, and the double-clicked
+rem shell's cwd is exactly that.
+cd /d "%TEMP%" 2>nul || goto :nocd
+if /i "%~1"=="--removing" goto :removing
+set "SELF=%TEMP%\tinycmdr-uninstall-%RANDOM%%RANDOM%.cmd"
+copy /y "%~f0" "%SELF%" >nul 2>&1
+if not exist "%SELF%" goto :inplace
+call "%SELF%" --removing "%~dp0" %*
+set "RC=%ERRORLEVEL%"
+del "%SELF%" >nul 2>&1
+exit /b %RC%
+
+:inplace
+rem Could not copy to %TEMP% (a full or read-only temp). Run in place; the
+rem removal may take this file with it and this tail may not survive, which
+rem is the shape this door exists to avoid on a normal machine.
+call "%~f0" --removing "%~dp0" %*
+set "RC=%ERRORLEVEL%"
+exit /b %RC%
+
+:nocd
+echo.
+echo ERROR: could not step out of the install folder (is %%TEMP%% writable?).
+echo Close this window and remove through the wrapper instead:
+echo   "%USERPROFILE%\tinycmdr\install\install-tinycmdr.cmd" -Uninstall -Force
+echo.
+echo Press any key to close this window.
+pause >nul
+exit /b 2
+
+:removing
+set "RC=2"
+set "HERE=%~2"
+if "%HERE%"=="" goto :nofolder
 if "%HERE:~-1%"=="\" set "HERE=%HERE:~0,-1%"
 
-if not exist "%HERE%\tinycmdr.py" (
-    echo.
-    echo ERROR: there is no tinycmdr.py in "%HERE%".
-    echo This door removes the tinycmdr installed in its own folder; nothing
-    echo was changed.
-    echo.
-    pause
-    exit /b 1
-)
-if not exist "%HERE%\config.json" if not exist "%HERE%\venv" (
-    echo.
-    echo ERROR: "%HERE%" does not look like a tinycmdr install.
-    echo An extracted package has no config.json and no venv\ - if this is the
-    echo package, run this door from the install folder instead (a real install is
-    echo %USERPROFILE%\tinycmdr unless -InstallDir put it elsewhere). Nothing was
-    echo changed.
-    echo.
-    pause
-    exit /b 1
-)
-if not exist "%HERE%\install\install-tinycmdr.cmd" (
-    echo.
-    echo ERROR: "%HERE%\install\install-tinycmdr.cmd" is missing, so the removal
-    echo cannot run. If you are sure nothing runs from this folder, delete it
-    echo by hand. Nothing was changed.
-    echo.
-    pause
-    exit /b 1
-)
+if not exist "%HERE%\tinycmdr.py" goto :noapp
+if not exist "%HERE%\config.json" if not exist "%HERE%\venv" goto :notinstall
+if not exist "%HERE%\install\install-tinycmdr.cmd" goto :nowrapper
 
 echo This removes the tinycmdr installed in:
 echo   %HERE%
@@ -60,11 +75,13 @@ echo and the folder goes with them (config, notes, sessions and .env too).
 echo.
 set "ANS="
 set /p "ANS=Remove it? (y/N) "
-if /i not "%ANS%"=="y" if /i not "%ANS%"=="yes" (
-    echo Nothing was removed.
-    pause
-    exit /b 0
-)
+if /i "%ANS%"=="y" goto :yes
+if /i "%ANS%"=="yes" goto :yes
+echo Nothing was removed.
+set "RC=0"
+goto :end
+
+:yes
 echo.
 rem -Force: the confirmation was just asked here, and the wrapper cannot ask
 rem (it always passes -NoPause, so the script's own interactive branch is
@@ -77,5 +94,38 @@ if not "%RC%"=="0" (
     echo The removal exited with code %RC% - the lines above say what is left.
     echo Close anything using the folder, then run this door again.
 )
-pause
+goto :end
+
+:noapp
+echo.
+echo ERROR: there is no tinycmdr.py in "%HERE%".
+echo This door removes the tinycmdr installed in its own folder; nothing
+echo was changed.
+goto :end
+
+:notinstall
+echo.
+echo ERROR: "%HERE%" does not look like a tinycmdr install.
+echo An extracted package has no config.json and no venv\ - if this is the
+echo package, run this door from the install folder instead (a real install is
+echo %USERPROFILE%\tinycmdr unless -InstallDir put it elsewhere). Nothing was
+echo changed.
+goto :end
+
+:nowrapper
+echo.
+echo ERROR: "%HERE%\install\install-tinycmdr.cmd" is missing, so the removal
+echo cannot run. If you are sure nothing runs from this folder, delete it
+echo by hand. Nothing was changed.
+goto :end
+
+:nofolder
+echo.
+echo ERROR: no install folder was given.
+goto :end
+
+:end
+echo.
+echo Press any key to close this window.
+pause >nul
 exit /b %RC%

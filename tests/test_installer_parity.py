@@ -94,6 +94,9 @@ PLATFORM_ONLY = {
     "--label": ((MAC,), "launchd label - macOS only"),
     "--use-fleet-model": ((MAC,), "reuse the fleet's model config - macOS only"),
     "AddEndpoint": ((PS1,), "repeatable extra model endpoints - PowerShell only"),
+    "AddSearch": ((PS1,), "repeatable extra web-search providers - PowerShell only; the "
+                          "POSIX installers take theirs at the search prompt, and "
+                          "`tinycmdr search add` is the door on every platform"),
     "AsService": ((PS1,), "boot-start scheduled task - Windows only"),
     "ForcePython": ((PS1,), "accept an interpreter NEWER than 3.12 and hope - the "
                             "Windows twin of macOS's --force-python"),

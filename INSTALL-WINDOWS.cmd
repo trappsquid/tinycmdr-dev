@@ -6,6 +6,11 @@ rem  It sits in the package root so you do not have to go looking. It runs
 rem  install\install-tinycmdr.cmd, which keeps its window open and writes
 rem  everything to %TEMP%\tinycmdr-install.log.
 rem
+rem  This door holds ITS OWN window open after the wrapper returns, because
+rem  a double-clicked window is the one that vanishes before the summary can
+rem  be read. A caller that already owns a window (the network one-liner
+rem  sets FB_NOPAUSE and runs in your own shell) gets no second barrier.
+rem
 rem  No administrator rights are needed: the agent is installed into your own
 rem  profile, its dependencies are fetched into a virtual environment inside
 rem  that folder, and it starts at logon. If Python is missing, the installer
@@ -30,5 +35,16 @@ if not exist "%HERE%install\install-tinycmdr.cmd" (
     pause
     exit /b 1
 )
+set "OWNS_PAUSE="
+if not defined FB_NOPAUSE (
+    set "FB_NOPAUSE=1"
+    set "OWNS_PAUSE=1"
+)
 call "%HERE%install\install-tinycmdr.cmd" %*
-exit /b %ERRORLEVEL%
+set "RC=%ERRORLEVEL%"
+if defined OWNS_PAUSE (
+    echo.
+    echo Press any key to close this window.
+    pause >nul
+)
+exit /b %RC%

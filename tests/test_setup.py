@@ -51,20 +51,21 @@ def stage(dirpath, egress):
     return dirpath
 
 
-def drive(dirpath, answer, page=("", "", "", "")):
+def drive(dirpath, answer, page=("", "", "", ""), extra=()):
     """Run the wizard with every answer empty but the page's and the last one.
 
     Prompt order: local/cloud, url, model, Mattermost?, Telegram?, page-serve,
     page-LAN (only when serving), page-port (only when serving), page-token (only
-    when serving), egress. `page` carries the four page answers; `answer` is the
-    egress one.
+    when serving), the web-search menu. `page` carries the four page answers; `answer`
+    is the menu's, and `extra` carries what choosing "4" (add your own provider) asks
+    after it (kind, url, label, and a key where its kind asks for one).
     """
     spec = importlib.util.spec_from_file_location("setup_" + dirpath.name,
                                                   dirpath / "tinycmdr.py")
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
-    mod.__dict__["_ANSWERS"] = ["", "", "", "", ""] + list(page) + [answer]
+    mod.__dict__["_ANSWERS"] = ["", "", "", "", ""] + list(page) + [answer] + list(extra)
     old_in = sys.stdin
     sys.stdin = FakeTTY("\n".join(mod.__dict__["_ANSWERS"]) + "\n")
     buf = io.StringIO()
@@ -80,26 +81,50 @@ def drive(dirpath, answer, page=("", "", "", "")):
 def main():
     work = Path(tempfile.mkdtemp(prefix="fbsetup-"))
     try:
-        # a fresh install says yes
+        # a fresh install allows the off-LAN providers (choice 2)
         d = stage(work / "yes", False)
-        rc, out, written, mod = drive(d, "y")
+        rc, out, written, mod = drive(d, "2")
         check(rc == 0, f"the wizard completes ({rc})", out[-300:])
-        check("off this LAN" in out,
-              "the search question is asked, and names what it means", out[-500:])
+        check("off this machine" in out and "searxng" in out,
+              "the web-search step names the provider shapes and the consent", out[-500:])
         check(written.get("search", {}).get("allow_cloud_egress") is True,
-              "answering yes writes search.allow_cloud_egress = true",
+              "choosing 2 writes search.allow_cloud_egress = true",
               json.dumps(written.get("search")))
         check(mod.CONFIG["search"]["allow_cloud_egress"] is True,
               "and the running process picks it up without a restart")
         check("Web search" in out and "off-LAN providers allowed" in out,
               "the summary reports it", out[-400:])
 
-        # and no turns it back off
+        # and choice 3 keeps search on this machine only
         d = stage(work / "no", True)
-        rc, out, written, mod = drive(d, "n")
+        rc, out, written, mod = drive(d, "3")
         check(rc == 0 and written["search"]["allow_cloud_egress"] is False,
-              "answering no writes false", json.dumps(written.get("search")))
+              "choosing 3 writes false", json.dumps(written.get("search")))
         check("this LAN only" in out, "and the summary says so", out[-300:])
+
+        # choice 4 asks for the provider itself - the input path for one of your OWN
+        # (a searxng box needs no key) - and it is tried first
+        d = stage(work / "add", True)
+        rc, out, written, mod = drive(d, "4",
+                                      extra=("1", "http://127.0.0.1:8890", "mybox"))
+        _prov = (written.get("search") or {}).get("providers") or []
+        check(rc == 0 and _prov and _prov[0] == {"kind": "searxng",
+                                                 "url": "http://127.0.0.1:8890",
+                                                 "label": "mybox"},
+              "choosing 4 asks for the provider and writes it first",
+              json.dumps(_prov))
+
+        # ...and a keyed one lands with its key in .env and only its NAME in config.json
+        d = stage(work / "key", True)
+        rc, out, written, mod = drive(
+            d, "4", extra=("2", "https://api.anysearch.com/v1/search", "", "sk-live-42"))
+        _prov = (written.get("search") or {}).get("providers") or []
+        _env = (d / ".env").read_text(encoding="utf-8") if (d / ".env").exists() else ""
+        check(rc == 0 and _prov and _prov[0].get("api_key_env") == "TINYCMDR_SEARCH1_API_KEY"
+              and "sk-live-42" not in json.dumps(_prov)
+              and "TINYCMDR_SEARCH1_API_KEY=sk-live-42" in _env,
+              "a typed key goes to .env; config.json only names the variable",
+              (json.dumps(_prov), _env[-120:]))
 
         # Enter keeps whatever is already there, both ways
         for current in (True, False):

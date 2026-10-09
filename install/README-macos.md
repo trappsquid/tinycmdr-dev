@@ -196,8 +196,8 @@ Local Network.
   `--search-egress true` answers without a prompt); the answer lands in `.env` as
   `TINYCMDR_SEARCH_EGRESS`. While it is off, an off-LAN provider is refused with a `BLOCKED`
   line naming the setting rather than being called - a provider on your own LAN never needs it.
-- It does not install search API keys. Put `TAVILY_API_KEY=...` / `ANYSEARCH_API_KEY=...` in a
-  file passed as `--secrets-file`, or add them to `~/.tinycmdr/.env` later. With no key at all
+- It does not install search API keys. Put `ANYSEARCH_API_KEY=...` in a
+  file passed as `--secrets-file`, or add it to `~/.tinycmdr/.env` later. With no key at all
   anysearch still answers on its anonymous tier - off this machine, rate-limited, which is why
   the flag above exists.
 - Provider order and endpoints are `search.providers` in `config.json`; a `searxng` entry keeps

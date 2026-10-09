@@ -144,19 +144,13 @@
     "a2a": false
   },
   "search": {
-    "_comment": "Web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network. `allow_cloud_egress` is ON by default - a box with providers configured wants to search, and a silent refusal reads as a broken tool; set it false to REFUSE every off-LAN provider, which also refuses fetch_url for a URL off this network. A searxng provider never needs the flag. The installers ask (--search-egress), setup asks, and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
+    "_comment": "Web search for the web_search tool. `providers` is tried in order; each entry names its own endpoint (url) and the .env variable that holds its key (api_key_env). ONE provider ships - anysearch, which answers without a key. A `searxng` entry pointing at a box on your LAN is the only shape whose traffic stays on your network, and it is added with `tinycmdr search add <url>` (nothing that needs a key is shipped: a host should never hold an entry it was not asked for). `allow_cloud_egress` is ON by default - a box with providers configured wants to search, and a silent refusal reads as a broken tool; set it false to REFUSE every off-LAN provider, which also refuses fetch_url for a URL off this network. A searxng provider never needs the flag. The installers ask (--search-egress), setup asks, and .env can carry TINYCMDR_SEARCH_EGRESS / TINYCMDR_SEARCH_PROVIDERS instead.",
     "providers": [
       {
         "kind": "anysearch",
         "url": "https://api.anysearch.com/v1/search",
         "api_key_env": "ANYSEARCH_API_KEY",
         "label": "anysearch"
-      },
-      {
-        "kind": "tavily",
-        "url": "https://api.tavily.com/search",
-        "api_key_env": "TAVILY_API_KEY",
-        "label": "tavily"
       }
     ],
     "allow_cloud_egress": true,

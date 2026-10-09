@@ -376,13 +376,13 @@ DEFAULT_CONFIG = {
         # PROVIDERS, in order: the first that answers wins. `kind` picks the adapter,
         # `url` its endpoint, `api_key_env` the .env variable holding that provider's
         # key (a key belongs in .env, never here - this file is read into a prompt).
-        # A `searxng` entry on this LAN is the one provider whose traffic stays inside
-        # the wire; the two below are both third parties.
+        # ONE default: anysearch, which answers without a key. A `searxng` entry on this
+        # LAN is the one provider whose traffic stays inside the wire, and it is ADDED
+        # (`tinycmdr search add`), never shipped: nothing on this list may need
+        # something the operator was never asked for.
         "providers": [
             {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",
              "api_key_env": "ANYSEARCH_API_KEY", "label": "anysearch"},
-            {"kind": "tavily", "url": "https://api.tavily.com/search",
-             "api_key_env": "TAVILY_API_KEY", "label": "tavily"},
         ],
         # ON by default. Written the other way round first, and that was wrong here: a box
         # whose providers are configured is a box that wants to search, and defaulting to
@@ -1237,8 +1237,7 @@ def load_config():
     # section is kept as the shipped default above, and `.get` off a string killed the
     # import before the guard could say anything (A-2026-10-08-135).
     _search_file = user.get("search") if isinstance(user.get("search"), dict) else {}
-    for old_key, env_name in (("anysearch_api_key", "ANYSEARCH_API_KEY"),
-                              ("tavily_api_key", "TAVILY_API_KEY")):
+    for old_key, env_name in (("anysearch_api_key", "ANYSEARCH_API_KEY"),):
         if str(_search_file.get(old_key) or "").strip():
             log.warning("search.%s in config.json is IGNORED - the key belongs in %s as "
                         "%s, which the provider named api_key_env reads. Delete the "
@@ -10062,11 +10061,9 @@ def tool_write_file(args, ctx):
 # list stays short on purpose.
 _SEARCH_DEFAULT_URL = {
     "anysearch": "https://api.anysearch.com/v1/search",
-    "tavily": "https://api.tavily.com/search",
     "searxng": "",          # a searxng entry carries its own url - it is the LAN one
 }
-_SEARCH_DEFAULT_KEY_ENV = {"anysearch": "ANYSEARCH_API_KEY",
-                           "tavily": "TAVILY_API_KEY", "searxng": ""}
+_SEARCH_DEFAULT_KEY_ENV = {"anysearch": "ANYSEARCH_API_KEY", "searxng": ""}
 
 
 def _search_providers():
@@ -10127,29 +10124,16 @@ def _provider_anysearch(entry, query, max_results):
 def _provider_checked_json(resp, name):
     """The provider's JSON body, or a RuntimeError naming the HTTP failure.
 
-    tavily and searxng read `.json().get("results")` with no status check: a JSON error
-    body (a bad key, a quota, a 5xx with a detail) has no "results", so the provider
-    returned [] - the chain read that as "no results" and never tried the next provider,
-    and the operator was told the search found nothing (A-2026-10-08-146).
+    searxng reads `.json().get("results")` with no status check: a JSON error body (a
+    quota, a 5xx with a detail) has no "results", so the provider returned [] - the chain
+    read that as "no results" and never tried the next provider, and the operator was
+    told the search found nothing (A-2026-10-08-146).
     """
     if resp.status_code >= 400:
         detail = re.sub(r"\s+", " ", str(getattr(resp, "text", "") or ""))[:140]
         raise RuntimeError("%s HTTP %s%s" % (name, resp.status_code,
                                              (": " + detail) if detail else ""))
     return resp.json()
-
-
-def _provider_tavily(entry, query, max_results):
-    key = _search_key(entry)
-    if not key:
-        raise RuntimeError("no %s set" % (entry.get("api_key_env") or "api key"))
-    resp = requests.post(entry["url"],
-                         json={"api_key": key, "query": query,
-                               "max_results": max_results},
-                         timeout=30)
-    results = _provider_checked_json(resp, "tavily").get("results", [])
-    return [{"title": r.get("title", ""), "url": r.get("url", ""),
-             "snippet": r.get("content", "")[:400]} for r in results]
 
 
 def _provider_searxng(entry, query, max_results):
@@ -10166,7 +10150,6 @@ def _provider_searxng(entry, query, max_results):
 
 
 _SEARCH_PROVIDERS_BY_KIND = {"anysearch": _provider_anysearch,
-                             "tavily": _provider_tavily,
                              "searxng": _provider_searxng}
 
 
@@ -10185,6 +10168,136 @@ def _search_chain_in_use():
     for entry in chain:
         (usable if _is_local_url(entry["url"]) else withheld).append(entry)
     return usable, withheld, problems
+
+
+def _search_entry_ready(entry, egress_ok):
+    """Would this entry answer here? The one predicate `search`/`doctor`/the tool line
+    grade the chain on: an off-LAN entry needs the consent flag. Every shipped and
+    added kind answers without a key (anysearch's anonymous tier; a searxng box)."""
+    if not egress_ok and not _is_local_url(entry["url"]):
+        return False
+    return True
+
+
+def _search_entry_state(entry, egress_ok):
+    """One phrase for `search`/`doctor`: would this entry answer, and if not, why."""
+    if not egress_ok and not _is_local_url(entry["url"]):
+        return "off-LAN, refused"
+    if entry["kind"] == "anysearch" and not _search_key(entry):
+        return "ready (anonymous tier)"
+    env = entry.get("api_key_env") or ""
+    return "ready" + (" (key %s)" % env if env and _search_key(entry) else "")
+
+
+def _search_kind_guess(url):
+    """The kind a bare url most likely is, for `search add <url>` without --kind: a host
+    that says anysearch, else a searxng-shaped instance (the self-hosted one, which
+    carries no key)."""
+    host = str(url or "").lower()
+    if "anysearch" in host:
+        return "anysearch"
+    return "searxng"
+
+
+def _search_providers_from_raw(raw):
+    """The provider list a WRITE should carry: the file's own when it names one, else the
+    shipped table - the file's list REPLACES the default, so an add must carry the rest
+    over. Entries whose kind is unknown are carried verbatim: a typo stays visible (and
+    is reported by _search_providers) instead of being silently dropped by an add."""
+    raw_search = raw.get("search") if isinstance(raw, dict) else None
+    listed = raw_search.get("providers") if isinstance(raw_search, dict) else None
+    src = listed if isinstance(listed, list) else DEFAULT_CONFIG["search"]["providers"]
+    out = []
+    for entry in src:
+        if isinstance(entry, str):
+            entry = {"kind": entry}
+        if not isinstance(entry, dict):
+            continue
+        kind = str(entry.get("kind") or "").strip().lower()
+        if kind not in _SEARCH_DEFAULT_URL:
+            out.append(entry)
+            continue
+        row = {"kind": kind,
+               "url": str(entry.get("url") or "").strip() or _SEARCH_DEFAULT_URL[kind],
+               "label": str(entry.get("label") or kind).strip()}
+        env = str(entry.get("api_key_env") or "").strip()
+        if env:
+            row["api_key_env"] = env
+        out.append(row)
+    return out
+
+
+def _search_entry_build(kind, url, label, key_env, key_value):
+    """(entry, error) for one new provider. The KEY stays in .env and the entry only
+    NAMES the variable (api_key_env) - the rule every other secret follows, because
+    config.json is a file the agent reads into a prompt. A typed key is written under a
+    generated name (TINYCMDR_SEARCH<n>_API_KEY); `key_env` is the door a script uses to
+    name the variable itself. Only the kinds with an adapter are accepted, and the error
+    names them, so a typo is refused where it can be explained."""
+    kind = str(kind or "").strip().lower()
+    if kind not in _SEARCH_DEFAULT_URL:
+        return None, ("kind must be one of: %s" % ", ".join(sorted(_SEARCH_DEFAULT_URL)))
+    url = str(url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        return None, "a provider url starts with http:// or https://"
+    url = url.rstrip("/")
+    label = str(label or "").strip() or kind
+    entry = {"kind": kind, "url": url, "label": label}
+    env = str(key_env or "").strip()
+    if env and not re.fullmatch(r"[A-Z][A-Z0-9_]*", env):
+        return None, "a .env key name, please: capitals, digits, underscore"
+    if key_value:
+        # Generated, so nobody has to invent one, and unique, so an existing key is never
+        # silently reused by a second provider.
+        n = 1
+        while ("TINYCMDR_SEARCH%d_API_KEY" % n) in _env_file_keys():
+            n += 1
+        env = "TINYCMDR_SEARCH%d_API_KEY" % n
+        if not _env_set_safe(env, key_value):
+            return None, "the key could not be saved (see above)"
+    if env:
+        entry["api_key_env"] = env
+    return entry, ""
+
+
+def _search_commit(raw, entry):
+    """Put `entry` FIRST in the file's search.providers, write through, say what it
+    means. First, because the first entry that answers wins: a provider the operator
+    adds on purpose must not sit behind the shipped ones."""
+    search = raw.setdefault("search", {})
+    if not isinstance(search, dict):
+        print("search in config.json is not an object - fix that first", file=sys.stderr)
+        return 1
+    have = _search_providers_from_raw(raw)
+    want = entry["url"].rstrip("/").lower()
+    for row in have:
+        if str(row.get("url") or "").rstrip("/").lower() == want:
+            print("%s is already there (label %r) - `tinycmdr search` lists the chain"
+                  % (entry["url"], row.get("label") or ""), file=sys.stderr)
+            return 2
+    search["providers"] = [entry] + have
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    back, _e = _config_raw()
+    if not _e:
+        CONFIG.update(back)          # the running process reads what it just wrote
+    print("added (tried first): %s %s" % (entry["label"], entry["url"]))
+    if entry.get("api_key_env") and not _search_key(entry):
+        print("note: %s is not set in .env yet; put its value there with:\n"
+              "  tinycmdr token set %s" % (entry["api_key_env"], entry["api_key_env"]))
+    if not _is_local_url(entry["url"]) and not _search_egress_allowed():
+        print("note: %s is off this machine and off-LAN providers are refused "
+              "(search.allow_cloud_egress false). Allow them with:\n"
+              "  tinycmdr search allow true" % entry["url"])
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
 
 
 def tool_send_file(args, ctx):
@@ -10223,10 +10336,15 @@ def tool_web_search(args, ctx):
             why += ("; %d unusable entr%s in search.providers: %s"
                     % (len(problems), "y" if len(problems) == 1 else "ies",
                        "; ".join(problems)))
-        return ("BLOCKED: web search is off here - %s. A search would send this "
-                "conversation's words to a third party, and search.allow_cloud_egress "
-                "is false. The operator can allow it, or add a provider on this LAN "
-                "(a searxng entry), which never leaves the wire." % why)
+        doors = []
+        if not _search_egress_allowed():
+            doors.append("allow web searches through the configured providers "
+                         "(`tinycmdr search allow true` - a search then sends the "
+                         "model's query to them)")
+        doors.append("add your own provider (`tinycmdr search add <url>` - a searxng "
+                     "box on this network never leaves the wire and needs no key)")
+        return ("BLOCKED: web search is off here - %s. The operator can %s."
+                % (why, ", or ".join(doors)))
     errors = []
     empty = []
     for entry in usable:
@@ -35012,15 +35130,53 @@ def _run_setup_interactive(rest=None):
                   "one run."))
     print()
 
-    print(bold("5. Web search (optional)"))
+    print(bold("5. Web search"))
     search = raw.setdefault("search", {})
     cur_egress = bool(search.get("allow_cloud_egress"))
-    print(dim("   A provider off this LAN sees the words of the model's query. A provider"))
-    print(dim("   on this LAN (searxng) never leaves the wire and needs no consent."))
-    ans_eg = input("   Allow search providers off this LAN (anysearch/tavily)? [%s]: "
-                   % ("y" if cur_egress else "n")).strip().lower()
-    if ans_eg:
-        search["allow_cloud_egress"] = ans_eg in ("y", "yes", "true", "1")
+    _chain, _ = _search_providers()
+    print(dim("   The web_search tool sends the model's query to a provider. anysearch is"))
+    print(dim("   shipped and answers without a key (queries leave this machine); your own"))
+    print(dim("   searxng box on this network needs no key and never leaves it."))
+    print(dim("   configured now: %s"
+              % (", ".join(e["label"] for e in _chain) or "nothing")))
+    print("   1) keep this host's setup")
+    print("   2) allow providers off this machine (anysearch sees the query)")
+    print("   3) keep search on this machine only (off-LAN providers are refused)")
+    print("   4) add your own provider now")
+    ans = input("   web search [1]: ").strip()
+    if ans == "2":
+        search["allow_cloud_egress"] = True
+    elif ans == "3":
+        search["allow_cloud_egress"] = False
+    elif ans == "4":
+        print(dim("   which provider?  1) searxng (your own box; no key)   2) anysearch "
+                  "(no key needed)"))
+        pick = input("   choice [1]: ").strip() or "1"
+        kind = {"1": "searxng", "2": "anysearch"}.get(pick)
+        if kind is None:
+            print(red("   not 1 or 2 - keeping the current setup"))
+        else:
+            _durl = _SEARCH_DEFAULT_URL[kind]
+            _q = ("   its url [%s]: " % _durl if _durl
+                  else "   its url (the base; /search is added): ")
+            _url = (input(_q).strip() or _durl)
+            _label = input("   label [%s]: " % kind).strip() or kind
+            _key = ""
+            if kind == "anysearch":
+                _key = input("   API key (Enter = none): ").strip()
+            _entry, _err = _search_entry_build(kind, _url, _label, "", _key)
+            if _err:
+                print(red("   %s - keeping the current setup" % _err))
+            else:
+                search["providers"] = [_entry] + [
+                    e for e in _search_providers_from_raw(raw)
+                    if str(e.get("url") or "").rstrip("/").lower()
+                    != _entry["url"].lower()]
+                if not _is_local_url(_entry["url"]) and not cur_egress:
+                    search["allow_cloud_egress"] = True
+                    print(dim("   %s is off this machine, so off-LAN providers are now "
+                              "allowed" % _entry["url"]))
+                print(dim("   added (tried first): %s %s" % (_label, _url)))
     else:
         search["allow_cloud_egress"] = cur_egress
     print()
@@ -35050,9 +35206,10 @@ def _run_setup_interactive(rest=None):
         "Page         : %s" % ("http://%s:%s (token in .env)"
                                % (web.get("host") or "127.0.0.1", web_port_effective())
                                if web.get("enabled", True) else "(disabled)"),
-        "Web search   : %s" % ("off-LAN providers allowed"
-                               if search.get("allow_cloud_egress")
-                               else "this LAN only (searxng never needs consent)"),
+        "Web search   : %s (%s)"
+        % (", ".join(e["label"] for e in _search_providers()[0]) or "no provider",
+           "off-LAN providers allowed" if search.get("allow_cloud_egress")
+           else "this LAN only (searxng never needs consent)"),
         "---",
         "✓ Saved to config.json & .env",
         "Run `tinycmdr restart` to apply to background service.",
@@ -36685,7 +36842,7 @@ def user_is_allowed(sender, user_id):
 
 VERBS = ("status", "doctor", "health", "model", "reasoning", "config", "setup", "logs", "proc",
          "restart", "update", "clean", "token", "version", "run", "help", "failures",
-         "approvals", "web")
+         "approvals", "web", "search")
 
 def ensure_launcher_executable():
     """Give the folder's launcher its execute bit back after a pull or an adoption.
@@ -36887,6 +37044,14 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      may automatic failover send to an off-LAN endpoint? (off by
                      default: off-LAN endpoints are reached only when you switch)
   model remove <x>   drop a fallback entry (by model name, alias or url)
+  search             the web-search providers: each entry's state, and the doors
+  search add [<url>] add a provider, tried first - searxng (your own box) needs no key
+                     and anysearch works without one; --key-env names the .env variable
+                     a key would live in (no <url> asks, and can take the key itself)
+  search remove <x>  drop a provider (by label, url or kind)
+  search allow [true|false]
+                     may providers off this machine answer? (search.allow_cloud_egress)
+  search test [q]    run one query through the chain and say what each provider answered
   setup              interactive wizard: model, Mattermost, Telegram, the page, web search
   config get|set|unset <dotted.key> [value]
                      read or edit config.json (a read-back is printed; secrets refused)
@@ -37158,15 +37323,22 @@ def _verb_doctor():
                      "`repeat: once|gap:N`) for the ones you recognize")
 
     # What web search would actually DO, so a BLOCKED line in a run has somewhere to be
-    # read from: the chain, and whether off-LAN providers are allowed on this host.
-    usable, withheld, s_problems = _search_chain_in_use()
-    if withheld:
-        print("  search    : off-LAN providers REFUSED (%s); on this LAN: %s"
-              % (", ".join(e["label"] for e in withheld),
-                 ", ".join(e["label"] for e in usable) or "none configured"))
+    # read from: the chain, each entry's state (an off-LAN entry without the consent is
+    # refused, and that must not read as a working chain), and the doors.
+    _usable, _withheld, s_problems = _search_chain_in_use()
+    chain, _problems = _search_providers()
+    egress = _search_egress_allowed()
+    if chain:
+        print("  search    : %s" % ", ".join(
+            "%s (%s)" % (e["label"], _search_entry_state(e, egress))
+            for e in chain))
     else:
-        print("  search    : %s" % (", ".join(e["label"] for e in usable)
-                                    or "no provider configured"))
+        print("  search    : no provider configured")
+    if not any(_search_entry_ready(e, egress) for e in chain):
+        notes.append("web search has no provider that can answer here: add your own "
+                     "with `tinycmdr search add <url>` (a searxng box on this network "
+                     "needs no key), or allow off-LAN providers with "
+                     "`tinycmdr search allow true`")
     if s_problems:
         notes.append("search.providers: " + "; ".join(s_problems))
 
@@ -37185,7 +37357,7 @@ def _verb_doctor():
                                            len(env), "" if len(env) == 1 else "s"))
     # names only, never values
     wanted = ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
-              "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY")
+              "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY")
     for name in wanted:
         where = []
         if os.environ.get(name):
@@ -39055,6 +39227,237 @@ def _model_setup_needs_terminal():
     return 2
 
 
+SEARCH_HELP = """tinycmdr search — the web-search providers, and the doors to change them
+
+  tinycmdr search                     the chain, each entry's state, and the doors
+  tinycmdr search add <url> [--kind anysearch|searxng] [--label NAME]
+                                      [--key-env ENV_NAME]
+                                      add a provider; it is tried FIRST. searxng (your own
+                                      box) needs no key, and anysearch works without one -
+                                      --key-env names the .env variable an optional key
+                                      would live in; no <url> asks, and the prompt can
+                                      take the key itself (it goes to .env)
+  tinycmdr search remove <label|url|kind>
+  tinycmdr search allow [true|false]  may providers off this machine answer?
+                                      (the search.allow_cloud_egress switch)
+  tinycmdr search test [query]        run one query through the chain and say what each
+                                      provider answered
+"""
+
+
+def _verb_search(rest):
+    sub = (rest[0] or "").strip().lower() if rest else "list"
+    if sub in ("", "list", "ls"):
+        return _verb_search_list()
+    if sub == "add":
+        return _verb_search_add(rest[1:])
+    if sub in ("remove", "rm"):
+        return _verb_search_remove(rest[1:])
+    if sub == "allow":
+        return _verb_search_allow(rest[1:])
+    if sub == "test":
+        return _verb_search_test(rest[1:])
+    print("unknown subcommand %r\n%s" % (sub, SEARCH_HELP), file=sys.stderr)
+    return 2
+
+
+def _verb_search_list():
+    """The chain, each entry's state, and the doors - what `doctor` summarizes in one
+    line, spelled out."""
+    chain, problems = _search_providers()
+    egress = _search_egress_allowed()
+    print("web search - providers in order (the first that answers wins):")
+    if not chain:
+        print("  none configured")
+    for i, entry in enumerate(chain, 1):
+        print("  %d) %s  %s  [%s]"
+              % (i, entry["label"], entry["url"], _search_entry_state(entry, egress)))
+    for problem in problems:
+        print("  problem: %s" % problem, file=sys.stderr)
+    print()
+    print("off-LAN providers: %s (search.allow_cloud_egress %s)"
+          % ("allowed" if egress else "refused", "true" if egress else "false"))
+    print("  allow them     : tinycmdr search allow true")
+    print("  add your own   : tinycmdr search add <url>")
+    print("  check the chain: tinycmdr search test")
+    return 0
+
+
+def _verb_search_add(rest):
+    opts, positional = {}, []
+    i = 0
+    while i < len(rest):
+        arg = rest[i]
+        if arg in ("--kind", "--label", "--key-env"):
+            if i + 1 >= len(rest):
+                print("%s needs a value" % arg, file=sys.stderr)
+                return 2
+            opts[arg[2:]] = rest[i + 1]
+            i += 2
+            continue
+        positional.append(arg)
+        i += 1
+    if not positional:
+        # No url: ask, the same way `setup` does. A pipe or a script still gets the
+        # usage text, because a prompt there would read EOF and look like a hang.
+        if sys.stdin.isatty() and _CLI.get("app") is None:
+            return _verb_search_add_interactive()
+        print(SEARCH_HELP, file=sys.stderr)
+        return 2
+    url = positional[0]
+    kind = str(opts.get("kind") or _search_kind_guess(url)).strip().lower()
+    entry, err = _search_entry_build(kind, url, opts.get("label"), opts.get("key-env"), "")
+    if err:
+        print(err, file=sys.stderr)
+        return 2
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    return _search_commit(raw, entry)
+
+
+def _verb_search_add_interactive():
+    print("Which provider?")
+    print("  1) searxng  - your own box on this network (or any /search?format=json); "
+          "no key")
+    print("  2) anysearch - the shipped cloud provider; works without a key")
+    pick = input("choice [1]: ").strip() or "1"
+    kind = {"1": "searxng", "2": "anysearch"}.get(pick)
+    if kind is None:
+        print("pick 1 or 2", file=sys.stderr)
+        return 2
+    if kind == "searxng":
+        url = input("   its url (the base, e.g. http://<box>:8888; /search is added): ").strip()
+    else:
+        url = (input("   its url [%s]: " % _SEARCH_DEFAULT_URL[kind]).strip()
+               or _SEARCH_DEFAULT_URL[kind])
+    label = input("   label [%s]: " % kind).strip() or kind
+    key = ""
+    if kind == "anysearch":
+        key = input("   API key (Enter = none; the anonymous tier still answers): ").strip()
+    entry, err = _search_entry_build(kind, url, label, "", key)
+    if err:
+        print(err, file=sys.stderr)
+        return 2
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    return _search_commit(raw, entry)
+
+
+def _verb_search_remove(rest):
+    if not rest:
+        print("search remove <label|url|kind> - which provider? (`tinycmdr search` lists "
+              "the chain)", file=sys.stderr)
+        return 2
+    want = rest[0].strip().lower()
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    keep, gone = [], None
+    for row in _search_providers_from_raw(raw):
+        keys = [str(row.get(k) or "").strip().lower()
+                for k in ("label", "kind", "url")]
+        if gone is None and want in keys:
+            gone = row
+            continue
+        keep.append(row)
+    if gone is None:
+        print("no provider matches %r (`tinycmdr search` lists the chain)" % want,
+              file=sys.stderr)
+        return 2
+    raw.setdefault("search", {})["providers"] = keep
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    back, _e = _config_raw()
+    if not _e:
+        CONFIG.update(back)
+    print("removed: %s %s" % (gone.get("label") or gone.get("kind"), gone.get("url")))
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
+
+
+def _verb_search_allow(rest):
+    """`search allow [true|false]` - the switch that decides whether providers OFF this
+    machine may answer (it gates fetch_url for off-LAN urls too). A door, not only a
+    config key: the BLOCKED line a run prints must name something typeable."""
+    raw, err = _config_raw()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    want = (rest[0] or "").strip().lower() if rest else ""
+    cur = bool((raw.get("search") or {}).get(
+        "allow_cloud_egress", _search_egress_allowed()))
+    if not want:
+        print("off-LAN providers are %s (search.allow_cloud_egress %s)"
+              % ("allowed" if cur else "REFUSED", "true" if cur else "false"))
+        print("change: tinycmdr search allow true|false")
+        return 0
+    if want not in ("true", "false", "on", "off", "yes", "no", "1", "0"):
+        print("search allow takes true or false", file=sys.stderr)
+        return 2
+    val = want in ("true", "on", "yes", "1")
+    raw.setdefault("search", {})["allow_cloud_egress"] = val
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    back, _e = _config_raw()
+    if not _e:
+        CONFIG.update(back)
+    print("off-LAN providers: %s" % ("allowed" if val else "refused"))
+    if val:
+        print("note: a search now sends the model's query to a provider off this "
+              "machine.")
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
+
+
+def _verb_search_test(rest):
+    """One query through the chain, provider by provider: the check an operator runs
+    after adding their own provider (and the only door that answers "does my key work"
+    without reading a log)."""
+    query = " ".join(rest).strip() or "tinycmdr connectivity test"
+    chain, _problems = _search_providers()
+    if not chain:
+        print("no provider is configured - add your own: tinycmdr search add <url>",
+              file=sys.stderr)
+        return 1
+    usable, withheld, _p = _search_chain_in_use()
+    withheld_urls = {e["url"] for e in withheld}
+    rc = 0
+    for entry in chain:
+        if entry["url"] in withheld_urls:
+            print("%-12s SKIPPED - off this machine, and off-LAN providers are refused "
+                  "(`tinycmdr search allow true`)" % entry["label"])
+            continue
+        try:
+            results = _SEARCH_PROVIDERS_BY_KIND[entry["kind"]](entry, query, 2)
+        except Exception as e:                                   # noqa: BLE001
+            print("%-12s FAILED - %s" % (entry["label"], e))
+            rc = 1
+            continue
+        print("%-12s OK - %d result(s)%s"
+              % (entry["label"], len(results),
+                 (": " + results[0].get("title", "")) if results else ""))
+    return rc
+
+
 def _verb_model(rest):
     if rest and rest[0] in ("add", "remove", "rm"):
         return _verb_model_endpoints(rest)
@@ -39526,7 +39929,7 @@ def _verb_token(rest):
     print("  .env.example lists every key; set one with: tinycmdr token set NAME")
     print("  %-22s %s" % ("key", "state"))
     for name in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN",
-                 "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY", "TAVILY_API_KEY"):
+                 "DEEPSEEK_API_KEY", "ANYSEARCH_API_KEY"):
         state = "set (%s)" % (".env" if name in env else "environment") \
             if os.environ.get(name) else "not set"
         print("  %-22s %s" % (name, state))
@@ -39712,6 +40115,8 @@ def run_verb(argv):
         return _verb_token(rest)
     if verb == "web":
         return _verb_web(rest)
+    if verb == "search":
+        return _verb_search(rest)
     if verb == "run":
         return _verb_run(rest)
     return 2

@@ -63,7 +63,7 @@ param(
     [string] $TelegramIds     = "",              # NUMERIC ids, comma or space separated
                                                  # (message @userinfobot for yours)
     [string] $SecretsFile     = "",              # .env-style file: TINYCMDR_MM_TOKEN,
-                                                 # TAVILY_API_KEY, ANYSEARCH_API_KEY
+                                                 # ANYSEARCH_API_KEY
                                                  # (a model key is per bot and is
                                                  #  ignored here - set it per host)
     [string] $AllowedUser     = "",              # default: fleet-defaults.json
@@ -80,6 +80,10 @@ param(
                                                  # and the key lands in .env. (';' and
                                                  # not '|': a cmd.exe wrapper reads '|'
                                                  # as a pipe and splits the argument)
+    [string[]] $AddSearch     = @(),             # more web-search providers, repeatable:
+                                                 # "<url>;<kind>;<label>;<key>" - kind is
+                                                 # anysearch|searxng (guessed from the host
+                                                 # when blank); the key is optional
     [string] $Python          = "",              # full path to python.exe if auto-detect fails
     [switch] $InstallPython,                     # kept for compatibility: installing a
                                                  # missing Python is now the DEFAULT
@@ -199,6 +203,14 @@ function Ask-Yes {
         if ($a -in @("n", "no")) { return $false }
         Write-Host "  Please answer y or n."
     }
+}
+
+function Test-LanUrl {
+    # A heuristic for the INSTALLER's own advice only: does this url look like it stays on
+    # this network? The harness makes the real decision (_is_local_url); this is what
+    # decides whether adding a provider needs the off-LAN consent to be turned on.
+    param([string] $Url)
+    return [bool]($Url -match '://(127\.0\.0\.1|localhost|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.)')
 }
 
 function Ask-Choose {
@@ -1026,6 +1038,34 @@ foreach ($spec in $AddEndpoint) {
     Say "endpoint added: $m at $u"
 }
 
+# Extra web-search providers, either as switches (repeatable - how a script adds one) or
+# answered at the web-search step below. "<url>;<kind>;<label>;<key>", the last three
+# optional; a key goes to .env under a generated name, never into config.json. The kind is
+# checked when given and guessed from the host when blank (anysearch, else searxng).
+$script:SearchRows = @()
+foreach ($spec in $AddSearch) {
+    if (-not $spec -or -not $spec.Trim()) { continue }
+    $parts = @(($spec -split '[;|]') + @("", "", "", ""))
+    $su = "$($parts[0])".Trim()
+    $sk = "$($parts[1])".Trim().ToLower()
+    $sl = "$($parts[2])".Trim()
+    $skey = "$($parts[3])".Trim()
+    if (-not $su) { continue }
+    if ($sk -and $sk -notin @("anysearch", "searxng")) {
+        Fail "-AddSearch: kind must be anysearch or searxng (got '$sk')"
+    }
+    if (-not $sk) {
+        if ($su -match "anysearch") { $sk = "anysearch" }
+        else { $sk = "searxng" }
+    }
+    if (-not $sl) { $sl = $sk }
+    $sn = $script:SearchRows.Count + 1
+    $script:SearchRows += [pscustomobject]@{
+        Kind = $sk; Url = $su.TrimEnd("/"); Label = $sl; Key = $skey
+        Env = $(if ($skey) { "TINYCMDR_SEARCH${sn}_API_KEY" } else { "" }) }
+    Say "search provider added: $sl at $su ($sk)"
+}
+
 # -SearchEgress takes true or false; "" is "leave this host's own". Anything else
 # would be read as false, so an off-LAN search stayed refused with nothing on screen
 # saying why. Lowercased here so the switch and the question agree on one spelling.
@@ -1216,17 +1256,55 @@ if ($Ask -and -not $KeepConn) {
         Write-Host "  endpoint #$n added: $fbModel at $fbUrl"
     }
 
-    # ---- web search: may it leave this machine? ----
-    # Off unless asked. Both built-in providers are third parties, and the keyless anonymous
-    # tier used to send the model's query with nobody asked and nothing on screen saying so
-    # (2026-09-27). A provider ON this LAN - a searxng entry - never needs this, so
-    # "no" here still leaves a working search if one is configured. The switch wins: it skips
-    # the question entirely, and the answer written to .env is what the build reads.
+    # ---- web search: which providers, and may they leave this machine? ----
+    # The old step asked ONE yes/no about a fixed pair of cloud providers. A
+    # provider of the operator's own - a searxng box on this network (no key), or a keyed
+    # API - is what many hosts actually want, so it can be entered here; `tinycmdr search
+    # add` is the same door later, and `tinycmdr search` lists the chain. The consent line
+    # stays the point of the step: a provider off this machine sees the model's query
+    # (2026-09-27), and the switch (-SearchEgress) still skips the question entirely.
     if (-not $SearchEgress) {
-        if (Ask-Yes "May the bot's web search send queries off this machine?" $true) {
+        Write-Host "  Web search sends the model's query to a provider. anysearch is shipped"
+        Write-Host "  and answers without a key (queries leave this machine); a searxng box"
+        Write-Host "  on your network needs no key and never leaves it."
+        Write-Host "    1) keep this host's setup"
+        Write-Host "    2) allow providers off this machine (anysearch sees the query)"
+        Write-Host "    3) keep search on this machine only (off-LAN providers are refused)"
+        Write-Host "    4) add your own provider now"
+        $sw = (Read-Host "  web search [1]").Trim()
+        if ($sw -eq "2") {
             $SearchEgress = "true"
-        } else {
+        } elseif ($sw -eq "3") {
             $SearchEgress = "false"
+        } elseif ($sw -eq "4") {
+            Write-Host "    provider: 1) searxng (your own box; no key)  2) anysearch (no key"
+            Write-Host "              needed)"
+            $pk = (Read-Host "    choice [1]").Trim()
+            $sk = switch ($pk) { "2" { "anysearch" } default { "searxng" } }
+            $sdurl = switch ($sk) {
+                "anysearch" { "https://api.anysearch.com/v1/search" }
+                default { "" }
+            }
+            $sq = if ($sdurl) { "    its url [$sdurl]" } else { "    its url (the base; /search is added)" }
+            $su = (Read-Host $sq).Trim()
+            if (-not $su) { $su = $sdurl }
+            $sl = (Read-Host "    label [$sk]").Trim()
+            if (-not $sl) { $sl = $sk }
+            $skey = ""
+            if ($sk -eq "anysearch") {
+                $skey = (Read-Host "    API key (Enter = none)").Trim()
+            }
+            if ($su) {
+                $sn = $script:SearchRows.Count + 1
+                $script:SearchRows += [pscustomobject]@{
+                    Kind = $sk; Url = $su.TrimEnd("/"); Label = $sl; Key = $skey
+                    Env = $(if ($skey) { "TINYCMDR_SEARCH${sn}_API_KEY" } else { "" }) }
+                Write-Host "    added (tried first): $sl $su"
+                if (-not (Test-LanUrl $su) -and -not $SearchEgress) {
+                    $SearchEgress = "true"
+                    Write-Host "    $su is off this machine, so off-LAN providers are now allowed"
+                }
+            }
         }
     }
 
@@ -1297,10 +1375,14 @@ if ($Ask -and -not $KeepConn) {
     Write-Host ("  how you talk : {0}" -f ($ways -join " and "))
     Write-Host ("  model        : {0} at {1}" -f $Model, $ModelBaseUrl)
     if ($ModelKey) { Write-Host "  model key    : given (.env, TINYCMDR_LLM_API_KEY)" }
+    if ($script:SearchRows.Count) {
+        Write-Host ("  web search   : you added {0} (tried first)" -f
+                    (($script:SearchRows | ForEach-Object { "$($_.Label) $($_.Url)" }) -join ", "))
+    }
     if ($SearchEgress -eq "true") {
         Write-Host "  web search   : on, and may leave this machine"
     } else {
-        Write-Host "  web search   : LAN only (an off-LAN provider is refused until allowed)"
+        Write-Host "  web search   : LAN only (own providers work; off-LAN ones are refused until allowed)"
     }
     Write-Host ""
     if (-not (Ask-Yes "Install now?" $true)) {
@@ -1605,6 +1687,33 @@ if ($script:Fallbacks.Count) {
     # exist. An update keeps whatever the host already had.
     $cfg.llm.fallbacks = @()
 }
+# Web-search providers: search.providers, ordered (the first that answers wins). THIS
+# run's entries go FIRST - a provider the operator adds on purpose must not sit behind the
+# shipped ones - and the ones the config already had are carried over, minus a duplicate
+# url. Same one-element-array trap as fallbacks, hence the injected JSON; the empty array
+# below is what the injection replaces.
+$searchJson = ""
+if ($script:SearchRows.Count) {
+    $list = @()
+    foreach ($row in $script:SearchRows) {
+        $e = [ordered]@{ kind = $row.Kind; url = $row.Url; label = $row.Label }
+        if ($row.Env) { $e["api_key_env"] = $row.Env }
+        $list += [pscustomobject]$e
+    }
+    if ($cfg.search -and $cfg.search.providers) {
+        foreach ($p in @($cfg.search.providers)) {
+            if (-not $p -or -not $p.url) { continue }
+            if ($list | Where-Object { "$($_.url)" -eq "$($p.url)" }) { continue }
+            $list += $p
+        }
+    }
+    if (-not $cfg.search) {
+        $cfg | Add-Member -NotePropertyName search -NotePropertyValue ([pscustomobject]@{})
+    }
+    $cfg.search | Add-Member -NotePropertyName providers -NotePropertyValue @() -Force
+    $searchJson = ($list | ConvertTo-Json -Depth 6)
+    if ($list.Count -eq 1) { $searchJson = "[`n$searchJson`n]" }
+}
 # The third door. The TOKEN is .env-only (env_map resolves TINYCMDR_TG_TOKEN, and a copy
 # in config.json is ignored with a warning), so only the numeric allowlist goes in here.
 # The lane is deny-by-default: a token with no id refuses to start, which is why the
@@ -1669,6 +1778,10 @@ if ($fbJson) {
     $json = [regex]::Replace($json, '(?s)("fallbacks"\s*:\s*)\[\s*\]',
                              { param($m) $m.Groups[1].Value + $fbJson })
 }
+if ($searchJson) {
+    $json = [regex]::Replace($json, '(?s)("providers"\s*:\s*)\[\s*\]',
+                             { param($m) $m.Groups[1].Value + $searchJson })
+}
 Write-Utf8NoBom $cfgPath $json
 $verify = Get-Content $cfgPath -Raw | ConvertFrom-Json
 if ($verify.mattermost.allowed_users -is [string] -or $verify.telegram.allowed_users -is [string]) {
@@ -1715,7 +1828,7 @@ if (Test-Path $envPath) {
             $v = $matches[2].Trim()
             # Only the keys THIS INSTALL owns are withheld. The search keys were in
             # this list too, so a re-run without -SecretsFile dropped a working
-            # host's TAVILY/ANYSEARCH keys - the same loss the config writer had,
+            # host's ANYSEARCH key - the same loss the config writer had,
             # one file over. The primary's
             # key is withheld only when THIS run resolved one; otherwise the host's
             # own TINYCMDR_LLM_API_KEY line is carried over like any other.
@@ -1749,7 +1862,7 @@ Copy-Item (Join-Path $InstallDir ".env.example") $envPath -Force
 $envText = Get-Content $envPath -Raw
 $written = @()
 $refused = @()
-foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN", "TINYCMDR_LLM_API_KEY", "TAVILY_API_KEY", "ANYSEARCH_API_KEY")) {
+foreach ($key in @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TINYCMDR_WEB_TOKEN", "TINYCMDR_LLM_API_KEY", "ANYSEARCH_API_KEY")) {
     $val = ""
     if ($key -eq "TINYCMDR_MM_TOKEN") { $val = $MattermostToken }
     elseif ($key -eq "TINYCMDR_TG_TOKEN") { $val = $TelegramToken }
@@ -1797,6 +1910,18 @@ foreach ($fb in $script:Fallbacks) {
     }
     $written += "$k (extra endpoint)"
 }
+# The web-search providers' keys, same shape as the endpoints': a generated name the
+# entry's api_key_env points at, never a value in config.json.
+foreach ($row in $script:SearchRows) {
+    if (-not $row.Env) { continue }
+    $k = $row.Env
+    if ($envText -match "(?m)^#?\s*$k=") {
+        $envText = [regex]::Replace($envText, "(?m)^#?\s*$k=.*$", { param($m) "$k=$($row.Key)" })
+    } else {
+        $envText = $envText.TrimEnd() + "`n$k=$($row.Key)`n"
+    }
+    $written += "$k (search provider)"
+}
 # The web-search consent, when this run has an opinion: "" is "leave this host's own",
 # and the carry-over above has already put a host's own line back. Written AFTER that
 # carry-over on purpose - the host's older line must not replace this run's answer, or an
@@ -1814,7 +1939,7 @@ if ($SearchEgress) {
 # And say what was NOT copied, without naming any provider: a model key belongs to
 # one host, and silently sharing it is how one box's usage appeared on another.
 $notCopied = @($secrets.Keys | Where-Object {
-        @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN", "TAVILY_API_KEY",
+        @("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN",
           "ANYSEARCH_API_KEY") -notcontains $_ })
 if ($notCopied.Count) {
     Say "NOTE    : not copied from the secrets file: $($notCopied -join ', ')"
@@ -1835,7 +1960,7 @@ if ($refused.Count) {
     Say "WARNING : refused redacted placeholder value(s): $($refused -join ', ')"
     Say "          that file carried no real key - edit $envPath with the real values"
 }
-if (-not $secrets["TAVILY_API_KEY"] -and -not $secrets["ANYSEARCH_API_KEY"]) {
+if (-not $secrets["ANYSEARCH_API_KEY"]) {
     # Not a failure, and it used to be described as one: with no key anysearch still
     # answers on its anonymous tier - off this machine and rate-limited, which is the
     # reason search.allow_cloud_egress exists and defaults to false. The old line said

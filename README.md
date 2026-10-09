@@ -101,6 +101,9 @@ Linux, `--label com.tinycmdr.work` on macOS, `-TaskName` on Windows.
 -TelegramToken <t>     a Telegram bot token
 -TelegramIds <ids>     your numeric Telegram id(s)
 -AddEndpoint <spec>    another endpoint, repeatable: "<base_url>;<model>;<alias>;<key>"
+-AddSearch <spec>      another web-search provider, repeatable:
+                       "<url>;<kind>;<label>;<key>" - kind defaults from the host
+                       (anysearch, else searxng); a key is optional
 -WebHost <addr>        page bind: 127.0.0.1 (default) or 0.0.0.0
 -WebPort <p>           page port (default 8790)
 -NoWeb                 install without the page

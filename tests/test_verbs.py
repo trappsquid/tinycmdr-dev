@@ -372,6 +372,23 @@ def _body():
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
 
+        # A config that still names the retired tavily kind must be REPORTED by name -
+        # that is the migration path for a host that had the old two-entry chain - and
+        # the rest of the chain must keep working.
+        _saved_providers = fb.CONFIG["search"].get("providers")
+        fb.CONFIG["search"]["providers"] = [
+            {"kind": "tavily", "url": "https://api.tavily.com/search",
+             "label": "tavily"},
+            {"kind": "anysearch", "url": "https://api.anysearch.com/v1/search",
+             "label": "anysearch", "api_key_env": "ANYSEARCH_API_KEY"}]
+        try:
+            rc, out, err = call(fb, ["doctor"])
+            check("doctor reports a retired kind by name, chain intact",
+                  "unknown kind" in out and "tavily" in out and "anysearch" in out,
+                  [l for l in out.splitlines() if "search" in l][:3])
+        finally:
+            fb.CONFIG["search"]["providers"] = _saved_providers
+
         # ---- the no-lane note tells the truth about the door -------------------
         # doctor said "CLI-only install" whenever there was no chat lane, but a lane-less
         # host with web ON serves the page - the decided default door (A-2026-10-08-139).
@@ -1343,8 +1360,103 @@ def _body():
         srv.server_close()
 
         check("the new verbs are in the verb list",
-              all(v in fb.VERBS for v in ("health", "config", "proc",
+              all(v in fb.VERBS for v in ("health", "config", "proc", "search",
                                           "update", "clean", "version")), fb.VERBS)
+
+        # ---- search: the provider chain and its doors --------------------------------
+        # The input path for a provider of the operator's OWN - with a key or without -
+        # and the doors the BLOCKED line a run prints names. tavily refuses keyless
+        # calls, so an entry of that kind is refused where the reason can be said.
+        import http.server as _http
+        import socketserver as _sockets
+        import threading as _threading
+
+        class _SearchStub(_http.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                body = json.dumps({"results": [
+                    {"title": "stub hit", "url": "http://x/", "content": "y"}]}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        _srv = _sockets.TCPServer(("127.0.0.1", 0), _SearchStub)
+        _threading.Thread(target=_srv.serve_forever, daemon=True).start()
+        _stub_url = "http://127.0.0.1:%d" % _srv.server_address[1]
+        try:
+            rc, out, err = call(fb, ["search"])
+            check("search lists the chain and the doors",
+                  rc == 0 and "anysearch" in out and "tinycmdr search add <url>" in out,
+                  (rc, out[:200]))
+            _file_before = json.loads((workdir / "config.json").read_text(
+                encoding="utf-8")).get("search", {}).get("providers")
+            _expect_tail = ([p["kind"] for p in _file_before]
+                            if isinstance(_file_before, list)
+                            else [p["kind"] for p in
+                                  fb.DEFAULT_CONFIG["search"]["providers"]])
+            rc, out, err = call(fb, ["search", "add", _stub_url, "--label", "mybox"])
+            _chain = json.loads((workdir / "config.json").read_text(
+                encoding="utf-8"))["search"]["providers"]
+            check("search add prepends a provider of your own (tried first)",
+                  rc == 0 and _chain[0] == {"kind": "searxng", "url": _stub_url,
+                                            "label": "mybox"}, (rc, _chain[:1]))
+            check("...and the file's own providers are carried over behind it",
+                  [p["kind"] for p in _chain[1:]] == _expect_tail, (_chain, _expect_tail))
+            rc, out, err = call(fb, ["search", "add", _stub_url])
+            check("a duplicate url is refused",
+                  rc == 2 and "already there" in err, (rc, err[:160]))
+            rc, out, err = call(fb, ["search", "add", "https://search.example.com/t",
+                                     "--kind", "tavily"])
+            check("the retired tavily kind is refused, naming what is accepted",
+                  rc == 2 and "kind must be one of" in err
+                  and "tavily" not in err.split(":")[1], (rc, err[:200]))
+            rc, out, err = call(fb, ["search", "add", "https://search.example.com/t",
+                                     "--kind", "anysearch",
+                                     "--key-env", "ANYSEARCH_API_KEY2",
+                                     "--label", "tav2"])
+            _chain = json.loads((workdir / "config.json").read_text(
+                encoding="utf-8"))["search"]["providers"]
+            check("a custom keyed endpoint is accepted when its .env variable is named",
+                  rc == 0 and _chain[0]["api_key_env"] == "ANYSEARCH_API_KEY2"
+                  and "not set in .env yet" in out, (rc, out[:200]))
+            rc, out, err = call(fb, ["search", "test"])
+            check("search test runs the chain and names what answered",
+                  rc == 0 and "mybox" in out and "OK - 1 result" in out,
+                  (rc, out[:200]))
+            rc, out, err = call(fb, ["search", "allow"])
+            check("search allow reports the consent state",
+                  rc == 0 and "off-LAN providers are" in out, (rc, out[:120]))
+            rc, out, err = call(fb, ["search", "allow", "false"])
+            check("...and sets it",
+                  rc == 0 and json.loads((workdir / "config.json").read_text(
+                      encoding="utf-8"))["search"]["allow_cloud_egress"] is False,
+                  (rc, out[:120]))
+            rc, out, err = call(fb, ["search", "add", "https://elsewhere.example.com/s"])
+            check("an off-LAN provider added while refused is called out",
+                  rc == 0 and "search allow true" in out, (rc, out[:300]))
+            call(fb, ["search", "allow", "true"])
+            rc, out, err = call(fb, ["search", "remove", "mybox"])
+            _chain = json.loads((workdir / "config.json").read_text(
+                encoding="utf-8"))["search"]["providers"]
+            check("search remove drops the matching provider",
+                  rc == 0 and all(p.get("label") != "mybox" for p in _chain), _chain)
+            # The interactive door: no url on a TTY asks (kind, url, label), and the
+            # answer lands like the flagged one.
+            rc, out, err = call(fb, ["search", "add"],
+                                stdin="1\nhttp://127.0.0.1:8898\ntypedbox\n", tty=True)
+            _chain = json.loads((workdir / "config.json").read_text(
+                encoding="utf-8"))["search"]["providers"]
+            check("search add with no url asks, and writes what was typed",
+                  rc == 0 and _chain[0] == {"kind": "searxng",
+                                            "url": "http://127.0.0.1:8898",
+                                            "label": "typedbox"}, (rc, _chain[:1], out[:200]))
+        finally:
+            _srv.shutdown()
+            _srv.server_close()
 
         # ---- logs: bounded, and scrubbed -------------------------------------
         secret = "sk-live-ABCdef0123456789"
