@@ -55,6 +55,19 @@ def fn_source(name):
     raise SystemExit("no %s() in tinycmdr.py" % name)
 
 
+def literal_from(path, name):
+    """A module-level literal in ANOTHER tree file (build-package.py's PLATFORM_FILES,
+    ...). Read from the source: build-package.py refuses to import without the private
+    inventory, which a clone does not carry."""
+    tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), str(path))
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == name:
+                    return ast.literal_eval(node.value)
+    raise SystemExit("no %s in %s" % (name, path))
+
+
 def main():
     page = literal("WEB_PAGE")
 
@@ -194,6 +207,34 @@ def main():
           sorted(_tracked_tools - _packed_tools))
     check("...and build-package ships no tools/ file git does not track",
           _packed_tools <= _tracked_tools, sorted(_packed_tools - _tracked_tools))
+
+    # ---- a helper ONE platform reads must not ride in another's package ---------------
+    # The download is per platform, and every installer copies the package tree into the
+    # install folder - so a file no reader on that host opens is clutter on its disk.
+    # tinycmdr-supervise.py is the Windows scheduled task's respawner: the Windows kit
+    # names it, the POSIX kit names it nowhere. PLATFORM_FILES in build-package.py is the
+    # declaration that decides which containers carry it (platform_skip leaves it out of
+    # the macOS and Linux archives); this pins the declaration to the readers.
+    _pf = literal_from(BASE / "maintenance" / "build-package.py", "PLATFORM_FILES")
+    _kits = {  # the files that RUN on the host, per platform: installers, updaters, doors
+        "win": ("install/install-tinycmdr.ps1", "install/install-tinycmdr.cmd",
+                "maintenance/restart-tinycmdr.ps1", "install.ps1", "update.ps1",
+                "tinycmdr.cmd", "INSTALL-WINDOWS.cmd", "UNINSTALL-WINDOWS.cmd"),
+        "posix": ("install/install-tinycmdr.sh", "install/install-tinycmdr-macos.sh",
+                  "install/uninstall-tinycmdr-macos.sh",
+                  "maintenance/restart-tinycmdr.sh",
+                  "maintenance/restart-tinycmdr-macos.sh",
+                  "install.sh", "update.sh"),
+    }
+    _kit_text = {k: "\n".join((BASE / r).read_text(encoding="utf-8") for r in files)
+                 for k, files in _kits.items()}
+    _watchdog = "tinycmdr-supervise.py"
+    check("the Windows kit names the respawner",
+          _watchdog in _kit_text["win"], "no reader in the Windows kit")
+    check("the POSIX kit names it nowhere", _watchdog not in _kit_text["posix"],
+          "a POSIX reader appeared; the file must not stay out of POSIX containers")
+    check("...so PLATFORM_FILES declares it as the Windows container's file",
+          _watchdog in _pf.get("win", ()), sorted(_pf))
 
     # ---- a release goes to the repo every installer and updater FETCHES from -------------
     # The source tree and the install surface are two repositories, and `gh` resolves one from

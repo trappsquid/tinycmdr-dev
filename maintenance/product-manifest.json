@@ -10,6 +10,7 @@
     "update.sh",
     "update.ps1",
     "requirements-test.txt",
+    "assets/tinycmdr-helm.png",
     "docs/tinycmdr-what-it-is.md",
     "docs/computer-use.md"
   ],

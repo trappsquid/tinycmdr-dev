@@ -96,8 +96,9 @@ SHIP = [
     # The watchdog the Windows scheduled task runs. It belongs to THIS package; without
     # it the installer's task points
     # at a file that is not there, which is how boxes ended up with no respawn at all.
+    # Only the Windows kit reads it - PLATFORM_FILES hands it to that container alone
+    # (measured 2026-10-09: 12.4 KB riding in both POSIX archives that nothing there opens).
     "tinycmdr-supervise.py",
-    "field-notes.md",
     # The persona seed: who the agent is plus three judgment hints a local model
     # loses without help. Shipped so an operator re-personas by editing one file
     # instead of patching the build (the fallback in the code is the same text).
@@ -152,13 +153,14 @@ SHIP = [
     "tools/toolsmith.py",
     "tools/computer_use.py",
     "tools/README.md",
-    # The brand, at the two sizes a reader meets: the chibi heads the README and is the
-    # image a link preview falls back to, the helm marks the "what it actually is" doc.
-    # The masters stay in the repository as source; the 1280x640 social preview is a
-    # GitHub setting, not a product surface. Shipped so the README in an unzipped release
-    # renders the way its author meant it to.
+    # The brand. The chibi heads the README that sits in every archive, and is the image
+    # a link preview falls back to - it must be beside README.md in the package, so the
+    # README renders the way its author meant it to. The helm marks the "what it actually
+    # is" doc, which lives in the product TREE, not an archive: it is in
+    # product-manifest.json's `extra` instead (measured 2026-10-09: 120 KB riding in every
+    # download that nothing inside one opens). The masters stay in the repository as
+    # source; the 1280x640 social preview is a GitHub setting, not a product surface.
     "assets/tinycmdr-chibi.png",
-    "assets/tinycmdr-helm.png",
     # The app rail's brand art: data (braille cells + colours), never ANSI. Derived from
     # the badge master by maintenance/make-brand-art.py; the app degrades to no art when
     # the terminal cannot show braille, so its absence is survivable but dull.
@@ -216,6 +218,10 @@ PLATFORM_FILES = {
         "INSTALL-WINDOWS.cmd",
         "UNINSTALL-WINDOWS.cmd",
         "tinycmdr.cmd",
+        # The respawner the scheduled task runs. No POSIX file names it - the POSIX
+        # restart helpers and installers were checked, and tests/test_contracts.py
+        # derives both sides - so only this kit carries it.
+        "tinycmdr-supervise.py",
         "install/install-tinycmdr.ps1",
         "install/install-tinycmdr.cmd",
         "maintenance/restart-tinycmdr.ps1",
@@ -254,6 +260,13 @@ FORBIDDEN_NAMES = {
     # and where things live). Shipping this box's map to another box is worse than shipping
     # none: it is wrong in a way that reads as authoritative.
     "atlas.md",
+    # The known-failure library (field-notes.md) is grown ON the host that runs it and is
+    # gitignored for exactly that reason. A package carrying one host's copy hands its
+    # memory to every other host - and the app reads whatever the host has, so a package
+    # never needs to carry one. SHIP listed it until 2026-10-09, on the box this fleet was
+    # built from, where the file the operator's own box grows was one build away from
+    # riding in every download and every fleet package.
+    "field-notes.md",
     # The host's live theme and persona. The package ships the seeds
     # (theme.default.toml, soul.example.md) and the app materializes these two on the
     # host, so a copy inside the zip would overwrite a host's edited file.

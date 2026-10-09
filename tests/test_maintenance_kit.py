@@ -106,7 +106,7 @@ def main():
         ghost = sorted(k for k in private if k not in suites)
         check("no private entry names a suite that is not there", not ghost, ", ".join(ghost))
         absent = sorted(r for r in man.get("extra", [])
-                        if not (BASE / r).exists() and r != "field-notes.md")
+                        if not (BASE / r).exists())
         check("every extra the manifest ships exists here", not absent, ", ".join(absent))
         print("note  %d of %d suites ship publicly; %d stay here"
               % (len(suites - set(private)), len(suites), len(private)))
