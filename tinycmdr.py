@@ -29082,8 +29082,9 @@ def run_webui():
                 # stale value and 401'd until the page's own boot dance ran (A-221);
                 # Max-Age=0 drops it, and the page then asks for the new token.
                 extra = list(extra or ()) + [
-                    ("Set-Cookie", "tinycmdr_token=; Path=/; HttpOnly; "
-                                   "SameSite=Strict; Max-Age=0")]
+                    ("Set-Cookie", "%s=; Path=/; HttpOnly; "
+                                   "SameSite=Strict; Max-Age=0"
+                     % _web_cookie_name(self.server.server_address[1]))]
             # ensure_ascii=False: JSON is UTF-8 by definition, and escaping every emoji
             # and every CJK character to \uXXXX cost six bytes each on the routes the
             # page polls several times a second (A-261, measured 2026-10-06: a /new
@@ -29178,9 +29179,10 @@ def run_webui():
                     # SAME page token, and the published card says so.
                     given = authz[7:].strip()
             if not given:
+                _cookie = _web_cookie_name(self.server.server_address[1])
                 for part in (self.headers.get("Cookie") or "").split(";"):
                     name, _, value = part.strip().partition("=")
-                    if name == "tinycmdr_token":
+                    if name == _cookie:
                         given = value
                         self._cookie_given = True      # so a 401 can clear a stale one
                         break
@@ -29768,8 +29770,9 @@ def run_webui():
                     self._json({"error": "unauthorized"}, 401)
                     return
                 self._json({"ok": True}, 200, extra=[
-                    ("Set-Cookie", "tinycmdr_token=%s; Path=/; HttpOnly; SameSite=Strict; "
-                                   "Max-Age=31536000" % token)])
+                    ("Set-Cookie", "%s=%s; Path=/; HttpOnly; SameSite=Strict; "
+                                   "Max-Age=31536000"
+                     % (_web_cookie_name(self.server.server_address[1]), token))])
                 return
             if self.path.startswith("/api/run"):
                 if not self._auth_ok():
@@ -30212,6 +30215,21 @@ def _web_token():
     """The token a server run would require: web.token, else .env's TINYCMDR_WEB_TOKEN."""
     return str((CONFIG.get("web") or {}).get("token")
                or os.environ.get("TINYCMDR_WEB_TOKEN") or "").strip()
+
+
+def _web_cookie_name(port):
+    """The login cookie's name, per PORT.
+
+    Cookies are scoped by host, not port (RFC 6265), so ONE name for every install on a
+    host means logging into the page on 8791 overwrites the live page's cookie on 8790 -
+    and the 401 path's Max-Age=0 then deletes it, which logs the other install out
+    (measured 2026-10-09: two pages on one host shared the name). The port is what tells
+    two installs apart on one host, so it is the name. The host-scope itself cannot be
+    fixed in the protocol - the browser still attaches this cookie to every service on
+    the same host - which is why the value is HttpOnly, SameSite=Strict and never in a
+    URL after login.
+    """
+    return "tinycmdr_token_%d" % int(port)
 
 
 WEB_FONTS = {

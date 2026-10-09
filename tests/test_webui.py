@@ -427,14 +427,19 @@ def main():
     # 2026-10-04: "the token should not be visible in the browser url").
     code, body, hdr = req("POST", "/api/login", TOK)
     cookie = hdr.get("Set-Cookie") or ""
+    # The name carries the PORT: cookies are host-scoped (RFC 6265), so one name for every
+    # install on a host means the second page's login overwrites the first's cookie.
+    _cname = "tinycmdr_token_%d" % port
     check(code == 200, "POST /api/login with the header: 200", code)
-    check("tinycmdr_token=" in cookie and "HttpOnly" in cookie
+    check(_cname + "=" in cookie and "HttpOnly" in cookie
           and "SameSite=Strict" in cookie,
-          "it answers with an HttpOnly, SameSite=Strict cookie", cookie)
-    check(req("GET", "/api/tasks", {"Cookie": "tinycmdr_token=%s" % token})[0] == 200,
+          "it answers with an HttpOnly, SameSite=Strict cookie named for the port", cookie)
+    check(req("GET", "/api/tasks", {"Cookie": "%s=%s" % (_cname, token)})[0] == 200,
           "the cookie alone authenticates a later request")
-    check(req("GET", "/api/tasks", {"Cookie": "tinycmdr_token=nope"})[0] == 401,
+    check(req("GET", "/api/tasks", {"Cookie": "%s=nope" % _cname})[0] == 401,
           "a wrong cookie: 401")
+    check(req("GET", "/api/tasks", {"Cookie": "tinycmdr_token=%s" % token})[0] == 401,
+          "the un-suffixed name does not authenticate (one name per port)")
     check(req("POST", "/api/login", {"X-Tinycmdr-Token": "wrong"})[0] == 401,
           "and the handover refuses a wrong token")
     check(req("GET", "/api/login")[0] == 401,
@@ -952,9 +957,9 @@ def main():
     # A-221: a 401 that saw a stale cookie clears it, so a rotated token does not leave
     # the browser 401ing on a value nothing removes.
     _st, _hd, _bd, _ = probe("GET", "/api/tasks",
-                             {"Cookie": "tinycmdr_token=stale-from-before"})
+                             {"Cookie": "tinycmdr_token_%d=stale-from-before" % port})
     _sc = _hd.get("Set-Cookie") or ""
-    check(_st == 401 and "tinycmdr_token=" in _sc and "Max-Age=0" in _sc,
+    check(_st == 401 and ("tinycmdr_token_%d=" % port) in _sc and "Max-Age=0" in _sc,
           "a 401 presenting a stale cookie clears it (Max-Age=0)", (_st, _sc))
 
     # A-223/A-224: query values are percent-decoded the way the page encodes them, and a
