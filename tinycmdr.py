@@ -30495,8 +30495,24 @@ def _browser_open_due(tok, port, ttl=None):
     return True
 
 
+def _console_attached():
+    """True when stdout is a terminal a person is looking at - the one place a line may
+    carry the page's token.
+
+    The shipped supervisors capture stdout into a log that outlives the process, so a
+    tokenized link printed there is a secret at rest (measured 2026-10-09: every
+    supervised start wrote one into its log). pythonw has no stdout at all, which reads
+    as no console; so does any pipe or file.
+    """
+    try:
+        return bool(sys.stdout and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
 def _announce_web(port, open_browser=True, force=False):
-    """Say where the page is - tokenized link first, then how to reach it.
+    """Say where the page is - the tokenized link at a terminal, the bare URL anywhere
+    else (a log must not hold the token; `tinycmdr web` is the deliberate door to it).
 
     The token rides the FRAGMENT: it never reaches the server, so it cannot land
     in its log or a Referer header. The page hands the fragment to /api/login once,
@@ -30507,10 +30523,17 @@ def _announce_web(port, open_browser=True, force=False):
     port = int(port)
     urls = _web_base_urls(port)
     tok = _web_token()
+    tty = _console_attached()
     print("")
     for i, (base, _loop) in enumerate(urls):
         label = "tinycmdr page: " if i == 0 else "  also: "
-        print("%s%s#token=%s" % (label, base, tok) if tok else "%s%s" % (label, base))
+        if tok and tty:
+            print("%s%s#token=%s" % (label, base, tok))
+        else:
+            print("%s%s" % (label, base))
+    if tok and not tty:
+        print("  the link with its token: `tinycmdr web` (the token is in %s and is "
+              "not written to this log)" % ENV_FILE.name)
     if str(web.get("host") or "") in ("0.0.0.0", "::"):
         print("  token required; that link works from any machine on your network - "
               "the token travels in cleartext there, so use a network you trust")

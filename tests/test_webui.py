@@ -155,7 +155,8 @@ def main():
     check("minted TINYCMDR_WEB_TOKEN" in out0, "and the start says so", out0[:80])
     check("the page is this install's door" in out0 and "tinycmdr setup" in out0,
           "and orients the operator (setup picks LAN vs loopback and the port)")
-    check("#token=" + minted in out0, "the link it prints carries it")
+    check("#token=" not in out0 and "tinycmdr web" in out0,
+          "the captured start prints no token and names the door to the link")
     port0 = srv0.server_address[1]
 
     def probe0(path, headers=None):
@@ -1198,7 +1199,8 @@ def main():
     out = buf.getvalue()
     check(again is None and "already serving" in out and dt < 1.0,
           "a second start announces the running page (no bind retry)", round(dt, 2))
-    check("#token=" + token in out, "the announcement carries the tokenized link")
+    check("#token=" not in out and "tinycmdr web" in out,
+          "the captured second start prints no token either")
     fb.CONFIG["web"]["port"] = 0
 
     # ---- the web verb -------------------------------------------------------
@@ -1239,6 +1241,22 @@ def main():
         check("127.0.0.1" in first,
               "no LAN address known: loopback leads", first)
     check("cleartext" in out, "and says the token travels in cleartext there")
+    check("#token=" not in out,
+          "the announce off a terminal (a supervisor's captured log) carries no token",
+          out[:240])
+    check("the tokenless output names the door to the link",
+          "tinycmdr web" in out, out[:240])
+
+    class _Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    buf = _Tty()
+    with contextlib.redirect_stdout(buf):
+        fb._announce_web(8790, open_browser=False)
+    check("#token=" + token in buf.getvalue(),
+          "at a terminal the announce still hands out the tokenized link",
+          buf.getvalue()[:240])
 
     # ---- web.port 0 means "the OS picks", and the readers must say which port ----
     # Eight readers collapsed a configured 0 to 8790, so a 0 host printed links to a port
