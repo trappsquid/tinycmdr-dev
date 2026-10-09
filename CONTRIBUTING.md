@@ -16,7 +16,7 @@ file before your first PR saves you and me a review round.
 
 ```bash
 python3.12 -m venv venv && venv/bin/pip install -r requirements.txt -r requirements-test.txt
-venv/bin/python tests/run_all.py     # the gate; must be green
+venv/bin/python tests/run_all.py --jobs 4   # the gate; must be green
 bash maintenance/pre-push.sh         # leak gate, tree-clean, regenerated numbers
 ```
 

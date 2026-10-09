@@ -12,7 +12,7 @@ The contract for developing here is `docs/development.md`. Read it. The short ve
 python3 maintenance/where.py --remote   # the trees, their roles, the running agent, GitHub NOW
 python3 maintenance/where.py --check    # exit 1 when a declared role is violated
 python3 tests/test_status.py            # what is known-open, anchored to commits/tags/files
-venv/bin/python tests/run_all.py        # the gate: the same command CI runs
+venv/bin/python tests/run_all.py --jobs 4  # the gate: the same command CI runs, in parallel
 bash maintenance/pre-push.sh            # the cheap pre-push set (also installable as the hook)
 ```
 
@@ -50,7 +50,7 @@ not authority.
   finding ids in the changelog and the record; the release notes are outside the tree, so the
   same rule is on me when I cut one (docs/development.md §7).
 - **One way to do each thing.** If you reach for a new script, note or doc, check first whether
-  `where.py`, `STATUS.json`, `run_all.py`, `measured-block.py` or `release.sh` already owns it.
+  `where.py`, `STATUS.json`, `run_all.py`, `batch.sh`, `measured-block.py` or `release.sh` already owns it.
 - **The gate must be armed, not merely present.** `bash maintenance/install-hooks.sh` in every
   clone (`tinycmdr doctor` says whether this one is armed); CI's `leak` job covers what a push
   adds; `release.sh` scans the range it is about to push.
@@ -62,8 +62,9 @@ not authority.
 
 ## Flow
 
-`git switch -c <topic>` -> edit -> `run_all.py` -> `pre-push.sh` -> push -> CI (macOS + Linux full
-sweep, Windows subset) -> `bash maintenance/release.sh <notes-file>` from a clean, gated `main`.
+`git switch -c <topic>` -> edit -> `bash maintenance/batch.sh -m "scope: what it does"` (renders the
+numbers, runs the whole gate, commits, pushes) -> CI (macOS + Linux full sweep, Windows subset) ->
+`bash maintenance/release.sh <notes-file>` from a clean, gated `main`.
 Released numbers are never rebuilt; `CHANGELOG.md` is the long-form record, one section per release.
 
 ## Picking this up cold

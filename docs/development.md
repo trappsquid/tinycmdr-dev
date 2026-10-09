@@ -63,14 +63,17 @@ cd ~/tinycmdr
 python3 maintenance/where.py              # 1. what is this box, before touching anything
 git switch -c <topic>                     # 2. one change, one branch
 # ...edit...
-venv/bin/python tests/run_all.py          # 3. the gate: the same command CI runs
-bash maintenance/pre-push.sh              # 4. the cheap set (also installed as the hook)
-git commit && git push -u origin <topic>  # 5. push; CI grades macOS + Linux (Windows subset)
+bash maintenance/batch.sh -m "scope: what it does"   # 3. numbers + gate (-j4) + commit + push
 ```
 
 - **The gate** is `tests/run_all.py` and nothing else. A suite that cannot run exits `77` and
   counts as **red** - a machine that graded nothing cannot report success. `--select 'tests/test_*x*'`
   narrows a run while you work on one suite.
+- **Landing a batch is one verb**: `bash maintenance/batch.sh -m "<scope: what it does>"` renders the
+  published numbers, runs the whole gate at `--jobs 4` (each suite keeps its own temp dir and process
+  group; the tree-write report gives up per-suite names, prints one union line and says so), commits
+  and pushes. Repeat `-m` for the body. Five hand steps it replaced: render, chase the prose numbers,
+  gate, commit, push.
 - **The artifact is graded too.** `bash maintenance/smoke-install.sh` builds the public
   package, installs from the archive it produces (not the working tree) and runs
   `doctor`/`health`/`--once` against it; CI runs the same on macOS, Linux and Windows
@@ -183,13 +186,21 @@ a release published into the source repo is a release nobody can fetch.
    tag AND refuses an `unreleased` one whose commit IS, so "no `expect` at all" is not available
    any more. `release.sh` runs `maintenance/ledger-tag.py`, which promotes the item to
    `shipped` + `expect: tagged` **after** the tag exists.
-4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`, plus the
-   prose line count the same tool's check complains about. `pre-push` refuses a stale block, so this
-   is not optional even for a one-line change.
-5. **Then**: `python3 tests/run_all.py --jobs 6` (green, `0 skipped`) - the whole gate, not the suite you
-   touched - and commit. `--jobs` keeps each suite's own temp dir and process group; what it gives up is
-   per-suite attribution in the tree-write report, which becomes one union line and says so (106 suites
-   here: 71s against 346s serial).
+4. **`docs/tinycmdr-what-it-is.md`** - `python3 maintenance/measured-block.py --write`; it renders the
+   blocks AND the prose numbers the gate grades, so nothing is left to fix by hand. `pre-push` refuses
+   a stale block, so this is not optional even for a one-line change.
+5. **Then**: `bash maintenance/batch.sh -m "<scope: what it does>"` - the ONE verb: renders the numbers
+   (step 4 again, for free), runs the whole gate at `--jobs 4` (green, `0 skipped`; each suite keeps its
+   own temp dir and process group, giving up only the tree-write report's per-suite names - one union
+   line, and it says so), commits the batch with the message, and pushes. Subject <= 50 chars; repeat
+   `-m` for the body (the why, the measurement, the test). It replaces five hand steps per batch
+   (render, the prose numbers, gate, commit, push), each one skippable and each one skipped at least
+   once.
+
+**A fix does not wait for a release, and a release is not grown by fixes.** Fixes land on `main` as
+ordinary commits; when a version is due, the batch above ships whatever `main` holds - it is never
+held open to gather more work, and its notes name the user-visible changes, not the work that
+produced them.
 
 ### The cut
 
@@ -408,7 +419,7 @@ A fresh clone, or a new model told only "work on tinycmdr here":
 ```bash
 python3.12 -m venv venv && venv/bin/pip install -r requirements.txt -r requirements-test.txt
 python3 maintenance/where.py --remote      # what is this box, and what has GitHub got
-venv/bin/python tests/run_all.py           # the baseline you are moving from
+venv/bin/python tests/run_all.py --jobs 4  # the gate, in parallel (~100 s; §7 lands a batch)
 python3 tests/test_status.py               # what is already known-open
 ```
 
