@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Leaner per-platform downloads:** each archive carries only the files its platform reads - the Windows task's respawner no longer rides in the macOS and Linux packages, the doc-only brand image moved to the product tree, and the host's own known-failure library can no longer ride into any package (tests/test_contracts.py, tests/test_maintenance_kit.py; the built archives measure 129 KB / 128 KB / 123 KB smaller on Linux / macOS / Windows).
 - **The batch is one verb:** `bash maintenance/batch.sh -m "scope: what it does"` renders the published numbers, runs the whole gate at `--jobs 4`, commits and pushes, and `maintenance/measured-block.py --write` now also writes the prose numbers the gate grades (tests/test_measured_doc.py).
+- **The gate runs 53 suite files, not 106:** same-surface suites run together in one file per group - each member keeps its body, its checks and its summary, a runner restores the environment, the cwd and sys.path around it, and every group is graded by a conservation check (string literals, printed checks and exit codes all equal the member's own run) (tests/run_all.py, tests/windows-tier.json).
 
 ## [1.0.97] - 2026-10-09
 

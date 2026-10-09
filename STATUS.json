@@ -2304,6 +2304,17 @@
       },
       "detail": "maintenance/batch.sh renders the published numbers, runs the whole gate at --jobs 4, commits with its -m message and pushes, replacing five hand steps (render, chase the prose numbers, gate, commit, push) whose serial gate measured 346 s against ~100 s at -j4; measured-block.py --write now also rewrites the four prose numbers the gate grades, so nothing in the doc is fixed by hand.",
       "gate": "tests/test_measured_doc.py falsifies the writer on a doctored prose number; the whole gate green via batch.sh"
+    },
+    {
+      "id": "suites-merged-106-to-53",
+      "title": "the gate runs 53 suite files, not 106, with every check conserved",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "877d0b0",
+        "expect": "untagged"
+      },
+      "detail": "Same-surface suites run together in one file per group (36 files absorb 89 members): each member's body becomes a function and the runner snapshots env, cwd and sys.path around it, the globals()-discovery idiom is rewritten to a per-member namespace, reindentation is tokenizer-aware so embedded worker scripts keep their bytes, suites that can exit 77 (checkin, tui, webui_page, update_script) stay their own files so a host that cannot grade them still reads SKIP, and the two names something reads by path keep theirs (test_envelope.py - run_all refuses a tree without it; test_status.py - AGENTS.md, docs and the pre-push hook run it).",
+      "gate": "per-member conservation: string literals, printed ok/FAIL counts and exit codes all equal the member's standalone run (36/36 groups), plus the whole gate green and CI"
     }
   ]
 }
