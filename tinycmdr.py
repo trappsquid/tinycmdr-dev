@@ -9606,12 +9606,21 @@ def tool_search_files(args, ctx):
     Scoping rules: the walk is path-ordered so the same search returns the same page on
     every host, a
     per-file cap keeps one hot log from eating the whole budget, and both a capped file and
-    a cap-terminated walk SAY SO instead of reading as an exhaustive answer.
+    a cap-terminated walk SAY SO instead of reading as an exhaustive answer. Only regular
+    files are read at all: a device, FIFO or socket is named in the note and skipped
+    (reading one never ends or blocks), and a single named file goes through the same
+    8 MiB cap the shell's output wears.
     """
     import fnmatch
     root = Path(_win_long_path(Path(args.get("path") or ".").expanduser()))
     if not root.exists():
         return f"ERROR: {root} does not exist"
+    if not root.is_file() and not root.is_dir():
+        # A device node, FIFO or socket named directly: is_file() is False (it is not a
+        # regular file) and os.walk on a non-directory yields nothing, so this used to
+        # answer a confident "No matches." for a path it never read (A-2026-10-08-98).
+        return (f"ERROR: {root} is not a regular file or directory (reading a device or "
+                f"FIFO never ends or blocks); name a regular file or a directory.")
     pat = args.get("pattern") or "*"
     if args.get("max_results") is not None:
         try:
@@ -9638,8 +9647,12 @@ def tool_search_files(args, ctx):
         if content_re is None:
             return (f"ERROR: {root} is one file and {grepper!r} is not a valid regex - pass "
                     f"the line pattern you want, or a directory to glob file names in")
+        # Bounded, through the same cap the shell's output wears: a single named file used
+        # to be read whole, and the walk's own skip note ("name one directly to grep it")
+        # sends exactly the over-2-MB files - and anyone who names /dev/zero - here, so
+        # this read grew until the kernel OOM-killed the bot (A-2026-10-08-98).
         try:
-            text, _enc = _decode_file_text(root.read_bytes())
+            text, _cut, cap_note = _read_capped(root, strict=True)
         except OSError as e:
             return f"ERROR: {e}"
         hits = []
@@ -9648,8 +9661,10 @@ def tool_search_files(args, ctx):
                 hits.append(f"{root}:{i}: {line.strip()[:160]}")
                 if len(hits) >= max_results:
                     break
-        return "\n".join(hits) if hits else "No matches."
+        body = "\n".join(hits) if hits else "No matches."
+        return body + cap_note
     hits, content_hits, skipped_big = [], [], []
+    skipped_special = []
     capped_files, cap_reached = [], False
     try:
         for dirpath, dirnames, filenames in os.walk(root):
@@ -9667,7 +9682,16 @@ def tool_search_files(args, ctx):
                     hits.append(str(full))
                 if content_re is not None and (globbed or not asked_content):
                     try:
-                        if full.stat().st_size > 2_000_000:
+                        st = full.stat()
+                        if not stat.S_ISREG(st.st_mode):
+                            # A device, FIFO or socket: its st_size is 0, so the size
+                            # guard below never saw it, and read_bytes() on /dev/zero
+                            # grows until the kernel OOM-kills the bot while a FIFO
+                            # blocks open() for ever (A-2026-10-08-98). Skipped, never
+                            # read, and named in the note.
+                            skipped_special.append(str(full))
+                            continue
+                        if st.st_size > 2_000_000:
                             skipped_big.append(str(full))
                             continue
                         file_hits = 0
@@ -9707,6 +9731,12 @@ def tool_search_files(args, ctx):
     # instantly when the big file was named directly (2026-10-02). Say what was
     # not searched, by name, on both the hit and the no-hit path.
     note = ""
+    if skipped_special:
+        _shown = ", ".join(Path(p).name for p in skipped_special[:3])
+        note = ("\n[HARNESS: %d file(s) that are not regular files (device, FIFO, socket) "
+                "were NOT searched (%s%s) - reading one never ends or blocks.]"
+                % (len(skipped_special), _shown,
+                   ", ..." if len(skipped_special) > 3 else ""))
     if skipped_big:
         _shown = ", ".join(Path(p).name for p in skipped_big[:3])
         note = ("\n[HARNESS: %d file(s) over 2 MB were NOT searched for content (%s%s) - "

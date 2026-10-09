@@ -85,6 +85,58 @@ def main():
         check("directories are walked in path order",
               first.index("a-sub") < first.index("z-sub"), first)
 
+        # ---- A-2026-10-08-98: only REGULAR files are read ---------------------------------
+        # A device/FIFO/socket used to be read with read_bytes() like any file: its
+        # st_size is 0, so the 2 MB guard never saw it, /dev/zero grows until the kernel
+        # OOM-kills the bot, and a FIFO's open() never returns. Each one is skipped BY
+        # NAME now - a silent skip reads as an exhaustive answer.
+        import socket as _socket
+        special = []
+        sock_path = work / "a-socket-name.txt"
+        if os.name != "nt" and hasattr(_socket, "AF_UNIX"):
+            _s = _socket.socket(_socket.AF_UNIX)
+            _s.bind(str(sock_path))
+            special.append(sock_path.name)
+        fifo_path = work / "a-fifo-name.txt"
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(fifo_path)
+            special.append(fifo_path.name)
+            # Hold a writer just long enough that a PRE-FIX read returns at all: without
+            # one, the old open()-for-read blocks for ever and this suite would hang
+            # instead of failing. The fixed walk never opens it, so the thread may stay
+            # parked in open() - daemon, never joined.
+            import threading
+            import time
+            def _brief_writer():
+                try:
+                    with open(fifo_path, "w", encoding="utf-8"):
+                        time.sleep(0.5)
+                except OSError:
+                    pass
+            threading.Thread(target=_brief_writer, daemon=True).start()
+        if special:
+            out = search(work, content="needle-that-is-not-there")
+            check("a socket and a FIFO in the tree are skipped, not read",
+                  "No matches." in out, out)
+            check("...and each one is named in the note",
+                  all(n in out for n in special) and "not regular files" in out, out)
+            out = search(sock_path, content="x")
+            check("naming a socket directly is refused, not a silent 'No matches.'",
+                  out.startswith("ERROR:") and "not a regular file" in out, out[:140])
+        else:
+            print("note  no socket/FIFO check on this platform (no AF_UNIX file sockets)")
+
+        # A single named file goes through the SAME 8 MiB cap the shell's output wears.
+        # The walk's own skip note sends the over-2-MB files here, so this read was the
+        # unbounded half of the same bug.
+        fat = work / "fat.log"
+        with open(fat, "w", encoding="utf-8") as f:
+            f.write("x" * (9 * 1024 * 1024))
+            f.write("needle-after-the-cap\n")
+        out = search(fat, content="needle-after-the-cap")
+        check("a single file over the cap is read bounded, and says so",
+              "only the first" in out and "MiB" in out, out[:220])
+
         # ---- an exhaustive miss is still exactly "No matches."
         empty = Path(tempfile.mkdtemp(prefix="fbtest-search-empty-"))
         (empty / "x.txt").write_text("nothing here\n", encoding="utf-8")
