@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **A failed forget answered OK:** tool_memory ignored memory_forget's None, so a file held open (a Windows PermissionError, a permissions problem anywhere) was announced as forgotten while it stayed on disk and in the index - the failure is reported by name now (tests/test_memory_okf.py).
+- **Memory add did not scrub the description, tags or sources:** only title and body went through the scrubber, so a secret in any of the other three fields landed in the concept file and in the prompt-carried index (tests/test_memory_okf.py).
+- **A duplicate title could be taken at another id:** the add door checked only the concept at the same slug, so a renamed concept (its id kept), a '-2' slug or a foreign file could hold a title a second concept then took; the rule is now the update path's - every concept (tests/test_memory_okf.py).
+- **A search provider's HTTP error read as "No results":** tavily and searxng never checked the status, so a JSON error body (a bad key, a quota, a 5xx) returned an empty set and the chain stopped instead of trying the next provider; the status is checked and an empty provider falls through too (tests/test_search_providers.py).
+- **A page cut inside a `<script>` returned the script source:** the markup stripper needs the closing tag, so a byte budget landing mid-block returned the JS in place of the page text - an unterminated trailing block is dropped now (tests/test_search_providers.py).
+- **A days-old remember offer swallowed a bare "no thanks":** the pending offer had no TTL and nothing cleared it on /new or on "save it", so a dismissal meant for the model was consumed and an unrelated shape retired - a day's TTL, and reset and "save it" clear it (tests/test_memory_prompts.py).
+- **The repeat mint offer posted on every run:** the `repeats >= 2` branch had no offered-record and counted the session's whole hand-call total; it now counts THIS run and is throttled weekly like the census branch (tests/test_memory_prompts.py).
+- **The procedure census grew with every command vocabulary, and a damaged file was replaced in silence:** the signature keys are bounded and a damaged census is kept as one `.damaged` copy and named in the log (tests/test_memory_prompts.py).
+- **Session-search hits were truncated in filename order:** with more than 25 matches the alphabetically first sessions were returned and recent ones silently dropped - hits are ranked then newest-first, and both doors say how many were omitted (tests/test_transcript.py).
+- **A job that came due was skipped when jobs.json was adopted mid-session:** the start-up overdue-skip ran on every adopt, so an occurrence the bot was up for never fired; the skip is the start-up load's alone (tests/test_schedule.py).
+- **Without croniter the scheduler still fired every job hourly:** the tick never checked its own disabled state, so a weekly job ran every hour while the log said scheduling was off (tests/test_schedule.py).
+- **A listed request step longer than 200 characters vanished from the plan:** the parser was anchored to 200, so a paragraph passed as one item dropped out of the plan and the wrap-up check (tests/test_plan.py).
+- **Model-set plan steps were uncapped:** the derived path caps at 200 chars and the tool did not, while the plan rides every later payload - the same cap now applies (tests/test_plan.py).
+- **The check-in line posted tool arguments in the clear:** the ⏳ snippet was built from raw args and no destination scrubs, so a literal token rode chat and page every five minutes (tests/test_checkin.py).
+- **A third identical tool card dropped the rest of the batch:** the fold compared the already-folded "(×2)" line with the card signature, so the batch post was redrawn as the folded card alone and every other line vanished (tests/test_checkin.py).
+- **An edit rewrote a non-UTF-8 file as UTF-8:** every cp1252/Latin-1/Shift-JIS byte became U+FFFD with a clean diff - the file's own encoding is detected and written back (tests/test_harness_extras.py).
+- **write_file followed a symlink and edit_file replaced it:** os.replace swapped the link itself for a regular file (target untouched, owner/ACL/xattrs lost) - both doors follow the link now (tests/test_atomic_write.py).
+- **A UTF-16 file read as NUL-interleaved text:** read_file and search_files decoded everything as UTF-8, so a PowerShell 5.1 `>` redirect never matched a content search - the BOM and interleaved-NUL shapes are detected (tests/test_harness_extras.py).
+- **Ctrl-C at the prompt killed the console's stdin reader:** prompt_toolkit reads it as a key on the reader thread, so the handler's bare raise escaped and the console blocked on the input queue for ever (tests/test_tui.py).
+- **A crash after a long healthy run counted as a failed start:** only exit 0 reset the supervisor's failure count, so crashes spread over weeks added up and one quick exit at boot stopped the bot for good (tests/test_supervise.py).
+- **launchd under sudo targeted the wrong domain:** `gui/$(id -u)` is gui/0 under sudo, so an uninstall left the job loaded and KeepAlive-respawning and a fresh install loaded into the wrong session - every domain names the invoking user's uid (tests/test_installer_parity.py).
 ## [1.0.92] - 2026-10-08
 
 ### Fixed
