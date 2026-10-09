@@ -105,8 +105,10 @@ ever.
 ## What the prompt carries
 
 `volatile_context()` (the trailing state block, never the system prompt) carries
-`index.md`, capped at `memory_index_max_chars`, with each entry's flags - `(stale)`,
-`(deprecated)`, `(unverified|machine-confirmed|human-reviewed)`. Concepts are read on
+the memory index, rendered from the concepts each time the prompt is built - so the
+time-based `(stale)` flag is never frozen at the last mutation (`index.md` is the
+mutation-written browse copy) - capped at `memory_index_max_chars`, with each entry's
+flags - `(stale)`, `(deprecated)`, `(unverified|machine-confirmed|human-reviewed)`. Concepts are read on
 demand with `memory {action: "read"}`. The index over budget is cut with a marker that
 names `memory action=list`; a read path never rewrites the bundle.
 

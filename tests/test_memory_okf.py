@@ -264,6 +264,27 @@ def test_index_cut_names_what_it_drops():
           block[-400:])
 
 
+def test_the_prompt_index_renders_at_read_time_so_staleness_is_never_frozen():
+    """A-2026-10-08-142: index.md only moves when a mutating verb runs, so a concept
+    whose stale_after instant passed while the bundle was otherwise quiet kept riding
+    every prompt with no (stale) flag. The prompt renders the index from the concepts;
+    the file stays the mutation-written browse copy."""
+    _fresh()
+    fb.memory_new_concept("A dated fact", "true as of when it was written",
+                          stale_after="2999-01-01T00:00:00Z")
+    fb.memory_index_update()
+    # Time passes with no further mutation: the instant lands in the past on the concept
+    # while index.md still carries the render from when it was fresh.
+    fb.memory_update_concept("a-dated-fact", stale_after="2001-01-01T00:00:00Z")
+    on_disk = fb.MEMORY_INDEX.read_text(encoding="utf-8")
+    check("the file still says what the last mutation rendered (it is not rewritten by reads)",
+          re.search(r"\([^)]*\bstale\b[^)]*\)", on_disk) is None, on_disk)
+    block = fb.volatile_context(session_key="stale-probe")
+    check("the prompt's index flags the concept stale on the first read after the instant",
+          re.search(r"\[A dated fact\]\(a-dated-fact\.md\)[^\n]*\([^)]*\bstale\b",
+                    block) is not None, block[-300:])
+
+
 def test_log_is_newest_first_and_date_grouped():
     _fresh()
     fb.memory_new_concept("One", "1")

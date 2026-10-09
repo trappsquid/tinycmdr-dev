@@ -16260,7 +16260,13 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
                      "writes it any more):\n" + notes)
     if MEMORY_INDEX.exists():
         cap = mem_limit_chars("memory_index_max_chars", 3000)
-        index = MEMORY_INDEX.read_text(encoding="utf-8", errors="replace")
+        # RENDERED FROM THE CONCEPTS, never the file as it lies: index.md only moves when
+        # a mutating verb runs, and the (stale) flag moves with TIME - a concept whose
+        # stale_after instant passed with the bundle otherwise quiet kept riding every
+        # prompt unflagged for as long as that lasted (A-2026-10-08-142). The render is
+        # bounded by the concept cap; index.md stays the mutation-written browse copy for
+        # humans and the other consumers.
+        index = memory_index_render()
         if len(index) > cap:
             # A read path never rewrites the bundle (the notes.md lesson): bound what
             # the prompt sees - but on a LINE boundary and NAMING what the tail loses.
