@@ -205,12 +205,29 @@ def main():
 
     f = mb.facts()
     prose = _prose(doc)
-    for label, pat, want in (("line count", r"([\d,]+)-line file", f["lines"]),
-                             ("assertion count", r"([\d,]+) unit assertions?", f["checks"]),
-                             ("suite count", r"([\d,]+) suites", f["suites"]),
-                             ("graded-task count", r"([\d,]+) (?:graded )?tasks", f["graded"])):
+    # The patterns come from the generator (mb.PROSE_NUMBERS) - the same list --write
+    # rewrites through, so the graded and the written numbers cannot drift apart.
+    for label, pat, key in mb.PROSE_NUMBERS:
+        want = f[key]
         wrong = [n for n in re.findall(pat, prose) if int(n.replace(",", "")) != want]
         check("every %s the prose states matches the tree (%s)" % (label, want), not wrong, wrong)
+
+    # ...and --write OWNS those numbers (mb.rewrite_numbers): a doctored one must come
+    # back repaired, or the hand step it replaced returns the first time a number moves.
+    prose_now = mb.prose_of(doc)
+    present = 0
+    for label, pat, _key in mb.PROSE_NUMBERS:
+        mo = re.search(pat, prose_now)
+        if not mo:
+            continue
+        present += 1
+        # Doctor the NUMBER only, keeping the words around it: replacing the whole match
+        # would delete the pattern and the writer would have nothing to repair.
+        bad = prose_now[:mo.start(1)] + mo.group(1) + "9" + prose_now[mo.end(1):]
+        fixed, n = mb.rewrite_numbers(bad, f)
+        check("--write repairs a doctored %s" % label,
+              n >= 1 and fixed == prose_now, (label, n))
+    check("the prose restates at least one measured number to doctor", present > 0, present)
 
     # A per-host number in a document a stranger reads is a claim about the author's box:
     # skills/ is gitignored, this box holds two, and the doc claimed 43 in three places.

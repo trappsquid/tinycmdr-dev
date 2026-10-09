@@ -14,6 +14,11 @@ the tree, and committed between markers:
     python maintenance/measured-block.py --write    # rewrite the blocks in place
     python maintenance/measured-block.py --print    # what it would write
 
+The prose OUTSIDE the blocks restates some of the same facts ("one NN,NNN-line file",
+the graded-task count). Those four numbers are written by --write too (PROSE_NUMBERS) -
+facts() knows each one and tests/test_measured_doc.py grades each one, so a hand copy in
+step was a step nothing needed.
+
 `tests/test_measured_doc.py` is the gate: it runs the check and fails, and it falsifies
 itself on a doctored copy so "the gate is green" means something.
 
@@ -39,6 +44,62 @@ SRC = BASE / "tinycmdr.py"
 
 def marker(name):
     return ("<!-- measured:%s:start -->" % name, "<!-- measured:%s:end -->" % name)
+
+
+# The numbers the PROSE restates - the ones that used to be chased by hand at every batch
+# (label, the pattern tests/test_measured_doc.py grades, the facts() key it must equal).
+# ONE list: --write rewrites through it, the gate grades through it.
+PROSE_NUMBERS = (
+    ("line count", r"([\d,]+)-line file", "lines"),
+    ("assertion count", r"([\d,]+) unit assertions?", "checks"),
+    ("suite count", r"([\d,]+) suites", "suites"),
+    ("graded-task count", r"([\d,]+) (?:graded )?tasks", "graded"),
+)
+
+_BLOCK_START = re.compile(r"<!-- measured:([A-Za-z0-9_]+):start -->")
+
+
+def prose_of(doc):
+    """The doc with every measured block cut out - the part nothing else regenerates."""
+    out, at = [], 0
+    for m in _BLOCK_START.finditer(doc):
+        out.append(doc[at:m.start()])
+        end = doc.find("<!-- measured:%s:end -->" % m.group(1), m.end())
+        cut = doc.find("\n", end) if end != -1 else m.end()
+        at = cut + 1 if cut != -1 else len(doc)
+    out.append(doc[at:])
+    return "".join(out)
+
+
+def rewrite_numbers(text, f):
+    """Every restated number in `text` set to the tree's value. Returns (text, count)."""
+    count = 0
+    for _, pat, key in PROSE_NUMBERS:
+        want = f"{f[key]:,}"
+
+        def sub(mo, want=want):
+            nonlocal count
+            count += 1
+            return want + mo.group(0)[len(mo.group(1)):]
+        text = re.sub(pat, sub, text)
+    return text, count
+
+
+def rewrite_prose_numbers(doc, f):
+    """The same over a whole doc; blocks are untouched (rewrite() owns those)."""
+    pieces, at, count = [], 0, 0
+    for m in _BLOCK_START.finditer(doc):
+        piece, n = rewrite_numbers(doc[at:m.start()], f)
+        count += n
+        pieces.append(piece)
+        end = doc.find("<!-- measured:%s:end -->" % m.group(1), m.end())
+        cut = doc.find("\n", end) if end != -1 else m.end()
+        stop = cut + 1 if cut != -1 else len(doc)
+        pieces.append(doc[m.start():stop])
+        at = stop
+    piece, n = rewrite_numbers(doc[at:], f)
+    pieces.append(piece)
+    return "".join(pieces), count + n
 
 
 # --------------------------------------------------------------------- staging
@@ -309,8 +370,10 @@ def main():
                 print("no %s markers in %s" % (name, DOC), file=sys.stderr)
                 return 2
             doc = rewrite(doc, name, wrapped(name, render(name, f)))
+        doc, n = rewrite_prose_numbers(doc, f)
         DOC.write_text(doc, encoding="utf-8")
-        print("rewrote %d measured block(s) in %s" % (len(BLOCKS), DOC))
+        print("rewrote %d measured block(s) and %d prose number(s) in %s"
+              % (len(BLOCKS), n, DOC))
         return 0
 
     stale = stale_blocks()

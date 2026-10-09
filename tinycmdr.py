@@ -38632,7 +38632,8 @@ _DEV_ONLY_PATHS = ("/tests/", "/.github/", "/docs/", "/STATUS.json", "/CHANGELOG
 # (2026-10-07: 10 of the 29 scripts were in no list at all, so an updated checkout-install
 # kept them and still looked like a dev tree); tests/test_maintenance_kit.py now fails when
 # a file in the folder is classified nowhere, so the name list cannot fall behind again.
-_DEV_MAINTENANCE_DROP = ("atlas-merge.py", "build-package.py", "check-hygiene.py",
+_DEV_MAINTENANCE_DROP = ("atlas-merge.py", "batch.sh", "build-package.py",
+                         "check-hygiene.py",
                          "check-package-assets.py", "check-package-modes.py",
                          "check-package-page.py", "check-readme-assets.py",
                          "check-tree-clean.py", "drive-web-cases.py", "finish-release.sh",
