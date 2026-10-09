@@ -204,8 +204,19 @@ def test_small_output_passes_through_untouched():
     rc, out, err, timed_out = fb.run_capture([PY, "-c", "print('tiny-output')"], 30)
     check("a small result is unchanged", "tiny-output" in out
           and "HARNESS" not in out, out[:120])
-    spilled = sorted(p.name for p in (runs.glob("*.out") if runs.exists() else [])
-                     if "tiny-output" in p.read_text(errors="replace"))
+    spilled = []
+    for p in (runs.glob("*.out") if runs.exists() else []):
+        try:
+            text = p.read_text(errors="replace")
+        except OSError:
+            # A peer suite's run_capture unlinks its own .out the moment it has been
+            # read back, so glob-then-read races that unlink under `--jobs N` (raised
+            # [Errno 2] here in the macos gate, 2026-10-09). A file that is gone was
+            # not kept, which is the only thing this check grades.
+            continue
+        if "tiny-output" in text:
+            spilled.append(p.name)
+    spilled.sort()
     check("a small result is not kept on disk", not spilled, spilled)
 
 

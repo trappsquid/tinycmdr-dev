@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A download that ran short parked its client:** `_file` sent a Content-Length, hit EOF mid-stream (the file shrank under the open reader) and stopped writing on a keep-alive socket; a short read or a failed write closes the connection, so the truncation is visible on the wire (tests/test_webui.py).
 - **The upload-name cut counted characters, not bytes:** a 100-character Han name is 300 bytes, so with the timestamp prefix it passed the 120-character cut and failed the write on ext4 ("cannot be stored"); the cut counts bytes and never keeps half a character (tests/test_webui.py).
 - **`web_busy_note` could never name the port's holder on macOS:** the lookup ran `ss || netstat -ltnp`, and macOS has neither; `_port_holder` asks lsof first, with the Linux pair as the fallback (tests/test_webui.py).
+- **The spill check raced a peer suite's unlink and failed the macos gate:** the check globbed the shared run directory and read every `*.out` it listed, while under `--jobs N` each suite's `run_capture` unlinks its own the moment it has been read back - a name between the glob and the read raised `[Errno 2]` and failed the whole job; a file that is gone was not kept, which is the only thing the check grades, so a vanished name is skipped now (tests/test_stall.py).
 
 ## [1.0.96] - 2026-10-09
 
