@@ -13838,16 +13838,20 @@ def clear_open_question(session_key):
         pass
 
 
-def open_question(session_key):
+def open_question(session_key, consume=True):
     """The question an earlier run left unanswered, as a line for the trailing block, or "".
 
-    Handed to exactly ONE run: reading it consumes it, because a reminder that repeats in
-    every later run is noise - measured 2026-10-03 on a live install, where five consecutive
-    runs restated the same assumption and paid the tokens each time. The operator already
-    saw the question when it was asked; the run that follows the stop is the one that needs
-    the context. A question older than `agent.ask_question_ttl_hours` (default 24) is stale
-    and dropped outright: past that the work has moved on, and re-asking it blind is worse
-    than letting it go.
+    Handed to exactly ONE run: the payload build reads with consume=True, which takes
+    delivery and unlinks the sidecar, because a reminder that repeats in every later run is
+    noise - measured 2026-10-03 on a live install, where five consecutive runs restated the
+    same assumption and paid the tokens each time. The operator already saw the question
+    when it was asked; the run that follows the stop is the one that needs the context.
+    `consume=False` is the budget measurement's read: it weighs the line the request will
+    cost without taking delivery - the measurement runs before the payload is built, and a
+    read that always consumed ate the question before any payload ever saw it
+    (A-2026-10-08-152). A question older than `agent.ask_question_ttl_hours` (default 24) is
+    stale and dropped outright: past that the work has moved on, and re-asking it blind is
+    worse than letting it go.
     """
     path = _question_path(session_key)
     try:
@@ -13866,8 +13870,10 @@ def open_question(session_key):
             clear_open_question(session_key)
             return ""
     # Consumed: this run is the one that gets told. Deleting here, not after the run, keeps
-    # the state machine single-step - there is no run-end hook that could forget to.
-    clear_open_question(session_key)
+    # the state machine single-step - there is no run-end hook that could forget to. The
+    # measurement's peek (consume=False) leaves the sidecar for the payload that follows.
+    if consume:
+        clear_open_question(session_key)
     opts = [str(o) for o in (d.get("options") or []) if str(o).strip()]
     line = ('[HARNESS: a question from an earlier run is still unanswered: "%s"' % q)
     if opts:
@@ -16195,7 +16201,7 @@ def continuation_like(text):
 
 
 def volatile_context(state_marker=True, session_key=None, atlas=False, shell=False,
-                     prior_unfinished=""):
+                     prior_unfinished="", question_consume=False):
     """Notes — everything in the prompt that changes mid-run.
 
     Sent as a TRAILING message, never baked into the system prompt. The system
@@ -16312,8 +16318,12 @@ def volatile_context(state_marker=True, session_key=None, atlas=False, shell=Fal
             "task alone." % prior_unfinished)
     # A question an earlier run asked and nobody answered: the run stopped on purpose rather
     # than guess, and this is the context that stop would otherwise cost. Absent is the
-    # ordinary case, so it costs a failed stat on a session that has never timed out.
-    _oq = open_question(session_key) if session_key else ""
+    # ordinary case, so it costs a failed stat on a session that has never timed out. Only
+    # the payload build takes delivery (question_consume=True): the budget measurement reads
+    # the same line through here first, and a read that always consumed ate the question
+    # before any payload saw it (A-2026-10-08-152).
+    _oq = (open_question(session_key, consume=question_consume)
+           if session_key else "")
     if _oq:
         parts.append(_oq)
     # The mint invitation, same discipline: it rides the block the model reads while writing
@@ -18325,7 +18335,7 @@ class Agent:
                          session_key, _turns)
                 _unfinished = ""
         v = volatile_context(session_key=session_key, atlas=atlas, shell=shell,
-                             prior_unfinished=_unfinished)
+                             prior_unfinished=_unfinished, question_consume=True)
         if not v:
             return attach_tool_images(messages, session_key)
         if messages and messages[-1].get("role") == "user":
@@ -21136,6 +21146,12 @@ class Agent:
             self.locks.pop(session_key, None)
         _carry_reset(session_key)
         _run_state_reset(session_key)
+        # A question parked by a stopped run belongs to the conversation it was asked in.
+        # /new abandons that conversation ("Session cleared. Fresh context."), so the
+        # sidecar must not ride the fresh one's first prompt and read as a continuation of
+        # what was just dropped (A-2026-10-08-83) - the same reasoning as the spill
+        # pointers below.
+        clear_open_question(session_key)
         # A reveal is per-SESSION rent, so a cleared conversation pays it again: measured
         # 2026-09-25 driving a Windows install, `find_tools {all: true}` took a session
         # from 14 schemas to 30 and every later turn - through /new, which says "Session

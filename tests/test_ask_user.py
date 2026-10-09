@@ -392,8 +392,12 @@ def test_an_unanswered_question_stops_the_run():
         _shown = fb.volatile_context(session_key="sess-t")
         check("the unanswered question rides the trailing block, so the task is not re-derived",
               "Which of the two?" in _shown, _shown[-200:])
-        check("...and it is handed to exactly ONE run (reading consumes it)",
-              fb.open_question("sess-t") == ""
+        check("...and reading the block does not take delivery (the budget measurement "
+              "reads it before the payload does)",
+              fb._question_path("sess-t").exists(),
+              "the block read consumed the sidecar")
+        check("...it is handed to exactly ONE consumer: the consuming read empties the sidecar",
+              "Which of the two?" in fb.open_question("sess-t")
               and not fb._question_path("sess-t").exists(),
               fb.open_question("sess-t")[:140])
         # A question nobody came back to is stale, not eternal: past the TTL it is dropped
@@ -418,6 +422,41 @@ def test_an_unanswered_question_stops_the_run():
         fb.CONFIG["agent"]["ask_user"] = saved
         fb.CONFIG["agent"]["ask_user_wait_seconds"] = saved_wait
         fb.CONFIG["agent"]["ask_timeout_continues"] = True   # the suite's baseline
+
+
+def test_the_budget_measurement_does_not_eat_the_parked_question():
+    """A-2026-10-08-152: the run loop's first step, `_compact`, always runs its budget
+    measurement, and that measurement's volatile_context() read consumed the sidecar
+    before `_payload` built the prompt - so the question the feature parks for the next
+    run never reached any payload at all."""
+    fb.set_open_question("sess-step", "Which of the two?", ["a", "b"])
+    try:
+        messages = [{"role": "user", "content": "carry on"}]
+        fb.AGENT._compact(messages, "sess-step")          # the run loop's first step
+        check("the measurement weighs the parked question without consuming it",
+              fb._question_path("sess-step").exists(),
+              "the measurement ate the sidecar")
+        payload = fb.AGENT._payload(messages, session_key="sess-step")
+        blob = "\n".join(str(m.get("content") or "") for m in payload)
+        check("the payload the model receives carries the question",
+              "Which of the two?" in blob, blob[-300:])
+        check("...and building the payload is what consumes it",
+              not fb._question_path("sess-step").exists())
+    finally:
+        fb.clear_open_question("sess-step")
+
+
+def test_new_does_not_inherit_a_parked_question():
+    """A-2026-10-08-83: a question parked by a stopped run belongs to the conversation it
+    was asked in; /new abandons that conversation, so the sidecar goes with it."""
+    fb.set_open_question("sess-fresh", "Which of the two?", ["a", "b"])
+    check("the question is parked", fb._question_path("sess-fresh").exists())
+    fb.AGENT.reset("sess-fresh")
+    check("reset drops the parked question",
+          not fb._question_path("sess-fresh").exists(),
+          "the sidecar survived /new")
+    check("...so the fresh conversation's block does not carry it",
+          "Which of the two?" not in fb.volatile_context(session_key="sess-fresh"))
 
 
 def test_the_model_cannot_grant_itself_a_longer_wait():
