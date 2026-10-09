@@ -1506,6 +1506,44 @@ def main():
           "conversation and registers nothing under that name",
           (_keys113, _made113, fb.web_entry("web-abc.carry"), _st113, _bd113[:200]))
 
+    # ---- A-114: the LAN address is the ROUTE's, never the resolver's guess -----
+    # A stock Debian/Ubuntu/Raspberry Pi OS answers its own hostname with 127.0.1.1,
+    # so the resolver-first pick announced "http://127.0.1.1:8790/" and never put the
+    # real LAN IP into the Host check; a Hyper-V/WSL/Docker vEthernet can sort before
+    # the real NIC. The default-route address (a UDP connect, no packet sent) is the
+    # answer, and ALL of 127/8 is skipped in the fallback.
+    _real_out114 = getattr(fb, "_web_outbound_ip", None)
+    _real_lh114 = fb._web_local_hosts
+    _cache114 = set(fb._WEB_HOSTS_CACHE) if fb._WEB_HOSTS_CACHE is not None else None
+    try:
+        fb._web_local_hosts = lambda: {"127.0.1.1", "127.0.0.1", "localhost", "10.9.8.7"}
+        fb._web_outbound_ip = lambda: "172.16.4.4"
+        check(fb._web_lan_ip() == "172.16.4.4",
+              "the LAN address announced is the default route's, not the resolver's "
+              "first answer", fb._web_lan_ip())
+        fb._web_local_hosts = lambda: {"127.0.1.1", "127.0.0.1", "localhost"}
+        fb._web_outbound_ip = lambda: ""
+        check(fb._web_lan_ip() == "",
+              "...and without a route answer every 127/8 name is skipped (Debian's "
+              "127.0.1.1 is not an address anyone can visit)", fb._web_lan_ip())
+        if _cache114 is not None:
+            fb._web_local_hosts = _real_lh114
+            fb._WEB_HOSTS_CACHE.clear()
+            fb._WEB_HOSTS_CACHE.update({"127.0.0.1", "localhost"})
+            fb._web_outbound_ip = lambda: "172.16.4.4"
+            fb._web_hosts_resolve()
+            check("172.16.4.4" in fb._web_local_hosts(),
+                  "the Host check knows this box's own route address, so a LAN visitor "
+                  "typing the IP is not refused", sorted(fb._web_local_hosts())[:8])
+    finally:
+        fb._web_local_hosts = _real_lh114
+        if _real_out114 is not None:
+            fb._web_outbound_ip = _real_out114
+        if _cache114 is not None:
+            fb._WEB_HOSTS_CACHE.clear()
+            fb._WEB_HOSTS_CACHE.update(_cache114)
+
+
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

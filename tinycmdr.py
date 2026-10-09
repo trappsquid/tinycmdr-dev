@@ -28837,17 +28837,30 @@ def _web_authority(authority):
 
 
 def _web_hosts_resolve():
-    """The names that need the resolver, merged into the cache when they land."""
+    """The names that need the resolver, merged into the cache when they land.
+
+    ...and this box's outbound address, which the resolver does NOT reliably name: a
+    stock Debian/Ubuntu/Raspberry Pi OS maps its own hostname to 127.0.1.1, so a LAN
+    visitor typing the box's real IP was refused by the Host check in exactly the
+    0.0.0.0 mode the installer offers (A-2026-10-08-114). The hostname's `.local`
+    (mDNS) spelling is added for the same reason - a Raspberry Pi is browsed as
+    `<host>.local`.
+    """
     extra = set()
     try:
-        host = socket.gethostname()
+        host = (socket.gethostname() or "").strip().lower()
         fq = socket.getfqdn(host)
         if fq:
             extra.add(fq.strip().lower())
+        if host:
+            extra.add(host + ".local")
         for ip in socket.gethostbyname_ex(host)[2]:
             extra.add(str(ip).strip().lower())
     except Exception:                                        # noqa: BLE001
         pass
+    addr = _web_outbound_ip()
+    if addr:
+        extra.add(addr)
     if _WEB_HOSTS_CACHE is not None:
         _WEB_HOSTS_CACHE.update(extra)
 
@@ -30445,14 +30458,47 @@ def _web_token_mint(announce=True):
     return tok
 
 
+def _web_outbound_ip():
+    """The IPv4 a LAN visitor should type: this box's DEFAULT-ROUTE address.
+
+    Found by connecting a UDP socket and reading the local end - connect() only asks
+    the routing table and no packet is sent, the shape every "what is my IP" uses. The
+    resolver cannot answer this: a stock Debian/Ubuntu/Raspberry Pi OS maps its own
+    hostname to 127.0.1.1, and a Hyper-V/WSL/Docker vEthernet can sort before the real
+    NIC, so a name lookup names the wrong interface (both measured shapes,
+    A-2026-10-08-114). An empty string means no route could be found.
+    """
+    for probe in ("192.0.2.1", "198.51.100.1"):     # TEST-NET-1/2: never routed
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect((probe, 9))
+                addr = str(s.getsockname()[0])
+            finally:
+                s.close()
+            if addr and addr != "0.0.0.0" and not addr.startswith("127."):
+                return addr
+        except OSError:
+            continue
+    return ""
+
+
 def _web_lan_ip():
-    """This box's first non-loopback IPv4, or "" - what a LAN visitor would type."""
+    """This box's IPv4 a LAN visitor would type, or "".
+
+    The default-route address first; the resolver's answers are the fallback with ALL
+    of 127/8 excluded - 127.0.1.1 is what a Debian box prints for its own hostname,
+    not an address anyone can visit, and announcing it (with "that link works from any
+    machine on your network" beside it) was the wrong door (A-2026-10-08-114)."""
+    addr = _web_outbound_ip()
+    if addr:
+        return addr
     try:
-        names = _web_local_hosts() - {"127.0.0.1", "localhost", "::1"}
-    except Exception:
+        names = _web_local_hosts() - {"localhost"}
+    except Exception:                                        # noqa: BLE001
         names = set()
     for n in sorted(names):
-        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", n):
+        if re.fullmatch(r"\d+\.\d+\.\d+\.\d+", n) and not n.startswith("127."):
             return n
     return ""
 
