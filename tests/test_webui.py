@@ -131,6 +131,9 @@ def main():
     check(fb.ENV_FILE.exists()
           and ("TINYCMDR_WEB_TOKEN=%s" % minted) in fb.ENV_FILE.read_text(encoding="utf-8"),
           "it lands in .env (the one file the agent cannot read into a prompt)")
+    check(fb.scrub(minted) == "«redacted»",
+          "the minted token is a secret to scrub() from the moment it exists",
+          fb.scrub(minted)[:60])
     # The token file is the one file the agent never reads into a prompt, so the mode it
     # is created with is the point: on POSIX the product chmods it 0600 (see _env_set),
     # and "no group or world bits" IS that claim. Windows has no such bits - st_mode

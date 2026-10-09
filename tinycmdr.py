@@ -3492,6 +3492,19 @@ def _secret_values():
 _SECRETS = _secret_values()
 
 
+def _refresh_secrets():
+    """Re-derive the secret sweep after something NEW was handed to this process.
+
+    The import-time sweep does not hold what arrives later, and an unscrubbed new
+    secret reaches the transcript, the log and the chat: `config set` adding a key
+    (measured 2026-09-29), an endpoint reload, and the page token _web_token_mint has
+    just put into os.environ (measured 2026-10-09 - the mint wrote .env and the
+    environment and left _SECRETS stale for the rest of the process).
+    """
+    global _SECRETS
+    _SECRETS = _secret_values()
+
+
 def scrub(text):
     """Mask known secrets before text enters context or leaves the process.
 
@@ -30369,6 +30382,7 @@ def _web_token_mint(announce=True):
         print("could not write %s: %s" % (ENV_FILE, e), file=sys.stderr)
         return ""
     os.environ["TINYCMDR_WEB_TOKEN"] = tok
+    _refresh_secrets()          # the token is a secret from THIS moment on
     if announce:
         print("minted TINYCMDR_WEB_TOKEN (the page's access token; it is in %s, never "
               "printed in full here)." % ENV_FILE.name)
@@ -35398,8 +35412,7 @@ def _run_setup_interactive(rest=None):
         return 1
     # Setup can add a key this process did not have at import; re-derive the sweep so
     # the keys it just wrote are masked like the rest (2026-09-29).
-    global _SECRETS
-    _SECRETS = _secret_values()
+    _refresh_secrets()
 
     summary = [
         "LLM Endpoint : %s" % llm.get("base_url"),
@@ -37910,9 +37923,8 @@ def _config_take_effect():
                 _fb["api_key"] = _val
     _MODEL_CACHE["at"] = 0.0
     # A key added after import was not in the sweep, so it reached the transcript, the
-    # log and the chat unmasked. Re-derive it with the config (2026-09-29).
-    global _SECRETS
-    _SECRETS = _secret_values()
+    # log and the chat unmasked (2026-09-29).
+    _refresh_secrets()
     return None
 
 
@@ -38256,10 +38268,8 @@ def _verb_config(rest):
         _MODEL_CACHE["at"] = 0.0
     CONFIG.update(back)
     # The secret guard above skips the llm section, so `config set llm.api_key` lands
-    # here and takes effect; the import-time sweep does not hold it, and an unscrubbed
-    # new key reaches the transcript, the log and the chat (2026-09-29).
-    global _SECRETS
-    _SECRETS = _secret_values()
+    # here and takes effect; the import-time sweep does not hold it (2026-09-29).
+    _refresh_secrets()
     if _verb_running() is True:
         print("a running bot reads config.json at start: `tinycmdr restart`.")
     return 0
