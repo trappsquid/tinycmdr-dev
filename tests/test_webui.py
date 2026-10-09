@@ -1412,6 +1412,29 @@ def main():
     # pre-fix build (TINYCMDR_SRC); the refutations are pinned as behaviour.
     # =====================================================================
 
+    # ---- A-121: /a2a checks the token BEFORE the body, and a body refusal keeps
+    # its own status - `_body() or {}` fed 411/413/408 refusals to the JSON-RPC
+    # path as an empty request, which answered "Invalid Request" for a body it had
+    # already refused.
+    fb.CONFIG["web"]["a2a"] = True
+    try:
+        _st121, _hd121, _bd121, _ = probe(
+            "POST", "/a2a", {**TOK, "Content-Length": "abc"})
+        check(_st121 == 411 and b"Content-Length" in _bd121,
+              "a /a2a body with no usable length is refused 411, not read as empty",
+              (_st121, _bd121[:90]))
+        _st121b, _hd121b, _bd121b, _ = probe("POST", "/a2a", TOK, b"[]")
+        check(_st121b == 400 and b"expected a JSON object body" in _bd121b,
+              "a /a2a body that is not a JSON object is refused in the door's words",
+              (_st121b, _bd121b[:90]))
+        _st121c, _hd121c, _bd121c, _ = probe("POST", "/a2a", None,
+                                             b'{"jsonrpc": "2.0", "id": 1}')
+        check(_st121c == 401 and b"unauthorized" in _bd121c,
+              "an unauthenticated /a2a call is still refused, before its body",
+              (_st121c, _bd121c[:90]))
+    finally:
+        del fb.CONFIG["web"]["a2a"]
+
     # ---- A-227: naming YOUR OWN conversation runs there, not in the shared one --
     # A client whose message is resolved to the shared "web" conversation IS steered
     # into the run going there - that conversation is documented as nobody's. The

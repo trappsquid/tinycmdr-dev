@@ -29936,8 +29936,19 @@ def run_webui():
                     self._drain()
                     self._json({"error": "not found"}, 404)
                     return
-                body = self._body() or {}
-                status, payload = a2a_http(self.path, body, self._auth_ok(),
+                # The token FIRST, like every other mutating route: reading and
+                # parsing an unauthenticated body spent a worker on a caller with no
+                # claim to one, and `_body() or {}` then fed a 411/413/408 refusal to
+                # the JSON-RPC path as an empty request - "Invalid Request" instead of
+                # the status that names what was wrong (A-121).
+                if not self._auth_ok():
+                    self._drain()
+                    self._json({"error": "unauthorized"}, 401)
+                    return
+                body = self._need_body()
+                if body is None:
+                    return
+                status, payload = a2a_http(self.path, body, True,
                                            self.headers.get("A2A-Version"))
                 self._json(payload, status)
                 return
