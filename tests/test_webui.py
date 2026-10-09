@@ -906,6 +906,46 @@ def main():
                   (round(_dt, 2), _d[:70]))
         finally:
             _sock.close()
+
+        # ...and the deadline belongs to the WHOLE body (A-120): with the timeout
+        # re-armed per recv, a client trickling one byte inside every window used to
+        # hold the worker - and keep its body being read - for as long as it liked.
+        # With a token the parse stalls to 408, without one the drain stalls to 401;
+        # both must come back at the deadline, not at 40 x the trickle interval.
+        for _hdr, _want, _why in ((b"X-Tinycmdr-Token: %s\r\n" % token.encode(), b"408",
+                                   "at a parser"),
+                                  (b"", b"401", "before auth")):
+            _sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+            _stop = threading.Event()
+
+            def _trickle(_sock=_sock, _stop=_stop):
+                try:
+                    while not _stop.is_set():
+                        _sock.sendall(b"{")
+                        time.sleep(0.2)
+                except OSError:
+                    pass
+
+            try:
+                _sock.sendall(b"POST /api/run HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                              b"Content-Type: application/json\r\n" % port
+                              + _hdr + b"Content-Length: 40\r\n\r\n")
+                threading.Thread(target=_trickle, daemon=True).start()
+                _t0 = time.time()
+                _d = b""
+                while b"\r\n\r\n" not in _d:
+                    _c = _sock.recv(4096)
+                    if not _c:
+                        break
+                    _d += _c
+                _dt = time.time() - _t0
+                check(_want in _d.split(b"\r\n", 1)[0] and _dt < 3,
+                      "a body that trickles %s is cut off at the deadline, not fed "
+                      "for ever" % _why,
+                      (round(_dt, 2), _d[:70]))
+            finally:
+                _stop.set()
+                _sock.close()
     finally:
         fb.WEB_BODY_DEADLINE = _saved_dl
 

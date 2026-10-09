@@ -27049,10 +27049,15 @@ def web_inventory():
 # already several times the model's whole context window.
 WEB_BODY_MAX = 1048576
 
-# How long a request body may take to arrive. The handler socket timeout (60 s) bounds a
-# client that never finishes its headers; this bounds the BODY, so a caller that announces
-# a length and then trickles bytes cannot hold a worker for the whole minute.
+# How long a request body may take to arrive, WHOLE: the handler socket timeout (60 s)
+# bounds a client that never finishes its headers; this bounds the body, and _body_read
+# re-arms the socket timeout with what is LEFT of it, so a caller that announces a
+# length and then trickles bytes cannot hold a worker for the whole minute.
 WEB_BODY_DEADLINE = 15
+
+# One recv's worth per loop in _body_read: the deadline is the WHOLE body's, so the
+# read runs one syscall at a time instead of inside the buffered reader's own loop.
+WEB_BODY_CHUNK = 65536
 
 # The request-target bound (A-226). Routing walks a chain of startswith() over self.path,
 # so a huge path is unbounded work per request from a peer that needs no token (measured
@@ -29696,6 +29701,39 @@ def run_webui():
         def do_PATCH(self):
             self._refuse_method("PATCH")
 
+        def _body_read(self, length):
+            """Up to `length` request-body bytes under an ABSOLUTE deadline.
+
+            settimeout alone bounds each recv, and rfile.read(n) loops over recvs
+            inside the buffered reader, so a client trickling one byte inside every
+            timeout window used to hold a worker - and keep its body readable - for
+            as long as it liked (A-2026-10-08-120). read1() makes one recv per loop
+            and the socket timeout is re-armed with what is LEFT of the deadline, so
+            the read as a whole ends within WEB_BODY_DEADLINE seconds of wall time.
+            Raises socket.timeout when the deadline passes mid-body; an EOF returns
+            short. Either incomplete case marks the connection un-reusable.
+            """
+            deadline = now_mono() + WEB_BODY_DEADLINE
+            chunks = []
+            got = 0
+            try:
+                while got < length:
+                    left = deadline - now_mono()
+                    if left <= 0:
+                        raise socket.timeout("request body deadline")
+                    self.connection.settimeout(left)
+                    chunk = self.rfile.read1(min(length - got, WEB_BODY_CHUNK))
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    got += len(chunk)
+            finally:
+                if got < length:
+                    # EOF, a stall or the deadline: bytes this body promised may still
+                    # be in flight, so this connection must not be reused.
+                    self.close_connection = True
+            return b"".join(chunks)
+
         def _body(self):
             """The request body as a JSON OBJECT, or None.
 
@@ -29742,8 +29780,7 @@ def run_webui():
                 # Read (and drop) what we can, bounded by the cap and under the
                 # deadline, so the caller HEARS the refusal instead of a reset.
                 try:
-                    self.connection.settimeout(WEB_BODY_DEADLINE)
-                    self.rfile.read(min(length, WEB_BODY_MAX))
+                    self._body_read(min(length, WEB_BODY_MAX))
                 except Exception:
                     pass
                 self.close_connection = True
@@ -29751,10 +29788,10 @@ def run_webui():
                 self._body_code = 413
                 return None
             try:
-                # An absolute deadline for THIS read: a client that announces a length and
-                # trickles bytes must not hold a worker for the whole socket timeout.
-                self.connection.settimeout(WEB_BODY_DEADLINE)
-                raw = self.rfile.read(length) or b"{}"
+                # An absolute deadline for this body (see _body_read): a client that
+                # announces a length and trickles bytes must not hold a worker for
+                # the whole socket timeout.
+                raw = self._body_read(length) or b"{}"
                 self._body_got = "body"
                 parsed = json.loads(raw)
             except (socket.timeout, TimeoutError):
@@ -29806,8 +29843,7 @@ def run_webui():
                 if not 0 < length <= max_bytes:
                     self.close_connection = True
                     return None
-                self.connection.settimeout(WEB_BODY_DEADLINE)
-                data = self.rfile.read(length)
+                data = self._body_read(length)
                 return data if len(data) == length else None
             except Exception:
                 return None
@@ -29837,8 +29873,7 @@ def run_webui():
                     self.close_connection = True
                     return
                 if length > 0:
-                    self.connection.settimeout(WEB_BODY_DEADLINE)
-                    got = self.rfile.read(min(length, WEB_BODY_MAX))
+                    got = self._body_read(min(length, WEB_BODY_MAX))
                     # A short read means EOF (or a stall): bytes we did not account for
                     # may remain, so this connection cannot be reused.
                     if len(got) < min(length, WEB_BODY_MAX):
