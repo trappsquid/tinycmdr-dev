@@ -2172,6 +2172,17 @@
       },
       "detail": "A double-clicked UNINSTALL-WINDOWS.cmd lives in the folder the removal deletes, and cmd.exe reads a batch file while it runs - the deletion took the tail with it, so the exit code, the error line and the closing pause never appeared and the window vanished with no message. The door re-runs itself from %TEMP% (which the removal cannot reach), steps its own shell out of the folder first, and ends every path behind 'Press any key to close this window.'; INSTALL-WINDOWS.cmd owns the same barrier when it is the double-clicked window, and none when a caller already holds one. tests/test_installer_windows.py now RUNS both doors on Windows against staged folders with a stub wrapper - refusals, no, yes, a wrapper's exit code, the barrier, and a wrapper that deletes the door's own file - where the previous checks only parsed text.",
       "gate": "closes at the next release"
+    },
+    {
+      "id": "per-platform-archives",
+      "title": "each archive carries only its own platform's doors",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "a320dd3",
+        "expect": "untagged"
+      },
+      "detail": "Every download packed all three OSes' doors: the win zip carried the macOS and Linux installers, install/README-macos.md, the launchd plist and both .command launchers - 9 files / 194.1 KB (103.3 KB macOS, 90.8 KB Linux), measured 2026-10-09 on the built public win zip - and every installer copies the package tree, so foreign doors landed in every install folder too. maintenance/build-package.py stages one tree and writes each container with the other platforms' names skipped (PLATFORM_FILES beside SHIP, guarded by platform_drift()), and grades the written artifact: a container that still carries a foreign door is refused like a leak. maintenance/check-package-modes.py builds the real pruned macOS container, and check-package-assets/-page and smoke-install.sh pass on all three archives.",
+      "gate": "closes at the next release"
     }
   ]
 }
