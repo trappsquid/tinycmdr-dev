@@ -93,16 +93,19 @@ def run(dirpath, args=(), tokens=(), with_mm=False, timeout=60, llm=None, config
     the deadline is the caller's: a timeout comes back as the string "serving" with
     everything the child had printed, instead of an exception that grades the test.
     For a serving child, prefer serve_and_probe(): text from a killed process is
-    unreliable, the page answering is not.
+    unreliable, the page answering is not. `config` is True (the minimal config below),
+    False (no config at all), or a DICT the caller owns - staged as the config.json.
     """
     cfg = {"llm": llm or LLM}
-    if not config:
-        (dirpath / "config.json").unlink(missing_ok=True)
     if with_mm:
         cfg["mattermost"] = {"url": "chat.invalid", "scheme": "https", "port": 443,
                              "token": "", "allowed_users": ["u1"]}
         cfg["telegram"] = {"token": "", "allowed_users": ["4242"]}
-    if config:
+    if isinstance(config, dict):
+        (dirpath / "config.json").write_text(json.dumps(config), encoding="utf-8")
+    elif not config:
+        (dirpath / "config.json").unlink(missing_ok=True)
+    else:
         (dirpath / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
     if tokens:
         (dirpath / ".env").write_text("".join(f"{k}={v}\n" for k, v in tokens),
@@ -367,6 +370,64 @@ def main():
               "A-73: ...and NO page is raised before it refuses", said[-300:])
         check(_dt < 15,
               "A-72: ...and it does not sit 30s on the way out", "took %.1fs" % _dt)
+
+        # -- --mattermost with a VALIDATING config: still no page before the refusal --
+        # The page was raised before the token check, so a lane-less host with web on
+        # (this one) opened a browser at a server that died the moment the check refused
+        # - the same curse A-73 fixed for the config error, one branch over
+        # (A-2026-10-08-138).
+        d = work / "mm_page"
+        d.mkdir(exist_ok=True)
+        shutil.copy2(SRC, d / "tinycmdr.py")
+        _port = free_port()
+        code, said = run(d, args=("--mattermost",),
+                         config={"llm": LLM,
+                                 "web": {"enabled": True, "host": "127.0.0.1",
+                                         "port": _port}},
+                         tokens=(("TINYCMDR_WEB_TOKEN", "t" * 32),), timeout=60)
+        check(code == 2 and "--mattermost was given" in said,
+              "a valid, token-less --mattermost refuses (rc 2)", (code, said[-300:]))
+        check("page:" not in said and "web UI listening" not in said,
+              "A-138: ...and NO page is raised before it refuses", said[-400:])
+
+        # -- a second start on the same folder names the LOOK-THROUGH door ------------
+        # POSIX locks the install FOLDER itself, so there is no lock file to delete;
+        # advising one hands the next start a fresh lock and a second bot on the same
+        # token (A-2026-10-08-131). A LIVE holder is the platform-neutral way to grade it.
+        d = work / "lockhold"
+        d.mkdir(exist_ok=True)
+        shutil.copy2(SRC, d / "tinycmdr.py")
+        _port = free_port()
+        (d / "config.json").write_text(json.dumps(
+            {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1", "port": _port}}),
+            encoding="utf-8")
+        _env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
+        _env["HOME"] = str(d)
+        _env["TINYCMDR_NO_BROWSER"] = "1"
+        holder = subprocess.Popen([sys.executable, str(d / "tinycmdr.py")],
+                                  cwd=str(d), env=_env, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            _up = False
+            _t0 = time.time()
+            while time.time() - _t0 < 30 and holder.poll() is None:
+                try:
+                    with urllib.request.urlopen(
+                            "http://127.0.0.1:%d/api/health" % _port, timeout=1) as _r:
+                        _up = _r.status == 200
+                    break
+                except Exception:                            # noqa: BLE001
+                    time.sleep(0.5)
+            check(_up, "a holder serves the folder (it holds the lock)", _port)
+            code, said = run(d, timeout=30)
+            check(code == 3 and "already running from this folder" in said,
+                  "a second start is refused (rc 3)", (code, said[-300:]))
+            check("tinycmdr status" in said and "delete tinycmdr.lock" not in said,
+                  "A-131: ...naming the look-through door, never the lock file",
+                  said[-500:])
+        finally:
+            holder.kill()
+            holder.wait(timeout=10)
 
         # -- `--once` takes the TASK, and only the task ----------------------------
         # A separate flag after `--once` used to be swallowed into the prompt - the model was

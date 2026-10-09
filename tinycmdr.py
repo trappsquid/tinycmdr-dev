@@ -52,7 +52,7 @@ import time
 import traceback
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import quote as _url_quote, quote_plus as _url_quote_plus
 
 import requests
@@ -126,6 +126,9 @@ class _LoudRotatingFileHandler(logging.handlers.RotatingFileHandler):
     inside the listener thread, which logs nothing about it. So a rollover failure now
     retries as a plain append - losing the ROTATION is fine, losing the RECORD is what an
     operator cannot see - and one stderr line names the file and the error either way.
+    A WRITE failure reports through handleError(): StreamHandler.emit swallows its own
+    exceptions and calls it, so an except around super().emit() is dead code and the
+    stdlib prints a traceback per record instead (A-2026-10-08-141).
     """
 
     _warned = False
@@ -141,18 +144,23 @@ class _LoudRotatingFileHandler(logging.handlers.RotatingFileHandler):
         except Exception:                                     # noqa: BLE001
             pass
 
-    def emit(self, record):
+    def handleError(self, record):
+        """The ONE hook a write failure reaches (see the class docstring): warn once,
+        then retry the append on a fresh handle - the failure is usually the handle, and
+        losing the RECORD is what an operator cannot see."""
+        err = sys.exc_info()[1] or RuntimeError("logging error")
+        self._warn("could not be written", err)
         try:
-            super().emit(record)
-        except Exception as e:                                # noqa: BLE001
-            self._warn("could not be written", e)
-            try:
-                if self.stream is None:
-                    self.stream = self._open()
-                self.stream.write(self.format(record) + self.terminator)
-                self.flush()
-            except Exception:                                 # noqa: BLE001
-                pass
+            if self.stream is not None:
+                try:
+                    self.stream.close()
+                except Exception:                             # noqa: BLE001
+                    pass
+            self.stream = self._open()
+            self.stream.write(self.format(record) + self.terminator)
+            self.flush()
+        except Exception:                                     # noqa: BLE001
+            pass
 
     def doRollover(self):
         try:
@@ -1224,10 +1232,14 @@ def load_config():
         cfg["telegram"]["token"] = ""
     # Same rule for the search providers, which name their key's .env variable now
     # (api_key_env). A key left in config.json is a copy the agent can read into a prompt
-    # and quote, so it is ignored with a warning rather than honoured silently.
+    # and quote, so it is ignored with a warning rather than honoured silently. What the
+    # FILE said is read, but only when the section IS an object: a non-object `search`
+    # section is kept as the shipped default above, and `.get` off a string killed the
+    # import before the guard could say anything (A-2026-10-08-135).
+    _search_file = user.get("search") if isinstance(user.get("search"), dict) else {}
     for old_key, env_name in (("anysearch_api_key", "ANYSEARCH_API_KEY"),
                               ("tavily_api_key", "TAVILY_API_KEY")):
-        if str((user.get("search") or {}).get(old_key) or "").strip():
+        if str(_search_file.get(old_key) or "").strip():
             log.warning("search.%s in config.json is IGNORED - the key belongs in %s as "
                         "%s, which the provider named api_key_env reads. Delete the "
                         "config.json copy.", old_key, ENV_FILE.name, env_name)
@@ -1235,8 +1247,22 @@ def load_config():
             # value survives into anything that writes this config back out.
             cfg["search"].pop(old_key, None)
     # fallback endpoints can name their own env var (api_key_env) so provider
-    # keys live in .env instead of config.json
-    for fb in cfg["llm"].get("fallbacks", []):
+    # keys live in .env instead of config.json. A wrong TYPE here is a config typo, not a
+    # startup crash: fb.get off a string entry raised AttributeError out of the import
+    # (A-2026-10-08-136), and every reader of llm.fallbacks assumes a list of objects.
+    _fbs = cfg["llm"].get("fallbacks")
+    if _fbs is not None and not isinstance(_fbs, list):
+        log.warning("config.json llm.fallbacks is %s, not a list - it is ignored (no "
+                    "fallbacks).", type(_fbs).__name__)
+        _fbs = None
+    _good_fbs = [fb for fb in (_fbs or []) if isinstance(fb, dict)]
+    if _fbs and len(_good_fbs) != len(_fbs):
+        log.warning("config.json llm.fallbacks: %d non-object %s ignored (an endpoint is "
+                    "an object with base_url and model).",
+                    len(_fbs) - len(_good_fbs),
+                    "entry" if len(_fbs) - len(_good_fbs) == 1 else "entries")
+    cfg["llm"]["fallbacks"] = _good_fbs
+    for fb in _good_fbs:
         env_name = fb.get("api_key_env")
         if env_name and os.environ.get(env_name):
             fb["api_key"] = os.environ[env_name]
@@ -37025,7 +37051,7 @@ def _verb_doctor():
 
     err = validate_startup_config()
     if not _chat_lane_configured():
-        notes.append("no chat lane configured - CLI-only install (--cli / --once)")
+        notes.append(_no_chat_lane_note())
     print("  config    : %s" % (err.splitlines()[0] if err else "ok"))
     if err:
         problems.append(err)
@@ -37054,8 +37080,9 @@ def _verb_doctor():
               "accepts images")
 
     # The persona is invisible state: nothing else in this output says whether the agent is
-    # running the shipped identity or one somebody edited here. (`update` copies an edited
-    # file aside before pulling; see preserve_edited_soul.)
+    # running the shipped identity or one somebody edited here. (`update` consumes the
+    # release artifact - no git - and never overwrites an edited soul.md; a copy is kept
+    # beside it. See preserve_edited_soul.)
     try:
         _soul_edited = (SOUL_FILE.read_text(encoding="utf-8").strip()
                         != DEFAULT_SOUL.strip()) if SOUL_FILE.exists() else None
@@ -37067,10 +37094,9 @@ def _verb_doctor():
         print("  persona   : soul.md (%s)"
               % ("edited on this host" if _soul_edited else "the shipped seed"))
         if _soul_edited:
-            notes.append("soul.md is an uncommitted edit to a tracked file: `update` "
-                         "copies it aside before pulling, but anything that discards "
-                         "local changes (git reset --hard) would take it. The persona is "
-                         "read once per process, so restart after editing it")
+            notes.append("soul.md is edited on this host: `update` never overwrites it "
+                         "(an edited persona is left in place and copied aside first). "
+                         "The persona is read once per process, so restart after editing it")
 
     drift = guard_list_drift()
     if drift:
@@ -37827,9 +37853,13 @@ def _verb_config(rest):
     if err:
         print(err, file=sys.stderr)
         return 1
+    # Walk the FULL dotted path: a single `back.get("llm.thinking_budgets")` never
+    # matches a depth-3 write, so a successful set of a name->spec key printed "(gone)"
+    # (A-2026-10-08-132). A non-dict mid-path reads as "nothing there", not a crash.
     node = back
-    for part in ([section] if section else []):
-        node = (node.get(part) or {})
+    for part in (section.split(".") if section else []):
+        nxt = node.get(part) if isinstance(node, dict) else None
+        node = nxt if isinstance(nxt, dict) else {}
     print("config %s: %s = %s" % (path, "unset" if what == "unset" else "set",
                                   json.dumps(node.get(key)) if key in node else "(gone)"))
     if key in ("base_url", "model", "fallbacks", "token") and section == "llm":
@@ -38093,12 +38123,40 @@ def _verify_asset(asset_path, sums_path, asset_name):
     return True, ""
 
 
+def _release_member_unsafe(member):
+    """Why a tar member must not be extracted, or "".
+
+    The manual half of tarfile's `data` filter, for Pythons that have no filter
+    parameter (a stock 3.9 distro build is one), where the old fallback extracted
+    blind: a `../` member wrote OUTSIDE the work folder, and SHA256SUMS rides the
+    same base URL, so the digest proves the transfer, not the contents
+    (A-2026-10-08-134). Refused: absolute names (POSIX or a Windows drive), a `..`
+    component anywhere, special files, and links whose target leaves the folder.
+    Backslashes count as separators because on Windows they are, and update runs there.
+    """
+    name = member.name.replace("\\", "/")
+    if os.path.isabs(name) or PurePosixPath(name).is_absolute() \
+            or ".." in PurePosixPath(name).parts:
+        return "a path outside the unpack folder (%s)" % member.name
+    if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+        return "a special file (%s)" % member.name
+    if member.issym() or member.islnk():
+        link = member.linkname.replace("\\", "/")
+        if os.path.isabs(link) or PurePosixPath(link).is_absolute() \
+                or ".." in PurePosixPath(link).parts:
+            return ("a link that leaves the unpack folder (%s -> %s)"
+                    % (member.name, member.linkname))
+    return ""
+
+
 def _extract_release(archive, dest):
     """Unpack an archive into `dest`; return the folder holding tinycmdr.py, or None."""
     import tarfile
     import zipfile
     dest.mkdir(parents=True, exist_ok=True)
     if str(archive).lower().endswith(".zip"):
+        # zipfile strips absolute paths and `..` components itself and writes symlink
+        # members as plain files, so no sieve is needed here.
         with zipfile.ZipFile(archive) as z:
             z.extractall(dest)
     else:
@@ -38106,7 +38164,21 @@ def _extract_release(archive, dest):
             try:
                 t.extractall(dest, filter="data")        # 3.12+: refuse odd members
             except TypeError:                            # older pythons have no filter
+                # One unsafe member refuses the WHOLE archive, the same call the filter
+                # makes - never a half-unpacked package.
+                for m in t.getmembers():
+                    why = _release_member_unsafe(m)
+                    if why:
+                        log.warning("release archive refused: %s carries %s - nothing was "
+                                    "unpacked", Path(archive).name, why)
+                        return None
                 t.extractall(dest)
+            except Exception as e:                       # 3.12+: the filter refused one
+                if not isinstance(e, getattr(tarfile, "FilterError", ())):
+                    raise
+                log.warning("release archive refused: %s - nothing was unpacked (%s)",
+                            Path(archive).name, e)
+                return None
     for cand in sorted(dest.rglob("tinycmdr.py")):
         return cand.parent
     return None
@@ -39682,6 +39754,18 @@ def _chat_lane_configured():
     return bool(_mm_token_configured() or _tg_token_configured())
 
 
+def _no_chat_lane_note():
+    """What a host with no chat lane is told, once (A-2026-10-08-139).
+
+    The page is a door whenever web is on - the first start mints its token and holds
+    the process open - so "CLI-only install" was false for exactly the hosts that have
+    a door. Only web.enabled false leaves the CLI doors alone."""
+    if (CONFIG.get("web") or {}).get("enabled", True):
+        return ("no chat lane configured - the page serves this host (bare `tinycmdr` "
+                "holds it open; --cli / --once need no service)")
+    return "no chat lane configured - CLI-only install (--cli / --once)"
+
+
 def validate_startup_config():
     """Catch the classic first-run mistakes before they die as an unreadable
     traceback inside the Mattermost driver. Returns an error string, or None."""
@@ -39711,10 +39795,10 @@ def validate_startup_config():
     _mm_intent = bool(_mm_users or (_mm_url and not _mm_placeholder_unset(_mm_url)
                                     and not _mm_documented_placeholder(_mm_url)))
     if not _chat_lane_configured() and not _mm_intent:
-        # A CLI-only install is a supported end state: the installers register no
-        # service for it, there is no chat driver to validate, and nothing remote
-        # to serve. `--cli` and `--once` are its doors.
-        log.info("no chat lane configured: CLI-only install (--cli / --once)")
+        # A lane-less install is a supported end state: there is no chat driver to
+        # validate. It may still have a door - the page, minting its token at first
+        # start - which _no_chat_lane_note() names (A-2026-10-08-139).
+        log.info("%s", _no_chat_lane_note())
         return None
     tg_users = [u for u in ((CONFIG.get("telegram") or {}).get("allowed_users") or [])
                 if str(u).strip()]
@@ -39960,13 +40044,14 @@ def main():
                 pass
             sys.exit(2)
         if not acquire_single_instance_lock():
-            log.critical("STARTUP ABORTED: another tinycmdr is already "
-                         "running from %s (tinycmdr.lock is held). Two "
-                         "instances on one bot token double-answer every "
-                         "DM — kill the other one instead.", BASE_DIR)
+            # instance_busy_note(), never the old "delete tinycmdr.lock" advice: POSIX
+            # locks the install FOLDER itself, so there is no lock file to delete and
+            # deleting one would hand the next start a fresh lock - a second bot on the
+            # same token (A-2026-10-08-131).
+            log.critical("STARTUP ABORTED: another tinycmdr is already running from %s. %s",
+                         BASE_DIR, instance_busy_note().replace("\n", " "))
             print(f"\n*** tinycmdr is already running from this folder ***\n"
-                  f"Kill the other instance (or delete tinycmdr.lock if "
-                  f"you're sure nothing is running).\n", file=sys.stderr)
+                  f"{instance_busy_note()}\n", file=sys.stderr)
             try:
                 _log_listener.stop()  # drain queued log records before exit
             except Exception:
@@ -39986,12 +40071,16 @@ def main():
         lane_with_retry(run_telegram, "telegram", _lane_report_telegram)
     else:
         _service_preflight()
-        _srv = _start_page()
-        lanes = lanes_to_serve()
         if "--mattermost" in sys.argv and not _mm_token_configured():
+            # BEFORE _start_page(): the page used to be raised - and a browser opened -
+            # for a server that died the moment this refused, which is the very ordering
+            # _start_page's docstring says was fixed for the config error
+            # (A-2026-10-08-138).
             print("--mattermost was given, but no Mattermost token is configured.",
                   file=sys.stderr)
             sys.exit(2)
+        _srv = _start_page()
+        lanes = lanes_to_serve()
         if not lanes:
             # No chat lane to serve. The PAGE is the door now, so when it started
             # this process holds it open; otherwise the folder is still ready for a

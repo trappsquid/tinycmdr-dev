@@ -1,4 +1,4 @@
-"""A null in config.json cannot blank a shipped default.
+"""A wrong TYPE in config.json cannot kill the load or blank a shipped default.
 
 `.get(key, default)` supplies the default only for a MISSING key, never for one that is
 present and null - so `"agent": {"max_minutes": null}` reached `None * 60` and raised
@@ -8,10 +8,16 @@ commented out by setting it to null, an installer template with an unfilled plac
 The section-level guard already stops a non-dict SECTION (`"agent": null` killed startup
 on 2026-10-05); this grades the same class one level down.
 
+Three wrong-type shapes, each graded here because each one KILLED the import before a
+warning could be printed: a null for a key the run loop does arithmetic on, a non-object
+`search` section read by the legacy-key sweep, and a non-dict `llm.fallbacks` entry read
+by the api_key_env sweep (the last two, A-2026-10-08-135/-136, evidence: reproduced).
+
     python tests/test_config_guards.py
 
 Falsification: with TINYCMDR_SRC=<pre-fix build> the merged value IS None and the keys the
-run loop does arithmetic on are the ones that crash it.
+run loop does arithmetic on are the ones that crash it; a pre-fix build fails the two
+wrong-type cases with AttributeError at load.
 """
 import importlib.util
 import json
@@ -46,13 +52,20 @@ def main():
         for section, key in GUARD_KEYS:
             cfg.setdefault(section, {})[key] = None
         cfg["agent"]["not_a_shipped_key"] = None      # a null must not become a default
+        cfg["search"] = "off"                         # a non-object section (A-135)
+        cfg["llm"]["fallbacks"] = ["http://x",        # non-dict entries (A-136)...
+                                   {"base_url": "http://127.0.0.1:2/v1", "model": "fb"}]
         (work / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
 
         spec = importlib.util.spec_from_file_location("tc_config_guards",
                                                       work / "tinycmdr.py")
         fb = importlib.util.module_from_spec(spec)
         sys.modules["tc_config_guards"] = fb
-        spec.loader.exec_module(fb)
+        try:
+            spec.loader.exec_module(fb)
+        except Exception as e:                        # noqa: BLE001
+            print("FAIL the staged module loads: %s: %s" % (type(e).__name__, e))
+            return 1
 
         said = []
 
@@ -80,6 +93,17 @@ def main():
                   [m for m in said if "null" in m][:3])
         check("a null for a key nothing ships is dropped, not invented",
               "not_a_shipped_key" not in merged["agent"], merged["agent"].get("not_a_shipped_key"))
+        check("a non-object search section keeps the shipped default, named",
+              isinstance(merged["search"], dict)
+              and any("section 'search' is str" in m for m in said),
+              (type(merged["search"]).__name__, [m for m in said if "search" in m][:2]))
+        check("non-dict fallback entries are dropped, the dict entry is kept",
+              len(merged["llm"]["fallbacks"]) == 1
+              and merged["llm"]["fallbacks"][0].get("model") == "fb",
+              merged["llm"]["fallbacks"])
+        check("...and the drop is named, once per entry kind",
+              any("llm.fallbacks: 1 non-object entry ignored" in m for m in said),
+              [m for m in said if "fallbacks" in m][:2])
         check("the load still answers a dict for every shipped section",
               all(isinstance(merged.get(s), dict) for s in fb.DEFAULT_CONFIG), sorted(merged))
     finally:

@@ -372,6 +372,31 @@ def _body():
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
 
+        # ---- the no-lane note tells the truth about the door -------------------
+        # doctor said "CLI-only install" whenever there was no chat lane, but a lane-less
+        # host with web ON serves the page - the decided default door (A-2026-10-08-139).
+        _saved = (dict(fb.CONFIG["mattermost"]), dict(fb.CONFIG["telegram"]),
+                  fb.CONFIG["web"].get("enabled"))
+        _saved_env = {k: os.environ.pop(k) for k in ("TINYCMDR_MM_TOKEN", "TINYCMDR_TG_TOKEN")
+                      if k in os.environ}
+        fb.CONFIG["mattermost"]["token"] = ""
+        fb.CONFIG["telegram"]["token"] = ""
+        try:
+            fb.CONFIG["web"]["enabled"] = True
+            rc, out, err = call(fb, ["doctor"])
+            check("a lane-less host with the page on is told the page is the door",
+                  "the page serves this host" in out and "CLI-only install" not in out,
+                  out[:400])
+            fb.CONFIG["web"]["enabled"] = False
+            rc, out, err = call(fb, ["doctor"])
+            check("...and with the page off, CLI-only is what it says",
+                  "CLI-only install" in out, out[:400])
+        finally:
+            fb.CONFIG["mattermost"].update(_saved[0])
+            fb.CONFIG["telegram"].update(_saved[1])
+            fb.CONFIG["web"]["enabled"] = _saved[2]
+            os.environ.update(_saved_env)
+
         # ---- the firewall note: a LAN bind is where a firewall eats the page ------
         # The bind never needs root; the firewall HOLE does, and a service cannot answer an
         # interactive prompt. The note's mapping is graded per OS here, because the real
@@ -484,10 +509,9 @@ def _body():
               and "TINYCMDR_WEB_TOKEN=" in upd_ps, "the guard is missing")
 
         # ---- the persona: which soul this agent is actually running ----------------
-        # soul.md is the one TRACKED file an operator is invited to edit, so a persona is an
-        # uncommitted modification to a tracked file: nothing used to say whether a box ran
-        # the shipped identity or somebody's edit, and `update` (a git pull) either refuses
-        # over that edit or has it discarded by the next `git reset --hard`.
+        # soul.md is the one SHIPPED file an operator is invited to edit: nothing used to
+        # say whether a box ran the shipped identity or somebody's edit, and `update`
+        # (an artifact install, not git) must never quietly replace the persona.
         soul = workdir / "soul.md"
         saved_soul = fb.SOUL_FILE
         fb.SOUL_FILE = soul
@@ -506,8 +530,9 @@ def _body():
             rc, out, err = call(fb, ["doctor"])
             check("...and an edit when somebody re-persona'd this box",
                   "edited on this host" in out, out[:400])
-            check("...with a note that update protects the edit and a hard reset would not",
-                  "uncommitted edit" in out and "reset --hard" in out, out[-300:])
+            check("...with a note that update never overwrites the edit",
+                  "never overwrites it" in out and "copied aside" in out
+                  and "reset --hard" not in out, out[-300:])
 
             backup = fb.preserve_edited_soul("20260930-000000")
             check("an edited persona is copied aside before an update",
@@ -1014,6 +1039,14 @@ def _body():
         rc, out, err = call(fb, ["config", "get", "agent.mcp_servers.demo.cmd"])
         check("...and reads back at the path that was set",
               rc == 0 and "run-me" in out, out[:80])
+        # A-2026-10-08-132: the read-back walked only one dotted level, so a depth-3
+        # write of a name->spec key answered "set = (gone)" while config.json held the
+        # value - the confirmation said the write was lost.
+        rc, out, err = call(fb, ["config", "set", "llm.thinking_budgets.high", "4000"])
+        written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        check("a depth-3 set reads the value back, not (gone)",
+              rc == 0 and "4000" in out and "(gone)" not in out
+              and written["llm"]["thinking_budgets"]["high"] == 4000, (rc, out[:120]))
         rc, out, err = call(fb, ["config", "get", "agent.mcp_servers.nope.cmd"])
         check("a deep get on a missing parent says (not set), rc=0",
               rc == 0 and "(not set)" in out, (rc, out[:80]))
@@ -1261,6 +1294,51 @@ def _body():
               rc == 1 and "SHA256SUMS" in (out + err), (rc, (out + err)[:200]))
         check("...and nothing is written over the install",
               (workdir / "tinycmdr.py").read_bytes() == _before)
+
+        # ---- an archive member that escapes the unpack folder ------------------
+        # The no-filter fallback (a stock 3.9 build) extracted blind pre-fix: a '../'
+        # member wrote OUTSIDE the work folder, and SHA256SUMS rides the same base URL,
+        # so it proves the transfer, not the contents (A-2026-10-08-134). The fallback
+        # is FORCED here - the sieve is then what runs on every interpreter.
+        import tarfile
+        evil = workdir / "evil.tar.gz"
+        with tarfile.open(evil, "w:gz") as t:
+            body = b"outside\n"
+            bad = tarfile.TarInfo("../escaped.txt")
+            bad.size = len(body)
+            t.addfile(bad, io.BytesIO(body))
+            okbody = b'VERSION = "9.9.12"\n'
+            good = tarfile.TarInfo("pkg/tinycmdr.py")
+            good.size = len(okbody)
+            t.addfile(good, io.BytesIO(okbody))
+        legit = workdir / "legit.tar.gz"
+        with tarfile.open(legit, "w:gz") as t:
+            okbody = b'VERSION = "9.9.12"\n'
+            good = tarfile.TarInfo("tinycmdr-9.9.12/tinycmdr.py")
+            good.size = len(okbody)
+            t.addfile(good, io.BytesIO(okbody))
+
+        _real_extractall = tarfile.TarFile.extractall
+
+        def _old_extractall(self, path=".", members=None, *, numeric_owner=False,
+                            filter=None):
+            if filter is not None:
+                raise TypeError("extractall() got an unexpected keyword argument 'filter'")
+            return _real_extractall(self, path, members=members,
+                                    numeric_owner=numeric_owner)
+
+        tarfile.TarFile.extractall = _old_extractall
+        try:
+            root = fb._extract_release(evil, workdir / "unpack-evil")
+            root_ok = fb._extract_release(legit, workdir / "unpack-ok")
+        finally:
+            tarfile.TarFile.extractall = _real_extractall
+        check("a tar member that escapes the unpack folder refuses the whole archive",
+              root is None and not (workdir / "escaped.txt").exists(),
+              (root, (workdir / "escaped.txt").exists()))
+        check("...while a normal tar.gz still unpacks",
+              root_ok is not None and (root_ok / "tinycmdr.py").exists(), root_ok)
+
         srv.shutdown()
         srv.server_close()
 
