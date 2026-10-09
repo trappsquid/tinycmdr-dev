@@ -283,5 +283,55 @@ check("...and the tick still moved the job it saved",
       merged.get("nightly", {}).get("next", 0) > time.time(),
       merged.get("nightly"))
 
+# ------------------- A-2026-10-08-153: an adopt does not eat a due occurrence ---------
+# jobs.json's mtime changes whenever another process writes it (a --once `schedule
+# add`/`remove`), and _load's start-up overdue-skip then pushed a job that had come due
+# since the last tick forward before the due check - the occurrence never fired though
+# nothing was down.
+jobs_file = STAGE / "jobs-adopt.json"
+sched = _scheduler("jobs-adopt.json")
+sched.jobs["nightly"] = {"cron": "* * * * *", "task": "say hi",
+                         "channel_id": None, "model": None, "next": 0.0}
+sched._save()
+sched._mtime = sched._disk_mtime()
+on_disk = json.loads(jobs_file.read_text(encoding="utf-8"))
+on_disk["nightly"]["next"] = time.time() - 30        # came due since the last tick
+time.sleep(0.01)
+jobs_file.write_text(json.dumps(on_disk), encoding="utf-8")
+sched._reload_if_changed()
+check("an adopted jobs.json keeps a due `next` (the occurrence is not skipped)",
+      sched.jobs["nightly"]["next"] <= time.time(), sched.jobs["nightly"]["next"])
+sched._load()                                        # the start-up call
+check("...while the start-up load still skips missed runs",
+      sched.jobs["nightly"]["next"] > time.time(), sched.jobs["nightly"]["next"])
+sched._stop.set()
+
+# ------------------- A-2026-10-08-154: no croniter, no firing --------------------------
+# __init__ disables the schedule and tool_action refuses, but _tick kept FIRING every job
+# whose next passed: _next_run raised ImportError, the except re-armed the job an hour
+# out, and a weekly job ran every hour while the log said scheduling was disabled.
+sched = _scheduler("jobs-nocroniter.json")
+sched.jobs["nightly"] = {"cron": "0 9 * * 1", "task": "say hi",
+                         "channel_id": None, "model": None, "next": time.time() - 1}
+sched._save()
+saved_next2 = sched.jobs["nightly"]["next"]
+fired = []
+saved_ok, saved_fire = sched.ok, sched._fire
+try:
+    sched.ok = False
+    sched._fire = lambda name, job: fired.append(name)
+    got = fb.acquire_single_instance_lock()
+    check("the no-croniter tick is graded while the instance lock is held", got)
+    check("with croniter missing the tick reports no fire",
+          sched._tick() is False, fired)
+    _until(lambda: fired or sched.jobs.get("nightly", {}).get("next") != saved_next2, 1.0)
+    check("...and fires nothing, leaving `next` alone",
+          fired == [] and sched.jobs.get("nightly", {}).get("next") == saved_next2,
+          (fired, sched.jobs.get("nightly", {}).get("next"), saved_next2))
+finally:
+    sched.ok, sched._fire = saved_ok, saved_fire
+    fb._release_lock()
+    sched._stop.set()
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

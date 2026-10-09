@@ -125,6 +125,16 @@ def main():
         check(verdict(R(0, d.RAPID_EXIT_S + 1, 4)) == (0, d.BACKOFF_START),
               f"a lifetime past {d.RAPID_EXIT_S}s was healthy and resets the count "
               f"({R(0, d.RAPID_EXIT_S + 1, 4)})")
+        # A-2026-10-08-170: the reset required code == 0, so a crash after days counted
+        # as a failed START; crashes spread over weeks added up until one quick exit at
+        # boot tripped the give-up and the bot stayed down.
+        check(verdict(R(1, d.RAPID_EXIT_S + 1, 4)) == (0, d.BACKOFF_START),
+              f"a CRASH after a long healthy run resets the count too "
+              f"({R(1, d.RAPID_EXIT_S + 1, 4)})")
+        check(verdict(R(1, d.RAPID_EXIT_S + 1, d.FAILED_STARTS_BEFORE_STOP - 1))
+              == (0, d.BACKOFF_START),
+              f"a crash after days is not one of the {d.FAILED_STARTS_BEFORE_STOP} "
+              f"rapid failed starts ({R(1, d.RAPID_EXIT_S + 1, d.FAILED_STARTS_BEFORE_STOP - 1)})")
         check(d.next_backoff(20) == d.BACKOFF_MAX,
               f"the backoff is capped at {d.BACKOFF_MAX}s ({d.next_backoff(20)})")
         check(verdict(R(2, 0, d.FAILED_STARTS_BEFORE_STOP - 2))[1] > 0,

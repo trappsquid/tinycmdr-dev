@@ -343,6 +343,35 @@ def test_tool_lines_cap_starts_new_message():
     check("second message starts a fresh batch", "step-2" in d.posts[1][2], d.posts[1][2])
 
 
+def test_the_checkin_line_scrubs_tool_args():
+    """A-2026-10-08-158: checkin_line built the ⏳ snippet from raw args and none of the
+    destinations scrubs, so a literal token in the first stretch of a command rode chat
+    and page every five minutes."""
+    fb._SECRETS.add("HUNTER-CHECKIN")
+    try:
+        line = fb.checkin_line("checkin-scrub", 3, 65.0, name="shell",
+                               args={"command": "export TOKEN=HUNTER-CHECKIN && run"})
+    finally:
+        fb._SECRETS.discard("HUNTER-CHECKIN")
+    check("the check-in line carries no secret", "HUNTER-CHECKIN" not in line, line[:200])
+    check("...and still names the tool and the time",
+          "`shell`" in line and "1m05s" in line, line[:200])
+
+
+def test_a_third_repeat_keeps_the_other_batch_lines():
+    """A-2026-10-08-159: the fold compared the FOLDED tail ("A (×2)") with the card's
+    signature, so the third identical call fell into the standalone branch and reset the
+    batch to the folded card alone - every other line the operator was reading vanished
+    (and the batch post was redrawn under the wrong ref)."""
+    d, rep = reporter(checkin_tool_merge_seconds=60)
+    rep.tool_done("shell", {"command": "step-B"}, "exit_code=0", 0.2)
+    for _ in range(3):
+        rep.tool_done("shell", {"command": "step-A"}, "exit_code=0", 0.2)
+    final = d.edits[-1][2]
+    check("the repeat count reaches x3", "×3" in final, final)
+    check("...and the other batch line is still on screen", "step-B" in final, final)
+
+
 def test_switches_silence_everything():
     d, rep = reporter(checkin_per_tool=False, checkin_notes=False)
     rep.tool_done("shell", {"command": "x"}, "exit_code=0", 1.0)

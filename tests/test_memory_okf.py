@@ -406,6 +406,75 @@ def test_add_refuses_a_restatement_and_supersedes_replaces():
           "(deprecated, unverified)" in index, index)
 
 
+def test_add_scrubs_description_tags_and_sources():
+    """A-2026-10-08-145: only title and body went through the scrubber, so a secret in
+    the added description, a tag or a source landed in the concept file and in the
+    prompt-carried index."""
+    _fresh()
+    secret = "hunter2-memdesc"
+    fb._SECRETS.add(secret)
+    try:
+        out = fb.tool_memory({"action": "add", "title": "Scrub probe",
+                              "body": "a fact about the probe",
+                              "description": "the value is " + secret,
+                              "tags": ["probe", secret],
+                              "sources": ["measured with " + secret]},
+                             {"session_key": "mem-scrub"})
+        check("the add lands", out.startswith("OK"), out[:160])
+        c = fb._memory_find("scrub-probe")
+        blob = c["path"].read_text(encoding="utf-8") if c else ""
+        check("the concept file carries no secret in any field",
+              secret not in blob and "«redacted»" in blob, blob[:300])
+        index = fb.MEMORY_INDEX.read_text(encoding="utf-8")
+        check("...and neither does the prompt's index",
+              secret not in index and "«redacted»" in index, index)
+    finally:
+        fb._SECRETS.discard(secret)
+
+
+def test_add_refuses_a_title_another_concept_holds():
+    """A-2026-10-08-151: the add door checked only the concept AT THE SLUG, so a title
+    held at another id (a renamed concept, a '-2' slug, a foreign file) could be taken
+    by a second concept - the update path already checks every concept."""
+    _fresh()
+    (fb.MEMORY_DIR / "foreign-stem.md").write_text(
+        fb.okf_dump({"type": "Fact", "title": "Shared title"}, "a foreign body"),
+        encoding="utf-8")
+    out = _call_tool({"action": "add", "title": "Shared title",
+                      "body": "a second concept claiming the same title"},
+                     {"session_key": "mem-dup"})
+    check("the add is refused and names the holder",
+          out.startswith("ERROR") and "foreign-stem" in out, out[:200])
+    check("...and nothing was written",
+          fb._memory_find("shared-title") is None, "a second concept landed")
+
+
+def test_a_failed_forget_is_reported_not_answered_ok():
+    """A-2026-10-08-144: tool_memory ignored memory_forget's None, so a file held open
+    (PermissionError on Windows, a permissions problem anywhere) was announced as
+    forgotten while it stayed on disk and in the index. A directory with no write
+    permission is the POSIX way to make unlink fail."""
+    if not hasattr(os, "geteuid") or os.geteuid() == 0:
+        print("skip a failed forget needs POSIX directory permissions to stage")
+        return
+    _fresh()
+    fb.memory_new_concept("Held open", "a fact that cannot be deleted")
+    _call_tool({"action": "list"}, {})          # create the lock inside the dir
+    made = fb._memory_find("held-open")
+    check("the concept exists before the attempt", made is not None)
+    mode = fb.MEMORY_DIR.stat().st_mode & 0o777
+    try:
+        os.chmod(fb.MEMORY_DIR, 0o500)          # unlink needs write on the DIRECTORY
+        out = _call_tool({"action": "forget", "id": "held-open"},
+                         {"session_key": "mem-forget"})
+    finally:
+        os.chmod(fb.MEMORY_DIR, mode)
+    check("a forget that could not delete says ERROR, not OK",
+          out.startswith("ERROR"), out[:200])
+    check("...naming the still-present file",
+          made["path"].exists(), "the file is gone")
+
+
 def test_a_superseding_add_re_renders_the_index_after_the_deprecation():
     """A-2026-10-08-143: the add path rendered index.md BEFORE deprecating the concept it
     supersedes, so the browse copy kept the old concept unflagged next to its replacement

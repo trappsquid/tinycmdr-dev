@@ -195,6 +195,19 @@ def main():
         check(fb.run_state("s1").get("derived") is False,
               "the model's own plan replaces a derived one")
 
+        # A-2026-10-08-155: the parse used to be anchored (.{10,200}$), so a listed step
+        # longer than 200 chars vanished from the plan and from the wrap-up check.
+        _dl = fb.derive_plan_from_text("Do these in order:\n1. short step here\n"
+                                       "2. %s\n3. another short step" % ("x" * 250))
+        check(len(_dl) == 3,
+              f"a listed step longer than 200 chars stays in the plan ({len(_dl)})")
+        # A-2026-10-08-157: the derived path caps at 200 and the model's set did not,
+        # while the plan (and the current-step header) rides every later payload.
+        fb.tool_plan({"action": "set", "steps": "short one\n" + ("y" * 260)}, ctx)
+        _pl = fb.run_state("s1")["plan"]
+        check(all(len(s["text"]) <= 200 for s in _pl),
+              "model-set steps are capped at 200 chars (the plan rides every payload)")
+
         # Then the tool-driven case: a plan the model writes itself.
         fb.tool_plan({"action": "set", "steps": "write the file\nverify it parses"}, ctx)
 

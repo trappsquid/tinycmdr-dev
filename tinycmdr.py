@@ -6170,6 +6170,49 @@ def _kill_tree(proc):
 _MAX_CAPTURE_BYTES = 8 * 1024 * 1024
 
 
+def _decode_file_text(blob, encoding=None):
+    """(text, encoding) for a file's bytes - the encodings this box actually meets.
+
+    read_file, search_files and edit_file decoded everything as UTF-8 with
+    errors="replace": PowerShell 5.1's `>` writes UTF-16, so a redirected file read as
+    NUL-interleaved text and never matched a content search (A-2026-10-08-99), and a
+    cp1252/Latin-1/Shift-JIS file lost every non-ASCII byte to U+FFFD on an edit while
+    the diff stayed clean (A-2026-10-08-96). Detection is explicit and ordered: a BOM
+    first, then a BOM-less UTF-16 heuristic (interleaved NULs), then strict UTF-8, then
+    a byte-preserving latin-1 fallback - the one decode that cannot lose a byte, so a
+    re-encode restores every byte the model did not touch. A blob whose only UTF-8
+    trouble is at a slice boundary (one replacement character) stays UTF-8.
+    """
+    if encoding:
+        try:
+            return blob.decode(encoding), encoding
+        except (UnicodeDecodeError, LookupError):
+            pass
+    if blob[:2] == b"\xff\xfe":
+        return blob.decode("utf-16-le", errors="replace"), "utf-16-le"
+    if blob[:2] == b"\xfe\xff":
+        return blob.decode("utf-16-be", errors="replace"), "utf-16-be"
+    if blob[:3] == b"\xef\xbb\xbf":
+        return blob.decode("utf-8-sig", errors="replace"), "utf-8-sig"
+    head = blob[:256]
+    if b"\x00" in head:
+        odd = head[1::2].count(0)
+        even = head[0::2].count(0)
+        if odd > len(head) // 4 and even == 0:
+            return blob.decode("utf-16-le", errors="replace"), "utf-16-le"
+        if even > len(head) // 4 and odd == 0:
+            return blob.decode("utf-16-be", errors="replace"), "utf-16-be"
+    try:
+        return blob.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError as e:
+        if e.start >= len(blob) - 4:
+            # The only invalid bytes are a multi-byte sequence sliced by a capped read:
+            # that is still UTF-8 text (one replacement at the very end), not another
+            # encoding.
+            return blob.decode("utf-8", errors="replace"), "utf-8"
+        return blob.decode("latin-1"), "latin-1"
+
+
 def _read_capped(path, limit=None, from_end=False, strict=False):
     """Read at most `limit` bytes of a captured stream or file, plus a note when cut.
 
@@ -6204,7 +6247,7 @@ def _read_capped(path, limit=None, from_end=False, strict=False):
             raise
         return "", False, ""
     truncated = size > len(blob)
-    text = blob.decode("utf-8", errors="replace")
+    text, _enc = _decode_file_text(blob)
     note = ""
     if truncated:
         where = "last" if from_end else "first"
@@ -6823,6 +6866,10 @@ _GUI_TOOL_RX = re.compile(
     r"(?i)(?:^|_)(?:computer|gui|screen|screenshot|vision|desktop|mouse|keyboard|pyautogui)(?:$|_)")
 PROC_CENSUS_FILE = BASE_DIR / "logs" / "procedure-census.json"
 _PROC_LOCK = threading.Lock()
+# A distinct command vocabulary per key, and a busy box mints new ones for ever; the cap
+# is generous against the real corpus (the runbook shapes) and exists so the file is
+# bounded at birth like every other accumulator here (A-2026-10-08-149).
+_CENSUS_SIG_MAX = 120
 
 
 _CMDLET_RX = re.compile(r"\b[A-Z][a-z]+-[A-Z][A-Za-z]+\b")
@@ -6858,7 +6905,20 @@ def _procedure_sig(name, args):
 def _census_load():
     try:
         return json.loads(PROC_CENSUS_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except ValueError:
+        # Damaged content used to return {} and the next save replaced the file with that
+        # empty map: the operator's orders and dismissals (and the evidence behind every
+        # mint offer) vanished with nothing said (A-2026-10-08-149). Keep the file as ONE
+        # .damaged predecessor and name it, the shape the log rolls use.
+        try:
+            damaged = PROC_CENSUS_FILE.parent / (PROC_CENSUS_FILE.name + ".damaged")
+            PROC_CENSUS_FILE.replace(damaged)
+            log.warning("procedure census is not valid JSON - kept as %s and starting "
+                        "from an empty map", damaged)
+        except OSError as e:
+            log.warning("procedure census is not valid JSON and could not be kept: %s", e)
+        return {}
+    except OSError:
         return {}
 
 
@@ -6896,6 +6956,17 @@ def procedure_census_bump(name, args, session_key=None):
         if run_id and run_id not in ent["runs"]:
             ent["runs"] = (ent["runs"] + [run_id])[-8:]
         ent["last"] = time.strftime("%Y-%m-%d %H:%M")
+        # One top-level key per distinct command vocabulary, kept for ever: bounded here
+        # at _CENSUS_SIG_MAX, oldest 'last' first, so a busy box's census cannot grow with
+        # every new combination of cmdlets (A-2026-10-08-149). The dunder sections each
+        # carry their own cap already.
+        sigs = [k for k in data if not k.startswith("__")]
+        if len(sigs) > _CENSUS_SIG_MAX:
+            keep = set(sorted(sigs, key=lambda k: str((data.get(k) or {}).get("last") or ""),
+                              reverse=True)[:_CENSUS_SIG_MAX])
+            for k in sigs:
+                if k not in keep:
+                    data.pop(k, None)
         _census_save(data)
         out = dict(ent)
         out["count"] = len(ent["runs"])
@@ -7084,7 +7155,11 @@ def mint_offer(session_key, reporter, source="main"):
         return ""
     st = run_state(session_key) or {}
     by = st.get("calls_by") or {}
-    hand = sum(int(by.get(t) or 0) for t in MINT_HINT_TOOLS)
+    hand_total = sum(int(by.get(t) or 0) for t in MINT_HINT_TOOLS)
+    # THIS run's hand calls, not the session's lifetime total: a long session used to pass
+    # the gate for a run that made none, and the line quoted a count the run never spent
+    # (A-2026-10-08-148). remember_offer() subtracts the same mark.
+    hand = hand_total - int(st.get("hand_at_start") or 0)
     if hand < int(CONFIG["agent"].get("mint_offer_steps") or 4):
         return ""
     if int(by.get("create_tool") or 0) or int(by.get("toolsmith") or 0):
@@ -7094,6 +7169,26 @@ def mint_offer(session_key, reporter, source="main"):
     # that reads as a "where is X" question, and a dismissal is remembered for the shape.
     repeats = int(st.get("order_repeats") or 0)
     if repeats >= 2:
+        # The same weekly throttle the census branch below keeps, recorded ON THE ORDER
+        # entry so it survives /new: without it the offer posted on every single run of a
+        # recurring order (A-2026-10-08-148).
+        with _PROC_LOCK:
+            data = _census_load()
+            ent = next((o for o in (data.get("__orders__") or [])
+                        if list(o.get("words") or []) == list(st.get("order_words") or [])),
+                       None)
+            when = str((ent or {}).get("mint_offered") or "")
+            if when:
+                try:
+                    if time.mktime(time.strptime(when, "%Y-%m-%d %H:%M")) > time.time() - 7 * 86400:
+                        log.info("[%s] mint offer for this order already posted %s - "
+                                 "throttled", session_key, when)
+                        return ""
+                except ValueError:
+                    pass
+            if ent is not None:
+                ent["mint_offered"] = time.strftime("%Y-%m-%d %H:%M")
+                _census_save(data)
         line = (f"💡 That was run #{repeats} of nearly this same request, and it took {hand} "
                 f"hand-driven calls again. If it is a routine, say **mint it** and I will "
                 f"build the tool once so later runs are one call.")
@@ -7262,6 +7357,41 @@ def offer_after_run(session_key, reporter, source="main"):
 _REMEMBER_DISMISS_RX = re.compile(
     r"(?i)^\s*(?:/)?(?:tinycmdr\s+)?(?:dismiss|don'?t save(?: it)?|skip it|"
     r"no thanks|not this one|forget it)[.!]?\s*$")
+_REMEMBER_SAVE_RX = re.compile(r"(?i)^\s*(?:/)?(?:tinycmdr\s+)?save it[.!]?\s*$")
+# An offer is answered by the message that FOLLOWS it; days later a bare "no thanks" is
+# answering the model, not the offer (A-2026-10-08-147). One day, the same bound the
+# parked ask-question uses, because both are "the operator may come back later".
+_REMEMBER_OFFER_TTL_S = 24 * 3600
+
+
+def _remember_offer_fresh(o):
+    try:
+        when = time.mktime(time.strptime(str((o or {}).get("at") or ""), "%Y-%m-%d %H:%M"))
+    except ValueError:
+        return False
+    return (time.time() - when) <= _REMEMBER_OFFER_TTL_S
+
+
+def clear_remember_offer(session_key):
+    """Drop this session's pending remember offer: /new ends the conversation it belongs
+    to, and the operator answering "save it" has answered it (A-2026-10-08-147)."""
+    with _PROC_LOCK:
+        data = _census_load()
+        offers = data.get("__remember_offers__") or []
+        left = [o for o in offers if o.get("session") != session_key]
+        if len(left) == len(offers):
+            return False
+        data["__remember_offers__"] = left
+        _census_save(data)
+    return True
+
+
+def remember_save_order(session_key, text):
+    """A bare "save it" answering the last remember offer: drop the pending record and
+    let the word run as an ordinary order (the model does the saving)."""
+    if not _REMEMBER_SAVE_RX.match(str(text or "")):
+        return False
+    return clear_remember_offer(session_key)
 
 
 def remember_dismiss_order(session_key, text):
@@ -7281,6 +7411,16 @@ def remember_dismiss_order(session_key, text):
         if not mine:
             return ""
         last = mine[-1]
+        if not _remember_offer_fresh(last):
+            # The offer is answered by the message that FOLLOWS it; days later a bare
+            # "no thanks" is answering the MODEL, and consuming it here both hid that
+            # answer and retired an unrelated shape (A-2026-10-08-147). Drop the stale
+            # record and let the word through.
+            data["__remember_offers__"] = [o for o in offers if o is not last]
+            _census_save(data)
+            log.info("[%s] a stale remember offer (posted %s) was dropped; the word was "
+                     "not consumed", session_key, last.get("at") or "?")
+            return ""
         data["__remember_offers__"] = [o for o in offers if o is not last]
         dismissed = data.setdefault("__remember_dismissed__", [])
         dismissed.append({"words": last.get("words") or [],
@@ -9013,6 +9153,17 @@ def atomic_write_bytes(path, data):
     the next load died on JSONDecodeError, with no .damaged-* copy anywhere).
     """
     p = Path(path)
+    # A SYMLINK is followed, not replaced: os.replace swaps the directory entry, so a
+    # dotfile managed by stow/chezmoi or an /etc/alternatives-style link had its LINK
+    # replaced by a regular file (the real target untouched, the result "OK"), and the new
+    # inode lost the target's owner/ACL/hard links/xattrs. write_file already followed the
+    # link - it opens for writing - so the two doors disagreed about the same path
+    # (A-2026-10-08-97).
+    try:
+        if p.is_symlink():
+            p = Path(os.path.realpath(str(p)))
+    except OSError:
+        pass
     # The temp name is per WRITER, not per process: one assistant turn runs its tool
     # calls in a ThreadPoolExecutor (up to 4), so two writers of the same state file
     # shared `<name>.tmp-<pid>`. The second rename then raised WinError 32 and BOTH
@@ -9240,12 +9391,12 @@ def tool_edit_file(args, ctx):
             return (f"ERROR: {path} is {size / 1048576:.1f} MiB - too large to edit "
                     f"whole. Edit it in pieces with a script, or name the section.")
         raw_bytes = path.read_bytes()
-        text = raw_bytes.decode("utf-8", "replace")
+        text, _enc = _decode_file_text(raw_bytes)
     except Exception as e:
         return f"ERROR reading {path}: {e}"
     # Keep this file's own convention: a Linux host editing a CRLF file through a
     # platform-translating write used to flip the whole file to LF.
-    nl = "\r\n" if "\r\n" in raw_bytes.decode("utf-8", "replace") else "\n"
+    nl = "\r\n" if "\r\n" in text else "\n"
     old, new = args["old_string"], args["new_string"]
     replace_all = bool(args.get("replace_all"))
     lf_text = text.replace("\r\n", "\n")
@@ -9315,7 +9466,11 @@ def tool_edit_file(args, ctx):
         # default: the .bak of a CRLF file came back "\r\r\n" per line, so the
         # one copy that exists to undo a bad edit was not restorable as-was.
         backup.write_bytes(raw_bytes)
-        atomic_write_text(path, out)
+        # ...and in the SAME ENCODING the file came in with: writing UTF-8 over a
+        # cp1252/Latin-1/Shift-JIS file turned every non-ASCII byte in it into U+FFFD
+        # (A-2026-10-08-96). A new character that the file's encoding cannot carry is
+        # refused loudly by the encode, with the backup already on disk.
+        atomic_write_text(path, out, encoding=_enc)
     except Exception as e:
         return f"ERROR writing {path}: {e} (backup: {backup.name})"
     _edit_noop_clear(path, ctx)
@@ -9385,7 +9540,7 @@ def tool_search_files(args, ctx):
             return (f"ERROR: {root} is one file and {grepper!r} is not a valid regex - pass "
                     f"the line pattern you want, or a directory to glob file names in")
         try:
-            text = root.read_text(encoding="utf-8", errors="replace")
+            text, _enc = _decode_file_text(root.read_bytes())
         except OSError as e:
             return f"ERROR: {e}"
         hits = []
@@ -9417,9 +9572,8 @@ def tool_search_files(args, ctx):
                             skipped_big.append(str(full))
                             continue
                         file_hits = 0
-                        for i, line in enumerate(
-                                full.read_text(encoding="utf-8",
-                                               errors="replace").splitlines(), 1):
+                        _lines, _enc = _decode_file_text(full.read_bytes())
+                        for i, line in enumerate(_lines.splitlines(), 1):
                             if content_re.search(line):
                                 content_hits.append(
                                     f"{full}:{i}: {line.strip()[:160]}")
@@ -9870,6 +10024,21 @@ def _provider_anysearch(entry, query, max_results):
             for r in results]
 
 
+def _provider_checked_json(resp, name):
+    """The provider's JSON body, or a RuntimeError naming the HTTP failure.
+
+    tavily and searxng read `.json().get("results")` with no status check: a JSON error
+    body (a bad key, a quota, a 5xx with a detail) has no "results", so the provider
+    returned [] - the chain read that as "no results" and never tried the next provider,
+    and the operator was told the search found nothing (A-2026-10-08-146).
+    """
+    if resp.status_code >= 400:
+        detail = re.sub(r"\s+", " ", str(getattr(resp, "text", "") or ""))[:140]
+        raise RuntimeError("%s HTTP %s%s" % (name, resp.status_code,
+                                             (": " + detail) if detail else ""))
+    return resp.json()
+
+
 def _provider_tavily(entry, query, max_results):
     key = _search_key(entry)
     if not key:
@@ -9878,7 +10047,7 @@ def _provider_tavily(entry, query, max_results):
                          json={"api_key": key, "query": query,
                                "max_results": max_results},
                          timeout=30)
-    results = resp.json().get("results", [])
+    results = _provider_checked_json(resp, "tavily").get("results", [])
     return [{"title": r.get("title", ""), "url": r.get("url", ""),
              "snippet": r.get("content", "")[:400]} for r in results]
 
@@ -9890,7 +10059,7 @@ def _provider_searxng(entry, query, max_results):
     to be turned on for."""
     resp = requests.get(entry["url"].rstrip("/") + "/search",
                         params={"q": query, "format": "json"}, timeout=30)
-    results = resp.json().get("results", [])[:max_results]
+    results = _provider_checked_json(resp, "searxng").get("results", [])[:max_results]
     return [{"title": r.get("title", ""), "url": r.get("url", ""),
              "snippet": (r.get("content") or r.get("snippet") or "")[:400]}
             for r in results]
@@ -9959,11 +10128,16 @@ def tool_web_search(args, ctx):
                 "is false. The operator can allow it, or add a provider on this LAN "
                 "(a searxng entry), which never leaves the wire." % why)
     errors = []
+    empty = []
     for entry in usable:
         try:
             results = _SEARCH_PROVIDERS_BY_KIND[entry["kind"]](entry, query, max_results)
             if not results:
-                return "No results for: %s" % query
+                # An empty set is this provider's answer, not the chain's: another index
+                # may hold the query, and an error that masqueraded as empty used to end
+                # the search here with "No results" (A-2026-10-08-146).
+                empty.append(entry["label"])
+                continue
             lines = []
             for i, r in enumerate(results, 1):
                 lines.append("%d. %s\n   %s\n   %s"
@@ -9977,7 +10151,12 @@ def tool_web_search(args, ctx):
             return "\n\n".join(lines)
         except Exception as e:                                       # noqa: BLE001
             errors.append("%s: %s" % (entry["label"], e))
-    return "ERROR: all search providers failed - " + "; ".join(errors)
+    if empty and not errors:
+        return "No results for: %s" % query
+    msg = "ERROR: search failed - " + "; ".join(errors)
+    if empty:
+        msg += " | answered nothing: " + ", ".join(empty)
+    return msg
 
 
 def tool_fetch_url(args, ctx):
@@ -10043,6 +10222,11 @@ def _fetch_page(url, max_chars, session=None):
         return f"ERROR fetching {url}: {e}"
     text = _raw.decode(_enc, "replace")
     text = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", text)
+    # The byte budget can land INSIDE a <script>/<style>: the pair regex above needs the
+    # closing tag, so that whole block survived, its source was returned as "the page
+    # text", and the content the cap promised was evicted (A-2026-10-08-150). Nothing
+    # after an opening script/style tag with no matching close can be page text.
+    text = re.sub(r"(?is)<(script|style|noscript)\b[^>]*>(?:(?!</\1).)*$", " ", text)
     text = re.sub(r"(?s)<[^>]+>", " ", text)
     text = html.unescape(text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -10585,10 +10769,18 @@ def memory_new_concept(title, body, ctype="Fact", tags=None, description=None,
         raise ValueError("memory/ already holds %d concepts (the cap). Update or "
                          "deprecate old ones instead of adding more." % len(concepts))
     slug = _memory_slug(title)
+    # A title identifies a concept in the (title-ordered) index, so it must be unique
+    # across the whole bundle. The check used to fire only when the concept AT THIS SLUG
+    # already carried the same title, so after an update renamed a concept (its id is
+    # kept), or for a title stored at a '-2' slug or in a foreign file with another
+    # stem, a second concept could take the title (A-2026-10-08-151). The update path
+    # already checks every concept; this is the same rule at the add door.
+    holder = next((c for c in concepts
+                   if c["title"].strip().lower() == title.lower()), None)
+    if holder is not None:
+        raise FileExistsError(holder["id"])
     same = next((c for c in concepts if c["id"] == slug), None)
     if same is not None:
-        if same["title"].strip().lower() == title.lower():
-            raise FileExistsError(slug)
         n = 2
         taken = {c["id"] for c in concepts}
         while "%s-%d" % (slug, n) in taken:
@@ -10825,12 +11017,24 @@ def tool_memory(args, ctx):
                         % (c["id"], c["title"],
                            str((c["fm"].get("generated") or {}).get("at") or "?"),
                            share * 100.0, c["id"], c["id"]))
-        sources = [{"resource": str(s).strip()}
+        # The update path scrubbed title/body/description; add passed description, tags
+        # and sources through raw, so a secret in any of them landed in the concept file
+        # and in index.md - which rides every prompt (A-2026-10-08-145).
+        description = (" ".join(scrub(str(args.get("description") or "")).split())
+                       if args.get("description") is not None else None)
+        raw_tags = args.get("tags")
+        if isinstance(raw_tags, str):
+            tags = scrub(raw_tags)
+        elif isinstance(raw_tags, (list, tuple)):
+            tags = [scrub(t) if isinstance(t, str) else t for t in raw_tags]
+        else:
+            tags = raw_tags      # _memory_tags refuses a non-string shape by name
+        sources = [{"resource": " ".join(scrub(str(s)).split())}
                    for s in (args.get("sources") or []) if str(s).strip()]
         try:
             made = memory_new_concept(
                 title, body, ctype=args.get("type") or "Fact",
-                tags=args.get("tags"), description=args.get("description"),
+                tags=tags, description=description,
                 stale_after=args.get("stale_after"), sources=sources or None,
                 actor=actor, supersedes=sup or None)
         except FileExistsError as e:
@@ -10905,7 +11109,16 @@ def tool_memory(args, ctx):
             memory_index_update()
             return ("OK: %s is deprecated%s - kept in the bundle for history and "
                     "links, flagged in the index." % (c["id"], tail))
-        memory_forget(c["id"])
+        done = memory_forget(c["id"])
+        if done is None:
+            # unlink failed (a Windows PermissionError while an editor, an indexer or AV
+            # holds the file; a permissions problem anywhere): the old shape answered OK
+            # while the file stayed on disk and in the index, breaking "true forget" and
+            # the degrade-loudly rule (A-2026-10-08-144).
+            return ("ERROR: memory/%s could not be deleted - something holds the file "
+                    "open. It is still in the bundle and in the index; close it and "
+                    "retry, or retire it with memory {action: \"deprecate\", id: \"%s\"}."
+                    % (c["id"], c["id"]))
         memory_index_update()
         return ("OK: %s is forgotten%s - the file is deleted; the log records that "
                 "it was removed, not what it held." % (c["id"], tail))
@@ -12530,7 +12743,7 @@ def tool_schedule(args, ctx):
 
 
 def session_search_hits(query, limit=25):
-    """[(key, role, snippet, rank)] for transcripts matching ALL query words.
+    """([(key, role, snippet, rank)], total) for transcripts matching ALL query words.
 
     The core `search_sessions` runs on, factored out so the PAGE's own search reads the
     same corpus with the same rules, searching INSIDE conversations and not just across
@@ -12539,10 +12752,16 @@ def session_search_hits(query, limit=25):
     both file shapes in sessions/ are tolerated: the transcript (*.json, a list of
     message dicts) and the carry sidecar (*.carry.json, a dict whose lists hold
     args/out entries).
+
+    The scan used to stop at `limit` FILES in filename order, so on a box with months of
+    history the alphabetically first sessions were returned and recent matches were
+    silently dropped (A-2026-10-08-156). Every match is collected, ordered by how many
+    query words its best message carries and then newest-first, and `total` says how many
+    there were so a caller can name what its truncation hid.
     """
     words = [w for w in re.split(r"\W+", str(query or "").lower()) if w]
     if not words:
-        return []
+        return [], 0
     hits = []
     for f in sorted(SESSIONS_DIR.glob("*.json")):
         try:
@@ -12575,12 +12794,16 @@ def session_search_hits(query, limit=25):
             continue
         m, c = max(texts, key=lambda mc: (sum(w in mc[1].lower() for w in words),
                                           len(mc[1])))
+        try:
+            mtime = f.stat().st_mtime
+        except OSError:
+            mtime = 0.0
         hits.append((f.stem, m.get("role") or m.get("tool") or "entry",
                      re.sub(r"\s+", " ", c)[:200],
-                     sum(w in c.lower() for w in words)))
-        if len(hits) >= limit:
-            break
-    return hits
+                     sum(w in c.lower() for w in words), mtime))
+    hits.sort(key=lambda h: (-h[3], -h[4]))
+    total = len(hits)
+    return [h[:4] for h in hits[:limit]], total
 
 
 def tool_search_sessions(args, ctx):
@@ -12595,11 +12818,15 @@ def tool_search_sessions(args, ctx):
     # so "scheduler fired schedule add" answered "No past session content matching" while
     # the same session's events were found in one search_files call - the tool built for
     # recall was worse at it than the generic search (2026-10-02).
-    hits = session_search_hits(raw, 25)
+    hits, total = session_search_hits(raw, 25)
     if not hits:
         return f"No past session content matching: {raw}"
-    return "\n".join("[%s] %s: %s" % (key, role, snippet)
-                      for key, role, snippet, _rank in hits)
+    out = "\n".join("[%s] %s: %s" % (key, role, snippet)
+                    for key, role, snippet, _rank in hits)
+    if total > len(hits):
+        out += ("\n(%d more session(s) matched - narrow the query to see them)"
+                % (total - len(hits)))
+    return out
 
 
 # A sub-agent's answer used to come back as raw prose, so the parent had to re-read a
@@ -12911,7 +13138,11 @@ def tool_plan(args, ctx):
         cap = int(CONFIG["agent"].get("plan_max_steps") or 12)
         plan.clear()
         for i, text in enumerate(steps[:cap], 1):
-            plan.append({"id": i, "text": text, "status": "open", "note": ""})
+            # The same 200-char bound the derived path and notes use: the plan (and the
+            # header repeating the current step) rides every later payload, so one
+            # paragraph-as-a-step cost its length up to twice per turn for the rest of the
+            # run (A-2026-10-08-157).
+            plan.append({"id": i, "text": text[:200], "status": "open", "note": ""})
         state["progress_at"] = state["calls"]
         state["derived"] = False       # the model's own plan replaces a parsed one
         log.info("[%s] plan set: %d step(s)", key, len(plan))
@@ -13247,9 +13478,16 @@ class Scheduler:
             return {}
         return jobs
 
-    def _load(self):
+    def _load(self, skip_overdue=True):
         self._mtime = self._disk_mtime()
         self.jobs = self._read_jobs_file()
+        if not skip_overdue:
+            # A mid-session adopt must not eat an occurrence. jobs.json's mtime changes
+            # whenever another process writes it (a --once `schedule add`/`remove`), and
+            # the start-up rule below pushed a job that came due since the last tick
+            # forward BEFORE the due check - that occurrence never fired, though nothing
+            # was down (A-2026-10-08-153). Leave `next` alone; the due check fires it.
+            return
         # A job whose time passed while the bot was down must NOT fire the
         # moment we start — a reboot after a day of downtime would launch every
         # missed run at once. Skip the missed occurrence, log it, move on.
@@ -13309,13 +13547,14 @@ class Scheduler:
         ever: a job added from a `--once` run said "next run 09:51" and never ran (no log
         line, no fire), and a job removed there was fired anyway and resurrected in the
         file by the next save - measured on a live install, 2026-10-03. mtime is enough: one
-        operator, one file. The overdue-skip in _load() is what makes a mid-session adopt
-        safe, the same way it is for a restart.
+        operator, one file. The adopt keeps `next` as the file has it - the start-up
+        overdue-skip belongs to _load()'s first call alone, because a mid-session adopt
+        that skipped would drop an occurrence the bot was up for (A-2026-10-08-153).
         """
         mt = self._disk_mtime()
         if mt is None or mt == self._mtime:
             return False
-        self._load()
+        self._load(skip_overdue=False)
         return True
 
     @staticmethod
@@ -13414,6 +13653,13 @@ class Scheduler:
         fired `sched-nightly` and moved its `next` a full minute on). Such a process
         still adopts another process's edits, so `schedule list` stays honest.
         """
+        if not self.ok:
+            # croniter is missing: __init__ disabled the schedule and tool_action
+            # refuses, but the tick kept FIRING every job whose `next` passed - _next_run
+            # then raised ImportError, the except re-armed the job an hour out, and a
+            # weekly job ran every hour while the log said scheduling was disabled
+            # (A-2026-10-08-154).
+            return False
         if not holds_instance_lock():
             with self.lock:
                 self._reload_if_changed()
@@ -14851,7 +15097,11 @@ def derive_plan_from_text(text):
     """
     steps = []
     for line in re.split(r"[\r\n]+", text or ""):
-        m = re.match(r"^\s*(?:\d{1,2}[.)]|[-*\u2022])\s+(.{10,200})$", line)
+        # No upper bound here: the pattern was anchored (`.{10,200}$`), so a listed step
+        # longer than 200 chars - a paragraph passed as one item - did not match and
+        # vanished from the plan and from the wrap-up check, while set_derived_plan's own
+        # t[:200] could never take effect (A-2026-10-08-155). The truncation belongs there.
+        m = re.match(r"^\s*(?:\d{1,2}[.)]|[-*\u2022])\s+(.{10,})$", line)
         if m:
             steps.append(m.group(1).strip())
     return steps if len(steps) >= 2 else []
@@ -19949,12 +20199,24 @@ class Agent:
                 hist.append({"role": "assistant", "content": _dismissed})
                 self._save(session_key)
                 return _dismissed
+            if remember_save_order(session_key, user_text):
+                # The operator answered the offer: its pending record goes, and the word
+                # itself runs as an ordinary order (the model does the saving).
+                log.info("[%s] remember offer answered with 'save it' - pending record "
+                         "dropped", session_key)
             _ord = order_census_note(session_key, user_text)
             _st0 = run_state(session_key, create=True)
             if _ord:
                 _st0["order_repeats"] = _ord["count"]
                 _st0["order_words"] = list(_ord.get("words") or [])
                 _st0["order_sample"] = _ord.get("sample") or ""
+            else:
+                # THIS run's order is not one the census counts (a question, a one-off):
+                # the repeat count from an earlier order must not be quoted by this run's
+                # offers (A-2026-10-08-148).
+                _st0["order_repeats"] = 0
+                _st0["order_words"] = []
+                _st0["order_sample"] = ""
             # The hand-driven call count AT THE START of this run: the remember offer asks
             # about what THIS run re-derived, and the counters live per session.
             _by0 = _st0.get("calls_by") or {}
@@ -21267,6 +21529,10 @@ class Agent:
         # what was just dropped (A-2026-10-08-83) - the same reasoning as the spill
         # pointers below.
         clear_open_question(session_key)
+        # ...and a pending save-or-dismiss offer belongs to the old conversation too:
+        # left behind, a bare "no thanks" days later would be swallowed as answering it
+        # (A-2026-10-08-147).
+        clear_remember_offer(session_key)
         # A reveal is per-SESSION rent, so a cleared conversation pays it again: measured
         # 2026-09-25 driving a Windows install, `find_tools {all: true}` took a session
         # from 14 schemas to 30 and every later turn - through /new, which says "Session
@@ -21754,7 +22020,10 @@ def checkin_line(session_key, steps, elapsed, name=None, args=None):
     bits = [f"⏳ {int(elapsed // 60)}m{int(elapsed % 60):02d}s in",
             f"step {steps}"]
     if name:
-        snippet = " ".join(str(args).split())[:70]
+        # The line goes to chat and the page every 5 minutes / 30 steps, and NOTHING
+        # downstream scrubs: a literal token in the first stretch of a command rode the
+        # channel in the clear (A-2026-10-08-158). Same scrubber as every other exit.
+        snippet = " ".join(scrub(str(args)).split())[:70]
         bits.append(f"doing `{name}` {snippet}".strip())
     # live first: last_usage still holds the PREVIOUS run until this one ends
     u = (fmt_usage(AGENT.live_usage.get(session_key))
@@ -21858,6 +22127,20 @@ def card_sig(line):
     when the card reads as the same card to the end.
     """
     return tuple(_line_words(_CARD_SECONDS.sub("", str(line or ""))))
+
+
+_FOLD_RX = re.compile(r"\s*\(×\d+\)\s*$")
+
+
+def _unfolded(line):
+    """The line a folded "(×N)" card was folded from.
+
+    The count is part of the text, so `card_sig("A (×2)")` never equals the signature of
+    A: the third identical call failed the in-batch test, fell into the standalone branch
+    and reset the batch to the folded card alone, dropping every other line the operator
+    was reading (A-2026-10-08-159).
+    """
+    return _FOLD_RX.sub("", str(line or "")).rstrip()
 
 
 class RunReporter:
@@ -22185,7 +22468,7 @@ class RunReporter:
             if prev and prev[0] == sig:
                 times = prev[2] + 1
                 shown = f"{prev[3]} (×{times})"
-                if lines and card_sig(lines[-1]) == prev[0]:
+                if lines and card_sig(_unfolded(lines[-1])) == prev[0]:
                     lines = lines[:-1] + [shown]     # the batch that is still open
                     keep = ref
                 else:
@@ -27330,10 +27613,12 @@ async function runSearch(){
   j=await r.json();
  }catch(e){hitsEl.hidden=true;return;}
  const ms=(j&&j.matches)||[];
+ const more=(j&&j.more)||0;
  if(!ms.length){hitsEl.hidden=true;return;}
  const head=document.createElement('div');head.className='hit-head';
  head.textContent=ms.length+(ms.length===1?' match inside conversations'
-                                          :' matches inside conversations');
+                                          :' matches inside conversations')
+                  +(more?' ('+more+' more - narrow the search)':'');
  hitsEl.appendChild(head);
  for(const m of ms){
   const b=document.createElement('button');b.type='button';b.className='hit';
@@ -28649,13 +28934,15 @@ def run_webui():
                     return
                 titles = {s.get("key"): (s.get("title") or "")
                           for s in web_sessions(_web_client(self.headers), True)}
+                _hits, _total = session_search_hits(q, 20)
                 self._json({"query": q, "matches": [
                     {"key": key, "role": role,
                      # a snippet is a QUOTE, but emphasis markers read as noise in a
                      # narrow rail; the model's tool output keeps them
                      "snippet": re.sub(r"\*\*|`", "", snippet),
                      "title": titles.get(key) or key}
-                    for key, role, snippet, _rank in session_search_hits(q, 20)]})
+                    for key, role, snippet, _rank in _hits],
+                    "more": max(0, _total - len(_hits))})
             elif self.path.startswith("/api/sessions"):
                 # The rail: what conversations this browser has, newest first.
                 # ?all=1 is the token holder's view of EVERY conversation on this
@@ -35560,7 +35847,18 @@ def _cli_reader():
             try:
                 line = session.prompt(_tui_prompt_text()).strip()
             except KeyboardInterrupt:        # Ctrl-C at the prompt: what SIGINT does
-                _cli_sigint(None, None)
+                # prompt_toolkit reads Ctrl-C as a KEY on THIS thread, so there is no
+                # main-thread SIGINT: _cli_sigint's bare raise used to escape here,
+                # killing the one owner of stdin while the console stayed blocked on
+                # inbox.get() for ever (A-2026-10-08-166).
+                _sig = _CLI.get("stop")
+                if _sig is not None and not _sig.is_set():
+                    _cli_sigint(None, None)              # stop the run in flight
+                else:
+                    # Idle, or already stopping: hand the loop the same thing a closed
+                    # stdin gives it, instead of dying on an exception nobody can catch.
+                    _CLI["inbox"].put(None)
+                    return
                 continue
             except EOFError:                 # Ctrl-D
                 _CLI["inbox"].put(None)

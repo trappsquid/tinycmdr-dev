@@ -99,6 +99,31 @@ def main():
         check("mm-multi" not in out,
               "...and still refuses when one word is nowhere in the session")
 
+        # ---- A-2026-10-08-156: hits are ranked, then newest-first, and a truncation
+        # says what it hid. The scan used to stop at `limit` FILES in filename order, so
+        # the alphabetically first sessions won and recent matches vanished in silence.
+        (fb.SESSIONS_DIR / "aa-worse.json").write_text(json.dumps([
+            {"role": "user", "content": "needle"},
+            {"role": "assistant", "content": "99 extra word"}]))
+        (fb.SESSIONS_DIR / "zz-best.json").write_text(json.dumps([
+            {"role": "user", "content": "needle 99 extra word"}]))
+        _res = fb.session_search_hits("needle 99 extra word", 25)
+        _hits, _total = (_res if isinstance(_res, tuple) else (_res, len(_res)))
+        check(_hits and _hits[0][0] == "zz-best",
+              f"the best-ranked hit comes first, whatever its filename ({_hits[:2]})")
+        check(_hits and _hits[0][3] == 4,
+              f"...and its rank is the whole query ({_hits[:1]})")
+        for i in range(30):
+            (fb.SESSIONS_DIR / ("zz-needle-%02d.json" % i)).write_text(json.dumps(
+                [{"role": "user", "content": "needle deep in session %02d" % i}]))
+        _res2 = fb.session_search_hits("needle", 25)
+        _h2, _t2 = (_res2 if isinstance(_res2, tuple) else (_res2, len(_res2)))
+        check(_t2 > len(_h2) and len(_h2) == 25,
+              f"a truncated set reports the full total ({(len(_h2), _t2)})")
+        out = fb.tool_search_sessions({"query": "needle"}, {})
+        check("more session(s) matched" in out,
+              f"...and the tool names what the truncation hid ({out[-160:]!r})")
+
         check(json.loads((fb.SESSIONS_DIR / f"{key}.transcript.jsonl").read_text(encoding="utf-8")
                          .splitlines()[0]).get("role") == "user",
               "and the first line is the oldest message, in order")

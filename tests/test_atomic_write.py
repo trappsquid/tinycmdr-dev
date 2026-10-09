@@ -159,6 +159,29 @@ def test_bytes_go_in_verbatim():
           crlf.read_bytes() == b"a\r\nb\r\n", repr(crlf.read_bytes()))
 
 
+def test_a_symlink_is_followed_not_replaced():
+    """A-2026-10-08-97: os.replace swaps the directory entry, so an edit through a
+    symlink (stow/chezmoi dotfiles, /etc/alternatives-style links) replaced the LINK
+    with a regular file - the real target untouched, the owner/ACL/hard links/xattrs
+    lost - while write_file followed it. The two doors disagreed about one path."""
+    target = TMP / "symlink-target.txt"
+    link = TMP / "symlink-managed.txt"
+    target.write_bytes(b"old bytes\n")
+    try:
+        link.unlink()
+    except OSError:
+        pass
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError) as e:
+        print(f"skip symlinks are not available here: {e}")
+        return
+    fb.atomic_write_bytes(link, b"new bytes\n")
+    check("the link is still a symlink", link.is_symlink())
+    check("...and the real target received the bytes",
+          target.read_bytes() == b"new bytes\n", target.read_bytes())
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

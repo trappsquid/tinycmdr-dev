@@ -194,7 +194,13 @@ def respond_to_exit(code, uptime, failures, self_restarts=0, window_start=0.0, n
         return failures, self_restarts, window_start, 1
     if code == LOCKED_EXIT_CODE:
         return failures, self_restarts, window_start, 30
-    if uptime > RAPID_EXIT_S and code == 0:
+    if uptime > RAPID_EXIT_S:
+        # ANY exit after a long healthy run resets the count: requiring code == 0 let a
+        # crash after days (exit 1, an endpoint blip, a killed child) count as a failed
+        # START, so crashes spread over weeks added up and one quick exit at boot then
+        # tripped FAILED_STARTS_BEFORE_STOP - the Windows bot stopped for good
+        # (A-2026-10-08-170). The count is about rapid failed STARTS; a long run was not
+        # one.
         return 0, self_restarts, window_start, BACKOFF_START
     failures += 1
     if uptime <= RAPID_EXIT_S and failures >= FAILED_STARTS_BEFORE_STOP:

@@ -62,10 +62,19 @@ class _Stub(BaseHTTPRequestHandler):
     def log_message(self, *a):        # the runner's log stays readable
         pass
 
-    def _send(self, obj):
+    def _send(self, obj, code=200):
         body = json.dumps(obj).encode("utf-8")
-        self.send_response(200)
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_raw(self, body, ctype="text/html"):
+        if isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -75,12 +84,34 @@ class _Stub(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(n) or b"{}")
         _Stub.calls.append(("POST", self.path, payload,
                             self.headers.get("Authorization")))
+        if "/fail" in self.path:
+            self._send({"detail": "bad key", "message": "quota exhausted"}, 500)
+            return
+        if "/empty" in self.path:
+            self._send({"results": []})
+            return
         self._send({"code": 0, "message": "success", "data": {"results": [
             {"title": "Stub AnySearch hit", "url": "https://example.invalid/a",
              "snippet": "anysearch snippet"}]}})
 
     def do_GET(self):
         _Stub.calls.append(("GET", self.path, parse_qs(urlparse(self.path).query), None))
+        if "/fail" in self.path:
+            self._send({"detail": "bad key", "message": "quota exhausted"}, 500)
+            return
+        if "/empty" in self.path:
+            self._send({"results": []})
+            return
+        if self.path.startswith("/bigscript"):
+            # iter_content reads in 64 KiB chunks and the loop breaks AFTER the chunk
+            # that crosses the budget, so the cut lands at 65536 bytes: the script must
+            # OPEN before it and CLOSE after it for the defect to be reachable.
+            self._send_raw("<!doctype html><html><body><p>HELLO PAGE</p>"
+                           + ("<!-- pad -->" * 4500)
+                           + "<script>var marker='JS_SOURCE_MARKER';"
+                           + ("x" * 50000)
+                           + "</script><p>TAIL AFTER THE SCRIPT</p></body></html>")
+            return
         self._send({"results": [{"title": "Stub SearxNG hit",
                                  "url": "https://example.invalid/s",
                                  "content": "searxng snippet"}]})
@@ -95,6 +126,10 @@ REMOTE = "https://api.anysearch.com/v1/search"
 def search_config(providers, egress):
     fb.CONFIG["search"]["providers"] = providers
     fb.CONFIG["search"]["allow_cloud_egress"] = egress
+    # The config.json reloads above can leave the section without the defaults the
+    # loader had merged at import; the tool reads max_results unconditionally.
+    fb.CONFIG["search"].setdefault("max_results",
+                                   fb.DEFAULT_CONFIG["search"]["max_results"])
     _Stub.calls.clear()
 
 
@@ -304,6 +339,29 @@ check("config set refuses a provider KEY and points at .env",
       rc == 2 and "token set" in said, (rc, said[:160]))
 rc, said = _verb("set", "agent.max_steps", "7")
 check("...while an ordinary setting is still accepted", rc == 0, (rc, said[:120]))
+
+# --------------------------- A-2026-10-08-146: an HTTP error is not an empty result
+search_config([{"kind": "searxng", "url": BASE_URL + "/fail"},
+               {"kind": "searxng", "url": BASE_URL}], False)
+out = fb.tool_web_search({"query": "error falls through"}, {})
+check("a provider's HTTP error falls through to the next provider",
+      "Stub SearxNG hit" in out, out[:200])
+search_config([{"kind": "searxng", "url": BASE_URL + "/empty"},
+               {"kind": "searxng", "url": BASE_URL}], False)
+out = fb.tool_web_search({"query": "empty falls through"}, {})
+check("...and an empty result set does too (another index may hold the query)",
+      "Stub SearxNG hit" in out, out[:200])
+search_config([{"kind": "searxng", "url": BASE_URL + "/fail"}], False)
+out = fb.tool_web_search({"query": "the only one fails"}, {})
+check("the failure is NAMED, never answered as 'No results'",
+      out.startswith("ERROR:") and "500" in out, out[:200])
+
+# ---------------------- A-2026-10-08-150: a byte cut inside a <script> is not page text
+_script_page = fb._fetch_page(BASE_URL + "/bigscript", 1000)
+check("a cut landing inside an inline <script> does not return the script source",
+      "JS_SOURCE_MARKER" not in _script_page, _script_page[:200])
+check("...and the text before the block is kept",
+      "HELLO PAGE" in _script_page, _script_page[:120])
 
 _srv.shutdown()
 print()

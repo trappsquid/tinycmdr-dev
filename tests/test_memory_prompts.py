@@ -90,6 +90,9 @@ def _seed(session, words, calls=5, **extra):
 
 
 SHAPE = ["burn", "the", "dvd", "and", "verify", "it"]
+FRESH = ["water", "the", "ferns", "twice", "weekly"]
+FRESH2 = ["oil", "the", "gate", "hinges", "yearly"]
+FRESH3 = ["sweep", "the", "chimney", "in", "spring"]
 OTHER = ["drain", "the", "mail", "queue", "and", "report"]
 RUN_SHAPE = ["encode", "the", "dvd", "title", "set", "now"]
 
@@ -158,6 +161,78 @@ _seed("mp-pri2", OTHER, calls=9)
 _pri2 = offer_after_run("mp-pri2", _Rep(), source="main")
 check("...while an ordinary long run gets the save-or-dismiss ask",
       "save it" in _pri2 and "dismiss" in _pri2, _pri2[:180])
+
+# ---- A-2026-10-08-147: an offer is answered by the message that FOLLOWS it -------------
+# (a shape of its own: the suite dismissed SHAPE and OTHER earlier)
+_seed("mp-stale", FRESH, calls=9)
+check("offer posted before the staleness test",
+      bool(remember_offer("mp-stale", None, source="main", trigger="event")))
+_data = json.loads(fb.PROC_CENSUS_FILE.read_text(encoding="utf-8"))
+for _o in _data.get("__remember_offers__", []):
+    if _o.get("session") == "mp-stale":
+        _o["at"] = "2020-01-01 00:00"
+fb.PROC_CENSUS_FILE.write_text(json.dumps(_data, indent=1, sort_keys=True), encoding="utf-8")
+check("a days-old offer does not swallow a bare 'no thanks'",
+      remember_dismiss_order("mp-stale", "no thanks") == "")
+check("...and the stale record is dropped, not left to nag",
+      all(o.get("session") != "mp-stale"
+          for o in json.loads(fb.PROC_CENSUS_FILE.read_text(encoding="utf-8"))
+          .get("__remember_offers__", [])))
+_seed("mp-save", FRESH2, calls=9)
+check("offer posted before the save answer",
+      bool(remember_offer("mp-save", None, source="main", trigger="event")))
+_save_order = getattr(fb, "remember_save_order", lambda *a, **k: False)
+check("a bare 'save it' answers the offer's record (the model still saves)",
+      _save_order("mp-save", "save it") is True)
+check("...so a later 'no thanks' in that session is the model's",
+      remember_dismiss_order("mp-save", "no thanks") == "")
+_seed("mp-reset", FRESH3, calls=9)
+check("offer posted before /new",
+      bool(remember_offer("mp-reset", None, source="main", trigger="event")))
+fb.AGENT.reset("mp-reset")
+check("...and /new takes the pending record with the conversation",
+      remember_dismiss_order("mp-reset", "no thanks") == "")
+
+# ---- A-2026-10-08-148: the repeat offer is throttled, and counts THIS run ---------------
+_cen = (json.loads(fb.PROC_CENSUS_FILE.read_text(encoding="utf-8"))
+        if fb.PROC_CENSUS_FILE.exists() else {})
+_cen.setdefault("__orders__", []).append({"words": ["burn", "dvd"], "count": 3,
+                                          "last": "2026-10-08 10:00"})
+fb.PROC_CENSUS_FILE.parent.mkdir(parents=True, exist_ok=True)
+fb.PROC_CENSUS_FILE.write_text(json.dumps(_cen, indent=1, sort_keys=True), encoding="utf-8")
+_seed("mp-rep", SHAPE, calls=9, order_repeats=3, order_words=["burn", "dvd"])
+fb.run_state("mp-rep", create=True)["hand_at_start"] = 5   # 4 of the session's 9 calls
+_line = fb.mint_offer("mp-rep", _Rep())
+check("the repeat offer posts with THIS run's hand count",
+      "run #3" in _line and "4 hand" in _line, _line[:200])
+check("...and is throttled for a week, not posted on every run",
+      fb.mint_offer("mp-rep", _Rep()) == "")
+_seed("mp-zero", SHAPE, calls=9, order_repeats=3, order_words=["burn", "dvd"])
+fb.run_state("mp-zero", create=True)["hand_at_start"] = 9
+check("a run that made no hand calls is not offered",
+      fb.mint_offer("mp-zero", _Rep()) == "")
+
+# ---- A-2026-10-08-149: a damaged census is kept; the keys are bounded -------------------
+_saved = (fb.PROC_CENSUS_FILE.read_text(encoding="utf-8")
+          if fb.PROC_CENSUS_FILE.exists() else None)
+try:
+    _dam = fb.PROC_CENSUS_FILE.parent / (fb.PROC_CENSUS_FILE.name + ".damaged")
+    _dam.unlink(missing_ok=True)
+    fb.PROC_CENSUS_FILE.write_text("{not json", encoding="utf-8")
+    check("a damaged census loads as an empty map", fb._census_load() == {})
+    check("...and is KEPT as one .damaged copy", _dam.exists())
+finally:
+    if _saved is not None:
+        fb.PROC_CENSUS_FILE.write_text(_saved, encoding="utf-8")
+_max = getattr(fb, "_CENSUS_SIG_MAX", 120)
+_big = {("sig-%03d" % i): {"runs": [], "offered": "", "minted": "",
+                           "last": "2026-01-%02d 00:00" % (i % 28)}
+        for i in range(_max + 5)}
+fb.PROC_CENSUS_FILE.write_text(json.dumps(_big, indent=1, sort_keys=True), encoding="utf-8")
+fb.procedure_census_bump("shell", {"command": "Get-PSDrive | Select-Object -First 5"})
+_after = fb._census_load()
+_sigs = [k for k in _after if not k.startswith("__")]
+check("the census prunes its signature keys to the cap", len(_sigs) <= _max, len(_sigs))
 
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)

@@ -322,6 +322,31 @@ def main():
               and "fix the REGION" in out,
               "a broken edit shows the region and the pre-image", out[-300:])
 
+        # ---- A-2026-10-08-96: an edit round-trips the file's own encoding
+        # The write was always UTF-8, so every cp1252/Latin-1/Shift-JIS byte in the file
+        # became U+FFFD on the first edit, with a clean diff.
+        latin = workdir / "latin1.txt"
+        latin.write_bytes(b"caf\xe9 grounds\nsecond line\n")
+        out = fb.tool_edit_file({"path": str(latin), "old_string": "second line",
+                                 "new_string": "SECOND LINE"}, dict(ctx))
+        check(out.startswith("OK"), "a cp1252/Latin-1 file edits cleanly", out[:160])
+        check(latin.read_bytes() == b"caf\xe9 grounds\nSECOND LINE\n",
+              "...and its non-UTF-8 bytes survive the round-trip", latin.read_bytes())
+
+        # ---- A-2026-10-08-99: a PowerShell 5.1 `>` redirect is UTF-16
+        # Decoded as UTF-8 with errors="replace" it read as NUL-interleaved text and
+        # never matched a content search.
+        u16 = workdir / "ps-redirect.txt"
+        u16.write_bytes("alpha kumquat beta\n".encode("utf-16"))     # BOM + LE
+        read_back = fb.tool_read_file({"path": str(u16)}, dict(ctx))
+        check("needle" not in read_back and "kumquat" in read_back
+              and "\x00" not in read_back,
+              "a UTF-16 file reads as text, not NULs", read_back[:120])
+        searched = fb.tool_search_files({"path": str(workdir), "content": "kumquat"},
+                                        dict(ctx))
+        check("ps-redirect.txt" in searched,
+              "...and a content search finds inside it", searched[:200])
+
         # ---------------------------------------------------------- skills metadata
         sk = workdir / "skills" / "net"
         sk.mkdir(parents=True)

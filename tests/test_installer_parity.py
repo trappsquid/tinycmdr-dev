@@ -199,6 +199,19 @@ def main():
     check("the README says plainly that macOS has no --mode",
           "no `--mode`" in mac_half, mac_half[:120])
 
+    # -------------------------------------------- the launchd domain names the USER
+    # A-2026-10-08-176/-177: every domain was `gui/$(id -u)`, which under sudo is gui/0,
+    # so bootout missed the user's job (its plist was deleted while the agent stayed
+    # loaded and KeepAlive-respawned) and bootstrap loaded a fresh install into the
+    # wrong session.
+    _mac_src = MAC.read_text(encoding="utf-8")
+    # Code only: the file's own comment quotes the OLD spelling while explaining it.
+    _mac_code = "\n".join(l for l in _mac_src.splitlines()
+                          if not l.lstrip().startswith("#"))
+    _domains = re.findall(r"gui/\$\(id -u[^)]*\)", _mac_code)
+    check("every launchd domain is the INVOKING user's uid, never gui/0 under sudo",
+          _domains and all(d == 'gui/$(id -u "$RUN_USER")' for d in _domains), _domains)
+
     print()
     if FAILS:
         print("%d FAILED: %s" % (len(FAILS), ", ".join(FAILS)))

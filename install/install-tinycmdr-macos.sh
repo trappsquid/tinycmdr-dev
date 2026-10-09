@@ -78,7 +78,11 @@ SRC="$(cd "$HERE/.." && pwd)"
 # uninstaller looked in /var/root, found nothing, printed "done." and exited 0, while the
 # launchd job kept KeepAlive-ing a tinycmdr.py that was still there. So resolve the
 # INVOKING user first (SUDO_USER, else the account behind this uid) and that user's home
-# from the account database, and use it everywhere $HOME used to appear.
+# from the account database, and use it everywhere $HOME used to appear. The launchd
+# domain follows the same rule: `gui/$(id -u)` under sudo is gui/0, so bootout and
+# bootstrap missed the user's session - the job stayed loaded and KeepAlive-respawned
+# after its plist was deleted, and a fresh install loaded into the wrong domain
+# (A-2026-10-08-176/-177).
 user_home() {   # user_home <name> -> that user's home directory, or empty
     local u="$1" h=""
     h="$(getent passwd "$u" 2>/dev/null | cut -d: -f6)" || true            # Linux
@@ -389,7 +393,7 @@ if [ "$UNINSTALL" = 1 ]; then
     # THIS install directory.
     if [ "$IS_MAC" = 1 ] && [ -f "$PLIST" ]; then
         if grep -qF "$INSTALL_DIR" "$PLIST" 2>/dev/null; then
-            launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null \
+            launchctl bootout "gui/$(id -u "$RUN_USER")/$LABEL" 2>/dev/null \
                 || launchctl unload -w "$PLIST" 2>/dev/null || true
             rm -f "$PLIST"
             _removed=1
@@ -673,7 +677,7 @@ if [ "$VERIFY_ONLY" = 1 ]; then
         warn "no .env (the bot cannot authenticate without it)"
     fi
     if [ "$IS_MAC" = 1 ] && [ -f "$PLIST" ]; then
-        if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+        if launchctl print "gui/$(id -u "$RUN_USER")/$LABEL" >/dev/null 2>&1; then
             info "launchd: $LABEL is loaded"
         else
             warn "launchd: $PLIST exists but $LABEL is not loaded"
@@ -982,7 +986,7 @@ if [ "$IS_MAC" = 1 ]; then
     else
         # `launchctl print` EXITS NON-ZERO for a label that is not loaded, and under
         # `set -e` with pipefail that killed the whole run at the assignment (measured
-        _loaded="$( { launchctl print "gui/$(id -u)/$LABEL" 2>/dev/null || true; } \
+        _loaded="$( { launchctl print "gui/$(id -u "$RUN_USER")/$LABEL" 2>/dev/null || true; } \
             | sed -n 's/^[[:space:]]*path = //p' | head -1)"
         if [ -n "$_loaded" ] && [ "$_loaded" != "$PLIST" ]; then
             _foreign="$_loaded"
@@ -1003,7 +1007,7 @@ mkdir -p "$INSTALL_DIR" "$LOGDIR"
 
 if [ "$FORCE" = 1 ]; then
     if [ "$IS_MAC" = 1 ] && [ -f "$PLIST" ]; then
-        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        launchctl bootout "gui/$(id -u "$RUN_USER")/$LABEL" 2>/dev/null || true
         sleep 1
         info "booted out the running agent"
     fi
@@ -1633,8 +1637,8 @@ chmod 600 "$INSTALL_DIR/$LABEL_FILE_NAME" 2>/dev/null || true
 if [ "$NO_START" = 1 ]; then
     info "--no-start: not loading the agent"
 else
-    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null \
+    launchctl bootout "gui/$(id -u "$RUN_USER")/$LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u "$RUN_USER")" "$PLIST" 2>/dev/null \
         || launchctl load -w "$PLIST" \
         || die "launchctl could not load $PLIST (see $LOGDIR/launchd.err.log)"
     info "agent loaded as $LABEL"

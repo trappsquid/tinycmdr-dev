@@ -1359,5 +1359,43 @@ if HAVE_APP:
         fb._CLI.clear()
         fb._CLI.update(_saved_cli)
 
+# --- Ctrl-C at the prompt must not kill the one owner of stdin (A-2026-10-08-166) -----
+# prompt_toolkit reads Ctrl-C as a KEY on the READER thread, so _cli_sigint's bare raise
+# (nothing running to stop) escaped the except handler: threading printed a traceback,
+# the reader died, and the console stayed blocked on inbox.get() for ever with nobody
+# reading stdin.
+import queue as _queue  # noqa: E402
+import threading as _threading  # noqa: E402
+
+
+class _SigPrompt:
+    """The session prompt() raises KeyboardInterrupt, the way Ctrl-C reads."""
+
+    def prompt(self, *a, **k):
+        raise KeyboardInterrupt
+
+
+_saved_cli2 = dict(fb._CLI)
+_real_tui_session = fb._tui_session
+try:
+    fb._CLI.clear()
+    fb._CLI["inbox"] = _queue.Queue()
+    fb._tui_session = lambda: _SigPrompt()
+    _thr = _threading.Thread(target=fb._cli_reader, daemon=True)
+    _thr.start()
+    try:
+        _got = fb._CLI["inbox"].get(timeout=5)
+    except _queue.Empty:
+        _got = "TIMEOUT: the reader never delivered anything"
+    check("Ctrl-C at an idle prompt hands the loop the closed-stdin marker",
+          _got is None, _got)
+    _thr.join(timeout=5)
+    check("...and the reader is gone by its own exit, not by a traceback",
+          not _thr.is_alive(), _thr.is_alive())
+finally:
+    fb._tui_session = _real_tui_session
+    fb._CLI.clear()
+    fb._CLI.update(_saved_cli2)
+
 print(f"\n{len(PASSES)} passed, {len(FAILS)} failed")
 sys.exit(1 if FAILS else 0)
