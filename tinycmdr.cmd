@@ -21,9 +21,9 @@ if not defined PY call :findpy python.exe
 if not defined PY call :findpy py.exe
 if not defined PY (
     echo tinycmdr: no Python found - install Python 3.10-3.12, or re-run the installer. 1>&2
-    REM Brackets, not parentheses: cmd parses a ')' inside an 'echo' inside an 'if (...)'
-    REM block as the END of the block, so the line after it ran unconditionally and this
-    REM shim exited 127 without printing anything. Measured on Windows 2026-09-29.
+    REM Brackets, not parentheses: an unescaped close-paren in a line inside an if-block
+    REM is read as the END of the block, so the line after it ran unconditionally and
+    REM this shim exited 127 without printing anything. Measured on Windows 2026-09-29.
     echo           [the Microsoft Store stub on PATH is not a usable interpreter.] 1>&2
     exit /b 127
 )
@@ -32,8 +32,8 @@ REM An old install's own updater may predate the release package, so when the lo
 REM cannot do the job this shim fetches the published updater and lets IT do the whole
 REM thing (the probe is a marker in tinycmdr.py, not a version compare).
 if /i "%~1"=="update" (
-    REM The CAPABILITY marker, not a verb name: 1.0.44 HAS an update verb (git pull based,
-    REM which dead-ends on the dirty checkout its installer leaves), and no
+    REM The CAPABILITY marker, not a verb name: 1.0.44 HAS an update verb - git pull
+    REM based, which dead-ends on the dirty checkout its installer leaves - and no
     REM releases/latest/download anywhere - see the unix shim for the measurement.
     findstr /c:"releases/latest/download" "%HERE%tinycmdr.py" >nul 2>&1
     if errorlevel 1 (

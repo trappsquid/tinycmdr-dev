@@ -823,6 +823,59 @@ def syntax_floor(folder):
     return problems
 
 
+_CMD_BARE_PAREN_RX = re.compile(r"(?<!\^)[()]")
+_CMD_QUOTED_RX = re.compile(r'"[^"]*"')
+
+
+def cmd_block_parens(folder):
+    """Problems for a shipped .cmd whose TEXT inside a ( ... ) block carries a bare
+    parenthesis.
+
+    cmd.exe scans a whole ( ... ) block before it evaluates the condition, so one
+    unescaped parenthesis in the text of any line inside it ends the block early and
+    the file dies with ". was unexpected at this time." - exit 255, no other message -
+    whether or not that branch would ever run. The v1.0.94 uninstall door shipped
+    exactly that: two echo lines in its "does not look like a tinycmdr install" block,
+    so a double-click flashed one cryptic line and closed, on every machine (operator
+    report, measured on Windows 10 2026-10-09; the shim carries the same class,
+    measured 2026-09-29). Escape the pair as ^( ... ^).
+
+    Structure the scan ignores: the "(" that ends a line and the leading ")" - or
+    ") else (" - that closes a block, parens inside "double quotes" (cmd does not read
+    those as structure; the shim's quoted PowerShell one-liner depends on it), ^( / ^)
+    escapes, and the `echo(` empty-line idiom. A one-line `if x (echo y)` block or a
+    nested for-in set inside a block would be flagged; no shipped door uses either,
+    and the refusal names the line so the author can look.
+    """
+    problems = []
+    files = sorted(folder.rglob("*.cmd")) + sorted(folder.rglob("*.bat"))
+    for f in files:
+        rel = f.relative_to(folder).as_posix()
+        depth = 0
+        for n, line in enumerate(
+                f.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            s = _CMD_QUOTED_RX.sub('""', line).strip()
+            if not s:
+                continue
+            while s.startswith(")") and not s.startswith("^)"):
+                depth -= 1
+                s = s[1:].lstrip()
+            body, opens = s.rstrip(), 0
+            if body.endswith("(") and not body.endswith("^("):
+                opens, body = 1, body[:-1].rstrip()
+            if depth > 0:
+                body = re.sub(r"(?i)\becho\(", "echo", body)
+                hit = _CMD_BARE_PAREN_RX.search(body)
+                if hit:
+                    problems.append(
+                        f"{rel}:{n}: a bare '{hit.group(0)}' in a line inside a cmd "
+                        f"( ... ) block - cmd reads it as the END of the block before "
+                        f"the branch would even run; escape it as ^{hit.group(0)}")
+            depth += opens
+    print(f"cmd blocks: {len(files)} script(s) free of bare parens inside blocks")
+    return problems
+
+
 def payload_floor():
     """What ONE turn of this build rents before any history: the system prompt
     plus the visible tool schemas, measured with the shipped fixture config
@@ -935,6 +988,7 @@ def main():
         if public:
             problems += audit_public(stage_dir)
         problems += syntax_floor(stage_dir)
+        problems += cmd_block_parens(stage_dir)
         problems += tier_drift()
         problems += maintenance_drift()
         problems += platform_drift()

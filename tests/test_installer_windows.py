@@ -418,6 +418,51 @@ def main():
             check("...and no barrier when the caller owns the window (FB_NOPAUSE)",
                   "Press any key to close this window." not in out,
                   out[-300:])
+
+            # The doors nothing ran yet: the shim's no-Python path and the two
+            # extraction guards. Each is a ( ... ) block whose text a bare paren kills
+            # before anything prints - the class of the v1.0.94 uninstall door (an
+            # operator's double-click flashed one cryptic line and closed, 2026-10-09).
+            d = staged()
+            shutil.copy2(os.path.join(ROOT, "INSTALL-WINDOWS.cmd"),
+                         os.path.join(d, "INSTALL-WINDOWS.cmd"))
+            os.remove(os.path.join(d, "install", "install-tinycmdr.cmd"))
+            _rc, out = run_and_report("INSTALL-WINDOWS.cmd", d, "\n\n")
+            check("the install door names a missing wrapper instead of flashing",
+                  _rc == 1 and "Extract the WHOLE archive first" in out,
+                  (_rc, out[-1500:]))
+
+            d = staged()
+            shutil.copy2(os.path.join(ROOT, "install", "install-tinycmdr.cmd"),
+                         os.path.join(d, "install", "install-tinycmdr.cmd"))
+            _rc, out = run_and_report(
+                os.path.join("install", "install-tinycmdr.cmd"), d, "\n\n")
+            check("the wrapper names a missing installer script instead of flashing",
+                  _rc == 1 and "could not find" in out
+                  and "Extract the whole package first" in out,
+                  (_rc, out[-1500:]))
+
+            # The shim with NO Python anywhere: PATH is an empty dir and there is no
+            # venv, so the `if not defined PY (` block runs. Both messages must print -
+            # its lines are exactly what a bare paren in a block kills in silence
+            # (measured 2026-09-29 in this same file, fixed with brackets).
+            d = staged()
+            shutil.copy2(os.path.join(ROOT, "tinycmdr.cmd"),
+                         os.path.join(d, "tinycmdr.cmd"))
+            empty = os.path.join(work, "empty-path")
+            os.makedirs(empty, exist_ok=True)
+            env = dict(os.environ, PATH=empty)
+            r = subprocess.run(["cmd.exe", "/c", os.path.join(d, "tinycmdr.cmd"), "status"],
+                               cwd=d, input="", capture_output=True, text=True,
+                               timeout=180, env=env)
+            out = (r.stdout or "") + (r.stderr or "")
+            print("    door run: tinycmdr.cmd (no Python) rc=%s" % r.returncode)
+            for _ln in out.splitlines()[-14:]:
+                print("    | " + _ln)
+            check("the shim's no-Python path prints both lines and exits 127",
+                  r.returncode == 127 and "no Python found" in out
+                  and "Microsoft Store stub" in out,
+                  (r.returncode, out[-1500:]))
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
