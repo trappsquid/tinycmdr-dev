@@ -2098,10 +2098,10 @@
     {
       "id": "audit-fixes-1-0-91",
       "title": "the two gate inversions: a refusal cannot approve, and a wrapper is not a verb",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "3013dad",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Two gate inversions the whole-harness review found, each with a regression test that fails on the pre-fix build. The confirm gate's answer parser read the whole sentence for a scope word but only its first word for a no, and 'never' meant 'always' there, so a refusal phrased as a sentence ('please never run that') approved the command and wrote the permanent allow-all; a refusal word anywhere is a no now, and an answer that mixes yes and no fails closed. Every guard read a segment's first token as the command's verb, so any wrapper or prefix it did not know (sudo, nice, env X=1, LC_ALL=C, a subshell, then, cmd /c, Start-Process) hid the real command and 19 measured spellings - wipefs, dd of=, mkfs, rm -rf / and whole-tree deletes - ran ungated; one unwrap rule peels wrappers (with the values their switches take), shell keywords, assignments and interpreter payloads for the never tier, the delete rule and the alias arm.",
       "gate": "tests/test_guard_battery.py red on the pre-fix build and green on the batch; the full gate green"
