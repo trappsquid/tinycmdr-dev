@@ -5,7 +5,7 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.97] - 2026-10-09
 
 ### Fixed
 - **A requested session key could adopt any file on the sessions shelf:** the page's search offers sidecar stems (`web-abc.carry`) and other lanes' keys as conversations, and any regex-valid key was honoured - the run then wrote its history over whatever that name held (a carry dict, a chat lane's transcript) and the rail owned it; a requested key is honoured only for the shared `web` or a registered page conversation (tests/test_webui.py).
