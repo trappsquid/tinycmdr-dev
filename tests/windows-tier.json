@@ -32,7 +32,9 @@
     "tests/test_tool_doors.py",
     "tests/test_tui.py",
     "tests/test_verbs.py",
-    "tests/test_webui.py"
+    "tests/test_webui.py",
+    "tests/test_leak_gate.py",
+    "tests/test_webui_page.py"
   ],
   "scheduled": [
     "tests/test_a2a.py",
@@ -59,7 +61,6 @@
     "tests/test_installer_parity.py",
     "tests/test_installer_unix.py",
     "tests/test_job_control.py",
-    "tests/test_leak_gate.py",
     "tests/test_llama_extensions.py",
     "tests/test_mcp.py",
     "tests/test_memory_okf.py",
@@ -105,7 +106,6 @@
     "tests/test_transient_retry.py",
     "tests/test_update_notes.py",
     "tests/test_verify.py",
-    "tests/test_webui_page.py",
     "tests/test_where.py"
   ],
   "excluded": {},
