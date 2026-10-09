@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.95] - 2026-10-09
+
+### Added
+- **A web-search provider is a URL you enter:** the installers, `tinycmdr setup` and `tinycmdr search add <url>` ask for the url, an optional key (hidden; blank = an endpoint that answers anonymously) and a label, then "add another?" - a JSON POST of `{query, max_results}` with the key as Bearer, a 405 retried as searxng's GET - so any JSON search API is one command, no code change (tests/test_search_providers.py, tests/test_verbs.py, tests/test_setup.py).
+- **`tinycmdr quit` (`kill`, `exit`) takes this install down:** it stops the service through the shipped helper and kills everything still running from the folder, foreground sessions included; leftovers are named with exit 1, and a quiet box says nothing was running (tests/test_verbs.py).
+- **`tinycmdr search` lists every provider and its state**, `search test` runs one query through the chain, and `search allow true|false` is the egress door the BLOCKED line names (tests/test_search_providers.py).
+
+### Fixed
+- **A wrong type in config.json warns instead of killing the start:** a non-object `search` section or a non-dict `llm.fallbacks` entry crashed the import before anything could say so (tests/test_config_guards.py).
+- **The config set read-back walks the full dotted path**, so a depth-3 write reads its value back instead of `(gone)` (tests/test_verbs.py).
+- **The update path refuses an archive whose member escapes the unpack folder** on Pythons without tarfile's data filter, instead of extracting blind (tests/test_verbs.py).
+- **The startup lock abort names the look-through door**, never "delete tinycmdr.lock" - POSIX locks the folder itself (tests/test_lane_choice.py).
+- **`--mattermost` without a token is refused before the page is raised**, so no browser tab opens at a server that dies at once (tests/test_lane_choice.py).
+- **doctor and the no-lane note say the page is the door when web is on**; "CLI-only install" only when the page is off (tests/test_verbs.py).
+- **The persona note describes the artifact update** (never overwritten), not a git pull that does not exist (tests/test_verbs.py).
+- **The file log's write-failure fallback lives in handleError()**, the hook the stdlib actually calls: one line, and the record is kept (tests/test_file_log.py).
+- **The Windows doors hold their window:** a double-clicked uninstaller re-runs itself from %TEMP% so a removal cannot kill its tail, and the install door prints its own closing barrier (tests/test_installer_windows.py).
+- **tavily is removed entirely** - it shipped beside anysearch and refuses keyless calls - so anysearch is the one shipped provider, and a config that still names tavily is treated like any other url (tests/test_search_providers.py).
+
 ## [1.0.94] - 2026-10-08
 
 ### Fixed
