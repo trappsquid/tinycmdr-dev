@@ -330,14 +330,17 @@ def main():
         try:
             def staged(install_like=True, wrapper=("exit /b 2",)):
                 """A folder shaped like an install, with a stub wrapper that RECORDS
-                instead of removing (so the door's own logic is what is graded)."""
+                instead of removing (so the door's own logic is what is graded). A PACKAGE
+                folder (install_like=False) still carries tinycmdr.py at its root - that is
+                what the real archive has, and what routes the door to its "not an install"
+                sentence rather than the "no tinycmdr.py" one."""
                 n = len(os.listdir(work))
                 d = os.path.join(work, "d%d" % n)
                 os.makedirs(os.path.join(d, "install"))
                 shutil.copy2(os.path.join(ROOT, "UNINSTALL-WINDOWS.cmd"),
                              os.path.join(d, "UNINSTALL-WINDOWS.cmd"))
+                open(os.path.join(d, "tinycmdr.py"), "w").close()
                 if install_like:
-                    open(os.path.join(d, "tinycmdr.py"), "w").close()
                     open(os.path.join(d, "config.json"), "w").close()
                 lines = (["@echo off", "echo stub: removal ran", "echo args %*"]
                          + list(wrapper))
@@ -346,55 +349,64 @@ def main():
                     fh.write("\r\n".join(lines) + "\r\n")
                 return d
 
-            def run_door(name, folder, stdin_text):
-                return subprocess.run(
+            def run_and_report(name, folder, stdin_text):
+                """Run a door, PRINT its transcript, then hand back (rc, output).
+
+                The transcript is the diagnosis: the runner's report keeps only the first
+                failing check's detail, so a silent door (or a wrong sentence) must be
+                visible in the suite's own output on the next run.
+                """
+                r = subprocess.run(
                     ["cmd.exe", "/c", os.path.join(folder, name)], cwd=folder,
                     input=stdin_text, capture_output=True, text=True, timeout=180)
+                out = (r.stdout or "") + (r.stderr or "")
+                print("    door run: %s rc=%s" % (name, r.returncode))
+                for _ln in out.splitlines()[-14:]:
+                    print("    | " + _ln)
+                return r.returncode, out
 
             package = staged(install_like=False)
-            r = run_door("UNINSTALL-WINDOWS.cmd", package, "")
-            out = (r.stdout or "") + (r.stderr or "")
+            _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", package, "")
             check("a package folder is refused with its message, and the window holds",
-                  r.returncode == 2 and "does not look like a tinycmdr install" in out
+                  _rc == 2 and "does not look like a tinycmdr install" in out
                   and "Press any key to close this window." in out,
-                  (r.returncode, out[-300:]))
+                  (_rc, out[-300:]))
 
             d = staged()
-            r = run_door("UNINSTALL-WINDOWS.cmd", d, "n\n\n")
-            out = (r.stdout or "") + (r.stderr or "")
+            _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", d, "n\r\n\n")
             check("answering no removes nothing, exits 0, and the window holds",
-                  r.returncode == 0 and "Nothing was removed." in out
+                  _rc == 0 and "Nothing was removed." in out
                   and "stub: removal ran" not in out
                   and "Press any key to close this window." in out,
-                  (r.returncode, out[-300:]))
+                  (_rc, out[-300:]))
 
-            d = staged(wrapper="exit /b 2")
-            r = run_door("UNINSTALL-WINDOWS.cmd", d, "y\n\n")
-            out = (r.stdout or "") + (r.stderr or "")
+            d = staged(wrapper=("exit /b 2",))
+            _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", d, "y\r\n\n")
             check("a y reaches the wrapper, its exit code comes back, the tail prints",
-                  r.returncode == 2 and "stub: removal ran" in out
+                  _rc == 2 and "stub: removal ran" in out
                   and "The removal exited with code 2" in out
                   and "Press any key to close this window." in out,
-                  (r.returncode, out[-400:]))
+                  (_rc, out[-400:]))
 
             d = staged(wrapper=('del /f /q "%~dp0..\\UNINSTALL-WINDOWS.cmd" >nul 2>&1',
                                 'exit /b 0'))
-            r = run_door("UNINSTALL-WINDOWS.cmd", d, "y\n\n")
-            out = (r.stdout or "") + (r.stderr or "")
+            _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", d, "y\r\n\n")
             check("a removal that deletes the door's own file still ends with the barrier",
-                  r.returncode == 0 and "Press any key to close this window." in out,
-                  (r.returncode, out[-300:]))
+                  _rc == 0 and "Press any key to close this window." in out,
+                  (_rc, out[-300:]))
 
             # The install door: the barrier when it owns the window, none when the
             # caller does (the network one-liner sets FB_NOPAUSE and keeps its shell).
             d = staged()
             shutil.copy2(os.path.join(ROOT, "INSTALL-WINDOWS.cmd"),
                          os.path.join(d, "INSTALL-WINDOWS.cmd"))
-            r = run_door("INSTALL-WINDOWS.cmd", d, "\n\n")
-            out = (r.stdout or "") + (r.stderr or "")
+            _rc, out = run_and_report("INSTALL-WINDOWS.cmd", d, "\n\n")
             check("a double-clicked install ends with the barrier",
-                  r.returncode == 2 and "Press any key to close this window." in out,
-                  (r.returncode, out[-300:]))
+                  _rc == 2 and "Press any key to close this window." in out,
+                  (_rc, out[-300:]))
+
+            # ...and the same door with FB_NOPAUSE already set (the one-line network
+            # install's case) prints no barrier at all.
             env = dict(os.environ)
             env["FB_NOPAUSE"] = "1"
             r = subprocess.run(["cmd.exe", "/c", os.path.join(d, "INSTALL-WINDOWS.cmd")],
