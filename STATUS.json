@@ -2282,6 +2282,28 @@
       },
       "detail": "The small-output check in tests/test_stall.py globbed the shared run directory and read every *.out it listed, and under --jobs N every suite's run_capture creates and unlinks its own .out the moment it has been read back - so the collected list could name a file that was already gone, and [Errno 2] raised the check and failed the whole macos job (the v1.0.97 gate, on a commit that had changed three lines). A file that is gone cannot be a kept spill, which is the only thing the check grades, so a vanished name is skipped now; the macos job was green on the same suites the run before.",
       "gate": "the failing check is the measurement: [Errno 2] reading a .out a peer suite had unlinked, in the macos gate, 2026-10-09; the whole gate green on the fix (--jobs 4, 106 suites, 0 skipped)"
+    },
+    {
+      "id": "archives-carry-only-their-platform-files",
+      "title": "each archive carries only the files its own platform reads",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "b53619d",
+        "expect": "untagged"
+      },
+      "detail": "The Windows task's respawner (tinycmdr-supervise.py, 12.4 KB) rode in the macOS and Linux packages where nothing names it, the doc-only brand image (assets/tinycmdr-helm.png, 120 KB) rode in all three where only the product tree's doc reads it, and field-notes.md - the host's own known-failure library, grown on the box - sat in SHIP one build away from riding into every download; PLATFORM_FILES gives the respawner to the Windows container, the helm moved to product-manifest.json's extra, field-notes.md joined FORBIDDEN_NAMES, and a fresh public build measures 129 KB / 128 KB / 123 KB smaller (linux / macos / win).",
+      "gate": "test_contracts derives the respawner's platform from the kits' own text; the built archives were extracted and counted, check-package-assets / -page / -modes and smoke-install.sh all green on them, and the whole gate green"
+    },
+    {
+      "id": "batch-one-verb",
+      "title": "one verb lands a batch, and the generator owns every published number",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "3366c26",
+        "expect": "untagged"
+      },
+      "detail": "maintenance/batch.sh renders the published numbers, runs the whole gate at --jobs 4, commits with its -m message and pushes, replacing five hand steps (render, chase the prose numbers, gate, commit, push) whose serial gate measured 346 s against ~100 s at -j4; measured-block.py --write now also rewrites the four prose numbers the gate grades, so nothing in the doc is fixed by hand.",
+      "gate": "tests/test_measured_doc.py falsifies the writer on a doctored prose number; the whole gate green via batch.sh"
     }
   ]
 }
