@@ -9344,6 +9344,26 @@ def atomic_write_text(path, text, encoding="utf-8"):
     """
     atomic_write_bytes(path, text.encode(encoding))
 
+
+def _keep_backup(path, data=None):
+    """Keep the file's previous bytes beside it, without ever taking a file's place.
+
+    One rolling predecessor: `<name>.bak`, or `<name>.bak.1` when the operator already
+    has their own .bak - the file tools used to replace whatever sat there, an
+    operator's copy included (A-2026-10-08-107). Bounded at those two names: the next
+    write rolls .bak.1 rather than growing a new copy each time. `data` is written as
+    given (the caller already holds the bytes); without it the file streams to disk, so
+    backing up a big file costs disk, not RAM.
+    """
+    backup = path.with_suffix(path.suffix + ".bak")
+    if backup.exists():
+        backup = backup.with_name(backup.name + ".1")
+    if data is None:
+        shutil.copy2(path, backup)
+    else:
+        backup.write_bytes(data)
+    return backup
+
 def _path_lock(path):
     """One lock per PATH, not per tool: a batch that edits two files in parallel is
     fine, two calls to the same file are not - and since then, two PROCESSES are not
@@ -9596,10 +9616,10 @@ def tool_edit_file(args, ctx):
     out = new_lf.replace("\n", nl) if nl != "\n" else new_lf
     backup = path.with_suffix(path.suffix + ".bak")
     try:
+        backup = _keep_backup(path, raw_bytes)
         # Byte-exact, never a text round-trip through the platform's newline
         # default: the .bak of a CRLF file came back "\r\r\n" per line, so the
         # one copy that exists to undo a bad edit was not restorable as-was.
-        backup.write_bytes(raw_bytes)
         # ...and in the SAME ENCODING the file came in with: writing UTF-8 over a
         # cp1252/Latin-1/Shift-JIS file turned every non-ASCII byte in it into U+FFFD
         # (A-2026-10-08-96). A new character that the file's encoding cannot carry is
@@ -10065,19 +10085,27 @@ def tool_write_file(args, ctx):
             _made.append(_p)
             _p = _p.parent
         path.parent.mkdir(parents=True, exist_ok=True)
+        backup = None
         if args.get("append"):
             with path.open("a", encoding="utf-8", newline="") as f:
                 f.write(args["content"])
         else:
+            if path.exists() and not path.is_file():
+                # A device, FIFO or socket: the atomic replace below swaps the directory
+                # entry, which would REPLACE the node, and the old in-place write could
+                # block for ever on a FIFO (A-2026-10-08-107). Loud, and the shell can
+                # still write into it deliberately.
+                return (f"ERROR: {path} exists and is not a regular file (device, FIFO "
+                        f"or socket); write_file replaces regular files - use the shell "
+                        f"(e.g. `... > {path.name}`) if you mean to write into it.")
             if path.exists() and not args.get("no_backup"):
-                backup = path.with_suffix(path.suffix + ".bak")
-                backup.write_bytes(path.read_bytes())
-            # newline="", from the other direction: an LF-only payload (a bash
-            # script, a .gitattributes) used to be rewritten CRLF by the platform,
-            # and bash then refused the script with "$'\r': command not found" -
-            # which reads as the model's fault, not the writer's.
-            with path.open("w", encoding="utf-8", newline="") as f:
-                f.write(args["content"])
+                backup = _keep_backup(path)
+            # Atomic replace, like edit_file: open("w") truncated the destination before a
+            # single byte was written, so a crash, a full disk or a concurrent reader left
+            # a partial file - and this path also writes the bot's own state files
+            # (config.json, notes.md through an approved gate) (A-2026-10-08-107). The
+            # bytes are written raw, so an LF-only payload stays LF.
+            atomic_write_text(path, args["content"])
         # A landed write ends any no-op streak on this path (the edit tool's guard).
         _edit_noop_clear(path, ctx)
         _receipt_record(path, _content, ctx)
@@ -10096,10 +10124,14 @@ def tool_write_file(args, ctx):
         # Windows only: CON.txt is an ordinary file everywhere else, and a warning there
         # would be noise on every POSIX host.
         _resv = _win_reserved_name(path.name) if IS_WINDOWS else ""
+        _bk_note = ""
+        if backup is not None and backup.name != path.name + ".bak":
+            _bk_note = (f"  [HARNESS: your existing {path.name}.bak was kept; the "
+                        f"previous content is in {backup.name}]")
         return (f"OK: wrote {len(args['content'])} chars to {path}"
                 + (f"  [HARNESS: created the missing parent dir(s): "
                    f"{', '.join(str(x) for x in reversed(_made))}]" if _made else "")
-                + note + _gated
+                + note + _gated + _bk_note
                 + ("" if not _resv else
                    (f"  [HARNESS: `{path.name}` begins with the Windows device name {_resv}: "
                     f"some Windows APIs read that as the device, not as this file. The file "

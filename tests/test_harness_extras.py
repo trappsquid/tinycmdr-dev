@@ -6,6 +6,7 @@ produces on a real box.
     python tests/test_harness_extras.py
 """
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -81,6 +82,49 @@ def main():
                     leftover.unlink()
             except OSError:
                 pass
+
+        # ---------------------------------------------------------- write_file: atomic, backs off
+        # A-2026-10-08-107: the old write read the whole file into RAM for the backup,
+        # replaced whatever sat at <name>.bak (an operator's copy included), and truncated
+        # the destination in place.
+        tf = Path(fb.BASE_DIR) / "wfile-target.txt"
+        tf.write_text("version one\n", encoding="utf-8")
+        tf_bak = Path(str(tf) + ".bak")
+        tf_bak.write_text("the operator's own copy\n", encoding="utf-8")
+        holder = open(tf, "rb") if os.name != "nt" else None
+        out = fb.tool_write_file({"path": str(tf), "content": "version two\n"},
+                                 dict(ctx))
+        check(_text(tf_bak) == "the operator's own copy\n",
+              "write_file keeps a .bak the operator owns", out[:160])
+        tf_bak1 = Path(str(tf) + ".bak.1")
+        check(_text(tf_bak1) == "version one\n" and ".bak.1" in out,
+              "...the previous content goes to .bak.1, named in the result", out[:220])
+        check(_text(tf) == "version two\n", "the destination carries the new content")
+        if holder is not None:
+            seen = holder.read()
+            holder.close()
+            check(seen == b"version one\n",
+                  "the replace is atomic: a reader that opened the old file still sees it",
+                  seen[:60])
+        else:
+            print("note  no pre-write reader check on Windows")
+        for leftover in (tf, tf_bak, tf_bak1):
+            try:
+                leftover.unlink()
+            except OSError:
+                pass
+
+        import socket as _socket
+        if os.name != "nt" and hasattr(_socket, "AF_UNIX"):
+            sock = Path(fb.BASE_DIR) / "wfile-sock"
+            _s = _socket.socket(_socket.AF_UNIX)
+            _s.bind(str(sock))
+            out = fb.tool_write_file({"path": str(sock), "content": "x"}, dict(ctx))
+            check(out.startswith("ERROR:") and "not a regular file" in out,
+                  "write_file refuses a non-regular target", out[:160])
+            sock.unlink()
+        else:
+            print("note  no non-regular-target check on this platform")
 
         # ---------------------------------------------------------- read miss with a sibling
         # Operator report (2026-10-03): `read_file .../notes` got the tool lecture while
