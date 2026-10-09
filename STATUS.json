@@ -2242,10 +2242,10 @@
     {
       "id": "audit-fixes-web-guards",
       "title": "the web-guards batch: session keys, the LAN address, web.port, the v6 family and the live-run cap",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "2a483b7",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Five findings from the whole-harness review, each verified against the code and graded by a check that fails on the pre-fix build. web_resolve_session honoured ANY key the regex accepted, and the page's search offers sidecar stems (sessions/<key>.carry.json reads as the key 'web-abc.carry') and other lanes' session keys as conversations: a run started in one wrote its history LIST over whatever that name held on disk (a carry dict, a chat lane's transcript) and the rail owned it from then on. A requested key is honoured only for the shared 'web' or a key the page registry knows; anything else falls through to the browser's own conversation, the same substitution the case-fold already makes. The LAN address came from the hostname resolver, and a stock Debian/Ubuntu/Raspberry Pi OS answers its own hostname with 127.0.1.1: the announce led with a loopback address and the box's real LAN IP never entered the Host check, so a LAN visitor typing the IP got 403 in exactly the 0.0.0.0 mode the installer offers (a Hyper-V/WSL/Docker vEthernet can also sort before the real NIC). The default route's address is what is used now (a UDP connect, no packet sent), all of 127/8 is skipped in the fallback, and the resolver thread adds that address plus the hostname's .local spelling to the Host set. A malformed web.port killed the whole bot at start: int() raised ValueError ('nope'), TypeError (null) and OverflowError (a JSON 1e999) out of main() before any other lane started, and 70000 passed int() and then failed the bind with an OverflowError the retry's `except OSError` never caught; one _web_port_int parses every read, warns once and falls back (0 and a numeric string honoured, a bool refused). QuietServer inherited AF_INET, so web.host '::' - a wildcard in several places - could never bind, and the gaierror came back as 'another process holds the port'; the family follows the host now and a gaierror is refused on the first attempt in words that name web.host. And the run table evicted only DONE runs, so one run per conversation was no bound with an open key space (N keys meant N agent threads against the LLM endpoint, and with 40+ live runs a finished one was evicted before its page made the final poll); _web_claim_run refuses a new run at WEB_RUN_LIVE_MAX live ones (below WEB_RUN_KEEP) and both web routes answer 429 in words - a scheduled job's report is not a claim and keeps its door.",
       "gate": "red on the pre-fix build: tests/test_webui.py 3 (-113), 3 (-114), 6 (-115), 2 (-116) and 2 (-117) checks; the whole gate green before the push"
@@ -2253,10 +2253,10 @@
     {
       "id": "audit-fix-autobg-ceiling",
       "title": "a shell timeout is a ceiling, whether the command blocks or is promoted",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "6390ec8",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The auto-background wait ended at the window's threshold only (while time.time() < deadline), and the ceiling's kill check sat INSIDE that loop, so with limit == threshold the check was unreachable: kill_at >= deadline, the loop exited first, and the command was PROMOTED to the background table. That is the default for every cost-guarded scan - scan_limits caps one at search_timeout=60 and auto_background_seconds is 60 - and tools/process.py has no timeout for adopted jobs, so the documented ceiling never fired: the scan ran to completion in the background and the run was charged only 60s. The wait ends at the EARLIER of the two clocks now, the ceiling is checked again at the exit (a limit landing on the boundary), and a promoted command's tree is killed at its limit by a daemon thread that logs it; the harness line handed to the model names the ceiling too. `timeout` shorter than the window keeps its old behavior, which the suite already graded.",
       "gate": "red on the pre-fix build: tests/test_job_control.py 2 checks (the tie was promoted; the promoted job was never killed); the whole gate green before the push"
@@ -2264,10 +2264,10 @@
     {
       "id": "audit-fixes-web-door-2",
       "title": "the web door's second pass: owned stops, one body deadline, kept refusals, closing streams, whole names",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "c989ede",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "Seven findings from the whole-harness review, each verified against the code and graded by checks that fail on the pre-fix build. /api/stop was the one mutating route with no owner check - any browser could cancel another's run - it said \"stopping: true\" for a run already finished, and a second call drew a second \"stop requested\" line: it binds web_run_owner like /api/steer, a done run is a 409, and a repeat stop is idempotent. The body's \"absolute deadline\" was one recv's (rfile.read loops over recvs with the timeout re-armed per recv), so a client trickling a byte inside every window held a worker - and kept its body being read, on the drain routes before auth included - for as long as it liked: one _body_read makes one recv per loop with the socket timeout set from what is LEFT of WEB_BODY_DEADLINE. /a2a parsed the body before the token, and `_body() or {}` fed a 411/413/408 refusal to the JSON-RPC path as an empty request: the token is checked first (drain, then 401) and the body answers through _need_body, the one refusal every JSON route uses. _file sent a Content-Length and, when the file shrank under the open reader, stopped writing on a keep-alive socket the client kept waiting on: a short read or a failed write sets close_connection. _web_safe_name cut the upload base at 120 CHARACTERS - a 100-character Han name is 300 bytes and with the timestamp prefix failed ENAMETOOLONG on ext4, where APFS takes the name (its limit counts characters) - the cut counts bytes now and never keeps half a character. web_busy_note's port lookup ran \"ss || netstat -ltnp\", which macOS cannot answer, so the note said \"No process answered a look-up\" for ever: _port_holder asks lsof first, with the Linux pair as the fallback. And one conversation-file list: _web_forget_files, Agent.reset and Agent.fork all walk _CONVERSATION_FILE_SUFFIXES, so forgetting a conversation takes its hints and parked question too, /new carries nothing old, and a fork carries the state and not a run's parked question.",
       "gate": "red on the pre-fix build: tests/test_webui.py 12 checks across (-119)...(-124) - the (-123) upload check on Linux only, its byte check on every platform - and tests/test_harness_refinements.py red for (-118); the whole gate green before the push"
@@ -2275,10 +2275,10 @@
     {
       "id": "stall-spill-check-unlink-race",
       "title": "the spill check raced a peer suite's unlink and failed the macos gate",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "51cc221",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The small-output check in tests/test_stall.py globbed the shared run directory and read every *.out it listed, and under --jobs N every suite's run_capture creates and unlinks its own .out the moment it has been read back - so the collected list could name a file that was already gone, and [Errno 2] raised the check and failed the whole macos job (the v1.0.97 gate, on a commit that had changed three lines). A file that is gone cannot be a kept spill, which is the only thing the check grades, so a vanished name is skipped now; the macos job was green on the same suites the run before.",
       "gate": "the failing check is the measurement: [Errno 2] reading a .out a peer suite had unlinked, in the macos gate, 2026-10-09; the whole gate green on the fix (--jobs 4, 106 suites, 0 skipped)"
