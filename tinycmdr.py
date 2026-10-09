@@ -6605,6 +6605,44 @@ def _start_process_warning(command):
             "when you mean to block on it.]")
 
 
+def _run_dir():
+    """The per-user scratch directory run_capture writes each call's stdout/stderr into.
+
+    On a shared Linux host gettempdir() is the world-readable /tmp, where the default
+    umask leaves this 0755 and every run's stdout/stderr 0644 - any local user can read
+    them, and an oversized output is kept here for a full day (macOS hides the leak:
+    $TMPDIR is already 0700). A FIXED name there is also a squatting target: mkdir
+    (exist_ok=True) accepts a directory another user made, their 0755 exposes every
+    run's output, and the chmod then raises EPERM for every shell call - the tool loop
+    dies until someone removes the path (measured 2026-10-09). The uid in the name is
+    what makes the directory ours (Windows' %TEMP% is already per-user, so the plain
+    name stays there), and what is actually at the name is still verified: a file or a
+    symlink planted there is not ours to write into. An unusable name does not freeze
+    the loop - the call gets a fresh private directory of its own, loudly.
+    """
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    path = Path(tempfile.gettempdir()) / (
+        "tinycmdr-runs" if uid is None else "tinycmdr-runs-%d" % uid)
+    try:
+        path.mkdir(mode=0o700, parents=True)
+    except FileExistsError:
+        pass
+    try:
+        st = os.lstat(path)
+    except OSError:
+        st = None
+    usable = (st is not None and stat.S_ISDIR(st.st_mode)
+              and (uid is None or st.st_uid == uid))
+    if not usable:
+        fallback = Path(tempfile.mkdtemp(prefix="tinycmdr-runs-"))
+        log.error("run scratch %s is not this user's directory - using %s for this call "
+                  "(remove that path to get the stable one back)", path, fallback)
+        return fallback
+    if os.name != "nt" and stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(path, 0o700)
+    return path
+
+
 def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     """Run argv, capture output, and never block past the timeout.
     stdin_text (when given) arrives on the child's stdin from a TEMP FILE, not
@@ -6629,13 +6667,7 @@ def run_capture(argv, timeout, cwd=None, cancel=None, stdin_text=None):
     it silently. That is what froze the DM channel for 21 minutes on
     files have no such coupling, and the tree kill reaps the grandchildren.
     """
-    run_dir = Path(tempfile.gettempdir()) / "tinycmdr-runs"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    # On a shared Linux host gettempdir() is the world-readable /tmp, where the default
-    # umask leaves this 0755 and every run's stdout/stderr 0644 - any local user can read
-    # them, and an oversized output is kept here for a full day. macOS hides the leak
-    # ($TMPDIR is already 0700), which is why it went unnoticed until then.
-    os.chmod(run_dir, 0o700)
+    run_dir = _run_dir()
     stem = f"{int(now_wall())}-{os.getpid()}-{threading.get_ident()}"
     out_path = run_dir / f"{stem}.out"
     err_path = run_dir / f"{stem}.err"

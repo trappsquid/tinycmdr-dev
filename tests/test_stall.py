@@ -88,6 +88,15 @@ def skip(name, why=""):
     print(f"skip {name}" + (f" — {why}" if why else ""))
 
 
+def _spill_dir():
+    """Where the build under test spills run output. Pre-fix builds have no
+    fb._run_dir() (the per-user name landed 2026-10-09), and a suite that calls an
+    absent helper crashes instead of grading - so look the helper up, and fall back
+    to the name those builds use."""
+    fn = getattr(fb, "_run_dir", None)
+    return fn() if fn else Path(tempfile.gettempdir()) / "tinycmdr-runs"
+
+
 CHILD = TMP / "test_child_linger.py"
 GRANDCHILD = TMP / "test_grandchild.py"
 CHILD.write_text(
@@ -186,12 +195,12 @@ def test_oversized_output_is_capped_not_held():
 
 
 def test_small_output_passes_through_untouched():
-    # tinycmdr-runs is the harness's SHARED spill directory, so "did the file count grow" is not
-    # a property this suite can grade: any other suite running at the same moment writes its own
-    # spill file there, and under `--jobs N` this check then failed for a run that spilled
-    # nothing (measured 2026-10-08, the parallel gate). Grade the CONTENT: the marker can only be
-    # in a file there if THIS result was spilled.
-    runs = Path(tempfile.gettempdir()) / "tinycmdr-runs"
+    # The harness's spill directory is shared by every concurrent suite, so "did the file
+    # count grow" is not a property this suite can grade: any other suite running at the
+    # same moment writes its own spill file there, and under `--jobs N` this check then
+    # failed for a run that spilled nothing (measured 2026-10-08, the parallel gate).
+    # Grade the CONTENT: the marker can only be in a file there if THIS result was spilled.
+    runs = _spill_dir()
     rc, out, err, timed_out = fb.run_capture([PY, "-c", "print('tiny-output')"], 30)
     check("a small result is unchanged", "tiny-output" in out
           and "HARNESS" not in out, out[:120])
@@ -210,9 +219,51 @@ def test_run_capture_directory_is_private():
         skip("run dir is 0700", "the mode is not POSIX-testable on Windows")
         return
     fb.run_capture([PY, "-c", "pass"], 30)
-    runs = Path(tempfile.gettempdir()) / "tinycmdr-runs"
+    runs = _spill_dir()
     mode = os.stat(runs).st_mode & 0o777
     check("the run dir is private (0700)", mode == 0o700, oct(mode))
+
+
+def test_a_planted_run_dir_cannot_break_a_call():
+    """A fixed name in the shared temp is a squatting target: another user (or anything
+    that gets there first) sits on the name, mkdir(exist_ok=True) accepts the path and
+    the chmod then fails (EPERM for a foreign directory) - every shell call dies until
+    someone removes it. The plant here is a symlink to nowhere, the same "not ours"
+    shape; the per-uid name ignores it, and a plant at OUR own name falls back to a
+    fresh private directory instead of freezing the tool loop."""
+    if os.name != "posix":
+        skip("planted run dir", "the shared-temp shape is POSIX")
+        return
+    old = tempfile.tempdir
+    tempfile.tempdir = str(TMP)
+    try:
+        plant = TMP / "tinycmdr-runs"
+        if plant.exists() or plant.is_symlink():
+            plant.unlink()          # the suite's TMP outlives a run; the plant must not
+        plant.symlink_to(TMP / "no-such-target")
+        try:
+            rc, out, err, timed_out = fb.run_capture([PY, "-c", "print('plant-ok')"], 30)
+        except Exception as exc:   # the pre-fix shape: the plant is used and the call dies
+            rc, out, err = -1, "", "%s: %s" % (type(exc).__name__, exc)
+        check("a plant at the shared name cannot break a call",
+              rc == 0 and "plant-ok" in out, (rc, out[:120], err[-200:]))
+        check("...and the plant is left alone", plant.is_symlink(), str(plant))
+
+        uid = os.getuid() if hasattr(os, "getuid") else None
+        if uid is not None:
+            mine = TMP / ("tinycmdr-runs-%d" % uid)
+            shutil.rmtree(mine, ignore_errors=True)
+            mine.write_text("not a directory", encoding="utf-8")
+            try:
+                rc, out, err, timed_out = fb.run_capture([PY, "-c", "print('fallback-ok')"], 30)
+            except Exception as exc:
+                rc, out, err = -1, "", "%s: %s" % (type(exc).__name__, exc)
+            check("a file at our own name falls back instead of freezing the loop",
+                  rc == 0 and "fallback-ok" in out, (rc, out[:120], err[-200:]))
+            check("...and the planted file is still there",
+                  mine.read_text(encoding="utf-8") == "not a directory", str(mine))
+    finally:
+        tempfile.tempdir = old
 
 
 def test_read_file_is_capped_and_says_so():
