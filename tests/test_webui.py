@@ -1363,10 +1363,12 @@ def main():
     # a second POST refused - no model is called.
     _real_agent_run = fb.AGENT.run
     _seen_keys = []
+    _seen_kwargs = []
     _gate = threading.Event()
 
     def _stub_run(key, text, *a, **kw):
         _seen_keys.append(key)
+        _seen_kwargs.append(dict(kw))
         _gate.wait(5)
         return "stub answer in %s" % key
 
@@ -1412,6 +1414,27 @@ def main():
           "/api/chat touches the conversation in the registry (so the rail does not "
           "prune a conversation whose transcript is growing)",
           (fb.web_entry(_chatkey) or {}).get("last_active"))
+    # A-111: the route hands the run its OWN doors - the cancel event the page's Stop
+    # sets, the steer queue the page's steer writes into, and the reporter the stall
+    # watchdog finishes through. It used to call AGENT.run bare, so all three were
+    # dropped: Stop answered "stopping" and nothing read it, a steer was shown but never
+    # reached the model, and a chat past 20 minutes was abandoned while its thread kept
+    # working.
+    _kw111 = _seen_kwargs[0] if _seen_kwargs else {}
+    check(_kw111.get("cancel_event") is _active228.cancel,
+          "a /api/chat run is wired to the run's own cancel event (Stop reaches it)",
+          _kw111.get("cancel_event"))
+    check(callable(_kw111.get("steer_cb")) and _kw111.get("steer_cb") == _active228.take_steer,
+          "...and to the run's own steer queue", _kw111.get("steer_cb"))
+    _active228.steer.append("a steered word")
+    _steer_cb111 = _kw111.get("steer_cb")
+    check(callable(_steer_cb111) and _steer_cb111() == [("web", "a steered word")],
+          "...which drains what the page steered into it", _steer_cb111)
+    check(getattr(_active228, "reporter", None) is not None,
+          "...and the reporter is kept on the run for the watchdog")
+    check(_kw111.get("ask_door") is None and _kw111.get("confirm_cb") is None,
+          "...while a scripted caller still gets no ask or confirm door",
+          (_kw111.get("ask_door"), _kw111.get("confirm_cb")))
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

@@ -23311,7 +23311,7 @@ RUNS = RunRegistry()
 
 def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
               channel_id=None, cancel_event=None, steer_cb=None, ask_door=None,
-              source="main", watch=True):
+              source="main", watch=True, confirm=True):
     """Run the agent, wired to ONE reporter. The only place these callbacks live.
 
     Lanes used to build this keyword list separately with different subsets,
@@ -23347,10 +23347,10 @@ def drive_run(session_key, text, reporter, *, rich_content=None, depth=0,
                              narration_drop_cb=_alive(reporter.narration_drop),
                              reasoning_cb=_alive(reporter.reasoning),
                              progress_done_cb=_alive(reporter.tool_done),
-                               confirm_cb=_alive(reporter.confirm),
-                               cancel_event=ctrl.cancel_event,
-                               steer_cb=steer_cb or ctrl.take_steering,
-                               ask_door=ask_door,
+                             confirm_cb=_alive(reporter.confirm) if confirm else None,
+                             cancel_event=ctrl.cancel_event,
+                             steer_cb=steer_cb or ctrl.take_steering,
+                             ask_door=ask_door,
                                # handed over unwrapped: tests pin this door's identity,
                                # and every attach is preceded by a tool line that touched.
                                send_file_cb=reporter.attach,
@@ -26772,14 +26772,22 @@ class WebDestination(Destination):
                                    "closed" % int(wait))
         return row.get("answer") if answered else None
 
-def _web_drive(run, text):
+def _web_drive(run, text, scripted=False):
     """Run the agent for a browser run, reporting through the shared reporter.
 
     Nothing here knows what a tool line or a check-in looks like: the run gets a
     destination, the destination gets a reporter, and every word the operator
     reads comes from the one implementation the other two lanes use.
+
+    `scripted=True` is /api/chat's caller: no ask door and no confirm door, so a
+    confirm-tier command gets the immediate DECLINED this route has always handed a
+    script, instead of a five-minute wait for an answer it cannot give. Everything
+    else - the cancel event the page's Stop sets, the run's steer queue, the
+    reporter the watchdog finishes through - is wired here for BOTH web routes.
+    Returns the reply text (the answer, or the failure line) for /api/chat's body.
     """
     answer = ""
+    reply = ""
     failed = False
     run.turn_start = time.time()
     reporter = RunReporter(WebDestination(run), run.session_key)
@@ -26791,18 +26799,24 @@ def _web_drive(run, text):
                            # who this run is, for anything that has to report
                            # somewhere later: a job scheduled here comes back here
                            channel_id=f"{WEB_DEST_PREFIX}{run.session_key}",
-                           ask_door=run,
+                           ask_door=None if scripted else run,
+                           confirm=not scripted,
                            cancel_event=run.cancel,
                            steer_cb=run.take_steer)
+        reply = answer
     except Exception as e:
         failed = True
         log.exception("web run failed")
-        run.add("error", f"⚠️ Something broke on my side: {e}")
+        # `answer` stays empty: the on-disk record of a failed run is the failure,
+        # and the caller (when there is one) gets the text to show.
+        reply = f"⚠️ Something broke on my side: {e}"
+        run.add("error", reply)
     finally:
         # The conversation lives on disk, not in this process: this is what a
         # reload, a second browser or a restart repaints from. Fail-soft on
         # purpose - a disk problem must not turn a finished run into a failed one.
         _finish_web_run(run, reporter, answer, failed=failed)
+    return reply
 
 # -- the page's panels: what this host already keeps, read only -------------
 # Everything here is per host and already on disk (the ledger, the scheduler's
@@ -30035,28 +30049,17 @@ def run_webui():
                                409)
                     return
                 run.add("you", text)
-                reporter = RunReporter(WebDestination(run), chat_key)
-                failed = False
-                try:
-                    # AGENT.run, exactly as before: this route has always called the
-                    # driver with no confirm door, and the shell tool reads "no
-                    # confirm_cb" as DECLINED - a scripted caller must keep getting a
-                    # fast decline, not a five-minute wait for a question it cannot
-                    # answer. What changed is the run is now REGISTERED (above), so the
-                    # one-run rule sees it and the rail can.
-                    payload = AGENT.run(chat_key, payload)
-                except (KeyboardInterrupt, SystemExit):
-                    raise
-                except BaseException as e:      # noqa: BLE001 - a lane must not die
-                    # BaseException, not Exception: a stop raised from inside the run used
-                    # to escape here and the browser got nothing at all.
-                    failed = True
-                    log.exception("web run failed")
-                    payload = f"⚠️ Something broke on my side: {e}"
-                finally:
-                    # Always: a registered run that is never finished would block the
-                    # conversation for ever.
-                    _finish_web_run(run, reporter, payload, failed=failed)
+                # The SAME driver /api/run uses - ONE wiring for the cancel event, the
+                # steer queue and the reporter - with the ask door and the confirm door
+                # off: a scripted caller keeps getting the immediate DECLINED it always
+                # got, not a five-minute wait for a question it cannot answer. This
+                # route used to call AGENT.run bare (the reporter it built was never
+                # passed), so the page's Stop set a cancel nothing read, a second tab's
+                # steer was shown but never reached the model, and a chat past the
+                # watchdog's 20 minutes was abandoned while its thread kept working
+                # (A-2026-10-08-111). The driver catches the lane-level stop and turns
+                # it into the answer below, so the reply is never lost.
+                payload = _web_drive(run, payload, scripted=True)
             self._json({"reply": payload})
 
     # Loopback unless the operator says otherwise; the installer asks on a headless
