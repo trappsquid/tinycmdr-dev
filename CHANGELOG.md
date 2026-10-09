@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A requested session key could adopt any file on the sessions shelf:** the page's search offers sidecar stems (`web-abc.carry`) and other lanes' keys as conversations, and any regex-valid key was honoured - the run then wrote its history over whatever that name held (a carry dict, a chat lane's transcript) and the rail owned it; a requested key is honoured only for the shared `web` or a registered page conversation (tests/test_webui.py).
+- **The LAN address came from the hostname resolver:** a stock Debian/Ubuntu/Raspberry Pi OS answers its own hostname with 127.0.1.1, so the announce led with a loopback address and the box's real IP was refused by the Host check in the 0.0.0.0 mode the installer offers; the default route's address is used now, all of 127/8 is skipped, and the hostname's `.local` spelling is accepted (tests/test_webui.py).
+- **A malformed `web.port` killed the whole bot at start:** `int()` on it raised ValueError (`"nope"`), TypeError (null) and OverflowError (a JSON 1e999) out of `main()` before any other lane started, and 70000 passed `int()` and then failed the bind with an OverflowError the bind retry never caught; one parse warns and falls back, with 0 and a numeric string honoured (tests/test_webui.py).
+- **`web.host: "::"` could never bind, and its gaierror was reported as "another process holds the port":** the server's address family follows the host now, and a host that does not resolve is refused at once with words that name the setting (tests/test_webui.py).
+- **Live browser runs had no bound:** the run table evicted only finished runs, so one run per conversation was no bound at all with an open key space (and with 40+ live runs a finished one was evicted before its page made the final poll); a host-wide cap refuses a new run in words, and a scheduled job's report keeps its door (tests/test_webui.py).
+
 ## [1.0.96] - 2026-10-09
 
 ### Fixed
