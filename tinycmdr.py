@@ -29301,11 +29301,18 @@ def run_webui():
                 while left > 0:
                     chunk = fh.read(min(65536, left))
                     if not chunk:
+                        # The file shrank under the reader: the Content-Length
+                        # promise and the bytes now disagree, so the client must SEE
+                        # the close instead of a kept-alive socket it would wait on
+                        # until the handler's own timeout (A-2026-10-08-122).
+                        self.close_connection = True
                         break
                     self.wfile.write(chunk)
                     left -= len(chunk)
             except (BrokenPipeError, ConnectionError, OSError):
-                pass
+                # A read or write failure mid-stream leaves the same half-kept
+                # promise behind.
+                self.close_connection = True
             finally:
                 fh.close()
 

@@ -1993,6 +1993,48 @@ def main():
           "a file that grew past the cap is refused with a sentence, not served",
           (_st251, _bd251[:80]))
 
+    # ---- A-122: a download that runs short CLOSES -------------------------------
+    # _file promised Content-Length, hit EOF mid-stream (the file shrank under the
+    # open reader) and simply stopped writing: the connection stayed keep-alive, so
+    # the client waited on bytes that were never coming. A truncated body must be
+    # seen as a truncated body, which on the wire means the close.
+    _big122 = STAGE / "shrink.bin"
+    _big122.write_bytes(b"s" * (16 * 1024 * 1024))
+    _r122 = fb._web_new_run("dl122suite")
+    _r122.add("file", str(_big122))
+    _u122 = urllib.parse.quote(_r122.lines[-1]["uid"], safe="")
+    _sock = socket.create_connection(("127.0.0.1", port), timeout=15)
+    try:
+        _sock.sendall(b"GET /api/download?run=%s&uid=%s HTTP/1.1\r\n"
+                      b"Host: 127.0.0.1:%d\r\nX-Tinycmdr-Token: %s\r\n\r\n"
+                      % (_r122.id.encode(), _u122.encode(), port, token.encode()))
+        _hdr = b""
+        while b"\r\n\r\n" not in _hdr:
+            _hdr += _sock.recv(4096)
+        _m122 = re.search(rb"Content-Length: (\d+)", _hdr)
+        _promised122 = int(_m122.group(1)) if _m122 else -1
+        time.sleep(0.3)                    # the server fills the buffers and blocks
+        os.truncate(_big122, 0)            # the file shrinks under the reader
+        _got122 = 0
+        _closed122 = False
+        _sock.settimeout(5)
+        try:
+            while True:
+                _chunk = _sock.recv(1 << 16)
+                if not _chunk:
+                    _closed122 = True
+                    break
+                _got122 += len(_chunk)
+        except socket.timeout:
+            pass
+        check(_promised122 == 16 * 1024 * 1024 and 0 <= _got122 < _promised122
+              and _closed122,
+              "a download that runs short closes the connection instead of parking "
+              "the client on a promise it can never fulfil",
+              (_promised122, _got122, _closed122))
+    finally:
+        _sock.close()
+
     # ---- A-252/253/254: assets carry an ETag, survive a vanished file, and are
     #      templated once ------------------------------------------------------
     _orig_font253 = fb._web_font_path
