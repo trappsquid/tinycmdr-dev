@@ -67,7 +67,6 @@ def function_body(text, signature):
 def main():
     install = source("install/install-tinycmdr.ps1")
     cmd = source("install/install-tinycmdr.cmd")
-    uninstall = source("install/uninstall-tinycmdr.ps1")
     one_line = source("install.ps1")
     shim = source("tinycmdr.cmd")
 
@@ -164,29 +163,29 @@ def main():
     check("the interpreter fallback is guarded for the non-ASCII case",
           "$vbsPyFallback" in install and "notmatch '^[\\x20-\\x7e]+$'" in install)
 
-    print("\n== the uninstall line names the wrapper and a real folder ==")
+    print("\n== the uninstall line names the door, the wrapper and a real folder ==")
     check("the installer summary prints the .cmd -Uninstall wrapper",
           "install-tinycmdr.cmd -Uninstall" in install)
-    check("the summary's -File form carries -ExecutionPolicy Bypass",
-          "-ExecutionPolicy Bypass -File" in install)
-    check("the summary's -File form passes the real -InstallDir",
-          'uninstall-tinycmdr.ps1" -InstallDir "' in install)
+    check("the installer summary names the double-click door first",
+          "uninstall: double-click" in install and "UNINSTALL-WINDOWS.cmd" in install)
     check("no uninstall line hardcodes the default folder any more",
           'powershell -File "' not in install,
           "the old 'powershell -File \"...\" -Force' form is back")
-    check("install.ps1's hint is the wrapper + Bypass + a real folder too",
+    check("install.ps1's hint names the door and the wrapper",
+          "UNINSTALL-WINDOWS.cmd" in one_line and
           "install-tinycmdr.cmd`\" -Uninstall" in one_line and
-          "-ExecutionPolicy Bypass" in one_line and
           'powershell -File `"' not in one_line)
     check("the install wrapper documents -Uninstall",
           "-Uninstall" in cmd and "-InstallDir" in cmd)
     check("the wrapper still runs PowerShell with -ExecutionPolicy Bypass",
           "-ExecutionPolicy Bypass" in cmd)
-    check("the uninstaller documents both wrapper and Bypass forms",
-          "install-tinycmdr.cmd -Uninstall" in uninstall and
-          "-ExecutionPolicy Bypass -File" in uninstall)
-    check("the uninstaller no longer claims a -AsService install lands in C:\\tinycmdr",
-          "put it in C:\\tinycmdr" not in uninstall)
+    # install/uninstall-tinycmdr.ps1 was the -File removal door: kept alive only by the
+    # two hint lines above (no script, no doc, no test beyond this one), and the form that
+    # "closes before you can read it" on stock Windows. The wrapper and the door cover it.
+    check("no shipped file still points at the deleted .ps1 removal door",
+          "uninstall-tinycmdr.ps1" not in install and
+          "uninstall-tinycmdr.ps1" not in one_line and
+          "uninstall-tinycmdr.ps1" not in cmd)
 
     print("\n== Windows restart elevation is for a task-owned instance only ==")
     # The fix itself belongs to tinycmdr.py, which this batch does not own (the parent
@@ -251,6 +250,28 @@ def main():
     check("a failed removal exits non-zero and names what is left (not 'done')",
           'Say "left    : $InstallDir' in fail_tail and "exit 2" in fail_tail,
           "tail: %r" % fail_tail[:200])
+    check("a removal takes only the task and Startup link that point at this folder",
+          "belongs to another install - left alone" in install and
+          "points at another install - left alone" in install and
+          "$($_.Execute) $($_.Arguments)" in install,
+          "a second install's autostart would be taken away by name")
+
+    print("\n== a page-only install is not asked about a chat lane ==")
+    # The wizard's answer "1" (the page) was followed by a Mattermost-token prompt, a
+    # config.json carrying the example's allowlist placeholder, and a closing line saying
+    # nothing would run in the background - while the launcher had just been registered to
+    # serve the page. The placeholder then aborted the FIRST start ("no Mattermost bot
+    # token"), so the install was dead on arrival (measured 2026-10-08, Windows, v1.0.93).
+    check("a fresh install drops the example's allowlist placeholder",
+          "elseif ($cfgFresh) {" in install and
+          "$cfg.mattermost.allowed_users = @()" in install,
+          "the example's REPLACE_WITH_YOUR_MATTERMOST_USER_ID lands in config.json and "
+          "reads as a Mattermost lane")
+    check("the bot-token prompt waits for the chat lane to be chosen",
+          "-not $MattermostToken -and $Ask -and $WantChat" in install,
+          "a page-only install is asked for a Mattermost token it just declined")
+    check("the closing summary counts the page as something selected",
+          "-not ($WantChat -or $WantTg -or $WantWeb -or $WantCli)" in install)
 
     print("\n== the removal door a double-click can run ==")
     door = source("UNINSTALL-WINDOWS.cmd")
@@ -262,6 +283,9 @@ def main():
           'set "HERE=%~dp0"' in door and '-InstallDir "%HERE%"' in door)
     check("the door asks first, and 'no' removes nothing",
           'set /p "ANS=Remove it? (y/N) "' in door and "Nothing was removed." in door)
+    check("the door refuses a folder that is not an install (no config.json, no venv)",
+          'if not exist "%HERE%\\config.json" if not exist "%HERE%\\venv"' in door,
+          "the door could be run against an extracted package")
     check("the door is ASCII with CRLF line endings (what cmd.exe wants)",
           door_bytes.isascii() and door_bytes.count(b"\n") == door_bytes.count(b"\r\n"))
     check("the door reports the exit code and keeps the window open",
@@ -424,8 +448,7 @@ def main():
     if not ps:
         skip("every shipped .ps1 parses", "no PowerShell on PATH here (the Windows job)")
     else:
-        for rel in ("update.ps1", "install.ps1", "install/install-tinycmdr.ps1",
-                    "install/uninstall-tinycmdr.ps1"):
+        for rel in ("update.ps1", "install.ps1", "install/install-tinycmdr.ps1"):
             probe = ("$e=$null;[System.Management.Automation.Language.Parser]::"
                      "ParseFile('%s',[ref]$null,[ref]$e)|Out-Null;"
                      "if($e.Count){$e|ForEach-Object{$_.Message};exit 1}" % rel)

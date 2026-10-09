@@ -82,9 +82,8 @@ try {
     Write-Host "    uninstaller (%USERPROFILE%\tinycmdr by default), so later:"
     Write-Host "      double-click `"$env:USERPROFILE\tinycmdr\UNINSTALL-WINDOWS.cmd`""
     Write-Host "      `"$env:USERPROFILE\tinycmdr\install\install-tinycmdr.cmd`" -Uninstall -Force"
-    Write-Host "      (or: powershell -ExecutionPolicy Bypass -File `"$env:USERPROFILE\tinycmdr\install\uninstall-tinycmdr.ps1`" -Force)"
-    Write-Host "    A -InstallDir install needs -InstallDir <that folder> on either form - the .ps1"
-    Write-Host "    defaults to %USERPROFILE%\tinycmdr and cannot find a custom folder on its own."
+    Write-Host "    A -InstallDir install needs -InstallDir <that folder> on the wrapper; the door"
+    Write-Host "    acts on the folder it sits in, so it needs nothing."
 } catch {
     Write-Host "`n*** $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "    (what was unpacked is still in $tmp)" -ForegroundColor Yellow

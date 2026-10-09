@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **A Windows removal could end as "done" with the folder still there:** the uninstaller now steps its own shell out of the folder before deleting it, stops and waits for the bot's child processes too, fails non-zero naming what is left, and ships UNINSTALL-WINDOWS.cmd - a double-click door the script execution policy cannot cut short (tests/test_installer_windows.py).
+- **A removal could take another install's autostart:** the task and the Startup shortcut are one name per user, not per folder, so the uninstaller removed whichever one was registered - it now removes only the ones whose launcher points at the folder being removed, and the door refuses a folder that is not an install (tests/test_installer_windows.py).
+- **Two removal doors nothing used:** `install/uninstall-tinycmdr.sh` had no caller at all and `install/uninstall-tinycmdr.ps1` was kept alive only by two printed hint lines - the `.cmd` wrapper and `UNINSTALL-WINDOWS.cmd` cover the same ground, so the package drops both (tests/test_installer_windows.py).
 
 ## [1.0.93] - 2026-10-08
 

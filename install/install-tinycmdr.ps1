@@ -705,15 +705,48 @@ if ($Uninstall) {
         exit 0
     }
     if ($taskExists -and -not $SkipTask) {
-        try { Stop-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue } catch { }
+        # Only OUR task goes. The task name is one per user, not per folder - a second
+        # install (or a probe) registers under the same name - so the action is read
+        # first: only a task whose launcher sits under $InstallDir is this install's.
+        # Taking the other one away would stop a live install's autostart while it
+        # keeps running (the plist side paid for exactly this on 2026-09-24).
+        $taskMine = $true
         try {
-            Unregister-ScheduledTask -TaskName $AppName -Confirm:$false -ErrorAction Stop
-            Say "task    : $AppName removed"
-        } catch { Say "task    : could not remove $AppName ($($_.Exception.Message))" }
+            $acts = @((Get-ScheduledTask -TaskName $AppName).Actions)
+            $taskMine = @($acts | Where-Object {
+                "$($_.Execute) $($_.Arguments)".IndexOf(
+                    $InstallDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            }).Count -gt 0
+        } catch { $taskMine = $true }   # unreadable: keep the old behaviour
+        if (-not $taskMine) {
+            Say "task    : $AppName belongs to another install - left alone"
+        } else {
+            try { Stop-ScheduledTask -TaskName $AppName -ErrorAction SilentlyContinue } catch { }
+            try {
+                Unregister-ScheduledTask -TaskName $AppName -Confirm:$false -ErrorAction Stop
+                Say "task    : $AppName removed"
+            } catch { Say "task    : could not remove $AppName ($($_.Exception.Message))" }
+        }
     }
     if (Test-Path $StartupLink) {
-        Remove-Item $StartupLink -Force -ErrorAction SilentlyContinue
-        Say "startup : $AppName.lnk removed"
+        # The same rule for the logon shortcut, and the same reason: one file per
+        # $AppName, and only the one whose target is THIS folder goes.
+        $lnkMine = $true
+        try {
+            $sh = New-Object -ComObject WScript.Shell
+            $lnk = $sh.CreateShortcut($StartupLink)
+            $lnkText = ("$($lnk.TargetPath) $($lnk.Arguments)").Trim()
+            if ($lnkText) {
+                $lnkMine = $lnkText.IndexOf(
+                    $InstallDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            }
+        } catch { $lnkMine = $true }    # unreadable: keep the old behaviour
+        if (-not $lnkMine) {
+            Say "startup : $AppName.lnk points at another install - left alone"
+        } else {
+            Remove-Item $StartupLink -Force -ErrorAction SilentlyContinue
+            Say "startup : $AppName.lnk removed"
+        }
     }
     $n = Stop-TinycmdrProcesses -Dir $InstallDir
     if ($n) { Say "stopped : $n process(es)" }
@@ -1309,8 +1342,10 @@ if ($MattermostToken) {
     # $Ask, not -not $NoPause: the .cmd wrapper ALWAYS passes -NoPause (it only means
     # "keep the window open"), so gating this on it never fired for a double-click, and
     # a scripted -NonInteractive run hung here forever waiting for a token nobody was
-    # there to type.
-    if (-not $MattermostToken -and $Ask) {
+    # there to type. And -and $WantChat: a page-only install was asked for a Mattermost
+    # token it had just declined (measured 2026-10-08, on Windows - "I already skipped
+    # mattermost, why is this being presented?").
+    if (-not $MattermostToken -and $Ask -and $WantChat) {
         $MattermostToken = Read-Secret "Mattermost bot token (blank = set it in .env later): "
         if ($MattermostToken) { $tokenSource = "prompt" }
     }
@@ -1526,6 +1561,14 @@ if ($MattermostUrl -and $MattermostUrl -ne "CHANGE-ME.example.com") {
 if ($MattermostPort -and $MattermostPort -ne 443) { $cfg.mattermost.port = $MattermostPort }
 $cfg.mattermost.token = ""
 if ($AllowedUser) { $cfg.mattermost.allowed_users = @($AllowedUser) }
+elseif ($cfgFresh) {
+    # The example's allowlist is a PLACEHOLDER ("REPLACE_WITH_YOUR_MATTERMOST_USER_ID").
+    # Left in place it made a fresh, page-only install look like a Mattermost host: the
+    # harness read it as intent and refused to start ("no Mattermost bot token"), so the
+    # page never came up (measured 2026-10-08 on Windows; the macOS and Linux installers
+    # drop the placeholder already).
+    $cfg.mattermost.allowed_users = @()
+}
 if ($ModelBaseUrlGiven) {
     $cfg.llm.base_url = $ModelBaseUrl
 } elseif ($cfgFresh) {
@@ -2102,7 +2145,11 @@ if ($Ask) {
         Say "DM your Telegram bot and it will answer."
         if ($WantChat) { Say "  (both tokens are set: this one process serves Mattermost AND Telegram)" }
     }
-    if (-not ($WantChat -or $WantTg -or $WantCli)) {
+    # The page counts: a page-only install keeps the agent running to serve it, and the
+    # old condition told that install "nothing selected ... does not run in the
+    # background" while the launcher it had just registered did exactly that (measured
+    # 2026-10-08 on Windows).
+    if (-not ($WantChat -or $WantTg -or $WantWeb -or $WantCli)) {
         Say "nothing selected - the harness is installed and does not run in the background."
     }
 }
@@ -2126,8 +2173,6 @@ Say "redo   : install-tinycmdr.cmd -Force"
 Say ("uninstall: double-click {0}\UNINSTALL-WINDOWS.cmd" -f $InstallDir)
 Say ("           (or: {0}\install\install-tinycmdr.cmd -Uninstall -Force)" -f $InstallDir)
 Say "           (from an extracted package: INSTALL-WINDOWS.cmd -Uninstall -Force)"
-Say ('           (or: powershell -ExecutionPolicy Bypass -File "' + $InstallDir +
-     '\install\uninstall-tinycmdr.ps1" -InstallDir "' + $InstallDir + '" -Force)')
 try { Stop-TranscriptRedacted } catch { }
 if (-not $NoPause) { Read-Host "`nPress Enter to close" }
 # 0 = installed and verified - 3 = installed, model endpoint not answering yet

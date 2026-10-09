@@ -169,7 +169,7 @@ def free_port():
     return port
 
 
-def serve_and_probe(dirpath, port, deadline=45):
+def serve_and_probe(dirpath, port, deadline=45, config=None):
     """Start the file with the page on `port`, wait for the PAGE to answer, kill it.
 
     The page is the evidence, not the child's words: a process killed at a deadline has
@@ -177,10 +177,13 @@ def serve_and_probe(dirpath, port, deadline=45):
     listener), so text greps flake by platform - measured, and the reason this helper
     exists. Returns (served, authed, said): served is /api/health answering 200, authed
     is a gated route answering 200 with the token the child itself minted into .env.
+
+    `config` runs the same probe against a config the CALLER owns (the example-as-shipped
+    case); the default is the minimal page config.
     """
-    (dirpath / "config.json").write_text(json.dumps(
-        {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1", "port": port}}),
-        encoding="utf-8")
+    if config is None:
+        config = {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1", "port": port}}
+    (dirpath / "config.json").write_text(json.dumps(config), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
     env["HOME"] = str(dirpath)
     # a test must not put tabs in somebody's browser: every staged child that serves
@@ -230,7 +233,8 @@ def serve_and_probe(dirpath, port, deadline=45):
 def main():
     work = Path(tempfile.mkdtemp(prefix="fblane-"))
     try:
-        for name in ("cli_only", "both", "mm_only", "tg_only", "health", "fresh", "once"):
+        for name in ("cli_only", "both", "mm_only", "tg_only", "health", "fresh", "once",
+                     "example"):
             d = work / name
             d.mkdir(parents=True, exist_ok=True)
             shutil.copy2(SRC, d / "tinycmdr.py")
@@ -247,6 +251,29 @@ def main():
         check("cannot start" not in said, "it is NOT a startup abort")
         _env = (work / "cli_only" / ".env").read_text(encoding="utf-8")
         check("TINYCMDR_WEB_TOKEN=" in _env, "the minted token lands in .env", _env[-120:])
+
+        # -- a config from the SHIPPED example is a page install, not a broken MM box ----
+        # config.example.json's allowlist holds its own placeholder
+        # (REPLACE_WITH_YOUR_MATTERMOST_USER_ID) and the installers wrote the example into
+        # config.json (the Windows and Linux ones copied it verbatim), so a fresh,
+        # page-only install carried a Mattermost intent nobody chose: the harness demanded
+        # a token, bare `tinycmdr` aborted "no Mattermost bot token", and the page never
+        # came up (measured 2026-10-08, a fresh Windows install of v1.0.93). The example's
+        # keys are the schema's outer edge too, so a start from it must draw no
+        # unknown-key warnings.
+        d = work / "example"
+        shutil.copy2(SRC.parent / "config.example.json", d / "config.example.json")
+        example = json.loads((SRC.parent / "config.example.json").read_text(encoding="utf-8"))
+        port = free_port()
+        example.setdefault("web", {})["enabled"] = True
+        example["web"]["host"] = "127.0.0.1"
+        example["web"]["port"] = port
+        served, authed, said = serve_and_probe(d, port, config=example)
+        check(served, "a config from the shipped example serves the page")
+        check("cannot start" not in said and "no Mattermost bot token" not in said,
+              "...and no Mattermost token is demanded for it", said[-400:])
+        check("is not a key the harness reads" not in said,
+              "...and the example's own keys draw no unknown-key warning", said[-400:])
 
         # -- every door's line must reach STDOUT -----------------------------
         # stdout is what cron, ssh and CI parse; a run that prints only to stderr is

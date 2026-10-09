@@ -1054,6 +1054,76 @@ def _env_bool(text):
     raise ValueError("not a boolean: %r" % text)
 
 
+# The known-key rule sits here, above load_config, because `CONFIG = load_config()` runs
+# AT IMPORT (further down): a later definition would not exist yet. `config set` validates
+# against this same set (_config_unknown_key), so the two surfaces cannot disagree about
+# what a `section.key` may be.
+_KNOWN_CONFIG_KEYS = {}
+
+
+def _known_config_keys(section):
+    """The key names a write to `section` may carry. DERIVED, never a hand list.
+
+    Three sources, because no single one is the schema:
+      * DEFAULT_CONFIG - what the harness ships a default for;
+      * config.example.json - what the shipped template documents, which is where a host's
+        copy of these keys lives;
+      * the code - `CONFIG["agent"].get("update_url")` and friends read keys that are neither
+        shipped nor documented (measured 2026-10-07: agent.update_url, agent.windows_task_name,
+        agent.send_file_max_bytes, agent.ask_timeout_continues, llm.think_fence), so a
+        name-only check would refuse a key the harness really reads.
+    A key ending in `_extra` is known when its base is: `_merge_guard_extras` folds
+    `<list>_extra` into `<list>`, which is how an operator adds a guard without replacing one.
+    """
+    if not _KNOWN_CONFIG_KEYS:
+        src = ""
+        try:
+            src = Path(__file__).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            pass
+        # `(CONFIG.get("llm") or {}).get("window_presets")` is the same read as
+        # `CONFIG["llm"].get("window_presets")`: normalize the `or {}` away so both match.
+        flat = re.sub(r'(CONFIG\s*\.\s*get\(\s*["\'][a-z_]+["\']\s*)\)\s*or\s*\{\}', r"\1", src)
+        ex = {}
+        try:
+            ex = json.loads((BASE_DIR / "config.example.json")
+                            .read_text(encoding="utf-8-sig"))
+        except Exception:                                     # noqa: BLE001
+            ex = {}
+        for sec, body in DEFAULT_CONFIG.items():
+            if not isinstance(body, dict):
+                continue
+            keys = {k for k in body if not k.startswith("_")}
+            keys |= {k for k in (ex.get(sec) or {}) if not k.startswith("_")}
+            esc = re.escape('"%s"' % sec)
+            for pat in (r'CONFIG\[\s*%s\s*\]\s*\.\s*get\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
+                        % esc,
+                        r'CONFIG\[\s*%s\s*\]\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']' % esc,
+                        r'CONFIG\.get\(\s*%s\s*,\s*\{\}\s*\)\s*\.\s*get\(\s*'
+                        r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']' % esc,
+                        r'CONFIG\.get\(\s*%s\s*\)\s*\.\s*get\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
+                        % esc,
+                        r'CONFIG\.get\(\s*%s\s*,\s*\{\}\s*\)\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
+                        % esc):
+                keys |= set(re.findall(pat, flat))
+            _KNOWN_CONFIG_KEYS[sec] = keys
+    return _KNOWN_CONFIG_KEYS.get(section, set())
+
+
+def _config_key_known(section, key):
+    """Is `section.key` a name something reads? ONE rule for `config set` and the
+    load-time warning, so the two surfaces cannot disagree.
+
+    A key ending in `_extra` counts when its base does: `_merge_guard_extras` folds
+    `<list>_extra` into `<list>`, which is how an operator adds a guard without replacing
+    the shipped one.
+    """
+    known = _known_config_keys(section)
+    if key in known:
+        return True
+    return (key.endswith("_extra") and key[:-len("_extra")] in known)
+
+
 def load_config():
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
     CONFIG_SOURCE["loaded"] = time.time()
@@ -1082,11 +1152,15 @@ def load_config():
                                     "kept. Delete the key to say nothing instead.",
                                     section, key)
                         continue
-                    if key not in cfg[section] and not key.startswith("_"):
+                    if not key.startswith("_") and not _config_key_known(section, key):
                         # A key nothing reads is not fatal - a host may keep its own extras
                         # in this file - but it must not be silent: a typo'd `base_url`
                         # looked applied on every surface an operator checks (run 25,
                         # A-2026-10-07-76). `_`-prefixed keys are the shipped comments.
+                        # The known set is the same one `config set` validates against:
+                        # DEFAULT_CONFIG alone made every fresh install warn about the
+                        # example's own keys - llm.window_presets and eleven more - on every
+                        # start (measured 2026-10-08, a fresh Windows install).
                         log.warning("config.json %s.%s is not a key the harness reads - it "
                                     "is ignored (check the spelling against "
                                     "config.example.json)", section, key)
@@ -37369,59 +37443,6 @@ def _seed_config_from_example():
     return _config_write_raw(raw)
 
 
-_KNOWN_CONFIG_KEYS = {}
-
-
-def _known_config_keys(section):
-    """The key names a write to `section` may carry. DERIVED, never a hand list.
-
-    Three sources, because no single one is the schema:
-      * DEFAULT_CONFIG - what the harness ships a default for;
-      * config.example.json - what the shipped template documents, which is where a host's
-        copy of these keys lives;
-      * the code - `CONFIG["agent"].get("update_url")` and friends read keys that are neither
-        shipped nor documented (measured 2026-10-07: agent.update_url, agent.windows_task_name,
-        agent.send_file_max_bytes, agent.ask_timeout_continues, llm.think_fence), so a
-        name-only check would refuse a key the harness really reads.
-    A key ending in `_extra` is known when its base is: `_merge_guard_extras` folds
-    `<list>_extra` into `<list>`, which is how an operator adds a guard without replacing one.
-    """
-    if not _KNOWN_CONFIG_KEYS:
-        import difflib                                        # noqa: F401 (kept local)
-        src = ""
-        try:
-            src = Path(__file__).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            pass
-        # `(CONFIG.get("llm") or {}).get("window_presets")` is the same read as
-        # `CONFIG["llm"].get("window_presets")`: normalize the `or {}` away so both match.
-        flat = re.sub(r'(CONFIG\s*\.\s*get\(\s*["\'][a-z_]+["\']\s*)\)\s*or\s*\{\}', r"\1", src)
-        ex = {}
-        try:
-            ex = json.loads((BASE_DIR / "config.example.json")
-                            .read_text(encoding="utf-8-sig"))
-        except Exception:                                     # noqa: BLE001
-            ex = {}
-        for sec, body in DEFAULT_CONFIG.items():
-            if not isinstance(body, dict):
-                continue
-            keys = {k for k in body if not k.startswith("_")}
-            keys |= {k for k in (ex.get(sec) or {}) if not k.startswith("_")}
-            esc = re.escape('"%s"' % sec)
-            for pat in (r'CONFIG\[\s*%s\s*\]\s*\.\s*get\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
-                        % esc,
-                        r'CONFIG\[\s*%s\s*\]\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']' % esc,
-                        r'CONFIG\.get\(\s*%s\s*,\s*\{\}\s*\)\s*\.\s*get\(\s*'
-                        r'["\']([A-Za-z_][A-Za-z0-9_]*)["\']' % esc,
-                        r'CONFIG\.get\(\s*%s\s*\)\s*\.\s*get\(\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
-                        % esc,
-                        r'CONFIG\.get\(\s*%s\s*,\s*\{\}\s*\)\[\s*["\']([A-Za-z_][A-Za-z0-9_]*)["\']'
-                        % esc):
-                keys |= set(re.findall(pat, flat))
-            _KNOWN_CONFIG_KEYS[sec] = keys
-    return _KNOWN_CONFIG_KEYS.get(section, set())
-
-
 def _config_unknown_key(section, key, parts):
     """A message when nothing would read this key, or "" when the write is fine.
 
@@ -37444,9 +37465,7 @@ def _config_unknown_key(section, key, parts):
                    CONFIG_PATH.name))
     if len(parts) == 2:
         known = _known_config_keys(parts[0])
-        if key.endswith("_extra") and key[:-6] in known:
-            return ""
-        if key not in known:
+        if not _config_key_known(parts[0], key):
             near = difflib.get_close_matches(key, sorted(known), n=1, cutoff=0.5)
             return ("%s.%s is not a key the harness reads%s - setting it would change "
                     "nothing. Edit %s by hand if it is for something else."
@@ -39632,6 +39651,12 @@ def run_verb(argv):
 # one.
 MM_TOKEN_PLACEHOLDER = "PASTE_BOT_TOKEN_HERE"
 MM_USER_PLACEHOLDER = "your-mattermost-user-id"
+# config.example.json ships its own shouty allowlist placeholder, and the documented first
+# run ("copy config.example.json to config.json") lands it - as did the Windows and Linux
+# installers, which copied the example verbatim until they learned to strip it. None of
+# these values may read as "a Mattermost lane is intended": measured 2026-10-08, a page-only
+# Windows install whose allowlist held this aborted at start with "no Mattermost bot token".
+MM_USER_PLACEHOLDERS = {MM_USER_PLACEHOLDER, "REPLACE_WITH_YOUR_MATTERMOST_USER_ID"}
 
 
 def _mm_token_configured():
@@ -39682,7 +39707,7 @@ def validate_startup_config():
     # to fill in a lane it never wanted.
     _mm_url = str(CONFIG["mattermost"].get("url") or "").strip().lower()
     _mm_users = [u for u in (CONFIG["mattermost"].get("allowed_users") or [])
-                 if str(u).strip() and str(u).strip() != MM_USER_PLACEHOLDER]
+                 if str(u).strip() and str(u).strip() not in MM_USER_PLACEHOLDERS]
     _mm_intent = bool(_mm_users or (_mm_url and not _mm_placeholder_unset(_mm_url)
                                     and not _mm_documented_placeholder(_mm_url)))
     if not _chat_lane_configured() and not _mm_intent:
@@ -39757,12 +39782,15 @@ def validate_startup_config():
                 "Put it in .env as TINYCMDR_MM_TOKEN=... (preferred, keeps it "
                 "out of config.json), or paste it into mattermost.token. "
                 "Get it from System Console -> Integrations -> Bot Accounts.")
-    if CONFIG["mattermost"].get("allowed_users") == ["your-mattermost-user-id"]:
-        return ("mattermost.allowed_users still has the placeholder.\n"
+    _placeholder_users = [u for u in (CONFIG["mattermost"].get("allowed_users") or [])
+                          if str(u).strip() in MM_USER_PLACEHOLDERS]
+    if _placeholder_users:
+        return ("mattermost.allowed_users still has the placeholder %r.\n"
                 "Set it to YOUR Mattermost USER ID (System Console -> Users -> "
                 "the id column) - not your username: it is compared against the "
                 "id on every post, and the bot is deny-by-default, so a "
-                "username here means nobody can use it.")
+                "username here means nobody can use it."
+                % (_placeholder_users[0],))
     return None
 
 

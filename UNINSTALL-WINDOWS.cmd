@@ -31,6 +31,17 @@ if not exist "%HERE%\tinycmdr.py" (
     pause
     exit /b 1
 )
+if not exist "%HERE%\config.json" if not exist "%HERE%\venv" (
+    echo.
+    echo ERROR: "%HERE%" does not look like a tinycmdr install.
+    echo An extracted package has no config.json and no venv\ - if this is the
+    echo package, run this door from the install folder instead (a real install is
+    echo %USERPROFILE%\tinycmdr unless -InstallDir put it elsewhere). Nothing was
+    echo changed.
+    echo.
+    pause
+    exit /b 1
+)
 if not exist "%HERE%\install\install-tinycmdr.cmd" (
     echo.
     echo ERROR: "%HERE%\install\install-tinycmdr.cmd" is missing, so the removal
