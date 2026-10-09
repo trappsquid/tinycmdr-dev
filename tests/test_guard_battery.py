@@ -354,6 +354,66 @@ def test_file_door_and_shell_door_agree():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_surface_gate_covers_the_memory_bundle_and_case_variants():
+    """A-2026-10-08-106: the file door compared a BASENAME against _SURFACE_FILES, and
+    "memory/" can never be a basename - so every write to BASE_DIR/memory/index.md, the
+    prompt-carried memory index, went unasked while the shell spelling was gated. A
+    case-variant name (Notes.md on a case-insensitive filesystem) slipped through too,
+    and the shell regex only knew the "memory/" spelling, not `memory\\index.md`."""
+    d = Path(tempfile.mkdtemp(prefix="tc-surface-mem-"))
+    mem = Path(fb.BASE_DIR) / "memory"
+    index = mem / "index.md"
+    ask = []
+    try:
+        mem.mkdir(parents=True, exist_ok=True)
+        index.write_text("the real index\n", encoding="utf-8")
+
+        out = fb.tool_write_file({"path": str(index), "content": "WIPED"},
+                                 {"confirm_cb": lambda s: ask.append(s) or False})
+        check("write_file into the bot's memory/ bundle is gated",
+              str(out).startswith("DECLINED"), str(out)[:140])
+        check("...and the index was not replaced",
+              "the real index" in index.read_text(encoding="utf-8"))
+
+        out = fb.tool_edit_file({"path": str(index), "old_string": "the real",
+                                 "new_string": "THE REAL"},
+                                {"confirm_cb": lambda s: ask.append(s) or False})
+        check("edit_file into the memory/ bundle is gated too",
+              str(out).startswith("DECLINED"), str(out)[:140])
+
+        casey = Path(fb.BASE_DIR) / "Notes.md"
+        out = fb.tool_write_file({"path": str(casey), "content": "x"},
+                                 {"confirm_cb": lambda s: ask.append(s) or False})
+        check("a case-variant name is gated (Notes.md is notes.md where it matters)",
+              str(out).startswith("DECLINED"), str(out)[:140])
+
+        theirs = d / "memory" / "index.md"
+        theirs.parent.mkdir(parents=True, exist_ok=True)
+        out = fb.tool_write_file({"path": str(theirs), "content": "theirs"},
+                                 {"confirm_cb": lambda s: ask.append(s) or False})
+        check("a memory/index.md that is NOT the bot's own is written unasked",
+              str(out).startswith("OK"), str(out)[:120])
+
+        shell = fb._prompt_surface_write("cp C:\\data\\x memory\\index.md")
+        check("the shell door sees the Windows spelling memory\\index.md",
+              bool(shell), shell)
+        shell = fb._prompt_surface_write("printf x > memory/index.md")
+        check("...and still names the POSIX spelling", bool(shell) and "memory" in shell,
+              shell)
+    finally:
+        for p in (index, Path(fb.BASE_DIR) / "Notes.md", Path(fb.BASE_DIR) / "notes.md"):
+            try:
+                if p.exists():
+                    p.unlink()
+            except OSError:
+                pass
+        try:
+            mem.rmdir()
+        except OSError:
+            pass
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def test_manifest_command_walks_the_shell_tier():
     """A .tool.json whose command is `rm -rf /` must not load, and a
     confirm-tier command must be asked at call time - the manifest door is the shell door."""

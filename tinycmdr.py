@@ -8475,11 +8475,17 @@ def _endpoint_load_request(command):
 # replaced by a line from a file it had been asked to read). Reads are untouched.
 _SURFACE_FILES = ("notes.md", "atlas.md", "field-notes.md", "field-notes-hits.json",
                   "memory/")
+# The flat names (the single files), casefolded for the file-door compare, and the
+# alternation the shell matcher uses: a bundle name has to match the Windows spelling of
+# its separator too, or `copy x memory\index.md` walks past the shell door
+# (A-2026-10-08-106).
+_SURFACE_FLAT = frozenset(f.casefold() for f in _SURFACE_FILES if not f.endswith("/"))
+_SURFACE_NAME_RX = "|".join((re.escape(f[:-1]) + r"[\\/]") if f.endswith("/")
+                            else re.escape(f) for f in _SURFACE_FILES)
 _SURFACE_WRITE_RX = re.compile(
     r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:%s)"
     r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"
-    r"[^|;\n]{0,140}?(?:%s)" % ("|".join(re.escape(f) for f in _SURFACE_FILES),
-                               "|".join(re.escape(f) for f in _SURFACE_FILES)))
+    r"[^|;\n]{0,140}?(?:%s)" % (_SURFACE_NAME_RX, _SURFACE_NAME_RX))
 
 # The confirm gate's own trust root. `{"all": true}` in this file silences the confirm
 # tier for every lane, so a MODEL write to it is refused outright - never asked: one
@@ -8511,7 +8517,8 @@ def _prompt_surface_write(command):
     hit = _SURFACE_WRITE_RX.search(text)
     if not text or not hit:
         return None
-    name = next((f for f in _SURFACE_FILES if f in hit.group(0)), "a prompt-surface file")
+    name = next((f for f in _SURFACE_FILES
+                 if f in hit.group(0).replace("\\", "/")), "a prompt-surface file")
     return ("a shell WRITE to this bot's own %s (its memory, not a scratch file)"
             % name)
 
@@ -9391,10 +9398,22 @@ def _surface_write_gate(path, subject, ctx):
     _prompt_surface_write while `tool_write_file({"path": ".../notes.md"})` replaced the
     file with no gate at all - the fastest route past the guard was a TOOL, not a command.
     The shell door and the file door now answer with the same question.
+
+    Identity is the RESOLVED path relative to the install, never a basename (an operator's
+    own docs/notes.md is not this bot's file - measured 2026-09-29), and two edges the
+    basename compare could not see are closed (A-2026-10-08-106): the memory/ bundle (no
+    basename can equal "memory/", so every write to the prompt-carried memory index went
+    unasked) and a case-variant name (a case-insensitive filesystem resolves Notes.md to
+    notes.md). Case folds on every platform: a needless ask on a case-sensitive host is
+    cheaper than a silent write to a file that IS this bot's memory.
     """
-    name = os.path.basename(str(path or ""))
+    raw = str(path or "")
     try:
-        if Path(str(path)).resolve() == Path(CONFIRM_ALLOW_FILE).resolve():
+        resolved = Path(raw).resolve()
+    except OSError:
+        return None
+    try:
+        if resolved == Path(CONFIRM_ALLOW_FILE).resolve():
             # The trust root itself: refused on every door, never asked - the model must
             # not be able to write the file that decides whether the model is asked
             # (A-2026-10-08-94). The operator sets it with `tinycmdr approvals`.
@@ -9403,21 +9422,17 @@ def _surface_write_gate(path, subject, ctx):
                     "approvals allow`." % _APPROVAL_STORE_NAME)
     except OSError:
         pass
-    if name not in _SURFACE_FILES:
-        return None
-    # ...and it has to be the BOT'S OWN file, by resolved path - not any file on the box that
-    # shares the name. Measured 2026-09-29: `write_file {"path":
-    # "/home/user/acme/docs/notes.md"}` was gated as "a write to this bot's own notes.md (its
-    # memory)" and DECLINED on a lane with nobody to ask, so an operator's own document
-    # could not be written because of its basename.
     try:
-        if Path(str(path)).resolve().parent != Path(BASE_DIR).resolve():
-            return None
-    except OSError:
+        rel = resolved.relative_to(Path(BASE_DIR).resolve()).as_posix()
+    except (OSError, ValueError):
+        return None                      # not this install's file
+    folded = rel.casefold()
+    if not (folded in _SURFACE_FLAT or folded == "memory"
+            or folded.startswith("memory/")):
         return None
-    return endpoint_gate("%s: %s" % (subject, name),
+    return endpoint_gate("%s: %s" % (subject, rel),
                          "a write to this bot's own %s (its memory, not a "
-                         "scratch file)" % name,
+                         "scratch file)" % rel,
                          (ctx or {}).get("confirm_cb"))
 
 
