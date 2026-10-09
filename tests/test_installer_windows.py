@@ -20,7 +20,7 @@ FAILED = []
 
 
 def check(what, ok, detail=""):
-    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % detail))
+    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % (detail,)))
     if not ok:
         FAILED.append(what)
 
@@ -28,7 +28,7 @@ def check(what, ok, detail=""):
 def skip(what, detail=""):
     # Not a failure: the fix belongs to a file this batch does not own. Printed loudly so
     # it cannot be forgotten.
-    print("skip " + what + ("  <- %s" % detail if detail else ""))
+    print("skip " + what + ("  <- %s" % (detail,) if detail else ""))
 
 
 def source(rel):
@@ -282,10 +282,12 @@ def main():
     check("the package ships UNINSTALL-WINDOWS.cmd",
           '"UNINSTALL-WINDOWS.cmd"' in source("maintenance/build-package.py"))
     check("the door acts on the folder it sits in, by absolute path",
-          '-InstallDir "%HERE%"' in door and '"%~dp0"' in door)
+          '-InstallDir "%HERE%"' in door and 'set "TARGET=%~dp0"' in door
+          and '"%TARGET%"' in door,
+          "the folder must travel without a trailing backslash through CALL")
     check("the door re-runs itself from %TEMP%, so the removal cannot kill its tail",
           'copy /y "%~f0" "%SELF%"' in door
-          and 'call "%SELF%" --removing "%~dp0"' in door
+          and 'call "%SELF%" --removing "%TARGET%"' in door
           and ":removing" in door,
           "a door living in the folder it deletes dies mid-run: no exit code, no pause")
     check("...and steps its own shell out of the folder first",

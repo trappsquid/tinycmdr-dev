@@ -2,8 +2,12 @@
 # Access denied) and start the fixed build through the same path the logon
 # task uses. Writes its own log - an elevated -Wait child's stdout does not
 # come back to the caller.
+# -Stop kills everything this install runs and does NOT relaunch it: the door
+# `tinycmdr quit` uses, where leaving a stopped box stopped is the whole point.
 # Paths come from this script's own location, so it works on any host and any
 # -InstallDir (it used to hardcode one machine's folder).
+param([switch]$Stop)
+$action = if ($Stop) { "stop" } else { "restart" }
 $here = $PSScriptRoot
 $install = Split-Path -Parent $here
 $log = Join-Path $here 'restart-tinycmdr.log'
@@ -40,7 +44,7 @@ function Get-TinycmdrProcesses {
       })
 }
 
-Log "=== restart run start (pid $PID, elevated: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) ==="
+Log "=== $action run start (pid $PID, elevated: $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))) ==="
 
 $exitCode = 0
 $procs = Get-TinycmdrProcesses
@@ -58,6 +62,12 @@ $left = Get-TinycmdrProcesses
 Log "after kill: $($left.Count) tinycmdr process(es) left"
 if ($left.Count -gt 0) { $exitCode = 1 }
 
+if ($Stop) {
+    Log "stop requested: the launcher is NOT relaunched"
+    Log "=== stop run end (exit $exitCode) ==="
+    exit $exitCode
+}
+
 # start through the service vbs = exactly what the Tinycmdr logon/startup task does
 & wscript.exe //B //Nologo (Join-Path $install 'tinycmdr-service.vbs')
 Log "launched tinycmdr-service.vbs"
@@ -73,5 +83,5 @@ for ($i = 0; $i -lt 10; $i++) {
 $sup = @($now | Where-Object { $_.CommandLine -like '*tinycmdr-supervise.py*' })
 Log "after start: $($now.Count) process(es), supervisor(s) $($sup.Count): $($now.ProcessId -join ',')"
 if ($now.Count -eq 0) { $exitCode = 1 }
-Log "=== restart run end (exit $exitCode) ==="
+Log "=== $action run end (exit $exitCode) ==="
 exit $exitCode

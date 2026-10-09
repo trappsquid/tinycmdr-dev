@@ -32,9 +32,14 @@ rem shell's cwd is exactly that.
 cd /d "%TEMP%" 2>nul || goto :nocd
 if /i "%~1"=="--removing" goto :removing
 set "SELF=%TEMP%\tinycmdr-uninstall-%RANDOM%%RANDOM%.cmd"
+rem The folder travels WITHOUT its trailing backslash: an argument ending in \" is the
+rem classic CALL re-parse footgun, where the closing quote is read as escaped and the
+rem copy gets a wrong folder or none.
+set "TARGET=%~dp0"
+if "%TARGET:~-1%"=="\" set "TARGET=%TARGET:~0,-1%"
 copy /y "%~f0" "%SELF%" >nul 2>&1
 if not exist "%SELF%" goto :inplace
-call "%SELF%" --removing "%~dp0" %*
+call "%SELF%" --removing "%TARGET%" %*
 set "RC=%ERRORLEVEL%"
 del "%SELF%" >nul 2>&1
 exit /b %RC%
@@ -43,7 +48,7 @@ exit /b %RC%
 rem Could not copy to %TEMP% (a full or read-only temp). Run in place; the
 rem removal may take this file with it and this tail may not survive, which
 rem is the shape this door exists to avoid on a normal machine.
-call "%~f0" --removing "%~dp0" %*
+call "%~f0" --removing "%TARGET%" %*
 set "RC=%ERRORLEVEL%"
 exit /b %RC%
 

@@ -36885,7 +36885,7 @@ def user_is_allowed(sender, user_id):
 
 VERBS = ("status", "doctor", "health", "model", "reasoning", "config", "setup", "logs", "proc",
          "restart", "update", "clean", "token", "version", "run", "help", "failures",
-         "approvals", "web", "search")
+         "approvals", "web", "search", "quit")
 
 def ensure_launcher_executable():
     """Give the folder's launcher its execute bit back after a pull or an adoption.
@@ -37112,6 +37112,10 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
   clean [--yes]      list the junk in this folder; --yes removes it (state is kept)
   logs [n]           the last n lines of tinycmdr.log (default 40)
   restart            restart through this host's own door (task, systemd, launchd)
+  quit | kill | exit take THIS install down entirely: stop its service/agent, then kill
+                     every process still running from this folder (a foreground session
+                     or a second start goes too); what survives is named, exit 1, and a
+                     box with nothing running says so (exit 0); `quit` twice is safe
   token              where the secrets live and which are set (never their values)
   token set <NAME>   read one value from stdin and write it to .env (mode 600)
   run                start the agent in this window, exactly as the file does
@@ -37823,7 +37827,12 @@ def _install_processes():
 
     The query everyone types by hand: `Get-CimInstance Win32_Process | Where-Object
     CommandLine -like '*tinycmdr*'` on Windows, `ps -eo pid,lstart,args | grep` elsewhere.
-    Matching on the install dir rather than the word keeps a second install out of it."""
+    Matching on the install dir rather than the word keeps a second install out of it.
+
+    What is matched is the COMMAND LINE, so a process started through a different
+    spelling of the path (a symlinked temp dir, an unresolved /var vs /private/var)
+    is invisible to it: start the app through the install's own path - what a shim,
+    a service and a shortcut all do - and it shows up here."""
     here = str(BASE_DIR).lower()
     if os.name == "nt":
         rc, out, err, _ = run_capture(
@@ -39751,6 +39760,151 @@ _RESTART_LOCK_POLL = 2.0   # seconds between looks while the handover is in flig
 _RESTART_LOCK_WAIT = 90.0  # long enough for the measured handover, short enough to be an answer
 
 
+def _ancestor_pids(depth=5):
+    """This process and its ancestors: the sweep must never kill the chain `tinycmdr
+    quit` was typed into - the verb process itself comes from the install folder, so it
+    IS a match for the filter, and a `bash -c 'cd <install> && tinycmdr quit'` parent
+    matches too."""
+    pids, pid = set(), os.getpid()
+    while pid and pid not in pids and len(pids) <= depth:
+        pids.add(pid)
+        if pid == os.getpid():
+            pid = os.getppid()
+            continue
+        if os.name == "nt":
+            break          # one level is what the runtime gives cheaply; documented
+        try:
+            out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
+                                 capture_output=True, text=True, timeout=10).stdout
+            pid = int(out.strip())
+        except Exception:                                        # noqa: BLE001
+            break
+    return pids
+
+
+def _kill_pid_tree(pid):
+    """Kill one process AND, where the platform offers it, its children: taskkill /T on
+    Windows (a surviving grandchild is what keeps a pipe open), the process GROUP on
+    POSIX when the pid leads one (a session-started bot's tool children go with it), a
+    plain SIGTERM otherwise. Never raises."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=20, **hidden_proc_kwargs())
+            return
+        import signal
+        try:
+            leader = os.getpgid(pid) == pid
+        except Exception:                                        # noqa: BLE001
+            leader = False
+        if leader:
+            os.killpg(pid, signal.SIGTERM)
+        else:
+            os.kill(pid, signal.SIGTERM)
+    except Exception as e:                                       # noqa: BLE001
+        log.debug("kill of pid %s failed: %s", pid, e)
+
+
+def _verb_quit():
+    """`quit` - take THIS install down entirely: the supervisor's door first, then every
+    process still running from this folder.
+
+    The two steps are the ones the hosts already own: stop the launchd agent / systemd
+    unit / Windows launcher through the SHIPPED helper (`stop` on the POSIX twins,
+    `-Stop` on Windows - the same scripts `restart` calls), then sweep what remains with
+    the filter `proc` shows and the uninstaller kills, so a foreground session or a
+    second start goes too. Bounded, this process's own chain spared, and whatever
+    survives is NAMED with exit 1 - a quit that half works must not read as done.
+    A box with nothing running says so and exits 0. `kill` and `exit` are the same door.
+    Scope is this folder: a second install on the box is not touched."""
+    helper = BASE_DIR / "maintenance" / ("restart-tinycmdr.ps1" if os.name == "nt"
+                                         else "restart-tinycmdr-macos.sh"
+                                         if sys.platform == "darwin"
+                                         else "restart-tinycmdr.sh")
+    if helper.exists():
+        if os.name == "nt":
+            argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(helper), "-Stop"]
+        else:
+            argv = ["bash", str(helper), "stop"]
+        rc, out, err, timed_out = run_capture(argv, timeout=180)
+        for line in (out or "").splitlines():
+            print(scrub(line))
+        for line in (err or "").splitlines():
+            if line.strip():
+                print(scrub(line), file=sys.stderr)
+        if timed_out:
+            print("the stop helper did not finish in 180s", file=sys.stderr)
+        elif rc != 0:
+            # Not fatal on its own: some exits mean "no unit on this host", and the
+            # sweep below is the other half of the door either way.
+            print("the stop helper exited %d (see above)" % rc, file=sys.stderr)
+    else:
+        print("no stop helper here (%s) - stopping what runs from this folder" % helper)
+
+    spare = _ancestor_pids()
+
+    def _pid_rows():
+        try:
+            rows, _err = _install_processes()
+        except Exception:                                        # noqa: BLE001
+            return []
+        found = []
+        for row in rows:
+            try:
+                pid = int(row.split()[0])
+            except (ValueError, IndexError):
+                continue
+            if pid in spare:
+                continue
+            found.append((pid, row))
+        return found
+
+    killed = 0
+    for attempt, grace in ((0, 10.0), (1, 10.0)):
+        alive = _pid_rows()
+        if not alive:
+            break
+        if attempt:
+            import signal
+            for pid, _row in alive:
+                try:
+                    if os.name == "nt":
+                        _kill_pid_tree(pid)
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                except Exception:                                # noqa: BLE001
+                    pass
+        else:
+            for pid, _row in alive:
+                _kill_pid_tree(pid)
+                killed += 1
+        deadline = time.time() + grace
+        while time.time() < deadline and _pid_rows():
+            time.sleep(0.5)
+
+    left = _pid_rows()
+    if left:
+        print("still running from %s after the sweep:" % BASE_DIR, file=sys.stderr)
+        for pid, row in left[:8]:
+            print("  pid %d  %s" % (pid, row[:140]), file=sys.stderr)
+        print("close it by hand (a shell sitting in the folder can hold a child), then "
+              "run `tinycmdr quit` again.", file=sys.stderr)
+        return 1
+    if not killed:
+        print("nothing was running from %s" % BASE_DIR)
+    else:
+        print("stopped %d process(es) from %s" % (killed, BASE_DIR))
+    if _verb_running() is True:
+        print("the instance lock is STILL held - something outside the folder's process "
+              "list owns it; `tinycmdr proc` names it.", file=sys.stderr)
+        return 1
+    print("tinycmdr is stopped here. Start it again the way this host does "
+          "(`tinycmdr restart`, or its service).")
+    return 0
+
+
 def _verb_restart():
     """Restart through this host's own door, by calling the SHIPPED helper.
 
@@ -40166,6 +40320,8 @@ def _verb_failures(rest):
 def run_verb(argv):
     """Dispatch one management verb. Returns the process exit code."""
     verb = (argv[0] or "").strip().lower()
+    if verb in ("kill", "exit"):
+        verb = "quit"          # one door, three names
     rest = list(argv[1:])
     if verb in ("help", "-h", "--help"):
         print(VERB_HELP)
@@ -40205,6 +40361,8 @@ def run_verb(argv):
         return _verb_logs(rest)
     if verb == "restart":
         return _verb_restart()
+    if verb == "quit":
+        return _verb_quit()
     if verb == "token":
         return _verb_token(rest)
     if verb == "web":

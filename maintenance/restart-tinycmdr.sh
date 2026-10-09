@@ -4,8 +4,15 @@
 # Under systemd the unit is the supervisor: never poke the process, ask systemd.
 # Run it as root (systemctl restart needs it), or with sudo.
 #
-#   sudo bash restart-tinycmdr.sh
+#   sudo bash restart-tinycmdr.sh          # restart
+#   sudo bash restart-tinycmdr.sh stop     # stop, and leave it stopped
 set -euo pipefail
+
+ACTION="${1:-restart}"
+case "$ACTION" in
+    restart|stop) ;;
+    *) echo "usage: restart-tinycmdr.sh [restart|stop]" >&2; exit 2 ;;
+esac
 
 SERVICE_NAME="${TINYCMDR_SERVICE:-tinycmdr}"
 INSTALL_DIR="${TINYCMDR_DIR:-/home/${SUDO_USER:-$(id -un)}/tinycmdr}"
@@ -13,7 +20,7 @@ LOG="${TINYCMDR_RESTART_LOG:-/tmp/tinycmdr-restart.log}"
 
 log() { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" | tee -a "$LOG"; }
 
-log "=== restart run begin (user $(id -un)) ==="
+log "=== $ACTION run begin (user $(id -un)) ==="
 
 # list-unit-files exits 0 whether or not it matched, so the old guard was dead
 # code: the operator got a systemctl error two lines later, AFTER the pkill had
@@ -22,7 +29,7 @@ log "=== restart run begin (user $(id -un)) ==="
 _unit_state="$(systemctl show -p LoadState --value "$SERVICE_NAME.service" 2>/dev/null || true)"
 if [ "$_unit_state" != "loaded" ]; then
     log "no $SERVICE_NAME.service on this host (LoadState=${_unit_state:-unknown}) - is tinycmdr installed here?"
-    log "=== restart run end (nothing to do) ==="
+    log "=== $ACTION run end (nothing to do) ==="
     exit 1
 fi
 
@@ -35,9 +42,21 @@ fi
 # the unit's cgroup; restarting through systemd is the clean path. The pkill is
 # scoped to THIS install and anchored with [.]: the old bare pattern was an
 # unanchored regex that also hit a second install's bot and anything merely
-# Naming the file, like `tail -f tinycmdr.py.log`.
+# Naming the file, like `tail -f tinycmdr.py.log`. Stop runs the same two steps
+# and skips the start, so a box left stopped really is stopped.
 pkill -f "$INSTALL_DIR/tinycmdr[.]py" 2>/dev/null || true
 sleep 1
+if [ "$ACTION" = "stop" ]; then
+    systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+    if systemctl is-active --quiet "$SERVICE_NAME"; then
+        log "the unit is STILL active after stop - check systemctl status $SERVICE_NAME"
+        log "=== stop run end (failed) ==="
+        exit 1
+    fi
+    log "tinycmdr is stopped"
+    log "=== stop run end ==="
+    exit 0
+fi
 systemctl restart "$SERVICE_NAME"
 
 for _ in $(seq 1 20); do

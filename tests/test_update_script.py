@@ -40,7 +40,7 @@ FAILS = []
 
 
 def check(cond, what, detail=""):
-    print(("ok   " if cond else "FAIL ") + what + ("" if cond else "  <- %s" % detail))
+    print(("ok   " if cond else "FAIL ") + what + ("" if cond else "  <- %s" % (detail,)))
     if not cond:
         FAILS.append(what)
 

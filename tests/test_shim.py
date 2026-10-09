@@ -35,7 +35,7 @@ FAILED = []
 
 
 def check(what, ok, detail=""):
-    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % detail))
+    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % (detail,)))
     if not ok:
         FAILED.append(what)
 

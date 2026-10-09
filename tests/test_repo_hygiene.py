@@ -20,7 +20,7 @@ FAILS = []
 
 
 def check(what, ok, detail=""):
-    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % detail))
+    print(("ok   " if ok else "FAIL ") + what + ("" if ok else "  <- %s" % (detail,)))
     if not ok:
         FAILS.append(what)
 
