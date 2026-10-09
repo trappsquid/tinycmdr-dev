@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Each download carried all three OSes' doors:** the win zip unpacked the macOS and Linux installers (9 files / 194.1 KB measured) and every installer copies the package tree, so foreign doors landed in every install folder too - each archive now carries only its own platform's doors, and the builder refuses a container that carries a foreign one (maintenance/build-package.py).
+- **A device or FIFO under a searched tree could OOM or hang the bot:** search_files read any non-regular file with read_bytes() (/dev/zero grows until the kernel kills the process, a FIFO blocks open() for ever) and a single named file had no cap at all - non-regular files are skipped by name, a single file goes through the same 8 MiB cap the shell's output wears, and naming one directly is refused (tests/test_search_scope.py).
+- **The file tools and the shell disagreed about the working directory:** relative write_file/read_file/edit_file paths resolved against the process cwd while the shell runs in the install dir, and verify_shell_writes verified the process cwd too - one _tool_path door resolves against BASE_DIR, and the verifier uses the cwd the shell actually ran in (tests/test_harness_extras.py, tests/test_verify.py).
+- **A write to the bot's own memory/ bundle went unasked:** the file-door gate compared a basename against "memory/" (which no basename can equal) and missed case-variant names, while the shell regex knew only the POSIX spelling - the gate decides on the resolved path relative to the install and the shell alternation accepts either separator (tests/test_guard_battery.py).
+- **write_file truncated in place and took a .bak the operator owned:** the whole old file was read into RAM for the backup, any <name>.bak was overwritten, and the destination was truncated before writing - one _keep_backup streams the predecessor to .bak (or a rolling .bak.1 when the operator has one) and the replace is atomic, with a non-regular target refused (tests/test_harness_extras.py).
+- **Every /stop or limit-kill of an auto-backgrounded command flashed a console window:** _shell_autobg's two inline taskkills omitted hidden_proc_kwargs() - both paths call _kill_tree now (tests/test_job_control.py).
+
 ## [1.0.95] - 2026-10-09
 
 ### Added

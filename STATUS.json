@@ -2183,6 +2183,17 @@
       },
       "detail": "Every download packed all three OSes' doors: the win zip carried the macOS and Linux installers, install/README-macos.md, the launchd plist and both .command launchers - 9 files / 194.1 KB (103.3 KB macOS, 90.8 KB Linux), measured 2026-10-09 on the built public win zip - and every installer copies the package tree, so foreign doors landed in every install folder too. maintenance/build-package.py stages one tree and writes each container with the other platforms' names skipped (PLATFORM_FILES beside SHIP, guarded by platform_drift()), and grades the written artifact: a container that still carries a foreign door is refused like a leak. maintenance/check-package-modes.py builds the real pruned macOS container, and check-package-assets/-page and smoke-install.sh pass on all three archives.",
       "gate": "closes at the next release"
+    },
+    {
+      "id": "audit-fixes-file-tools",
+      "title": "the file-tools batch: non-regular reads, one cwd, the memory bundle, the backup, the flasher",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "7613d7d",
+        "expect": "untagged"
+      },
+      "detail": "Five findings from the whole-harness review (after -96, -97), each verified against the code and graded by a check that fails on the pre-fix build. search_files read device nodes and FIFOs with read_bytes() - their st_size is 0, so the 2 MB guard stepped around them and /dev/zero grows until the kernel OOM-kills the bot while a FIFO's open() never returns - and a single named file, where the walk's own note sends the over-2-MB ones, had no cap at all; non-regular files are skipped and named in the note, a single file goes through _read_capped (8 MiB), and a device named directly is refused instead of answering 'No matches.'. The file tools resolved relative paths against the process cwd while the shell runs in BASE_DIR, so `write_file report.md` from ~/proj landed in ~/proj and the next `shell` call looked in the install, and verify_shell_writes verified Path.cwd() - one _tool_path door now, and the verifier uses the cwd the shell ran in. _surface_write_gate compared a basename against _SURFACE_FILES, so writes into the prompt-carried memory/ bundle (no basename can equal 'memory/') and case-variant names went unasked, and the shell regex knew only 'memory/'; the gate decides on the resolved path relative to the install, casefolded, and the alternation accepts either separator. write_file read the old file whole for the backup, replaced whatever sat at <name>.bak (an operator's own copy included) and truncated the destination in place; _keep_backup streams the predecessor to .bak (or a rolling .bak.1 when taken, named in the result) and the replace is atomic_write_text, with a non-regular target refused. _shell_autobg's two inline taskkills omitted hidden_proc_kwargs(), bringing back the console-window flash under pythonw; both paths call _kill_tree.",
+      "gate": "red on the pre-fix builds: tests/test_search_scope.py 3 FAILs, tests/test_harness_extras.py 4, tests/test_guard_battery.py 5, tests/test_verify.py 1, tests/test_job_control.py 1; green on the batch, and the full gate green"
     }
   ]
 }
