@@ -48,6 +48,32 @@ def run(rules, mode="--tree"):
                           env=env, capture_output=True, text=True)
 
 
+def _bash():
+    """A bash that can actually run the repo's scripts.
+
+    On Windows `bash` on PATH is often System32's WSL stub, which has no distribution
+    installed: it exits 1 with a UTF-16 "Windows Subsystem for Linux has no installed
+    distributions" notice and installs nothing (measured 2026-10-09 in the windows job,
+    where the hook check had been grading the stub). Git for Windows ships the real one;
+    probe the candidates and take the first that answers.
+    """
+    cands = ["bash"]
+    if os.name == "nt":
+        for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"),
+                     os.environ.get("LOCALAPPDATA")):
+            if root:
+                cands.append(str(Path(root) / "Git" / "bin" / "bash.exe"))
+                cands.append(str(Path(root) / "Programs" / "Git" / "bin" / "bash.exe"))
+    for cand in cands:
+        try:
+            probe = subprocess.run([cand, "-c", "exit 0"], capture_output=True, timeout=60)
+        except OSError:
+            continue
+        if probe.returncode == 0:
+            return cand
+    return cands[0]
+
+
 def main():
     # Every mode of the gate reads the tree through git, so a tree without a .git has
     # nothing to grade: this suite would report on an empty set either way. exit 77 is the
@@ -156,20 +182,23 @@ def main():
               and "no pattern list" in (none_done.stdout + none_done.stderr),
               (none_done.returncode, (none_done.stdout + none_done.stderr)[:160]))
 
-        installed = _run(["bash", str(BASE / "maintenance" / "install-hooks.sh"),
+        bash = _bash()
+        installed = _run([bash, str(BASE / "maintenance" / "install-hooks.sh"),
                           "--leak-only"], work,
                          {**os.environ, "TINYCMDR_HOOK_ROOT": str(work)})
         hook = work / ".git" / "hooks" / "pre-push"
-        # The execute bit is a POSIX claim: on Windows os.access(X_OK) asks PATHEXT, so a
-        # no-extension file like `pre-push` reads as not executable while git runs hooks by
-        # name regardless (measured 2026-10-09, the nightly's Windows job).
+        # The execute bit is a POSIX claim: git runs a hook by name on Windows and
+        # os.access(X_OK) there asks PATHEXT, so a no-extension `pre-push` would read as
+        # not executable.
         check("install-hooks.sh arms the clone", installed.returncode == 0 and hook.is_file()
               and (os.name == "nt" or os.access(str(hook), os.X_OK)),
               (installed.returncode, installed.stdout[:120]))
-        before_bytes = hook.read_bytes()
-        again = _run(["bash", str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only"],
+        before_bytes = hook.read_bytes() if hook.is_file() else b""
+        again = _run([bash, str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only"],
                      work, {**os.environ, "TINYCMDR_HOOK_ROOT": str(work)})
-        check("...and is idempotent", again.returncode == 0 and hook.read_bytes() == before_bytes)
+        check("...and is idempotent",
+              again.returncode == 0 and hook.is_file() and hook.read_bytes() == before_bytes,
+              (again.returncode, hook.is_file()))
 
         # 1. the token in a commit MESSAGE - the shape that actually reached the public repo
         (work / "README.md").write_text("clean\nmore\n", encoding="utf-8")
@@ -201,14 +230,17 @@ def main():
         # 4. a foreign hook is not clobbered silently
         hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         hook.chmod(0o755)
-        refused = _run(["bash", str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only"],
+        refused = _run([bash, str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only"],
                        work, {**os.environ, "TINYCMDR_HOOK_ROOT": str(work)})
         check("a foreign pre-push hook is refused, not overwritten",
               refused.returncode == 2 and "was not written by this script" in refused.stderr,
               (refused.returncode, refused.stderr.strip()[:160]))
-        forced = _run(["bash", str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only",
+        forced = _run([bash, str(BASE / "maintenance" / "install-hooks.sh"), "--leak-only",
                        "--force"], work, {**os.environ, "TINYCMDR_HOOK_ROOT": str(work)})
-        check("...unless --force says so", forced.returncode == 0 and b"leak-gate" in hook.read_bytes())
+        check("...unless --force says so",
+              forced.returncode == 0 and hook.is_file()
+              and b"leak-gate" in hook.read_bytes(),
+              (forced.returncode, hook.is_file()))
 
         # The range mode, on THIS repo's own commits: a bare rev is that one commit, its
         # message is graded, and a range that adds nothing does not re-litigate the past.
