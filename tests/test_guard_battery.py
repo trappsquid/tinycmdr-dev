@@ -107,6 +107,26 @@ MUST_GATE = [
     "cmd /c format /FS:NTFS /Q D:", 'cmd /c "powershell -enc SQBFAFgA"',
     "Start-Process powershell -ArgumentList '-enc','SQBFAFgA'",
     "sudo sh -c 'wipefs -a /dev/sdb'", "sh -c 'wipefs -a /dev/sdb'",
+    # a continuation line is the same command (A-2026-10-08-89): each of these was read
+    # as TWO segments, and the half that carried the target read clean
+    "dd if=/dev/zero bs=1M \\\nof=/dev/sda",
+    "find / \\\n-delete",
+    "format `\n/FS:NTFS Q:",
+    "powershell `\n-enc SQBFAFgA",
+    "sudo \\\nwipefs -a /dev/sdb",
+    # every abbreviation of -EncodedCommand, and the slash spelling (A-2026-10-08-90)
+    "powershell -enco SQBFAFgA", "pwsh -encod SQBFAFgA", "pwsh -encoded SQBFAFgA",
+    "pwsh /encodedcommand SQBFAFgA", "powershell –enc SQBFAFgA",
+    # the macOS disk tools and the Linux partition editors (A-2026-10-08-91)
+    "diskutil eraseDisk JHFS+ X /dev/disk2", "diskutil zeroDisk /dev/disk2",
+    "diskutil apfs deleteVolume disk3s1",
+    "parted /dev/sda mklabel gpt", "sfdisk /dev/sda", "cfdisk /dev/sda",
+    "gdisk /dev/sda", "blkdiscard /dev/nvme0n1", "mkswap /dev/sdb1",
+    "newfs_apfs /dev/disk3", "asr restore --erase --source x --target /dev/disk2",
+    # the confirm gate's own file: a model write there is refused, not asked
+    # (A-2026-10-08-94)
+    "echo '{\"all\": true}' > confirm-allow.json",
+    "Set-Content confirm-allow.json '{\"all\": true}'",
 ]
 
 MUST_ALLOW = [
@@ -134,6 +154,12 @@ MUST_ALLOW = [
     "if true; then ls; fi", "echo 'then rm -rf /'",
     "cmd /c dir", "cmd /c echo hi", "Start-Process notepad",
     "sudo rm -f /nonexistent-xyz",
+    # the mirror of the batch above: reading a Mac's disks, an ordinary continuation,
+    # a non-encoded PowerShell parameter, and reading the gate's own file are not gates
+    "diskutil list", "diskutil info /dev/disk1",
+    "echo one \\\ntwo", "ls /sbin/newfs*",
+    "powershell -ExecutionPolicy Bypass -File setup.ps1",
+    "cat confirm-allow.json",
 ]
 
 
@@ -605,6 +631,58 @@ def test_the_gate_helpers_coerce_instead_of_raising():
     check("_one_json_object(None) is None", fb._one_json_object(None) is None)
     check("_host_is_local(None) is False", fb._host_is_local(None) is False)
     check("_confirm_hit(None) is None", fb._confirm_hit(None) is None)
+
+
+def test_the_approval_store_gates_its_own_writers():
+    """A-2026-10-08-93/-94: a `session` grant outlived the conversation it was given in,
+    a model write to confirm-allow.json turned the confirm tier off with nothing asked,
+    and a permanent grant answered for lanes that have nobody to ask."""
+    fb.confirm_allow("clear")
+    try:
+        fb.confirm_allow("session", "sess-r")
+        check("a session grant is live", fb.confirm_preapproved("sess-r")[0] is True)
+        fb.AGENT.reset("sess-r")
+        check("...and /new takes it with the conversation",
+              fb.confirm_preapproved("sess-r")[0] is False)
+        for door in ("write_file", "edit_file"):
+            refusal = fb._surface_write_gate(str(fb.CONFIRM_ALLOW_FILE), door, {}) or ""
+            check("%s to the store is REFUSED" % door,
+                  refusal.startswith("REFUSED"), refusal)
+        for c in ('echo \'{"all": true}\' > confirm-allow.json',
+                  "Set-Content confirm-allow.json '{\"all\": true}'",
+                  'python -c "open(\'confirm-allow.json\', \'w\').write(\'{}\')"'):
+            check("a shell/code write is blocked: %s" % c, bool(fb.is_blocked(c)), c)
+        fb.confirm_allow("always")
+        check("the permanent grant is on", fb.confirm_preapproved("any")[0] is True)
+        d = _ApprovalDest("yes")
+        d.has_human = False
+        saved = fb.CONFIG["agent"].get("confirm_without_door")
+        fb.CONFIG["agent"]["confirm_without_door"] = "decline"
+        try:
+            check("a no-door lane still declines under a permanent grant",
+                  fb.RunReporter(d, "sess-nodoor").confirm("rm -rf /tmp/x") is False)
+        finally:
+            fb.CONFIG["agent"]["confirm_without_door"] = saved
+    finally:
+        fb.confirm_allow("clear")
+
+
+def test_an_allow_pattern_whitelists_only_its_segment():
+    """A-2026-10-08-95: `allow_patterns: ["git status"]` silenced the confirm tier for
+    every command chained after an allow-listed shape - the first match anywhere returned
+    None before any segment was read."""
+    saved = list(fb.CONFIG["agent"].get("allow_patterns") or [])
+    fb.CONFIG["agent"]["allow_patterns"] = [r"git status"]
+    try:
+        check("the allowed shape alone passes", fb._confirm_hit("git status") is None)
+        check("a confirm-tier command chained onto it is still asked",
+              fb._confirm_hit("git status && git reset --hard") is not None)
+        check("...even when the allowed shape comes last",
+              fb._confirm_hit("git reset --hard && git status") is not None)
+        check("a wholly allow-listed line needs no question",
+              fb._confirm_hit("git status && git status") is None)
+    finally:
+        fb.CONFIG["agent"]["allow_patterns"] = saved
 
 
 def main():

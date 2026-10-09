@@ -820,11 +820,17 @@ DEFAULT_CONFIG = {
             r"\bformat-volume\b", r"\bclear-disk\b", r"\binitialize-disk\b",
             r"\bcipher\s+/w\b", r"\bvssadmin\s+delete\s+shadows\b",
             # An ENCODED command is opaque by design, so it is refused only where it really
-            # is one: a powershell/pwsh invocation with -e / -ec / -encodedcommand and a
-            # base64-looking argument. The old bare `-encodedcommand\b` matched the word in
-            # a note ("this box blocks -EncodedCommand in text") and refused the write
-            r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s-e(?:c|nc(?:odedcommand)?)?\s+"
-            r"[A-Za-z0-9+/=]{8,}",
+            # is one: a powershell/pwsh invocation with any accepted abbreviation of
+            # -EncodedCommand (-e … -encodedcommand, or the / spelling) and a
+            # base64-looking argument. The old alternation accepted only -e/-ec/-enc/
+            # -encodedcommand, so -enco/-encod/-encoded and /encodedcommand passed the
+            # shipped pattern (A-2026-10-08-90; the token arm reads them all now, this is
+            # the regex a drop-in tool's own guard sees). The old bare
+            # `-encodedcommand\b` matched the WORD in a note ("this box blocks
+            # -EncodedCommand in text") and refused the write
+            r"\b(?:powershell|pwsh)(?:\.exe)?\b[^\n]*\s[-/](?:e|ec|en|enc|enco|encod|"
+            r"encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|"
+            r"encodedcomman|encodedcommand)\b\s+[A-Za-z0-9+/=]{8,}",
         ],
     },
 }
@@ -4145,10 +4151,47 @@ def resolve_approval(name, args, ctx):
 # way destructive_risk() is kept out of the list). The tokens are read after
 # _guard_unwrap(), so a prefix cannot become the verb either (2026-10-08).
 _GUARD_NEVER_VERBS = ("format", "diskpart", "fdisk", "sgdisk", "wipefs", "clear-disk",
-                      "initialize-disk", "format-volume", "mke2fs", "shred")
+                      "initialize-disk", "format-volume", "mke2fs", "shred",
+                      # the macOS disk tools and the Linux partition editors the first
+                      # list missed (A-2026-10-08-91): the canonical Mac erase is
+                      # `diskutil eraseDisk …`, and parted/sfdisk/blkdiscard write
+                      # partition tables and discard blocks with no other spelling.
+                      # diskutil is read-gated below (list/info must stay usable).
+                      "diskutil", "parted", "sfdisk", "cfdisk", "gdisk", "blkdiscard",
+                      "mkswap", "asr")
+_GUARD_DISKUTIL_WRITES = ("erasedisk", "erasevolume", "eraseoptical", "zerodisk",
+                          "randomdisk", "secureerase", "partitiondisk", "reformat",
+                          "deletevolume", "deletecontainer")
 _GUARD_ROOT_TARGETS = {"/", "/*", "/.", "/..", "//", "c:", "c:\\", "\\",
                        "\\\\?\\c:", "\\\\?\\c:\\", "*"}
-_GUARD_ENCODED_SWITCHES = ("-e", "-ec", "-enc", "-encodedcommand", "/e", "/enc")
+# bash joins a line whose last character is a backslash, PowerShell one whose last
+# character is a backtick; a tokenizer that ends the segment at the newline instead
+# splits one command in two and each arm then reads only half of it (A-2026-10-08-89).
+_GUARD_CONTINUATION_RX = re.compile(r"\\\r?\n|`\r?\n")
+
+
+def _guard_join_continuations(text):
+    """One line from the shell's continuation spellings, before any guard reads tokens.
+
+    The two characters are REMOVED, which is bash's own semantic (`dd if=x \\` + newline
+    + `of=/dev/sda` runs as one line), so a command cannot be formatted onto two lines to
+    keep its second half out of a guard's sight.
+    """
+    return _GUARD_CONTINUATION_RX.sub("", str(text or ""))
+
+
+def _guard_encoded_switch(tok):
+    """True when a token names PowerShell's -EncodedCommand in an accepted spelling.
+
+    powershell/pwsh accept any unambiguous abbreviation of a parameter name, with a
+    '-' or a '/', and a colon or '=' may carry the value (`-EncodedCommand:<b64>`); an
+    exact-token list missed -enco/-encod/-encoded and every slash spelling
+    (A-2026-10-08-90). Chat clients substitute en/em dashes, so those lead too.
+    """
+    t = str(tok or "").strip().strip("\"'").lower().lstrip("-/–—−")
+    name = re.split(r"[:=]", t, 1)[0]
+    return bool(name) and ("encodedcommand".startswith(name)
+                           or name.startswith("encodedcommand"))
 
 
 def _guard_tokens(command):
@@ -4158,10 +4201,12 @@ def _guard_tokens(command):
     `of=/dev/sdz9` yield the same token; `;`, `&&`, `||`, `|` and newlines split segments;
     `#` starts a comment when it begins a token; `<`, `>` and `>>` become operator tokens
     (that is how a redirect to a device is seen). A trailing unterminated quote runs to the
-    end of the line rather than dropping its content.
+    end of the line rather than dropping its content. bash's backslash-newline and
+    PowerShell's backtick-newline join first (A-2026-10-08-89), so a command formatted
+    onto two lines is not read as two commands.
     """
     segments, cur, word, quote = [], [], "", ""
-    text = str(command or "")
+    text = _guard_join_continuations(command)
 
     def end_word():
         nonlocal word
@@ -4420,13 +4465,20 @@ def _guard_never_verdict(command):
     for toks in _guard_segments(command):
         verb = _guard_verb(toks[0])
         lows = [t.lower() for t in toks]
-        if verb in _GUARD_NEVER_VERBS or verb.startswith("mkfs"):
+        if verb in _GUARD_NEVER_VERBS or verb.startswith(("mkfs", "newfs")):
             # `format` alone can be an English sentence's first word ("format the
             # paragraph"): the disk writers need a switch or a device-shaped argument
-            # before the verb alone decides. mkfs is unambiguous - nothing else spells it.
+            # before the verb alone decides. mkfs/newfs are unambiguous - nothing else
+            # spells them.
             if verb in ("format", "format.com") and not any(
                     t.startswith(("-", "/")) or re.fullmatch(r"[a-z]:\\?", t)
                     for t in lows[1:]):
+                continue
+            if verb == "diskutil" and not any(
+                    t.startswith(_GUARD_DISKUTIL_WRITES) for t in lows[1:]):
+                # `diskutil list|info|activity` is how a Mac is read, and the whole
+                # verb is not a write: only the erase/first-aid subcommands are
+                # (A-2026-10-08-91).
                 continue
             return ("%s is a never-tier command: a disk, partition or filesystem write "
                     "cannot be approved in-band" % verb)
@@ -4438,7 +4490,7 @@ def _guard_never_verdict(command):
         if verb in ("powershell", "pwsh"):
             for tok in lows[1:]:
                 tok = tok.split(",", 1)[0]   # PowerShell's array comma: '-enc','blob'
-                if tok in _GUARD_ENCODED_SWITCHES or tok.startswith("-encodedcommand"):
+                if _guard_encoded_switch(tok):
                     return ("an encoded powershell command is opaque by design: "
                             "never-tier")
         if verb in ("rm", "rmdir", "rd", "del", "erase", "remove-item", "ri"):
@@ -4462,7 +4514,10 @@ def is_blocked(command):
     # case-insensitive on purpose: PowerShell cmdlets are capitalised
     # (Remove-Item, Stop-Computer) and 'Format C:' must match too (the patterns
     # compile with IGNORECASE in _patterns)
-    text = str(command or "")
+    text = _guard_join_continuations(command)
+    _trust = _approval_store_write(text)
+    if _trust:
+        return _trust
     never = _guard_never_verdict(text)
     if never:
         return never
@@ -4491,14 +4546,26 @@ def _confirm_hit(text, kind="confirm_patterns"):
 
     An `allow` list is checked FIRST, so an operator can whitelist one known-safe shape
     instead of silencing the whole tier with confirm-allow's {"all": true}. deny still
-    wins: allow is only consulted here, after is_blocked refused its own match.
+    wins: allow is only consulted here, after is_blocked refused its own match. An allow
+    pattern whitelists the SEGMENT it matches, not the whole line (A-2026-10-08-95): a
+    first match anywhere used to silence `git status && git reset --hard` for its whole
+    length, and only a command whose every segment is allow-listed needs no question.
     """
-    text = str(text or "")
+    text = _guard_join_continuations(text)
     allow_kind = ("allow_content_patterns" if kind == "confirm_content_patterns"
                   else "allow_patterns")
-    for pat in _patterns(allow_kind):
-        if pat.search(text):
-            return None
+    if kind == "confirm_patterns":
+        allows = _patterns(allow_kind)
+        if allows:
+            rest = [s for s in (seg.strip() for seg in _SEGMENT_RX.split(text))
+                    if s and not any(p.search(s) for p in allows)]
+            if not rest:
+                return None            # every segment is allow-listed
+            text = "\n".join(rest)
+    else:
+        for pat in _patterns(allow_kind):
+            if pat.search(text):
+                return None
     if kind == "confirm_patterns":
         # Aliases are the confirm tier's blind spot:
         # `ri -Recurse -Force` matched nothing because the pattern named `remove-item`,
@@ -8171,6 +8238,26 @@ _SURFACE_WRITE_RX = re.compile(
     r"[^|;\n]{0,140}?(?:%s)" % ("|".join(re.escape(f) for f in _SURFACE_FILES),
                                "|".join(re.escape(f) for f in _SURFACE_FILES)))
 
+# The confirm gate's own trust root. `{"all": true}` in this file silences the confirm
+# tier for every lane, so a MODEL write to it is refused outright - never asked: one
+# write_file, edit_file, shell redirect or code string would otherwise turn the
+# operator's question off for good (A-2026-10-08-94). The operator sets it with
+# `tinycmdr approvals` (or by hand, as the root of their own box); nothing here may.
+_APPROVAL_STORE_NAME = "confirm-allow.json"
+_APPROVAL_WRITE_RX = re.compile(
+    r"(?im)(?:^|[\s;&|])>>?\s*[^|;>\n]{0,160}?(?:confirm-allow\.json)"
+    r"|\b(?:set-content|out-file|add-content|sed\s+-i|tee|copy-item|move-item|cp|mv|truncate)\b"
+    r"[^|;\n]{0,140}?(?:confirm-allow\.json)"
+    r"|\b(?:open|write_text|write_bytes)\s*\([^)\n]{0,140}?(?:confirm-allow\.json)")
+
+
+def _approval_store_write(text):
+    """A shell- or code-shaped WRITE to the confirm gate's own file, as a reason, or None."""
+    if _APPROVAL_WRITE_RX.search(str(text or "")):
+        return ("a write to %s (the confirm gate's own trust root - it cannot unlock "
+                "itself)" % _APPROVAL_STORE_NAME)
+    return None
+
 
 def _prompt_surface_write(command):
     """True-ish when a command overwrites one of the files this bot IS. None = proceed."""
@@ -8329,7 +8416,7 @@ def destructive_risk(command, _depth=0):
     """
     if _depth > 3:
         return None
-    for segment in _SEGMENT_RX.split(str(command or "")):
+    for segment in _SEGMENT_RX.split(_guard_join_continuations(command)):
         argv = _shlex_words(segment)
         if not argv:
             continue
@@ -9049,6 +9136,16 @@ def _surface_write_gate(path, subject, ctx):
     The shell door and the file door now answer with the same question.
     """
     name = os.path.basename(str(path or ""))
+    try:
+        if Path(str(path)).resolve() == Path(CONFIRM_ALLOW_FILE).resolve():
+            # The trust root itself: refused on every door, never asked - the model must
+            # not be able to write the file that decides whether the model is asked
+            # (A-2026-10-08-94). The operator sets it with `tinycmdr approvals`.
+            return ("REFUSED: %s is the confirm gate's own trust root - a write to it "
+                    "cannot be approved in-band; the operator sets it with `tinycmdr "
+                    "approvals allow`." % _APPROVAL_STORE_NAME)
+    except OSError:
+        pass
     if name not in _SURFACE_FILES:
         return None
     # ...and it has to be the BOT'S OWN file, by resolved path - not any file on the box that
@@ -21156,6 +21253,11 @@ class Agent:
             self.locks.pop(session_key, None)
         _carry_reset(session_key)
         _run_state_reset(session_key)
+        # `session` = THIS conversation, so /new ends it: the allow-list is keyed by the
+        # channel's session key (which /new keeps), so without this the fresh conversation
+        # inherits approval for every confirm-tier command until a restart or
+        # `tinycmdr approvals clear` (A-2026-10-08-93).
+        _CONFIRM_SESSION_ALLOW.discard(session_key)
         # A question parked by a stopped run belongs to the conversation it was asked in.
         # /new abandons that conversation ("Session cleared. Fresh context."), so the
         # sidecar must not ride the fresh one's first prompt and read as a continuation of
@@ -22210,8 +22312,13 @@ class RunReporter:
 
         Three ways to say yes: this once, all of them for this SESSION, or always (a
         permanent allowlist, so the operator is never asked again). The last two are
-        what stop a long run being an interrogation.
+        what stop a long run being an interrogation. A lane with no door decides by
+        `agent.confirm_without_door` and nothing else: a preapproval answered a question
+        THIS lane cannot ask, so it must not flip unattended runs (jobs, sub-agents,
+        --once) to allow (A-2026-10-08-94).
         """
+        if not self.dest.has_human:
+            return CONFIG["agent"].get("confirm_without_door", "decline") == "allow"
         ok_pre, why = confirm_preapproved(self.session_key)
         if ok_pre:
             # The line names WHAT is running and WHY it was not asked again: a bare
@@ -22230,10 +22337,6 @@ class RunReporter:
             list(_CONFIRM_CHOICES),
             wait, "this conversation")
         if answer is None:
-            if not self.dest.has_human:
-                # nobody can be asked in this lane: the configured default decides
-                return CONFIG["agent"].get("confirm_without_door",
-                                           "decline") == "allow"
             # Asked, and nobody said anything: that is a verdict, and the operator
             # finds out by reading it rather than by wondering why nothing ran.
             self._draw("system", f"⏱ no answer within {int(wait)}s — that "
