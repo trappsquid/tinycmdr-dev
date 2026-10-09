@@ -8353,13 +8353,22 @@ _CONFIRM_SESSION_ALLOW = set()
 _CONFIRM_CHOICES = ("yes", "no", "session", "always")
 _CONFIRM_YES = ("y", "yes", "yeah", "yep", "ok", "okay", "approve", "approved",
                 "run", "go", "confirm", "confirmed", "1", "true")
+# A refusal word ANYWHERE in the answer makes it a no, because a sentence is how people
+# refuse: "please never run that" and "not at all" used to APPROVE - only the first word
+# could say no, and the scope table read the 'never' and the 'all' in them as scope words
+# ('never' even meant 'always'), so refusing set the permanent allow-all (fixed
+# 2026-10-08). The tokenizer splits an apostrophe, so a contraction lands here as its
+# fragments ("don't" -> don, t).
 _CONFIRM_NO = ("n", "no", "nope", "stop", "cancel", "deny", "denied", "never",
-               "0", "false")
-# A scope word ALONE is a whole answer: the button says exactly that.
-_CONFIRM_ALONE = {"session": "session", "all": "session", "always": "always",
+               "0", "false", "not", "don", "dont", "won", "wont", "can", "cant",
+               "cannot", "none", "nothing", "nah", "skip", "abort", "decline",
+               "declined", "disallow", "forbid", "forbidden", "refuse", "refused",
+               "negative")
+# A scope word is a whole answer on its own (the button says exactly that) or, inside a
+# sentence ("yes, always"), only sets the scope. 'never' is NOT one: it is a refusal word,
+# and reading it as a scope is the bug above.
+_CONFIRM_SCOPE = {"session": "session", "all": "session", "always": "always",
                   "permanent": "always", "forever": "always"}
-# ...and inside a sentence ("yes, always") it only sets the scope.
-_CONFIRM_SCOPE = dict(_CONFIRM_ALONE, never="always")
 
 
 def _confirm_allow_read():
@@ -22061,7 +22070,10 @@ class RunReporter:
         # report the option they pressed and a terminal where the operator types both
         # come back as text, and one parser means one place to change what yes is.
         # The options are four short words, so a single word is a whole answer; a
-        # sentence still works ("yes, run it"), scope word anywhere in it.
+        # sentence still works ("yes, run it") - but a refusal word anywhere in it wins. A
+        # refusal phrased as a sentence used to approve: only the FIRST word could say no,
+        # and 'never'/'all' were read as scope words wherever they sat, so "please never
+        # run that" set the permanent allow-all (fixed 2026-10-08).
         words = re.findall(r"[a-z0-9]+", str(answer).strip().lower())
         if len(words) == 1 and words[0].isdigit():
             # A lane that answers the NUMBERED list ("3") answered with the option it
@@ -22072,9 +22084,10 @@ class RunReporter:
         first = words[0] if words else ""
         scope = next((_CONFIRM_SCOPE[w] for w in words if w in _CONFIRM_SCOPE), None)
         ok = False
-        if first in _CONFIRM_NO:
-            ok = False        # an explicit no outranks any scope word in the sentence
-        elif len(words) == 1 and first in _CONFIRM_ALONE:
+        if any(w in _CONFIRM_NO for w in words):
+            ok = False        # a no anywhere outranks a scope word anywhere; an answer
+                              # that mixes the two fails closed
+        elif len(words) == 1 and first in _CONFIRM_SCOPE:
             ok = True         # "session" / "always" alone is the whole answer
         elif first in _CONFIRM_YES:
             ok = True         # "yes, always" and "yes" are not the same decision: the

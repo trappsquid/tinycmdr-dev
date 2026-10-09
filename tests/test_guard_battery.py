@@ -490,6 +490,42 @@ def test_confirm_approval_scopes():
     fb.confirm_allow("clear")
 
 
+def test_a_refusal_sentence_cannot_approve():
+    """A refusal word ANYWHERE in the answer outranks a scope word anywhere (2026-10-08).
+
+    The parser read the whole answer for a scope word but only the FIRST word for a no,
+    and the scope table carried `never` -> 'always' and `all` -> 'session': so "please
+    never run that" approved the command AND wrote the permanent allow-all, "not at all"
+    allow-listed the session, and "don't, never" did the same. A refusal must never
+    approve, and an answer that mixes yes and no must fail closed.
+    """
+    refusals = ["please never run that", "not at all", "do not run this at all",
+                "don't, never", "I'd never allow that", "absolutely not, never",
+                "don't run that", "no thanks", "never", "not this one", "0"]
+    try:
+        for answer in refusals:
+            fb.confirm_allow("clear")
+            d = _ApprovalDest(answer)
+            ok = fb.RunReporter(d, "refuse-s").confirm("rm -rf /tmp/x")
+            check("a refusal is a no: %r" % answer, ok is False, ok)
+            check("  ...and grants nothing: %r" % answer,
+                  fb.confirm_preapproved("refuse-s")[0] is False
+                  and fb.confirm_preapproved("anything")[0] is False)
+        fb.confirm_allow("clear")
+        check("'yes, always' still sets the permanent grant",
+              fb.RunReporter(_ApprovalDest("yes, always"),
+                             "refuse-s").confirm("rm -rf /tmp/y") is True
+              and fb.confirm_preapproved("anything")[0] is True)
+        fb.confirm_allow("clear")
+        check("'just this session' still sets the session grant",
+              fb.RunReporter(_ApprovalDest("just this session"),
+                             "refuse-s").confirm("rm -rf /tmp/z") is True
+              and fb.confirm_preapproved("refuse-s")[0] is True
+              and fb.confirm_preapproved("other-s")[0] is False)
+    finally:
+        fb.confirm_allow("clear")
+
+
 def test_the_never_tier_reads_tokens_not_spellings():
     """the never tier was anchored to one surface
     shape per command, so `format /FS:NTFS Q:`, `powershell -enc "..."` and `dd of="..."`
