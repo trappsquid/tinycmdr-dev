@@ -188,6 +188,11 @@ def main():
           "uninstall-tinycmdr.ps1" not in install and
           "uninstall-tinycmdr.ps1" not in one_line and
           "uninstall-tinycmdr.ps1" not in cmd)
+    check("the wrapper hands an uninstall to a %TEMP% copy (the removal takes its file)",
+          "FB_UNINSTALL_COPY" in cmd and "FB_UNINSTALL_HERE" in cmd
+          and 'copy /y "%~f0" "%SELF%"' in cmd and 'call "%SELF%"' not in cmd
+          and ":run" in cmd,
+          "a removal that takes the wrapper's own file must not be read again")
 
     print("\n== Windows restart elevation is for a task-owned instance only ==")
     # The fix itself belongs to tinycmdr.py, which this batch does not own (the parent
@@ -463,6 +468,49 @@ def main():
                   r.returncode == 127 and "no Python found" in out
                   and "Microsoft Store stub" in out,
                   (r.returncode, out[-1500:]))
+
+            # The wrapper itself is a file a removal deletes: cmd keeps reading a
+            # batch file while it runs, so the tail that reports the exit code must
+            # run from a copy that survives. Measured 2026-10-09 on a real box: after
+            # a removal that SUCCEEDED, the tail read off the deleted file, cmd
+            # printed "The system cannot find the path specified.", and the wrapper
+            # exited 1 - the door above then showed a failure for a removal with
+            # nothing left to remove. The stub installer makes the removal real: it
+            # takes the folder (and with it the wrapper) and exits 0.
+            d = os.path.join(work, "wrapper-takes-folder")
+            wrapper = os.path.join(d, "install", "install-tinycmdr.cmd")
+            os.makedirs(os.path.dirname(wrapper))
+            shutil.copy2(os.path.join(ROOT, "install", "install-tinycmdr.cmd"), wrapper)
+            with open(os.path.join(d, "install", "install-tinycmdr.ps1"), "w",
+                      newline="", encoding="ascii") as fh:
+                fh.write("param([switch]$NoPause,[switch]$Uninstall,[switch]$Force,"
+                         "[string]$InstallDir)\r\n"
+                         "Write-Host \"stub: removal ran\"\r\n"
+                         "Remove-Item -LiteralPath $InstallDir -Recurse -Force\r\n"
+                         "Write-Host \"stub: done\"\r\n"
+                         "exit 0\r\n")
+            # The wrapper takes arguments, so a launcher carries them: cmd.exe /c
+            # re-parses its command line, and an argument list loses the quoting a
+            # path with a space needs (measured: "-InstallDir C:\Users\David" split
+            # at the space and the removal never ran).
+            launcher = os.path.join(work, "run-wrapper.cmd")
+            with open(launcher, "w", newline="", encoding="ascii") as fh:
+                fh.write("@echo off\r\n"
+                         + 'call "' + wrapper + '" -Uninstall -Force -InstallDir "'
+                         + d + '"\r\n'
+                         + "exit /b %ERRORLEVEL%\r\n")
+            r = subprocess.run(["cmd.exe", "/c", launcher],
+                               cwd=work, capture_output=True, text=True, timeout=180)
+            out = (r.stdout or "") + (r.stderr or "")
+            print("    door run: install\\install-tinycmdr.cmd (the removal takes "
+                  "the wrapper) rc=%s" % r.returncode)
+            for _ln in out.splitlines()[-14:]:
+                print("    | " + _ln)
+            check("a removal that takes the wrapper's own file still reports exit 0",
+                  r.returncode == 0 and "stub: done" in out
+                  and "cannot find the path specified" not in out.lower(),
+                  (r.returncode, out[-1500:]))
+            check("...and the removal really took the folder", not os.path.exists(d))
         finally:
             shutil.rmtree(work, ignore_errors=True)
 

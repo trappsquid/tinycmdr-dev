@@ -32,8 +32,37 @@ rem  double-click.
 rem =====================================================================
 setlocal
 set "HERE=%~dp0"
-set "PS1=%HERE%install-tinycmdr.ps1"
 set "LOG=%TEMP%\tinycmdr-install.log"
+
+rem Windows refuses to delete a directory that is a live process's current directory,
+rem and that includes this wrapper's own shell when it was run after a cd into the
+rem install folder. Step out for an uninstall only: a relative -SecretsFile keeps the
+rem shell's own directory on the install path.
+set "UNINSTALLING="
+if not "%~1"=="" for %%A in (%*) do if /i "%%~A"=="-Uninstall" set "UNINSTALLING=1"
+if defined UNINSTALLING cd /d "%TEMP%"
+
+rem An uninstall removes the folder THIS file lives in, and cmd keeps reading a batch
+rem file while it runs: the lines after the removal were unreadable, cmd printed
+rem "The system cannot find the path specified.", and a removal that SUCCEEDED exited
+rem 1 - so the door reported a failure after a removal that worked (measured
+rem 2026-10-09 on a real Windows box). The removal door already re-runs itself from
+rem %TEMP%; this is the same hand-over for the wrapper, control TRANSFERRED (not
+rem called) so nothing below is ever read from the deleted file again.
+if not defined UNINSTALLING goto :run
+if defined FB_UNINSTALL_COPY goto :run
+set "FB_UNINSTALL_COPY=1"
+set "FB_UNINSTALL_HERE=%HERE%"
+set "SELF=%TEMP%\tinycmdr-rm-%RANDOM%%RANDOM%.cmd"
+copy /y "%~f0" "%SELF%" >nul 2>&1
+if not exist "%SELF%" goto :run
+"%SELF%" %*
+exit /b 1
+
+:run
+rem The copy's own folder is %TEMP%, so the original one travels in the environment.
+if defined FB_UNINSTALL_HERE set "HERE=%FB_UNINSTALL_HERE%"
+set "PS1=%HERE%install-tinycmdr.ps1"
 
 if not exist "%PS1%" (
     echo.
@@ -44,14 +73,6 @@ if not exist "%PS1%" (
     pause
     exit /b 1
 )
-
-rem Windows refuses to delete a directory that is a live process's current directory,
-rem and that includes this wrapper's own shell when it was run after a cd into the
-rem install folder. Step out for an uninstall only: a relative -SecretsFile keeps the
-rem shell's own directory on the install path.
-set "UNINSTALLING="
-if not "%~1"=="" for %%A in (%*) do if /i "%%~A"=="-Uninstall" set "UNINSTALLING=1"
-if defined UNINSTALLING cd /d "%TEMP%"
 
 echo Running the tinycmdr installer. Log: %LOG%
 echo.
