@@ -1625,6 +1625,44 @@ def main():
         fb.log.removeHandler(_sink116)
         fb.CONFIG["web"] = _saved_web116
 
+    # ---- A-117: live runs are capped host-wide --------------------------------
+    # _web_register_run evicted only DONE runs, so the table's bound did nothing while
+    # runs were live: the key space is open, so N keys meant N agent threads against
+    # the LLM endpoint (and with 40+ live runs a finished one was evicted before its
+    # page made the final poll).
+    _cap117 = getattr(fb, "WEB_RUN_LIVE_MAX", None)
+    _saved_runs117 = dict(fb.WEB_RUNS)
+    _real_run117 = fb.AGENT.run
+
+    def _stuff_live117():
+        fb.WEB_RUNS.clear()
+        for _i in range(_cap117 or 8):
+            _r = fb.WebRun("caprun%02d" % _i, "capkey%02d" % _i, "")
+            fb.WEB_RUNS[_r.id] = _r
+
+    try:
+        fb.AGENT.run = lambda key, text, *a, **kw: "cap probe answer"
+        _stuff_live117()
+        _got117 = fb._web_claim_run("fresh-key-117", "")
+        check(bool(_cap117) and _got117 == (None, "cap"),
+              "a fresh conversation cannot start a run when the host is at its live "
+              "cap", (_cap117, _got117))
+        _st117, _bd117, _hd117 = req("POST", "/api/run",
+                                     {**TOK, "Content-Type": "application/json"},
+                                     json.dumps({"message": "cap probe",
+                                                 "session": "web"}).encode())
+        check(_st117 == 429 and b"too many runs" in _bd117,
+              "...and the route says so (429), not a crash", (_st117, _bd117[:120]))
+        fb.WEB_RUNS["caprun00"].done = True
+        _ok117 = fb._web_claim_run("fresh-key-117b", "")
+        check(_ok117[1] is None and _ok117[0] is not None,
+              "...while a slot freed by a finished run is usable at once", _ok117)
+        if _ok117[0] is not None:
+            _ok117[0].done = True
+    finally:
+        fb.AGENT.run = _real_run117
+        fb.WEB_RUNS.clear()
+        fb.WEB_RUNS.update(_saved_runs117)
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

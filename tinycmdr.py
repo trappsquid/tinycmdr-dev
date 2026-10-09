@@ -26336,6 +26336,11 @@ WEB_RUNS = {}
 WEB_RUNS_LOCK = threading.Lock()
 
 WEB_RUN_KEEP = 40          # finished runs that stay pollable
+WEB_RUN_LIVE_MAX = 24      # runs in flight at once, host-wide: the key space is open, so
+                           # one-run-per-conversation is not a bound (A-2026-10-08-117);
+                           # below WEB_RUN_KEEP, so a live run can never push a finished
+                           # one out before its page's final poll
+
 
 class WebRun:
     """One agent run driven from the browser, with its own line buffer."""
@@ -26642,6 +26647,13 @@ def _web_claim_run(session_key="web", client=""):
         for r in WEB_RUNS.values():
             if r.session_key == session_key and not r.done:
                 return None, r
+        if sum(1 for r in WEB_RUNS.values() if not r.done) >= WEB_RUN_LIVE_MAX:
+            # The bound this table never had: one run per conversation is not a bound
+            # when the key space is open, so N keys meant N agent threads against the
+            # LLM endpoint, and with 40+ live runs every finished run was evicted
+            # before its page made the final poll (A-2026-10-08-117). A scheduled
+            # job's report (web_new_scheduled_run) is not a claim and keeps its door.
+            return None, "cap"
         run = WebRun(os.urandom(6).hex(), session_key, client)
         _web_register_run(run)
         return run, None
@@ -29783,6 +29795,10 @@ def run_webui():
             possible instead of queueing behind it."""
             web_touch(key)
             run, busy = _web_claim_run(key, client)
+            if busy == "cap":
+                self._json({"error": "too many runs are going on this host - wait for "
+                                     "one to finish, or stop it", "busy": True}, 429)
+                return
             if busy is not None:
                 _busy_owner = web_run_owner(busy)
                 if _busy_owner and _busy_owner != client:
@@ -30096,6 +30112,11 @@ def run_webui():
                 # driver so its lines land in the same buffer the page polls.
                 web_touch(chat_key)
                 run, busy = _web_claim_run(chat_key, chat_client)
+                if busy == "cap":
+                    self._json({"reply": "⚠️ too many runs are going on this host - "
+                                         "wait for one to finish, or stop it",
+                                "busy": True}, 429)
+                    return
                 if busy is not None:
                     self._json({"reply": "⚠️ a run is already going in this "
                                          "conversation — wait for it to finish, or "
