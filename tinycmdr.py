@@ -50,6 +50,7 @@ import threading
 import functools
 import time
 import traceback
+import urllib.parse
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path, PurePosixPath
@@ -1674,13 +1675,16 @@ def _is_local_url(url):
     Same TTL and same reason as static_prompt_tokens (2026-09-29).
     """
     try:
-        host = url.split("//", 1)[-1].split("/", 1)[0]
-        host = host.rsplit("@", 1)[-1]              # strip user:pass@
-        if host.startswith("["):                    # an IPv6 literal: [::1]:8080
-            host = host[1:].split("]", 1)[0]
-        else:
-            host = host.split(":", 1)[0]
-        host = host.strip().lower()
+        # The authority is parsed with urlsplit - the same RFC 3986 authority the HTTP
+        # clients we hand the URL to use. The old hand split ended it at the first '/'
+        # only and then took everything after the LAST '@', so
+        # `http://evil.example?@10.0.0.1/` read as the LAN host 10.0.0.1 while the
+        # request goes to evil.example: an off-LAN read with `allow_cloud_egress: false`
+        # (measured 2026-10-09). A string with no '//' is read as scheme-relative, so a
+        # bare `host:8081/v1` still names its host.
+        text = str(url or "")
+        parts = urllib.parse.urlsplit(text if "//" in text else "//" + text)
+        host = (parts.hostname or "").strip().lower()
     except Exception:
         return False
     if not host:
@@ -1706,6 +1710,13 @@ def _host_is_local(host):
         return True
     parts = host.split(".")
     if all(p.isdigit() for p in parts) and len(parts) in (2, 4):
+        # A leading-zero octet is an OCTAL spelling to inet_aton (010 -> 8) and a decimal
+        # one to other parsers, so the client's own parse decides where the request goes -
+        # and this gate must not guess LAN for it. int("010") == 10 made `010.0.0.1` read
+        # as 10.0.0.1 (measured 2026-10-09); an ambiguous spelling is read as NOT local,
+        # the same pessimistic rule as an unresolvable name.
+        if not all(p == "0" or not p.startswith("0") for p in parts):
+            return False
         if parts[0] == "127":                       # all of 127/8, and the "127.1" form
             return True
         if len(parts) == 4:
@@ -1719,16 +1730,25 @@ def _host_is_local(host):
         infos = socket.getaddrinfo(host, None)
     except Exception:
         return False                                 # unresolvable -> remote
-    for info in infos:
-        addr = str(info[4][0])
-        if addr.startswith("127.") or addr == "::1":
+    # ALL the answers must be local: a name can resolve to a private AND a public address,
+    # the client may connect to the public one, and requests tries the answers in order -
+    # so one off-LAN answer makes the NAME off-LAN (measured 2026-10-09; the old
+    # any-answer-wins rule called such a name local).
+    if not infos:
+        return False
+    return all(_addr_is_local(str(info[4][0])) for info in infos)
+
+
+def _addr_is_local(addr):
+    """One resolved address: loopback, or an RFC 1918 / ULA / link-local range."""
+    if addr.startswith("127.") or addr == "::1":
+        return True
+    if addr.startswith(("10.", "192.168.", "fc", "fd", "fe80")):
+        return True
+    if addr.startswith("172."):
+        octets = addr.split(".")
+        if len(octets) == 4 and octets[1].isdigit() and 16 <= int(octets[1]) <= 31:
             return True
-        if addr.startswith(("10.", "192.168.", "fc", "fd", "fe80")):
-            return True
-        if addr.startswith("172."):
-            octets = addr.split(".")
-            if len(octets) == 4 and octets[1].isdigit() and 16 <= int(octets[1]) <= 31:
-                return True
     return False
 
 

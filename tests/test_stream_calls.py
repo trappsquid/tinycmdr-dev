@@ -390,9 +390,45 @@ def test_locality_classification():
                       ("http://172.16.0.4:8080/v1", True),
                       ("http://172.32.0.4:8080/v1", False),
                       ("https://api.deepseek.com/v1", False),
-                      ("https://no-such-host.invalid/v1", False)):
+                      ("https://no-such-host.invalid/v1", False),
+                      # The authority ends where the CLIENT ends it ('/', '?', '#'):
+                      # userinfo after that point is not the host the request reaches.
+                      ("http://no-such.invalid?@10.0.0.1/v1", False),
+                      ("http://no-such.invalid#@10.0.0.1/v1", False),
+                      ("http://127.0.0.1#@no-such.invalid/v1", True),
+                      # A leading-zero octet is octal to inet_aton (010 -> 8) and decimal
+                      # to other parsers: ambiguous, so never classified as LAN.
+                      ("http://010.0.0.1:8080/v1", False)):
         got = fb._is_local_url(url)
         check(f"locality: {url} -> {want}", got is want, got)
+
+
+def test_a_name_is_local_only_when_every_address_is():
+    """A name with a private AND a public answer: requests may connect to the public one,
+    so the NAME is off-LAN. The old rule returned True on the first private answer."""
+    real = fb.socket.getaddrinfo
+
+    def fake(host, *a, **kw):
+        return [(2, 1, 6, "", ("10.0.0.5", 0)), (2, 1, 6, "", ("93.184.216.34", 0))]
+
+    try:
+        fb.socket.getaddrinfo = fake
+        fb._LOCAL_URL_CACHE.clear()
+        check("a dual-homed name is NOT local",
+              fb._is_local_url("http://dual-homed.invalid:1/") is False,
+              fb._is_local_url("http://dual-homed.invalid:1/"))
+
+        def fake_private(host, *a, **kw):
+            return [(2, 1, 6, "", ("10.0.0.5", 0)), (2, 1, 6, "", ("172.16.0.9", 0))]
+
+        fb.socket.getaddrinfo = fake_private
+        fb._LOCAL_URL_CACHE.clear()
+        check("...while an all-private name still is",
+              fb._is_local_url("http://all-private.invalid:1/") is True,
+              fb._is_local_url("http://all-private.invalid:1/"))
+    finally:
+        fb.socket.getaddrinfo = real
+        fb._LOCAL_URL_CACHE.clear()
 
 
 def test_privacy_pin_covers_the_failover_tail():
