@@ -2205,6 +2205,17 @@
       },
       "detail": "Operator report (Windows 10, 2026-10-09): double-clicking UNINSTALL-WINDOWS.cmd from their install flashed '. was unexpected at this time.' and closed, exit 255 - cmd.exe parses a whole ( ... ) block before evaluating the condition, and two echo lines in the v1.0.94 door's \"does not look like a tinycmdr install\" block carried unescaped parens, so the file died while cmd was still parsing it, before any of its own output. The v1.0.95 door rewrite already replaced those blocks with goto guards (the published v1.0.95 archive's door is byte-identical to this tree's), so the shipped artifact is fixed; nothing graded the class. Two closures: maintenance/build-package.py's audit() refuses any shipped .cmd with a bare ( or ) in a line inside a cmd block (structure, \"double quotes\", ^ escapes and the echo( empty-line idiom are understood; the v1.0.94 file is flagged on exactly its lines 38-39, and the four shipped doors are clean after the shim's rem lines were reworded to carry no parens), and tests/test_installer_windows.py on Windows now RUNS the three guard paths nothing had run: the install door with a missing wrapper, the wrapper with a missing .ps1, and the shim with no Python on PATH (both messages must print, exit 127).",
       "gate": "closes at the next release"
+    },
+    {
+      "id": "uninstall-wrapper-tail",
+      "title": "an uninstall reports the real exit code after the removal takes the wrapper",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "8b20603",
+        "expect": "untagged"
+      },
+      "detail": "Driving the removal door on a real Windows host (2026-10-09): the y-run removed the probe folder and printed done, then the door showed \"The removal exited with code 1 - the lines above say what is left. Close anything using the folder, then run this door again.\", with cmd's \"The system cannot find the path specified.\" above it - for a folder that was already gone. The removal takes install\\install-tinycmdr.cmd with the folder and cmd keeps reading a batch file while it runs, so the tail that carries the exit code was read off the deleted file and the wrapper exited 1; the n-run was clean (rc 0, \"Nothing was removed.\") and the live autostart was refused in the same transcript (\"startup : Tinycmdr.lnk points at another install - left alone\"). -Uninstall now hands the tail to a %TEMP% copy (FB_UNINSTALL_COPY marks the copy, FB_UNINSTALL_HERE carries the original folder), control TRANSFERRED exactly as the door's own re-run transfers, so nothing below is read from the deleted file.",
+      "gate": "tests/test_installer_windows.py: red on the pre-fix build on the host (rc 1 and the cmd error), green after; the whole gate green before the push, 106 suites, 0 skipped"
     }
   ]
 }
