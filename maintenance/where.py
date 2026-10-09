@@ -42,7 +42,7 @@ box where `dev` IS the live tree, says so here instead of editing the shipped de
     [{"role": "dev", "same_as": "live",
       "why": "one tree on this box: the install is also where code work happens"}]
 
-Point it at a whole different declaration (used by tests/test_where.py) with
+Point it at a whole different declaration (used by tests/test_status.py) with
 
     TINYCMDR_WHERE_ROLES=/path/to/roles.json  python3 maintenance/where.py
 """

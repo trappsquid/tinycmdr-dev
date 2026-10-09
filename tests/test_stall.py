@@ -2943,7 +2943,7 @@ def test_fetch_url_cannot_blow_up_the_context():
     fb.CONFIG["agent"]["fetch_max_chars"] = 12000
     # This grades the fetch cap, not the egress consent: with the default (false) the
     # off-LAN url below is refused before any response is read. The gate has its own
-    # suite - tests/test_search_providers.py.
+    # suite - tests/test_search_surface.py.
     fb.CONFIG["search"]["allow_cloud_egress"] = True
     fb.requests.get = lambda *a, **kw: R()
     try:

@@ -57,7 +57,7 @@ def check(name, cond, detail=""):
 class _StubHandler(BaseHTTPRequestHandler):
     """An OpenAI-shaped endpoint the installed tree can actually talk to.
 
-    The same shape tests/test_prefix_stability.py stages, kept minimal: the two GETs the
+    The same shape tests/test_envelope.py stages, kept minimal: the two GETs the
     envelope probes (/v1/models, /props) and the one POST a turn makes. Every POST is
     recorded so the caller can grade that the request really left the process.
     """

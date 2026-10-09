@@ -128,10 +128,10 @@ The feature was built to a budget, and the budget is pinned:
 
 ## What pins it
 
-- `tests/test_memory_okf.py` - the format contract: round-trip (unknown keys included),
+- `tests/test_memory_surface.py` - the format contract: round-trip (unknown keys included),
   quoting, conformance, tiers, staleness, add/update/deprecate/forget, index, log, and
   tolerance of foreign files.
-- `tests/test_cross_process.py` - three processes adding at once: every concept lands and
+- `tests/test_events_surface.py` - three processes adding at once: every concept lands and
   the shared index lists all three.
-- `tests/test_envelope.py`, `tests/test_disclosure.py` - the rent (ceiling, per-schema cap).
-- `tests/test_harness_extras.py` - the secret scrubber on a memory write.
+- `tests/test_envelope.py`, `tests/test_safety_surface.py` - the rent (ceiling, per-schema cap).
+- `tests/test_harness_surface.py` - the secret scrubber on a memory write.

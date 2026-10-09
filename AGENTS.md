@@ -98,7 +98,7 @@ or `{commit: ..., expect: tagged|untagged}`) and a `gate` saying what would clos
 Host state is never tracked. The same tree is deployed to many hosts, so a tracked
 per-host file reads as canonical and an update overwrites the copy that host owns.
 `.gitignore` carries the names, `maintenance/check-hygiene.py` fails when `git ls-files`
-reports one, `maintenance/pre-push.sh` runs it, and `tests/test_repo_hygiene.py` holds the
+reports one, `maintenance/pre-push.sh` runs it, and `tests/test_tree_lists.py` holds the
 same line in the gate.
 
 `theme.toml` and `soul.md` are the operator's theme and persona. A checkout or install that

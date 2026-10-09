@@ -134,7 +134,7 @@ the build as `DEFAULT_SOUL`, so a host with no `soul.md` at all still runs a rea
 
 - Credentials live in `.env` on the host, mode 600: the chat token (`TINYCMDR_MM_TOKEN`), the sudo
   password (`SUDO_PASSWORD`), per-bot keys. The names the app writes are the names it reads
-  (`tests/test_env_names.py`); values never print, and anything named `*PASSWORD` or `*PASSWD` of 6+
+  (`tests/test_host_surface.py`); values never print, and anything named `*PASSWORD` or `*PASSWD` of 6+
   characters is scrubbed from tool output.
 - Privilege is the host's decision and the repository carries none of it: an install may be given a
   scoped `NOPASSWD` grant for the read-only verbs it needs (service queries, logs, power state).
@@ -391,8 +391,8 @@ declares (`Card`, `Column`, `Row`, `Text`, `Divider`; `{"path": ...}` bindings r
 against `createSurface.dataModel`); `a2ui_validate()` refuses anything else by name.
 The payload rides the transcript line (`WebRun.add(kind, text, **extra)` -> the page's
 `a2uiRender`) and NEVER the prompt: the model sees the one-line summary. A lane with no
-surface answers honestly. Tests: `tests/test_a2a.py` covers the door, `tests/test_a2ui.py`
-the envelope and caps, and the page suite's shim the renderer.
+surface answers honestly. Tests: `tests/test_a2_surface.py` covers the door and the
+envelope and caps, and the page suite's shim the renderer.
 
 **A2A** — the mesh door, off by default (`web.a2a`):
 - `GET /.well-known/agent-card.json` is public metadata (no token) once enabled;
@@ -406,7 +406,7 @@ the envelope and caps, and the page suite's shim the renderer.
   message is in flight), and any later `SendMessage` with that id returns the stored task
   without running the message again - the retry a timed-out peer sends is safe.
 - The client is a hidden `a2a` tool (list/card/send) that is registered **only** when
-  `agent.a2a_remotes` is non-empty - the A2A check lives in `tests/test_a2a.py`.
+  `agent.a2a_remotes` is non-empty - the A2A check lives in `tests/test_a2_surface.py`.
 
 Verify by hand: set `web.a2a` true, restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with
