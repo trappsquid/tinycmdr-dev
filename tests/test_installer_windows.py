@@ -287,9 +287,11 @@ def main():
           "the folder must travel without a trailing backslash through CALL")
     check("the door re-runs itself from %TEMP%, so the removal cannot kill its tail",
           'copy /y "%~f0" "%SELF%"' in door
-          and 'call "%SELF%" --removing "%TARGET%"' in door
+          and '"%SELF%" --removing "%TARGET%"' in door
+          and 'call "%SELF%"' not in door
           and ":removing" in door,
-          "a door living in the folder it deletes dies mid-run: no exit code, no pause")
+          "a CALL waits to return and the removal deletes this very file: control "
+          "must TRANSFER to the copy")
     check("...and steps its own shell out of the folder first",
           'cd /d "%TEMP%"' in door)
     check("the door asks first, and 'no' removes nothing",
@@ -370,7 +372,7 @@ def main():
             check("a package folder is refused with its message, and the window holds",
                   _rc == 2 and "does not look like a tinycmdr install" in out
                   and "Press any key to close this window." in out,
-                  (_rc, out[-300:]))
+                  (_rc, out[-1500:]))
 
             d = staged()
             _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", d, "n\r\n\n")
@@ -378,7 +380,7 @@ def main():
                   _rc == 0 and "Nothing was removed." in out
                   and "stub: removal ran" not in out
                   and "Press any key to close this window." in out,
-                  (_rc, out[-300:]))
+                  (_rc, out[-1500:]))
 
             d = staged(wrapper=("exit /b 2",))
             _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", d, "y\r\n\n")
@@ -386,14 +388,14 @@ def main():
                   _rc == 2 and "stub: removal ran" in out
                   and "The removal exited with code 2" in out
                   and "Press any key to close this window." in out,
-                  (_rc, out[-400:]))
+                  (_rc, out[-1500:]))
 
             d = staged(wrapper=('del /f /q "%~dp0..\\UNINSTALL-WINDOWS.cmd" >nul 2>&1',
                                 'exit /b 0'))
             _rc, out = run_and_report("UNINSTALL-WINDOWS.cmd", d, "y\r\n\n")
             check("a removal that deletes the door's own file still ends with the barrier",
                   _rc == 0 and "Press any key to close this window." in out,
-                  (_rc, out[-300:]))
+                  (_rc, out[-1500:]))
 
             # The install door: the barrier when it owns the window, none when the
             # caller does (the network one-liner sets FB_NOPAUSE and keeps its shell).
@@ -403,7 +405,7 @@ def main():
             _rc, out = run_and_report("INSTALL-WINDOWS.cmd", d, "\n\n")
             check("a double-clicked install ends with the barrier",
                   _rc == 2 and "Press any key to close this window." in out,
-                  (_rc, out[-300:]))
+                  (_rc, out[-1500:]))
 
             # ...and the same door with FB_NOPAUSE already set (the one-line network
             # install's case) prints no barrier at all.

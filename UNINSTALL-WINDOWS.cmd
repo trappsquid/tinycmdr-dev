@@ -37,20 +37,22 @@ rem classic CALL re-parse footgun, where the closing quote is read as escaped an
 rem copy gets a wrong folder or none.
 set "TARGET=%~dp0"
 if "%TARGET:~-1%"=="\" set "TARGET=%TARGET:~0,-1%"
+rem TRANSFER, not CALL: the removal deletes this very file, and a script that waits to
+rem return needs it again to do so - the tail dies with it (measured 2026-10-09,
+rem windows-latest: exit 1, no barrier). Handing control over means this file's remaining
+rem lines are never read again; the temp copy's exit code is the process's. `exit /b 1`
+rem is unreachable unless the copy could not be executed at all.
 copy /y "%~f0" "%SELF%" >nul 2>&1
 if not exist "%SELF%" goto :inplace
-call "%SELF%" --removing "%TARGET%" %*
-set "RC=%ERRORLEVEL%"
-del "%SELF%" >nul 2>&1
-exit /b %RC%
+"%SELF%" --removing "%TARGET%" %*
+exit /b 1
 
 :inplace
 rem Could not copy to %TEMP% (a full or read-only temp). Run in place; the
 rem removal may take this file with it and this tail may not survive, which
 rem is the shape this door exists to avoid on a normal machine.
-call "%~f0" --removing "%TARGET%" %*
-set "RC=%ERRORLEVEL%"
-exit /b %RC%
+"%~f0" --removing "%TARGET%" %*
+exit /b 1
 
 :nocd
 echo.
