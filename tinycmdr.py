@@ -10594,13 +10594,41 @@ def _fetch_page(url, max_chars, session=None):
         # stream=True and a BOUNDED read. resp.text materialised the whole body before
         # cap_output trimmed it, so one multi-GB response (or a page that never ends)
         # could take the process down - the same failure class the file-read cap fixed
-        # after four recorded kills (2026-09-22). No address filtering, by the
-        # operator's decision: on a box with a shell that is a speed bump, not a wall.
-        # Two rules are easy to conflate here: THIS function still does not filter
-        # addresses; what tool_fetch_url does is refuse to START an off-LAN fetch the
-        # operator has not allowed - disclosure, not containment.
-        resp = requests.get(url, timeout=30, stream=True, headers={
-            "User-Agent": "Mozilla/5.0 (tinycmdr; ops agent)"})
+        # after four recorded kills (2026-09-22). No address filtering of the URL this
+        # call was given, by the operator's decision: on a box with a shell that is a
+        # speed bump, not a wall. What tool_fetch_url does is refuse to START an off-LAN
+        # fetch the operator has not allowed - disclosure, not containment.
+        #
+        # Redirects are followed HERE, one hop at a time: requests' own follower took a
+        # LAN url that answered 302 straight out of the LAN, where the gate could not
+        # see it (measured 2026-10-09). Each hop passes the same check the first url
+        # did, and the count is bounded like a browser's.
+        hops = 0
+        while True:
+            # A hop this box judged LOCAL is reached DIRECTLY: with an http(s)_proxy in the
+            # environment requests sent even http://127.0.0.1/ through it (measured
+            # 2026-10-09), so a local fetch stopped being local and could leave the LAN
+            # through a proxy the gate never saw. Off-LAN hops keep the operator's proxy:
+            # that is their setup, and the consent flag is what covers them.
+            direct = {"http": None, "https": None} if _is_local_url(url) else None
+            resp = requests.get(url, timeout=30, stream=True, allow_redirects=False,
+                                headers={"User-Agent": "Mozilla/5.0 (tinycmdr; ops agent)"},
+                                proxies=direct)
+            location = (resp.headers.get("Location")
+                        if resp.status_code in (301, 302, 303, 307, 308) else None)
+            if not location:
+                break
+            nxt = urllib.parse.urljoin(url, location.strip())
+            resp.close()
+            if not _is_local_url(nxt) and not _search_egress_allowed():
+                return ("BLOCKED: %s redirects to %s, which is off this LAN, and "
+                        "search.allow_cloud_egress is false, so nothing was fetched from "
+                        "it. A URL on this LAN is always allowed; for the rest the "
+                        "operator decides." % (url, nxt))
+            hops += 1
+            if hops >= 5:
+                return "ERROR fetching %s: more than five redirects" % url
+            url = nxt
         resp.raise_for_status()
         _enc = resp.encoding or "utf-8"
         _budget = max(4000, int(max_chars) * 8)      # bytes: worst-case multi-byte text

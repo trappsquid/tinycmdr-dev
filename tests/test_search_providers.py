@@ -100,6 +100,19 @@ class _Stub(BaseHTTPRequestHandler):
 
     def do_GET(self):
         _Stub.calls.append(("GET", self.path, parse_qs(urlparse(self.path).query), None))
+        if self.path.startswith("/goto-page"):
+            # A RELATIVE Location: the follower must urljoin it, not hand it to the client.
+            self.send_response(302)
+            self.send_header("Location", "/page")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path.startswith("/goto-off"):
+            self.send_response(302)
+            self.send_header("Location", "http://no-such-host.invalid/x")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if "/fail" in self.path:
             self._send({"detail": "bad key", "message": "quota exhausted"}, 500)
             return
@@ -295,6 +308,48 @@ check("...while a LAN url is fetched normally",
 search_config([{"kind": "anysearch", "url": REMOTE}], True)
 out = fb.tool_fetch_url({"url": BASE_URL + "/page"}, {})
 check("and the flag does not break a LAN fetch", not out.startswith("BLOCKED"), out[:80])
+
+# ---------------------------------------------- a redirect stays under the same gate
+search_config([{"kind": "anysearch", "url": REMOTE}], False)
+_Stub.calls.clear()
+out = fb.tool_fetch_url({"url": BASE_URL + "/goto-page"}, {})
+check("a LAN redirect is followed by hand, one hop at a time",
+      "Stub SearxNG hit" in out and not out.startswith("BLOCKED"), out[:200])
+check("...with both hops really requested", ["/goto-page", "/page"] ==
+      [c[1] for c in _Stub.calls if c[0] == "GET"], _Stub.calls)
+_Stub.calls.clear()
+out = fb.tool_fetch_url({"url": BASE_URL + "/goto-off"}, {})
+check("a LAN url that redirects off-LAN is refused before the second hop",
+      out.startswith("BLOCKED:") and "no-such-host.invalid" in out, out[:300])
+check("...and the off-LAN hop was never requested",
+      [c[1] for c in _Stub.calls if c[0] == "GET"] == ["/goto-off"], _Stub.calls)
+search_config([{"kind": "anysearch", "url": REMOTE}], True)
+_Stub.calls.clear()
+out = fb.tool_fetch_url({"url": BASE_URL + "/goto-page"}, {})
+check("the flag lets a redirect run as usual", "Stub SearxNG hit" in out, out[:120])
+
+# ---------------------------------------- a local fetch goes direct, not via a proxy
+# With http_proxy set, requests sent even http://127.0.0.1/ through the proxy (measured
+# 2026-10-09): the "local" fetch left the box and nothing in the gate saw it. The proxy
+# stub here IS this suite's server, so what it receives would be the absolute-form
+# "GET http://127.0.0.1:PORT/page" instead of the path-only form a direct request has.
+search_config([{"kind": "anysearch", "url": REMOTE}], False)
+_Stub.calls.clear()
+_saved_proxy = {k: os.environ.get(k) for k in ("http_proxy", "no_proxy", "NO_PROXY")}
+os.environ["http_proxy"] = BASE_URL
+os.environ["no_proxy"] = ""
+os.environ.pop("NO_PROXY", None)
+try:
+    out = fb.tool_fetch_url({"url": BASE_URL + "/page"}, {})
+finally:
+    for _k, _v in _saved_proxy.items():
+        if _v is None:
+            os.environ.pop(_k, None)
+        else:
+            os.environ[_k] = _v
+_got = [c[1] for c in _Stub.calls if c[0] == "GET"]
+check("a local fetch ignores an environment proxy (it is reached directly)",
+      "Stub SearxNG hit" in out and _got == ["/page"], (out[:80], _got))
 
 # ------------------------------------------------- a key in config.json is a copy
 (STAGE / "config.json").write_text(json.dumps(

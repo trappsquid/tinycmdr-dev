@@ -397,6 +397,10 @@ class _FakeResp:
     def __init__(self, text):
         self._raw = text.encode("utf-8")
         self.encoding = "utf-8"
+        # _fetch_page follows redirects by hand since 2026-10-09: it reads status_code
+        # and Location before it reads the body.
+        self.status_code = 200
+        self.headers = {}
         self.closed = False
         self.pulls = 0
 
