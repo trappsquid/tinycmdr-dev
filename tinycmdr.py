@@ -30431,9 +30431,18 @@ def _port_holder(port):
              "ForEach-Object { 'pid ' + $_.OwningProcess + ' on ' + $_.LocalAddress }" % port],
             60)
     else:
+        # lsof names the holder on macOS - which has no ss, and whose netstat
+        # refuses -p without a protocol argument and prints no pids, so the old
+        # pipeline could never answer there and the busy note always read "No
+        # process answered a look-up" (A-2026-10-08-124). The Linux-native pair
+        # stays as the fallback for a box without lsof.
         rc, out, _err, _ = run_capture(
-            ["sh", "-c", "(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) "
-                         "| grep -E '[:.]%d[[:space:]]' | head -3" % port], 60)
+            ["sh", "-c", "lsof -nP -iTCP:%d -sTCP:LISTEN 2>/dev/null "
+                         "| tail -n +2 | head -3" % port], 60)
+        if not (out or "").strip():
+            rc, out, _err, _ = run_capture(
+                ["sh", "-c", "(ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null) "
+                             "| grep -E '[:.]%d[[:space:]]' | head -3" % port], 60)
     lines = [ln.strip() for ln in (out or "").splitlines() if ln.strip()]
     return "; ".join(lines[:3]) if lines else None
 

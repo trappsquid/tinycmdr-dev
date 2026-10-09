@@ -1406,6 +1406,23 @@ def main():
     fb.CONFIG["web"]["port"] = 0
     fb.LANE_STATE_FILE.unlink(missing_ok=True)
 
+    # ---- A-124: the port-holder lookup can actually answer -----------------------
+    # web_busy_note ran "(ss || netstat -ltnp) | grep"; macOS has no ss, and its
+    # netstat -p refuses without a protocol argument and prints no pids - so on
+    # the platform the verb exists for, the holder could never be named. lsof is
+    # what answers there; a box with no lookup tool at all still gets a plain None
+    # (the note is written for that case), never a guess.
+    _holder124 = fb._port_holder(port)
+    if os.name == "nt" or sys.platform == "darwin" \
+            or shutil.which("lsof") or shutil.which("ss") or shutil.which("netstat"):
+        check(_holder124 is not None and str(os.getpid()) in str(_holder124),
+              "the port-holder lookup names the process listening on the port",
+              _holder124)
+    else:
+        check(_holder124 is None,
+              "with no lookup tool installed the holder is a plain None, not a guess",
+              _holder124)
+
     # =====================================================================
     # run 13, pass C (A-227 .. A-261): the POST chain, the run buffer, the
     # assets and the CLI verbs. Every fix below has its check fail against a
