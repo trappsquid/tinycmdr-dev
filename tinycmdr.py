@@ -30125,7 +30125,27 @@ def run_webui():
                 if run is None:
                     self._json({"error": "no such run"}, 404)
                     return
-                run.cancel.set()
+                # Same bind as /api/steer: stopping is a mutation of THAT run, and a
+                # run id seen in the shared rail must not be enough for it (A-119).
+                owner = web_run_owner(run)
+                if owner and owner != _web_client(self.headers):
+                    self._json({"error": "that run belongs to another browser on "
+                                         "this host - only that browser can stop it"},
+                               403)
+                    return
+                if run.done:
+                    # A finished run cannot be stopped; "stopping: true" read as if
+                    # something were still going on (A-119).
+                    self._json({"error": "run finished"}, 409)
+                    return
+                with run.lock:
+                    already = run.cancel.is_set()
+                    if not already:
+                        run.cancel.set()
+                if already:
+                    # Idempotent: a second stop draws no second "stop requested" line.
+                    self._json({"stopping": True, "already": True})
+                    return
                 run.add("system", "stop requested")
                 log.info("web run %s: stop requested", run.id)
                 self._json({"stopping": True})

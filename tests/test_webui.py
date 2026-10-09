@@ -1115,6 +1115,42 @@ def main():
           "a run in the SHARED conversation is still answerable by any browser",
           (_st, row_s.get("answer")))
 
+    # ---- A-119: /api/stop is bound to the run's OWN browser, and is truthful ---
+    # The one mutating route with no owner check: a run id seen in the shared rail
+    # was enough to cancel another browser's run, "stopping: true" came back for a
+    # run already done, and a second stop drew a second "stop requested" line.
+    run_119 = fb._web_new_run("web")
+    run_119.client = "suiteA"
+    _st, _b = req("POST", "/api/stop", CB,
+                  json.dumps({"run_id": run_119.id}).encode())[:2]
+    check(_st == 403 and not run_119.cancel.is_set()
+          and not any(l["text"] == "stop requested" for l in run_119.lines),
+          "a second browser cannot stop another browser's run",
+          (_st, _b[:120], run_119.cancel.is_set()))
+    check(b"another browser on this host" in _b,
+          "the stop refusal names whose run it is", _b[:120])
+    _st, _b = req("POST", "/api/stop", CA,
+                  json.dumps({"run_id": run_119.id}).encode())[:2]
+    check(_st == 200 and b'"stopping": true' in _b.lower() and run_119.cancel.is_set(),
+          "the OWNING browser stops it", (_st, _b[:80]))
+    _st, _b = req("POST", "/api/stop", CA,
+                  json.dumps({"run_id": run_119.id}).encode())[:2]
+    _asked = sum(1 for l in run_119.lines if l["text"] == "stop requested")
+    check(_st == 200 and _asked == 1,
+          "a second stop is idempotent: no second stop-requested line",
+          (_st, _b[:80], [l["text"] for l in run_119.lines]))
+    fb._finish_web_run(run_119, fb.RunReporter(fb.WebDestination(run_119), "web"),
+                       "done before the stop")
+    _st, _b = req("POST", "/api/stop", CA,
+                  json.dumps({"run_id": run_119.id}).encode())[:2]
+    check(_st == 409 and b"finished" in _b.lower(),
+          "a run already done is not answered 'stopping'", (_st, _b[:80]))
+    run_119s = fb._web_new_run("web")       # no client ever involved: nobody's
+    _st = req("POST", "/api/stop", CB,
+              json.dumps({"run_id": run_119s.id}).encode())[0]
+    check(_st == 200 and run_119s.cancel.is_set(),
+          "a run in the SHARED conversation is stoppable by any browser", _st)
+
     # ---- A-245: the answer is drawn exactly once ----------------------------
     # The dead `run.answered` latch read False for ever, so a run that had already
     # drawn its own final line got a SECOND one at the end.
