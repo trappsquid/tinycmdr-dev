@@ -1735,10 +1735,10 @@
     {
       "id": "search-provider-declared-next",
       "title": "the web-search provider is a url you enter, never a menu",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "5ab03f3",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "search.providers shipped anysearch and tavily - and tavily refuses keyless calls, so a fresh box carried a dead entry nobody asked for, while the installers' one yes/no was the only search question there was. anysearch is the ONE shipped provider now (its anonymous tier answers with no key) and tavily is gone entirely. A provider of your own is a URL: the installers, `tinycmdr setup` and `tinycmdr search add <url>` ask for the url, an optional key (hidden on a console; blank = an endpoint that answers anonymously) and an optional label, then 'add another?' - the entries in order ARE the chain, and an added entry is tried first. The wire contract is open: a JSON POST of {query, max_results} (the key as Authorization: Bearer; a 405 retries as searxng's GET ?q=&format=json) answered with a results list, so a search API this build has never heard of needs a url, not a code change - anysearch and searxng keep their exact adapters when their kind is named. `tinycmdr search` lists every entry's state, `search test` runs one query through the chain, and `search allow` is the egress door the BLOCKED line names.",
       "gate": "closes at the next release"
@@ -2165,10 +2165,10 @@
     {
       "id": "windows-doors-hold-their-window",
       "title": "the Windows doors hold their window, and a removal cannot kill their tail",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "b939f77",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "A double-clicked UNINSTALL-WINDOWS.cmd lives in the folder the removal deletes, and cmd.exe reads a batch file while it runs - the deletion took the tail with it, so the exit code, the error line and the closing pause never appeared and the window vanished with no message. The door re-runs itself from %TEMP% (which the removal cannot reach), steps its own shell out of the folder first, and ends every path behind 'Press any key to close this window.'; INSTALL-WINDOWS.cmd owns the same barrier when it is the double-clicked window, and none when a caller already holds one. tests/test_installer_windows.py now RUNS both doors on Windows against staged folders with a stub wrapper - refusals, no, yes, a wrapper's exit code, the barrier, and a wrapper that deletes the door's own file - where the previous checks only parsed text.",
       "gate": "closes at the next release"
