@@ -393,32 +393,18 @@ def main():
         # -- a second start on the same folder names the LOOK-THROUGH door ------------
         # POSIX locks the install FOLDER itself, so there is no lock file to delete;
         # advising one hands the next start a fresh lock and a second bot on the same
-        # token (A-2026-10-08-131). A LIVE holder is the platform-neutral way to grade it.
+        # token (A-2026-10-08-131). Hold the lock IN-PROCESS, exactly as a running bot
+        # does: a serving child as the holder raced under the CI's --jobs (measured
+        # 2026-10-09, macos-latest - the holder never answered), and the message is what
+        # this check grades.
         d = work / "lockhold"
         d.mkdir(exist_ok=True)
         shutil.copy2(SRC, d / "tinycmdr.py")
-        _port = free_port()
-        (d / "config.json").write_text(json.dumps(
-            {"llm": LLM, "web": {"enabled": True, "host": "127.0.0.1", "port": _port}}),
-            encoding="utf-8")
-        _env = {k: v for k, v in os.environ.items() if not k.startswith("TINYCMDR_")}
-        _env["HOME"] = str(d)
-        _env["TINYCMDR_NO_BROWSER"] = "1"
-        holder = subprocess.Popen([sys.executable, str(d / "tinycmdr.py")],
-                                  cwd=str(d), env=_env, stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        (d / "config.json").write_text(json.dumps({"llm": LLM}), encoding="utf-8")
+        m = load(d)
+        _held = m.acquire_single_instance_lock()
+        check(_held is True, "the test process holds the folder's lock like a bot", _held)
         try:
-            _up = False
-            _t0 = time.time()
-            while time.time() - _t0 < 30 and holder.poll() is None:
-                try:
-                    with urllib.request.urlopen(
-                            "http://127.0.0.1:%d/api/health" % _port, timeout=1) as _r:
-                        _up = _r.status == 200
-                    break
-                except Exception:                            # noqa: BLE001
-                    time.sleep(0.5)
-            check(_up, "a holder serves the folder (it holds the lock)", _port)
             code, said = run(d, timeout=30)
             check(code == 3 and "already running from this folder" in said,
                   "a second start is refused (rc 3)", (code, said[-300:]))
@@ -426,8 +412,7 @@ def main():
                   "A-131: ...naming the look-through door, never the lock file",
                   said[-500:])
         finally:
-            holder.kill()
-            holder.wait(timeout=10)
+            m._release_lock()
 
         # -- `--once` takes the TASK, and only the task ----------------------------
         # A separate flag after `--once` used to be swallowed into the prompt - the model was
