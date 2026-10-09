@@ -571,7 +571,15 @@ def main():
         dt = time.time() - t0
         check(code == 200 and dt < 2.0,
               f"a request never waits on the resolver ({code}, {round(dt, 2)}s)")
-        check(calls["n"] >= 1, "the resolver runs in the background", calls)
+        # The warm thread starts asynchronously, so the COUNT is waited for rather than
+        # sampled: on a loaded CI runner the thread may not have reached the stub in the
+        # few milliseconds the request took, and the check read the race, not the rule
+        # (measured 2026-10-09, macos-latest: {'n': 0} on a tree that passes locally).
+        _t0 = time.time()
+        while calls["n"] < 1 and time.time() - _t0 < 10:
+            time.sleep(0.1)
+        check(calls["n"] >= 1, "the resolver runs in the background (bounded wait)",
+              calls)
     finally:
         fb.socket = real_socket
 
