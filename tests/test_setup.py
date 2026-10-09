@@ -102,13 +102,13 @@ def main():
               "choosing 3 writes false", json.dumps(written.get("search")))
         check("this LAN only" in out, "and the summary says so", out[-300:])
 
-        # choice 4 asks for the provider itself - the input path for one of your OWN
-        # (a searxng box needs no key) - and it is tried first
+        # choice 4 asks for the provider itself - url, optional key, label - the input
+        # path for one of your OWN, and it is tried first
         d = stage(work / "add", True)
         rc, out, written, mod = drive(d, "4",
-                                      extra=("1", "http://127.0.0.1:8890", "mybox"))
+                                      extra=("http://127.0.0.1:8890", "", "mybox", "n"))
         _prov = (written.get("search") or {}).get("providers") or []
-        check(rc == 0 and _prov and _prov[0] == {"kind": "searxng",
+        check(rc == 0 and _prov and _prov[0] == {"kind": "generic",
                                                  "url": "http://127.0.0.1:8890",
                                                  "label": "mybox"},
               "choosing 4 asks for the provider and writes it first",
@@ -117,7 +117,7 @@ def main():
         # ...and a keyed one lands with its key in .env and only its NAME in config.json
         d = stage(work / "key", True)
         rc, out, written, mod = drive(
-            d, "4", extra=("2", "https://api.anysearch.com/v1/search", "", "sk-live-42"))
+            d, "4", extra=("https://api.example.com/s", "sk-live-42", "", "n"))
         _prov = (written.get("search") or {}).get("providers") or []
         _env = (d / ".env").read_text(encoding="utf-8") if (d / ".env").exists() else ""
         check(rc == 0 and _prov and _prov[0].get("api_key_env") == "TINYCMDR_SEARCH1_API_KEY"
@@ -125,6 +125,15 @@ def main():
               and "TINYCMDR_SEARCH1_API_KEY=sk-live-42" in _env,
               "a typed key goes to .env; config.json only names the variable",
               (json.dumps(_prov), _env[-120:]))
+
+        # ...and "add another" builds the chain: the entries in order ARE the order tried
+        d = stage(work / "chain", True)
+        rc, out, written, mod = drive(
+            d, "4", extra=("http://127.0.0.1:8891", "", "first", "y",
+                           "http://127.0.0.1:8892", "", "second", "n"))
+        _prov = (written.get("search") or {}).get("providers") or []
+        check(rc == 0 and [p.get("label") for p in _prov[:2]] == ["first", "second"],
+              "add-another makes an ordered chain", json.dumps(_prov[:2]))
 
         # Enter keeps whatever is already there, both ways
         for current in (True, False):

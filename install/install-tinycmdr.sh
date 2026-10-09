@@ -1016,40 +1016,34 @@ if [ "$ASK_Q" = 1 ] && [ -z "$SEARCH_EGRESS" ]; then
         2) SEARCH_EGRESS="true" ;;
         3) SEARCH_EGRESS="false" ;;
         4)
-            info "provider: 1) searxng (your own box; no key)  2) anysearch (no key needed)"
-            case "$(ask_text 'choice' 1)" in
-                2) _sk="anysearch"; _skey_q="API key (Enter = none)" ;;
-                *) _sk="searxng";   _skey_q="" ;;
-            esac
-            case "$_sk" in
-                anysearch) _sdurl="https://api.anysearch.com/v1/search" ;;
-                *)         _sdurl="" ;;
-            esac
-            if [ -n "$_sdurl" ]; then
-                _su="$(ask_text "its url [$_sdurl]" "$_sdurl")"
-            else
-                _su="$(ask_text 'its url (the base; /search is added)')"
-            fi
-            _sl="$(ask_text 'label' "$_sk")"
-            _skey=""
-            if [ -n "$_skey_q" ]; then
-                _skey="$(ask_secret "$_skey_q")"
-            fi
-            if [ -n "$_su" ]; then
+            info "   the API's url, an optional key (Enter = an endpoint that answers"
+            info "   anonymously) and a label; a url alone is called with a JSON POST of"
+            info "   {query, max_results}, and a searxng box works too."
+            _sn=0
+            while :; do
+                _su="$(ask_text 'provider url')"
+                [ -n "$_su" ] || break
+                _skey="$(ask_secret 'API key (Enter = none)')"
+                _sl="$(ask_text 'label')"
+                if [ -z "$_sl" ]; then
+                    _sl="$(printf '%s' "$_su" | sed 's|^https\?://||; s|/.*||')"
+                fi
                 _sname=""
                 if [ -n "$_skey" ]; then
-                    _sname="TINYCMDR_SEARCH1_API_KEY"
+                    _sn=$((_sn + 1))
+                    _sname="TINYCMDR_SEARCH${_sn}_API_KEY"
                     SEARCH_ENV_LINES="${SEARCH_ENV_LINES}${_sname}=${_skey}
 "
                 fi
-                SEARCH_SPECS="${SEARCH_SPECS}${_su}|${_sk}|${_sl}|${_sname}
+                SEARCH_SPECS="${SEARCH_SPECS}${_su}|generic|${_sl}|${_sname}
 "
                 info "added (tried first): $_sl $_su"
                 if ! is_lan_url "$_su" && [ -z "$SEARCH_EGRESS" ]; then
                     SEARCH_EGRESS="true"
                     info "$_su is off this machine, so off-LAN providers are now allowed"
                 fi
-            fi
+                ask_yes "Add another entry?" n || break
+            done
             ;;
     esac
 fi

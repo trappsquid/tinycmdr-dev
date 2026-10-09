@@ -10069,7 +10069,12 @@ _SEARCH_DEFAULT_KEY_ENV = {"anysearch": "ANYSEARCH_API_KEY", "searxng": ""}
 def _search_providers():
     """The configured chain, normalised. Returns (chain, problems): an entry that cannot
     be used at all is a PROBLEM, reported rather than silently dropped, so a typo in the
-    list reads as a typo instead of as a shorter chain."""
+    list reads as a typo instead of as a shorter chain.
+
+    Any entry WITH its own url is accepted: a kind outside the built-in table (`anysearch`
+    and `searxng`) is called with the generic JSON POST, so an operator can add a provider
+    this file has never heard of without a code change - the same shape an llm.base_url
+    has. Only an entry with neither a known kind nor a url is a problem."""
     raw = CONFIG["search"].get("providers")
     if not isinstance(raw, list):
         raw = DEFAULT_CONFIG["search"]["providers"]
@@ -10080,19 +10085,20 @@ def _search_providers():
         if not isinstance(entry, dict):
             problems.append("entry %d is not an object" % (i + 1))
             continue
-        kind = str(entry.get("kind") or "").strip().lower()
-        if kind not in _SEARCH_DEFAULT_URL:
-            problems.append("entry %d: unknown kind %r" % (i + 1, entry.get("kind")))
-            continue
-        url = str(entry.get("url") or "").strip() or _SEARCH_DEFAULT_URL[kind]
+        named = str(entry.get("kind") or "").strip().lower()
+        url = str(entry.get("url") or "").strip()
+        kind = named if named in _SEARCH_DEFAULT_URL else "generic"
+        url = url or _SEARCH_DEFAULT_URL.get(kind, "")
         if not url:
-            problems.append("entry %d: a %s entry needs its own url" % (i + 1, kind))
+            problems.append("entry %d: %r needs its own url (only %s are shipped with "
+                            "one)" % (i + 1, entry.get("kind") or "an entry without a "
+                                      "kind", " and ".join(sorted(_SEARCH_DEFAULT_URL))))
             continue
         chain.append({
             "kind": kind, "url": url,
             "api_key_env": str(entry.get("api_key_env") or
-                               _SEARCH_DEFAULT_KEY_ENV[kind]).strip(),
-            "label": str(entry.get("label") or kind).strip(),
+                               _SEARCH_DEFAULT_KEY_ENV.get(kind, "")).strip(),
+            "label": str(entry.get("label") or named or kind).strip(),
         })
     return chain, problems
 
@@ -10149,8 +10155,50 @@ def _provider_searxng(entry, query, max_results):
             for r in results]
 
 
+def _provider_generic(entry, query, max_results):
+    """ANY search endpoint with its own url: the POST goes JSON {query, max_results}
+    (the entry's key, when one is set, as Authorization: Bearer), and the answer's
+    `results` list - top-level or under `data` - carries {title, url, snippet|content}.
+
+    405 ("this endpoint is not a POST") retries once as GET with `?q=&format=json`, the
+    shape a searxng instance speaks, so a url pasted from either family works. An API
+    with its own body or header spelling answers an HTTP error, which is named; the door
+    is open, and the contract is written here, in `tinycmdr search add`'s output and in
+    the prompts."""
+    label = entry.get("label") or "provider"
+    headers = {"Content-Type": "application/json"}
+    key = _search_key(entry)
+    if key:
+        headers["Authorization"] = "Bearer %s" % key
+    resp = requests.post(entry["url"], headers=headers,
+                         json={"query": query, "max_results": max_results}, timeout=30)
+    if resp.status_code == 405:
+        resp = requests.get(entry["url"], headers=headers,
+                            params={"q": query, "format": "json"}, timeout=30)
+    data = _provider_checked_json(resp, label)
+    if not isinstance(data, dict):
+        raise RuntimeError("%s answered %s, not a JSON object"
+                           % (label, type(data).__name__))
+    results = data.get("results")
+    if not isinstance(results, list):
+        inner = data.get("data")
+        results = inner.get("results") if isinstance(inner, dict) else None
+    if not isinstance(results, list):
+        raise RuntimeError("%s answered without a results list" % label)
+    out = []
+    for r in results[:max_results]:
+        if not isinstance(r, dict):
+            continue
+        out.append({"title": r.get("title") or "",
+                    "url": r.get("url") or r.get("link") or "",
+                    "snippet": (r.get("snippet") or r.get("content")
+                                or r.get("description") or "")[:400]})
+    return out
+
+
 _SEARCH_PROVIDERS_BY_KIND = {"anysearch": _provider_anysearch,
-                             "searxng": _provider_searxng}
+                             "searxng": _provider_searxng,
+                             "generic": _provider_generic}
 
 
 def _search_egress_allowed():
@@ -10189,21 +10237,11 @@ def _search_entry_state(entry, egress_ok):
     return "ready" + (" (key %s)" % env if env and _search_key(entry) else "")
 
 
-def _search_kind_guess(url):
-    """The kind a bare url most likely is, for `search add <url>` without --kind: a host
-    that says anysearch, else a searxng-shaped instance (the self-hosted one, which
-    carries no key)."""
-    host = str(url or "").lower()
-    if "anysearch" in host:
-        return "anysearch"
-    return "searxng"
-
-
 def _search_providers_from_raw(raw):
     """The provider list a WRITE should carry: the file's own when it names one, else the
     shipped table - the file's list REPLACES the default, so an add must carry the rest
-    over. Entries whose kind is unknown are carried verbatim: a typo stays visible (and
-    is reported by _search_providers) instead of being silently dropped by an add."""
+    over. Entries are carried verbatim when their kind is outside the built-in table: the
+    runtime calls any url with the generic JSON POST, so nothing here may drop one."""
     raw_search = raw.get("search") if isinstance(raw, dict) else None
     listed = raw_search.get("providers") if isinstance(raw_search, dict) else None
     src = listed if isinstance(listed, list) else DEFAULT_CONFIG["search"]["providers"]
@@ -10228,21 +10266,22 @@ def _search_providers_from_raw(raw):
 
 
 def _search_entry_build(kind, url, label, key_env, key_value):
-    """(entry, error) for one new provider. The KEY stays in .env and the entry only
-    NAMES the variable (api_key_env) - the rule every other secret follows, because
-    config.json is a file the agent reads into a prompt. A typed key is written under a
-    generated name (TINYCMDR_SEARCH<n>_API_KEY); `key_env` is the door a script uses to
-    name the variable itself. Only the kinds with an adapter are accepted, and the error
-    names them, so a typo is refused where it can be explained."""
+    """(entry, error) for one new provider. `kind` is OPTIONAL and OPEN: anysearch and
+    searxng use their exact wire shapes, and any other name - or none - is called with the
+    generic JSON POST, so a provider this file has never heard of needs a url, not a code
+    change. The KEY is optional too (blank = an endpoint that answers anonymously, which
+    the runtime supports) and it stays in .env: the entry only NAMES the variable, the
+    rule every other secret follows, because config.json is read into a prompt."""
     kind = str(kind or "").strip().lower()
-    if kind not in _SEARCH_DEFAULT_URL:
-        return None, ("kind must be one of: %s" % ", ".join(sorted(_SEARCH_DEFAULT_URL)))
+    if kind and not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,23}", kind):
+        return None, ("a kind is a short name (letters, digits, . _ -) - e.g. searxng, "
+                      "or leave it out for the generic JSON POST")
     url = str(url or "").strip()
     if not url.lower().startswith(("http://", "https://")):
         return None, "a provider url starts with http:// or https://"
     url = url.rstrip("/")
-    label = str(label or "").strip() or kind
-    entry = {"kind": kind, "url": url, "label": label}
+    label = str(label or "").strip() or kind or url.split("//", 1)[-1].split("/")[0]
+    entry = {"kind": kind or "generic", "url": url, "label": label}
     env = str(key_env or "").strip()
     if env and not re.fullmatch(r"[A-Z][A-Z0-9_]*", env):
         return None, "a .env key name, please: capitals, digits, underscore"
@@ -35149,34 +35188,38 @@ def _run_setup_interactive(rest=None):
     elif ans == "3":
         search["allow_cloud_egress"] = False
     elif ans == "4":
-        print(dim("   which provider?  1) searxng (your own box; no key)   2) anysearch "
-                  "(no key needed)"))
-        pick = input("   choice [1]: ").strip() or "1"
-        kind = {"1": "searxng", "2": "anysearch"}.get(pick)
-        if kind is None:
-            print(red("   not 1 or 2 - keeping the current setup"))
-        else:
-            _durl = _SEARCH_DEFAULT_URL[kind]
-            _q = ("   its url [%s]: " % _durl if _durl
-                  else "   its url (the base; /search is added): ")
-            _url = (input(_q).strip() or _durl)
-            _label = input("   label [%s]: " % kind).strip() or kind
-            _key = ""
-            if kind == "anysearch":
-                _key = input("   API key (Enter = none): ").strip()
-            _entry, _err = _search_entry_build(kind, _url, _label, "", _key)
+        print(dim("   The API's url, an optional key (hidden; blank = an endpoint that"))
+        print(dim("   answers anonymously) and a label. A url alone is called with a JSON"))
+        print(dim("   POST of {query, max_results}; a searxng box on this network works"))
+        print(dim("   too, and `tinycmdr search add <url> --kind searxng` names its exact"))
+        print(dim("   shape later. You can add more than one - the entries in order ARE"))
+        print(dim("   the chain."))
+        _added = []
+        while True:
+            _url = input("   provider url: ").strip()
+            if not _url:
+                break
+            _key = input("   API key (Enter = none): ").strip()
+            _label = input("   label [%s]: "
+                           % (_url.split("//", 1)[-1].split("/")[0] or "generic")).strip()
+            _entry, _err = _search_entry_build("", _url, _label, "", _key)
             if _err:
                 print(red("   %s - keeping the current setup" % _err))
-            else:
-                search["providers"] = [_entry] + [
-                    e for e in _search_providers_from_raw(raw)
-                    if str(e.get("url") or "").rstrip("/").lower()
-                    != _entry["url"].lower()]
-                if not _is_local_url(_entry["url"]) and not cur_egress:
-                    search["allow_cloud_egress"] = True
-                    print(dim("   %s is off this machine, so off-LAN providers are now "
-                              "allowed" % _entry["url"]))
-                print(dim("   added (tried first): %s %s" % (_label, _url)))
+                break
+            _added.append(_entry)
+            if input("   add another entry? [y/N]: ").strip().lower() not in ("y", "yes"):
+                break
+        if _added:
+            search["providers"] = _added + [
+                e for e in _search_providers_from_raw(raw)
+                if all(str(e.get("url") or "").rstrip("/").lower()
+                       != n["url"].lower() for n in _added)]
+            if any(not _is_local_url(n["url"]) for n in _added) and not cur_egress:
+                search["allow_cloud_egress"] = True
+                print(dim("   a provider off this machine was added, so off-LAN providers "
+                          "are now allowed"))
+            for _n in _added:
+                print(dim("   added (tried first): %s %s" % (_n["label"], _n["url"])))
     else:
         search["allow_cloud_egress"] = cur_egress
     print()
@@ -37045,9 +37088,10 @@ VERB_HELP = """tinycmdr <verb> — management, never a model call
                      default: off-LAN endpoints are reached only when you switch)
   model remove <x>   drop a fallback entry (by model name, alias or url)
   search             the web-search providers: each entry's state, and the doors
-  search add [<url>] add a provider, tried first - searxng (your own box) needs no key
-                     and anysearch works without one; --key-env names the .env variable
-                     a key would live in (no <url> asks, and can take the key itself)
+  search add [<url>] add a provider, tried first - a url alone is a JSON search API
+                     (POST {query, max_results}; 405 retries as searxng's GET);
+                     --kind searxng|anysearch names an exact shape; the key is optional
+                     (--key-env names its .env variable; no <url> asks, un-echoed)
   search remove <x>  drop a provider (by label, url or kind)
   search allow [true|false]
                      may providers off this machine answer? (search.allow_cloud_egress)
@@ -39230,13 +39274,16 @@ def _model_setup_needs_terminal():
 SEARCH_HELP = """tinycmdr search — the web-search providers, and the doors to change them
 
   tinycmdr search                     the chain, each entry's state, and the doors
-  tinycmdr search add <url> [--kind anysearch|searxng] [--label NAME]
-                                      [--key-env ENV_NAME]
-                                      add a provider; it is tried FIRST. searxng (your own
-                                      box) needs no key, and anysearch works without one -
-                                      --key-env names the .env variable an optional key
-                                      would live in; no <url> asks, and the prompt can
-                                      take the key itself (it goes to .env)
+  tinycmdr search add <url> [--kind NAME] [--label NAME] [--key-env ENV_NAME]
+                                      add a provider; it is tried FIRST. A url alone is a
+                                      JSON search API: a POST of {query, max_results},
+                                      answered with {results: [{title, url, snippet}]}
+                                      (a 405 retries as GET ?q=&format=json, the searxng
+                                      shape). --kind anysearch|searxng names one of the
+                                      exact shapes. The key is optional - blank means an
+                                      endpoint that answers anonymously - and it lives in
+                                      .env: --key-env names the variable; no <url> asks,
+                                      and the prompt takes the key un-echoed
   tinycmdr search remove <label|url|kind>
   tinycmdr search allow [true|false]  may providers off this machine answer?
                                       (the search.allow_cloud_egress switch)
@@ -39305,8 +39352,8 @@ def _verb_search_add(rest):
         print(SEARCH_HELP, file=sys.stderr)
         return 2
     url = positional[0]
-    kind = str(opts.get("kind") or _search_kind_guess(url)).strip().lower()
-    entry, err = _search_entry_build(kind, url, opts.get("label"), opts.get("key-env"), "")
+    entry, err = _search_entry_build(opts.get("kind"), url, opts.get("label"),
+                                     opts.get("key-env"), "")
     if err:
         print(err, file=sys.stderr)
         return 2
@@ -39318,33 +39365,80 @@ def _verb_search_add(rest):
 
 
 def _verb_search_add_interactive():
-    print("Which provider?")
-    print("  1) searxng  - your own box on this network (or any /search?format=json); "
-          "no key")
-    print("  2) anysearch - the shipped cloud provider; works without a key")
-    pick = input("choice [1]: ").strip() or "1"
-    kind = {"1": "searxng", "2": "anysearch"}.get(pick)
-    if kind is None:
-        print("pick 1 or 2", file=sys.stderr)
-        return 2
-    if kind == "searxng":
-        url = input("   its url (the base, e.g. http://<box>:8888; /search is added): ").strip()
-    else:
-        url = (input("   its url [%s]: " % _SEARCH_DEFAULT_URL[kind]).strip()
-               or _SEARCH_DEFAULT_URL[kind])
-    label = input("   label [%s]: " % kind).strip() or kind
-    key = ""
-    if kind == "anysearch":
-        key = input("   API key (Enter = none; the anonymous tier still answers): ").strip()
-    entry, err = _search_entry_build(kind, url, label, "", key)
-    if err:
-        print(err, file=sys.stderr)
-        return 2
+    """The open-ended ask, mirroring the model-endpoint questions: a url, an optional key
+    (hidden; blank = an endpoint that answers anonymously), an optional label - then
+    "add another?", because the entries in order ARE the chain. There is no kind MENU on
+    purpose: dozens of search APIs exist and none of them belongs hardcoded in the ask -
+    a url alone is called with the generic JSON POST."""
     raw, err = _config_raw()
     if err:
         print(err, file=sys.stderr)
         return 1
-    return _search_commit(raw, entry)
+    rows = []
+    while True:
+        url = input("   provider url (a JSON search API; a searxng box works too): ").strip()
+        if not url:
+            print("   no url - nothing was added", file=sys.stderr)
+            break
+        # Hidden on a real console (getpass); a fake/redirected stdin falls back to a
+        # plain read, so a suite can drive it. The --key-env door is named for a key
+        # that should never be typed anywhere.
+        try:
+            _real_tty = sys.stdin.isatty() and os.isatty(sys.stdin.fileno())
+        except Exception:                                        # noqa: BLE001
+            _real_tty = False
+        if _real_tty:
+            import getpass
+            key = getpass.getpass("   API key (not echoed): ").strip()
+        else:
+            key = input("   API key (Enter = an endpoint that answers anonymously): ").strip()
+        label = input("   label [%s]: "
+                      % (url.split("//", 1)[-1].split("/")[0] or "generic")).strip()
+        entry, err = _search_entry_build("", url, label, "", key)
+        if err:
+            print(err, file=sys.stderr)
+            return 2
+        rows.append(entry)
+        more = input("   add another entry? [y/N]: ").strip().lower()
+        if more not in ("y", "yes"):
+            break
+    if not rows:
+        return 2
+    search = raw.setdefault("search", {})
+    if not isinstance(search, dict):
+        print("search in config.json is not an object - fix that first", file=sys.stderr)
+        return 1
+    have = _search_providers_from_raw(raw)
+    for entry in reversed(rows):
+        if any(str(r.get("url") or "").rstrip("/").lower()
+               == entry["url"].lower() for r in have):
+            print("%s is already there - skipped" % entry["url"], file=sys.stderr)
+            continue
+        have.insert(0, entry)
+    search["providers"] = have
+    err = _config_write_raw(raw)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    err = _config_take_effect()
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    back, _e = _config_raw()
+    if not _e:
+        CONFIG.update(back)
+    for entry in rows:
+        print("added (tried first): %s %s" % (entry["label"], entry["url"]))
+        if entry.get("api_key_env") and not _search_key(entry):
+            print("note: %s is not set in .env yet; put its value there with:\n"
+                  "  tinycmdr token set %s" % (entry["api_key_env"], entry["api_key_env"]))
+        if not _is_local_url(entry["url"]) and not _search_egress_allowed():
+            print("note: %s is off this machine and off-LAN providers are refused "
+                  "(search.allow_cloud_egress false). Allow them with:\n"
+                  "  tinycmdr search allow true" % entry["url"])
+    if _verb_running() is True:
+        print("a running bot reads config.json at start: `tinycmdr restart`.")
+    return 0
 
 
 def _verb_search_remove(rest):

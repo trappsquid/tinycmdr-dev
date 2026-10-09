@@ -372,9 +372,10 @@ def _body():
         check("doctor never prints a secret value",
               "fixture-token" not in out and "fixture-token" not in err, out[:200])
 
-        # A config that still names the retired tavily kind must be REPORTED by name -
-        # that is the migration path for a host that had the old two-entry chain - and
-        # the rest of the chain must keep working.
+        # A config that names a provider this build has no adapter for is listed like
+        # any other entry: `tavily` was removed as a built-in, and the open contract is
+        # a JSON POST to whatever url the entry carries - so there is no special case,
+        # no complaint, and the rest of the chain stays intact.
         _saved_providers = fb.CONFIG["search"].get("providers")
         fb.CONFIG["search"]["providers"] = [
             {"kind": "tavily", "url": "https://api.tavily.com/search",
@@ -383,8 +384,10 @@ def _body():
              "label": "anysearch", "api_key_env": "ANYSEARCH_API_KEY"}]
         try:
             rc, out, err = call(fb, ["doctor"])
-            check("doctor reports a retired kind by name, chain intact",
-                  "unknown kind" in out and "tavily" in out and "anysearch" in out,
+            check("doctor lists a config-named provider like any other, chain intact",
+                  "tavily (off-LAN, refused)" in out
+                  and "anysearch (off-LAN, refused)" in out
+                  and "unknown kind" not in out,
                   [l for l in out.splitlines() if "search" in l][:3])
         finally:
             fb.CONFIG["search"]["providers"] = _saved_providers
@@ -1375,14 +1378,23 @@ def _body():
             def log_message(self, *a):
                 pass
 
-            def do_GET(self):
-                body = json.dumps({"results": [
-                    {"title": "stub hit", "url": "http://x/", "content": "y"}]}).encode()
+            def _send(self, obj):
+                body = json.dumps(obj).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length") or 0)
+                self.rfile.read(n)
+                self._send({"results": [
+                    {"title": "stub hit", "url": "http://x/", "content": "y"}]})
+
+            def do_GET(self):
+                self._send({"results": [
+                    {"title": "stub hit", "url": "http://x/", "content": "y"}]})
 
         _srv = _sockets.TCPServer(("127.0.0.1", 0), _SearchStub)
         _threading.Thread(target=_srv.serve_forever, daemon=True).start()
@@ -1402,7 +1414,7 @@ def _body():
             _chain = json.loads((workdir / "config.json").read_text(
                 encoding="utf-8"))["search"]["providers"]
             check("search add prepends a provider of your own (tried first)",
-                  rc == 0 and _chain[0] == {"kind": "searxng", "url": _stub_url,
+                  rc == 0 and _chain[0] == {"kind": "generic", "url": _stub_url,
                                             "label": "mybox"}, (rc, _chain[:1]))
             check("...and the file's own providers are carried over behind it",
                   [p["kind"] for p in _chain[1:]] == _expect_tail, (_chain, _expect_tail))
@@ -1410,11 +1422,13 @@ def _body():
             check("a duplicate url is refused",
                   rc == 2 and "already there" in err, (rc, err[:160]))
             rc, out, err = call(fb, ["search", "add", "https://search.example.com/t",
-                                     "--kind", "tavily"])
-            check("the retired tavily kind is refused, naming what is accepted",
-                  rc == 2 and "kind must be one of" in err
-                  and "tavily" not in err.split(":")[1], (rc, err[:200]))
-            rc, out, err = call(fb, ["search", "add", "https://search.example.com/t",
+                                     "--kind", "brave", "--label", "my-brave"])
+            _chain = json.loads((workdir / "config.json").read_text(
+                encoding="utf-8"))["search"]["providers"]
+            check("a kind this file never heard of is kept and called generically",
+                  rc == 0 and _chain[0]["kind"] == "brave"
+                  and _chain[0]["label"] == "my-brave", (rc, _chain[:1]))
+            rc, out, err = call(fb, ["search", "add", "https://search.example.com/t2",
                                      "--kind", "anysearch",
                                      "--key-env", "ANYSEARCH_API_KEY2",
                                      "--label", "tav2"])
@@ -1444,14 +1458,14 @@ def _body():
                 encoding="utf-8"))["search"]["providers"]
             check("search remove drops the matching provider",
                   rc == 0 and all(p.get("label") != "mybox" for p in _chain), _chain)
-            # The interactive door: no url on a TTY asks (kind, url, label), and the
-            # answer lands like the flagged one.
+            # The interactive door: no url on a TTY asks (url, optional key, label,
+            # "add another?"), and the answer lands like the flagged one.
             rc, out, err = call(fb, ["search", "add"],
-                                stdin="1\nhttp://127.0.0.1:8898\ntypedbox\n", tty=True)
+                                stdin="http://127.0.0.1:8898\n\ntypedbox\nn\n", tty=True)
             _chain = json.loads((workdir / "config.json").read_text(
                 encoding="utf-8"))["search"]["providers"]
             check("search add with no url asks, and writes what was typed",
-                  rc == 0 and _chain[0] == {"kind": "searxng",
+                  rc == 0 and _chain[0] == {"kind": "generic",
                                             "url": "http://127.0.0.1:8898",
                                             "label": "typedbox"}, (rc, _chain[:1], out[:200]))
         finally:

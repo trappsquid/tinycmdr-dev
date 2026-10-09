@@ -1176,15 +1176,15 @@ def main():
               "4) add your own provider now" in _src
               and "keep search on this machine only" in _src,
               "one question was the only option")
-        check("%s: the add asks kind, url and label; a key where the kind takes one" % _label,
-              "provider: 1) searxng (your own box; no key)" in _src
-              and "API key (Enter = none)" in _src)
+        check("%s: the add asks url, key and label, then offers another" % _label,
+              "provider url" in _src and "API key (Enter = none)" in _src
+              and "Add another entry?" in _src)
         check("%s: tavily is GONE - no built-in option, no prompt line, no key name" % _label,
               "tavily" not in _src.lower())
         check("%s: the provider rows reach config.json, this run's first" % _label,
               "SEARCH_SPECS" in _src and '_search["providers"] = _rows' in _src)
         check("%s: a typed key goes to .env, and only its NAME reaches config" % _label,
-              "SEARCH_ENV_LINES" in _src and "TINYCMDR_SEARCH1_API_KEY" in _src)
+              "SEARCH_ENV_LINES" in _src and "TINYCMDR_SEARCH${_sn}_API_KEY" in _src)
     print()
     if FAILS:
         print(f"{len(FAILS)} check(s) failed:")

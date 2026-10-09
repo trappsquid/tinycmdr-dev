@@ -84,6 +84,10 @@ class _Stub(BaseHTTPRequestHandler):
         payload = json.loads(self.rfile.read(n) or b"{}")
         _Stub.calls.append(("POST", self.path, payload,
                             self.headers.get("Authorization")))
+        if "/post405" in self.path:
+            self.send_response(405)
+            self.end_headers()
+            return
         if "/fail" in self.path:
             self._send({"detail": "bad key", "message": "quota exhausted"}, 500)
             return
@@ -206,10 +210,11 @@ check("...and it produces no complaints", problems == [], problems)
 
 search_config([{"kind": "nope"}, {"kind": "searxng"}], False)
 chain, problems = fb._search_providers()
-check("an unknown kind is a reported problem, not a silent drop",
-      chain == [] and any("unknown kind" in p for p in problems), problems)
-check("a searxng entry with no url is a reported problem too",
-      any("needs its own url" in p for p in problems), problems)
+check("a kind with no url and no adapter is a reported problem, never a silent drop",
+      chain == [] and len(problems) == 2
+      and all("needs its own url" in p for p in problems), problems)
+check("...and the report names the entry and what it is missing",
+      "entry 1" in problems[0] and "nope" in problems[0], problems)
 
 search_config(["anysearch"], False)
 chain, problems = fb._search_providers()
@@ -275,7 +280,7 @@ check("when every provider fails the error names them",
 search_config([{"kind": "nope"}, {"kind": "searxng"}], False)
 out = fb.tool_web_search({"query": "typo"}, {})
 check("a typo'd providers list is named in the refusal",
-      out.startswith("BLOCKED:") and "unknown kind" in out, out[:300])
+      out.startswith("BLOCKED:") and "needs its own url" in out, out[:300])
 
 # ------------------------------------------------------------------ fetch_url's gate
 search_config([{"kind": "anysearch", "url": REMOTE}], False)
@@ -317,23 +322,57 @@ check("an off-LAN provider is not ready with egress off",
       and fb._search_entry_state(_anon, False) == "off-LAN, refused",
       fb._search_entry_state(_anon, False))
 
-# tavily was a built-in alongside anysearch; it is GONE (its API refused keyless calls,
-# so it shipped as dead weight). An old config that still names it must be REPORTED, not
-# silently half-working, and the kind must not come back through a typo-tolerance path.
-check("tavily is no longer a kind",
+# tavily was a built-in alongside anysearch; it is GONE as a kind and an adapter (its API
+# refused keyless calls, so it shipped as dead weight). A config that still names it is
+# accepted like any other url: the OPEN contract is a JSON POST, so a provider this file
+# has never heard of needs a url, not a code change.
+check("tavily is no longer a kind or an adapter",
       "tavily" not in fb._SEARCH_DEFAULT_URL
       and "tavily" not in fb._SEARCH_PROVIDERS_BY_KIND
       and "tavily" not in fb._SEARCH_DEFAULT_KEY_ENV,
       sorted(fb._SEARCH_PROVIDERS_BY_KIND))
 search_config([{"kind": "tavily", "url": REMOTE}], False)
 _chain, _problems = fb._search_providers()
-check("a config still naming tavily is reported as an unknown kind",
-      _chain == [] and _problems and "unknown kind" in _problems[0]
-      and "tavily" in _problems[0], (_chain, _problems))
-out = fb.tool_web_search({"query": "retired kind"}, {})
-check("...and the refusal a run prints names it too",
-      out.startswith("BLOCKED:") and "unusable entr" in out and "tavily" in out,
-      out[:300])
+check("a config naming an unknown kind is accepted as a generic provider",
+      _problems == [] and len(_chain) == 1 and _chain[0]["kind"] == "generic"
+      and _chain[0]["label"] == "tavily", (_chain, _problems))
+search_config([{"kind": "nope"}], False)
+_chain, _problems = fb._search_providers()
+check("...while a kind with no url of its own is still a named problem",
+      _chain == [] and _problems and "needs its own url" in _problems[0],
+      (_chain, _problems))
+
+# The open contract itself: a POST of {query, max_results}, the key as Bearer, answered
+# with results - and a 405 retried as searxng's GET.
+_generic = {"kind": "generic", "url": BASE_URL + "/generic", "label": "custom",
+            "api_key_env": ""}
+search_config([_generic], True)
+idx = len(_Stub.calls)
+out = fb.tool_web_search({"query": "open contract"}, {})
+shot = _Stub.calls[idx] if len(_Stub.calls) > idx else None
+check("a url alone is a JSON POST of {query, max_results}",
+      shot and shot[0] == "POST" and shot[2] == {"query": "open contract",
+                                                 "max_results": 5},
+      shot)
+check("...and the answer's results list is read", "Stub AnySearch hit" in out, out[:200])
+os.environ["MY_PROVIDER_KEY"] = "sekret-bearer"
+try:
+    _keyed = dict(_generic, api_key_env="MY_PROVIDER_KEY")
+    search_config([_keyed], True)
+    idx = len(_Stub.calls)
+    out = fb.tool_web_search({"query": "keyed"}, {})
+    shot = _Stub.calls[idx] if len(_Stub.calls) > idx else None
+    check("...with its key as Authorization: Bearer",
+          shot and shot[3] == "Bearer sekret-bearer", shot)
+finally:
+    os.environ.pop("MY_PROVIDER_KEY", None)
+search_config([{"kind": "generic", "url": BASE_URL + "/post405", "label": "getonly"}],
+              True)
+idx = len(_Stub.calls)
+out = fb.tool_web_search({"query": "fallback"}, {})
+verbs = [c[0] for c in _Stub.calls[idx:]]
+check("a 405 on the POST retries as GET ?q=&format=json (the searxng shape)",
+      verbs[:2] == ["POST", "GET"] and "Stub SearxNG hit" in out, (verbs, out[:200]))
 
 # The BLOCKED line is what the MODEL relays, so it must name doors the operator can
 # actually type - "web search is disabled" and nothing else is not an answer.
@@ -347,10 +386,17 @@ check("...and the add-your-own door",
 # ------------------------------------------- building an entry: the key's home is .env
 envp = STAGE / ".env"
 envp.unlink(missing_ok=True)
-entry, err = fb._search_entry_build("tavily", REMOTE, "t", "", "")
-check("building a retired kind is refused, naming what is accepted",
-      entry is None and "kind must be one of" in err and "tavily" not in err.split(":")[1],
-      err)
+entry, err = fb._search_entry_build("brave", REMOTE, "my-brave", "", "")
+check("a kind the file never heard of is kept as its name (the generic POST calls it)",
+      err == "" and entry == {"kind": "brave", "url": REMOTE, "label": "my-brave"},
+      (entry, err))
+entry, err = fb._search_entry_build("", BASE_URL + "/", "", "", "")
+check("no kind at all means generic, and the label defaults to the url's host",
+      err == "" and entry["kind"] == "generic"
+      and entry["label"] == BASE_URL.split("//", 1)[1], entry)
+_bad, _berr = fb._search_entry_build("bad kind!", BASE_URL, "", "", "")
+check("a kind with junk in it is refused, with the shape spelled out",
+      _bad is None and "short name" in _berr, _berr)
 entry, err = fb._search_entry_build("searxng", BASE_URL + "/", "mybox", "", "")
 check("a searxng entry needs no key and its url is trimmed",
       err == "" and entry == {"kind": "searxng", "url": BASE_URL, "label": "mybox"},

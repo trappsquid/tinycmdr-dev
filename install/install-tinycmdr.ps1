@@ -82,8 +82,9 @@ param(
                                                  # as a pipe and splits the argument)
     [string[]] $AddSearch     = @(),             # more web-search providers, repeatable:
                                                  # "<url>;<kind>;<label>;<key>" - kind is
-                                                 # anysearch|searxng (guessed from the host
-                                                 # when blank); the key is optional
+                                                 # optional and open (anysearch|searxng
+                                                 # name exact shapes; anything else is a
+                                                 # generic JSON POST); the key is optional
     [string] $Python          = "",              # full path to python.exe if auto-detect fails
     [switch] $InstallPython,                     # kept for compatibility: installing a
                                                  # missing Python is now the DEFAULT
@@ -1041,7 +1042,9 @@ foreach ($spec in $AddEndpoint) {
 # Extra web-search providers, either as switches (repeatable - how a script adds one) or
 # answered at the web-search step below. "<url>;<kind>;<label>;<key>", the last three
 # optional; a key goes to .env under a generated name, never into config.json. The kind is
-# checked when given and guessed from the host when blank (anysearch, else searxng).
+# OPTIONAL and OPEN: anysearch and searxng name their exact wire shapes, anything else (or
+# nothing) is called with the generic JSON POST - a provider this installer has never
+# heard of needs a url, not a code change.
 $script:SearchRows = @()
 foreach ($spec in $AddSearch) {
     if (-not $spec -or -not $spec.Trim()) { continue }
@@ -1051,14 +1054,8 @@ foreach ($spec in $AddSearch) {
     $sl = "$($parts[2])".Trim()
     $skey = "$($parts[3])".Trim()
     if (-not $su) { continue }
-    if ($sk -and $sk -notin @("anysearch", "searxng")) {
-        Fail "-AddSearch: kind must be anysearch or searxng (got '$sk')"
-    }
-    if (-not $sk) {
-        if ($su -match "anysearch") { $sk = "anysearch" }
-        else { $sk = "searxng" }
-    }
-    if (-not $sl) { $sl = $sk }
+    if (-not $sk) { $sk = "generic" }
+    if (-not $sl) { $sl = ($su -replace '^https?://', '').Split('/')[0] }
     $sn = $script:SearchRows.Count + 1
     $script:SearchRows += [pscustomobject]@{
         Kind = $sk; Url = $su.TrimEnd("/"); Label = $sl; Key = $skey
@@ -1277,33 +1274,26 @@ if ($Ask -and -not $KeepConn) {
         } elseif ($sw -eq "3") {
             $SearchEgress = "false"
         } elseif ($sw -eq "4") {
-            Write-Host "    provider: 1) searxng (your own box; no key)  2) anysearch (no key"
-            Write-Host "              needed)"
-            $pk = (Read-Host "    choice [1]").Trim()
-            $sk = switch ($pk) { "2" { "anysearch" } default { "searxng" } }
-            $sdurl = switch ($sk) {
-                "anysearch" { "https://api.anysearch.com/v1/search" }
-                default { "" }
-            }
-            $sq = if ($sdurl) { "    its url [$sdurl]" } else { "    its url (the base; /search is added)" }
-            $su = (Read-Host $sq).Trim()
-            if (-not $su) { $su = $sdurl }
-            $sl = (Read-Host "    label [$sk]").Trim()
-            if (-not $sl) { $sl = $sk }
-            $skey = ""
-            if ($sk -eq "anysearch") {
-                $skey = (Read-Host "    API key (Enter = none)").Trim()
-            }
-            if ($su) {
+            Write-Host "    The API's url, an optional key (not echoed; Enter = an endpoint"
+            Write-Host "    that answers anonymously) and a label. A url alone is called with"
+            Write-Host "    a JSON POST of {query, max_results}; a searxng box works too."
+            while ($true) {
+                $su = (Read-Host "    provider url").Trim()
+                if (-not $su) { break }
+                $skey = Read-Secret "    API key (Enter = none)"
+                $dlabel = ($su -replace '^https?://', '').Split('/')[0]
+                $sl = (Read-Host "    label [$dlabel]").Trim()
+                if (-not $sl) { $sl = $dlabel }
                 $sn = $script:SearchRows.Count + 1
                 $script:SearchRows += [pscustomobject]@{
-                    Kind = $sk; Url = $su.TrimEnd("/"); Label = $sl; Key = $skey
+                    Kind = "generic"; Url = $su.TrimEnd("/"); Label = $sl; Key = $skey
                     Env = $(if ($skey) { "TINYCMDR_SEARCH${sn}_API_KEY" } else { "" }) }
                 Write-Host "    added (tried first): $sl $su"
                 if (-not (Test-LanUrl $su) -and -not $SearchEgress) {
                     $SearchEgress = "true"
                     Write-Host "    $su is off this machine, so off-LAN providers are now allowed"
                 }
+                if (-not (Ask-Yes "    Add another entry?" $false)) { break }
             }
         }
     }

@@ -408,17 +408,20 @@ def main():
     print("\n== the installer takes web-search providers of your own ==")
     check("the switch is declared and parsed",
           "[string[]] $AddSearch" in install and "foreach ($spec in $AddSearch)" in install)
-    check("an unknown kind at the switch is refused, naming what is accepted",
-          "-AddSearch: kind must be anysearch or searxng" in install)
+    check("a blank kind at the switch becomes the generic POST provider",
+          'if (-not $sk) { $sk = "generic" }' in install
+          and "-AddSearch: kind must be" not in install,
+          "an open kind must not be refused by a hand-kept list")
+    check("the interactive add asks url, key and label, then offers another",
+          "provider url" in install and "API key (Enter = none)" in install
+          and "Add another entry?" in install)
+    check("...and a blank label defaults to the url's host",
+          ".Split('/')[0]" in install)
     check("the web-search step is a menu, not one yes/no",
           "4) add your own provider now" in install
           and "keep search on this machine only" in install)
     check("tavily is GONE - no built-in option, no prompt line, no key name",
           "tavily" not in install.lower())
-    check("the interactive add asks kind, url and label; a key where the kind takes one",
-          "provider: 1) searxng (your own box; no key)" in install
-          and "API key (Enter = none)" in install
-          and "its url" in install and "label [" in install)
     check("the rows reach search.providers, this run's first",
           "$cfg.search | Add-Member -NotePropertyName providers" in install
           and '("providers"\\s*:\\s*)\\[\\s*\\]' in install)
