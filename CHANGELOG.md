@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.92] - 2026-10-08
+
 ### Fixed
 - **A question parked for the next run never arrived:** the run loop's budget measurement read and consumed the sidecar before any payload was built, and `/new` never cleared it - the measurement now weighs the line without taking delivery, the payload build consumes it, and reset clears it (tests/test_ask_user.py).
 - **A memory's `(stale)` flag could be frozen at its last write:** the prompt read `index.md` as last rendered, so a concept whose `stale_after` instant passed while the bundle was otherwise quiet kept riding every prompt unflagged - the prompt renders the index from the concepts at prompt time (tests/test_memory_okf.py).
