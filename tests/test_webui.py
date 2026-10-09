@@ -1588,6 +1588,43 @@ def main():
         except Exception:                                        # noqa: BLE001
             pass
 
+    # ---- A-116: '::1' binds, and an unresolvable host says so ------------------
+    # QuietServer inherited AF_INET, so web.host "::" (a wildcard in several places)
+    # could never bind and the gaierror came back as "another process holds the port".
+    _saved_web116 = json.loads(json.dumps(fb.CONFIG.get("web") or {}))
+    _sink116 = _Collect()
+    fb.log.addHandler(_sink116)
+    try:
+        fb.CONFIG["web"] = {"enabled": True, "host": "::1", "port": 0, "token": token}
+        _v6err116, _srv116 = "", None
+        try:
+            _srv116 = fb.run_webui()
+        except BaseException as e:               # the pre-fix shape: a gaierror escapes
+            _v6err116 = "%s: %s" % (type(e).__name__, e)
+        check(_srv116 is not None and _srv116.server_address[1] > 0,
+              "a v6 host ('::1') binds instead of dying with a gaierror",
+              (_v6err116, _srv116))
+        if _srv116 is not None:
+            try:
+                _srv116.shutdown()
+                _srv116.server_close()
+            except Exception:                                    # noqa: BLE001
+                pass
+        fb.CONFIG["web"] = {"enabled": True, "host": "no-such-host.invalid", "port": 0,
+                            "token": token}
+        _sink116.lines.clear()
+        _t0 = time.time()
+        _bad116 = fb.run_webui()
+        _took116 = time.time() - _t0
+        check(_bad116 is None and _took116 < 3.0
+              and any("does not resolve" in ln for ln in _sink116.lines),
+              "a host that does not resolve is refused at once, in words (not six "
+              "retries ending in 'held by another process')",
+              (_took116, _sink116.lines[-2:]))
+    finally:
+        fb.log.removeHandler(_sink116)
+        fb.CONFIG["web"] = _saved_web116
+
     # ...and the claim is ATOMIC: three simultaneous chats in one conversation start
     # exactly one run. The look and the registration used to be two steps, so all
     # three passed the check and all three ran (the measured shape of A-228).

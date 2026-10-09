@@ -28917,6 +28917,15 @@ def run_webui():
         is normal; log it as one line and keep serving."""
 
         daemon_threads = True
+
+        def __init__(self, addr, handler):
+            # An IPv6 host ('::1', '::', a v6 literal) needs the v6 family: with AF_INET
+            # it failed with a gaierror that the retry loop then reported as "held by
+            # another process" (A-2026-10-08-116). The instance attribute is what
+            # socketserver's own __init__ reads when it creates the socket.
+            if ":" in str(addr[0]):
+                self.address_family = socket.AF_INET6
+            super().__init__(addr, handler)
         # SO_REUSEADDR means two DIFFERENT things: on POSIX it only relaxes the TIME_WAIT
         # rebind a restart needs, while on Windows it lets a SECOND process bind a port
         # that is already served - measured 2026-09-22, `tinycmdr web` shared 8787 with the
