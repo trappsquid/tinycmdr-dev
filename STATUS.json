@@ -2116,6 +2116,17 @@
       },
       "detail": "Four findings from the whole-harness review's second batch, each with a regression test that fails on the pre-fix build. The run loop's budget measurement read the sidecar of a question an unanswered ask_user run had parked and consumed it before any payload was built, so the question never reached the next run at all; the same sidecar survived /new, which would have let it ride a conversation the operator had just abandoned. The measurement now weighs the line without taking delivery (open_question consume=False), the payload build consumes it, and reset clears it. The prompt carried index.md as last written, so a concept whose stale_after instant passed while the bundle was otherwise quiet kept riding every prompt with no (stale) flag - the prompt now renders the index from the concepts at prompt time, and the file stays the mutation-written browse copy for humans and the other consumers. The add path rendered that index before deprecating the concept it supersedes, so the superseded entry rode unflagged next to its replacement until a later mutation re-rendered.",
       "gate": "tests/test_ask_user.py and tests/test_memory_okf.py red on the pre-fix build (6 and 3 FAILs) and green on the batch; the full gate green"
+    },
+    {
+      "id": "audit-fixes-1-0-92-guards",
+      "title": "six gate holes: continuations, -enc abbreviations, Mac disks, the grant, the store, the allow scope",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "09a5f67",
+        "expect": "untagged"
+      },
+      "detail": "The six findings left in the guard slice after -88, each verified against the code and graded by tests/test_guard_battery.py (30 checks red on the pre-fix build). A backslash (bash) or backtick (PowerShell) line continuation ended one segment at the newline, so `dd bs=1M \\<newline>of=/dev/sda`, a backtick-continued `format` and `find / \\<newline>-delete` split and the half carrying the target read clean - one join before any guard reads tokens now. The encoded-PowerShell arm matched only exact tokens plus the full word, so -enco/-encod/-encoded and every slash spelling passed it and the shipped blocked_patterns regex; any accepted abbreviation counts now (colon/equals values, en/em dashes). The never tier had no macOS disk verb and missed common Linux ones - diskutil (write subcommands only; list/info stay usable), parted, sfdisk, cfdisk, gdisk, blkdiscard, mkswap, asr and newfs_* are never-tier. A `session` approval lived for the life of the process under a key /new keeps, so a fresh conversation inherited it; reset drops it with the conversation. The confirm gate's own file was writable by the model (write_file, edit_file, a redirect or an open() call) and a permanent grant answered for lanes with nobody to ask: writes to confirm-allow.json are refused on every door now (file doors by resolved path, shell/code in is_blocked), and a no-door lane decides by agent.confirm_without_door and nothing else. An allow pattern matched anywhere in the line, so an allow_patterns entry naming `git status` also exempted `git status && git reset --hard`; a pattern whitelists the segment it matches, and a line is exempt only when every segment is.",
+      "gate": "tests/test_guard_battery.py red on the pre-fix build (30 FAILs) and green on the batch; test_authority/test_endpoint_gate/test_stall/test_verbs green; the full gate green"
     }
   ]
 }
