@@ -279,7 +279,7 @@
       "\\binitialize-disk\\b",
       "\\bcipher\\s+/w\\b",
       "\\bvssadmin\\s+delete\\s+shadows\\b",
-      "\\b(?:powershell|pwsh)(?:\\.exe)?\\b[^\\n]*\\s-e(?:c|nc(?:odedcommand)?)?\\s+[A-Za-z0-9+/=]{8,}"
+      "\\b(?:powershell|pwsh)(?:\\.exe)?\\b[^\\n]*\\s[-/](?:e|ec|en|enc|enco|encod|encode|encoded|encodedc|encodedco|encodedcom|encodedcomm|encodedcomma|encodedcomman|encodedcommand)\\b\\s+[A-Za-z0-9+/=]{8,}"
     ],
     "blocked_patterns_extra": [],
     "confirm_patterns": [
