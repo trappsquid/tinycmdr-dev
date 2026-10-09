@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.96] - 2026-10-09
+
+### Fixed
 - **Each download carried all three OSes' doors:** the win zip unpacked the macOS and Linux installers (9 files / 194.1 KB measured) and every installer copies the package tree, so foreign doors landed in every install folder too - each archive now carries only its own platform's doors, and the builder refuses a container that carries a foreign one (maintenance/build-package.py).
 - **A device or FIFO under a searched tree could OOM or hang the bot:** search_files read any non-regular file with read_bytes() (/dev/zero grows until the kernel kills the process, a FIFO blocks open() for ever) and a single named file had no cap at all - non-regular files are skipped by name, a single file goes through the same 8 MiB cap the shell's output wears, and naming one directly is refused (tests/test_search_scope.py).
 - **The file tools and the shell disagreed about the working directory:** relative write_file/read_file/edit_file paths resolved against the process cwd while the shell runs in the install dir, and verify_shell_writes verified the process cwd too - one _tool_path door resolves against BASE_DIR, and the verifier uses the cwd the shell actually ran in (tests/test_harness_extras.py, tests/test_verify.py).
