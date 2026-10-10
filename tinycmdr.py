@@ -36907,6 +36907,45 @@ def _cli_model(rest, pick=False):
     print(green("  ✓ model is now %s%s (this session)" % (target, where)))
 
 
+def _cli_plan(rest):
+    """`/plan [on|off|apply]` in the console: the chat lane's words, one word everywhere.
+
+    HELP_TEXT advertised the verb, and the chat lane ran it, while the console answered
+    "not a command" (A-2026-10-06-277).
+    """
+    key = _cli_key()
+    arg = (rest or "").strip().lower()
+    if arg in ("on", "off"):
+        mode = plan_mode_set(key, "plan" if arg == "on" else "execute")
+        if mode == "plan":
+            print(green("  Plan mode ON - this machine is read-only: the agent investigates "
+                        "and records a plan, and nothing writes or runs until /plan apply."))
+        else:
+            print(green("  Plan mode OFF - execution resumed."))
+        return
+    if arg in ("apply", "approve"):
+        plan_mode_set(key, "execute")
+        body = plan_render(key)
+        print(green("  Plan approved - execution mode is on."))
+        if body:
+            print(body)
+        return
+    print(dim("  Mode: %s. Usage: /plan on (look, don't touch), /plan apply "
+              "(approve and execute), /plan off (resume execution)."
+              % ("plan (read-only)" if plan_mode(key) == "plan" else "execute")))
+
+
+def _cli_fork(rest):
+    """`/fork [name]` in the console: copy this conversation, keep the original."""
+    key = _cli_key()
+    made = AGENT.fork(key, (rest or "").strip() or None)
+    if not made:
+        print(dim("  Nothing to fork yet - this session has no saved turns."))
+        return
+    print(green("  Forked to '%s' - the original is untouched." % made))
+    print(dim("  /tinycmdr sessions lists it; /tinycmdr resume N continues the copy."))
+
+
 def _cli_command(text):
     """Handle one /verb. True = keep the loop, False = quit."""
     text = cmdr_strip(text)          # `/tinycmdr model` is `/model`, handled below
@@ -37007,6 +37046,12 @@ def _cli_command(text):
         return True
     if verb == "/usage":
         _cli_usage_line(force=True)
+        return True
+    if verb == "/plan":
+        _cli_plan(rest)
+        return True
+    if verb == "/fork":
+        _cli_fork(rest)
         return True
     # A MANAGEMENT verb the session cannot run still has an answer: say which door has it.
     # Measured 2026-09-30: /update typed in a session got "not a command - /tinycmdr help lists them", where the list has no

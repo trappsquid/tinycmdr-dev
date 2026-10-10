@@ -1692,6 +1692,57 @@ What must hold, and what this pins:
               "not a command" not in out.getvalue(), out.getvalue()[:120])
 
 
+    def test_console_plan_and_fork():
+        """The console advertised /plan and /fork in HELP_TEXT and handled neither
+        (A-2026-10-06-277): both said "not a command" while the chat lane ran them."""
+        saved_cli = dict(fb._CLI)
+        key = "cli-verbs-probe"
+
+        def _probe_files():
+            # The stage dir outlives one run, so a probe file a previous (or crashed) run
+            # left behind would answer "has saved turns" and get itself numbered.
+            for pat in ("cli-verbs-probe*.json", "branch-a*.json"):
+                for p in fb.SESSIONS_DIR.glob(pat):
+                    yield p
+
+        for _p in _probe_files():
+            _p.unlink(missing_ok=True)
+        try:
+            fb._CLI["session"] = key
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                keep = fb._cli_command("/plan on")
+            check("/plan on in the console enters read-only plan mode",
+                  keep is True and fb.plan_mode(key) == "plan"
+                  and "Plan mode ON" in out.getvalue(), out.getvalue()[:160])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                fb._cli_command("/plan apply")
+            check("...and /plan apply leaves it, saying so",
+                  fb.plan_mode(key) == "execute"
+                  and "Plan approved" in out.getvalue(), out.getvalue()[:160])
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                fb._cli_command("/fork")
+            check("/fork with nothing saved says so - not 'not a command'",
+                  "Nothing to fork" in out.getvalue(), out.getvalue()[:160])
+            fb.AGENT.histories[key] = [{"role": "user", "content": "hi"}]
+            fb.AGENT._save(key)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                fb._cli_command("/fork branch-a")
+            check("...and with turns saved it forks under the name given",
+                  fb.AGENT._session_path("branch-a").exists()
+                  and "Forked to 'branch-a'" in out.getvalue(), out.getvalue()[:160])
+        finally:
+            fb._CLI.clear()
+            fb._CLI.update(saved_cli)
+            fb._RUNS.pop(key, None)
+            fb.AGENT.histories.pop(key, None)
+            for _p in _probe_files():
+                _p.unlink(missing_ok=True)
+
+
     def main():
         tests = [v for k, v in sorted(_ns.items())
                  if k.startswith("test_") and callable(v)]
