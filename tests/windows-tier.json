@@ -20,6 +20,7 @@
     "tests/test_log_config_surface.py",
     "tests/test_measured_doc.py",
     "tests/test_plan_surface.py",
+    "tests/test_process_surface.py",
     "tests/test_route_surface.py",
     "tests/test_safety_surface.py",
     "tests/test_spill_state_surface.py",
@@ -51,7 +52,6 @@
     "tests/test_stream_surface.py",
     "tests/test_tool_args_surface.py",
     "tests/test_context_surface.py",
-    "tests/test_process_surface.py",
     "tests/test_search_surface.py",
     "tests/test_telegram.py"
   ],

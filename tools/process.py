@@ -420,6 +420,9 @@ def _load():
         return {}
 
 
+_SAVE_LOCK = threading.Lock()      # one writer at a time; see _save
+
+
 def _save(jobs):
     JOBS_FILE.parent.mkdir(parents=True, exist_ok=True)
     # One unique temp per save: a batch's tool calls run in a thread pool, and a FIXED
@@ -428,18 +431,25 @@ def _save(jobs):
     # stage: a status+output batch, and the operator got `ERROR in tool 'process'` for a
     # job that had finished cleanly). The same defect _census_save fixed for itself;
     # mkstemp in the target directory keeps the replace atomic on one filesystem.
-    fd, tmp = tempfile.mkstemp(prefix="process-jobs.", suffix=".tmp",
-                               dir=str(JOBS_FILE.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(jobs, indent=2))
-        os.replace(tmp, JOBS_FILE)
-    except BaseException:
+    #
+    # And ONE writer at a time, because a unique temp is not enough on Windows: two
+    # os.replace calls racing onto the same destination collide there - the loser gets
+    # [WinError 5] Access is denied on its own replace (measured 2026-10-10: the install
+    # surface's Windows job failed this suite's four-thread save member with exactly
+    # that). Readers never take this lock; the replace stays atomic for them.
+    with _SAVE_LOCK:
+        fd, tmp = tempfile.mkstemp(prefix="process-jobs.", suffix=".tmp",
+                                   dir=str(JOBS_FILE.parent))
         try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(jobs, indent=2))
+            os.replace(tmp, JOBS_FILE)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
 
 def _hidden():
