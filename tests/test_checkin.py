@@ -1200,6 +1200,37 @@ def test_a_restated_narration_does_not_open_a_new_line():
     check("a genuinely new status opens a new line", len(d.posts) == 2, d.posts)
 
 
+def test_a_restatement_inside_the_gap_still_updates_the_line():
+    """A-280 (2026-10-06): the note rate-limit ran BEFORE the restatement fold, so
+    a reworded restatement inside checkin_note_min_seconds was dropped outright and
+    the line kept the OLDER wording - the opposite of the fold's promise that the
+    newest wording is what the operator reads."""
+    d, rep = reporter(checkin_note_min_seconds=60)
+    rep.note("Checking the chat lane for the file (9.2 MB)")
+    check("the first note posts", len(d.posts) == 1, d.posts)
+    rep.note("Checking the chat lane for the file (9.2 MB, unchanged)")
+    check("a restatement inside the gap still updates the line it restates",
+          bool(d.edits) and "unchanged" in d.edits[-1][2], d.edits)
+    check("...and posts nothing new", len(d.posts) == 1, d.posts)
+
+
+def test_a_restated_narration_inside_the_gap_still_updates_its_line():
+    """A-280's streamed twin: narration() ran the same gap check before its fold."""
+    d, rep = reporter(checkin_stream_seconds=60)
+    rep.narration("The video is already downloaded (9.2 MB at /tmp/download/x.mp4)",
+                  final=False, new_turn=True)
+    check("the first status opens a line", len(d.posts) == 1, d.posts)
+    rep.narration("The video is already downloaded (9.2 MB, from an earlier run)",
+                  final=False, new_turn=True)
+    check("a restatement inside the gap updates the line",
+          bool(d.edits) and "earlier run" in d.edits[-1][2], d.edits)
+    check("...and posts nothing new", len(d.posts) == 1, d.posts)
+    rep.narration("Now checking how much disk space is left", final=False,
+                  new_turn=False)
+    check("a genuinely different status inside the gap is still throttled",
+          len(d.edits) == 1 and len(d.posts) == 1, (d.posts, d.edits))
+
+
 def test_a_repeated_card_folds_into_one_card_with_a_count():
     d, rep = reporter(checkin_tool_merge_seconds=0)
     rep.tool_done("shell", {"command": "ls -la"}, "exit_code=0", 0.2)

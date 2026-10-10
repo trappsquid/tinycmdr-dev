@@ -22855,28 +22855,33 @@ class RunReporter:
         if len(text) > cap:
             text = text[:cap].rstrip() + "…"
         gap = float(CONFIG["agent"].get("checkin_note_min_seconds", 1.0) or 0)
-        with self.lock:
-            now = time.time()
-            if now - self.last_note.get(src, 0.0) < gap:
-                return
-            self.last_note[src] = now
         # A RESTATED NOTE IS THE SAME LINE. The model's interstitial narration is
         # where the copy-paste repeats showed up (eight near-identical 💬 posts in
         # one stuck run, each one a notification on the phone). A line that opens
         # with the same words UPDATES the note already on screen instead of adding
         # another one: nothing is lost - the newest wording is what the operator
-        # reads - and nothing new is posted for the reader to scroll past.
-        if same_open(text, self.note_text.get(src, "")):
+        # reads - and nothing new is posted for the reader to scroll past. The fold
+        # therefore runs BEFORE the rate-limit gap: an edit is not a notification,
+        # so a reworded restatement inside the window still updates the line; with
+        # the gap first it was dropped and the OLDER wording stayed on screen
+        # (measured 2026-10-06).
+        with self.lock:
+            now = time.time()
+            ref = (self.note_ref.get(src)
+                   if same_open(text, self.note_text.get(src, "")) else None)
+            if ref is None:
+                if now - self.last_note.get(src, 0.0) < gap:
+                    return
+                self.last_note[src] = now
+        if ref is not None:
             self.note_repeats[src] = self.note_repeats.get(src, 0) + 1
             log.info("[%s] restated note updates its line (#%d): %s",
                      self.session_key, self.note_repeats[src], text[:80])
-            ref = self.note_ref.get(src)
-            if ref:
-                new_ref = self._redraw(ref, "note", f"💬 {text}", src)
-                self.note_ref[src] = new_ref
-                if new_ref is not None:
-                    return
-                # the line is gone: the restatement is posted as a new line below
+            new_ref = self._redraw(ref, "note", f"💬 {text}", src)
+            self.note_ref[src] = new_ref
+            if new_ref is not None:
+                return
+            # the line is gone: the restatement is posted as a new line below
         else:
             self.note_repeats[src] = 0
         self.note_text[src] = text
@@ -22934,16 +22939,22 @@ class RunReporter:
                 fresh = True
             else:
                 fresh = False
-                if not final and (now - self.last_stream.get(src, 0.0)) < gap:
-                    return
                 if body == self.stream_text.get(src):
                     return
-                if same_open(body, self.stream_open.get(src) or ""):
-                    # The line is the model's CURRENT status, and a reworded version
-                    # of the same sentence is still that one line: it is UPDATED in
-                    # place below, never posted again (the measured eight-post
-                    # storm). Nothing is lost - the newest wording is what the
-                    # operator reads - and no reader gets another notification.
+                # The line is the model's CURRENT status, and a reworded version
+                # of the same sentence is still that one line: it is UPDATED in
+                # place below, never posted again (the measured eight-post
+                # storm). Nothing is lost - the newest wording is what the
+                # operator reads - and no reader gets another notification. An
+                # edit is not a notification, so a restatement may also land
+                # inside the stream gap; with the gap checked first, a reworded
+                # turn was dropped and the OLDER wording stayed on screen
+                # (measured 2026-10-06).
+                restated = same_open(body, self.stream_open.get(src) or "")
+                if not final and not restated \
+                        and (now - self.last_stream.get(src, 0.0)) < gap:
+                    return
+                if restated:
                     self.stream_repeats[src] = self.stream_repeats.get(src, 0) + 1
                     log.info("[%s] restated line updates its post (#%d): %s",
                              self.session_key, self.stream_repeats[src], body[:80])
