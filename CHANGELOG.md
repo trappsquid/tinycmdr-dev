@@ -5,6 +5,11 @@ All notable changes to tinycmdr are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The file log keeps what a short-lived door logged:** the queue is drained at exit, so a verb's or a scheduled run's last lines reach `tinycmdr.log` instead of dying with the listener thread (tests/test_log_config_surface.py).
+
 ## [1.0.100] - 2026-10-09
 
 ### Fixed

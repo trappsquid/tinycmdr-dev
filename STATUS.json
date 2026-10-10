@@ -2381,6 +2381,17 @@
       },
       "detail": "The last three open code findings, each verified against the code first and each landed with a check that fails on the pre-fix build: the console runs `/plan` and `/fork` (both were advertised in `/tinycmdr help` and answered \"not a command\" while the chat lane ran them, and the console now speaks the chat lane's words); a session key that carries a character a file name cannot (a colon, a slash) is percent-quoted, so two such keys no longer fold onto one session file and a restart reloads each conversation under the key its file carries - the reload used to rename the survivor and lose the other's content with the name; and the Ctrl-Y copy file lives in a per-user 0700 directory, is created 0600 in one step instead of write-then-chmod, and refuses a path that is not a plain file, so a symlink planted at the predictable temp path cannot hand the copied text to the file it points at. tests/test_interaction_surface.py, tests/test_harness_surface.py and tests/test_tui.py carry the checks.",
       "gate": "every new check RED on the pre-fix build (test_interaction_surface's console probe, test_harness_surface's collision reload, test_tui's planted symlink); the whole gate is green at -j4 per slice, 0 skipped"
+    },
+    {
+      "id": "log-drain-at-exit",
+      "title": "the file log keeps what a short-lived door logged before exiting",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "c4e93e0",
+        "expect": "untagged"
+      },
+      "detail": "The log listener's thread is a daemon, so a process that exits with records still queued - a management verb, a scheduled run, --once - had them torn down unwritten: measured on a Windows install, a refused verb's line reached the console and the file kept 5 of 20 calls, silently, and a 200-record burst before sys.exit lost every record. One atexit hook drains the queue wherever the process leaves, and the manual drain in the service preflight is gone. tests/test_log_config_surface.py's burst check fails on the pre-fix build.",
+      "gate": "RED on the pre-fix build: the 200-record burst check lands 0 of 200; green on the batch"
     }
   ]
 }
