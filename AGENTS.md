@@ -42,13 +42,15 @@ not authority.
   "Operator" means whoever runs a box; when the record is about my own work or decisions it
   says "I" (David). tests/test_wording.py grades the mechanical half in the gate.
 - **The repo never names my private records.** The nightly audits, the sessions that fix their
-  findings, the finding ids, the findings ledger and the share they live on are private working
-  machinery: a commit message, the changelog, the record, a release body or a code comment says
-  what was wrong and what changed, never which run found it or where the write-up is kept. A
-  dated measurement ("measured 2026-10-06 on a Windows install") is the public form of the same
-  fact and is what to write instead. tests/test_wording.py refuses the nouns everywhere and the
-  finding ids in the changelog and the record; the release notes are outside the tree, so the
-  same rule is on me when I cut one (docs/development.md §7).
+  findings, the findings ledger and the share they live on are private working machinery: a commit
+  message, the changelog, the record, a release body or a code comment says what was wrong and what
+  changed, never which run found it or where the write-up is kept. Finding ids are the one allowed
+  exception, and only beside their reason: an id in a source comment or a commit subject is an
+  opaque label, and it never appears in a narrative file - the changelog, the record (STATUS.json),
+  the docs or a release body. A dated measurement ("measured 2026-10-06 on a Windows install") is
+  the public form of the same fact and is what to write instead. tests/test_wording.py refuses the
+  nouns everywhere and the finding ids in the narrative files; the release notes are outside the
+  tree, so the same rule is on me when I cut one (docs/development.md §7).
 - **One way to do each thing.** If you reach for a new script, note or doc, check first whether
   `where.py`, `STATUS.json`, `run_all.py`, `batch.sh`, `measured-block.py` or `release.sh` already owns it.
 - **The gate must be armed, not merely present.** `bash maintenance/install-hooks.sh` in every
