@@ -534,6 +534,67 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     check("...while a shell-driven runbook still is",
           "mint it" in fb.mint_offer_line("mint-nogui-1"), fb.mint_offer_line("mint-nogui-1")[:120])
 
+    # ---- a runbook whose procedure ALREADY has a tool: never offer to mint it ----------
+    # Operator report, 2026-10-10: a run executed the dvd-pipeline runbook by hand while
+    # the dvd_creator tool for it sat in tools/ - built from the same conversation, named
+    # in the runbook and naming the runbook - and the offer still said "say mint it and I
+    # will turn it into a tool". The GUI skip above is the same shape: nothing to mint,
+    # nothing to ask. Falsify: a build without runbook_covered_by() answers "" and the
+    # checks FAIL (never crash), the way the route_hint checks do.
+    covered_by = getattr(fb, "runbook_covered_by", lambda *a, **k: "")
+    _shelf = {"dvd_creator": {"schema": {"type": "function", "function": {
+        "name": "dvd_creator",
+        "description": "DVD pipeline on this Mac; read the dvd-pipeline skill first."}}}}
+    check("a tool whose description names the runbook covers it",
+          covered_by("dvd-pipeline", tools=_shelf) == "dvd_creator",
+          covered_by("dvd-pipeline", tools=_shelf))
+    _shelf2 = {"dvd_creator": {"schema": {"type": "function", "function": {
+        "name": "dvd_creator", "description": "Burn an ISO to a disc."}}}}
+    check("...and a shared name word covers it on its own",
+          covered_by("dvd-pipeline", tools=_shelf2) == "dvd_creator",
+          covered_by("dvd-pipeline", tools=_shelf2))
+    check("...and so does a declared category",
+          covered_by("dvd-pipeline", tools={
+              "disc_dub": {"category": "dvd",
+                           "schema": {"type": "function", "function": {
+                               "name": "disc_dub", "description": "Copy discs."}}}}) == "disc_dub")
+    check("a runbook with no tool of its own is not covered",
+          covered_by("fleet-access", tools=_shelf) == "")
+    _st_cov = fb.run_state("mint-covered-1", create=True)
+    _st_cov["calls_by"] = {"shell": 6}
+    _st_cov["skills_read"] = ["dvd-pipeline"]
+    _keep_shelf = dict(fb.REGISTRY.custom)
+    fb.REGISTRY.custom.update(_shelf)
+    try:
+        check("the operator is never offered a mint for a runbook that has a tool",
+              fb.mint_offer("mint-covered-1", None, source="main") == "")
+    finally:
+        fb.REGISTRY.custom.clear()
+        fb.REGISTRY.custom.update(_keep_shelf)
+    # ...while an uncovered runbook still reaches the operator (the check above is not
+    # just "never offer"): the same run state with a book that has no tool.
+    _st_cov["skills_read"] = ["fleet-access"]
+    check("an uncovered runbook still offers",
+          "mint it" in (fb.mint_offer("mint-covered-1", None, source="main") or ""),
+          fb.mint_offer("mint-covered-1", None, source="main"))
+
+    # ---- every hand-driven call counts, not only the fingerprinted ones ----------------
+    # Measured 2026-10-10: the offer quoted "5 hand calls" for a run that made 17 - the
+    # increment sat inside the census branch, so 12 shell calls whose command vocabulary
+    # did not fingerprint (ls, sleep, tail, ffmpeg chains) were invisible to the gate.
+    # "echo" is the shape with NO fingerprint by construction (no verb in the list).
+    fb._run_state_reset("mint-count-1")
+    for _ in range(3):
+        fb.Agent._exec_tool(fb.AGENT,
+                            {"function": {"name": "shell",
+                                          "arguments": {"command": "echo count-me"}}},
+                            {"session_key": "mint-count-1", "config": fb.CONFIG})
+    _byc = (fb.run_state("mint-count-1") or {}).get("calls_by") or {}
+    check("every successful hand-driven call counts toward the run's hand total",
+          int(_byc.get("shell") or 0) == 3, _byc)
+    check("...and the unfingerprintable one proves it (no census shape for echo)",
+          fb._procedure_sig("shell", {"command": "echo count-me"}) == "")
+
     # ---- the mint census: one line when a by-hand SHAPE has run in several runs ----------
     # Measured 2026-09-25 on a live install: the run does a routine by hand every time and never
     # offers to keep it, and the whole six-day log held ONE `remember` call. The model sees one

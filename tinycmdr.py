@@ -7414,6 +7414,43 @@ def remember_nudge(name, args, ctx):
             "every future prompt, so the next run does not look it up again.]")
 
 
+_RUNBOOK_WORDS_RX = re.compile(r"[^a-z0-9]+")
+
+
+def runbook_covered_by(book, tools=None):
+    """The box's custom tool that already covers this runbook, or "".
+
+    The mint offer asks whether a runbook should become a tool; when one was minted for it
+    before, the answer is on disk and the question is noise (operator report, 2026-10-10: a
+    run executed a DVD-pipeline runbook by hand while the tool for it sat in ./tools and was
+    named IN the runbook). Two matches, both read from the registration:
+      * the tool's DESCRIPTION names the runbook ("read the dvd-pipeline skill ...");
+      * the runbook name and the tool's name/declared category share a word of 3+ chars
+        ("dvd-pipeline" -> "dvd_creator").
+    A false positive costs one offer the operator can still ask for by hand; a false
+    negative is the report above.
+    """
+    phrase = " ".join(_RUNBOOK_WORDS_RX.split(str(book or "").lower())).strip()
+    if not phrase:
+        return ""
+    words = {w for w in phrase.split() if len(w) >= 3}
+    shelf = (getattr(REGISTRY, "custom", None) or {}) if tools is None else tools
+    for name in sorted(shelf or {}):
+        tool = shelf.get(name) or {}
+        desc = " ".join(_RUNBOOK_WORDS_RX.split(str(
+            (tool.get("schema") or {}).get("function", {}).get("description")
+            or "").lower()))
+        if phrase in desc:
+            return name
+        if words:
+            named = {w for w in _RUNBOOK_WORDS_RX.split(
+                ("%s %s" % (name, tool.get("category") or "")).lower())
+                if len(w) >= 3}
+            if words & named:
+                return name
+    return ""
+
+
 def mint_offer(session_key, reporter, source="main"):
     """Ask the OPERATOR whether a by-hand routine should become a tool.
 
@@ -7477,11 +7514,21 @@ def mint_offer(session_key, reporter, source="main"):
         log.info("[%s] mint offer skipped: the run used a computer/GUI tool", session_key)
         return ""
     books = [b for b in (st.get("skills_read") or []) if b]
-    if books:
+    open_books = [b for b in books if not runbook_covered_by(b)]
+    if books and not open_books:
+        # Every runbook this run read already HAS a tool: the mint question is answered
+        # twice over, and asking it reads as the harness not knowing its own box (operator
+        # report, 2026-10-10). The GUI skip above stands the same way: nothing to mint,
+        # nothing to ask.
+        log.info("[%s] mint offer skipped: a tool already covers the %s runbook",
+                 session_key, ", ".join(books[-3:]))
+        return ""
+    if open_books:
         # The run READ a runbook and then did its steps by hand. That is the "combine the
         # skill into a tool" case the operator named, and it needs no census: the runbook
-        # IS the procedure, and its name is the tool's name.
-        book = books[-1]
+        # IS the procedure, and its name is the tool's name. A runbook that already has a
+        # tool is filtered out of `open_books` above.
+        book = open_books[-1]
         line = (f"💡 That run executed the `{book}` runbook by hand ({hand} calls). If that "
                 f"procedure is routine here, say **mint it** and I will turn it into a tool "
                 f"so one call does what the whole runbook walked you through.")
@@ -20835,14 +20882,19 @@ class Agent:
         if name in MINT_HINT_TOOLS and not out.startswith(("ERROR", "BLOCKED", "DECLINED")):
             try:
                 _key = ctx.get("session_key") if ctx else None
+                _st = run_state(_key, create=True) if _key else {}
+                _by = _st.setdefault("calls_by", {})
+                # EVERY hand-driven call counts: the mint and remember offers gate on how
+                # much of the run went by hand. This increment used to sit inside the
+                # census branch below, so only calls whose command vocabulary
+                # fingerprinted were counted, and an offer quoted a fraction of the run's
+                # own work (measured 2026-10-10: a 17-call run offered as 5).
+                _by[name] = int(_by.get(name) or 0) + 1
                 ent = procedure_census_bump(name, args, _key)
                 if ent:
-                    _st = run_state(_key, create=True) if _key else {}
                     sigs = _st.setdefault("sigs", [])
                     if ent["sig"] not in sigs:
                         sigs.append(ent["sig"])
-                    _by = _st.setdefault("calls_by", {})
-                    _by[name] = int(_by.get(name) or 0) + 1
                     hint = mint_hint(name, args, ctx, ent)
                     if hint:
                         out += hint
