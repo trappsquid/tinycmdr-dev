@@ -2414,6 +2414,17 @@
       },
       "detail": "The hand-call count the offer quotes counted only the calls whose command vocabulary the census could fingerprint, because the increment sat inside the census branch - measured 2026-10-10, a 17-call run was offered as 5. Every successful hand-driven call now counts toward the mint and remember gates. tests/test_route_surface.py keeps three unfingerprintable shell calls and fails on the pre-fix build when the counter stays empty.",
       "gate": "RED on the pre-fix build: three 'echo' calls leave calls_by empty; green on the batch"
+    },
+    {
+      "id": "runbook-offer-per-run-weekly",
+      "title": "the runbook mint offer speaks for its own run, and once a week",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "519e130",
+        "expect": "untagged"
+      },
+      "detail": "skills_read was every runbook the SESSION had read, so a run that read none still passed the runbook gate and the offer could say \"That run executed the X runbook by hand\" about a runbook that run never opened; a run now starts with an empty list (run_start_marks, the seam the hand count moved to when it was fixed the same way). The branch also had no throttle, so the offer posted on every qualifying run (measured 2026-10-07: five offers in one evening) - it keeps the week's window the order and census branches keep, marked in the census file so a restart does not lift it. tests/test_route_surface.py's three checks fail on the pre-fix build.",
+      "gate": "RED on the pre-fix build: the run-start list, the vouch check and the weekly throttle; green on the batch"
     }
   ]
 }
