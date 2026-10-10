@@ -997,7 +997,8 @@ def _write_config(raw):
         mode = st.st_mode & 0o777
     except OSError:
         pass
-    atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
+    with _path_lock(str(CONFIG_PATH)):    # the one lock every config.json writer shares
+        atomic_write_text(CONFIG_PATH, json.dumps(raw, indent=2))
     if mode is not None and os.name != "nt":
         # The replacement is created with the umask, so a 0600 file the installer wrote
         # would come back 0644 - and config.json can hold llm.api_key. Restore the mode.
@@ -1018,6 +1019,37 @@ def _write_config(raw):
             log.warning("config.json is now owned by uid %d and could not be restored "
                         "to %d:%d: %s", os.getuid(), owner[0], owner[1], e)
     _config_stamp_refresh()
+
+
+_CONFIG_GONE = object()          # a key a delta REMOVES
+
+
+def _config_delta(before, after):
+    """The deep difference `after` - `before`, as a nested dict; removals are _CONFIG_GONE."""
+    out = {}
+    for k, v in after.items():
+        b = before.get(k)
+        if isinstance(v, dict) and isinstance(b, dict):
+            sub = _config_delta(b, v)
+            if sub:
+                out[k] = sub
+        elif b != v:
+            out[k] = v
+    for k in before:
+        if k not in after:
+            out[k] = _CONFIG_GONE
+    return out
+
+
+def _config_apply_delta(target, delta):
+    """Apply a `_config_delta` result to `target` in place."""
+    for k, v in delta.items():
+        if v is _CONFIG_GONE:
+            target.pop(k, None)
+        elif isinstance(v, dict) and isinstance(target.get(k), dict):
+            _config_apply_delta(target[k], v)
+        else:
+            target[k] = v
 
 
 def config_drift():
@@ -10555,7 +10587,7 @@ def _search_commit(raw, entry):
         return 1
     back, _e = _config_raw()
     if not _e:
-        CONFIG.update(back)          # the running process reads what it just wrote
+        _config_reload_live()          # the running process reads what it just wrote
     print("added (tried first): %s %s" % (entry["label"], entry["url"]))
     if entry.get("api_key_env") and not _search_key(entry):
         print("note: %s is not set in .env yet; put its value there with:\n"
@@ -35557,7 +35589,7 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
         if kind == "cloud" and not key:
             if default_key:
                 print(dim("   a key is already set for this endpoint (Enter keeps it)"))
-            key = input("   API key (leave empty if it needs none): ").strip() or default_key
+            key = _ask_secret("   API key (leave empty if it needs none): ") or default_key
         # The key changed on a 401 without the URL changing: re-probe the same link
         # rather than making the reader re-type it. Bounded - three refusals means the
         # provider is not going to take it, and the rest of the wizard has work to do.
@@ -35572,7 +35604,7 @@ def _ask_model_target(default_url="", default_model="", default_key=""):
                     break
                 print(red("   \u2717 the provider refused that key (HTTP %d)"
                           % res["status"]))
-                key = input("   API key (try again): ").strip() or key
+                key = _ask_secret("   API key (try again): ") or key
                 continue
             break
         if res["ok"]:
@@ -35646,6 +35678,9 @@ def _run_setup_interactive(rest=None):
     except Exception as e:
         print(red("could not read config.json: %s" % e), file=sys.stderr)
         return 1
+    # The START snapshot: the write path diffs the wizard's answers against it, so a
+    # concurrent write to keys the wizard never touched survives (A-2026-10-08-169).
+    _setup_before = json.loads(json.dumps(raw))
 
     llm = raw.setdefault("llm", {})
     mm = raw.setdefault("mattermost", {})
@@ -35720,7 +35755,7 @@ def _run_setup_interactive(rest=None):
         mm_url = input("   Mattermost server URL (e.g. https://chat.example.com) [%s]: " % cur_mm_url).strip()
         if mm_url:
             mm["url"] = mm_url
-        mm_token = input("   Mattermost bot token (leave empty to keep current): ").strip()
+        mm_token = _ask_secret("   Mattermost bot token (leave empty to keep current): ")
         if mm_token:
             if _env_set_safe("TINYCMDR_MM_TOKEN", mm_token):
                 print(dim("   Mattermost token saved to .env"))
@@ -35734,7 +35769,7 @@ def _run_setup_interactive(rest=None):
     cur_tg_users = ",".join(str(u) for u in (tg.get("allowed_users") or []))
     want_tg = input("   Configure Telegram gateway? [%s]: " % ("y" if cur_tg_users else "n")).strip().lower()
     if want_tg in ("y", "yes"):
-        tg_token = input("   Telegram bot token (leave empty to keep current): ").strip()
+        tg_token = _ask_secret("   Telegram bot token (leave empty to keep current): ")
         if tg_token:
             if _env_set_safe("TINYCMDR_TG_TOKEN", tg_token):
                 print(dim("   Telegram token saved to .env"))
@@ -35785,8 +35820,8 @@ def _run_setup_interactive(rest=None):
         # _ or -), and a refused value must come back as a question, not as a link that
         # quietly still carries the old token.
         for _try in range(3):
-            ans_tok = input("   Access token (Enter to %s): "
-                            % ("keep the current one" if cur_tok else "mint one")).strip()
+            ans_tok = _ask_secret("   Access token (Enter to %s): "
+                                  % ("keep the current one" if cur_tok else "mint one"))
             if not ans_tok:
                 break
             if _env_set_safe("TINYCMDR_WEB_TOKEN", ans_tok):
@@ -35850,7 +35885,7 @@ def _run_setup_interactive(rest=None):
             _url = input("   provider url: ").strip()
             if not _url:
                 break
-            _key = input("   API key (Enter = none): ").strip()
+            _key = _ask_secret("   API key (Enter = none): ")
             _label = input("   label [%s]: "
                            % (_url.split("//", 1)[-1].split("/")[0] or "generic")).strip()
             _entry, _err = _search_entry_build("", _url, _label, "", _key)
@@ -35876,8 +35911,18 @@ def _run_setup_interactive(rest=None):
     print()
 
     try:
-        _write_config(raw)
-        CONFIG.update(raw)
+        # Another writer may have changed config.json during this conversation (a chat
+        # /model use, `config set`, `tinycmdr model ...`): writing this run's whole
+        # snapshot would silently revert it. Under the one lock every config writer
+        # shares, re-read the file and apply ONLY what the wizard changed
+        # (A-2026-10-08-169) - then reload the FULL merge, never the bare file
+        # (A-2026-10-08-168).
+        _delta = _config_delta(_setup_before, raw)
+        with _path_lock(str(CONFIG_PATH)):
+            _fresh, _fresherr = _config_raw()
+            _config_apply_delta(_fresh if not _fresherr else {}, _delta)
+            _write_config(_fresh)
+        _config_reload_live()
         _MODEL_CACHE["at"] = 0.0
     except Exception as e:
         print(red("could not write config.json: %s" % e), file=sys.stderr)
@@ -38379,24 +38424,28 @@ def _config_write_raw(raw):
     return None
 
 
+def _config_reload_live():
+    """Make the running process read what is on disk: a full load_config().
+
+    CONFIG is a deep merge of the shipped defaults + the file + the env overrides;
+    swapping whole sections in from the bare file (dict.update(raw), or an llm-only
+    take-effect) dropped every defaulted key and every env-applied value from the live
+    process - a config.json without llm.max_turns then died at the next request with
+    KeyError (A-2026-10-08-168)."""
+    CONFIG.clear()
+    CONFIG.update(load_config())
+    # A key added after import was not in the sweep, so it reached the transcript, the
+    # log and the chat unmasked (2026-09-29).
+    _refresh_secrets()
+
+
 def _config_take_effect():
     """Re-read config.json and make the change live. The read-back is the proof."""
     back, err = _config_raw()
     if err:
         return err
-    CONFIG["llm"] = back.get("llm") or CONFIG["llm"]
-    # Resolve each fallback's api_key_env against the environment AND .env, exactly as
-    # load_config does at import: a key `model add` just wrote to .env has to reach
-    # model_catalog in THIS process, or the new endpoint cannot answer until a restart.
-    for _fb in CONFIG["llm"].get("fallbacks", []):
-        if isinstance(_fb, dict) and _fb.get("api_key_env"):
-            _val = _endpoint_key(_fb["api_key_env"])
-            if _val:
-                _fb["api_key"] = _val
+    _config_reload_live()
     _MODEL_CACHE["at"] = 0.0
-    # A key added after import was not in the sweep, so it reached the transcript, the
-    # log and the chat unmasked (2026-09-29).
-    _refresh_secrets()
     return None
 
 
@@ -38738,7 +38787,7 @@ def _verb_config(rest):
                                   json.dumps(node.get(key)) if key in node else "(gone)"))
     if key in ("base_url", "model", "fallbacks", "token") and section == "llm":
         _MODEL_CACHE["at"] = 0.0
-    CONFIG.update(back)
+    _config_reload_live()
     # The secret guard above skips the llm section, so `config set llm.api_key` lands
     # here and takes effect; the import-time sweep does not hold it (2026-09-29).
     _refresh_secrets()
@@ -38837,6 +38886,11 @@ def _disk_version():
         return VERSION
     m = re.search(r'^VERSION\s*=\s*"([^"]+)"', text, re.M)
     return m.group(1) if m else VERSION
+
+
+def _version_key(v):
+    """A comparable tuple for a VERSION string: its digits, in order ("1.0.9" < "1.0.10")."""
+    return tuple(int(x) for x in re.findall(r"\d+", str(v))) or (0,)
 
 
 def _dev_tree_reason():
@@ -39141,7 +39195,8 @@ def _verb_update(rest):
     import tempfile
     import zipfile
     keep_dev = "--full" in rest
-    rest = [a for a in rest if a != "--full"]
+    force = "--force" in rest
+    rest = [a for a in rest if a not in ("--full", "--force")]
     if not rest:
         asset = _update_asset()
         base = _update_base()
@@ -39192,6 +39247,29 @@ def _verb_update(rest):
                 # A half-applied update needed.
                 print("already up to date: VERSION %s" % this_version)
                 return 0
+            _dev_why = _dev_tree_reason()
+            if _version_key(new_version) < _version_key(this_version) and not force:
+                # releases/latest re-pointed, or agent.update_url naming an older tag:
+                # replacing a newer build with an older one must not be silent
+                # (A-2026-10-08-133).
+                print("VERSION %s is OLDER than the %s installed here - refusing to "
+                      "replace a newer build with an older one. `update --force` does it "
+                      "deliberately." % (new_version, this_version), file=sys.stderr)
+                return 1
+            if _dev_why and not force:
+                if new_version == this_version:
+                    # The same-version "repair" over a checkout would overwrite
+                    # uncommitted edits for nothing.
+                    print("this folder looks like a development checkout (%s), and this "
+                          "package carries the SAME version - a repair here would "
+                          "overwrite uncommitted edits for nothing. `update --force` "
+                          "does it deliberately." % _dev_why, file=sys.stderr)
+                    return 1
+                # An UPGRADE over a checkout WARNS but lands: the stranded installs are
+                # exactly this shape and `update <package>` is their one way forward.
+                print("note: this folder looks like a development checkout (%s) - "
+                      "shipped files carrying uncommitted edits are overwritten by this "
+                      "update" % _dev_why, file=sys.stderr)
             if new_version == this_version:
                 print("VERSION %s is already here, but this package's files differ - "
                       "applying it to repair the install" % this_version)
@@ -39291,6 +39369,25 @@ def _verb_update(rest):
             return 1
         print("candidate: %s (VERSION %s, runs ok)" % (new_app, new_version))
         print("this one : %s (VERSION %s)" % (CONFIG_PATH.parent, VERSION))
+        _disk_now = _disk_version()
+        _dev_why = _dev_tree_reason()
+        if _version_key(new_version) < _version_key(_disk_now) and not force:
+            # A rollback is legitimate - and deliberate. `update --force` says so
+            # (A-2026-10-08-133).
+            print("VERSION %s is OLDER than the %s installed here - refusing to replace "
+                  "a newer build with an older one. `update --force` does it deliberately."
+                  % (new_version, _disk_now), file=sys.stderr)
+            return 1
+        if _dev_why and not force:
+            if _version_key(new_version) == _version_key(_disk_now):
+                print("this folder looks like a development checkout (%s), and this "
+                      "candidate carries the SAME version - applying it would overwrite "
+                      "uncommitted edits for nothing. `update --force` does it "
+                      "deliberately." % _dev_why, file=sys.stderr)
+                return 1
+            print("note: this folder looks like a development checkout (%s) - shipped "
+                  "files carrying uncommitted edits are overwritten by this update"
+                  % _dev_why, file=sys.stderr)
         changed = []
         for name in ("tinycmdr.py",):
             candidate = find(name)
@@ -40083,7 +40180,7 @@ def _verb_search_add_interactive():
         return 1
     back, _e = _config_raw()
     if not _e:
-        CONFIG.update(back)
+        _config_reload_live()
     for entry in rows:
         print("added (tried first): %s %s" % (entry["label"], entry["url"]))
         if entry.get("api_key_env") and not _search_key(entry):
@@ -40131,7 +40228,7 @@ def _verb_search_remove(rest):
         return 1
     back, _e = _config_raw()
     if not _e:
-        CONFIG.update(back)
+        _config_reload_live()
     print("removed: %s %s" % (gone.get("label") or gone.get("kind"), gone.get("url")))
     if _verb_running() is True:
         print("a running bot reads config.json at start: `tinycmdr restart`.")
@@ -40169,7 +40266,7 @@ def _verb_search_allow(rest):
         return 1
     back, _e = _config_raw()
     if not _e:
-        CONFIG.update(back)
+        _config_reload_live()
     print("off-LAN providers: %s" % ("allowed" if val else "refused"))
     if val:
         print("note: a search now sends the model's query to a provider off this "

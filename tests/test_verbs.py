@@ -892,6 +892,101 @@ def _body():
               (rc, written["llm"].get("base_url")))
         fb.pick_terminal_ready, fb.run_model_pick = saved_ready, saved_pick
 
+        # ---- the setup wizard: no secret echoed, the live CONFIG kept whole, and a
+        #      concurrent write not reverted ------------------------------------
+        # A config.json the FILE does not fill in: the live CONFIG is a deep merge with
+        # the shipped defaults, and the wizard must leave every defaulted key in place.
+        _wiz_cfg = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        _wiz_cfg["llm"].pop("max_turns", None)
+        _wiz_cfg["llm"]["fallbacks"] = []
+        _wiz_cfg["agent"].pop("max_steps", None)
+        (workdir / "config.json").write_text(json.dumps(_wiz_cfg, indent=2),
+                                             encoding="utf-8")
+        _seen_prompts = []
+        _canned = {"Mattermost bot token": "MTGATEWAYFIXTURE0000000000",
+                   "Telegram bot token": "123456789:FIXTURE-TG-TOKEN-" + "0" * 15,
+                   "Access token": "web-tok-1-abcdefghij",
+                   "API key": "sk-canned"}
+        _real_secret = fb._ask_secret
+
+        def _recording_secret(prompt):
+            _seen_prompts.append(prompt)
+            for _ck, _cv in _canned.items():
+                if _ck in prompt:
+                    return _cv
+            return ""
+
+        _saved_target = fb._ask_model_target
+
+        def _target_stub(default_url="", default_model="", default_key=""):
+            # a concurrent writer lands while the wizard is open (a chat /model use)
+            _live = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+            _live.setdefault("agent", {})["max_steps"] = 7
+            (workdir / "config.json").write_text(json.dumps(_live, indent=2),
+                                                 encoding="utf-8")
+            return {"url": "http://127.0.0.1:8081/v1", "model": "main", "key": ""}
+
+        fb._ask_model_target = _target_stub
+        fb._ask_secret = _recording_secret
+        _saved_envs = {k: os.environ.get(k) for k in ("TINYCMDR_MODEL",
+                                                      "TINYCMDR_WEB_TOKEN")}
+        os.environ["TINYCMDR_MODEL"] = "env-fixed-model"
+        try:
+            rc, out, err = call(
+                fb, ["setup"],
+                stdin="\n".join(["y", "", "", "y", "", "", "", "", "", "",
+                                 "", "", ""]),
+                tty=True)
+        finally:
+            for _k, _v in _saved_envs.items():
+                if _v is None:
+                    os.environ.pop(_k, None)
+                else:
+                    os.environ[_k] = _v
+            fb._ask_model_target = _saved_target
+            fb._ask_secret = _real_secret
+        _wiz_written = json.loads((workdir / "config.json").read_text(encoding="utf-8"))
+        _wiz_env = (workdir / ".env").read_text(encoding="utf-8")
+        check("the wizard runs to the end", rc == 0, (rc, err[:200]))
+        check("the Mattermost token is asked for through the no-echo reader",
+              any("Mattermost bot token" in p for p in _seen_prompts), _seen_prompts)
+        check("...and the Telegram token, and the page token",
+              any("Telegram bot token" in p for p in _seen_prompts)
+              and any("Access token" in p for p in _seen_prompts), _seen_prompts)
+        check("...and what it read landed in .env",
+              "TINYCMDR_MM_TOKEN=MTGATEWAYFIXTURE0000000000" in _wiz_env
+              and ("TINYCMDR_TG_TOKEN=123456789:FIXTURE-TG-TOKEN-" + "0" * 15) in _wiz_env
+              and "TINYCMDR_WEB_TOKEN=web-tok-1-abcdefghij" in _wiz_env, _wiz_env[-260:])
+        check("a write made while the wizard was open survives it",
+              _wiz_written.get("agent", {}).get("max_steps") == 7,
+              _wiz_written.get("agent"))
+        check("the live CONFIG is the FULL merge again, not the bare file",
+              bool(fb.CONFIG["llm"].get("max_turns"))
+              and bool(fb.CONFIG["agent"].get("max_steps"))
+              and fb.CONFIG["llm"].get("model") == "env-fixed-model",
+              (fb.CONFIG["llm"].get("max_turns"), fb.CONFIG["agent"].get("max_steps"),
+               fb.CONFIG["llm"].get("model")))
+
+        # ...the model key too: section 1 of the same wizard, called directly
+        _seen_prompts.clear()
+        _saved_kind, _saved_choose = fb._ask_endpoint_kind, fb._choose_one_model
+        fb._ask_endpoint_kind = lambda default: "cloud"
+        fb._choose_one_model = lambda url, ids, default: "m1"
+        fb.probe_endpoint = lambda url, key=None, timeout=20: {
+            "ok": True, "ids": ["m1"], "status": 200, "error": ""}
+        fb._ask_secret = _recording_secret
+        _saved_stdin = sys.stdin
+        sys.stdin = FakeTTY("\n\n")
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                fb._ask_model_target("https://api.example.com/v1", "m0", "")
+        finally:
+            sys.stdin = _saved_stdin
+            fb._ask_endpoint_kind, fb._choose_one_model = _saved_kind, _saved_choose
+            fb._ask_secret = _real_secret
+        check("the model key is read through the no-echo reader as well",
+              any("API key" in p for p in _seen_prompts), _seen_prompts)
+
         # ---- model add / remove: an endpoint has a route of its own -----------
         # (operator, 2026-09-22: "your solution to wire in another endpoint is to rerun
         # the installer?" - it never was one. Hand-editing config.json was the only way
@@ -1306,6 +1401,45 @@ def _body():
               rc == 0 and "9.9.11" in out, (rc, out[:200], err[:200]))
         check("...and the install runs the new build",
               'VERSION = "9.9.11-' in (workdir / "tinycmdr.py").read_text(encoding="utf-8"))
+
+        # ---- an older release must not flatten a newer install ---------------------
+        _before_dg = (workdir / "tinycmdr.py").read_bytes()
+        _old = workdir / "old" / "tinycmdr.py"
+        _old.parent.mkdir()
+        _old.write_text((workdir / "tinycmdr.py").read_text(encoding="utf-8")
+                        .replace('VERSION = "', 'VERSION = "1.0.1-', 1), encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(_old)])
+        check("a downgrade is refused, and says it is one",
+              rc == 1 and "OLDER" in err and "1.0.1" in err, (rc, (err or out)[:200]))
+        check("...and the install is untouched",
+              (workdir / "tinycmdr.py").read_bytes() == _before_dg)
+        rc, out, err = call(fb, ["update", str(_old), "--force"])
+        check("`update --force` takes the downgrade deliberately",
+              rc == 0 and 'VERSION = "1.0.1-' in (workdir / "tinycmdr.py").read_text(
+                  encoding="utf-8"), (rc, out[:160], err[:160]))
+        (workdir / "tinycmdr.py").write_bytes(_before_dg)     # back to the 9.9.11 build
+
+        # ...and a same-version "repair" must not overwrite a checkout's edits. The
+        # legacy UPGRADE over the same checkout warns but lands (the stranded-install
+        # rescue) - the two are the difference this guard turns on.
+        _cand_dir = workdir / "cand-guard"
+        _cand_dir.mkdir()
+        _cand = _cand_dir / "tinycmdr.py"
+        _cand.write_text((workdir / "tinycmdr.py").read_text(encoding="utf-8")
+                         .replace('VERSION = "9.9.11-', 'VERSION = "9.9.12-', 1),
+                         encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(_cand)])
+        check("an upgrade over a checkout warns about uncommitted edits, and lands",
+              rc == 0 and "development checkout" in err and "9.9.12" in out,
+              (rc, err[:200], out[:160]))
+        _cand.write_text((workdir / "tinycmdr.py").read_text(encoding="utf-8") + "\n# probe\n",
+                         encoding="utf-8")
+        rc, out, err = call(fb, ["update", str(_cand)])
+        check("a same-version repair over a checkout is refused",
+              rc == 1 and "SAME version" in err, (rc, err[:220]))
+        rc, out, err = call(fb, ["update", str(_cand), "--force"])
+        check("...and `--force` repairs deliberately",
+              rc == 0, (rc, out[:160], err[:160]))
 
         (rel / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, asset), encoding="utf-8")
         _before = (workdir / "tinycmdr.py").read_bytes()
@@ -1807,8 +1941,10 @@ def _body():
         # The literal OrdinalIgnoreCase compare replaced it in BOTH copies, and the
         # supervisor clause is scoped like the bot clause now (the vbs passes the full
         # path; measured 2026-10-05).
-        check("...and scopes the filter with a literal, wildcard-safe compare",
-              "IndexOf($install," in _ps and 'like "*$install*"' not in _ps
+        check("...and scopes the filter with a literal, wildcard-safe compare at a path "
+              "boundary",
+              "IndexOf(($install.TrimEnd('\\') + '\\')," in _ps
+              and 'like "*$install*"' not in _ps
               and "-Filter \"Name='pythonw.exe'\"" not in _ps)
         _psi = (BASE / "install" / "install-tinycmdr.ps1").read_text(encoding="utf-8")
         check("...and the installer's copy spells it the same way (kept in step)",
