@@ -260,7 +260,13 @@ losing the shape.
           t["evidence"] == ["pytest: 3 failed"], t)
     t, _ = fb.parse_subagent_result(block(status="ok", summary="s",
                                           evidence=["e%d" % i for i in range(20)]))
-    check("fields are capped, not unbounded", len(t["evidence"]) == 8, len(t["evidence"]))
+    check("fields are capped, not unbounded - and say how much was dropped",
+          len(t["evidence"]) == 9 and t["evidence"][-1] == "... +12 more", t["evidence"])
+    t, _ = fb.parse_subagent_result(block(status="ok", summary="s",
+                                          evidence=["e" * 400]))
+    check("...and an over-long item marks its cut tail, it does not drop it silently",
+          t["evidence"][0].endswith("...") and len(t["evidence"][0]) == 303,
+          len(t["evidence"][0]))
 
     quoted = ("here is the shape I will use:\n" + block(status="ok", summary="example")
               + "\nthe real one:\n" + block(status="blocked", summary="real answer"))
@@ -306,6 +312,39 @@ losing the shape.
           "TYPED" in fb.CORE_TOOLS["delegate_task"]["schema"]["function"]["description"])
     check("a sub-agent cannot spawn a sub-agent",
           "cannot spawn further" in fb.tool_delegate_task({"task": "x"}, {"depth": 1}))
+
+    # ---- the trimmed remainder is REAL now -------------------------------------
+    # The pointer said "the full text is in this run's transcript", and the child's
+    # session (its .transcript.jsonl included) is deleted right after the run
+    # (A-2026-10-06-293). It is spilled, and the pointer names the file. The spill
+    # dir is redirected: this suite grades the build, not the checkout it runs from.
+    import tempfile as _tempfile
+    import shutil as _shutil
+    _spill_saved = fb._spill_dir
+    _spill_tmp = Path(_tempfile.mkdtemp(prefix="fbtest-deleg-spill-"))
+    fb._spill_dir = lambda: _spill_tmp
+    try:
+        _long_ok = "y" * 5000 + block(status="ok", summary="s")
+        _spills_before = {p.name for p in fb._spill_dir().glob("*.txt")}
+        try:
+            fb.AGENT.run = lambda key, text, **kw: _long_ok
+            fb.AGENT.reset = lambda key: None
+            fb._relay_callbacks = lambda ctx, src: {}
+            out_long = fb.tool_delegate_task({"task": "long one"}, {"session_key": "s2"})
+        finally:
+            fb.AGENT.run, fb.AGENT.reset, fb._relay_callbacks = (real_run, real_reset,
+                                                                 real_relay)
+        _spilled = [p for p in fb._spill_dir().glob("subagent-*.txt")
+                    if p.name not in _spills_before]
+        check("a trimmed sub-agent answer is kept on disk, not thrown away with its session",
+              len(_spilled) == 1 and _spilled[0].read_text(encoding="utf-8") == _long_ok,
+              _spilled)
+        check("...and the trim points at that file, not at a transcript that is gone",
+              bool(_spilled) and ("spill/" + _spilled[0].name) in out_long
+              and "read_file" in out_long, out_long[-260:])
+    finally:
+        fb._spill_dir = _spill_saved
+        _shutil.rmtree(_spill_tmp, ignore_errors=True)
 
     print()
     print("%d passed, %d failed" % (len(PASSES), len(FAILS)))

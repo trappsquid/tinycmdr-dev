@@ -13464,16 +13464,28 @@ def parse_subagent_result(text):
         value = data.get(key) or []
         if isinstance(value, str):
             value = [value]
-        typed[key] = [" ".join(str(v).split())[:300] for v in value if str(v).strip()][:8]
+        items = [" ".join(str(v).split()) for v in value if str(v).strip()]
+        # The parent model must be able to tell "8 findings" from "8 of 30": the silent
+        # `[:8]` read as the former, and a >300-char item lost its tail with no mark
+        # (A-2026-10-06-296). Both caps say so, in the list itself.
+        shown = [it[:300] + ("..." if len(it) > 300 else "") for it in items[:8]]
+        if len(items) > 8:
+            shown.append("... +%d more" % (len(items) - 8))
+        typed[key] = shown
     return typed, ""
 
 
-def render_subagent_result(typed, why, answer, cap=2000):
+def render_subagent_result(typed, why, answer, cap=2000, spill=""):
     """What the parent model sees: fields first, the sub-agent's own words after."""
     raw = _SUBAGENT_RESULT_RX.sub("", answer or "").strip()
     if len(raw) > cap:
-        raw = (raw[:cap] + "\n[...sub-agent answer trimmed; the full text is in this run's "
-                            "transcript]")
+        if spill:
+            keep = ("the FULL text is in %s - read it with `read_file "
+                    "{\"path\": \"%s\"}`" % (spill, spill))
+        else:
+            keep = ("the rest was NOT kept (the child's session is thrown away after "
+                    "this call)")
+        raw = raw[:cap] + "\n[...sub-agent answer trimmed; " + keep + "]"
     if typed is None:
         return ("[HARNESS: sub-agent result UNPARSED - %s. Its own words below, read them "
                 "as prose.]\n%s" % (why, raw or "(empty answer)"))
@@ -13490,6 +13502,34 @@ def render_subagent_result(typed, why, answer, cap=2000):
 
 
 _SUB_KEYS = itertools.count()
+
+
+def _spill_subagent_answer(answer, ctx, cap=2000):
+    """Keep the child's own words on disk and return the spill path, or "".
+
+    The trimmed remainder used to point at "this run's transcript" - but the child's
+    session (and its .transcript.jsonl) is deleted by AGENT.reset right after the run,
+    so the text the sentence promised was gone (A-2026-10-06-293). One content-addressed
+    file per delegation, rotated with every other spill and indexed for the parent's
+    session, so the pointer names a file that exists. Nothing is written when the render
+    will not trim - there is no pointer to back.
+    """
+    text = str(answer or "")
+    if len(_SUBAGENT_RESULT_RX.sub("", text).strip()) <= cap:
+        return ""
+    try:
+        raw = text.encode("utf-8", "replace")
+        digest = hashlib.sha1(raw).hexdigest()[:16]
+        path = _spill_dir() / f"subagent-{digest}.txt"
+        if not path.exists() or path.stat().st_size != len(raw):
+            atomic_write_text(path, text)
+        _spill_rotate(int(CONFIG["agent"].get("spill_keep") or 50))
+        rel = f"spill/{path.name}"
+        _spill_record("delegate", rel, text, (ctx or {}).get("session_key"))
+        return rel
+    except Exception as e:                                            # noqa: BLE001
+        log.debug("subagent answer spill failed: %s", e)
+        return ""
 
 
 def _run_delegate_one(task, context, model, timeout, ctx):
@@ -13526,7 +13566,8 @@ def _run_delegate_one(task, context, model, timeout, ctx):
         usage = AGENT.last_usage.pop(key, None)
         AGENT.reset(key)  # sub-agent context is throwaway
     typed, why = parse_subagent_result(answer)
-    out = render_subagent_result(typed, why, answer)
+    out = render_subagent_result(typed, why, answer,
+                                 spill=_spill_subagent_answer(answer, ctx))
     if usage:
         # A 4-way delegation is the expensive case by construction; the parent (and the
         # operator reading the footer) should see what it actually spent.
