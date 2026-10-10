@@ -7529,6 +7529,28 @@ def mint_offer(session_key, reporter, source="main"):
         # IS the procedure, and its name is the tool's name. A runbook that already has a
         # tool is filtered out of `open_books` above.
         book = open_books[-1]
+        # One offer per runbook per week, the window the order branch keeps (A-2026-10-08-148)
+        # and the census branch below keeps: without it a recurring runbook's offer posts on
+        # every qualifying run (measured 2026-10-07: a runbook offer on five qualifying runs
+        # in one evening). The mark sits in the census's own file, so a restart does not
+        # lift it, and the section is capped like the rest of the file.
+        with _PROC_LOCK:
+            data = _census_load()
+            marks = data.setdefault("__runbooks__", {})
+            when = str(marks.get(book) or "")
+            if when:
+                try:
+                    if time.mktime(time.strptime(when, "%Y-%m-%d %H:%M")) > time.time() - 7 * 86400:
+                        log.info("[%s] mint offer for the %s runbook already posted %s - "
+                                 "throttled", session_key, book, when)
+                        return ""
+                except ValueError:
+                    pass
+            marks[book] = time.strftime("%Y-%m-%d %H:%M")
+            if len(marks) > 60:
+                for stale in sorted(marks, key=lambda k: str(marks.get(k) or ""))[:-60]:
+                    marks.pop(stale, None)
+            _census_save(data)
         line = (f"💡 That run executed the `{book}` runbook by hand ({hand} calls). If that "
                 f"procedure is routine here, say **mint it** and I will turn it into a tool "
                 f"so one call does what the whole runbook walked you through.")
@@ -15878,6 +15900,23 @@ def run_state(key, create=False):
         return st
 
 
+def run_start_marks(key):
+    """Stamp what THIS run starts from: the hand-call count, and an empty runbook list.
+
+    Both offers speak about the run ("That run executed the X runbook by hand"), and both
+    read session-lifetime state until they were moved here: the hand count first
+    (A-2026-10-08-148), and the runbook list second - a run that read no runbook carried
+    every book earlier runs had read into the offer gate, so the offer could name a
+    runbook the run never opened. Called once, where the run starts; /new and a restart
+    are the other resets.
+    """
+    st = run_state(key, create=True)
+    by = st.get("calls_by") or {}
+    st["hand_at_start"] = sum(int(by.get(t) or 0) for t in MINT_HINT_TOOLS)
+    st["skills_read"] = []
+    return st
+
+
 def plan_render(key, limit=None):
     """The plan as the model sees it: status, text, and the current step marked."""
     st = run_state(key)
@@ -21032,10 +21071,10 @@ class Agent:
                 _st0["order_repeats"] = 0
                 _st0["order_words"] = []
                 _st0["order_sample"] = ""
-            # The hand-driven call count AT THE START of this run: the remember offer asks
-            # about what THIS run re-derived, and the counters live per session.
-            _by0 = _st0.get("calls_by") or {}
-            _st0["hand_at_start"] = sum(int(_by0.get(t) or 0) for t in MINT_HINT_TOOLS)
+            # The run's own start marks - the hand count AT START and an empty runbook
+            # list - through one call, so the two offers can never disagree about what
+            # "this run" means.
+            _st0 = run_start_marks(session_key)
             if lookup_question(user_text):
                 _st0["order_is_lookup"] = 1
                 log.info("[%s] order reads as a durable-fact lookup", session_key)

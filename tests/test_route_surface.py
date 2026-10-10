@@ -560,23 +560,6 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
                                "name": "disc_dub", "description": "Copy discs."}}}}) == "disc_dub")
     check("a runbook with no tool of its own is not covered",
           covered_by("fleet-access", tools=_shelf) == "")
-    _st_cov = fb.run_state("mint-covered-1", create=True)
-    _st_cov["calls_by"] = {"shell": 6}
-    _st_cov["skills_read"] = ["dvd-pipeline"]
-    _keep_shelf = dict(fb.REGISTRY.custom)
-    fb.REGISTRY.custom.update(_shelf)
-    try:
-        check("the operator is never offered a mint for a runbook that has a tool",
-              fb.mint_offer("mint-covered-1", None, source="main") == "")
-    finally:
-        fb.REGISTRY.custom.clear()
-        fb.REGISTRY.custom.update(_keep_shelf)
-    # ...while an uncovered runbook still reaches the operator (the check above is not
-    # just "never offer"): the same run state with a book that has no tool.
-    _st_cov["skills_read"] = ["fleet-access"]
-    check("an uncovered runbook still offers",
-          "mint it" in (fb.mint_offer("mint-covered-1", None, source="main") or ""),
-          fb.mint_offer("mint-covered-1", None, source="main"))
 
     # ---- every hand-driven call counts, not only the fingerprinted ones ----------------
     # Measured 2026-10-10: the offer quoted "5 hand calls" for a run that made 17 - the
@@ -604,6 +587,43 @@ Falsify: point it at a build without route_hint() (the checks go through getattr
     _proc = Path(_tempfile.mkdtemp(prefix="fbtest-mint-")) / "procedure-census.json"
     fb.PROC_CENSUS_FILE = _proc
     fb._CENSUS_FORCE = True          # this suite is the census's test, not the running bot
+
+    # ---- the runbook offer, now that it can read the box and keep its own books --------
+    # These call the offer itself, which marks the census file from here down - and the
+    # file is the temp one, never the tree's.
+    _st_cov = fb.run_state("mint-covered-1", create=True)
+    _st_cov["calls_by"] = {"shell": 6}
+    _st_cov["skills_read"] = ["dvd-pipeline"]
+    _keep_shelf = dict(fb.REGISTRY.custom)
+    fb.REGISTRY.custom.update(_shelf)
+    try:
+        check("the operator is never offered a mint for a runbook that has a tool",
+              fb.mint_offer("mint-covered-1", None, source="main") == "")
+    finally:
+        fb.REGISTRY.custom.clear()
+        fb.REGISTRY.custom.update(_keep_shelf)
+    _st_un = fb.run_state("mint-uncovered-1", create=True)
+    _st_un["calls_by"] = {"shell": 6}
+    _st_un["skills_read"] = ["camera-swap"]
+    _line_un = fb.mint_offer("mint-uncovered-1", None, source="main")
+    check("an uncovered runbook still offers",
+          bool(_line_un) and "mint it" in _line_un, _line_un)
+    check("...once a week, not on every qualifying run",
+          fb.mint_offer("mint-uncovered-1", None, source="main") == "")
+
+    # ---- the offer speaks for THIS run: an earlier run's runbook cannot vouch for it ----
+    _st_rb = fb.run_state("mint-runbook-run-1", create=True)
+    _st_rb["calls_by"] = {"shell": 6}
+    _st_rb["skills_read"] = ["gate-latch"]     # what the session carried in
+    _marks = getattr(fb, "run_start_marks", None)
+    if _marks:
+        _marks("mint-runbook-run-1")
+    check("at a run's start the runbook list is the run's own (empty) one",
+          _marks is not None
+          and (fb.run_state("mint-runbook-run-1").get("skills_read") or []) == [],
+          (bool(_marks), fb.run_state("mint-runbook-run-1").get("skills_read")))
+    check("...so the offer cannot name a runbook this run never read",
+          "gate-latch" not in (fb.mint_offer("mint-runbook-run-1", None, source="main") or ""))
     _ord1 = fb.order_census_note("ord-sess", "Check free space on C, the 5 biggest files in logs, "
                                               "and the newest warnings in the supervisor log")
     _ord1b = fb.order_census_note("ord-sess", "check free space on C: the 5 biggest files under "
