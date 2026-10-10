@@ -2600,6 +2600,72 @@
       },
       "detail": "cap_output spilled the raw text - the run loop's own scrub ran after it - so a secret a tool result carried sat raw in spill/ on disk, and the folder took the umask (0755). Both writers (cap_output and a delegate's answer) mask before the digest, the file, the index row and the window; the folder is created 0700 and tightened when found wide.",
       "gate": "RED on the pre-fix build: the raw secret is in the spill file, the returned window and the index row, and the folder stays 0755; green on the batch"
+    },
+    {
+      "id": "macos-installer-python-gate",
+      "title": "the macOS installer's Python gate offers a way through",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1eff26b",
+        "expect": "untagged"
+      },
+      "detail": "A Mac whose /usr/bin/python3 is the Command Line Tools placeholder died at \"python could not run\" with no cause and no next command, and a 3.9-only Mac was refused without the fetch offer the installer makes when no interpreter exists at all. The placeholder now counts as no interpreter (the offer and -y consent apply), a 3.9 at a terminal gets the same offer, a --python that cannot run names --install-python, and declining after a python was fetched says the private copy stays in the install dir.",
+      "gate": "RED on the pre-fix build: the bare \"could not run\" line, the offerless 3.9 refusal and the unchanged decline line; green on the batch"
+    },
+    {
+      "id": "macos-re-run-and-doors",
+      "title": "a macOS re-run works like Linux's, and its doors report the truth",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1eff26b",
+        "expect": "untagged"
+      },
+      "detail": "A re-run over an existing install was refused without --force while the installer's own footer and the Mac guide tell the reader to re-run to add a lane, and a run from the installed copy died on a same-file cp; the foreign-label guard refused --no-launchd runs it could not harm, --no-start's summary read as registered, an uninstall could leave the job loaded and still say removed, .env was truncated in place before its rewrite, and the plist substitution ate an & in the install path. The re-run keeps the install behind one \"Keep the existing configuration?\" question, the same-file copy is skipped, the guard fires only when the agent would be written or loaded, --no-start and the uninstall report the real loading state, .env is written beside and renamed, and the plist values are escaped for both sed and XML.",
+      "gate": "RED on the pre-fix build: the blanket refusal, the same-file abort, the --no-launchd refusal, the unqualified --no-start summary and the &-eaten plist; green on the batch"
+    },
+    {
+      "id": "linux-installer-gates",
+      "title": "the Linux installer names the way through its own gates",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1eff26b",
+        "expect": "untagged"
+      },
+      "detail": "The default no-root install could not build its venv on a stock Debian/Ubuntu box (apt-get ran unelevated and the failure named only the log), --no-service and --uninstall died without systemctl while naming no way forward, ExecStart was unquoted so a space in HOME or --install-dir broke the unit, and a user-mode run with no systemd bus warned that all was fine and then died restarting the service; the removal path could also delete a folder under a system install, needed a working python3, and left a sudo grant or linger enabled without saying so. The missing venv is named with the exact root command before anything is written, the systemctl check applies only to runs that need it, ExecStart is quoted, the no-bus run finishes and says what to do, a user-mode uninstall refuses (or names) what it cannot remove, --uninstall no longer needs python3, the survivors are named, and the venv/pip/dependency failures carry cause and next command.",
+      "gate": "RED on the pre-fix build: the unsudoed apt-get, the pre-flight systemctl refusal under --no-service and --uninstall, the unquoted ExecStart and the after-warn restart abort; green on the batch"
+    },
+    {
+      "id": "windows-installer-boundaries",
+      "title": "the Windows installer stops at path boundaries and real names",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1eff26b",
+        "expect": "untagged"
+      },
+      "detail": "The process sweep matched the install dir as a bare substring (so uninstalling or force-reinstalling one install killed a sibling whose path has the first as a prefix), the python.org fallback downloaded python-3.12.8-win32.exe which does not exist and ignored WOW64, three path comparisons read the install dir with -like wildcards, a keep-existing re-run told the reader nothing runs in the background right after registering and starting the launcher, install.ps1 fetched without TLS 1.2 and left FB_NOPAUSE in the caller, the transcript scrub missed the page token, and the generated launchers inherited the package's LF endings. The sweep matches at a path boundary like the restart helper, the fallback maps architectures to python.org's real names, the comparisons are literal, the closing lines read the real registration state, TLS 1.2 is set, the environment is restored, the scrub covers the token, and the launchers are written with explicit CRLF.",
+      "gate": "RED on the pre-fix build: the substring sweep, the win32 name, the -like reads, the wizard-flag closing line, the missing TLS line, the leaked FB_NOPAUSE and the LF launchers; green on the batch"
+    },
+    {
+      "id": "updaters-refuse-and-rename",
+      "title": "the fallback updaters agree with the update verb",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1eff26b",
+        "expect": "untagged"
+      },
+      "detail": "update.sh and update.ps1 copied a re-pointed or mirrored older release over a newer install silently (the in-app verb refuses this by name), copied each file in place so an interrupt could leave a torn tinycmdr.py, printed a reconcile command naming the system python when the venv was missing, and named no next step on a failed fetch or checksum; the launcher's fallback leaked its temp updater exactly when the update failed, install.sh's footer hardcoded ~/tinycmdr, and the build's required-file gate checked the staged tree rather than the win container. Both updaters refuse a downgrade, write each file beside and rename it, name the venv's own python, name the next step on failure, and the launcher cleans up; the footer is qualified and the gate checks the container.",
+      "gate": "RED on the pre-fix build: the silent downgrade, the in-place copy, the system-python hint and the leaked temp file; green on the batch"
+    },
+    {
+      "id": "installer-docs-match",
+      "title": "the install docs match the installers",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1eff26b",
+        "expect": "untagged"
+      },
+      "detail": "The Mac guide sent readers to ~/.tinycmdr/.env (nothing reads it; the file is <install-dir>/.env), said a hosted endpoint's key is kept in config.json's llm.api_key (the installer writes it to .env as TINYCMDR_LLM_API_KEY and removes it from config.json), listed prompts the wizard no longer asks and referenced a curl line the file does not carry, and did not mention uv's cache outside the install dir; the README's --install-python note was unqualified next to the Linux line. The guide and the README now match the code.",
+      "gate": "RED on the pre-fix build: the wrong env path and the wrong key home in the guide; green on the batch"
     }
   ]
 }
