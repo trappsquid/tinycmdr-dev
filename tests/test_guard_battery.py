@@ -764,15 +764,20 @@ def test_a_written_script_cannot_carry_a_declined_command():
     script = work / "run_rm.sh"
     ctx_none = {"session_key": "script-belt"}                 # a lane with no door
     ctx_yes = {"session_key": "script-belt", "confirm_cb": lambda subject: True}
+    # Script CONTENT is read by bash, so the path must be bash-shaped on every platform:
+    # a Windows path with backslashes is consumed as escapes by bash (`rm -rf C:\...`
+    # targets "C:Users..."), rm -f still exits 0, and the check read a green run as a
+    # failure on the Windows CI (measured 2026-10-10, the fix's first push).
+    tgt = target.as_posix()
 
     out = fb.tool_write_file({"path": str(script),
-                              "content": "#!/bin/bash\nrm -rf %s\n" % target},
+                              "content": "#!/bin/bash\nrm -rf %s\n" % tgt},
                              ctx_none)
     check("write_file: a recursive delete in a script is declined before it lands",
           out.startswith("DECLINED") and not script.exists(), out[:160])
 
     out = fb.tool_write_file({"path": str(script),
-                              "content": "#!/bin/bash\nrm -rf %s\n" % target},
+                              "content": "#!/bin/bash\nrm -rf %s\n" % tgt},
                              ctx_yes)
     check("...and the approved write lands", out.startswith("OK") and script.exists(),
           out[:160])
@@ -780,7 +785,7 @@ def test_a_written_script_cannot_carry_a_declined_command():
     # the run-time half: a file the write gate never saw (written outside it, or by an
     # older build) is read back when an interpreter is pointed at it
     late = work / "late.sh"
-    late.write_text("#!/bin/bash\nrm -rf %s\n" % target)
+    late.write_text("#!/bin/bash\nrm -rf %s\n" % tgt)
     out = fb.tool_shell({"command": "bash %s" % late}, ctx_none)
     check("shell: bash of a script written this run is declined on the file's content",
           out.startswith("DECLINED") and str(late) in out, out[:160])
