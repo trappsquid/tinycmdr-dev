@@ -2524,6 +2524,39 @@
       },
       "detail": "The remember offer told operators \"nothing it learned went to memory - so the next run of this re-derives it\" for runs whose calls walked a runbook - the durable copy on disk (measured 2026-10-10: each order that read one earned the line). The offer stands down when the run read a runbook, with the log naming it; a run that learned the facts by hand still offers.",
       "gate": "RED on the pre-fix build: the runbook-reading run earns the offer; green on the batch"
+    },
+    {
+      "id": "spill-index-is-budgeted",
+      "title": "the spill index is budgeted per render",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "7d7780f",
+        "expect": "untagged"
+      },
+      "detail": "The spill index rides every request of the run, and it listed every spill of the session with no cap - the header's \"older lines drop off this list\" sentence was static, true of nothing (rows are ~110-160 chars per spill). The index is budgeted like the carry's own index now: the newest rows within twelve rows and 2400 chars, newest kept, with the count of what was left out said per render.",
+      "gate": "RED on the pre-fix build: 25 spills render 2204 chars and the oldest rows are listed; green on the batch"
+    },
+    {
+      "id": "carry-drops-the-inline-excerpt",
+      "title": "the carry does not re-buy the inline spill excerpt",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "7d7780f",
+        "expect": "untagged"
+      },
+      "detail": "The inline spill excerpt (200..cap//4 chars of cause-naming lines from the dropped middle) is a same-turn recovery aid, but the carry stored the capped result verbatim - every later request of the next run re-bought those exact lines (measured 2026-10-10). The carry copy strips the excerpt now; the head, the tail and the pointer stay. The excerpt's closing bracket moved to its own line so the strip cannot cut a line that merely ends in one.",
+      "gate": "RED on the pre-fix build: the stored carry copy still carries the excerpt; green on the batch"
+    },
+    {
+      "id": "spill-pointer-names-find-tools",
+      "title": "the spill pointer names find_tools for a hidden search_files",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "7d7780f",
+        "expect": "untagged"
+      },
+      "detail": "The spill pointer names search_files as the search door for the full text, while disclosure hides a core tool until find_tools reveals it (measured against the default tool list, 2026-10-10). The note says so now, so the model is not sent to a name its list does not show.",
+      "gate": "RED on the pre-fix build: the pointer does not name find_tools; green on the batch"
     }
   ]
 }

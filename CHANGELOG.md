@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The offer branches read the registry before the order branch fires:** a repeated order whose runbooks are all covered by a loaded tool is not offered a mint - the stand-down the runbook branch keeps now sits above the order and census branches (tests/test_route_surface.py).
 - **A lone generic probe is not a routine:** a census shape reduced to a single `ps`, `grep`, `df`, `du`, `date`, `find`, `awk` or `sed` no longer earns the mint hint, while two verbs still fingerprint (tests/test_route_surface.py).
 - **A run that read a runbook is not asked to save what the runbook already holds:** the remember offer stands down when the run's calls walked a procedure durable on disk (tests/test_route_surface.py).
+- **The spill index is budgeted per render:** the session's index lists the newest rows within twelve rows and 2400 chars and says how many older spills were left out - it used to re-buy every spill of the session on every request, and its "older lines drop off" line was static (tests/test_spill_state_surface.py).
+- **The carry does not re-buy the inline spill excerpt:** the excerpt is a same-turn aid, so the carry copy keeps the head, the tail and the pointer and drops it - it was stored verbatim and bought again on every later request of the next run (tests/test_spill_state_surface.py).
+- **The spill pointer names find_tools for a hidden search_files:** the note no longer sends the model to a tool disclosure hides until it is revealed (tests/test_spill_state_surface.py).
 
 ## [1.1.0] - 2026-10-10
 
