@@ -22,6 +22,7 @@ import hashlib
 import http.server
 import json
 import os
+import re
 import shutil
 import socket
 import socketserver
@@ -58,13 +59,20 @@ def fake_release(rel, version):
         'VERSION = "%s"\n' % version
         + '"""a fake build, for grading update.sh"""\n'
         + "print('hello from %s')\n" % version, encoding="utf-8")
+    # A release that moved the dependency bounds: update.sh must say how to reconcile
+    # the venv, the way the Python update verb does (A-2026-10-08-179).
+    (pkg / "requirements.txt").write_text("requests>=2.32,<3\n", encoding="utf-8")
     if asset.endswith(".zip"):
         with zipfile.ZipFile(rel / asset, "w") as z:
             z.write(pkg / "tinycmdr.py", "tinycmdr-%s/tinycmdr.py" % version)
+            z.write(pkg / "requirements.txt",
+                    "tinycmdr-%s/requirements.txt" % version)
     else:
         import tarfile
         with tarfile.open(rel / asset, "w:gz") as t:
             t.add(pkg / "tinycmdr.py", arcname="tinycmdr-%s/tinycmdr.py" % version)
+            t.add(pkg / "requirements.txt",
+                  arcname="tinycmdr-%s/requirements.txt" % version)
     digest = hashlib.sha256((rel / asset).read_bytes()).hexdigest()
     (rel / "SHA256SUMS").write_text("%s  %s\n" % (digest, asset), encoding="utf-8")
     return asset
@@ -151,17 +159,23 @@ def main():
         # one number an operator uses to see the copy loop did anything (run 23,
         # A-2026-10-07-67).
         summary = [ln for ln in out.splitlines() if ln.startswith("update: 1.0.0 -> 9.9.9")]
-        check(summary and "(1 file(s);" in summary[0],
+        check(bool(summary) and re.search(r"\(\d+ file\(s\);", summary[0]) is not None,
               "the summary reports how many files it wrote", summary)
+        check("pip install -r" in out and "requirements.txt" in out,
+              "a release that moved requirements.txt says how to reconcile the venv",
+              out[-300:])
 
         # A second run must not append another token: the guard the merge defeated.
         proc2 = subprocess.run(["sh", str(SCRIPT), str(inst)], cwd=str(work), env=env,
                                capture_output=True, text=True, timeout=300,
                                stdin=subprocess.DEVNULL)
+        out2 = proc2.stdout + proc2.stderr
         again = [l for l in (inst / ".env").read_text(encoding="utf-8").splitlines()
                  if l.startswith("TINYCMDR_WEB_TOKEN=")]
         check(len(again) == 1,
               "a later update finds the token and does not mint another", again)
+        check("pip install -r" not in out2,
+              "...and the same requirements stay quiet on a re-run", out2[-300:])
     finally:
         if srv is not None:
             srv.shutdown()

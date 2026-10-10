@@ -31,17 +31,10 @@ REM THE RULE: every user, on every released version, types `tinycmdr update` and
 REM An old install's own updater may predate the release package, so when the local code
 REM cannot do the job this shim fetches the published updater and lets IT do the whole
 REM thing (the probe is a marker in tinycmdr.py, not a version compare).
-if /i "%~1"=="update" (
-    REM The CAPABILITY marker, not a verb name: 1.0.44 HAS an update verb - git pull
-    REM based, which dead-ends on the dirty checkout its installer leaves - and no
-    REM releases/latest/download anywhere - see the unix shim for the measurement.
-    findstr /c:"releases/latest/download" "%HERE%tinycmdr.py" >nul 2>&1
-    if errorlevel 1 (
-        echo tinycmdr: this install predates the packaged updater - using the published one
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing 'https://github.com/trappsquid/tinycmdr/releases/latest/download/update.ps1' -OutFile (Join-Path $env:TEMP 'tc-update.ps1'); } catch { Write-Error 'could not fetch the updater'; exit 1 }; & (Join-Path $env:TEMP 'tc-update.ps1') -Dir '%HERE%'; exit $LASTEXITCODE"
-        exit /b %ERRORLEVEL%
-    )
-)
+REM A LABEL, not an if-block: cmd expands %ERRORLEVEL% when it PARSES the whole block, so
+REM the old `exit /b %ERRORLEVEL%` inside one exited with the code from BEFORE the
+REM updater ran - 0 for every refusal (A-2026-10-08-171).
+if /i "%~1"=="update" goto tc_update
 
 REM No arguments means the PAGE (the build's no-argument start), so nothing is added; a
 REM terminal session is the deliberate choice (`tinycmdr cli`). The bot keeps starting the
@@ -51,6 +44,23 @@ if "%~1"=="" (
 ) else (
     "%PY%" "%HERE%tinycmdr.py" %*
 )
+exit /b %ERRORLEVEL%
+
+:tc_update
+REM The CAPABILITY marker, not a verb name: 1.0.44 HAS an update verb - git pull
+REM based, which dead-ends on the dirty checkout its installer leaves - and no
+REM releases/latest/download anywhere - see the unix shim for the measurement.
+findstr /c:"releases/latest/download" "%HERE%tinycmdr.py" >nul 2>&1
+if not errorlevel 1 goto tc_update_local
+echo tinycmdr: this install predates the packaged updater - using the published one
+REM TLS 1.2 explicitly: Windows PowerShell 5.1's default protocol set excludes it where
+REM .NET's strong-crypto registry keys are unset, and GitHub requires it
+REM (A-2026-10-08-172).
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing 'https://github.com/trappsquid/tinycmdr/releases/latest/download/update.ps1' -OutFile (Join-Path $env:TEMP 'tc-update.ps1'); } catch { Write-Error 'could not fetch the updater'; exit 1 }; & (Join-Path $env:TEMP 'tc-update.ps1') -Dir '%HERE%'; exit $LASTEXITCODE"
+exit /b %ERRORLEVEL%
+
+:tc_update_local
+"%PY%" "%HERE%tinycmdr.py" %*
 exit /b %ERRORLEVEL%
 
 :findpy

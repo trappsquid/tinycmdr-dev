@@ -23,6 +23,10 @@ param(
     [string]$Dir = (Split-Path -Parent $MyInvocation.MyCommand.Path)
 )
 $ErrorActionPreference = "Stop"
+# Windows PowerShell 5.1's default protocol set excludes TLS 1.2 where .NET's
+# strong-crypto registry keys are unset, and GitHub requires it - the installer sets this
+# and the updater runs in its own fresh 5.1 process (A-2026-10-08-172).
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $Repo = "trappsquid/tinycmdr"
 $Dir = (Resolve-Path $Dir).Path
 if (-not (Test-Path (Join-Path $Dir "tinycmdr.py"))) {
@@ -38,6 +42,10 @@ $Work = Join-Path $env:TEMP ("tinycmdr-update-" + [guid]::NewGuid().ToString("N"
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
 $Asset = "tinycmdr-win.zip"
 $Base = "https://github.com/$Repo/releases/latest/download"
+# TINYCMDR_UPDATE_URL names a mirror or a staged release the way update.sh honours it -
+# the .ps1 twin ignored it, so a staged update could not be driven on Windows
+# (A-2026-10-08-173).
+if ($env:TINYCMDR_UPDATE_URL) { $Base = $env:TINYCMDR_UPDATE_URL.TrimEnd('/') }
 Write-Host "update: $Dir is $Cur; fetching the latest release ($Asset)"
 try {
     Invoke-WebRequest -UseBasicParsing "$Base/$Asset" -OutFile (Join-Path $Work $Asset)

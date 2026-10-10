@@ -1056,6 +1056,11 @@ def case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py):
         "llm": {"base_url": "http://127.0.0.1:9/v1", "model": "main"},
         "mattermost": {"url": "chat.invalid", "allowed_users": ["u1-fixture-user-id"]},
     }), encoding="utf-8")
+    # A .env the host already owns: the installer must REPLACE it (write beside, rename),
+    # never truncate it in place - an interrupt or ENOSPC mid-write used to leave the
+    # host's only copy of its secrets empty or partial (A-2026-10-08-178).
+    (inst / ".env").write_text("TINYCMDR_MODEL_KEY=host-key\n", encoding="utf-8")
+    _env_ino = (inst / ".env").stat().st_ino if os.name == "posix" else None
     log = sb / "logs" / "allow.log"
     log.parent.mkdir(parents=True, exist_ok=True)
     env = sandbox_home_env(sb, bindir, log, user, extra={"TINYCMDR_ASK": "1"})
@@ -1072,6 +1077,13 @@ def case_installer_token_and_allowlist_default(sb, pkg, bindir, user, py):
     check("the allowlist default is a plain joined id, not a Python list repr",
           "u1-fixture-user-id" in out and "['" not in out and "[[" not in out,
           out[-700:])
+    check("a re-run replaces .env by rename, never truncating the host's copy in place",
+          _env_ino is not None and (inst / ".env").stat().st_ino != _env_ino,
+          "the installer rewrote .env in place (write_text), so an interrupt could "
+          "empty it")
+    check("...and leaves no staging copy behind",
+          not list(inst.glob(".env.new-*")),
+          [p.name for p in inst.glob(".env.new-*")])
 
 
 def case_macos_cloud_key(sb, pkg, bindir, user, py):

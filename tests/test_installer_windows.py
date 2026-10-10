@@ -686,6 +686,33 @@ def main():
           "$cfg.telegram.allowed_users" in ps1 and "-not $TelegramIds" in ps1,
           "the token-with-no-id guard would refuse a valid kept install")
 
+    print("\n== the updater path: exit codes, TLS, the release base, path boundaries ==")
+    update_ps1 = source("update.ps1")
+    restart_ps1 = source("maintenance/restart-tinycmdr.ps1")
+    check("the shim's update branch is a label, not a parenthesized block",
+          "goto tc_update" in shim
+          and re.search(r'if /i "%~1"=="update" \(', shim) is None,
+          "cmd expands %ERRORLEVEL% when it parses a block, so the block's exit /b "
+          "reported the code from before the updater ran")
+    check("...so the published updater's exit code is read AFTER it runs",
+          re.search(r'(?m)^powershell [^\n]+\n *exit /b %ERRORLEVEL%\s*$', shim) is not None
+          and re.search(r'(?m)^:tc_update_local\n"%PY%" [^\n]+\n *exit /b %ERRORLEVEL%\s*$',
+                        shim) is not None)
+    check("the shim's fetch of the published updater sets TLS 1.2 explicitly",
+          "SecurityProtocol = [Net.SecurityProtocolType]::Tls12" in shim)
+    check("update.ps1 sets TLS 1.2 before its first fetch",
+          "SecurityProtocol = [Net.SecurityProtocolType]::Tls12" in update_ps1
+          and 0 <= update_ps1.find("SecurityProtocol") < update_ps1.find("Invoke-WebRequest"))
+    check("update.ps1 honours TINYCMDR_UPDATE_URL like update.sh",
+          "$env:TINYCMDR_UPDATE_URL" in update_ps1)
+    check("the restart helper matches the install at a path boundary",
+          "TrimEnd('\\') + '\\'" in restart_ps1
+          and re.search(r"IndexOf\(\$install,\s*\n", restart_ps1) is None,
+          "a raw substring also matches a sibling folder that starts with the same text")
+    check("a failed icacls is reported, not printed as locked",
+          "$LASTEXITCODE -ne 0" in install and "was NOT tightened" in install
+          and install.find("was NOT tightened") < install.find("locked to $env:USERNAME"))
+
     # ---- every shipped .ps1 PARSES when a PowerShell is here to say so ------------
     # The checks above are [READ] by design (the bed is macOS). The Windows CI job HAS a
     # PowerShell, so there the same files get a real parse - which is how a syntax error
@@ -695,7 +722,8 @@ def main():
     if not ps:
         skip("every shipped .ps1 parses", "no PowerShell on PATH here (the Windows job)")
     else:
-        for rel in ("update.ps1", "install.ps1", "install/install-tinycmdr.ps1"):
+        for rel in ("update.ps1", "install.ps1", "install/install-tinycmdr.ps1",
+                    "maintenance/restart-tinycmdr.ps1"):
             probe = ("$e=$null;[System.Management.Automation.Language.Parser]::"
                      "ParseFile('%s',[ref]$null,[ref]$e)|Out-Null;"
                      "if($e.Count){$e|ForEach-Object{$_.Message};exit 1}" % rel)

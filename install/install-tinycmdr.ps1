@@ -2061,7 +2061,14 @@ try {
     icacls $InstallDir /inheritance:r /grant:r `
         "$($env:USERNAME):(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" `
         | Out-Null
-    Say "acl     : $InstallDir locked to $env:USERNAME, Administrators, SYSTEM"
+    if ($LASTEXITCODE -ne 0) {
+        # A native command that exits non-zero does NOT throw in Windows PowerShell 5.1,
+        # even under $ErrorActionPreference='Stop': the old code printed "locked" for a
+        # lockdown that failed (A-2026-10-08-175).
+        Say "NOTE    : icacls exited $LASTEXITCODE - the ACL on $InstallDir was NOT tightened"
+    } else {
+        Say "acl     : $InstallDir locked to $env:USERNAME, Administrators, SYSTEM"
+    }
 } catch {
     Say "NOTE    : could not tighten the ACL on $InstallDir ($($_.Exception.Message))"
 }

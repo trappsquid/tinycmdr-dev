@@ -37,7 +37,10 @@ function Get-TinycmdrProcesses {
               # PATH as WILDCARDS, so a bracketed install dir matched nothing and the old
               # bot survived the restart. OrdinalIgnoreCase is a
               # literal compare with Windows path semantics.
-              return $_.CommandLine.IndexOf($install,
+              # A path BOUNDARY, not a substring: `C:\x\tinycmdr` must not match
+              # `C:\x\tinycmdr-dev\...` and kill a sibling install's bot
+              # (A-2026-10-08-174).
+              return $_.CommandLine.IndexOf(($install.TrimEnd('\') + '\'),
                   [System.StringComparison]::OrdinalIgnoreCase) -ge 0
           }
           return $false

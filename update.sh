@@ -84,6 +84,11 @@ cd "$SRC"
 # in a subshell, so COUNT died with it and the summary line could not print one - while
 # update.ps1 has printed `($written file(s); ...)` all along (run 23, A-2026-10-07-67).
 find . -type f | sed 's|^\./||' > "$WORK/filelist"
+# What this host's requirements.txt held before the copy: a release that moved the
+# dependency bounds must say so, the way the Python update verb does
+# (A-2026-10-08-179).
+OLD_REQ=""
+[ -f "$DIR/requirements.txt" ] && OLD_REQ="$(cat "$DIR/requirements.txt")"
 COUNT=0
 while IFS= read -r rel; do
     is_host "$rel" && continue
@@ -93,6 +98,11 @@ while IFS= read -r rel; do
     COUNT=$((COUNT + 1))
 done < "$WORK/filelist"
 chmod +x "$DIR/tinycmdr" "$DIR/install/install-tinycmdr.sh" 2>/dev/null || true
+
+if [ -f "$DIR/requirements.txt" ] && [ "$(cat "$DIR/requirements.txt")" != "$OLD_REQ" ]; then
+    echo "update: dependencies changed in this release - reconcile the venv:"
+    echo "    $PY -m pip install -r $DIR/requirements.txt"
+fi
 
 echo "update: $CUR -> $NEW ($COUNT file(s); host-owned files left alone)"
 if [ "$CUR" = "$NEW" ]; then

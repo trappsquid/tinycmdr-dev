@@ -1607,7 +1607,22 @@ out = ["# tinycmdr secrets - per-host tokens + fleet-wide search keys.",
       + [l for l in (search_env or "").splitlines() if "=" in l] \
       + ([f"TINYCMDR_SEARCH_EGRESS={egress}"] if egress else []) \
       + lines + [""]
-envp.write_text("\n".join(out), encoding="utf-8")
+# Written BESIDE it and renamed, with the mode set at creation: write_text inherited the
+# umask (a moment in 0644 on a fresh install) and truncated the host's only copy of its
+# secrets in place, so an interrupt or ENOSPC left it empty or partial
+# (A-2026-10-08-178).
+_tmp = str(envp) + ".new-%d" % os.getpid()
+_fd = os.open(_tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+try:
+    with os.fdopen(_fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(out))
+    os.replace(_tmp, str(envp))
+except BaseException:
+    try:
+        os.unlink(_tmp)
+    except OSError:
+        pass
+    raise
 os.chmod(envp, 0o600)
 print(f"    wrote .env ({len(have) + 1} keys, mode 600)")
 if per_bot:
