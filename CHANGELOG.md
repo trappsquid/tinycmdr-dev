@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A runbook whose procedure is already a tool is never offered a mint:** the offer reads the tool registration, and a tool whose description names the runbook - or whose name or declared category shares a word with it - stands the offer down (tests/test_route_surface.py).
 - **The mint offer counts every hand-driven call:** the total it quotes used to cover only the calls whose command vocabulary the census could fingerprint, so a 17-call run was offered as 5 (tests/test_route_surface.py).
 - **The runbook mint offer speaks for its own run, once a week:** the offered runbook list is the run's own (an earlier run's read no longer vouches for it), and a runbook's offer is throttled to one a week like the order and census offers (tests/test_route_surface.py).
+- **The timeout notice matches what the run will do:** with `ask_timeout_continues` false (the default) the door says it is stopping rather than acting on an assumption, and "applying my own judgment" is drawn only when the configuration continues (tests/test_interaction_surface.py).
+- **An infra failure mid-run no longer claims nothing was changed:** with any tool call completed the answer names the count and says what stands; with none it keeps the old sentence (tests/test_checkin.py).
+- **The process tool's job state survives a batch:** the save writes through one unique temp per call, so `status` and `output` racing in one batch no longer lose a save to `ENOENT` (tests/test_process_surface.py).
 
 ## [1.0.100] - 2026-10-09
 
