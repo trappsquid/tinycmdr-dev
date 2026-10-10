@@ -25,6 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A non-ASCII download was saved mangled:** the page read only the header's ASCII `filename=` fallback, so `café.pdf` arrived as `caf_.pdf`; `filename*=UTF-8''` is read first now (tests/test_webui_page.py).
 - **An oversized upload failed with "Failed to fetch":** the page sent any file and the server's 413 landed under the caller; the page refuses a file over 50 MiB in words, and an upload failure's note survives the progress line's clear (tests/test_webui_page.py).
 - **A refused address was blamed on the token:** a 403 from the login probe (the Host/Origin check) was read as "already authenticated" and every later call failed as 403; the page names the address and how web.host is bound (tests/test_webui_page.py).
+- **The setup wizard echoed the secrets it read:** the model key (and its 401 retry), the Mattermost and Telegram tokens, the page token and the search provider's key were read with `input()`; all of them go through the no-echo reader the other doors use (tests/test_verbs.py).
+- **Setup could flatten the live config:** `/setup` and `config set` swapped the file's bare sections into the running CONFIG, dropping every defaulted key and env-applied value; both reload the full merge now (tests/test_verbs.py).
+- **A write made during setup was silently reverted:** the wizard wrote its minutes-old snapshot; it re-reads the file under the config lock and applies only what it changed (tests/test_verbs.py).
+- **`update` installed older builds and flattened checkouts silently:** a downgrade is refused (with both versions named; `--force` overrides), a same-version "repair" over a development checkout is refused, and an upgrade over one warns (tests/test_verbs.py).
+- **A refused Windows update reported success:** the shim's `exit /b %ERRORLEVEL%` sat inside a parenthesized block, which cmd expands early; the branch is a label now, so the published updater's exit code is the shim's (tests/test_installer_windows.py).
+- **The updaters ignored TLS 1.2:** update.ps1 and the shim's own fetch now set it explicitly, as the installer does (tests/test_installer_windows.py).
+- **`update.ps1` ignored `TINYCMDR_UPDATE_URL`:** the Windows twin honours it like update.sh, so a staged or mirrored update can be driven there (tests/test_installer_windows.py).
+- **The Windows restart helper matched its install by substring:** `C:\x\tinycmdr` also matched `C:\x\tinycmdr-dev\...` and killed a sibling install's processes; the match is at a path boundary now (tests/test_installer_windows.py).
+- **A failed ACL lockdown printed "locked":** icacls' exit code is checked, so a lockdown that did not happen is reported instead (tests/test_installer_windows.py).
+- **The Unix installer rewrote .env in place:** it is written beside and renamed in, mode 0600 at creation - no umask window, and an interrupt or ENOSPC can no longer empty the host's only copy of its secrets (tests/test_installer_unix.py).
+- **`update.sh` did not flag a dependency change:** a release that moved requirements.txt now prints the pip command, as the Python update verb does (tests/test_update_script.py).
 
 ## [1.0.97] - 2026-10-09
 

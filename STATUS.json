@@ -2337,6 +2337,17 @@
       },
       "detail": "Six page findings from the whole-harness review: the A2UI validator accepted a surface that is not a tree (a cycle, a child listed twice) and the recursive renderer then threw RangeError out of the paint, leaving 'trouble' for ever - the validator refuses those shapes and a2uiNode carries a visited set and a node budget; a poll or an open reply that landed after a conversation switch painted the other conversation's lines; the cookie handover removed the token from localStorage only and kept sending it as a header, so a link-opened tab never used the cookie; a download was named from the header's ASCII fallback alone; an oversized upload went up anyway and its 413 read as 'Failed to fetch'; and a 403 from the login probe (the Host/Origin check) was read as cookie-authenticated.",
       "gate": "each new page check is RED on the pre-fix build (the page suite swaps the pre-fix module into the tree): the token rode every call (['test-token','test-token','test-token']), the upload carried it, the token note and the address note were empty, the download saved 'caf_.pdf', the oversized file was uploaded, the left conversation's transcript leaked, and a self-referencing card left the stage 'trouble' with the rest of the run unpainted; the validator's tree checks are RED via tc-falsify; post-fix the page suite, the a2 suite and the whole gate are green"
+    },
+    {
+      "id": "setup-and-doors-eleven",
+      "title": "the setup wizard and the doors: eleven findings, one batch",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "f2286dc",
+        "expect": "untagged"
+      },
+      "detail": "Eleven findings from the whole-harness review: the setup wizard echoed the model key, both chat tokens, the page token and the provider key; `/setup` and `config set` swapped the bare file sections into the live CONFIG (a file without llm.max_turns then died with KeyError); the wizard's write reverted anything another process changed while it was open; `update` applied older releases and flattened a development checkout's uncommitted edits silently; the Windows shim's update branch read %ERRORLEVEL% before the updater ran; update.ps1 and the shim's fetch ignored TLS 1.2; update.ps1 ignored TINYCMDR_UPDATE_URL; the restart helper matched its install by substring; a failed icacls printed \"locked\"; the Unix installer truncated .env in place; and update.sh stayed quiet about a moved requirements.txt.",
+      "gate": "every new check is RED on the pre-fix build: tests/test_verbs.py (staged with TINYCMDR_TEST_APP) fails the secret-prompt, .env, concurrent-write, full-merge and update-guard checks (11 FAILs); tests/test_installer_windows.py fails its seven updater-path shape checks against the pre-fix scripts; tests/test_installer_unix.py fails the .env-replacement check against the pre-fix installer; tests/test_update_script.py fails the requirements hint against the pre-fix update.sh; all four suites and the whole gate are green on the batch"
     }
   ]
 }
