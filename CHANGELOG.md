@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A failed ACL lockdown printed "locked":** icacls' exit code is checked, so a lockdown that did not happen is reported instead (tests/test_installer_windows.py).
 - **The Unix installer rewrote .env in place:** it is written beside and renamed in, mode 0600 at creation - no umask window, and an interrupt or ENOSPC can no longer empty the host's only copy of its secrets (tests/test_installer_unix.py).
 - **`update.sh` did not flag a dependency change:** a release that moved requirements.txt now prints the pip command, as the Python update verb does (tests/test_update_script.py).
+- **The Mattermost confirm question had no numbers, no answer hint and no wait window:** it renders through the same numbered prompt as every other question, and the terminal prompt numbers its options too (tests/test_stall.py, tests/test_interaction_surface.py).
+- **A question was painted the same white as routine progress:** the ask tone has its own blue bar, so a run blocked on the operator reads differently from status chatter (tests/test_stall.py).
+- **A chunk of emoji could overflow Mattermost's post limit:** the chunker and the `send_file` note are measured in UTF-16 units, the way the server counts, so a 16,000-code-point chunk can no longer be rejected (tests/test_stall.py).
+- **A flaky server could hold a channel for a fixed second per chunk:** the post retry's pause is capped exponential backoff inside one budget per message, so messages queued behind a retry are not stuck for a second per chunk (tests/test_stall.py).
+- **A deleted post froze a run's live line:** an edit the server answers "not found" re-opens the line with the current text, and the reporter's own ref follows the new post, while a transient failure still retries in place (tests/test_stall.py).
+- **A run whose opening status post failed never got a Done line:** the closing line posts on its own when there is no live line to edit (tests/test_stall.py).
+- **A reworded restatement inside the note throttle kept the older wording on screen:** the note and narration restatement folds run before their rate-limit gaps - an edit is not a notification (tests/test_checkin.py).
+- **An ask_user answer could steal a confirm answer in the same channel:** with two questions open, the newest one takes the message, and the confirm now says which question it answered (tests/test_stall.py).
+- **The queued notice promised a "0 minutes" watchdog:** its parenthetical is said only when stalls are actually abandoned (tests/test_stall.py).
 
 ## [1.0.97] - 2026-10-09
 
