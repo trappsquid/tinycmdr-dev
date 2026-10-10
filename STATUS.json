@@ -2385,10 +2385,10 @@
     {
       "id": "log-drain-at-exit",
       "title": "the file log keeps what a short-lived door logged before exiting",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "c4e93e0",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The log listener's thread is a daemon, so a process that exits with records still queued - a management verb, a scheduled run, --once - had them torn down unwritten: measured on a Windows install, a refused verb's line reached the console and the file kept 5 of 20 calls, silently, and a 200-record burst before sys.exit lost every record. One atexit hook drains the queue wherever the process leaves, and the manual drain in the service preflight is gone. tests/test_log_config_surface.py's burst check fails on the pre-fix build.",
       "gate": "RED on the pre-fix build: the 200-record burst check lands 0 of 200; green on the batch"
@@ -2396,10 +2396,10 @@
     {
       "id": "mint-offer-covered-runbook",
       "title": "a runbook whose procedure is already a tool is never offered a mint",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f444c4b",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The mint offer asked whether a runbook should become a tool without reading whether a tool for it already existed, so a run whose runbook was already wrapped - the tool built from the same conversation and named in the runbook - still earned \"say mint it\". runbook_covered_by() matches a tool's description against the runbook name, then the name and declared category word by word, and a covered runbook stands the offer down the way the computer/GUI skip does. tests/test_route_surface.py's covered-runbook checks fail on the pre-fix build.",
       "gate": "RED on the pre-fix build: the covered runbook still earns the offer; green on the batch"
@@ -2407,10 +2407,10 @@
     {
       "id": "mint-offer-hand-count",
       "title": "the mint offer counts every hand-driven call",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "f444c4b",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The hand-call count the offer quotes counted only the calls whose command vocabulary the census could fingerprint, because the increment sat inside the census branch - measured 2026-10-10, a 17-call run was offered as 5. Every successful hand-driven call now counts toward the mint and remember gates. tests/test_route_surface.py keeps three unfingerprintable shell calls and fails on the pre-fix build when the counter stays empty.",
       "gate": "RED on the pre-fix build: three 'echo' calls leave calls_by empty; green on the batch"
@@ -2418,10 +2418,10 @@
     {
       "id": "runbook-offer-per-run-weekly",
       "title": "the runbook mint offer speaks for its own run, and once a week",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "519e130",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "skills_read was every runbook the SESSION had read, so a run that read none still passed the runbook gate and the offer could say \"That run executed the X runbook by hand\" about a runbook that run never opened; a run now starts with an empty list (run_start_marks, the seam the hand count moved to when it was fixed the same way). The branch also had no throttle, so the offer posted on every qualifying run (measured 2026-10-07: five offers in one evening) - it keeps the week's window the order and census branches keep, marked in the census file so a restart does not lift it. tests/test_route_surface.py's three checks fail on the pre-fix build.",
       "gate": "RED on the pre-fix build: the run-start list, the vouch check and the weekly throttle; green on the batch"
@@ -2429,10 +2429,10 @@
     {
       "id": "ask-timeout-line-matches-config",
       "title": "the timeout notice matches what the run will do",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4d155a5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The ask door drew \"applying my own judgment and will say what I assumed\" whatever the configuration, while with ask_timeout_continues false (the default) the run raises OperatorStop right after the wait - the drawn line promised what the run would not do (measured 2026-10-10 on the console lane: that line, then the stop). The drawn line follows the configuration now; tests/test_interaction_surface.py grades both directions and fails on the pre-fix build.",
       "gate": "RED on the pre-fix build: the default drew \"applying my own judgment\" and the run then stopped; green on the batch"
@@ -2440,10 +2440,10 @@
     {
       "id": "infra-failure-names-what-stands",
       "title": "an infra failure mid-run does not claim nothing was changed",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4d155a5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "The infra-failure answer was the blanket \"The task did not run; nothing was changed\" at whatever call failed, with no look at what the run had already done - the measurement's run had minted a tool and written files when the endpoint died. With any call completed the answer names the count and says what stands; zero calls keep the old sentence. tests/test_checkin.py fails on the pre-fix build.",
       "gate": "RED on the pre-fix build: the mid-run failure still answered \"nothing was changed\" over a completed call; green on the batch"
@@ -2451,10 +2451,10 @@
     {
       "id": "process-save-unique-temp",
       "title": "the process tool's job state saves through a unique temp per call",
-      "state": "unreleased",
+      "state": "shipped",
       "anchor": {
         "commit": "4d155a5",
-        "expect": "untagged"
+        "expect": "tagged"
       },
       "detail": "tools/process.py saved its state through a FIXED process-jobs.json.tmp, so a batch's status+output pair raced it - the first os.replace moved the shared tmp away and the second died ENOENT, answering \"ERROR in tool 'process'\" for a job that had finished cleanly (measured 2026-10-10). One mkstemp per save now, the shape _census_save already uses; tests/test_process_surface.py's race member fails on the pre-fix build and passes on the fixed one.",
       "gate": "RED on the pre-fix build: the fixed temp name loses the save (ENOENT on every run); green on the batch"
