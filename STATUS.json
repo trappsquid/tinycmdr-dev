@@ -2469,6 +2469,17 @@
       },
       "detail": "A unique temp fixed the POSIX ENOENT and not the Windows side: two os.replace calls racing onto the same destination collide there, and the loser gets [WinError 5] Access is denied on its own replace (measured 2026-10-10: the install surface's Windows job failed the four-thread save member with exactly that). One lock around the save serialises writers; readers never take it, and the replace stays atomic for them. tests/test_process_surface.py moves to the declared must tier, so the dev CI grades it on Windows on every push.",
       "gate": "RED on the pre-fix build: the fixed temp name loses the save (ENOENT on POSIX; the Windows job measured WinError 5 on the replace); green on the batch"
+    },
+    {
+      "id": "script-cannot-walk-the-confirm-tier",
+      "title": "a script cannot carry a declined command past the tier",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "a4e282f",
+        "expect": "untagged"
+      },
+      "detail": "The confirm tier was one file away from bypassed (measured 2026-10-10 driving the stage): a recursive delete was declined five spellings in a row, the run wrote it into run.sh, and `bash run.sh` carried it through - the command line has no delete verb, and no tier read the file's CONTENT (the content tier carries the Windows shapes, not the POSIX deletes); the directory was gone. A script-shaped write (.sh/.bash/.zsh/.ksh/.command/.ps1/.bat/.cmd) now has its content read as commands, per line: comments stripped, the confirm tier and the endpoint/prompt-surface gates, the target-aware delete rule, then the never tier - a block anywhere wins over a confirm anywhere. The shell also reads back a file an interpreter is pointed at when this process just made it, so the payload cannot move out of sight by being written first; the never tier was one file away the same way (`mkfs` inside a written script). The system prompt says a DECLINED command is an answer, never re-spelled and never wrapped.",
+      "gate": "RED on the pre-fix build: the script deletes its decoy dir (write gate, run gate and never tier all missed it); green on the batch"
     }
   ]
 }

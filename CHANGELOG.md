@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A script cannot carry a declined command past the tier:** a script-shaped write's content is read as commands (the confirm tier, the target-aware delete rule and the never tier), and an interpreter pointed at a file this run just wrote is read back the same way, so `write_file run.sh` + `bash run.sh` no longer walks a recursive delete past the confirm gate (tests/test_guard_battery.py).
+
 ## [1.1.0] - 2026-10-10
 
 ### Fixed
