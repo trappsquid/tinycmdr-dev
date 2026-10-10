@@ -1163,8 +1163,16 @@ exiting 2.
                     [r[len("excluded: "):] for r in rows if r.startswith("excluded: ")])
 
         rc0, whole, _ = listing()
+        # The expectation is the TREE's own suite files, never a fixed count: the
+        # source tree carries 53 and the generated install surface ships 43 (its
+        # dev-only graders stay behind, per maintenance/product-manifest.json), so
+        # the old "> 50" graded the source tree only and the surface's own run
+        # failed this check with its 43 suites (measured 2026-10-10).
+        on_disk = sorted("tests/" + p.name
+                         for p in (BASE / "tests").glob("test_*.py"))
         check("--list names every suite and nothing is excluded by default",
-              rc0 == 0 and len(whole) > 50 and not listing()[2], len(whole))
+              rc0 == 0 and not listing()[2] and sorted(whole) == on_disk,
+              (len(whole), len(on_disk)))
         rc1, reduced, dropped = listing("--exclude", "tests/test_tui.py")
         check("--exclude drops exactly the named suite, and says which",
               rc1 == 0 and dropped == ["tests/test_tui.py"]
