@@ -1415,10 +1415,24 @@ def test_a_jobs_file_written_by_another_process_is_adopted():
         jf.write_text("{}", encoding="utf-8")
         s = fb.Scheduler(jf)
         check("a fresh scheduler starts with the file's jobs", s.jobs == {}, s.jobs)
-        jf.write_text(json.dumps({"nightly": {"cron": "0 3 * * *", "task": "x",
-                                              "next": time.time() + 3600}}),
-                      encoding="utf-8")
-        os.utime(jf, (time.time() + 2, time.time() + 2))
+        # The adopt is `_reload_if_changed`, which the loop calls; graded here by calling
+        # it directly, with the loop stopped: a live reader racing this test's write read
+        # the half-written file, the damaged copy was moved aside, and the explicit adopt
+        # then found no file at all (measured 2026-10-10, macos-latest CI: the check saw
+        # {}). The daemon's own call is the same function - nothing is being skipped.
+        s._stop.set()
+
+        def _write_jobs(text, ahead=2):
+            # The shape the real writer uses (atomic replace), never a truncate-in-place
+            # a reader can catch mid-write.
+            stamp = time.time() + ahead
+            tmp = work / (jf.name + ".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            os.utime(tmp, (stamp, stamp))
+            os.replace(tmp, jf)
+
+        _write_jobs(json.dumps({"nightly": {"cron": "0 3 * * *", "task": "x",
+                                            "next": time.time() + 3600}}))
         check("a job added by another process is adopted",
               s._reload_if_changed() and "nightly" in s.jobs, s.jobs)
         check("...and the same file is not re-read twice", s._reload_if_changed() is False)
@@ -1429,8 +1443,7 @@ def test_a_jobs_file_written_by_another_process_is_adopted():
         _line = s.tool_action({"action": "list"}, {})
         check("...and a long task text is elided with an ellipsis, not cut mid-word",
               "..." in _line and _line.count("x") <= 80, _line)
-        jf.write_text("{}", encoding="utf-8")
-        os.utime(jf, (time.time() + 4, time.time() + 4))
+        _write_jobs("{}", ahead=4)
         check("...and a removal made elsewhere takes effect",
               s._reload_if_changed() and s.jobs == {}, s.jobs)
     finally:
