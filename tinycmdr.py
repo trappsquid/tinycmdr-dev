@@ -14260,7 +14260,7 @@ class Scheduler:
         on a question nobody answers.
         """
         row = {"ev": threading.Event(), "answer": None, "question": question,
-               "options": list(options or [])}
+               "options": list(options or []), "opened": time.time()}
         self.pending_asks[key] = row
         _ASK_PENDING[key] = row
         if self.dispatcher is not None:
@@ -31262,7 +31262,7 @@ class MattermostDestination(Destination):
             return None
         del label      # the lane's own _ask_label says how to answer (see _ask_prompt)
         ev = threading.Event()
-        row = {"event": ev, "answer": None}
+        row = {"event": ev, "answer": None, "opened": time.time()}
         held = self.d.pending.setdefault(self.channel_id, row)   # the atomic claim
         if held is not row:
             if not held["event"].is_set():
@@ -31455,7 +31455,7 @@ class MattermostDispatcher:
         only by luck.
         """
         row = {"ev": threading.Event(), "answer": None, "question": question,
-               "options": list(options or [])}
+               "options": list(options or []), "opened": time.time()}
         ch = self._session_channel.get(session_key)
         self.pending_asks[ch if ch else session_key] = row
         _ASK_PENDING[session_key] = row
@@ -31844,13 +31844,28 @@ class MattermostDispatcher:
         # the ANSWER, on the listener thread, while that run stays blocked. Ahead of
         # /stop so an answer that reads like a command is still the answer; `/tinycmdr stop`
         # itself cancels instead, so a parked run is never unreleasable.
+        pend = self.pending.get(channel_id)
+        pend_live = pend is not None and not pend["event"].is_set()
         if low != "/stop" and not low.startswith("/"):
-            for _sk in [s for s, r in list(self.pending_asks.items())
-                        if not r["ev"].is_set()]:
+            ask_key = None
+            for _sk, r in list(self.pending_asks.items()):
+                if r["ev"].is_set():
+                    continue
                 _ch = self._session_channel.get(_sk)
                 if (_ch and _ch == channel_id) or (not _ch and _sk == channel_id):
-                    if self.reply_ask(_sk, text, sender):
-                        return
+                    ask_key = _sk
+                    break
+            take_ask = ask_key is not None
+            if take_ask and pend_live:
+                # Two questions open in one channel: the NEWEST one takes the message -
+                # the operator answers the question they were just shown, and the older
+                # one keeps waiting. The ask_user row used to be preferred outright, so a
+                # background run's question ate the reply to the confirm the main run was
+                # parked on, and the confirm timed out (measured 2026-10-06).
+                take_ask = (float(self.pending_asks[ask_key].get("opened") or 0)
+                            >= float(pend.get("opened") or 0))
+            if take_ask and self.reply_ask(ask_key, text, sender):
+                return
         if low == "/stop":
             # The listener thread, so a stop is read even while a wedged run owns
             # this channel's worker. See _stop_channel for why this is a helper.
@@ -31876,12 +31891,18 @@ class MattermostDispatcher:
                        "and tinycmdr.py changes are picked up.")
             perform_restart(channel_id, None, sender)
             return
-        pend = self.pending.get(channel_id)
-        if pend and not pend["event"].is_set():
+        if pend_live:
             # the operator's own words, not a pre-chewed boolean: RunReporter
-            # decides what counts as a yes, so every lane answers the same way
+            # decides what counts as a yes, so every lane answers the same way.
+            # The ack says which question the words went to - an ask_user answer
+            # already replies "✅ Got it", and with two questions open in one
+            # channel the operator must be able to tell which one consumed it.
             pend["answer"] = text.strip()
             pend["event"].set()
+            said = " ".join(text.split())
+            self._post(channel_id, None,
+                       "✅ Got it: " + said[:160]
+                       + ("..." if len(said) > 160 else "") + " — carrying on.")
             return
         if self.paused is not None and not text.strip().lower().startswith("/pause"):
             self._post(channel_id, None,
@@ -31913,12 +31934,18 @@ class MattermostDispatcher:
             # First message of a backlog: say so ONCE, and only when a run really
             # is in flight. Otherwise the user stares at silence for as long as
             # the run ahead of them takes and concludes the bot is dead — which
-            # is what kept happening.
+            # is what kept happening. The watchdog promise is made only when the
+            # watchdog is on: it used to interpolate the raw value, so with
+            # stall_abandon_minutes: 0 the notice said a run is "abandoned
+            # automatically" after 0 minutes (measured 2026-10-06).
+            tail = ""
+            abandon = int(self._stall_abandon_minutes())
+            if abandon > 0:
+                tail = (" (a run with no progress for %d minutes is abandoned "
+                        "automatically)." % abandon)
             self._post(channel_id, None,
                        "⏳ Queued behind the task already running here — I'll "
-                       "take it as soon as that finishes (a run with no "
-                       "progress for %d minutes is abandoned automatically)."
-                       % int(self._stall_abandon_minutes()))
+                       "take it as soon as that finishes" + tail)
 
     def _worker(self, channel_id, q, gen=0):
         try:

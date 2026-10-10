@@ -839,6 +839,92 @@ def test_one_question_at_a_time_per_channel():
           got)
 
 
+def test_the_newest_open_question_takes_the_answer():
+    """A-284 (2026-10-06): `enqueue` claimed a plain message for a parked ask_user
+    row BEFORE it looked at the confirm row, so a background run parked on ask_user
+    ate the operator's "yes" to the confirm the main run was waiting on, and the
+    confirm then timed out."""
+    d = _dispatcher()
+    ch = "chan-two-doors"
+    d._session_channel["bg-284a"] = ch
+    bg_row = d.open_question("bg-284a", "Which port should the job use?",
+                             ["4185", "8080"], 300)          # opened first
+    time.sleep(0.05)
+    got = {}
+
+    def _ask():
+        got["v"] = fb.MattermostDestination(d, ch, None).ask(
+            "Allow `rm -rf build`?", ["yes", "no"], wait=6)
+
+    t = threading.Thread(target=_ask, daemon=True)
+    t.start()
+    time.sleep(0.4)
+    check("both questions are open",
+          bg_row is not None and d.pending.get(ch) is not None, (bg_row, d.pending))
+    msg = _FakeMsg(ch, "yes", mid="m284-a")
+    d.enqueue(msg, msg.text)
+    t.join(8)
+    check("the newer question (the confirm) takes the answer",
+          got.get("v") == "yes", got)
+    check("...the older ask_user row is still parked", not bg_row["ev"].is_set(),
+          bg_row)
+    check("...and the channel says the answer landed",
+          any("Got it" in text for _, text in d.posted), d.posted)
+    bg_row["ev"].set()                     # release the row this test parked
+
+    # ...and the inverse: an ask_user question opened LAST takes the message.
+    d2 = _dispatcher()
+    ch2 = "chan-two-doors-b"
+    got2 = {}
+
+    def _ask2():
+        got2["v"] = fb.MattermostDestination(d2, ch2, None).ask(
+            "Allow `rm -rf build`?", ["yes", "no"], wait=6)
+
+    t2 = threading.Thread(target=_ask2, daemon=True)
+    t2.start()
+    time.sleep(0.4)
+    d2._session_channel["bg-284b"] = ch2
+    row2 = d2.open_question("bg-284b", "Which port should the job use?",
+                            ["4185"], 300)
+    msg2 = _FakeMsg(ch2, "use 4185 please", mid="m284-b")
+    d2.enqueue(msg2, msg2.text)
+    check("an ask_user question opened last takes the answer",
+          row2["ev"].is_set() and row2["answer"] == "use 4185 please", row2)
+    check("...and the older confirm is still parked",
+          d2.pending.get(ch2) is not None, d2.pending.get(ch2))
+    pend = d2.pending.get(ch2)
+    if pend is not None:
+        pend["answer"] = "no"
+        pend["event"].set()
+    t2.join(8)
+    check("the confirm's own answer still lands", got2.get("v") == "no", got2)
+
+
+def test_the_queued_notice_keeps_quiet_about_a_disabled_watchdog():
+    """A-286 (2026-10-06): with stall_abandon_minutes: 0 (the watchdog off) the
+    queued notice still read "... for 0 minutes is abandoned automatically"."""
+    d = _dispatcher()
+    ch = "chan-queued-off"
+    saved = fb.CONFIG["agent"].get("stall_abandon_minutes")
+    fb.CONFIG["agent"]["stall_abandon_minutes"] = 0
+    try:
+        with d.workers_lock:
+            d._spawn_worker(ch, d.queues.setdefault(ch, fb.queue.Queue()))
+        d.running.add(ch)
+        msg = _FakeMsg(ch, "/version", mid="m286")
+        d.enqueue(msg, msg.text)
+    finally:
+        if saved is None:
+            fb.CONFIG["agent"].pop("stall_abandon_minutes", None)
+        else:
+            fb.CONFIG["agent"]["stall_abandon_minutes"] = saved
+        d.running.discard(ch)
+    said = [t for _, t in d.posted if "Queued behind" in t]
+    check("the notice does not promise a 0-minute watchdog",
+          bool(said) and "0 minutes" not in said[-1], said)
+
+
 def test_the_confirm_question_renders_like_the_ask_door():
     """A-270 + A-283 (2026-10-06): the MM confirm question rendered its options as
     prose (`question - reply yes / no / session / always`) with no numbers, no
