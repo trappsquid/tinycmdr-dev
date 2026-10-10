@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A long task is not ended by its own wording:** the completion-announcement guard is a single advisory reminder now (`0` disables it) instead of a demand that blocked continuation and a force two announcements later, and what ends a genuinely stuck run is the new idle-turn counter — a turn whose every tool call repeated a known result or was refused — so no model's phrasing can end a task early, and every harness stop names its reason and how to resume (tests/test_stall.py).
+
 ## [1.1.2] - 2026-10-10
 
 ### Added

@@ -2666,6 +2666,17 @@
       },
       "detail": "The Mac guide sent readers to ~/.tinycmdr/.env (nothing reads it; the file is <install-dir>/.env), said a hosted endpoint's key is kept in config.json's llm.api_key (the installer writes it to .env as TINYCMDR_LLM_API_KEY and removes it from config.json), listed prompts the wizard no longer asks and referenced a curl line the file does not carry, and did not mention uv's cache outside the install dir; the README's --install-python note was unqualified next to the Linux line. The guide and the README now match the code.",
       "gate": "RED on the pre-fix build: the wrong env path and the wrong key home in the guide; green on the batch"
+    },
+    {
+      "id": "wrap-guards-read-state-not-words",
+      "title": "the wrap-up guards read state, not the model's words",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "4bb19fa",
+        "expect": "untagged"
+      },
+      "detail": "The delivery guard counted completion-sounding phrases in replies that still queued tool calls: at three announcements it demanded the report and blocked auto-continue, at five it forced the wrap - and on the live box the demand landed at step 51 of an audit that kept working for hours, because a phrase list cannot tell narration from a stall. The count is one advisory reminder now (0 disables it; the old `or 3` made 0 mean 3); what ends a genuinely stuck run is the new idle-turn counter, which counts turns whose every tool call repeated a result already known or was refused, and every harness stop names its reason and says how to resume.",
+      "gate": "RED on the pre-fix build: the reminder-only run was wrapped by its words, an explicit 0 still reminded, and an idle run reached its scripted end; green on the batch"
     }
   ]
 }
