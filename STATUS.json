@@ -2326,6 +2326,17 @@
       },
       "detail": "Six findings from the whole-harness review: a server-announced SSE error (llama.cpp's `error:` event, vLLM's `data: {\"error\": ...}` chunk) was skipped until the [DONE] after it passed every terminal check and the partial text returned as the answer; the idle clock advanced on `:` keep-alive comments, so a wedged generation that kept pinging never tripped `stream_idle_seconds`; every stream failure was logged as a process-wide streaming downgrade though a prefill timeout, an idle gap or a mid-stream break leaves the endpoint eligible; the inline tool-call parser ran any reply that mentioned the markup, so a quoted example was dispatched as a real call and stripped; the deaf-listener restart spawned its replacement while the old process still held the folder lock, so the replacement aborted and the old process exited with nothing left to relaunch it; and a zombie worker's exit cleared the new worker's run from the busy set.",
       "gate": "each new check is RED on the pre-fix build (TINYCMDR_SRC): an error-only stream raised 'not a stream', both SSE error shapes returned 'partial answer', the pinging wedge read 'closed after 1 chunk(s) with no finish_reason', the fallback log carried 'rest of THIS process', the quoted example executed (a real tool message in the next payload), the zombie cleared the flag (set()), and the restart order read ['spawn', 'exit']; the whole gate green at --jobs 4 on the batch"
+    },
+    {
+      "id": "page-slice-six-findings",
+      "title": "the page slice: six findings, one pass",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "1147b99",
+        "expect": "untagged"
+      },
+      "detail": "Six page findings from the whole-harness review: the A2UI validator accepted a surface that is not a tree (a cycle, a child listed twice) and the recursive renderer then threw RangeError out of the paint, leaving 'trouble' for ever - the validator refuses those shapes and a2uiNode carries a visited set and a node budget; a poll or an open reply that landed after a conversation switch painted the other conversation's lines; the cookie handover removed the token from localStorage only and kept sending it as a header, so a link-opened tab never used the cookie; a download was named from the header's ASCII fallback alone; an oversized upload went up anyway and its 413 read as 'Failed to fetch'; and a 403 from the login probe (the Host/Origin check) was read as cookie-authenticated.",
+      "gate": "each new page check is RED on the pre-fix build (the page suite swaps the pre-fix module into the tree): the token rode every call (['test-token','test-token','test-token']), the upload carried it, the token note and the address note were empty, the download saved 'caf_.pdf', the oversized file was uploaded, the left conversation's transcript leaked, and a self-referencing card left the stage 'trouble' with the rest of the run unpainted; the validator's tree checks are RED via tc-falsify; post-fix the page suite, the a2 suite and the whole gate are green"
     }
   ]
 }
