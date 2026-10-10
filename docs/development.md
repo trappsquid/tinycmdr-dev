@@ -412,6 +412,23 @@ envelope and caps, and the page suite's shim the renderer.
   without running the message again - the retry a timed-out peer sends is safe.
 - The client is a hidden `a2a` tool (list/card/send) that is registered **only** when
   `agent.a2a_remotes` is non-empty - the A2A check lives in `tests/test_a2_surface.py`.
+- The run-lines extension: `tinycmdr/GetRunLines` (declared in the card's
+  `capabilities.extensions` as `urn:tinycmdr:run-lines:v1`) returns the same uid-keyed
+  lines the page reconciles, kept in a frame per task (`_A2A_FRAMES`, bounded WITH the
+  task ring) so a peering tinycmdr can WATCH a message work instead of waiting out the
+  blocking reply. A frame writes nothing to disk (`A2ARunFrame.persist = False`) and
+  refuses `send_file` (a peer has no `/api/download`).
+- **The legion** (one page, several boxes): with `agent.a2a_remotes` set, this box's page
+  relays orders to those cohorts server-to-server - `/api/legion` (overview) plus exact
+  paths `session`/`lines` and one POST op family (`send`, `tab-open`, `tab-close`). The
+  browser names a CONFIGURED cohort and never a URL; cohort tokens stay in this box's
+  `.env` via `token_env`. Orders dispatch off-thread (the POST returns at once), fall
+  back to `GetTask` when the socket dies (the store answers; the order is never re-sent),
+  and a hub restart is repaired from the cohort's own store (`_legion_reattach`), also
+  without re-sending. `web.a2a_policy: "read_only"` on a cohort refuses every write/exec
+  tool for runs that arrived over `/a2a` while its own page keeps them; an off-LAN remote
+  URL warns once at startup; every inbound `SendMessage` and every hub dispatch is one
+  log line. Tests: `tests/test_legion.py`, plus the page shim's legion scenario.
 
 Verify by hand: set `web.a2a` true, restart, then
 `curl http://127.0.0.1:8790/.well-known/agent-card.json`, and a `SendMessage` with

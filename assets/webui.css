@@ -1285,8 +1285,9 @@ box-shadow:0 .9rem 2.4rem var(--shadow);text-align:center}
 #sessions{overflow-y:auto;padding:0 .55rem .5rem;flex:1 1 auto;min-height:0}
 /* a long archive scrolls inside its own section, so the host card stays pinned to the
    rail's foot (measured 2026-10-04: 17 conversations pushed it off-screen with nothing
-   scrolling - the section had no height of its own) */
-.sidebar-section:nth-of-type(2){display:flex;min-height:0;flex:1 1 auto;flex-direction:column}
+   scrolling - the section had no height of its own). The class, not nth-of-type: the
+   legion section joined the rail above the archive and moved the count. */
+.sidebar-archive{display:flex;min-height:0;flex:1 1 auto;flex-direction:column}
 .campaign-item{position:relative}
 .campaign-del{position:absolute;top:6px;right:6px;display:grid;width:22px;height:22px;
 place-items:center;border:1px solid var(--line-soft);border-radius:3px;
@@ -1393,6 +1394,20 @@ svg.lucide{width:18px;height:18px;flex:0 0 auto}
 .dispatch-button svg{width:16px;height:16px}
 .command-meta svg{width:12px;height:12px}
 #tabs svg{width:16px;height:16px}
+
+/* LEGION: the rail's cohort rows and the channel tab strip over the stage. Same
+ * glass/bronze idiom as the archive's campaign rows - a cohort IS a campaign surface,
+ * one whose work happens on another box. */
+.legion-stat{margin-left:auto;color:var(--muted-2);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:.62rem;font-weight:400;letter-spacing:.06em;text-transform:none}
+.campaign-item .dot.bad{background:var(--bad);box-shadow:0 0 12px color-mix(in srgb,var(--bad) 55%,transparent)}
+.campaign-item.cohort.local .campaign-icon{color:var(--gold-bright)}
+.campaign-tabs{position:relative;z-index:2;display:flex;flex:0 0 auto;gap:.3rem;padding:.42rem 1rem 0;border-bottom:1px solid var(--line-soft);overflow-x:auto;background:rgba(12,14,17,.22)}
+.campaign-tab{display:flex;align-items:center;gap:.4rem;padding:.34rem .7rem;border:1px solid transparent;border-bottom:0;border-radius:.45rem .45rem 0 0;color:var(--muted);cursor:pointer;font-family:'Cinzel',Georgia,serif;font-size:.68rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;white-space:nowrap}
+.campaign-tab:hover{color:var(--ivory);border-color:var(--line-soft)}
+.campaign-tab.on{color:var(--gold);border-color:var(--line);background:color-mix(in srgb,var(--gold) 9%,transparent)}
+.campaign-tab .tabdot{width:6px;height:6px;flex:0 0 auto;border-radius:50%;background:var(--gold);box-shadow:0 0 10px color-mix(in srgb,var(--gold) 70%,transparent)}
+.campaign-tab-x{border:0;background:transparent;color:var(--muted-2);cursor:pointer;font-size:.72rem;line-height:1;padding:0 .12rem}
+.campaign-tab-x:hover{color:var(--error)}
 
 #lanewarn:not(.show),
 #configwarn:not(.show){display:none}

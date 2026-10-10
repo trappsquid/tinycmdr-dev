@@ -37,12 +37,43 @@ Runs **on the machine it manages**: you send a task, it uses real tools (`shell`
 
 | Door | For |
 | :--- | :--- |
-| **Page** (default) | live cards, file upload/download, conversation rail, tasks/jobs/log/inventory — browser, phone on your LAN |
+| **Page** (default) | live cards, file upload/download, conversation rail, tasks/jobs/log/inventory, and a channel per cohort below — browser, phone on your LAN |
 | Terminal (`--app`, `--cli`) | ops on the box |
 | Chat (Mattermost / Telegram) | steering from anywhere; uploads both ways |
 | `--once "…"` | scripts |
 
 One process serves whichever are configured; same sessions, notes, skills, model switches.
+
+## One page, several boxes
+
+The page can command more than the box it runs on. Give it *cohorts* — other tinycmdr boxes —
+and it grows a rail section (one row per cohort), a tab per engaged cohort, and a channel that
+streams that box's work line by line, exactly like a local run:
+
+```json
+// the hub: config.json
+"agent": {
+  "a2a_remotes": {
+    "storage":  {"url": "http://storage.lan:8790", "token_env": "COHORT_STORAGE_TOKEN"},
+    "workshop": {"url": "http://100.101.2.3:8790", "token_env": "COHORT_WORKSHOP_TOKEN"}
+  }
+}
+```
+
+```json
+// each cohort: config.json   (its own page needs nothing else)
+"web": {"a2a": true, "a2a_policy": "read_only"}
+```
+
+The hub relays server-to-server over the agent-to-agent protocol; `token_env` names a variable in
+the hub's `.env` holding that cohort's page token — copy the cohort's `TINYCMDR_WEB_TOKEN` value
+into the hub's `.env` under the name you chose (never into `config.json`), and the browser only
+ever names a configured cohort: it never sees a cohort token. Keep one token per box, so a lost or
+retired one rotates alone (`tinycmdr token set TINYCMDR_WEB_TOKEN` on that box, then the hub's
+`.env`). `a2a_policy: "read_only"` lets a cohort answer with reads while refusing every write and
+command that arrives over A2A; its own page keeps full tools. Address cohorts on a private network
+(the LAN, or a Tailscale/WireGuard overlay) — this one link is plain HTTP with a bearer token, and
+a public address is warned about at startup.
 
 ## Install
 

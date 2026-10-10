@@ -776,6 +776,91 @@ def main():
     check(has(res, "answer after the card"),
           "and the rest of the run still renders")
 
+    # -- the legion: a hub WITH cohorts ------------------------------------------------
+    # The rail gains the cohort section, the stage gains the channel tabs, and a
+    # cohort's channel streams the other box's lines through the same renderer a
+    # local run uses. With no cohorts configured nothing of it is drawn or fetched.
+    cohorts = [
+        {"name": "storage", "numeral": 2, "host": "storage:8790", "state": "ready",
+         "error": "", "version": "1.0.88", "lines": True,
+         "task": {"id": "T-done", "state": "done", "started": 5, "finished": 6,
+                  "failed": False}},
+        {"name": "office", "numeral": 3, "host": "office:8790", "state": "silent",
+         "error": "connection refused", "version": "", "lines": None, "task": None},
+    ]
+    sc = {"runs": [], "legion_cohorts": cohorts, "legion_tabs": [],
+          "legion_spec": [["tool", "uptime"], ["final", "load average 0.4"]],
+          "steps": [
+              {"kind": "polls", "n": 3},
+              {"kind": "clickrow", "id": "cohorts", "text": "storage", "polls": 6},
+              {"kind": "message", "text": "check the disks", "polls": 12},
+          ]}
+    res = run_page(sc, script)
+    check(not res["errors"], f"the legion page runs clean ({res['errors'][:1]})")
+    check(res.get("legionHidden") is False,
+          "a hub with cohorts shows the legion rail section")
+    names = [c["text"] for c in (res.get("cohorts") or [])]
+    check(len(names) == 3 and "PRAETORIUM" in names[0] and "storage" in names[1],
+          f"the rail pins the praetorium first, then one row per cohort ({names})")
+    check("COHORS III" in (names[2] or "") and (res["cohorts"][2] or {}).get("bad"),
+          f"the silent cohort wears the bad dot, numbered ({names[2]!r})")
+    check("connection refused" in ((res["cohorts"][2] or {}).get("title") or ""),
+          f"...and its error is one hover away ({(res['cohorts'][2] or {}).get('title')!r})")
+    check(res.get("chan") == "COMMAND CHANNEL \u00b7 COHORT",
+          f"clicking a cohort opens its channel ({res.get('chan')!r})")
+    check(((res.get("state") or {}).get("legion") or {}).get("active") == "storage",
+          f"...on that cohort ({res.get('state')})")
+    check(has(res, "check the disks") and has(res, "uptime")
+          and has(res, "load average 0.4"),
+          f"the order went to the cohort and its lines streamed back "
+          f"({[t for _c, t in drawn(res)]})")
+    tabs = res.get("campTabs") or []
+    check(len(tabs) == 2 and tabs[0]["text"] == "PRAETORIUM"
+          and (tabs[1].get("text") or "").startswith("storage")
+          and tabs[1].get("on") and tabs[1].get("x"),
+          f"the tab strip holds the praetorium and the engaged cohort ({tabs})")
+
+    # ...an open cohort tab nobody has looked at wears the gold badge, and opening
+    # its channel clears it; closing the tab returns the stage to the praetorium
+    sc = {"runs": [], "legion_cohorts": cohorts, "legion_tabs": ["storage"],
+          "steps": [{"kind": "polls", "n": 3}]}
+    res = run_page(sc, script)
+    check(not res["errors"], f"the badge page runs clean ({res['errors'][:1]})")
+    check((res["campTabs"][1] or {}).get("badge") and not (res["campTabs"][1] or {}).get("on"),
+          f"a cohort that reported while you were elsewhere wears the badge "
+          f"({res['campTabs'][1]})")
+    sc["steps"].append({"kind": "clickrow", "id": "campaigns", "text": "storage",
+                        "polls": 5})
+    res = run_page(sc, script)
+    check(not res["errors"] and not (res["campTabs"][1] or {}).get("badge")
+          and (res["campTabs"][1] or {}).get("on"),
+          f"opening the tab clears the badge and marks the channel "
+          f"({res.get('campTabs')})")
+    sc["steps"].append({"kind": "call", "fn": "closeChannel", "args": ["storage"],
+                        "polls": 5})
+    res = run_page(sc, script)
+    check(not res["errors"] and res.get("campTabs")
+          and [t["text"] for t in res["campTabs"]] == ["PRAETORIUM"],
+          f"closing the cohort tab leaves the praetorium ({res.get('campTabs')})")
+    check(((res.get("state") or {}).get("legion") or {}).get("active") == "praetorium",
+          f"...and the stage follows ({res.get('state')})")
+
+    # ...a second order while the cohort is on campaign is refused, with the hub's words
+    sc = {"runs": [], "legion_cohorts": cohorts, "legion_tabs": [], "legion_busy": True,
+          "steps": [{"kind": "clickrow", "id": "cohorts", "text": "storage", "polls": 6},
+                    {"kind": "message", "text": "again", "polls": 4}]}
+    res = run_page(sc, script)
+    check("already on campaign" in (((res.get("note") or {}).get("text")) or ""),
+          f"a second order while one runs is refused in the hub's words "
+          f"({res.get('note')!r})")
+
+    # ...and a hub with NO cohorts: no rail section, no tab strip, no /api/legion call
+    res = run_page({"runs": [], "steps": [{"kind": "polls", "n": 2}]}, script)
+    check(res.get("legionHidden") is True and res.get("legionFetches") == 0
+          and not (res.get("cohorts") or []) and not (res.get("campTabs") or []),
+          f"a hub with no cohorts shows no legion UI and fetches nothing extra "
+          f"({res.get('legionFetches')} fetch(es))")
+
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0
 

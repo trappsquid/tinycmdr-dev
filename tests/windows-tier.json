@@ -15,6 +15,7 @@
     "tests/test_installer_windows.py",
     "tests/test_interaction_surface.py",
     "tests/test_jobs_surface.py",
+    "tests/test_legion.py",
     "tests/test_lane_surface.py",
     "tests/test_leak_gate.py",
     "tests/test_log_config_surface.py",

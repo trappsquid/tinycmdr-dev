@@ -421,6 +421,26 @@ def main():
           "a wrong token: 401")
     check(req("GET", "/api/tasks", TOK)[0] == 200, "the right token: 200")
 
+    # ---- the legion routes: token-gated like everything, empty without cohorts -------
+    check(req("GET", "/api/legion")[0] == 401,
+          "the legion route without a token: 401")
+    _lg = req("GET", "/api/legion", TOK)
+    _lgj = json.loads(_lg[1]) if _lg[0] == 200 else {}
+    check(_lg[0] == 200 and _lgj.get("cohorts") == [] and _lgj.get("tabs") == []
+          and _lgj.get("praetorium", {}).get("version"),
+          "a hub with no cohorts answers an empty legion (and its own version)",
+          (_lg[0], (_lg[1] or b"")[:140]))
+    check(req("GET", "/api/legion/lines?remote=ghost", TOK)[0] == 404
+          and req("GET", "/api/legion/session?remote=ghost", TOK)[0] == 404,
+          "session/lines for a cohort this hub does not have: 404")
+    check(req("POST", "/api/legion", TOK, b'{"op":"send","remote":"ghost","message":"x"}')[0] == 404,
+          "an order to a cohort this hub does not have: 404 (the browser names a "
+          "CONFIGURED remote, never a URL)")
+    check(req("POST", "/api/legion", TOK, b'{"op":"zzz"}')[0] == 400,
+          "an unknown legion op: 400")
+    check(req("POST", "/api/legion", None, b'{"op":"send"}')[0] == 401,
+          "a legion POST without a token: 401")
+
     # ---- the browser's one handover: header in, HttpOnly cookie out ----------
     # The token arrives in the URL fragment once; the page POSTs it here and forgets it,
     # so no URL, no history entry and no localStorage keeps it afterwards (
@@ -483,6 +503,10 @@ def main():
     check(r.status == 403, "a foreign Host: 403", r.status)
     check(req("GET", "/api/tasks", {**TOK, "Origin": "http://evil.example"})[0] == 403,
           "a cross-origin request: 403")
+    check(req("GET", "/api/legion", {**TOK, "Origin": "http://evil.example"})[0] == 403
+          and req("POST", "/api/legion",
+                  {**TOK, "Origin": "http://evil.example"}, b'{"op":"zzz"}')[0] == 403,
+          "the legion routes ride the same Origin guard")
     # Cookies are host-scoped, not port-scoped: a page on another port of this same name
     # still carries the operator's session cookie, so the Origin check has to compare the
     # port too (measured 2026-10-05 with a real browser: even the CORS-blocked response
@@ -740,6 +764,9 @@ def main():
                            ("GET", "/api/log", TOK, None),
                            ("GET", "/api/commands", TOK, None),
                            ("GET", "/api/session?key=web-none", TOK, None),
+                           ("GET", "/api/legion", TOK, None),
+                           ("GET", "/api/legion/lines?remote=ghost", TOK, None),  # 404
+                           ("POST", "/api/legion", TOK, b'{"op":"zzz"}'),       # 400
                            ("GET", "/api/download?run=x&uid=y", TOK, None),   # 404
                            ("GET", "/api/login", TOK, None),
                            ("GET", "/page.css", None, None),

@@ -117,7 +117,10 @@ const IDS = ['log', 'in', 'send', 'stop', 'ver',
              // the page shell: the rail's filter, the host card, the hero's stats and
              // the stage header's state
              'filter', 'hits', 'hostver', 'stage-state', 'logwrap',
-             'stat-session', 'stat-context', 'stat-model'];
+             'stat-session', 'stat-context', 'stat-model',
+             // the legion: the rail's cohort section and rows, the channel tab
+             // strip, the header's channel label and the cohort tally
+             'legion', 'cohorts', 'campaigns', 'chan', 'legionstat'];
 const byId = {};
 function freshDom() {
   for (const id of IDS) { byId[id] = new El(id === 'in' ? 'textarea' : 'div'); }
@@ -126,6 +129,10 @@ function freshDom() {
   // parser, so put the two attributes the driver reads back
   byId.emptymark.setAttribute('src', '/mark.png');
   byId.lanedetail.hidden = true;
+  // the legion section and the channel tabs start hidden in the markup (they are
+  // shown only when the hub reports cohorts), so the shim says so too
+  byId.legion.hidden = true;
+  byId.campaigns.hidden = true;
   globalThis.document.body = new El('body');
 }
 
@@ -169,6 +176,14 @@ let authFlaked = false;
 const loginCalls = [];
 const uploads = [];
 let healthFetches = 0;
+let legionFetches = 0;
+// Does a node or any descendant carry this class? (`dot`/`work`/`bad`/`tabdot` sit
+// on children of the rail rows and the tabs, and the report serializes the parent.)
+function deepHas(n, cls) {
+  if (!n) { return false; }
+  if (String(n.className || '').split(' ').indexOf(cls) >= 0) { return true; }
+  return (n.children || []).some((k) => deepHas(k, cls));
+}
 
 // -------------------------------------------------------- fake web server
 // Mirrors tinycmdr.py's WebRun: growth follows an explicit "streaming line"
@@ -254,6 +269,23 @@ const sessions = [{ key: 'web', title: 'the shared conversation', created: 0,
                     last_active: 0, exchanges: 0, tokens: 0, model: 'main',
                     owner: 'shared', live: null }];
 
+// ---------------------------------------------------------------- the legion
+// The fake hub's cohorts: one run per order, its lines the same shape the real
+// hub's LegionRun composes (a hub prefix line, then the cohort frame's lines).
+let legionSeq = 0;
+const legionRuns = [];
+function legionOpen(remote, orderText) {
+  const r = { id: 'L' + (++legionSeq), remote: remote, lines: [], spec: [], done: false,
+              cursor: 0 };
+  r.spec = (scenario.legion_spec || [["tool", "uname -a"], ["final", "it answered"]]).slice();
+  if (r.spec.length && r.spec[r.spec.length - 1][0] !== 'final') {
+    r.spec.push(['final', 'done']);
+  }
+  r.lines.push({ i: 0, uid: r.id + 'p0', kind: 'you', text: orderText, t: 0, r: 1 });
+  legionRuns.push(r);
+  return r;
+}
+
 function fetchShim(url, opts) {
   const body = (opts && typeof opts.body === 'string') ? JSON.parse(opts.body) : {};
   const hdrs = (opts && opts.headers) || {};
@@ -306,7 +338,8 @@ function fetchShim(url, opts) {
       return jres({ error: 'unknown op' });
     }
     return jres({ sessions: sessions, open: 'web', budget: 200000,
-                  host: 'harness', version: 'harness' });
+                  host: 'harness', version: 'harness',
+                  legion: (scenario.legion_cohorts || []).length });
   }
   if (url.indexOf('/api/session?') === 0) {
     // what a reload paints: THIS conversation's runs, in order. scenario.session_status
@@ -362,6 +395,62 @@ function fetchShim(url, opts) {
     // a page that just loaded asks who is running instead of posting a message
     // and having the server turn that into a steer of the run already going
     return jres({ run_id: (active && !active.done) ? active.id : null });
+  }
+  if (url.indexOf('/api/legion') === 0) {
+    legionFetches++;
+    // the legion mesh: the hub's cohorts and tabs, one cohort's transcript, and the
+    // live lines of an order. Mirrors the hub's own shapes - a cohort's runs carry
+    // the hub prefix line plus the cohort frame's uid-keyed lines. One branch for
+    // the family, dispatched on the EXACT path inside: a nested indexOf prefix
+    // would shadow a later one (the server's route-order rule, graded by
+    // tests/test_contracts.py on this file too).
+    const sub = url.split('?')[0];
+    const query = {};
+    (url.split('?')[1] || '').split('&').forEach((p) => {
+      const kv = p.split('='); if (kv[0]) { query[kv[0]] = decodeURIComponent(kv[1] || ''); }
+    });
+    if (opts && opts.method === 'POST') {
+      if (body.op === 'send') {
+        if (scenario.legion_busy) {
+          return Promise.resolve({ ok: false, status: 409, json: () => Promise.resolve(
+            { error: 'this cohort is already on campaign (task L42) - wait for its report' }) });
+        }
+        const r = legionOpen(body.remote, body.message);
+        return jres({ run_id: r.id, remote: body.remote });
+      }
+      if (body.op === 'tab-open') {
+        if (scenario.legion_tabs.indexOf(body.remote) < 0) { scenario.legion_tabs.push(body.remote); }
+        return jres({ tabs: scenario.legion_tabs.slice() });
+      }
+      if (body.op === 'tab-close') {
+        scenario.legion_tabs = scenario.legion_tabs.filter((n) => n !== body.remote);
+        return jres({ tabs: scenario.legion_tabs.slice() });
+      }
+      return jres({ error: 'unknown op' });
+    }
+    if (sub === '/api/legion/session') {
+      const name = query.remote || '';
+      const mine = legionRuns.filter((r) => r.remote === name);
+      const row = (scenario.legion_cohorts || []).find((c) => c.name === name) || null;
+      return jres({ remote: name, cohort: row,
+                    runs: mine.map((r) => ({ run_id: r.id, lines: r.lines, live: !r.done })) });
+    }
+    if (sub === '/api/legion/lines') {
+      const name = query.remote || '';
+      const r = legionRuns.filter((x) => x.remote === name && !x.done).slice(-1)[0];
+      if (!r) { return jres({ remote: name, lines: [], done: true, no_run: true }); }
+      if (r.cursor < r.spec.length) {
+        const [k, t] = r.spec[r.cursor++];
+        r.lines.push({ i: r.lines.length, uid: r.id + '#' + r.lines.length, kind: k,
+                       text: t, r: r.cursor, t: r.cursor });
+      }
+      r.done = r.cursor >= r.spec.length;
+      return jres({ remote: name, run_id: r.id, lines: r.lines, done: r.done,
+                    status: r.done ? 'done' : 'working', steps: r.cursor, elapsed: 1.0 });
+    }
+    return jres({ cohorts: scenario.legion_cohorts || [],
+                  tabs: scenario.legion_tabs || [],
+                  praetorium: { host: 'harness', version: 'harness' } });
   }
   if (url.indexOf('/api/events') === 0) {
     const q = {};
@@ -421,9 +510,11 @@ async function tick() {
 // page source itself is untouched: this appended line is the whole difference.
 const EXPORTS = "\n;globalThis.__page={send:send,stop:stop,"
   + "newConversation:newConversation,openSession:openSession,fetchFile:fetchFile,"
-  + "uploadFiles:uploadFiles,versionCheck:versionCheck,"
+  + "uploadFiles:uploadFiles,versionCheck:versionCheck,openChannel:openChannel,"
+  + "closeChannel:closeChannel,"
   + "renameSession:renameSession,state:function(){return {sessionKey:sessionKey,"
-  + "sessions:sessions};}};";
+  + "sessions:sessions,legion:{active:legion.active,on:legion.on,"
+  + "cohorts:legion.cohorts,tabs:legion.tabs,seen:legion.seen}};}};";
 
 function loadPage() {
   pages++;
@@ -519,6 +610,27 @@ async function main() {
       for (let i = 0; i < (step.polls || 2); i++) { await tick(); }
     } else if (step.kind === 'polls') {
       for (let i = 0; i < (step.n || 1); i++) { await tick(); }
+    } else if (step.kind === 'clickrow') {
+      // click a dynamically drawn row: the first descendant of #<id> whose text
+      // contains <text> and which carries a handler (a rail cohort row, a tab)
+      const root = byId[step.id];
+      const find = (n) => {
+        if (!n) { return null; }
+        const live = (typeof n.onclick === 'function')
+          || (n.listeners && n.listeners.click && n.listeners.click.length);
+        if (live && String(n.textContent || '').indexOf(step.text) >= 0) { return n; }
+        for (const k of (n.children || [])) { const hit = find(k); if (hit) { return hit; } }
+        return null;
+      };
+      const el = root ? find(root) : null;
+      if (!el) {
+        errors.push('clickrow step: nothing in #' + step.id + ' matches ' + JSON.stringify(step.text));
+      } else if (typeof el.onclick === 'function') {
+        await el.onclick({ preventDefault() {} });
+      } else {
+        for (const fn of el.listeners.click) { await fn({ preventDefault() {} }); }
+      }
+      for (let i = 0; i < (step.polls || 2); i++) { await tick(); }
     } else if (step.kind === 'copy') {
       // click the copy button on the box that contains <text>: the real path
       const target = logNodes().find((k) => (step.cls === undefined || k.className.indexOf(step.cls) >= 0)
@@ -562,6 +674,20 @@ async function main() {
     config: { cls: byId.configwarn.className, text: byId.configtext.textContent },
     empty: { hidden: !!byId.empty.hidden, text: byId.empty.textContent,
              img: byId.emptymark.getAttribute('src') },
+    // the legion surfaces: what the rail's cohort section, the tab strip and the
+    // stage header actually show (the transcript itself is in `rendered`)
+    chan: byId.chan ? byId.chan.textContent : null,
+    legionHidden: !!(byId.legion || {}).hidden,
+    legionStat: byId.legionstat ? byId.legionstat.textContent : '',
+    legionFetches: legionFetches,
+    cohorts: (byId.cohorts ? byId.cohorts.children : []).map((c) => ({
+      cls: c.className, text: c.textContent, title: c.title || '',
+      dot: deepHas(c, 'dot'), work: deepHas(c, 'work'), bad: deepHas(c, 'bad'),
+      active: deepHas(c, 'active') })),
+    campTabs: (byId.campaigns ? byId.campaigns.children : []).map((c) => ({
+      cls: c.className, text: c.textContent, title: c.title || '',
+      badge: deepHas(c, 'tabdot'), on: deepHas(c, 'on'),
+      x: deepHas(c, 'campaign-tab-x') })),
     retryLabel: byId.laneretry.textContent,
     healthFetches: healthFetches,
     title: globalThis.document.title,
