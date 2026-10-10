@@ -202,6 +202,11 @@ ordinary commits; when a version is due, the batch above ships whatever `main` h
 held open to gather more work, and its notes name the user-visible changes, not the work that
 produced them.
 
+**The gate is a batch gate, not a per-fix step** (2026-10-10): a session working through several
+small fixes commits each finding on its own, renders the numbers once and pays ONE whole-gate run
+and ONE push - `batch.sh` is the shortcut for the single-change case. Gating between every small
+fix repeats a verdict the final run already gives.
+
 ### The cut
 
 ```bash
