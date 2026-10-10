@@ -79,7 +79,12 @@ class El {
   getAttribute(name) { return this._attrs ? this._attrs[name] : undefined; }
   setAttribute(name, value) { (this._attrs = this._attrs || {})[name] = String(value); }
   focus() {}
-  click() { for (const fn of this.listeners.click || []) { fn({ preventDefault() {} }); } }
+  click() {
+    // an offered download draws an anchor with a name; this is how a page suite sees
+    // which name the browser would have saved
+    if (this.download) { (globalThis.__downloads = globalThis.__downloads || []).push(this.download); }
+    for (const fn of this.listeners.click || []) { fn({ preventDefault() {} }); }
+  }
   set textContent(v) { this.children = []; this._text = String(v); }
   get textContent() {
     if (this.children.length === 0) { return this._text; }
@@ -152,6 +157,13 @@ globalThis.location = { search: scenario.query || '', hash: scenario.hash || '',
                         href: 'http://127.0.0.1:8790/' + (scenario.query || '') };
 const replaced = [];
 globalThis.history = { replaceState: (_s, _t, url) => { replaced.push(url); } };
+// the page makes blob URLs for downloads; Node's URL.createObjectURL refuses a plain
+// object, and without this the fetchFile path throws before it names the file
+globalThis.URL = {
+  createObjectURL: () => 'blob:harness',
+  revokeObjectURL: () => {},
+};
+
 const authSeen = [];
 let authFlaked = false;
 const loginCalls = [];
@@ -219,8 +231,9 @@ function pollRun(id, since, rev) {
   if (!r) { return null; }
   // one scripted fragment per poll: that is how the real callbacks arrive
   if (r.cursor < r.spec.length) {
-    const [k, t] = r.spec[r.cursor++];
-    grow(r, k, t);
+    const [k, t, ui] = r.spec[r.cursor++];
+    const l = grow(r, k, t);
+    if (ui && l) { l.ui = ui; }        // a card line carries its payload, like WebRun._line
   }
   const done = r.cursor >= r.spec.length;
   r.done = done;
@@ -245,6 +258,16 @@ function fetchShim(url, opts) {
   const body = (opts && typeof opts.body === 'string') ? JSON.parse(opts.body) : {};
   const hdrs = (opts && opts.headers) || {};
   if ('X-Tinycmdr-Token' in hdrs) { authSeen.push(hdrs['X-Tinycmdr-Token']); }
+  if (url.indexOf('/api/download') === 0) {
+    // what _web_filename_header sends: an ASCII fallback plus filename*=UTF-8''.
+    const nm = scenario.download_name || 'report.pdf';
+    const ascii = scenario.download_ascii || nm.replace(/[^\x20-\x7e]/g, '_');
+    return Promise.resolve({ ok: true, status: 200,
+      headers: { get: (h) => (String(h).toLowerCase() === 'content-disposition'
+        ? "attachment; filename=" + ascii + "; filename*=UTF-8''" + encodeURIComponent(nm)
+        : null) },
+      blob: () => Promise.resolve({}), json: () => Promise.resolve({}) });
+  }
   if (url.indexOf('/api/upload') === 0) {
     // the page POSTs the File itself; only the name and the token matter here
     const name = decodeURIComponent((url.split('name=')[1] || 'x').split('&')[0]);
@@ -294,8 +317,18 @@ function fetchShim(url, opts) {
     }
     const key = (url.split('key=')[1] || 'web').split('&')[0];
     const mine = runs.filter((r) => r.conv === key);
-    return jres({ key: key, runs: mine.map((r) => ({ run_id: r.id, lines: r.lines,
-                                                    live: !r.done })) });
+    const reply = jres({ key: key, runs: mine.map((r) => ({ run_id: r.id, lines: r.lines,
+                                                            live: !r.done })) });
+    if (scenario.session_delay) {
+      // hold the reply for N driver ticks: the switch-mid-flight race needs the first
+      // open's reply to land AFTER the second open has run
+      return new Promise((res) => {
+        let n = scenario.session_delay;
+        const step = () => (n-- <= 0 ? res(reply) : setImmediate(step));
+        step();
+      });
+    }
+    return reply;
   }
   if (url.indexOf('/api/commands') === 0) {
     return jres({ commands: [{ cmd: '/new', help: 'fresh conversation' },
@@ -309,6 +342,12 @@ function fetchShim(url, opts) {
     // cookie is unreadable to the page, readable to the server). A browser with no
     // token and no cookie is refused - the default, and what a fresh profile looks
     // like; scenario.login_ok marks one whose cookie already authenticates.
+    if ((opts && opts.method) === 'GET' && scenario.login_status) {
+      // a server that refuses the page itself (the Host/Origin check): the page must
+      // name the address, not the token
+      return Promise.resolve({ ok: false, status: scenario.login_status,
+                               json: () => Promise.resolve({ error: 'refused' }) });
+    }
     if ((opts && opts.method) === 'GET' && !scenario.login_ok) {
       return Promise.resolve({ ok: false, status: 401,
                                json: () => Promise.resolve({ error: 'unauthorized' }) });
@@ -381,7 +420,7 @@ async function tick() {
 // re-evaluate it cleanly) and exports the two functions the driver drives. The
 // page source itself is untouched: this appended line is the whole difference.
 const EXPORTS = "\n;globalThis.__page={send:send,stop:stop,"
-  + "newConversation:newConversation,openSession:openSession,"
+  + "newConversation:newConversation,openSession:openSession,fetchFile:fetchFile,"
   + "uploadFiles:uploadFiles,versionCheck:versionCheck,"
   + "renameSession:renameSession,state:function(){return {sessionKey:sessionKey,"
   + "sessions:sessions};}};";
@@ -449,7 +488,10 @@ async function main() {
     } else if (step.kind === 'call') {
       // drive the rail the way a click does
       const fn = page()[step.fn];
-      if (typeof fn === 'function') { await fn.apply(null, step.args || []); }
+      if (typeof fn === 'function') {
+        const p = fn.apply(null, step.args || []);
+        if (!step.fire) { await p; }   // fire: leave it in flight (a race is the subject)
+      }
       for (let i = 0; i < (step.polls || 4); i++) { await tick(); }
     } else if (step.kind === 'input') {
       // type into a field and fire its handler (the rail's search box)
@@ -511,6 +553,7 @@ async function main() {
     auth: authSeen,
     token: store.fb_token,
     uploads: uploads,
+    downloads: (globalThis.__downloads || []),
     composer: byId.in.value,
     ver: { cls: byId.ver.className, title: byId.ver.title },
     warn: { cls: byId.lanewarn.className, text: byId.lanetext.textContent,

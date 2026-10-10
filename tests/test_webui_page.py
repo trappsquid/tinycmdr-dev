@@ -478,8 +478,10 @@ def main():
     check(not res["errors"], f"the link page runs clean ({res['errors'][:1]})")
     check(res["prompts"] == 0,
           f"a link that carries the token does not ask for one ({res['prompts']})")
-    check(res["auth"] and all(t == "from-the-link" for t in res["auth"]),
-          f"every call carries the link's token ({set(res['auth'] or [])})")
+    check(res["auth"] and res["auth"][0] == "from-the-link"
+          and all(not t for t in res["auth"][1:]),
+          f"the link's token rides the handover POST alone; the cookie takes over "
+          f"({res['auth'][:3]})")
     check(has(res, "the link worked"), "and the task it sent came back answered")
     check(res["replaced"] == ["/"],
           f"the token is scrubbed out of the address bar ({res['replaced'][:2]})")
@@ -504,8 +506,10 @@ def main():
     check("\n\n" in moved and len(moved.splitlines()) > 3,
           f"and it still reads as paragraphs, not one long line ({moved[:40]!r})")
     check(has(res, "typed token worked"), "the token it was given is used")
-    check(res["auth"] and all(t == "test-token" for t in res["auth"]),
-          f"...on every call that needs it ({set(res['auth'] or [])})")
+    check(res["auth"] and res["auth"][0] == "test-token"
+          and all(not t for t in res["auth"][1:]),
+          f"...on the handover POST alone (the cookie carries the rest) "
+          f"({res['auth'][:3]})")
 
     # -- 14. a dead chat lane must be visible ON THE PAGE -----------------------
     # The incident (a live install, 2026-09-28): the process was up, /api/health said ok, the
@@ -656,8 +660,10 @@ def main():
     check(res.get("token") is None,
           f"the fragment token is handed over for a cookie, then dropped from "
           f"localStorage ({res.get('token')!r})")
-    check(res["auth"] and all(t == "from-the-fragment" for t in res["auth"]),
-          f"every call carries it ({set(res['auth'] or [])})")
+    check(res["auth"] and res["auth"][0] == "from-the-fragment"
+          and all(not t for t in res["auth"][1:]),
+          f"the fragment token rides the handover POST alone; the cookie takes over "
+          f"({res['auth'][:3]})")
     check(res["replaced"] == ["/"],
           f"and the address bar is scrubbed ({res['replaced'][:2]})")
     check(has(res, "the fragment worked"), "the task it sent came back answered")
@@ -687,9 +693,88 @@ def main():
     ups = res.get("uploads") or []
     check(ups and ups[0]["name"] == "report final.txt",
           f"the file reaches /api/upload under its own name ({ups[:1]})")
-    check(ups and ups[0]["token"] == "test-token", f"with the token ({ups[:1]})")
+    check(ups and ups[0]["token"] == "",
+          f"the handover has landed, so the upload leans on the cookie, not the token "
+          f"({ups[:1]})")
     check("uploads/123_report final.txt" in (res.get("composer") or ""),
           f"and the saved path lands in the composer ({res.get('composer')!r})")
+
+    # -- the address, not the token: a login probe answered 403 is the Host/Origin
+    # check; the page must say so instead of failing every call mysteriously ----------
+    sc = {"runs": [], "steps": [{"kind": "polls", "n": 3}], "no_token": True,
+          "login_status": 403}
+    res = run_page(sc, script)
+    check(res["prompts"] == 0,
+          f"a refused page does not raise the token prompt ({res['prompts']})")
+    check("web.host" in ((res.get("note") or {}).get("text") or "")
+          and "not the token" in ((res.get("note") or {}).get("text") or ""),
+          f"...and the note blames the address and the binding ({res.get('note')!r})")
+
+    # -- after the handover the cookie authenticates: no call sends a token header -----
+    sc = {"runs": [[["final", "hi"]]],
+          "steps": [{"kind": "message", "text": "hello", "polls": 6}]}
+    res = run_page(sc, script)
+    check(res["auth"] and res["auth"][0] == "test-token"
+          and all(not t for t in res["auth"][1:]),
+          f"the token rides the handover POST alone ({res['auth'][:3]})")
+
+    # -- the download name: filename* carries the real (non-ASCII) one -------------------
+    sc = {"runs": [],
+          "steps": [{"kind": "call", "fn": "fetchFile", "args": ["u1#0"], "polls": 4}],
+          "download_name": "caf\u00e9.pdf", "download_ascii": "caf_.pdf"}
+    res = run_page(sc, script)
+    check(res.get("downloads") == ["caf\u00e9.pdf"],
+          f"a non-ASCII download keeps its real name ({res.get('downloads')})")
+
+    # -- an oversized upload is refused in the page, before the body goes up -------------
+    sc = {"runs": [],
+          "steps": [{"kind": "call", "fn": "uploadFiles", "polls": 4,
+                     "args": [[{"name": "big.bin", "size": 62914560}]]}]}
+    res = run_page(sc, script)
+    check(not (res.get("uploads") or []),
+          f"an oversized file is not uploaded ({res.get('uploads')})")
+    check("50 MiB" in ((res.get("note") or {}).get("text") or ""),
+          f"...and the note says why ({res.get('note')!r})")
+
+    # -- a switch mid-flight: the reply of the conversation that was left must not paint -
+    sc = {
+        "runs": [[["final", "answer A"]], [["final", "answer B"]]],
+        "session_delay": 2,          # the first open's reply must land after the second
+        "steps": [
+            {"kind": "call", "fn": "openSession", "args": ["conv-a"], "polls": 4},
+            {"kind": "message", "text": "ask A", "polls": 10},
+            {"kind": "call", "fn": "openSession", "args": ["conv-b"], "polls": 4},
+            {"kind": "message", "text": "ask B", "polls": 10},
+            {"kind": "call", "fn": "openSession", "args": ["conv-a"], "fire": True,
+             "polls": 1},
+            {"kind": "call", "fn": "openSession", "args": ["conv-b"], "fire": True,
+             "polls": 8},
+        ],
+    }
+    res = run_page(sc, script)
+    check(not res["errors"], f"the switching page runs clean ({res['errors'][:1]})")
+    check(count(res, "ask A") == 0 and count(res, "answer A") == 0,
+          "the left conversation's transcript did not leak into the open one")
+    check(count(res, "ask B") == 1,
+          "the open conversation is the one drawn")
+
+    # -- a malformed card must not brick the conversation --------------------------------
+    # The renderer recurses, so a self-referencing card threw RangeError out of the paint,
+    # the poll counted it as a server failure ("trouble" forever) and the run's done was
+    # never handled; the page guards its own recursion now (the server refuses the payload
+    # too - tests/test_a2_surface.py).
+    cyc = {"version": "v1.0", "createSurface": {
+        "surfaceId": "s", "components": [
+            {"id": "root", "component": "Column", "children": ["root"]}]}}
+    sc = {"runs": [[["ui", "the card", cyc], ["final", "answer after the card"]]],
+          "steps": [{"kind": "message", "text": "draw it", "polls": 14}]}
+    res = run_page(sc, script)
+    check(not res["errors"], f"the cyclic-card page runs clean ({res['errors'][:1]})")
+    check(res.get("stage") == "ready",
+          f"a self-referencing card leaves the page ready, not in trouble "
+          f"({res.get('stage')!r})")
+    check(has(res, "answer after the card"),
+          "and the rest of the run still renders")
 
     print(f"\n{'FAILED: ' + str(len(FAILS)) if FAILS else 'all page renderer checks passed'}")
     return 1 if FAILS else 0

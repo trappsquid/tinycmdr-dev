@@ -11702,6 +11702,7 @@ def a2ui_validate(payload):
         ids[cid] = name
     if "root" not in ids:
         return False, "one component must have id 'root' (the surface mounts it)", ""
+    kids_by_id = {}
     for c in comps:
         kids = c.get("children")
         if kids is None:
@@ -11714,6 +11715,18 @@ def a2ui_validate(payload):
             if k not in ids:
                 return False, ("%s names a child %r that is not in this payload"
                                % (c["id"], k)), ""
+        kids_by_id[c["id"]] = kids
+    # The surface must be a TREE. The renderer recurses, so a node reachable twice -
+    # through a cycle (`root` listing itself) or a child listed twice - used to throw
+    # in the tab or build 2^depth nodes and freeze it (A-2026-10-08-160).
+    reach, seen = ["root"], set()
+    while reach:
+        cid = reach.pop()
+        if cid in seen:
+            return False, ("%s is reachable more than once - the surface must be a tree"
+                           % cid), ""
+        seen.add(cid)
+        reach.extend(kids_by_id.get(cid) or [])
     text = ""
     for c in comps:
         if c.get("component") != "Text":
@@ -27414,14 +27427,28 @@ async function login(){
   // reported on re-entry (2026-10-04).
   try{
    const probe=await fetch('/api/login',{method:'GET'});
-   if(probe.status!==401){return;}
+   if(probe.status===200){return;}
+   if(probe.status!==401){
+    // A 403 here is the Host/Origin check, not the token: the page was loaded from
+    // an address the server refuses (or web.host binds somewhere this name does not
+    // reach). Asking for a token would blame the wrong thing (A-2026-10-08-165).
+    note('the server refused this page ('+probe.status+') - check the address you used and how web.host is bound, not the token');
+    return;
+   }
   }catch(e){return;}
   if(!askToken(false)){return;}
   localStorage.fb_token=token;
  }
  try{
   const r=await fetch('/api/login',{method:'POST',headers:H()});
-  if(r.ok){try{localStorage.removeItem('fb_token');}catch(e){}}
+  if(r.ok){
+   // The handover landed: the HttpOnly cookie authenticates from here, so the token
+   // leaves localStorage AND this page's memory - the comment above promises that,
+   // and H() sending it anyway meant a tab opened from a link never actually used
+   // the cookie (A-2026-10-08-162).
+   try{localStorage.removeItem('fb_token');}catch(e){}
+   token='';
+  }
  }catch(e){}
 }
 // Keep the address bar usable as a bookmark without the token sitting in it - and
@@ -27505,7 +27532,12 @@ function a2uiResolve(v,dm){
  }
  return v==null?'':String(v);
 }
-function a2uiNode(c,byId,dm){
+function a2uiNode(c,byId,dm,seen,budget){
+ // The server refuses cycles and repeated children; this is the page's own backstop,
+ // because a cycle used to throw RangeError out of a2uiRender and a doubled chain
+ // built 2^depth nodes and froze the tab (A-2026-10-08-160).
+ if(!c||seen.has(c)||budget.n>=200)return document.createElement('div');
+ seen.add(c);budget.n++;
  const name=c.component||'',el=document.createElement('div');
  if(name==='Text'){
   const span=document.createElement('div');
@@ -27517,7 +27549,7 @@ function a2uiNode(c,byId,dm){
  }
  if(name==='Divider'){el.className='ui-divider';return el;}
  el.className='ui-'+name.toLowerCase();
- for(const kid of (c.children||[])){const k=byId[kid];if(k)el.appendChild(a2uiNode(k,byId,dm));}
+ for(const kid of (c.children||[])){const k=byId[kid];if(k)el.appendChild(a2uiNode(k,byId,dm,seen,budget));}
  return el;
 }
 function a2uiRender(payload){
@@ -27527,7 +27559,7 @@ function a2uiRender(payload){
  for(const c of comps){if(c&&c.id)byId[c.id]=c;}
  if(!byId['root'])return null;
  const card=document.createElement('div');card.className='ui-card';
- card.appendChild(a2uiNode(byId['root'],byId,s.dataModel||{}));
+ card.appendChild(a2uiNode(byId['root'],byId,s.dataModel||{},new Set(),{n:0}));
  return card;
 }
 // A model writes markdown, and Mattermost renders it - the page used to print it raw:
@@ -27810,14 +27842,20 @@ async function openSession(key,quiet){
  if(!key)return;
  sessionKey=key;localStorage.fb_session=key;runId=null;busy(false);
  clearLog();renderRail();
+ // This generation owns the page now: an in-flight poll or an earlier open's reply
+ // MUST NOT paint into the freshly cleared log (A-2026-10-08-161).
+ const my=++gen;
  try{await fetch('/api/sessions',{method:'POST',headers:H(),
    body:JSON.stringify({op:'open',key:key})});}catch(e){}
  try{
   const r=await fetch('/api/session?key='+encodeURIComponent(key),{headers:H()});
+  if(my!==gen)return;                 // another conversation was opened meanwhile
   if(r.ok){const j=await r.json();
+   if(my!==gen)return;
    for(const run of (j.runs||[]))reconcile(run.run_id,run.lines||[]);}
   else showLoadError('the server answered '+r.status);
- }catch(e){showLoadError(String(e));}
+ }catch(e){if(my===gen)showLoadError(String(e));}
+ if(my!==gen)return;
  if(!quiet)note('');
  await loadSessions();
  await attach();
@@ -28025,6 +28063,7 @@ async function poll(my){
   // A cursor cannot lose a line that grew in place, or re-create one it has
   // already drawn, and a reload cannot end up with two copies of anything.
   const r=await fetch('/api/events?run_id='+id+'&since=0',{headers:H()});
+  if(my!==gen)return;      // the conversation changed while this was in flight
   if(r.ok){
    const j=await r.json();fails=0;
    reconcile(id,j.lines||[]);
@@ -28139,8 +28178,15 @@ async function fetchFile(uid){
    +'&uid='+encodeURIComponent(uid),{headers:H()});
  if(!r.ok){note('could not fetch that file ('+r.status+')');return;}
  const blob=await r.blob();
- const m=/filename=([^;]+)/.exec(r.headers.get('Content-Disposition')||'');
- const name=m?m[1]:'download.bin';
+ // filename*=UTF-8'' carries the real (non-ASCII) name; filename= is the ASCII
+ // fallback the server sends beside it, and reading only that saved every download
+ // under the mangled name (A-2026-10-08-163).
+ const cd=r.headers.get('Content-Disposition')||'';
+ const star=/filename\\*=UTF-8''([^;]+)/i.exec(cd);
+ const plain=/filename="?([^";]+)"?/i.exec(cd);
+ let name='download.bin';
+ if(star){try{name=decodeURIComponent(star[1]);}catch(e){name=star[1];}}
+ else if(plain){name=plain[1];}
  const u=URL.createObjectURL(blob);
  const a=document.createElement('a');a.href=u;a.download=name;
  document.body.appendChild(a);a.click();a.remove();
@@ -28148,18 +28194,26 @@ async function fetchFile(uid){
 }
 async function uploadFiles(files){
  if(!files||!files.length)return;
+ let failed=0;
  for(const f of files){
+  // The server refuses a Content-Length over 50 MiB before reading the body, and on
+  // Windows that answers under the caller as "Failed to fetch"; say it here instead
+  // of uploading the file first (A-2026-10-08-164).
+  if(f.size>52428800){note('upload failed: '+f.name+' is over the 50 MiB limit');failed++;continue;}
   note('uploading '+f.name+'…');
   try{
    const r=await fetch('/api/upload?name='+encodeURIComponent(f.name),
      {method:'POST',headers:{'X-Tinycmdr-Token':token,'X-Tinycmdr-Client':clientId},
       body:f});
    const j=await r.json().catch(function(){return {};});
-   if(!r.ok){note('upload failed: '+(j.error||r.status));continue;}
+   if(!r.ok){note('upload failed: '+(j.error||r.status));failed++;continue;}
    inp.value=(inp.value?inp.value+' ':'')+'📎 '+j.path;
-  }catch(e){note('upload failed: '+e);}
+  }catch(e){note('upload failed: '+e);failed++;}
  }
- note('');inp.focus();
+ // The progress line is cleared, but a FAILURE line must stay readable: it used to be
+ // wiped by this same line before anyone could read it.
+ if(!failed)note('');
+ inp.focus();
 }
 sendBtn.onclick=send;stopBtn.onclick=stop;
 clipBtn.onclick=function(){fileEl.click();};

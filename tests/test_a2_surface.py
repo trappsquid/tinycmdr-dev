@@ -501,6 +501,23 @@ half-drawn. The tool must also never pretend: with no surface on the lane it say
         check("a dangling child id is refused",
               "not in this payload" in fb.a2ui_validate(card(surface={"components": [
                   {"id": "root", "component": "Column", "children": ["ghost"]}]}))[1])
+        check("a self-referencing root is refused",
+              not fb.a2ui_validate(card(surface={"components": [
+                  {"id": "root", "component": "Column", "children": ["root"]}]}))[0])
+        check("...and the reason names it",
+              "reachable more than once" in fb.a2ui_validate(card(surface={"components": [
+                  {"id": "root", "component": "Column",
+                   "children": ["root"]}]}))[1])
+        check("a child listed twice is refused",
+              not fb.a2ui_validate(card(surface={"components": [
+                  {"id": "root", "component": "Column", "children": ["t", "t"]},
+                  {"id": "t", "component": "Text", "text": "a"}]}))[0])
+        check("a shared child (a diamond) is refused",
+              not fb.a2ui_validate(card(surface={"components": [
+                  {"id": "root", "component": "Column", "children": ["a", "b"]},
+                  {"id": "a", "component": "Column", "children": ["t"]},
+                  {"id": "b", "component": "Column", "children": ["t"]},
+                  {"id": "t", "component": "Text", "text": "x"}]}))[0])
         check("a Text with children is refused",
               "cannot have children" in fb.a2ui_validate(card(surface={"components": [
                   {"id": "root", "component": "Column", "children": ["t"]},
