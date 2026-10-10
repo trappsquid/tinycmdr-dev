@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The batch is one verb:** `bash maintenance/batch.sh -m "scope: what it does"` renders the published numbers, runs the whole gate at `--jobs 4`, commits and pushes, and `maintenance/measured-block.py --write` now also writes the prose numbers the gate grades (tests/test_measured_doc.py).
 - **The gate runs 53 suite files, not 106:** same-surface suites run together in one file per group - each member keeps its body, its checks and its summary, a runner restores the environment, the cwd and sys.path around it, and every group is graded by a conservation check (string literals, printed checks and exit codes all equal the member's own run) (tests/run_all.py, tests/windows-tier.json).
 
+### Fixed
+- **An SSE `error` event was answered as the model's reply:** llama.cpp's `error: {...}` event and vLLM's `data: {"error": ...}` chunk were skipped and the `[DONE]` after them passed every terminal check, so whatever text had arrived came back as the complete answer; an error the server announced is a failure now (tests/test_stream_surface.py).
+- **Keep-alive pings held a wedged generation open:** the idle clock advanced on every line read, so a server that kept sending `:` comments never tripped `stream_idle_seconds`; the deadline is checked on every pass and only output advances the clock (tests/test_stream_surface.py).
+- **The stream-fallback log reported a downgrade that had not happened:** every failure logged "keeping this endpoint off streaming for the rest of THIS process" while a prefill timeout, an idle gap and a mid-stream break leave the endpoint eligible; the message is per-call unless the server ignored `stream:true` (tests/test_stream_surface.py).
+- **A quoted tool-call example was executed:** the inline parser ran any reply that mentioned the markup, so a fenced example was dispatched as a real call and deleted from the shown answer; inline calls run only when the reply is nothing but the call blocks (tests/test_stall.py).
+- **The deaf-listener restart could leave no bot behind:** it spawned the replacement while the old process still held the folder's single-instance lock, so the replacement aborted "another tinycmdr is already running" inside the 0.5 s window and the old process then exited; the lock is released before the spawn, the order `/restart` uses (tests/test_lane_surface.py).
+- **A zombie worker cleared a live run's busy flag:** the stall watchdog bumps the worker generation and respawns, and the written-off worker's exit then cleared the flag for the new run, so the next plain message was queued silently (no steering, no queued notice); the discard is generation-guarded (tests/test_stall.py).
+
 ## [1.0.97] - 2026-10-09
 
 ### Fixed

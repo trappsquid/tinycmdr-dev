@@ -2315,6 +2315,17 @@
       },
       "detail": "Same-surface suites run together in one file per group (36 files absorb 89 members): each member's body becomes a function and the runner snapshots env, cwd and sys.path around it, the globals()-discovery idiom is rewritten to a per-member namespace, reindentation is tokenizer-aware so embedded worker scripts keep their bytes, suites that can exit 77 (checkin, tui, webui_page, update_script) stay their own files so a host that cannot grade them still reads SKIP, and the two names something reads by path keep theirs (test_envelope.py - run_all refuses a tree without it; test_status.py - AGENTS.md, docs and the pre-push hook run it).",
       "gate": "per-member conservation: string literals, printed ok/FAIL counts and exit codes all equal the member's standalone run (36/36 groups), plus the whole gate green and CI"
+    },
+    {
+      "id": "wire-slice-six-findings",
+      "title": "the wire and lane slice: six findings, one pass",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "cd8c69d",
+        "expect": "untagged"
+      },
+      "detail": "Six findings from the whole-harness review: a server-announced SSE error (llama.cpp's `error:` event, vLLM's `data: {\"error\": ...}` chunk) was skipped until the [DONE] after it passed every terminal check and the partial text returned as the answer; the idle clock advanced on `:` keep-alive comments, so a wedged generation that kept pinging never tripped `stream_idle_seconds`; every stream failure was logged as a process-wide streaming downgrade though a prefill timeout, an idle gap or a mid-stream break leaves the endpoint eligible; the inline tool-call parser ran any reply that mentioned the markup, so a quoted example was dispatched as a real call and stripped; the deaf-listener restart spawned its replacement while the old process still held the folder lock, so the replacement aborted and the old process exited with nothing left to relaunch it; and a zombie worker's exit cleared the new worker's run from the busy set.",
+      "gate": "each new check is RED on the pre-fix build (TINYCMDR_SRC): an error-only stream raised 'not a stream', both SSE error shapes returned 'partial answer', the pinging wedge read 'closed after 1 chunk(s) with no finish_reason', the fallback log carried 'rest of THIS process', the quoted example executed (a real tool message in the next payload), the zombie cleared the flag (set()), and the restart order read ['spawn', 'exit']; the whole gate green at --jobs 4 on the batch"
     }
   ]
 }
