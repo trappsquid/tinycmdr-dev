@@ -914,6 +914,88 @@ def test_a_long_answer_is_cut_on_a_line_and_never_inside_a_fence():
           [len(c) for c in got])
 
 
+def test_a_chunk_is_measured_in_utf16_units_not_code_points():
+    """A-264 (2026-10-06): the limit counted code points, and Mattermost counts
+    UTF-16 units - measured: 15,500 'x' + 500 emoji is len() == 16,000 but 16,500
+    units against the 16,383 limit, so `create_post` 400s and the answer is gone."""
+    L = fb.MAX_POST_LEN
+    body = "x" * 15500 + "🔧" * 500
+    check("the fixture is the measured shape",
+          len(body) == 16000 and len(body.encode("utf-16-le")) // 2 == 16500,
+          (len(body), len(body.encode("utf-16-le")) // 2))
+    chunks = list(fb.MattermostDispatcher._chunks(body))
+    units = [len(c.encode("utf-16-le")) // 2 for c in chunks]
+    check("every chunk fits Mattermost's 16,383-unit ceiling",
+          all(u <= 16383 for u in units), units)
+    check("...inside the harness's own limit too",
+          all(u <= L for u in units), units)
+    check("nothing is lost at the cut", "".join(chunks) == body,
+          (sum(len(c) for c in chunks), len(body)))
+
+
+def test_a_send_file_note_is_cut_in_utf16_units_too():
+    """The note beside a file shares the post limit: 16,000 emoji is 32,000 units
+    and the upload's post 400s - the same class as A-264."""
+    posted = []
+
+    def _upload(paths, channel_id):
+        return ["file-1"]
+
+    class _Posts:
+        @staticmethod
+        def create_post(post):
+            posted.append(post)
+            return {"id": "post-1"}
+
+    class _Door(fb.MattermostDispatcher):
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {
+                "upload_files": staticmethod(_upload),
+                "posts": _Posts()})()
+
+    src = TMP / "note-source.txt"
+    src.write_text("x", encoding="utf-8")
+    out = _Door().send_file("chan-note", None, str(src), "🔧" * 20000)
+    check("the file still lands", out.startswith("sent:"), out)
+    fit = (len(posted[0]["message"].encode("utf-16-le")) // 2) if posted else None
+    check("the note fits the unit ceiling", fit is not None and fit <= 16383, fit)
+
+
+def test_a_flaky_server_cannot_hold_the_channel_for_a_fixed_second_per_chunk():
+    """A-285 (2026-10-06): `_post`'s transient retry slept a fixed 1.0s per chunk -
+    a 5-chunk answer against a flaky server held the channel's single worker for
+    5 seconds with no backoff and no ceiling, and every later message in the
+    channel queued behind it."""
+    slept = []
+    calls = {"n": 0}
+    saved_sleep = fb.time.sleep
+    fb.time.sleep = lambda s: slept.append(s)
+
+    class _Posts:
+        @staticmethod
+        def create_post(post):
+            calls["n"] += 1
+            raise RuntimeError("connection reset by peer")
+
+    class _Door(fb.MattermostDispatcher):
+        def __init__(self):
+            (STAGE / "state.json").unlink(missing_ok=True)
+            super().__init__()
+            self.driver = type("D", (), {"posts": _Posts()})()
+
+    try:
+        _Door()._post("chan-flaky", None, "x" * (fb.MAX_POST_LEN * 2 + 5))
+    finally:
+        fb.time.sleep = saved_sleep
+    check("every chunk still got its one retry", calls["n"] == 6, calls)
+    check("the first pause is well under the old fixed second",
+          bool(slept) and slept[0] < 0.5, slept)
+    check("...and one _post()'s total pause is bounded",
+          sum(slept) <= fb.MM_POST_RETRY_BUDGET + 0.01, slept)
+
+
 def test_a_streamed_draft_belongs_to_the_run_that_streamed_it():
     """A-265 + A-269 (2026-10-06): `drop` parked the streamed draft under the CHANNEL
     and `_post` gave it to the next colourless post from ANYONE. Measured here with

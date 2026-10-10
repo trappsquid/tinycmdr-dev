@@ -25825,7 +25825,47 @@ def model_command(session_key, arg):
 
 
 
-MAX_POST_LEN = 16000  # Mattermost default limit is 16383 chars
+MAX_POST_LEN = 16000  # Mattermost's own limit is 16,383 UTF-16 units
+
+
+def _mm_units(text):
+    """What Mattermost counts a message in: UTF-16 units, not code points.
+
+    An astral character (an emoji) is two units, so 16,000 code points can be
+    32,000 units and the post 400s: measured 2026-10-06, 15,500 'x' + 500 emoji
+    was len() == 16,000 and 16,500 units against the 16,383 limit.
+    """
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _mm_fit_window(text, limit=MAX_POST_LEN):
+    """The longest prefix of `text` that fits `limit` UTF-16 units.
+
+    The chunker slices code points, so it asks this for the widest window it may
+    cut in. A prefix's unit count only grows with its length, so bisection finds
+    the answer without measuring every cut.
+    """
+    lo, hi = 0, len(text)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if _mm_units(text[:mid]) <= limit:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+# A transient post failure gets one retry with the identical payload. The pause
+# before that retry is capped exponential backoff, and ONE _post() call - the
+# whole message, all its chunks - may spend at most MM_POST_RETRY_BUDGET seconds
+# pausing in total: it used to be a fixed 1.0s per chunk, so a 5-chunk answer
+# against a flaky server held the channel's single worker for 5 seconds with no
+# ceiling, and every later message in the channel queued behind it (measured
+# 2026-10-06).
+MM_POST_RETRY_BASE_MS = 250
+MM_POST_RETRY_MAX_MS = 1000
+MM_POST_RETRY_BUDGET = 2.0
+
 # One file per send_file call, bounded BEFORE the bytes move: a run must not push a
 # multi-gigabyte file through the chat's upload path because a model picked the wrong
 # path. The server has its own limit; this one fails fast and says so.
@@ -31468,6 +31508,8 @@ class MattermostDispatcher:
             self._edit(draft_id, channel_id, chunks[0], color=None)
             post_id = draft_id
             chunks = chunks[1:]
+        retry_budget = MM_POST_RETRY_BUDGET
+        retries = 0
         for chunk in chunks:
             post = {"channel_id": channel_id, "message": chunk}
             if color and post_id is None:
@@ -31486,7 +31528,18 @@ class MattermostDispatcher:
                     err = e
                     if self._is_root_rejection(e) or attempt == 2:
                         break
-                    time.sleep(1.0)   # transient: one retry, same payload
+                    # Transient: one retry, same payload. The pause grows per
+                    # failed chunk and _post's total pause is bounded - a flaky
+                    # server must not hold the channel's single worker (see the
+                    # MM_POST_RETRY_* constants).
+                    pause = min(
+                        _retry_backoff_ms(retries + 1, MM_POST_RETRY_BASE_MS,
+                                          MM_POST_RETRY_MAX_MS, 25) / 1000.0,
+                        retry_budget)
+                    retry_budget -= pause
+                    retries += 1
+                    if pause > 0:
+                        time.sleep(pause)
             if err is None:
                 continue
             # A chunk that cannot be posted is an answer the channel never got, and
@@ -31562,8 +31615,9 @@ class MattermostDispatcher:
             ids = self.driver.upload_files([str(p)], channel_id)
         except Exception as e:                                   # noqa: BLE001
             return f"ERROR: upload failed: {e}"
+        note_text = " ".join(str(note or "").split())
         post = {"channel_id": channel_id,
-                "message": " ".join(str(note or "").split())[:MAX_POST_LEN],
+                "message": note_text[:_mm_fit_window(note_text)],
                 "file_ids": ids}
         if root_id:
             post["root_id"] = root_id
@@ -31579,7 +31633,7 @@ class MattermostDispatcher:
     def _chunks(text):
         """Split for the post limit, on a line boundary, never inside a code fence.
 
-        A bare slice cut the answer wherever 16,000 characters happened to fall.
+        A bare slice cut the answer wherever the limit happened to fall.
         Measured 2026-10-06 with a long fenced answer: the first post ended
         `value_1010 = 1010` INSIDE an open ``` block, so Mattermost rendered the rest
         of the answer as code and the second post began with orphaned markers - and
@@ -31588,14 +31642,18 @@ class MattermostDispatcher:
         it on the next post, which costs 4 characters against a limit of 16,383; and
         never back off past half the window, so one over-long line or block still
         makes progress instead of looping.
+
+        The window is measured in UTF-16 UNITS, the way Mattermost counts (see
+        `_mm_units`): 16,000 code points of emoji is 32,000 units and the post 400s.
         """
-        while len(text) > MAX_POST_LEN:
-            cut = text.rfind("\n", 0, MAX_POST_LEN)
-            if cut < MAX_POST_LEN // 2:
-                cut = MAX_POST_LEN            # one long line: cut it anyway
+        while _mm_units(text) > MAX_POST_LEN:
+            window = _mm_fit_window(text)
+            cut = text.rfind("\n", 0, window)
+            if cut < window // 2:
+                cut = window                  # one long line: cut it anyway
             if text[:cut].count("```") % 2:
-                lower = text.rfind("\n", 0, MAX_POST_LEN - 4)
-                if lower > MAX_POST_LEN // 2:
+                lower = text.rfind("\n", 0, window - 4)
+                if lower > window // 2:
                     cut = lower
                 yield text[:cut] + "\n```"
                 text = "```\n" + text[cut:].lstrip("\n")
