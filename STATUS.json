@@ -2392,6 +2392,28 @@
       },
       "detail": "The log listener's thread is a daemon, so a process that exits with records still queued - a management verb, a scheduled run, --once - had them torn down unwritten: measured on a Windows install, a refused verb's line reached the console and the file kept 5 of 20 calls, silently, and a 200-record burst before sys.exit lost every record. One atexit hook drains the queue wherever the process leaves, and the manual drain in the service preflight is gone. tests/test_log_config_surface.py's burst check fails on the pre-fix build.",
       "gate": "RED on the pre-fix build: the 200-record burst check lands 0 of 200; green on the batch"
+    },
+    {
+      "id": "mint-offer-covered-runbook",
+      "title": "a runbook whose procedure is already a tool is never offered a mint",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "f444c4b",
+        "expect": "untagged"
+      },
+      "detail": "The mint offer asked whether a runbook should become a tool without reading whether a tool for it already existed, so a run whose runbook was already wrapped - the tool built from the same conversation and named in the runbook - still earned \"say mint it\". runbook_covered_by() matches a tool's description against the runbook name, then the name and declared category word by word, and a covered runbook stands the offer down the way the computer/GUI skip does. tests/test_route_surface.py's covered-runbook checks fail on the pre-fix build.",
+      "gate": "RED on the pre-fix build: the covered runbook still earns the offer; green on the batch"
+    },
+    {
+      "id": "mint-offer-hand-count",
+      "title": "the mint offer counts every hand-driven call",
+      "state": "unreleased",
+      "anchor": {
+        "commit": "f444c4b",
+        "expect": "untagged"
+      },
+      "detail": "The hand-call count the offer quotes counted only the calls whose command vocabulary the census could fingerprint, because the increment sat inside the census branch - measured 2026-10-10, a 17-call run was offered as 5. Every successful hand-driven call now counts toward the mint and remember gates. tests/test_route_surface.py keeps three unfingerprintable shell calls and fails on the pre-fix build when the counter stays empty.",
+      "gate": "RED on the pre-fix build: three 'echo' calls leave calls_by empty; green on the batch"
     }
   ]
 }
